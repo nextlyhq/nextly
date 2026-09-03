@@ -33,6 +33,7 @@ import type { DocumentSurvey } from "./measure-bytes";
 import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
+import { boundedOwnKeys } from "./safe-record";
 import type { TokenKind } from "./style/catalog-types";
 import { breakpointContexts } from "./style/compile-page";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./style/named-class";
@@ -1635,16 +1636,14 @@ function ownKeysBounded(
   what: string,
   issues: ValidationIssue[]
 ): string[] | null {
-  const keys: string[] = [];
-  for (const key in record) {
-    if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
-    if (keys.length >= MAX_ENVELOPE_ENTRIES) {
-      withinBudget(keys.length + 1, path, what, issues);
-      return null;
-    }
-    keys.push(key);
-  }
-  return keys;
+  const keys = boundedOwnKeys(record, MAX_ENVELOPE_ENTRIES);
+  if (keys !== null) return keys;
+  // The walk stops AT the cap and reports nothing itself, so the number named
+  // here is the smallest one that exceeds it rather than the record's real
+  // size — which is the point of stopping, and why the enumeration and the
+  // complaint are two functions.
+  withinBudget(MAX_ENVELOPE_ENTRIES + 1, path, what, issues);
+  return null;
 }
 
 /** One `exposed` entry, before anything about it has been checked. */

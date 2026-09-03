@@ -117,6 +117,10 @@ export {
   moveNode,
   reidSubtree,
   reidSubtreeWithMap,
+  // The one rule for what a copied DOM id becomes. Public because two copiers
+  // apply it — pattern insert and component composition — and a page may hold
+  // the output of both, so a second spelling would put two ids on one target.
+  mintDomId,
   duplicateNode,
   updateNode,
 } from "./tree";

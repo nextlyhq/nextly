@@ -1127,8 +1127,16 @@ function reidOneKeepingReferences(
  * collision the remap exists to avoid. Trimmed to keep the result readable in a
  * URL fragment; the full node id is not needed for uniqueness within a subtree
  * that has exactly one node per new id.
+ *
+ * Exported because a second copier now exists. Composition inlines one
+ * definition into every instance of it, which duplicates the definition's
+ * `cssId` and `attributes.id` exactly as pattern insert duplicates a subtree's
+ * — and a document may legitimately hold both, so the two must agree on what a
+ * replacement looks like or one page carries two spellings of the same rule.
+ * The COPY policy is shared; the id policy is not, because these ids are
+ * derived and `reidSubtree`'s are random.
  */
-function mintDomId(original: string, newNodeId: string): string {
+export function mintDomId(original: string, newNodeId: string): string {
   return `${original}-${newNodeId.replace(/-/g, "").slice(0, 8)}`;
 }
 

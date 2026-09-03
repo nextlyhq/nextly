@@ -46,6 +46,7 @@
  */
 import {
   COMPONENT_INSTANCE_TYPE,
+  isComponentDocument,
   isUnsetOverride,
   type BlockDocument,
   type BlockNode,
@@ -60,8 +61,10 @@ import {
   type DocumentLimits,
 } from "./limits";
 import { isPlainRecord } from "./plain-record";
-import { defineEntry, ownEntry } from "./safe-record";
+import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
 import { hashId } from "./style/node-class";
+import { mintDomId } from "./tree";
+import { isConditionGated } from "./visibility";
 
 /**
  * Why an instance was left standing instead of being replaced by its
@@ -91,7 +94,13 @@ export const COMPONENT_UNRESOLVED_REASONS = [
   "node-depth",
   /** Inlining it would pass the run's node budget. */
   "budget",
-  /** The instance node does not name a component id. */
+  /**
+   * The instance or its definition is not the shape composition needs — a node
+   * naming no component, or a definition that is not a component document.
+   *
+   * Both are faults no author action fixes, which is what separates this from
+   * `missing`: that one asks somebody to publish or restore a component.
+   */
   "malformed",
 ] as const;
 
@@ -269,7 +278,12 @@ export function resolveComponentInstances(
     definitions,
     maxDepth: limits.maxDepth,
     maxComposedDepth: options.maxComposedDepth ?? MAX_COMPOSED_DEPTH,
-    budget: limits.maxNodes,
+    // What is LEFT under the cap, not the cap itself. `maxNodes` bounds a
+    // document, and the composed tree IS the document every later pass walks —
+    // the style compiler, the renderer, the SEO derivation. Starting a fresh
+    // allowance here would let a page at the cap resolve to twice it while
+    // every one of those passes believes it is reading a bounded document.
+    budget: limits.maxNodes - survey.count,
     taken: survey.ids,
     minted: [],
     abort: undefined,
@@ -331,6 +345,8 @@ interface HostSurvey {
   hasInstance: boolean;
   /** The walk stopped at the node cap, so `ids` is a PREFIX of what is there. */
   truncated: boolean;
+  /** How many nodes the host already holds, instances included. */
+  count: number;
   ids: Set<string>;
 }
 
@@ -345,6 +361,7 @@ function surveyHost(nodes: readonly unknown[], maxNodes: number): HostSurvey {
   const ids = new Set<string>();
   let hasInstance = false;
   let truncated = false;
+  let count = 0;
   let budget = maxNodes;
   walkForest(nodes, entry => {
     if (budget <= 0) {
@@ -352,13 +369,14 @@ function surveyHost(nodes: readonly unknown[], maxNodes: number): HostSurvey {
       return "stop";
     }
     budget -= 1;
+    count += 1;
     const node = entry.node;
     if (!isPlainRecord(node)) return "descend";
     if (typeof node.id === "string") ids.add(node.id);
     if (node.type === COMPONENT_INSTANCE_TYPE) hasInstance = true;
     return "descend";
   });
-  return { hasInstance, truncated, ids };
+  return { hasInstance, truncated, count, ids };
 }
 
 /** The component a node references, or `undefined` if it references none. */
@@ -470,6 +488,20 @@ function expandInstance(
   presupplied?: Record<string, ResolvedBlockNode[]>,
   owner?: string
 ): ResolvedBlockNode[] {
+  // Asked before anything else, including whether the instance is even well
+  // formed. A gated node is not served, so composing it is work nobody
+  // receives — and reporting it would put an instance the reader never sees
+  // into the list a publish check reads.
+  //
+  // The instance is returned STANDING, carrying its gate, so the pass that
+  // prunes hidden nodes removes it and its whole subtree exactly as it would
+  // any other gated node. Expanding it instead drops the gate on the floor:
+  // the definition's roots replace the instance, none of them inherits it, and
+  // the later pass sees a tree with nothing left to prune. That is the
+  // direction `visibility.ts` names as the unrecoverable one — content shown
+  // to a reader it was withheld from cannot be taken back.
+  if (isConditionGated(instance)) return [instance];
+
   const componentId = componentIdOf(instance);
   if (componentId === undefined) {
     return [refuse(run, instance, "", "malformed")];
@@ -491,11 +523,18 @@ function expandInstance(
   // slots — so a mark taken after it would leave a refused instance having
   // permanently charged the page for a tree nobody receives.
   const mark = savepoint(run);
-  const supplied = presupplied ?? suppliedSlots(instance, run, scope, depth);
+  // The instance node is REPLACED, so its own slot under the cap is freed for
+  // what replaces it. Credited before the clone rather than after, or a
+  // definition that exactly fills the remaining room is refused for needing
+  // one node more than the document will actually hold.
+  run.budget += 1;
+  const supplied =
+    presupplied ?? suppliedSlots(instance, definition, run, scope, depth);
   const ctx: InlineContext = {
     run,
     scopeKey: instance.id,
     owner: owner ?? instance.id,
+    domIds: new Map<string, string>(),
     plans: planEdits(definition, instance, supplied),
     scope: {
       depth: scope.depth + 1,
@@ -510,7 +549,53 @@ function expandInstance(
     rollback(run, mark);
     return [refuse(run, instance, componentId, reason)];
   }
-  return inlined;
+  return withInstanceDevices(inlined, instance);
+}
+
+/**
+ * Carry an instance's per-breakpoint hiding onto the roots that replace it.
+ *
+ * `devices` is NOT a gate — `isConditionGated` excludes it deliberately, since
+ * per-breakpoint hiding is CSS applied to a node that is always served. So it
+ * cannot be handled by leaving the instance standing; it has to travel, or an
+ * author who hid a whole component on mobile silently gets it back.
+ *
+ * Only `false` propagates. The instance may hide what the definition shows; it
+ * may not SHOW what the definition hid, because the definition's author made
+ * that decision about their own content and an instance saying "visible at
+ * mobile" is answering a different question.
+ */
+function withInstanceDevices(
+  roots: ResolvedBlockNode[],
+  instance: ResolvedBlockNode
+): ResolvedBlockNode[] {
+  const envelope = instance.visibility;
+  if (envelope === undefined) return roots;
+  const devices = envelope.devices;
+  if (!isPlainRecord(devices)) return roots;
+  const hidden = boundedOwnKeys(devices, MAX_ENVELOPE_ENTRIES);
+  if (hidden === null || hidden.length === 0) return roots;
+
+  return roots.map(root => {
+    const own = root.visibility;
+    const merged: Record<string, unknown> = isPlainRecord(own?.devices)
+      ? { ...own.devices }
+      : {};
+    let changed = false;
+    for (const id of hidden) {
+      if (ownEntry(devices, id) !== false) continue;
+      defineEntry(merged, id, false);
+      changed = true;
+    }
+    if (!changed) return root;
+    return {
+      ...root,
+      visibility: {
+        ...(own ?? {}),
+        devices: merged as Record<string, boolean>,
+      },
+    };
+  });
 }
 
 /** Everything one speculative expansion may have to give back. */
@@ -566,6 +651,13 @@ function refusalFor(
   if (!isPlainRecord(definition) || !Array.isArray(definition.nodes)) {
     return "missing";
   }
+  // A structural check is not the discrimination. `DefinitionsById` is keyed to
+  // `BlockDocument`, so a page, a region or a template satisfies "has a nodes
+  // array" and would be inlined as though it were a component — content from
+  // another document appearing inside this one, with its exposed properties
+  // and slots meaning nothing. The kind is what the engine already publishes
+  // an answer for.
+  if (!isComponentDocument(definition)) return "malformed";
   return undefined;
 }
 
@@ -606,13 +698,49 @@ function noteReference(run: ResolveRun, componentId: string): void {
  */
 function suppliedSlots(
   instance: ResolvedBlockNode,
+  definition: ComponentDocument,
   run: ResolveRun,
   scope: ComposedScope,
   depth: number
 ): Record<string, ResolvedBlockNode[]> | undefined {
   const slots = instance.slots;
   if (!isPlainRecord(slots)) return undefined;
-  return inlineHostSlots(slots, run, scope, depth);
+  const wanted = exposedSlotContent(slots, definition);
+  if (wanted === undefined) return undefined;
+  return inlineHostSlots(wanted, run, scope, depth);
+}
+
+/**
+ * The instance's slot content, narrowed to the slots the definition still has.
+ *
+ * Narrowed BEFORE it is resolved, which is the whole point. An author who
+ * removed an exposed slot leaves every instance holding content under a key
+ * nothing will insert; resolving it first spends the page's node budget on a
+ * tree nobody receives, mints ids for it, and records a diagnostic naming a
+ * node absent from the returned document — so a large enough orphan can refuse
+ * the visible instance that contains it.
+ *
+ * The content is KEPT in the stored instance regardless. This decides what a
+ * render walks, not what an author owns: re-exposing the slot must bring the
+ * content back.
+ */
+function exposedSlotContent(
+  slots: Record<string, ResolvedBlockNode[]>,
+  definition: ComponentDocument
+): Record<string, ResolvedBlockNode[]> | undefined {
+  const exposed = definition.slots;
+  if (!isPlainRecord(exposed)) return undefined;
+  const ids = boundedOwnKeys(exposed, MAX_ENVELOPE_ENTRIES);
+  if (ids === null) return undefined;
+  const wanted: Record<string, ResolvedBlockNode[]> = {};
+  let any = false;
+  for (const id of ids) {
+    const content = ownEntry(slots, id);
+    if (content === undefined) continue;
+    any = true;
+    defineEntry(wanted, id, content);
+  }
+  return any ? wanted : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -685,12 +813,13 @@ function collectOverrides(
   into: Map<string, OverrideValue>
 ): void {
   if (!isPlainRecord(source)) return;
-  let budget = MAX_ENVELOPE_ENTRIES;
-  for (const key of Object.keys(source)) {
-    if (budget <= 0) return;
-    budget -= 1;
-    into.set(key, ownEntry(source, key));
-  }
+  // Bounded during the walk, not after it. `Object.keys` on a record with a
+  // hundred thousand keys allocates all of them before a budget checked in the
+  // loop body gets a turn, so the cap would bound the work done PER key and
+  // nothing at all about reaching them.
+  const keys = boundedOwnKeys(source, MAX_ENVELOPE_ENTRIES);
+  if (keys === null) return;
+  for (const key of keys) into.set(key, ownEntry(source, key));
 }
 
 /** Turn overridden exposure ids into per-node edits. */
@@ -750,10 +879,9 @@ function planSlots(
   plans: Map<string, NodePlan>
 ): void {
   if (!isPlainRecord(slots)) return;
-  let budget = MAX_ENVELOPE_ENTRIES;
-  for (const id of Object.keys(slots)) {
-    if (budget <= 0) return;
-    budget -= 1;
+  const ids = boundedOwnKeys(slots, MAX_ENVELOPE_ENTRIES);
+  if (ids === null) return;
+  for (const id of ids) {
     const content = ownEntry(supplied, id);
     const target = slotTarget(ownEntry(slots, id));
     if (!Array.isArray(content) || target === undefined) continue;
@@ -811,6 +939,15 @@ interface InlineContext {
    */
   owner: string;
   plans: ReadonlyMap<string, NodePlan>;
+  /**
+   * Original DOM id to its replacement, for this instance.
+   *
+   * Asked once per distinct ORIGINAL, so a definition whose two nodes carry
+   * one DOM id maps both to a single replacement — the pair pointed at one
+   * target before and still reaches one target after. The same memo
+   * `reidSubtreeWithMap` keeps, for the same reason.
+   */
+  domIds: Map<string, string>;
   /** The scope INSIDE this component, for instances the definition itself holds. */
   scope: ComposedScope;
 }
@@ -914,7 +1051,52 @@ function scopeNode(
   if (plan !== undefined && plan.props.length > 0) {
     scoped.props = editedProps(node.props, plan.props);
   }
+  applyScopedDomIds(scoped, ctx);
   return scoped;
+}
+
+/**
+ * Give this copy of the definition its own DOM ids.
+ *
+ * One definition inlined into two instances publishes its `cssId` and its
+ * `id` attribute twice, which is a duplicate HTML id — so an anchor, a
+ * `<label for>` or an id selector reaches whichever instance the browser
+ * happens to find first. Node ids are already scoped; these are the other
+ * addresses a document carries and they were being spread through untouched.
+ *
+ * `mintDomId` rather than a rule of its own: pattern insert solves exactly
+ * this when it copies a subtree, a page may hold the output of both, and two
+ * spellings of one replacement would put two ids on one target.
+ */
+function applyScopedDomIds(
+  scoped: ResolvedBlockNode,
+  ctx: InlineContext
+): void {
+  const remap = (value: string): string => {
+    const existing = ctx.domIds.get(value);
+    if (existing !== undefined) return existing;
+    const minted = mintDomId(value, scoped.id);
+    ctx.domIds.set(value, minted);
+    return minted;
+  };
+
+  if (typeof scoped.cssId === "string" && scoped.cssId !== "") {
+    scoped.cssId = remap(scoped.cssId);
+  }
+  if (!isPlainRecord(scoped.attributes)) return;
+  const names = boundedOwnKeys(scoped.attributes, MAX_ENVELOPE_ENTRIES);
+  if (names === null) return;
+  const next: Record<string, string> = {};
+  for (const name of names) {
+    const value = ownEntry(scoped.attributes, name);
+    if (typeof value !== "string") continue;
+    // Case-insensitively, because HTML attribute names are: a stored `ID` and
+    // a stored `id` address the same thing to a browser, and remapping only
+    // the lowercase spelling leaves the other duplicated.
+    const isId = name.toLowerCase() === "id" && value !== "";
+    defineEntry(next, name, isId ? remap(value) : value);
+  }
+  scoped.attributes = next;
 }
 
 /**

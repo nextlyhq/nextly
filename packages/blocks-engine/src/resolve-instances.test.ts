@@ -15,7 +15,7 @@ import {
   type BlockNode,
   type ComponentDocument,
 } from "./document";
-import { DEFAULT_LIMITS } from "./limits";
+import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import {
   componentIdsIn,
   resolveComponentInstances,
@@ -682,23 +682,28 @@ describe("resolveComponentInstances limits and speculative work", () => {
 
   it("gives back the budget an instance's slot content spent before it failed", () => {
     const definitions = defs({
-      big: component([node("b1"), node("b2")]),
-      small: component([node("s1"), node("s2"), node("s3")]),
+      // `big` must EXPOSE the slot, or its content is never resolved at all
+      // and there is no spend to give back.
+      big: component([box("b1", []), node("b2"), node("b3")], {
+        slots: { any: { label: "Any", nodeId: "b1", slot: "children" } },
+      }),
+      small: component([node("s1"), node("s2"), node("s3"), node("s4")]),
     });
     const doc = page([
       instance("i1", "big", {}, { slots: { any: [instance("i2", "small")] } }),
       instance("i3", "small"),
     ]);
 
-    // Three: the host's own node count, and exactly what `small` costs. The
-    // slot content inside `i1` spends all of it and is then thrown away with
-    // `i1`, so the sibling fits only if that spend was given back.
+    // Sized so the sibling fits ONLY if the slot content's spend comes back:
+    // the host holds three nodes, so composition starts with three left, `i1`
+    // spends four of them on slot content that is then thrown away with it,
+    // and `i3` needs four.
     const result = resolveComponentInstances(doc, definitions, {
-      limits: { ...DEFAULT_LIMITS, maxNodes: 3 },
+      limits: { ...DEFAULT_LIMITS, maxNodes: 6 },
     });
 
     expect(result.unresolved.map(e => e.instanceId)).toEqual(["i1"]);
-    expect(byInstanceOf(result.document, "i3")).toHaveLength(3);
+    expect(byInstanceOf(result.document, "i3")).toHaveLength(4);
   });
 
   it("keeps an inlined id stable when an unrelated node joins its definition", () => {
@@ -757,6 +762,177 @@ describe("resolveComponentInstances limits and speculative work", () => {
     });
 
     expect(result.unresolved.map(e => e.reason)).toEqual(["budget"]);
+  });
+});
+
+describe("resolveComponentInstances what an instance carries", () => {
+  it("leaves a condition-gated instance standing rather than expanding it", () => {
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "vip" }]] };
+    const doc = page([
+      { ...instance("i1", "hero"), visibility: gate },
+      node("plain"),
+    ]);
+    const definitions = defs({ hero: component([node("d1"), node("d2")]) });
+
+    const result = resolveComponentInstances(doc, definitions);
+
+    // The gate has to survive INTO the tree the later pass prunes. Expanding
+    // and dropping it serves restricted content to everyone.
+    expect(result.document.nodes.map(e => e.id)).toEqual(["i1", "plain"]);
+    expect(result.document.nodes[0]!.visibility).toEqual(gate);
+    expect(result.unresolved).toEqual([]);
+    expect(result.referenced).toEqual([]);
+  });
+
+  it("carries an instance's per-breakpoint hiding onto every root", () => {
+    const doc = page([
+      {
+        ...instance("i1", "hero"),
+        visibility: { devices: { mobile: false, desktop: true } },
+      },
+    ]);
+    const definitions = defs({ hero: component([node("d1"), node("d2")]) });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes).toHaveLength(2);
+    expect(nodes.map(e => e.visibility?.devices?.mobile)).toEqual([
+      false,
+      false,
+    ]);
+    // Only hiding travels: the instance may not un-hide what the definition hid.
+    expect(nodes[0]!.visibility?.devices).not.toHaveProperty("desktop");
+  });
+
+  it("does not let an instance re-show a root its definition hid", () => {
+    const doc = page([
+      {
+        ...instance("i1", "hero"),
+        visibility: { devices: { mobile: true } },
+      },
+    ]);
+    const definitions = defs({
+      hero: component([
+        node("d1", { visibility: { devices: { mobile: false } } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[0]!.visibility?.devices?.mobile).toBe(false);
+  });
+
+  it("gives each instance its own DOM ids for one definition", () => {
+    const doc = page([instance("i1", "hero"), instance("i2", "hero")]);
+    const definitions = defs({
+      hero: component([
+        node("d1", { cssId: "signup", attributes: { ID: "signup" } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[0]!.cssId).not.toBe(nodes[1]!.cssId);
+    expect(nodes[0]!.attributes!.ID).not.toBe(nodes[1]!.attributes!.ID);
+    // Derived from the original, so it stays recognisable in a URL fragment.
+    expect(nodes[0]!.cssId).toContain("signup");
+  });
+
+  it("maps one definition's repeated DOM id to a single replacement", () => {
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        node("d1", { cssId: "dup" }),
+        node("d2", { cssId: "dup" }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    // The pair addressed one target before composition and must after.
+    expect(nodes[0]!.cssId).toBe(nodes[1]!.cssId);
+  });
+});
+
+describe("resolveComponentInstances bounds", () => {
+  it("counts the host's surviving nodes against the composition budget", () => {
+    const doc = page([node("keep"), instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([node("d1"), node("d2"), node("d3")]),
+    });
+
+    const result = resolveComponentInstances(doc, definitions, {
+      limits: { ...DEFAULT_LIMITS, maxNodes: 3 },
+    });
+
+    expect(flatten(result.document.nodes)).toHaveLength(2);
+    expect(result.unresolved.map(e => e.reason)).toEqual(["budget"]);
+  });
+
+  it("spends the slot the replaced instance itself gives up", () => {
+    const doc = page([node("keep"), instance("i1", "hero")]);
+    const definitions = defs({ hero: component([node("d1"), node("d2")]) });
+
+    // Two host nodes and a two-node definition under a cap of three: it fits
+    // only because the instance node is replaced rather than added to.
+    const result = resolveComponentInstances(doc, definitions, {
+      limits: { ...DEFAULT_LIMITS, maxNodes: 3 },
+    });
+
+    expect(flatten(result.document.nodes)).toHaveLength(3);
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it("never resolves slot content the definition no longer exposes", () => {
+    const doc = page([
+      instance(
+        "i1",
+        "hero",
+        {},
+        { slots: { gone: [instance("i2", "absent")] } }
+      ),
+    ]);
+    const definitions = defs({ hero: component([node("d1")]) });
+
+    const result = resolveComponentInstances(doc, definitions);
+
+    expect(result.unresolved).toEqual([]);
+    expect(result.referenced).toEqual(["hero"]);
+  });
+
+  it("refuses an oversized overrides record rather than applying part of it", () => {
+    const overrides: Record<string, unknown> = { headline: "APPLIED" };
+    for (let i = 0; i < MAX_ENVELOPE_ENTRIES + 1; i += 1) {
+      overrides[`k${i}`] = i;
+    }
+    const definition = component([node("d1", { props: { text: "base" } })], {
+      exposed: [
+        {
+          id: "headline",
+          label: "H",
+          nodeId: "d1",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    });
+    const doc = page([instance("i1", "hero", { overrides })]);
+
+    const result = resolveComponentInstances(doc, defs({ hero: definition }));
+
+    // Applying a prefix would make which overrides an author gets depend on
+    // key enumeration order.
+    expect(result.document.nodes[0]!.props.text).toBe("base");
+  });
+
+  it("refuses a definition that is not a component document", () => {
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({ hero: page([node("d1")]) });
+
+    const result = resolveComponentInstances(doc, definitions);
+
+    expect(result.unresolved.map(e => e.reason)).toEqual(["malformed"]);
+    expect(idsOf(result.document)).toEqual(["i1"]);
   });
 });
 
