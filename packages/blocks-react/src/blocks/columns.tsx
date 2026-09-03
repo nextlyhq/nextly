@@ -95,19 +95,19 @@ export const COLUMNS_BASE_STYLES = {
        * nothing turned a token set into CSS; that is fixed, and `PageRenderer`
        * now compiles a site sheet by default.
        *
-       * It is still not safe HERE. A consumer holding a stored `styles`
-       * artifact and passing it back with no `styleContext` gets no site sheet
-       * at all — `PageRenderer` withholds one when no breakpoints are stated —
-       * while the stored page CSS still carries the reference. Measured on that
-       * path: `gap: var(--site-space-4)` present, `--site-space-4` undefined, so
-       * the declaration is invalid at computed-value time and the gutter is zero
-       * again. `core/card` is live in exactly that state today, which is what
-       * the token migration is waiting on rather than this block.
+       * It was not safe HERE until the renderer stopped withholding the token
+       * tier from a consumer holding a stored `styles` artifact. On that path
+       * the stored page CSS carried `gap: var(--site-space-4)` with the property
+       * undeclared, which is invalid at computed-value time, and `gap` fell back
+       * to `normal` — zero for a grid, and the exact defect this block was fixed
+       * for. Measured on that same path now: `--site-space-4` is declared and
+       * resolves to `1rem`, which is the value the literal was standing in for.
        *
-       * `1rem` is what `space.4` declares, so the value survives the change back
-       * once the definition reaches every path a reference does.
+       * So the gutter follows the site again. A site that redefines `space.4`
+       * moves this row with it, which is what a token set is for and what a
+       * length hard-coded here could never do.
        */
-      gap: "1rem",
+      gap: { $token: "space.4" },
     },
   },
 } as const;
