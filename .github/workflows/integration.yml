@@ -248,10 +248,17 @@ jobs:
       # Builds all three adapters for the same reason the database job does:
       # nextly's database/factory.ts references them as optional peers, and
       # turbo's `^build` does not traverse peerDependencies.
+      # `plugin-seo` runs on THIS leg only, unlike the packages beside it. Its
+      # suites call `createTestNextly`, which boots on in-memory SQLite and
+      # names no dialect, so the postgres and mysql legs would run byte-identical
+      # work — three times the runtime for one answer. They are here rather than
+      # in the unit `Test` step because each case boots a real instance, and
+      # doing that while seventeen other suites run in parallel is what took one
+      # past a 30s budget on CI while it finishes in about 1.5s alone.
       - name: Run integration tests (sqlite)
         run: |
-          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder
-          pnpm turbo test:integration --filter=@nextlyhq/adapter-sqlite --filter=nextly --filter=@nextlyhq/plugin-page-builder
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-seo
+          pnpm turbo test:integration --filter=@nextlyhq/adapter-sqlite --filter=nextly --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-seo
         env:
           TURBO_CACHE_DIR: .turbo
 

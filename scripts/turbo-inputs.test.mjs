@@ -87,7 +87,16 @@ function dryRun() {
 }
 
 function resolvedTasks() {
-  return dryRun().tasks;
+  // The `check-types` tasks ONLY, rather than everything the run contains.
+  //
+  // `check-types` depends on `^build`, so the graph carries a `build` task for
+  // every dependency as well, and each assertion below is about how a package's
+  // TYPE-CHECK is hashed and what it depends on. Unfiltered, they read a
+  // `build` task's definition and report it under a check-types message — which
+  // is how a correct `build` (`dependsOn: ["^build"]`, and no command at all in
+  // a package that ships no build) arrives as a package that "has no runnable
+  // check-types command".
+  return dryRun().tasks.filter(entry => entry.task === "check-types");
 }
 
 /** The TypeScript modules git tracks inside a package. */
@@ -277,6 +286,14 @@ describe("every tracked file a compiler reads is covered by some hash", () => {
   const dry = dryRun();
   const globalFiles = new Set(Object.keys(dry.globalCacheInputs.files));
   const byPackage = new Map(dry.tasks.map(task => [task.package, task]));
+  // Every runnable task in the run, `build` included — not just `check-types`.
+  //
+  // Unlike `resolvedTasks`, this block asks what a task's compiler READS and
+  // whether the hash covers it, which is as true of a build as of a typecheck:
+  // inputs that miss a source file leave the cache valid across an edit to it
+  // either way. `check-types` depends on `^build`, so the build tasks arrive
+  // here through that edge rather than by being asked for, and stating it is
+  // what stops them disappearing unremarked if the edge ever moves.
   const runnable = dry.tasks.filter(
     task => !String(task.command).includes("NONEXISTENT")
   );
@@ -355,6 +372,43 @@ describe("a package's hash covers the program it actually compiles", () => {
         task.resolvedTaskDefinition.dependsOn,
         `${task.package} does not depend on its dependencies' check-types, so a change in one cannot move its hash`
       ).toContain("^check-types");
+    }
+  });
+
+  // Each edge gets its own case, because they answer different questions and a
+  // single assertion over the array would report the wrong one as missing.
+  it("reads each dependency's BUILD, not only its hash", () => {
+    // Five packages map a neighbour at its source; every other one resolves
+    // `@nextlyhq/*` through package exports, which point at `dist`. Without
+    // this edge such a package typechecks against whatever artifact survived,
+    // and a stale one answers about code that is gone — silently, in the
+    // passing direction.
+    const withCommand = resolvedTasks().filter(
+      task => !String(task.command).includes("NONEXISTENT")
+    );
+    expect(withCommand.length).toBeGreaterThan(15);
+    for (const task of withCommand) {
+      expect(
+        task.resolvedTaskDefinition.dependsOn,
+        `${task.package} typechecks without building its dependencies, so a stale dist answers for them`
+      ).toContain("^build");
+    }
+  });
+
+  it("orders its OWN build before it, so one build-info file has one writer", () => {
+    // `${configDir}/.tsbuildinfo` is one file per package and both tasks write
+    // it. The `^build` edge above puts both in a single run, so without this
+    // they are unordered siblings free to write and restore it at once.
+    // Asserted as the un-prefixed `build`: `^build` is a different edge and
+    // satisfies neither this nor the case above.
+    const withCommand = resolvedTasks().filter(
+      task => !String(task.command).includes("NONEXISTENT")
+    );
+    for (const task of withCommand) {
+      expect(
+        task.resolvedTaskDefinition.dependsOn,
+        `${task.package} may typecheck while its own build writes the same .tsbuildinfo`
+      ).toContain("build");
     }
   });
 });

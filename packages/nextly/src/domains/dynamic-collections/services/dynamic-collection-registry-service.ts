@@ -6,6 +6,7 @@ import type { RevalidateConfig } from "../../../revalidation/types";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
+  StoredHookConfig,
   MigrationStatus,
   StoredWebhookRecording,
 } from "../../../schemas/dynamic-collections/types";
@@ -82,7 +83,12 @@ export interface CollectionMetadata {
     publish?: { type: string; allowedRoles?: string[] };
     unpublish?: { type: string; allowedRoles?: string[] };
   };
-  hooks?: Record<string, unknown>[];
+  /**
+   * The canonical stored-hook shape, not a looser record: the registry row
+   * these feed is typed with it, and the executor reads `config` and `order`
+   * off every entry.
+   */
+  hooks?: StoredHookConfig[];
   createdBy?: string;
 }
 

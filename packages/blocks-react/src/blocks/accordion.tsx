@@ -36,20 +36,17 @@
  * makes it design pressure rather than three mistakes: when the correct
  * mechanism is unreachable, the thing that LOOKS like it works gets reached for.
  *
- * This docblock used to continue "…this renderer emits `--site-*`", and to say
- * `defaultSiteTokens()` "guarantees" a named set. **Both were false and the
- * second is the load-bearing one: this renderer emits NOTHING.**
- * `compileSiteSheet` — the only thing that turns a token set into CSS — has zero
- * consumers outside `blocks-engine`, and `--site-` appears in no source file
- * outside the engine (positive control: `--nx-` appears in over a hundred). So
- * the default token set is a default nobody applies, and a `{ $token }` here
- * would dangle for the same reason `--nx-*` does — not a different namespace,
- * the same emptiness.
+ * The gap is `space.4`, and the route it took is worth keeping. This block
+ * shipped with `{ $token: "space.4" }` and its sections rendered touching,
+ * because nothing turned the token set into CSS: an unresolved `var()` makes
+ * the declaration invalid at computed-value time and `gap` falls back to
+ * `normal` — zero for a grid. It became a plain length for that reason, and is
+ * a token again now that `PageRenderer` emits the token tier on every path a
+ * reference reaches, including a stored artifact handed back with no context.
  *
- * That is not hypothetical here: this block shipped with `{ $token: "space.4" }`
- * and its sections rendered touching, because an unresolved `var()` makes the
- * declaration invalid at computed-value time and `gap` falls back to `normal` —
- * zero for a grid.
+ * The `--nx-` half of that history stands: that namespace belongs to the admin
+ * and this renderer never emits it, so a rule using it resolves to nothing on a
+ * published page while looking right in an editor preview.
  *
  * Separation between sections is therefore a LENGTH, which needs no stylesheet
  * to resolve, and the divider is left to the author until the site stylesheet
@@ -86,11 +83,13 @@ export const ACCORDION_BASE_STYLES = {
   base: {
     base: {
       display: "grid",
-      // A LENGTH, not a token: nothing emits token CSS yet, so a `{ $token }`
-      // reference compiles to a `var()` with nothing behind it and the gap
-      // silently falls back to `normal`, which for a grid is zero. `1rem` is
-      // what `space.4` itself declares, so the value survives the change back.
-      gap: "1rem",
+      // The site's spacing token. This was a length while nothing declared
+      // `--site-*` on every path a reference reaches: the value compiled to a
+      // `var()` with nothing behind it and `gap` fell back to `normal`, zero for
+      // a grid. Measured on the path that used to fail — a stored artifact
+      // handed back with no context — the property is now declared and resolves
+      // to `1rem`, the value the literal stood in for.
+      gap: { $token: "space.4" },
     },
   },
 } as const;

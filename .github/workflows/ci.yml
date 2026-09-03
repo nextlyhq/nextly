@@ -462,15 +462,23 @@ jobs:
         run: pnpm lint:workspace
 
       # Identified for the same reason `install` is, and the reason is in
-      # AGENTS.md rather than here: `turbo.jsonc` gives `lint` no dependency at
-      # all and `check-types` only `^check-types`, so neither rebuilds — they
-      # read whatever `dist` survived. On an unbuilt tree `check-types` fails
-      # workspace-wide on TS2307 through the siblings' export maps and `lint`
-      # fails on `import-x/no-unresolved`, and the dangerous half is that every
-      # TYPE-AWARE lint rule then reports on types the checker cannot see: the
+      # AGENTS.md rather than here: these steps read `dist`, and what they say
+      # without one is misleading rather than merely absent.
+      #
+      # `turbo.jsonc` gives `lint` no dependency at all, so it reads whatever
+      # `dist` survived. On an unbuilt tree it fails on
+      # `import-x/no-unresolved`, and the dangerous half is that every
+      # TYPE-AWARE rule then reports on types the checker cannot see: the
       # message names YOUR EXPRESSION and reads as a correctness defect whose
       # obvious remedy is a real regression. `publint` and `arethetypeswrong`
       # read `dist` directly and have nothing to say without one.
+      #
+      # `check-types` carries `^build`, so it rebuilds its own dependencies and
+      # no longer fails workspace-wide on TS2307 through the siblings' export
+      # maps. It stays on this gate anyway, for a different reason than the
+      # others: the build it would run is the one the Build step just ran and
+      # failed, so letting it proceed reports a single defect a second time
+      # under a name that points at the wrong package.
       #
       # So a failed Build legitimately skips those FOUR, exactly as a failed
       # install skips everything: reporting one defect four ways, all of them
@@ -507,11 +515,15 @@ jobs:
       #
       # ui / storage-s3 / storage-uploadthing have no test files yet; listed so
       # they gate automatically the moment they gain one.
+      # admin-css is listed because its suite compiles a fixture stylesheet, and
+      # what that compile emits depends on the repository around it rather than
+      # on this package alone - so it is a suite an unrelated change can turn
+      # red, which is exactly the kind nothing should have to remember to run.
       # NOT gated on Build, unlike the four steps around it: turbo.jsonc gives
       # `test` `dependsOn: ["^build"]`, so `turbo test` rebuilds the dependency
       # subgraph of whatever it is filtered to. A Build failure in a package
-      # none of these seventeen depends on - an app, which is a leaf - would
-      # otherwise silence all seventeen suites for no reason, and a failure in
+      # none of these depends on - an app, which is a leaf - would otherwise
+      # silence every suite listed here for no reason, and a failure in
       # one they DO depend on is reported as an attributed `#build` failure
       # here rather than as the type-aware noise the others would produce.
       - name: Test
@@ -526,6 +538,7 @@ jobs:
           --filter=@nextlyhq/plugin-seo
           --filter=@nextlyhq/plugin-sdk
           --filter=@nextlyhq/ui
+          --filter=@nextlyhq/admin-css
           --filter=@nextlyhq/adapter-drizzle
           --filter=@nextlyhq/adapter-postgres
           --filter=@nextlyhq/adapter-mysql
@@ -539,7 +552,7 @@ jobs:
           TURBO_CACHE_DIR: .turbo
 
       # The playground is an APP, so `turbo test`'s filter list above — which
-      # names the seventeen publishable packages — never reaches it, and its
+      # names publishable packages only — never reaches it, and its
       # suites ran nowhere. That was already true of its dev-tooling tests
       # (doctor, reset, the style-fixture manifest); it now also covers the
       # seeded block-page fixture, whose whole job is to fail when a block is

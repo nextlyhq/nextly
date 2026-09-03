@@ -286,6 +286,49 @@ function DescriptionStrip({
 }
 
 /**
+ * What a press does, for the pointer that has no other way to ask.
+ *
+ * A press moves the highlight, so the strip above describes the tile under the
+ * finger before it lifts. That is the affordance a touch author could not
+ * discover: on a pointer that cannot hover, the only way to read a tile looked
+ * like the way to take it.
+ *
+ * WHAT IT DOES NOT CLAIM. An earlier wording offered "slide off to cancel",
+ * and that is not reliably true: the canvas sits beside this panel and IS a
+ * drop target, so a finger sliding horizontally out of the tile can start a
+ * palette drag and insert on release. Only a release over nothing declines,
+ * and which regions those are depends on the layout the host mounted. Both
+ * clauses here hold wherever the panel is mounted — pressing reads, lifting
+ * commits — and an author who knows lifting commits can hold and think.
+ *
+ * SHOWN FROM THE POINTER THAT WAS ACTUALLY USED, not from a media query.
+ * `(pointer: coarse)` describes the PRIMARY pointer, so a touchscreen laptop
+ * driven by its trackpad reports `fine` and hides this from the author the
+ * moment they reach up and touch the screen. The pointer type on the event is
+ * the input in hand rather than the one the device is classified by, and it
+ * has the side benefit of appearing exactly when it is relevant: after the
+ * first press, which is when the question arises.
+ *
+ * `aria-hidden`, deliberately. It describes a POINTER gesture, and a screen
+ * reader on a touch device does not activate a control by lifting a finger
+ * from it — the guidance would be wrong for exactly the people an accessible
+ * name is for. The block's description reaches them through each tile's own
+ * `aria-describedby` regardless.
+ */
+function TouchGestureHint({
+  shown,
+}: {
+  shown: boolean;
+}): React.JSX.Element | null {
+  if (!shown) return null;
+  return (
+    <p aria-hidden className="nx-insert-panel__gesture-hint">
+      Press to read · lift to insert
+    </p>
+  );
+}
+
+/**
  * The entry a command value names, or the first one offered.
  *
  * Scoped to the GROUPS rather than to the whole catalog, because a filter can
@@ -334,6 +377,18 @@ export function InsertPanel({
   beginInsertDrag,
 }: InsertPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
+  /*
+   * Whether a TOUCH has pressed a tile in this panel yet.
+   *
+   * Set from the pointer that was actually used rather than read from a media
+   * query, because `(pointer: coarse)` describes the device's PRIMARY pointer:
+   * a touchscreen laptop driven by its trackpad reports `fine`, and the
+   * guidance would be hidden from an author the moment they reach up and touch
+   * the screen. It also appears exactly when it is relevant — after the first
+   * press, which is when the question arises — and never for a pointer that
+   * reads a tile by hovering it.
+   */
+  const [touchPressed, setTouchPressed] = React.useState(false);
 
   // ONE snapshot, taken per mount, that both the catalog and the default
   // expansion below read. The panel documents its palette as read once per
@@ -561,6 +616,11 @@ export function InsertPanel({
                   // that supplies no drag leaves the row exactly as it was.
                   onPointerDown={event => {
                     /*
+                     * The input in hand, recorded before anything else in this
+                     * handler can return early.
+                     */
+                    if (event.pointerType === "touch") setTouchPressed(true);
+                    /*
                      * Describe this tile on the PRESS, not only on a hover.
                      *
                      * A touch screen produces no `pointermove` before contact,
@@ -614,6 +674,12 @@ export function InsertPanel({
           ))}
         </CommandList>
         <DescriptionStrip groups={groups} tokens={tokens} />
+        {/*
+          Not drawn while nothing is offered: with the search filtered to no
+          matches the panel would show "No blocks match" beside an instruction
+          about pressing tiles, and spend scarce panel height doing it.
+        */}
+        <TouchGestureHint shown={touchPressed && groups.length > 0} />
       </Command>
     </div>
   );
