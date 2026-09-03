@@ -59,7 +59,7 @@ vi.mock("../auth/entity-read-access", async importOriginal => {
 });
 
 import { requireAuthentication } from "../auth/middleware";
-import { clearSources } from "../domains/widgets/sources";
+import { clearSources, registerSource } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
 import { setNextlyLogger } from "../observability/logger";
 
@@ -399,6 +399,92 @@ describe("POST /api/dashboard/query", () => {
 
       expect(slot.ok).toBe(false);
       expect(slot.error).toContain("zzz");
+    });
+  });
+
+  describe("a system source is admitted, and authorized where its rows live", () => {
+    // Registered directly rather than through `registerSystemSource`, because
+    // `executeWidgetQuery` is mocked in this file: what is under test is the
+    // ENDPOINT's gate, and a resolver would only be consulted past it.
+    // `refreshCollectionSources` replaces sources by KIND, so this survives it.
+    beforeEach(() => {
+      registerSource({
+        id: "system:releases",
+        label: "Releases",
+        kind: "system",
+        supports: ["count"],
+        fields: [{ name: "title", type: "string" }],
+      });
+    });
+
+    it("reaches execution rather than being refused as an unexecutable kind", async () => {
+      // 🔴 The gate refused every kind but `collection`, so a registered system
+      // source was unreachable through the only production caller: the whole
+      // mechanism answered "unavailable source" to every reader.
+      const res = await postWidgetQuery(
+        makeReq({ queries: [{ source: "system:releases", op: "count" }] })
+      );
+
+      const [slot] = await slotsOf(res);
+      expect(slot.ok).toBe(true);
+      expect(executeWidgetQuery).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "system:releases" }),
+        expect.anything()
+      );
+    });
+
+    it("takes NO entity read decision of its own", async () => {
+      // 🔴 The property that keeps this from becoming a second access
+      // implementation. A system source's rows are not an entity the permission
+      // table names, and the service that owns them authorizes this same caller
+      // -- a decision invented here would be a coarser rule shadowing that one,
+      // free to drift from it. A `mayRead` added for these sources fails here.
+      await postWidgetQuery(
+        makeReq({ queries: [{ source: "system:releases", op: "count" }] })
+      );
+
+      expect(canReadEntity).not.toHaveBeenCalled();
+    });
+
+    it("still refuses a kind nothing executes", async () => {
+      // The control. A gate that admitted everything but collections would
+      // satisfy both cases above while opening every unimplemented kind.
+      registerSource({
+        id: "plugin:stripe/revenue",
+        label: "Revenue",
+        kind: "plugin",
+        supports: ["count"],
+        fields: [{ name: "title", type: "string" }],
+      });
+
+      const res = await postWidgetQuery(
+        makeReq({ queries: [{ source: "plugin:stripe/revenue", op: "count" }] })
+      );
+
+      const [slot] = await slotsOf(res);
+      expect(slot.ok).toBe(false);
+      expect(executeWidgetQuery).not.toHaveBeenCalled();
+    });
+
+    it("refuses an unregistered system source the SAME WAY as a collection the caller may not read", async () => {
+      // 🔴 Admitting the kind must not make the id an oracle. Both dead ends
+      // answer with the one shared string, so "no such system source" cannot be
+      // told from "not yours".
+      canReadEntity.mockResolvedValue(false);
+
+      const res = await postWidgetQuery(
+        makeReq({
+          queries: [
+            { source: "system:nothing-here", op: "count" },
+            { source: "collection:posts", op: "count" },
+          ],
+        })
+      );
+
+      const [absent, forbidden] = await slotsOf(res);
+      expect(absent.ok).toBe(false);
+      expect(forbidden.ok).toBe(false);
+      expect(absent.error).toBe(forbidden.error);
     });
   });
 
