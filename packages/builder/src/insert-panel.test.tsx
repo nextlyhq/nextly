@@ -881,40 +881,95 @@ describe("the grid, and the strip that describes it", () => {
     expect(block).not.toContain("flex: none");
   });
 
-  it("tells a touch author how to decline a tile", () => {
+  /** One definition with a description, so the strip and tiles both draw. */
+  const described = [
+    {
+      ...base,
+      name: "acme/solo",
+      description: "A block with a description, so the strip renders.",
+      editor: { label: "Solo", category: "Layout" },
+    },
+  ] as never;
+
+  /** Press the first tile with the given pointer, as a device would. */
+  function pressTile(pointerType: string): void {
+    const tile = document.querySelector("[cmdk-item]") as HTMLElement;
+    fireEvent.pointerDown(tile, { pointerType });
+  }
+
+  it("says nothing until a pointer has actually been used", () => {
     /*
-     * A press moves the highlight, so the strip describes the tile under the
-     * finger before it lifts, and releasing away from the tile inserts
-     * nothing — measured in a browser under touch emulation. Both halves work;
-     * nothing announced the second one.
+     * The hint answers a question a hovering pointer never asks, and drawing
+     * it before any press would spend panel height on an instruction nobody
+     * has needed yet.
      */
-    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    render(
+      <InsertPanel editor={editorSpy(documentOf())} definitions={described} />
+    );
+
+    expect(document.querySelector(".nx-insert-panel__gesture-hint")).toBeNull();
+  });
+
+  it("appears once a TOUCH has pressed a tile", () => {
+    render(
+      <InsertPanel editor={editorSpy(documentOf())} definitions={described} />
+    );
+    pressTile("touch");
 
     const hint = document.querySelector(".nx-insert-panel__gesture-hint");
-    expect(hint?.textContent).toContain("slide off");
+    expect(hint?.textContent).toContain("Press to read");
+    expect(hint?.textContent).toContain("lift to insert");
+  });
+
+  it("stays away for a MOUSE, which reads a tile by hovering it", () => {
+    /*
+     * The discriminating case. A gate that merely waited for any press would
+     * show a mouse author an instruction about a gesture their pointer does
+     * not perform — and it is what a media query on the PRIMARY pointer gets
+     * wrong in the other direction, on a touchscreen laptop driven by its
+     * trackpad.
+     */
+    render(
+      <InsertPanel editor={editorSpy(documentOf())} definitions={described} />
+    );
+    pressTile("mouse");
+
+    expect(document.querySelector(".nx-insert-panel__gesture-hint")).toBeNull();
+  });
+
+  it("promises no cancellation, because sliding off can INSERT", () => {
+    /*
+     * The canvas sits beside this panel and is a drop target, so a finger
+     * sliding horizontally out of a tile can start a palette drag and insert
+     * on release — measured: a drag from a tile onto the canvas inserts.
+     * Wording that offered "slide off to cancel" therefore told an author
+     * declining a block to perform a gesture that can take it.
+     *
+     * Asserted as an absence with the population named, so it cannot pass by
+     * the element being missing altogether.
+     */
+    render(
+      <InsertPanel editor={editorSpy(documentOf())} definitions={described} />
+    );
+    pressTile("touch");
+
+    const hint = document.querySelector(".nx-insert-panel__gesture-hint");
+    expect(hint).not.toBeNull();
+    expect(hint?.textContent?.toLowerCase()).not.toContain("cancel");
+    expect(hint?.textContent?.toLowerCase()).not.toContain("slide off");
   });
 
   it("keeps the hint OUT of the scrollable strip", () => {
     /*
-     * Structural, because the failure is positional rather than textual: the
-     * strip is bounded and scrolls, so a hint placed inside it leaves the
-     * viewport exactly when the description is long — and the authors reading
-     * the longest descriptions are the ones who most need the way out.
+     * Structural, because the failure is positional: the strip is bounded and
+     * scrolls, so a line placed inside it leaves the viewport exactly when the
+     * description is long — and the authors reading the longest descriptions
+     * are the ones who most need to know what a lift does.
      */
-    // One definition with a description, so the strip has something to draw:
-    // it renders nothing when no entry can be offered, and the containment
-    // assertion below would then pass on two absences.
-    const described = [
-      {
-        ...base,
-        name: "acme/solo",
-        description: "A block with a description, so the strip renders.",
-        editor: { label: "Solo", category: "Layout" },
-      },
-    ] as never;
     render(
       <InsertPanel editor={editorSpy(documentOf())} definitions={described} />
     );
+    pressTile("touch");
 
     const strip = document.querySelector(".nx-insert-panel__describes");
     const hint = document.querySelector(".nx-insert-panel__gesture-hint");
@@ -928,56 +983,39 @@ describe("the grid, and the strip that describes it", () => {
      * It describes a POINTER gesture. A screen reader on a touch device does
      * not activate a control by lifting a finger from it, so the sentence is
      * wrong for exactly the people an accessible name serves — and the block's
-     * description reaches them through each tile's own `aria-describedby`
-     * regardless.
+     * description reaches them through each tile's own `aria-describedby`.
      */
-    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    render(
+      <InsertPanel editor={editorSpy(documentOf())} definitions={described} />
+    );
+    pressTile("touch");
 
-    const hint = document.querySelector(".nx-insert-panel__gesture-hint");
-    expect(hint?.getAttribute("aria-hidden")).toBe("true");
+    expect(
+      document
+        .querySelector(".nx-insert-panel__gesture-hint")
+        ?.getAttribute("aria-hidden")
+    ).toBe("true");
   });
 
-  it("shows the hint only where the pointer cannot hover", () => {
+  it("says nothing when the search matches no block", () => {
     /*
-     * Asserted against the stylesheet, for the reason the strip's bound is:
-     * jsdom evaluates no media query, so a case driven through the DOM passes
-     * whether the query is there or not.
-     *
-     * The default is `display: none` and the query TURNS IT ON, which is the
-     * safe direction — a context that cannot evaluate the query shows nothing
-     * rather than showing a mouse user an instruction about a gesture their
-     * pointer never performs.
-     *
-     * WHAT THIS DOES NOT COVER, stated rather than left to look like coverage:
-     * that the line becomes VISIBLE under a coarse pointer. The hidden half is
-     * measured — in a real browser with a mouse the element computes
-     * `display: none` — and the query's presence is asserted here, but nothing
-     * available drives the pointer media features, so the shown half rests on
-     * the rule being three lines of ordinary CSS rather than on a measurement.
+     * With nothing offered the panel already says "No blocks match"; an
+     * instruction about pressing tiles beside it describes tiles that are not
+     * there, and spends panel height doing it.
      */
-    const css = readFileSync(
-      join(process.cwd(), "src/styles/builder-chrome.css"),
-      "utf8"
+    render(
+      <InsertPanel editor={editorSpy(documentOf())} definitions={described} />
     );
-    const stripped = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    pressTile("touch");
+    expect(
+      document.querySelector(".nx-insert-panel__gesture-hint")
+    ).not.toBeNull();
 
-    // Population first: a renamed selector leaves every assertion below
-    // reading an empty string, and absence then passes on nothing at all.
-    const base = stripped.slice(
-      stripped.indexOf(".nx-insert-panel__gesture-hint {")
-    );
-    expect(base.length).toBeGreaterThan(0);
-    expect(base.slice(0, base.indexOf("}"))).toContain("display: none");
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "nothing matches this at all" },
+    });
 
-    // The query that reveals it names BOTH conditions: a coarse pointer alone
-    // admits a stylus, which hovers.
-    const query = stripped.slice(
-      stripped.indexOf("@media (hover: none) and (pointer: coarse)")
-    );
-    expect(query.length).toBeGreaterThan(0);
-    expect(query.slice(0, query.indexOf("\n}"))).toContain(
-      ".nx-insert-panel__gesture-hint"
-    );
+    expect(document.querySelector(".nx-insert-panel__gesture-hint")).toBeNull();
   });
 
   it("keeps two variations apart when only TRAILING SPACE separates them", () => {

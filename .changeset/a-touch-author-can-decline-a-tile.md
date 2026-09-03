@@ -26,9 +26,10 @@
 "@nextlyhq/ui": patch
 ---
 
-A touch author is told how to read a block without inserting it. Pressing a
-tile in the insert panel already moves the description to it, and lifting the
-finger away from the tile inserts nothing — so reading and declining both
-worked, and neither was announced. The panel now says so, in one line placed
-beside the description rather than on the tile, and only where the pointer
-cannot hover: a mouse reads a tile by hovering it and needs no instruction.
+A touch author is told what a press does. Pressing a tile in the insert panel
+already moves the description to it, so a block can be read before it is taken —
+on a pointer that cannot hover, that was the one affordance nothing announced.
+The panel now says so in a line beside the description rather than on the tile,
+and it appears from the pointer actually used rather than the one the device is
+classified by, so a touchscreen laptop driven by its trackpad still shows it the
+moment the author touches the screen.
