@@ -193,6 +193,24 @@ function descriptionLiteral(
     : sqlStr(description, dialect);
 }
 
+/**
+ * The `admin` column, when the manifest says anything about presentation.
+ *
+ * 🔴 CONDITIONAL, unlike `description`. An absent block must leave the stored
+ * value alone rather than clear it, so this returns nothing rather than NULL --
+ * a manifest that says nothing about presentation is not an instruction to
+ * forget it.
+ *
+ * One helper rather than the same block in each builder: all three kinds have
+ * this column and all three must agree about when it is written.
+ */
+function adminColumns(entity: UiSchemaEntity, dialect: Dialect): Column[] {
+  if (entity.admin === undefined) return [];
+  return [
+    { name: "admin", value: jsonLiteral(entity.admin, dialect), update: true },
+  ];
+}
+
 function buildUpsert(
   table: string,
   columns: Column[],
@@ -339,13 +357,7 @@ export function buildCollectionMetadataUpsert(
   // CONDITIONAL, unlike `description`: an absent block leaves the stored value
   // alone rather than clearing it, which is what lets a manifest that says
   // nothing about presentation not erase it.
-  if (entity.admin !== undefined) {
-    columns.push({
-      name: "admin",
-      value: jsonLiteral(entity.admin, dialect),
-      update: true,
-    });
-  }
+  columns.push(...adminColumns(entity, dialect));
   columns.push(...timestampColumns(dialect));
   return buildUpsert("dynamic_collections", columns, dialect);
 }
@@ -419,13 +431,7 @@ export function buildSingleMetadataUpsert(
     { name: "migration_status", value: sqlStr("applied", dialect) },
   ];
   columns.push(...timestampColumns(dialect));
-  if (entity.admin !== undefined) {
-    columns.push({
-      name: "admin",
-      value: jsonLiteral(entity.admin, dialect),
-      update: true,
-    });
-  }
+  columns.push(...adminColumns(entity, dialect));
   return buildUpsert("dynamic_singles", columns, dialect);
 }
 
@@ -471,12 +477,6 @@ export function buildComponentMetadataUpsert(
     { name: "migration_status", value: sqlStr("applied", dialect) },
   ];
   columns.push(...timestampColumns(dialect));
-  if (entity.admin !== undefined) {
-    columns.push({
-      name: "admin",
-      value: jsonLiteral(entity.admin, dialect),
-      update: true,
-    });
-  }
+  columns.push(...adminColumns(entity, dialect));
   return buildUpsert(STORAGE_FORMAT.registryTable, columns, dialect);
 }

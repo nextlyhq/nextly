@@ -991,8 +991,12 @@ function quoteOpenerAt(
 function opensBackslashEscapedString(
   text: string,
   index: number,
+  opener: string,
   dialect: SupportedDialect | undefined
 ): boolean {
+  // Only a single-quoted STRING can escape; a quoted identifier never does, and
+  // asking that here keeps the caller's loop to one question.
+  if (opener !== "'") return false;
   if (dialect === "mysql") return true;
   if (dialect !== "postgresql") return false;
   const prev = text[index - 1];
@@ -1010,6 +1014,21 @@ function opensBackslashEscapedString(
  * on its own; an odd run means the last one escapes it. Consulted only for a
  * literal that honours backslash escapes at all.
  */
+/**
+ * Whether a quote at `index` CLOSES the literal it appears in.
+ *
+ * The two questions — does this literal escape at all, and is this particular
+ * quote escaped — are answered here rather than in the scanning loop, which is
+ * long enough that one more condition inside it is one more thing to read past.
+ */
+function closesLiteral(
+  text: string,
+  index: number,
+  escapesWithBackslash: boolean
+): boolean {
+  return !(escapesWithBackslash && precededByOddBackslashes(text, index));
+}
+
 function precededByOddBackslashes(text: string, index: number): boolean {
   let run = 0;
   for (let k = index - 1; k >= 0 && text[k] === "\\"; k -= 1) run += 1;
@@ -1092,12 +1111,16 @@ export function splitSqlStatements(
       stringChar = opener;
       // Recorded when the literal OPENS: the `E` prefix is only visible here,
       // and by the closing quote it is long past.
-      stringEscapesWithBackslash =
-        opener === "'" && opensBackslashEscapedString(cleanedSql, i, dialect);
+      stringEscapesWithBackslash = opensBackslashEscapedString(
+        cleanedSql,
+        i,
+        opener,
+        dialect
+      );
     } else if (
       inString &&
       char === stringChar &&
-      !(stringEscapesWithBackslash && precededByOddBackslashes(cleanedSql, i))
+      closesLiteral(cleanedSql, i, stringEscapesWithBackslash)
     ) {
       inString = false;
     }
