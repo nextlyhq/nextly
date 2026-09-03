@@ -59,6 +59,7 @@ async function generate(overrides: Record<string, unknown> = {}) {
     ...overrides,
   } as never)) as unknown as {
     migrationSQL: string;
+    localMigrationSQL?: string;
     metadata: {
       slug: string;
       labels: { singular: string; plural: string };
@@ -110,6 +111,45 @@ describe("the migration a Builder create writes", () => {
     // the replacement reads as correct everywhere the slug happens to match.
     const sql = await sqlFor({ label: "Story" });
     expect(sql).toContain("Story");
+  });
+
+  it("carries EVERY admin key the local row gets, not just the queryable two", async () => {
+    // 🔴 These decide what a reader SEES — whether the collection appears at
+    // all, where in the sidebar, under which icon. A narrower mapping rebuilt a
+    // visibly different collection wherever the file was replayed while looking
+    // correct in the one place it was authored, which is the failure that does
+    // not announce itself.
+    const sql = await sqlFor({
+      icon: "Sparkles",
+      hidden: true,
+      order: 7,
+      sidebarGroup: "Editorial",
+      useAsTitle: "title",
+      group: "Content",
+    });
+    for (const fragment of [
+      "Sparkles",
+      "sidebarGroup",
+      "Editorial",
+      "hidden",
+    ]) {
+      expect(sql).toContain(fragment);
+    }
+  });
+
+  it("does not run the registry row against THIS database", async () => {
+    // 🔴 The artefact and the local execution are not the same statement. Here
+    // the row is written by `registerCollection`, which refuses a slug that
+    // already exists — so running the upsert locally would take the slug, make
+    // that refusal fire, and leave a created table beside a half-written
+    // registry with every retry failing on the slug it just took.
+    const { migrationSQL, localMigrationSQL } = await generate();
+    expect(migrationSQL).toContain("dynamic_collections");
+    expect(localMigrationSQL).toBeDefined();
+    expect(localMigrationSQL).not.toContain("dynamic_collections");
+    // The control: the local SQL is still the DDL, not empty — a variant that
+    // returned nothing would satisfy the refusal above and create no table.
+    expect(localMigrationSQL).toContain("dc_articles");
   });
 
   it("emits EXACTLY what migrate:create emits for the same entity", async () => {

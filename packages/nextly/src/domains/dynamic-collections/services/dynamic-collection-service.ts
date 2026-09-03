@@ -43,7 +43,21 @@ import { DynamicCollectionSchemaService } from "./dynamic-collection-schema-serv
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 
 export interface CollectionArtifacts {
+  /**
+   * The migration to COMMIT. Carries the `dynamic_collections` upsert, because
+   * the database this file is replayed against has no row for the collection.
+   */
   migrationSQL: string;
+  /**
+   * What to run against THIS database, which differs from the artefact.
+   *
+   * The registry row here is written by `registerCollection`, and it refuses a
+   * slug that already exists — so the upsert the artefact carries must not run
+   * locally. Optional so a caller that has no reason to distinguish the two can
+   * fall back to `migrationSQL`, which is how the update path already reads its
+   * own local variant.
+   */
+  localMigrationSQL?: string;
   migrationFileName: string;
   tableName: string;
   metadata: {
@@ -375,6 +389,17 @@ export class DynamicCollectionService extends BaseService {
     // that would have to agree with it. The two authoring paths are otherwise
     // disjoint -- this one writes no `meta/` snapshot, so `migrate:create` never
     // sees its tables -- which is exactly why each has to be self-sufficient.
+    // 🔴 The ARTEFACT and what runs HERE are not the same statement, and this
+    // path had no reason to distinguish them until the artefact gained the
+    // registry row. The committed file must recreate that row, because the
+    // database it is replayed against has none. THIS database is about to get
+    // one from `registerCollection`, which refuses a slug that already exists --
+    // so running the upsert locally would insert the row, make that refusal
+    // fire, and leave a created table beside a half-written registry with every
+    // retry failing on the slug it just took.
+    //
+    // The update path already draws this distinction and names it the same way;
+    // the create path simply never needed it before.
     const fullMigrationSQL = this.appendMetadataUpsertSQL(
       withCompanion,
       this.manifestEntityFor(normalizedName, data, userDefinedFields)
@@ -429,6 +454,9 @@ export class DynamicCollectionService extends BaseService {
 
     return {
       migrationSQL: fullMigrationSQL,
+      // What to run against THIS database: the DDL without the registry row,
+      // which `registerCollection` writes a moment later.
+      localMigrationSQL: withCompanion,
       migrationFileName: `${Date.now()}_create_${normalizedName}.sql`,
       tableName,
       metadata,
@@ -482,7 +510,19 @@ export class DynamicCollectionService extends BaseService {
         singular: data.label || slug,
         plural: (data.label || slug) + "s",
       },
-      admin: { useAsTitle: data.useAsTitle, group: data.group?.toLowerCase() },
+      // 🔴 EVERY admin key the local row gets, not the two the manifest used to
+      // declare. These are what a reader sees -- whether the collection appears
+      // at all, where in the sidebar, under which icon -- so a narrower mapping
+      // here rebuilt a visibly different collection wherever the file was
+      // replayed, and looked correct in the one place it was authored.
+      admin: {
+        useAsTitle: data.useAsTitle,
+        group: data.group?.toLowerCase(),
+        icon: data.icon,
+        hidden: data.hidden,
+        order: data.order,
+        sidebarGroup: data.sidebarGroup,
+      },
       status: data.status === true,
       localized: data.localized === true,
       versions: data.versions,

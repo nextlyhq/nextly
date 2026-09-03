@@ -416,3 +416,55 @@ describe("webhooks column", () => {
     expect(parsed.success).toBe(false);
   });
 });
+
+describe("escaping the values a Builder-authored entity can carry", () => {
+  // A validation pattern is the ordinary way a backslash reaches this SQL.
+  const PATTERN = "^\\d+$";
+  const withPattern = {
+    slug: "posts",
+    fields: [{ name: "code", type: "text", options: { pattern: PATTERN } }],
+  } as never;
+  // What the fields column holds before any SQL quoting: JSON encodes the
+  // backslash, so this already carries two characters where the pattern had one.
+  const asJson = JSON.stringify([
+    { name: "code", type: "text", options: { pattern: PATTERN } },
+  ]);
+
+  it("DOUBLES a backslash for MySQL, which reads one as an escape", () => {
+    // 🔴 Under the default SQL mode MySQL consumes a level of backslash
+    // escaping, so the JSON it stores is not the JSON that was written — or the
+    // statement stops parsing. Either way it fails AFTER the table DDL in the
+    // same file has already run, leaving the migration half applied.
+    //
+    // The expectation is COMPUTED rather than written out: an escape sequence
+    // typed by hand is exactly the thing this test is about getting wrong.
+    const sql = buildCollectionMetadataUpsert(withPattern, "mysql");
+    expect(sql).toContain(asJson.replace(/\\/g, "\\\\"));
+  });
+
+  it("leaves it alone for PostgreSQL and SQLite, which store it verbatim", () => {
+    // The control: a rule that doubled everywhere would corrupt these two, and
+    // would still satisfy the assertion above.
+    for (const dialect of ["postgresql", "sqlite"] as const) {
+      const sql = buildCollectionMetadataUpsert(withPattern, dialect);
+      expect(sql).toContain(asJson);
+      expect(sql).not.toContain(asJson.replace(/\\/g, "\\\\"));
+    }
+  });
+
+  it("still doubles an apostrophe on every dialect", () => {
+    // The other control: delegating must not have dropped the escaping that
+    // was already right.
+    for (const dialect of ["postgresql", "sqlite", "mysql"] as const) {
+      const sql = buildCollectionMetadataUpsert(
+        {
+          slug: "posts",
+          labels: { singular: "O'Reilly", plural: "x" },
+          fields: [],
+        } as never,
+        dialect
+      );
+      expect(sql).toContain("O''Reilly");
+    }
+  });
+});

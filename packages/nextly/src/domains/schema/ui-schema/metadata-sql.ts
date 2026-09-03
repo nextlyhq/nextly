@@ -48,6 +48,7 @@ import { resolveBuilderVersions } from "../../versions/builder-versions";
 import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { calculateSchemaHash } from "../services/schema-hash";
+import { quoteSqlLiteral } from "../utils/sql-literal";
 
 type Dialect = SupportedDialect;
 
@@ -64,13 +65,27 @@ function deterministicId(slug: string): string {
 }
 
 /** SQL single-quoted string literal (standard single-quote doubling). */
-function sqlStr(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
+/**
+ * A quoted SQL string literal for the target dialect.
+ *
+ * 🔴 DELEGATES rather than escaping here. This doubled apostrophes and left
+ * backslashes alone, which is correct for PostgreSQL and SQLite and wrong for
+ * MySQL, where a backslash introduces an escape. JSON is where that bites:
+ * every `\d` in a field's validation pattern, and every encoded newline, is a
+ * backslash pair that MySQL would consume -- changing the stored JSON or making
+ * the statement invalid, after the table DDL in the same file has already run.
+ *
+ * `quoteSqlLiteral` is the answer this repository already has, and its own
+ * docblock describes this exact failure. A second escaping rule beside it is
+ * how the two came to disagree.
+ */
+function sqlStr(value: string, dialect: Dialect): string {
+  return quoteSqlLiteral(value, dialect);
 }
 
 /** JSON value literal. PG casts to jsonb; MySQL/SQLite store the JSON text. */
 function jsonLiteral(value: unknown, dialect: Dialect): string {
-  const lit = sqlStr(JSON.stringify(value));
+  const lit = sqlStr(JSON.stringify(value), dialect);
   return dialect === "postgresql" ? `${lit}::jsonb` : lit;
 }
 
@@ -212,17 +227,24 @@ export function buildCollectionMetadataUpsert(
     plural: entity.labels?.plural ?? toPluralLabel(entity.slug),
   };
   const columns: Column[] = [
-    { name: "id", value: sqlStr(deterministicId(entity.slug)) },
-    { name: "slug", value: sqlStr(entity.slug) },
+    { name: "id", value: sqlStr(deterministicId(entity.slug), dialect) },
+    { name: "slug", value: sqlStr(entity.slug, dialect) },
     { name: "labels", value: jsonLiteral(labels, dialect), update: true },
-    { name: "table_name", value: sqlStr(tableNameFor(entity.slug, "dc_")) },
+    {
+      name: "table_name",
+      value: sqlStr(tableNameFor(entity.slug, "dc_"), dialect),
+    },
     {
       name: "fields",
       value: jsonLiteral(entity.fields, dialect),
       update: true,
     },
-    { name: "source", value: sqlStr("ui") },
-    { name: "schema_hash", value: sqlStr(hashOf(entity)), update: true },
+    { name: "source", value: sqlStr("ui", dialect) },
+    {
+      name: "schema_hash",
+      value: sqlStr(hashOf(entity), dialect),
+      update: true,
+    },
     {
       name: "status",
       value: boolLiteral(entity.status === true, dialect),
@@ -264,7 +286,7 @@ export function buildCollectionMetadataUpsert(
       value: webhooksLiteral(entity.webhooks, dialect),
       update: true,
     },
-    { name: "migration_status", value: sqlStr("applied") },
+    { name: "migration_status", value: sqlStr("applied", dialect) },
   ];
   if (entity.admin !== undefined) {
     columns.push({
@@ -282,20 +304,24 @@ export function buildSingleMetadataUpsert(
   dialect: Dialect
 ): string {
   const columns: Column[] = [
-    { name: "id", value: sqlStr(deterministicId(entity.slug)) },
-    { name: "slug", value: sqlStr(entity.slug) },
-    { name: "label", value: sqlStr(singular(entity)), update: true },
+    { name: "id", value: sqlStr(deterministicId(entity.slug), dialect) },
+    { name: "slug", value: sqlStr(entity.slug, dialect) },
+    { name: "label", value: sqlStr(singular(entity), dialect), update: true },
     {
       name: "table_name",
-      value: sqlStr(tableNameFor(entity.slug, "single_")),
+      value: sqlStr(tableNameFor(entity.slug, "single_"), dialect),
     },
     {
       name: "fields",
       value: jsonLiteral(entity.fields, dialect),
       update: true,
     },
-    { name: "source", value: sqlStr("ui") },
-    { name: "schema_hash", value: sqlStr(hashOf(entity)), update: true },
+    { name: "source", value: sqlStr("ui", dialect) },
+    {
+      name: "schema_hash",
+      value: sqlStr(hashOf(entity), dialect),
+      update: true,
+    },
     {
       name: "status",
       value: boolLiteral(entity.status === true, dialect),
@@ -334,7 +360,7 @@ export function buildSingleMetadataUpsert(
       value: webhooksLiteral(entity.webhooks, dialect),
       update: true,
     },
-    { name: "migration_status", value: sqlStr("applied") },
+    { name: "migration_status", value: sqlStr("applied", dialect) },
   ];
   columns.push(...timestampColumns(dialect));
   return buildUpsert("dynamic_singles", columns, dialect);
@@ -345,19 +371,22 @@ export function buildComponentMetadataUpsert(
   dialect: Dialect
 ): string {
   const columns: Column[] = [
-    { name: "id", value: sqlStr(deterministicId(entity.slug)) },
-    { name: "slug", value: sqlStr(entity.slug) },
-    { name: "label", value: sqlStr(singular(entity)), update: true },
+    { name: "id", value: sqlStr(deterministicId(entity.slug), dialect) },
+    { name: "slug", value: sqlStr(entity.slug, dialect) },
+    { name: "label", value: sqlStr(singular(entity), dialect), update: true },
     {
       name: "table_name",
-      value: sqlStr(tableNameFor(entity.slug, STORAGE_FORMAT.tablePrefix)),
+      value: sqlStr(
+        tableNameFor(entity.slug, STORAGE_FORMAT.tablePrefix),
+        dialect
+      ),
     },
     {
       name: "fields",
       value: jsonLiteral(entity.fields, dialect),
       update: true,
     },
-    { name: "source", value: sqlStr("ui") },
+    { name: "source", value: sqlStr("ui", dialect) },
     {
       // Persist the Builder localized flag so boot reads the component as localized and
       // resolves/writes its companion `comp_<slug>_locales` fields; without it the registry
@@ -366,8 +395,12 @@ export function buildComponentMetadataUpsert(
       value: boolLiteral(entity.localized === true, dialect),
       update: true,
     },
-    { name: "schema_hash", value: sqlStr(hashOf(entity)), update: true },
-    { name: "migration_status", value: sqlStr("applied") },
+    {
+      name: "schema_hash",
+      value: sqlStr(hashOf(entity), dialect),
+      update: true,
+    },
+    { name: "migration_status", value: sqlStr("applied", dialect) },
   ];
   columns.push(...timestampColumns(dialect));
   return buildUpsert(STORAGE_FORMAT.registryTable, columns, dialect);

@@ -392,7 +392,13 @@ export class CollectionMetadataService extends BaseService {
 
       if (this.isDevelopment()) {
         try {
-          await this.fileManager.runMigration(artifacts.migrationSQL);
+          // The artefact carries the registry-row upsert so the committed file
+          // recreates it where the Builder has never run. This database gets
+          // that row from `registerCollection` below, and it refuses a slug
+          // that already exists -- so what runs HERE is the DDL alone.
+          await this.fileManager.runMigration(
+            artifacts.localMigrationSQL ?? artifacts.migrationSQL
+          );
           // Verify table was actually created before marking as applied
           const tableExists = await this.adapter.tableExists(
             artifacts.tableName
