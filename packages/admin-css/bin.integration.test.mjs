@@ -50,18 +50,26 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
  * free for the case budget below to act as a second bound.
  */
 const CHILD_TIMEOUT_MS = 60_000;
+/** Enough of a failing compile's output to diagnose it, bounded so a noisy hang cannot grow it without limit. */
+const STDERR_TAIL_BYTES = 16_384;
 const COMPILE_TIMEOUT_MS = CHILD_TIMEOUT_MS + 30_000;
 
 /** Run the CLI, killing the whole process tree if it outlives its budget. */
-function compile(args, cwd) {
+function compile(args, cwd, timeoutMs = CHILD_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, {
       cwd,
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    // Drained continuously so the pipe never fills and stalls the child, but
+    // only the TAIL is retained: a compiler failing noisily can emit for as long
+    // as the bound allows, and keeping every byte to build one error message
+    // lets the worker exhaust its heap before the bound it was waiting for.
     let stderr = "";
-    child.stderr.on("data", chunk => (stderr += chunk));
+    child.stderr.on("data", chunk => {
+      stderr = (stderr + chunk).slice(-STDERR_TAIL_BYTES);
+    });
     const timer = setTimeout(() => {
       // The negative pid addresses the GROUP. Wrapped because the group is gone
       // already when the child exits between the timer firing and this call.
@@ -70,8 +78,8 @@ function compile(args, cwd) {
       } catch {
         /* already gone */
       }
-      reject(new Error(`compile exceeded ${String(CHILD_TIMEOUT_MS)}ms`));
-    }, CHILD_TIMEOUT_MS);
+      reject(new Error(`compile exceeded ${String(timeoutMs)}ms`));
+    }, timeoutMs);
     child.on("error", error => {
       clearTimeout(timer);
       reject(error);
@@ -112,4 +120,58 @@ describe("nextly-build-admin-css (POC)", () => {
     },
     COMPILE_TIMEOUT_MS
   );
+});
+
+/*
+ * The timeout branch, which the compile case above never reaches.
+ *
+ * Without this the helper's kill could regress to signalling the wrapper alone
+ * and every other case here would still pass — the failure it exists to prevent
+ * is invisible to a suite whose only invocation succeeds.
+ *
+ * Asserted through the FILESYSTEM rather than a process table: the nested child
+ * writes one file when it starts and another when it finishes, so "was it
+ * killed" becomes "did the second file never appear". That needs no `pgrep`,
+ * no pid arithmetic, and behaves the same wherever the suite runs.
+ */
+describe("the compile timeout", () => {
+  const HANG = path.join(ROOT, "__fixtures__", "hang");
+  // The child outlives its bound by enough that a surviving process would
+  // certainly have finished before the assertion, and no longer.
+  const CHILD_SLEEP_MS = 3_000;
+  const BOUND_MS = 500;
+
+  it("kills the NESTED process, not only the wrapper it signalled", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nx-hang-"));
+    const started = path.join(dir, "started");
+    const finished = path.join(dir, "finished");
+
+    await expect(
+      compile(
+        [
+          path.join(HANG, "wrapper.mjs"),
+          started,
+          finished,
+          String(CHILD_SLEEP_MS),
+        ],
+        ROOT,
+        BOUND_MS
+      )
+    ).rejects.toThrow(/exceeded/);
+
+    // Must-be-found: the nested child really ran, so its absence below is a
+    // kill rather than a fixture that never started.
+    expect(
+      fs.existsSync(started),
+      "the nested child never started, so this case proves nothing about killing it"
+    ).toBe(true);
+
+    // Past the point it would have finished had it survived.
+    await new Promise(resolve => setTimeout(resolve, CHILD_SLEEP_MS));
+
+    expect(
+      fs.existsSync(finished),
+      "the nested child outlived the kill aimed at its parent's process group"
+    ).toBe(false);
+  }, 30_000);
 });
