@@ -469,18 +469,55 @@ describe("escaping the values a Builder-authored entity can carry", () => {
   });
 });
 
-describe("values the create body can carry that the schema does not validate", () => {
-  it("writes NULL for an explicit null description rather than throwing", () => {
-    // 🔴 `generateCollection` forwards the create body unvalidated, and `null`
-    // is what "clear it" looks like over JSON. Reaching the quoting helper with
-    // a non-string threw on `.replace`, turning an ordinary create into a 500
-    // AFTER the table DDL in the same file had run.
+describe("a column that is absent from the manifest must not clear the row", () => {
+  it("omits the description column entirely when the manifest carries none", () => {
+    // 🔴 The correction this branch made after four rounds of the same finding.
+    // Written unconditionally — NULL when absent — the column does not merely
+    // fail to set a description, it CLEARS one: every manifest projection that
+    // does not carry the value erases what an earlier migration deployed, and
+    // there are six such projections.
+    //
+    // Omitted, it is absent from the INSERT and from the DO UPDATE SET, so the
+    // stored value survives. `admin` has behaved this way throughout and
+    // produced none of that.
+    const sql = buildCollectionMetadataUpsert(
+      { slug: "posts", fields: [] } as never,
+      "sqlite"
+    );
+    expect(sql).not.toContain('"description"');
+  });
+
+  it("treats an explicit null the same as absent, rather than throwing", () => {
+    // `generateCollection` forwards the create body unvalidated, and `null` is
+    // what "clear it" looks like over JSON. It previously reached the quoting
+    // helper and threw on `.replace` of a non-string, AFTER the table DDL in
+    // the same file had run.
     const sql = buildCollectionMetadataUpsert(
       { slug: "posts", description: null, fields: [] } as never,
       "sqlite"
     );
-    expect(sql).toContain("NULL");
-    expect(sql).not.toContain("'null'");
+    expect(sql).not.toContain('"description"');
+  });
+
+  it("DOES write the column when the manifest carries a description", () => {
+    // The control: a helper that returned nothing unconditionally would satisfy
+    // both assertions above and never deploy a description at all.
+    const sql = buildCollectionMetadataUpsert(
+      { slug: "posts", description: "Editorial", fields: [] } as never,
+      "sqlite"
+    );
+    expect(sql).toContain("Editorial");
+    expect(sql).toContain('"description"');
+  });
+
+  it("omits the hooks column when the manifest carries none", () => {
+    // No manifest projection carries hooks, so an unconditional NULL would
+    // disable the validation and transformation a deployed collection runs.
+    const sql = buildCollectionMetadataUpsert(
+      { slug: "posts", fields: [] } as never,
+      "sqlite"
+    );
+    expect(sql).not.toContain('"hooks"');
   });
 });
 

@@ -213,3 +213,28 @@ describe("PostgreSQL escape strings honour backslashes; ordinary literals do not
     expect(splitSqlStatements(sql, "postgresql")).toHaveLength(2);
   });
 });
+
+describe("MySQL escapes inside BOTH literal quotes", () => {
+  it("keeps a double-quoted MySQL value whole when a backslash escapes its quote", () => {
+    // 🔴 A regression this branch introduced and this test now pins. Under
+    // MySQL's default SQL mode a double quote also delimits a string, and the
+    // scanner this replaced applied its backslash check to whichever quote had
+    // opened the region. Gating on the single quote alone split this valid
+    // statement at the semicolon INSIDE the value.
+    //
+    // Asserted on CONTENT: a fragment carrying no SQL keyword is discarded, so
+    // a length check passes on the broken implementation too.
+    const sql = `SELECT "left \\"; right" AS v;`;
+    const out = splitSqlStatements(sql, "mysql");
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain("right");
+  });
+
+  it("does NOT treat a backtick-quoted identifier as escaping", () => {
+    // The control: a backtick delimits a NAME, not a literal, so a backslash
+    // inside one escapes nothing and the following semicolon still separates.
+    const sql =
+      "INSERT INTO `t` (d) VALUES (1); INSERT INTO `u` (d) VALUES (2);";
+    expect(splitSqlStatements(sql, "mysql")).toHaveLength(2);
+  });
+});

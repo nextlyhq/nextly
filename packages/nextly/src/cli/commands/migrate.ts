@@ -994,11 +994,18 @@ function opensBackslashEscapedString(
   opener: string,
   dialect: SupportedDialect | undefined
 ): boolean {
-  // Only a single-quoted STRING can escape; a quoted identifier never does, and
-  // asking that here keeps the caller's loop to one question.
-  if (opener !== "'") return false;
+  // A quoted IDENTIFIER never escapes — a backtick or a bracket delimits a name,
+  // not a literal — so only the two literal quotes are candidates.
+  if (opener !== "'" && opener !== '"') return false;
+  // 🔴 MySQL escapes in BOTH literal quotes. Under its default SQL mode a
+  // double quote also delimits a string, and the scanner this replaced applied
+  // its backslash check to whatever quote had opened the region — so gating on
+  // the single quote alone silently regressed `SELECT "left \"; right"`, which
+  // then splits at the semicolon inside the value.
   if (dialect === "mysql") return true;
   if (dialect !== "postgresql") return false;
+  // PostgreSQL's escape strings are single-quoted only: `E"…"` is not one.
+  if (opener !== "'") return false;
   const prev = text[index - 1];
   if (prev !== "E" && prev !== "e") return false;
   // Not part of a longer word: `VALUES (E'x')` opens an escape string, while an

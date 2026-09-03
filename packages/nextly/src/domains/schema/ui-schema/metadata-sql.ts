@@ -180,17 +180,45 @@ interface Column {
  * description impossible to propagate -- the same reasoning `versions`,
  * `revalidate` and `webhooks` state beside their own columns.
  */
-function descriptionLiteral(
-  description: string | undefined | null,
+/**
+ * The `description` column, when the manifest actually carries one.
+ *
+ * 🔴 CONDITIONAL, and that is a correction rather than a preference. Written
+ * unconditionally — NULL when absent — it does not merely fail to set a
+ * description, it CLEARS one: every manifest projection that does not carry the
+ * value erases whatever an earlier migration deployed. There are six such
+ * projections and each was found one review round at a time.
+ *
+ * `admin` has been conditional throughout and produced none of that, which is
+ * the precedent this now follows. The cost is that clearing a description
+ * cannot propagate through a migration, and that is the smaller defect by far:
+ * not being able to remove a value is recoverable, silently removing one is not.
+ */
+function descriptionColumns(
+  entity: UiSchemaEntity,
   dialect: Dialect
-): string {
-  // 🔴 `null` as well as `undefined`. The create body reaches this unvalidated,
-  // so a caller sending `description: null` — which is what "clear it" looks
-  // like over JSON — otherwise reached `quoteSqlLiteral` and threw on `.replace`
-  // of a non-string, turning a routine create into a 500.
-  return description === undefined || description === null
-    ? "NULL"
-    : sqlStr(description, dialect);
+): Column[] {
+  const description = entity.description;
+  if (description === undefined || description === null) return [];
+  return [
+    { name: "description", value: sqlStr(description, dialect), update: true },
+  ];
+}
+
+/**
+ * The `hooks` column, when the manifest carries any. COLLECTIONS ONLY —
+ * `dynamic_singles` and the component registry have no such column, so naming
+ * it there would fail every migration for those kinds.
+ *
+ * Conditional for the same reason as {@link descriptionColumns}: no manifest
+ * projection carries hooks today, so writing NULL when absent would disable the
+ * validation and transformation a deployed collection was running.
+ */
+function hooksColumns(entity: UiSchemaEntity, dialect: Dialect): Column[] {
+  if (entity.hooks === undefined) return [];
+  return [
+    { name: "hooks", value: jsonLiteral(entity.hooks, dialect), update: true },
+  ];
 }
 
 /**
@@ -270,26 +298,6 @@ export function buildCollectionMetadataUpsert(
     { name: "slug", value: sqlStr(entity.slug, dialect) },
     { name: "labels", value: jsonLiteral(labels, dialect), update: true },
     {
-      name: "description",
-      value: descriptionLiteral(entity.description, dialect),
-      update: true,
-    },
-    {
-      // 🔴 COLLECTIONS ONLY. Stored hook configs travel with the row for the
-      // same reason its fields do: the hook service reads them from here, so a
-      // row without them runs none. `dynamic_singles` and the component
-      // registry have NO such column, so emitting it there would name a column
-      // that does not exist and fail every migration for those kinds.
-      // NULL when absent, and always emitted, so removing every hook
-      // propagates rather than leaving the previous set standing.
-      name: "hooks",
-      value:
-        entity.hooks === undefined
-          ? "NULL"
-          : jsonLiteral(entity.hooks, dialect),
-      update: true,
-    },
-    {
       name: "table_name",
       value: sqlStr(tableNameFor(entity.slug, "dc_"), dialect),
     },
@@ -358,7 +366,9 @@ export function buildCollectionMetadataUpsert(
   // alone rather than clearing it, which is what lets a manifest that says
   // nothing about presentation not erase it.
   columns.push(...adminColumns(entity, dialect));
+  columns.push(...hooksColumns(entity, dialect));
   columns.push(...timestampColumns(dialect));
+  columns.push(...descriptionColumns(entity, dialect));
   return buildUpsert("dynamic_collections", columns, dialect);
 }
 
@@ -370,11 +380,6 @@ export function buildSingleMetadataUpsert(
     { name: "id", value: sqlStr(deterministicId(entity.slug), dialect) },
     { name: "slug", value: sqlStr(entity.slug, dialect) },
     { name: "label", value: sqlStr(singular(entity), dialect), update: true },
-    {
-      name: "description",
-      value: descriptionLiteral(entity.description, dialect),
-      update: true,
-    },
     {
       name: "table_name",
       value: sqlStr(tableNameFor(entity.slug, "single_"), dialect),
@@ -432,6 +437,7 @@ export function buildSingleMetadataUpsert(
   ];
   columns.push(...timestampColumns(dialect));
   columns.push(...adminColumns(entity, dialect));
+  columns.push(...descriptionColumns(entity, dialect));
   return buildUpsert("dynamic_singles", columns, dialect);
 }
 
@@ -443,11 +449,6 @@ export function buildComponentMetadataUpsert(
     { name: "id", value: sqlStr(deterministicId(entity.slug), dialect) },
     { name: "slug", value: sqlStr(entity.slug, dialect) },
     { name: "label", value: sqlStr(singular(entity), dialect), update: true },
-    {
-      name: "description",
-      value: descriptionLiteral(entity.description, dialect),
-      update: true,
-    },
     {
       name: "table_name",
       value: sqlStr(
@@ -478,5 +479,6 @@ export function buildComponentMetadataUpsert(
   ];
   columns.push(...timestampColumns(dialect));
   columns.push(...adminColumns(entity, dialect));
+  columns.push(...descriptionColumns(entity, dialect));
   return buildUpsert(STORAGE_FORMAT.registryTable, columns, dialect);
 }
