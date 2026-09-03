@@ -88,6 +88,20 @@ describe("what it asks the service", () => {
     });
   });
 
+  it("forwards the caller's ROLES", async () => {
+    // 🔴 `ReleaseActor.userRoles` is what a code-defined access rule reads. An
+    // actor built without it evaluates that rule against an empty list, so a
+    // reader authorized by their roles is refused here while the REST route and
+    // the Direct API — which both forward it — admit them.
+    await executeWidgetQuery(
+      { source: RELEASES_SOURCE_ID, op: "list" },
+      caller
+    );
+
+    const [, actor] = find.mock.calls[0] as [unknown, Record<string, unknown>];
+    expect(actor.userRoles).toEqual(["editor"]);
+  });
+
   it("does not invent an authenticatedScope for a session caller", async () => {
     // A present-but-undefined key wins a spread, so an unconditional one would
     // stamp a session caller with an empty scope and have it judged as a
@@ -147,6 +161,50 @@ describe("what it refuses", () => {
       )
     ).rejects.toThrow(/unavailable source or unsupported op/);
     expect(find).not.toHaveBeenCalled();
+  });
+
+  it("refuses a `status` selector, rather than ignoring it", async () => {
+    // The validator accepts `status` for every source, and this resolver
+    // hard-codes `state: "scheduled"`. Accepting the selector and dropping it
+    // answers a question the caller did not ask, with plausible rows.
+    await expect(
+      executeWidgetQuery(
+        { source: RELEASES_SOURCE_ID, op: "list", status: "draft" },
+        caller
+      )
+    ).rejects.toThrow(/unavailable source or unsupported op/);
+    expect(find).not.toHaveBeenCalled();
+  });
+
+  it("refuses EVERY unconsumed field, named together", async () => {
+    // 🔴 The property is the boundary, not the three fields. A resolver that
+    // checked them one at a time is what let `status` through, so this asserts
+    // that a query carrying several is refused as a whole.
+    await expect(
+      executeWidgetQuery(
+        {
+          source: RELEASES_SOURCE_ID,
+          op: "list",
+          status: "draft",
+          sort: "-scheduledAt",
+          where: { state: { equals: "draft" } },
+        },
+        caller
+      )
+    ).rejects.toThrow(/unavailable source or unsupported op/);
+    expect(find).not.toHaveBeenCalled();
+  });
+
+  it("still answers a query that carries only consumed fields", async () => {
+    // The control. A refusal keyed on "any field present" would satisfy every
+    // case above and refuse the card's own query.
+    await expect(
+      executeWidgetQuery(
+        { source: RELEASES_SOURCE_ID, op: "list", select: ["title"], limit: 2 },
+        caller
+      )
+    ).resolves.toBeDefined();
+    expect(find).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a `sort`, rather than ignoring it", async () => {

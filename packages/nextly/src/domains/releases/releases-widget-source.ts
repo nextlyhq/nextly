@@ -87,6 +87,13 @@ function service(): ReleasesService {
 function actorFor(caller: ReadCaller): ReleaseActor {
   return {
     userId: caller.user.id,
+    // 🔴 Forwarded, because `ReleaseActor.userRoles` exists precisely so a
+    // code-defined access rule evaluates against the real user rather than
+    // against an empty list. Both other constructors of this actor already send
+    // it — `direct-api/namespaces/releases` and `api/releases` — so omitting it
+    // here would make this the one caller whose roles vanish, and a rule that
+    // reads them would deny a reader the other two admit.
+    ...(caller.user.roles !== undefined && { userRoles: caller.user.roles }),
     ...(caller.authenticatedScope !== undefined && {
       authenticatedScope: caller.authenticatedScope,
     }),
@@ -127,6 +134,58 @@ function describeFields(
 }
 
 /**
+ * What this resolver does with each field of a widget query.
+ *
+ * 🔴 An exhaustive `Record` over `keyof WidgetQuery`, not a list of fields to
+ * reject. This resolver asks ONE fixed question, so any field it does not
+ * consume would otherwise be accepted by `validateReadWidgetQuery` and then
+ * quietly dropped — answering a different question than the caller asked, with
+ * rows that look entirely right. Listing the rejects instead is what let
+ * `status` through: `where` and `sort` were named and the third was not.
+ *
+ * Keyed on the TYPE, so adding a field to `WidgetQuery` fails `check-types`
+ * here until someone decides what it means for this source. That is a
+ * deliberate, visible coupling; the alternative is a silent one, and the silent
+ * one has already produced this defect once.
+ */
+const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
+  source: "consumed",
+  op: "consumed",
+  select: "consumed",
+  limit: "consumed",
+  where: "refused",
+  sort: "refused",
+  status: "refused",
+};
+
+/**
+ * Refuse a query carrying anything this source cannot honour.
+ *
+ * Refused with the shared string every other dead end here uses; the field
+ * names travel in the log rather than the response, which is careful not to
+ * describe a source the caller may not be able to see.
+ *
+ * A key present but `undefined` is not carried input: `readWidgetQuery` reads
+ * every property once into a fresh object, so an absent field can arrive as an
+ * own key holding `undefined`, and treating that as supplied would refuse an
+ * ordinary query.
+ */
+function refuseUnconsumed(query: WidgetQuery): void {
+  const carried = Object.entries(query)
+    .filter(
+      ([name, value]) =>
+        value !== undefined &&
+        QUERY_FIELD_USE[name as keyof WidgetQuery] === "refused"
+    )
+    .map(([name]) => name);
+  if (carried.length > 0) {
+    failUnavailableSourceOrOp(
+      `source "${RELEASES_SOURCE_ID}" answers a fixed question and cannot honour: ${carried.join(", ")}`
+    );
+  }
+}
+
+/**
  * Answer "what ships next", soonest first.
  *
  * 🔴 `order: "soonest"` is what makes the limit keep the right end. The
@@ -138,27 +197,18 @@ function describeFields(
  * next year is still the next one when nothing is closer, and a window would
  * make the card empty rather than say so.
  *
- * `where` and `sort` are REFUSED rather than ignored. The source's declared
- * fields are the allowlist a query's `where` is validated against, so a caller
- * may express one — and this resolver asks a fixed question, so honouring the
- * validation while discarding the filter would answer a different question than
- * the one asked and look correct doing it. Refused with the shared string, the
- * way every other dead end here answers.
+ * Every field this source does not consume is REFUSED rather than ignored —
+ * see `QUERY_FIELD_USE`. The declared fields are the allowlist a `where` is
+ * checked against and `status` is accepted by the validator for every source,
+ * so a caller may express either; this resolver asks a fixed question, so
+ * honouring the validation while discarding the selector would answer a
+ * different question than the one asked and look correct doing it.
  */
 async function resolveReleases(
   query: WidgetQuery,
   caller: ReadCaller
 ): Promise<WidgetResult> {
-  if (query.where !== undefined) {
-    failUnavailableSourceOrOp(
-      `source "${RELEASES_SOURCE_ID}" does not support a "where" filter`
-    );
-  }
-  if (query.sort !== undefined) {
-    failUnavailableSourceOrOp(
-      `source "${RELEASES_SOURCE_ID}" answers in schedule order and cannot be sorted`
-    );
-  }
+  refuseUnconsumed(query);
 
   const rows = await service().find(
     {

@@ -69,11 +69,10 @@ describe.each(getConfiguredTestDialects())(
   "ReleasesRepository (%s)",
   dialect => {
     it("takes the SOONEST releases when a limited query asks for them", async () => {
-      // 🔴 The oracle has to be real rows in a real order. The defect this
-      // guards is not a wrong row set but a wrong END of the right one: under
-      // the recent-first default, "the next two releases" returns the two
-      // furthest out — real releases, plausibly ordered, with nothing in the
-      // result to say the answer is backwards.
+      // 🔴 Schedule order and creation order differ here on purpose, and the
+      // rows are inserted in neither. What separates a correct limited query
+      // from a reversed one is WHICH END of the window it keeps: both return
+      // real releases in a plausible order, and only the titles say which.
       const app = await boot(dialect);
       const repo = new ReleasesRepository(app.adapter);
 
