@@ -141,37 +141,58 @@ describe("the compile timeout", () => {
   const CHILD_SLEEP_MS = 3_000;
   const BOUND_MS = 500;
 
-  it("kills the NESTED process, not only the wrapper it signalled", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nx-hang-"));
-    const started = path.join(dir, "started");
-    const finished = path.join(dir, "finished");
+  /*
+   * POSIX only, and the skip is the honest answer rather than a convenience.
+   *
+   * `process.kill(-pid)` addresses a process GROUP, which Windows has no
+   * equivalent for: the call throws there, the helper's catch swallows it, and
+   * the case would fail on every Windows machine — not because the code
+   * regressed but because the mechanism it asserts does not exist. A test that
+   * cannot pass on a platform is worse than absent, since the failure teaches a
+   * contributor to distrust the suite.
+   *
+   * What is lost is stated rather than hidden: on Windows a hung compiler is
+   * not reaped, so the bound stops the wait without stopping the work. Killing
+   * a tree there needs `taskkill /T`, which is a different mechanism this
+   * repository has nowhere to run — CI's Test step is `ubuntu-latest` — and
+   * writing it unverified would put code nothing exercises in the position of
+   * the thing being trusted.
+   */
+  it.skipIf(process.platform === "win32")(
+    "kills the NESTED process, not only the wrapper it signalled",
+    async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nx-hang-"));
+      const started = path.join(dir, "started");
+      const finished = path.join(dir, "finished");
 
-    await expect(
-      compile(
-        [
-          path.join(HANG, "wrapper.mjs"),
-          started,
-          finished,
-          String(CHILD_SLEEP_MS),
-        ],
-        ROOT,
-        BOUND_MS
-      )
-    ).rejects.toThrow(/exceeded/);
+      await expect(
+        compile(
+          [
+            path.join(HANG, "wrapper.mjs"),
+            started,
+            finished,
+            String(CHILD_SLEEP_MS),
+          ],
+          ROOT,
+          BOUND_MS
+        )
+      ).rejects.toThrow(/exceeded/);
 
-    // Must-be-found: the nested child really ran, so its absence below is a
-    // kill rather than a fixture that never started.
-    expect(
-      fs.existsSync(started),
-      "the nested child never started, so this case proves nothing about killing it"
-    ).toBe(true);
+      // Must-be-found: the nested child really ran, so its absence below is a
+      // kill rather than a fixture that never started.
+      expect(
+        fs.existsSync(started),
+        "the nested child never started, so this case proves nothing about killing it"
+      ).toBe(true);
 
-    // Past the point it would have finished had it survived.
-    await new Promise(resolve => setTimeout(resolve, CHILD_SLEEP_MS));
+      // Past the point it would have finished had it survived.
+      await new Promise(resolve => setTimeout(resolve, CHILD_SLEEP_MS));
 
-    expect(
-      fs.existsSync(finished),
-      "the nested child outlived the kill aimed at its parent's process group"
-    ).toBe(false);
-  }, 30_000);
+      expect(
+        fs.existsSync(finished),
+        "the nested child outlived the kill aimed at its parent's process group"
+      ).toBe(false);
+    },
+    30_000
+  );
 });
