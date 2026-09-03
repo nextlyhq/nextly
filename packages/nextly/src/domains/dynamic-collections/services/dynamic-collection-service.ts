@@ -243,8 +243,11 @@ export class DynamicCollectionService extends BaseService {
    * historical custom name — so deriving it from the slug again would target a
    * table that does not exist and fail the save.
    *
-   * Best-effort: an unavailable registry resolves nothing, and a slug with no
-   * record has no table for the association UPDATE to touch.
+   * A precondition of the rename, not a best-effort lookup: when any referenced
+   * slug cannot be resolved — the registry is unavailable, or a record is
+   * missing — the save is refused. Letting it proceed would advance the
+   * collection metadata to the new field name while every existing instance
+   * row stays keyed by the old one, and the renamed field would read as empty.
    */
   private async resolveFieldGroupTableNames(
     fields: FieldDefinition[]
@@ -256,19 +259,30 @@ export class DynamicCollectionService extends BaseService {
     if (slugs.size === 0) return new Map();
 
     const resolved = new Map<string, string>();
-    try {
-      const registry = getService(
-        "fieldGroupRegistryService"
-      );
-      await Promise.all(
-        [...slugs].map(async slug => {
-          const record = await registry.getComponentBySlug(slug);
-          if (record) resolved.set(slug, record.tableName);
-        })
-      );
-    } catch {
-      // Registry unavailable — no association migration is emitted for these
-      // slugs rather than one against a guessed table name.
+    const registry = getService("fieldGroupRegistryService");
+    await Promise.all(
+      [...slugs].map(async slug => {
+        const record = await registry.getComponentBySlug(slug);
+        if (record) resolved.set(slug, record.tableName);
+      })
+    );
+
+    const unresolved = [...slugs].filter(slug => !resolved.has(slug));
+    if (unresolved.length > 0) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `fields.${unresolved.join(", ")}`,
+            code: "FIELD_GROUP_TABLE_UNRESOLVED",
+            message:
+              `Cannot rename this field group: its data lives in tables whose ` +
+              `names come from the field-group registry, and no record could ` +
+              `be resolved for: ${unresolved.join(", ")}. Restore the missing ` +
+              `field group (or remove the field) and save again.`,
+          },
+        ],
+        logContext: { unresolvedFieldGroups: unresolved },
+      });
     }
     return resolved;
   }
@@ -875,10 +889,18 @@ export class DynamicCollectionService extends BaseService {
             wasStatus,
             hasStatus,
             ...(await liveTable()),
-            fieldGroupTableNames: await this.resolveFieldGroupTableNames([
-              ...oldShared,
-              ...newShared,
-            ]),
+            // Strict only when an association rename will occur: the table
+            // names are a precondition of THAT migration, and requiring them
+            // for every edit would refuse saves unrelated to renames.
+            fieldGroupTableNames: this.schemaService.detectFieldGroupAssociationRename(
+              oldShared,
+              newShared
+            )
+              ? await this.resolveFieldGroupTableNames([
+                  ...oldShared,
+                  ...newShared,
+                ])
+              : new Map(),
           }
         );
         const {
@@ -921,10 +943,15 @@ export class DynamicCollectionService extends BaseService {
             wasStatus,
             hasStatus,
             ...(await liveTable()),
-            fieldGroupTableNames: await this.resolveFieldGroupTableNames([
-              ...oldUserFields,
-              ...userDefinedFields,
-            ]),
+            fieldGroupTableNames: this.schemaService.detectFieldGroupAssociationRename(
+              oldUserFields,
+              userDefinedFields
+            )
+              ? await this.resolveFieldGroupTableNames([
+                  ...oldUserFields,
+                  ...userDefinedFields,
+                ])
+              : new Map(),
           }
         );
       }

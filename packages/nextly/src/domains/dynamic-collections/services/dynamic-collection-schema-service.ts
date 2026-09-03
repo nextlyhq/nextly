@@ -1500,9 +1500,12 @@ ${allColumnDefs.join(",\n")}
 
     const fromSlugs = fieldGroupSlugList(from);
     const toSlugs = fieldGroupSlugList(to);
+    // Compared as SETS, not positionally: a rename in the same save that only
+    // reorders an unchanged zone whitelist is still a pure rename, and judging
+    // it by order would orphan every row keyed by the old field name.
     if (
       fromSlugs.length !== toSlugs.length ||
-      fromSlugs.some((slug, i) => slug !== toSlugs[i])
+      fromSlugs.some(slug => !toSlugs.includes(slug))
     ) {
       return null;
     }

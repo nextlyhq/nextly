@@ -26,13 +26,22 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { MIGRATION_TARGET } from "../migration/target";
 
 /**
- * Every field type token a stored definition may carry for a field group: the
- * spelling on disk today and the one the storage migration moves it to.
+ * Every field type token a stored field definition may carry for a field group.
+ *
+ * `"component"` is pinned as a literal, not derived from the catalog: the day
+ * `STORAGE_FORMAT.fieldType` flips to the migration target, a list built from
+ * the two catalogs collapses to two copies of `"fieldGroup"` and every
+ * definition still carrying the historical spelling — every database that has
+ * not run the migration, and the stragglers of one that ran part way — stops
+ * being recognized at once. The catalog tokens are kept alongside it so the
+ * set also answers before the flip. Deduplicated, because the two are the same
+ * string today and again after it.
  */
 export const fieldGroupFieldTypes: readonly string[] = [
+  "component",
   STORAGE_FORMAT.fieldType,
   MIGRATION_TARGET.fieldType,
-];
+].filter((token, i, all) => all.indexOf(token) === i);
 
 /**
  * Whether a field type token names a field group, in either the current or the
