@@ -1487,11 +1487,17 @@ ${allColumnDefs.join(",\n")}
    * keyed by the FIELD NAME in the group's own table, so the rename is real:
    * it migrates `_parent_field` instead of renaming a column.
    *
-   * Pairs only when exactly one field was removed and one added — the same
-   * zero-ambiguity heuristic its column-producing sibling applies — and only
-   * when both sides reference the same slugs under the same cardinality, so
-   * this is a pure rename and not a remove-one-group-add-another edit in
-   * disguise. Anything else stays with the loops.
+   * Only the field-group fields among the renamed candidates participate: a
+   * rename saved alongside other edits — adding a text field, dropping
+   * another — is still a rename for THIS field, and those other fields keep
+   * their own add/drop paths. Pairing needs the same slugs under the same
+   * cardinality, so this is a pure rename and not a remove-one-group-add-
+   * another edit in disguise.
+   *
+   * More than one renamed field group in a single save cannot be paired
+   * reliably — a wrong old-to-new mapping migrates the wrong rows — and is
+   * refused outright rather than silently orphaning data: the author renames
+   * one field group at a time.
    */
   detectFieldGroupAssociationRename(
     oldFields: FieldDefinition[],
@@ -1500,15 +1506,38 @@ ${allColumnDefs.join(",\n")}
     const oldNames = new Set(oldFields.map(f => f.name));
     const newNames = new Set(newFields.map(f => f.name));
 
-    const oldOnly = oldFields.filter(f => !newNames.has(f.name));
-    const newOnly = newFields.filter(f => !oldNames.has(f.name));
-    if (oldOnly.length !== 1 || newOnly.length !== 1) return null;
+    const oldOnly = oldFields.filter(
+      f => !newNames.has(f.name) && isFieldGroupType(f.type)
+    );
+    const newOnly = newFields.filter(
+      f => !oldNames.has(f.name) && isFieldGroupType(f.type)
+    );
+    if (oldOnly.length === 0 || newOnly.length === 0) return null;
+
+    if (oldOnly.length > 1 || newOnly.length > 1) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "fields",
+            code: "FIELD_GROUP_RENAME_AMBIGUOUS",
+            message:
+              `This save renames ${oldOnly.length} field groups at once ` +
+              `(removed: ${oldOnly.map(f => `"${f.name}"`).join(", ")}; ` +
+              `added: ${newOnly.map(f => `"${f.name}"`).join(", ")}). ` +
+              `Each rename moves the group's existing rows to the new field ` +
+              `name, and with more than one in flight the pairing cannot be ` +
+              `known reliably. Rename one field group per save.`,
+          },
+        ],
+        logContext: {
+          removed: oldOnly.map(f => f.name),
+          added: newOnly.map(f => f.name),
+        },
+      });
+    }
 
     const from = oldOnly[0];
     const to = newOnly[0];
-    if (!isFieldGroupType(from.type) || !isFieldGroupType(to.type)) {
-      return null;
-    }
     if (from.repeatable !== to.repeatable) return null;
 
     const fromSlugs = fieldGroupSlugList(from);

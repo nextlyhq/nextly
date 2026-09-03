@@ -105,5 +105,65 @@ describe.each(DIALECTS)(
 
       expect(sql).not.toContain("UPDATE");
     });
+
+    it("migrates the rename among other same-save field edits", () => {
+      // The rename saved alongside an unrelated field addition is still a
+      // rename: only the field-group fields participate in the pairing, and
+      // skipping it because other fields changed would orphan the rows under
+      // the old name while the metadata adopted the new one.
+      const sql = service.generateAlterTableMigration(
+        TABLE,
+        [
+          asField({ name: "title", type: "text" }),
+          asField({ name: "seo", type: "fieldGroup", fieldGroup: "seo" }),
+        ],
+        [
+          asField({ name: "title", type: "text" }),
+          asField({ name: "meta", type: "fieldGroup", fieldGroup: "seo" }),
+          asField({ name: "extra", type: "text" }),
+        ],
+        { fieldGroupTableNames: new Map([["seo", "comp_seo"]]) }
+      );
+
+      expect(sql).toMatch(/["'`]_parent_field["'`] = 'meta'/);
+    });
+
+    it("refuses a save that renames two field groups at once", () => {
+      // With two renamed groups in flight the old-to-new pairing cannot be
+      // known reliably, and a wrong mapping migrates the wrong rows — the
+      // save is refused rather than guessed.
+      const build = () =>
+        service.generateAlterTableMigration(
+          TABLE,
+          [
+            asField({ name: "a", type: "fieldGroup", fieldGroup: "ga" }),
+            asField({ name: "b", type: "fieldGroup", fieldGroup: "gb" }),
+          ],
+          [
+            asField({ name: "a2", type: "fieldGroup", fieldGroup: "ga" }),
+            asField({ name: "b2", type: "fieldGroup", fieldGroup: "gb" }),
+          ],
+          {
+            fieldGroupTableNames: new Map([
+              ["ga", "comp_ga"],
+              ["gb", "comp_gb"],
+            ]),
+          }
+        );
+
+      // The envelope's message is the generic "Validation failed."; the
+      // actionable detail lives in the typed publicData payload.
+      try {
+        build();
+        expect.unreachable("expected a refusal");
+      } catch (error) {
+        const data = (
+          error as {
+            publicData?: { errors?: { code?: string }[] };
+          }
+        ).publicData;
+        expect(data?.errors?.[0]?.code).toBe("FIELD_GROUP_RENAME_AMBIGUOUS");
+      }
+    });
   }
 );
