@@ -476,11 +476,29 @@ const storedHookConfig = z.object({
   order: z.number(),
 });
 
-/** Compile-time proof that the schema above still describes the stored shape. */
-type StoredHookSchemaMatchesInterface =
+/**
+ * Compile-time proof that the schema and the stored shape describe each other.
+ *
+ * 🔴 BOTH directions, because each catches a different drift and neither
+ * catches the other's. Schema-to-interface fails when the schema goes wider
+ * than the runtime accepts. Interface-to-schema fails when the schema goes
+ * NARROWER — a lifecycle point added to `StoredHookType` leaves this enum short,
+ * and a one-way proof still passes while every manifest naming the new hook is
+ * silently refused. The narrow direction is the quiet one, so it is the one
+ * worth stating.
+ *
+ * `StoredHookType` is a union in a module with no runtime exports, so the enum
+ * is spelled here rather than derived from a shared array; keeping that module
+ * type-only is worth more than removing this pair of assertions.
+ */
+type SchemaAcceptsOnlyStoredHooks =
   z.infer<typeof storedHookConfig> extends StoredHookConfig ? true : never;
-const _storedHookShapeHolds: StoredHookSchemaMatchesInterface = true;
-void _storedHookShapeHolds;
+type SchemaAcceptsEveryStoredHook =
+  StoredHookConfig extends z.infer<typeof storedHookConfig> ? true : never;
+const _schemaAcceptsOnlyStoredHooks: SchemaAcceptsOnlyStoredHooks = true;
+const _schemaAcceptsEveryStoredHook: SchemaAcceptsEveryStoredHook = true;
+void _schemaAcceptsOnlyStoredHooks;
+void _schemaAcceptsEveryStoredHook;
 
 const admin = z.object({
   useAsTitle: z.string().optional(),
