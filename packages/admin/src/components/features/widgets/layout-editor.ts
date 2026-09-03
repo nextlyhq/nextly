@@ -297,3 +297,63 @@ export function columnAffordance(
     canMoveRight: column < columnCount - 1,
   };
 }
+
+/** The prefix that marks a droppable id as a COLUMN rather than a card. */
+const COLUMN_DROP_PREFIX = "widget-column:";
+
+/**
+ * The droppable id for a column.
+ *
+ * 🔴 Built and read in one place. A column and a card share one id space in
+ * dnd-kit, so the only thing separating them is this spelling — and two copies
+ * of it drift the moment one is edited, which reads as "dropping onto a column
+ * silently does nothing".
+ */
+export function columnDropId(column: number): string {
+  return `${COLUMN_DROP_PREFIX}${column}`;
+}
+
+/** The column a droppable id names, or `undefined` when it names a card. */
+function columnFromDropId(id: string): number | undefined {
+  if (!id.startsWith(COLUMN_DROP_PREFIX)) return undefined;
+  const parsed = Number.parseInt(id.slice(COLUMN_DROP_PREFIX.length), 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+/**
+ * The arrangement after a card was dropped somewhere.
+ *
+ * Two kinds of target, because a column needs both. Dropping onto a CARD takes
+ * that card's column and lands beside it, which is how a reader orders one
+ * widget above another. Dropping onto the COLUMN itself is the only way to
+ * reach an empty one -- it holds no card to aim at, so without this a column
+ * becomes unreachable the moment its last card leaves.
+ *
+ * A drop that resolves to nothing returns the arrangement unchanged. Released
+ * over empty space, or onto itself, is an ordinary end to a drag rather than an
+ * error worth reporting.
+ */
+export function resolveDrop(
+  placements: readonly WidgetPlacement[],
+  activeId: string,
+  overId: string | null,
+  columnCount: number
+): WidgetPlacement[] {
+  if (overId === null || overId === activeId) return [...placements];
+
+  const targetColumn = columnFromDropId(overId);
+  if (targetColumn !== undefined) {
+    const bounded = Math.min(targetColumn, Math.max(0, columnCount - 1));
+    return renumber(moveToColumn(placements, activeId, bounded));
+  }
+
+  const over = placements.find(placement => placement.id === overId);
+  if (over === undefined) return [...placements];
+
+  // The column FIRST, then the position, and both are needed. Taking the
+  // column alone lands every card in arrival order, so a reader could never
+  // put one below another; moving the position alone would reorder a card
+  // inside the column it came from while the drop was aimed at another.
+  const recolumned = moveToColumn(placements, activeId, over.column ?? 0);
+  return renumber(movePlacementTo(recolumned, activeId, overId));
+}

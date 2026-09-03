@@ -8,6 +8,8 @@ import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 import {
   addPlacement,
   columnAffordance,
+  columnDropId,
+  resolveDrop,
   moveToColumn,
   placementsByColumn,
   hasChanges,
@@ -322,5 +324,47 @@ describe("arranging across columns", () => {
         canMoveRight: true,
       });
     });
+  });
+});
+
+describe("resolving where a drag landed", () => {
+  const at = (id: string, column: number, order: number): WidgetPlacement => ({
+    id,
+    widgetId: `w-${id}`,
+    column,
+    order,
+    hidden: false,
+  });
+  const start = [at("a", 0, 0), at("b", 0, 10), at("c", 1, 20)];
+
+  it("drops onto an EMPTY column when the target is the column itself", () => {
+    // 🔴 The case a card-to-card resolution cannot express. An empty column
+    // holds no card to drop onto, so unless the column itself is a target it
+    // is reachable only until its last card leaves and never again.
+    const next = resolveDrop(start, "a", columnDropId(2), 3);
+    expect(next.find(p => p.id === "a")?.column).toBe(2);
+  });
+
+  it("takes the column of the card it was dropped onto", () => {
+    const next = resolveDrop(start, "a", "c", 3);
+    expect(next.find(p => p.id === "a")?.column).toBe(1);
+  });
+
+  it("REORDERS within a column rather than only re-columning", () => {
+    // 🔴 The control for the case above. Setting the column and stopping there
+    // passes "took the column" while every card lands in arrival order, so a
+    // reader can never place one BELOW another in the same column.
+    const next = resolveDrop(start, "b", "a", 3);
+    const column0 = next.filter(p => (p.column ?? 0) === 0).map(p => p.id);
+    expect(column0).toEqual(["b", "a"]);
+  });
+
+  it("leaves the arrangement alone when the drop resolves to nothing", () => {
+    // A drag released over empty space is an ordinary outcome, not an error.
+    expect(resolveDrop(start, "a", null, 3)).toEqual(start);
+  });
+
+  it("leaves the arrangement alone when a card is dropped on itself", () => {
+    expect(resolveDrop(start, "a", "a", 3)).toEqual(start);
   });
 });
