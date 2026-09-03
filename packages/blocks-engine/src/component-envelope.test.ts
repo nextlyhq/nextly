@@ -285,9 +285,14 @@ describe("a variant may only preset what the component exposes", () => {
     // it and can be walked by the same machinery.
     const issues = issuesFrom(
       componentDoc({
+        exposed: [goodExposure],
         slots: { body: { label: "Body", nodeId: "box", slot: "children" } },
         variants: {
-          compact: { label: "Compact", overrides: {}, slots: { body: [] } },
+          compact: {
+            label: "Compact",
+            overrides: { heading: "Hi" },
+            slots: { body: [] },
+          },
         },
       })
     );
@@ -301,9 +306,17 @@ describe("a variant states what a picker and a resolver need", () => {
   it("refuses a variant with no label", () => {
     // The picker renders the label. Without one it offers a row reading
     // "undefined", which is indistinguishable from a rendering bug.
-    expect(
-      codesFrom(componentDoc({ variants: { compact: { overrides: {} } } }))
-    ).toEqual(["component-envelope-invalid"]);
+    const issues = issuesFrom(
+      componentDoc({
+        exposed: [goodExposure],
+        variants: { compact: { overrides: { heading: "Hi" } } },
+      })
+    );
+
+    // Asserted at the label, not merely by code: `component-envelope-invalid`
+    // covers every shape fault in this envelope, so a code-only assertion
+    // would pass on a document refused for something else entirely.
+    expect(issues.map(i => i.path)).toEqual(["/variants/compact/label"]);
   });
 
   it("refuses a variant with no overrides map", () => {
@@ -486,6 +499,109 @@ describe("an over-limit document does not pay for its envelope", () => {
     expect(
       underLimit.filter(i => i.code === "exposed-node-missing")
     ).toHaveLength(400);
+  });
+});
+
+describe("a slot exposure survives a container the author has not filled", () => {
+  it("accepts a slot on a node that stores no slots at all", () => {
+    // `makeNode` sets `slots` only when a caller supplies content, and
+    // `expandSlotDefaults` returns nothing for a container with no seeded
+    // children — so a declared, still-empty region is stored as an ABSENT map.
+    // Refusing that rejects a sound definition for exposing a slot the author
+    // has not filled yet, which is the state of every container the moment it
+    // is created.
+    const doc = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "box", type: "core/box", version: 1, props: {} }],
+      slots: { body: { label: "Body", nodeId: "box", slot: "children" } },
+    } as unknown as BlockDocument;
+
+    expect(codesFrom(doc)).toEqual([]);
+  });
+});
+
+describe("an exposed slot id is usable", () => {
+  it("refuses an empty slot id", () => {
+    // Instance content is stored under this id in the instance node's own
+    // slots, and the builder's operation boundary refuses an empty slot name —
+    // so an exposure accepted here is one no author could ever fill.
+    expect(
+      codesFrom(
+        componentDoc({
+          slots: { "": { label: "Body", nodeId: "box", slot: "children" } },
+        })
+      )
+    ).toEqual(["component-envelope-invalid"]);
+  });
+});
+
+describe("an allow entry is held to the block-type grammar", () => {
+  it("refuses a string that is not a block type", () => {
+    // Every non-empty string used to pass, in the one field whose whole
+    // purpose is naming block types. `isBlockType` is the predicate the rest
+    // of this file holds a node's own `type` to.
+    expect(
+      codesFrom(
+        componentDoc({
+          slots: {
+            body: {
+              label: "Body",
+              nodeId: "box",
+              slot: "children",
+              allow: ["not a block"],
+            },
+          },
+        })
+      )
+    ).toEqual(["component-envelope-invalid"]);
+  });
+});
+
+describe("a variant presets something", () => {
+  it("refuses a variant whose overrides map is empty", () => {
+    // The picker would offer a control that does nothing when chosen.
+    expect(
+      codesFrom(
+        componentDoc({
+          exposed: [goodExposure],
+          variants: { compact: { label: "Compact", overrides: {} } },
+        })
+      )
+    ).toEqual(["component-envelope-invalid"]);
+  });
+});
+
+describe("the unset sentinel is an exact shape", () => {
+  it("does not clear a structured value that carries the marker", () => {
+    // A link value of `{ href: "/docs", $unset: true }` is a value to APPLY.
+    // Matching on the marker alone would clear the property instead of setting
+    // it, and override values are unconstrained, so a richer object may
+    // legitimately hold a key of that name.
+    expect(isUnsetOverride({ href: "/docs", $unset: true })).toBe(false);
+    expect(isUnsetOverride({ $unset: true })).toBe(true);
+  });
+});
+
+describe("a huge envelope is bounded whatever the survey measured", () => {
+  it("refuses an exposed list longer than the document may have nodes", () => {
+    // The survey measures what `JSON.stringify` would emit, so a field with a
+    // `toJSON` returning `[]` is measured as two bytes while this walk reads
+    // the real array. The envelope bounds what it actually reads.
+    const exposed = Array.from({ length: 12 }, (_, i) => ({
+      id: `e${i}`,
+      label: "L",
+      nodeId: "box",
+      propPath: "heading",
+      type: "text",
+    }));
+    const issues = validate(componentDoc({ exposed }), {
+      ...context("strict"),
+      limits: { maxDepth: 12, maxNodes: 10, maxBytes: 2_097_152 },
+    });
+
+    expect(issues.map(i => i.code)).toEqual(["component-envelope-invalid"]);
+    expect(issues[0].message).toContain("12 exposed properties");
   });
 });
 

@@ -43,9 +43,11 @@ renders — the fault only appears later, as an author editing a property and
 seeing nothing change on any page carrying the component. The refusal names the
 node or slot it could not find, and what the node declares instead.
 
-A variant states the label its picker shows and the overrides it presets, and
-an exposed slot states the label the layers panel shows and the block types it
-accepts. A variant cannot carry slot content yet: that content is a second node
+A variant states the label its picker shows and at least one override it
+presets — one that presets nothing is a picker entry that does nothing when
+chosen. An exposed slot needs a usable id, and the block types it accepts are
+held to the same grammar a node's own type is. And
+an exposed slot states the label the layers panel shows. A variant cannot carry slot content yet: that content is a second node
 forest, and the one place a forest is checked for malformed nodes, duplicate
 ids and depth is the walk over the document's own nodes — so it lands with the
 resolver that inlines it, rather than being stored unchecked.

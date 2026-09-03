@@ -1569,6 +1569,38 @@ function nodesById(nodes: BlockNode[], maxNodes: number) {
   return index;
 }
 
+/**
+ * Whether a collection is small enough to be worth walking, reporting once
+ * when it is not.
+ *
+ * Its OWN budget rather than a share of the survey's verdict. The survey
+ * measures what `JSON.stringify` would emit, so a field carrying a `toJSON`
+ * that returns `[]` is measured as two bytes while the walks below read the
+ * real array by ordinary property access — a document that passes a 200-byte
+ * survey can still hold a hundred thousand entries here. The envelope has to
+ * bound the collection it actually reads.
+ *
+ * The node cap is the bound because the envelope POINTS INTO the node forest:
+ * more exposures than the document may contain nodes describes pointers that
+ * cannot all resolve, whatever else is wrong with it.
+ */
+function withinBudget(
+  items: readonly unknown[],
+  path: string,
+  what: string,
+  maxNodes: number,
+  issues: ValidationIssue[]
+): boolean {
+  if (items.length <= maxNodes) return true;
+  issues.push({
+    path,
+    code: "component-envelope-invalid",
+    severity: "error",
+    message: `A component declares ${items.length} ${what}, more than the ${maxNodes} nodes a document may contain.`,
+  });
+  return false;
+}
+
 /** One `exposed` entry, before anything about it has been checked. */
 type RawExposed = Record<string, unknown>;
 
@@ -1600,37 +1632,74 @@ function validateComponentEnvelope(
   issues: ValidationIssue[]
 ): void {
   const index = nodesById(nodes, maxNodes);
-  const exposedIds = new Set<string>();
+  const exposedIds = checkExposedList(doc.exposed, index, maxNodes, issues);
+  checkExposedSlots(doc.slots, index, maxNodes, issues);
+  checkVariants(doc.variants, exposedIds, maxNodes, issues);
+}
 
-  const exposed = doc.exposed;
-  if (exposed !== undefined && !Array.isArray(exposed)) {
+/**
+ * The `exposed` list, returning the ids it declared.
+ *
+ * The ids are the return value because the variants below address them: a
+ * variant preset naming something nothing exposes is applied by no one, and
+ * only this pass knows what was named.
+ */
+function checkExposedList(
+  exposed: unknown,
+  index: Map<string, BlockNode>,
+  maxNodes: number,
+  issues: ValidationIssue[]
+): ReadonlySet<string> {
+  const exposedIds = new Set<string>();
+  if (exposed === undefined) return exposedIds;
+
+  if (!Array.isArray(exposed)) {
     issues.push({
       path: "/exposed",
       code: "component-envelope-invalid",
       severity: "error",
       message: "A component's exposed field must be an array.",
     });
-  } else {
-    (exposed ?? []).forEach((entry: unknown, i: number) => {
-      checkExposedProperty(entry, `/exposed/${i}`, index, exposedIds, issues);
-    });
+    return exposedIds;
   }
 
-  const slots = doc.slots;
-  if (slots !== undefined && !isPlainRecord(slots)) {
+  if (
+    !withinBudget(exposed, "/exposed", "exposed properties", maxNodes, issues)
+  ) {
+    return exposedIds;
+  }
+
+  exposed.forEach((entry: unknown, i: number) => {
+    checkExposedProperty(entry, `/exposed/${i}`, index, exposedIds, issues);
+  });
+  return exposedIds;
+}
+
+/** The `slots` map, keyed by the id an instance addresses its content with. */
+function checkExposedSlots(
+  slots: unknown,
+  index: Map<string, BlockNode>,
+  maxNodes: number,
+  issues: ValidationIssue[]
+): void {
+  if (slots === undefined) return;
+
+  if (!isPlainRecord(slots)) {
     issues.push({
       path: "/slots",
       code: "component-envelope-invalid",
       severity: "error",
       message: "A component's slots field must be an object keyed by slot id.",
     });
-  } else {
-    for (const [id, entry] of Object.entries(slots ?? {})) {
-      checkExposedSlot(entry, id, pointer("/slots", id), index, issues);
-    }
+    return;
   }
 
-  checkVariants(doc.variants, exposedIds, issues);
+  const ids = Object.keys(slots);
+  if (!withinBudget(ids, "/slots", "exposed slots", maxNodes, issues)) return;
+
+  for (const id of ids) {
+    checkExposedSlot(slots[id], id, pointer("/slots", id), index, issues);
+  }
 }
 
 /**
@@ -1837,6 +1906,20 @@ function checkExposedSlot(
   index: Map<string, BlockNode>,
   issues: ValidationIssue[]
 ): void {
+  // The map KEY is the slot's id, and an empty one is unusable rather than
+  // merely odd: instance content is stored under it in the instance node's own
+  // `slots`, and the builder's operation boundary refuses an empty slot name —
+  // so an exposure accepted here is one no author can ever fill.
+  if (id === "") {
+    issues.push({
+      path,
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: "An exposed slot needs a non-empty id.",
+    });
+    return;
+  }
+
   if (!isPlainRecord(entry)) {
     issues.push({
       path,
@@ -1901,7 +1984,10 @@ function checkExposedSlotMetadata(
 
   const at = pointer(path, "allow");
   allow.forEach((type: unknown, i: number) => {
-    if (typeof type === "string" && type !== "") return;
+    // The same predicate the rest of this file holds a node's `type` to. A
+    // second, weaker definition here would accept `"not-a-block"` as a block
+    // type in the one place the field's whole purpose is naming block types.
+    if (isBlockType(type)) return;
     issues.push({
       path: pointer(at, i),
       code: "component-envelope-invalid",
@@ -1912,18 +1998,26 @@ function checkExposedSlotMetadata(
 }
 
 /**
- * That the node actually declares the named region.
+ * That the node holds the named region.
  *
- * A separate question from whether the node exists, and the one a renamed
- * container leaves behind: the node is still there, the definition still
- * loads, and nothing in the tree looks wrong.
+ * Answered from the node's STORED slots, which is what this package can see: a
+ * block's declared slots live in its definition, and validation is given a
+ * `BlockTypeLookup` that answers `has(type)` and nothing else. So this catches
+ * the case it can — a slot key the node's own content does not use, which is
+ * what a renamed container leaves behind — and cannot catch a slot that the
+ * block definition no longer declares but whose content is still stored.
  *
- * An OWN property. `slots` is an ordinary object, so `"toString" in slots` is
- * true of every node — a slot by that name would pass here and then resolve to
- * nothing, which is precisely the dangling reference this check exists to
- * refuse. `slots` is also undefined on a container an author has not filled
- * yet, which is an ordinary state, so an absent map is judged the same as a
- * map without the key rather than skipped.
+ * A node with NO slots map is passed, deliberately. `makeNode` sets `slots`
+ * only when a caller supplies content and `expandSlotDefaults` returns nothing
+ * for a container with no seeded children, so a declared, still-empty region
+ * is stored as an absent map — indistinguishable from a region that never
+ * existed. Refusing that would reject a sound definition for exposing a slot
+ * the author has not filled yet, which is the ordinary state of a container
+ * the moment it is created.
+ *
+ * An OWN property when there is a map. `slots` is an ordinary object, so
+ * `"toString" in slots` is true of every node, and a slot by that name would
+ * otherwise pass and then resolve to nothing.
  */
 function checkSlotOnNode(
   slot: unknown,
@@ -1932,14 +2026,15 @@ function checkSlotOnNode(
   path: string,
   issues: ValidationIssue[]
 ): void {
-  const declared = node.slots ?? {};
+  const declared = node.slots;
+  if (declared === undefined) return;
   if (typeof slot === "string" && declares(declared, slot)) return;
 
   issues.push({
     path: pointer(path, "slot"),
     code: "exposed-slot-missing",
     severity: "error",
-    message: `Exposed slot "${id}" names slot ${describeValue(slot)}, which node "${node.id}" does not declare.`,
+    message: `Exposed slot "${id}" names slot ${describeValue(slot)}, which node "${node.id}" does not hold.`,
     suggestion: `Name one of: ${Object.keys(declared).join(", ") || "(none)"}.`,
   });
 }
@@ -1956,6 +2051,7 @@ function checkSlotOnNode(
 function checkVariants(
   variants: unknown,
   exposedIds: ReadonlySet<string>,
+  maxNodes: number,
   issues: ValidationIssue[]
 ): void {
   if (variants === undefined) return;
@@ -1966,6 +2062,18 @@ function checkVariants(
       severity: "error",
       message: "A component's variants field must be an object keyed by name.",
     });
+    return;
+  }
+
+  if (
+    !withinBudget(
+      Object.keys(variants),
+      "/variants",
+      "variants",
+      maxNodes,
+      issues
+    )
+  ) {
     return;
   }
 
@@ -2001,15 +2109,24 @@ function checkVariant(
     });
   }
 
-  // Required, not optional. A variant is a preset, and the picker offering one
-  // that presets nothing is a control that does nothing when chosen — which is
-  // a defect in the definition rather than a variant with no opinions.
+  // Required AND non-empty. A variant is a preset, and the picker offering one
+  // that presets nothing is a control that does nothing when chosen. An empty
+  // map is that control exactly, so checking only the type would state the
+  // invariant in the comment and enforce a weaker one in the code.
   if (!isPlainRecord(variant.overrides)) {
     issues.push({
       path: pointer(at, "overrides"),
       code: "component-envelope-invalid",
       severity: "error",
       message: `Variant "${name}" needs an overrides object keyed by exposed id.`,
+    });
+  } else if (Object.keys(variant.overrides).length === 0) {
+    issues.push({
+      path: pointer(at, "overrides"),
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Variant "${name}" presets nothing, so selecting it would change nothing.`,
+      suggestion: "Give it at least one override, or remove the variant.",
     });
   } else {
     checkVariantTargets(

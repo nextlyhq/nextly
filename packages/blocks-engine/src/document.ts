@@ -578,14 +578,11 @@ export const MAX_CLASSES_PER_NODE = 64;
  * package. Only the FETCH belongs to the stores, which alone know whether a
  * caller wants the draft or the published definition.
  *
- * This paragraph previously said the opposite: that resolution happens "where
- * components are stored and rendered, not here". That was written while the
- * canvas was an iframe running the renderer, so "the renderer" and "the
- * editor" were one place. They are not any more — the canvas renders in the
- * same document as the admin — so a resolver living with the renderer would be
- * a second implementation for the canvas, and the class-usage index and SEO
- * derivation would each need a third. One pure resolver here is what keeps
- * those four answering the same question.
+ * Four consumers need that resolution and none of them is the renderer alone:
+ * the canvas renders in the same document as the admin rather than in an
+ * iframe, and the class-usage index and SEO derivation each read a resolved
+ * tree without rendering at all. A resolver living beside any one of them
+ * would be reimplemented by the other three.
  */
 export const COMPONENT_INSTANCE_TYPE = "nextly/component-instance";
 
@@ -636,13 +633,22 @@ export interface OverrideUnset {
  */
 export type OverrideValue = unknown;
 
-/** True if an override clears its property rather than replacing it. */
+/**
+ * True if an override clears its property rather than replacing it.
+ *
+ * The EXACT shape, not merely an object carrying the marker. Override values
+ * are unconstrained, so a structured one may legitimately hold a `$unset` key
+ * of its own — a link value of `{ href: "/docs", $unset: true }` is a value to
+ * apply, and matching on the marker alone would clear the property instead of
+ * setting it. Requiring the sentinel to be its own sole key leaves every
+ * richer object a value.
+ */
 export function isUnsetOverride(value: OverrideValue): value is OverrideUnset {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { $unset?: unknown }).$unset === true
-  );
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const keys = Object.keys(value);
+  return keys.length === 1 && (value as { $unset?: unknown }).$unset === true;
 }
 
 /** True if a node is a linked component instance. */

@@ -15,6 +15,10 @@ export {
   BINDING_FORMAT_TYPES,
   DEFAULT_BINDING_SOURCE,
   COMPONENT_INSTANCE_TYPE,
+  // The component-definition contract, published so the stores and the admin
+  // DERIVE the vocabulary rather than restating it. A schema branch or a
+  // picker that listed these values itself would agree on the day it was
+  // written and accept a type this engine refuses the day one is added.
   EXPOSED_PROPERTY_TYPES,
   STYLE_STATES,
   MAX_BREAKPOINTS_PER_AXIS,
