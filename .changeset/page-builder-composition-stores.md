@@ -40,6 +40,9 @@ so a site can keep saved starting points and reusable pieces beside its pages.
   rows rather than columns, so adding an announcement bar or a sidebar later
   costs no migration.
 
+Each store is offered by one sidebar link — the page builder's own — rather
+than also appearing in the automatic collection navigation.
+
 All three separate saving from publishing: a draft is worked on privately and
 publishing is the single act that ships it. Each appears in the admin behind
 its own read permission, and each accepts only its own kind of document, so a

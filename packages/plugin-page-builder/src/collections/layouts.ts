@@ -143,11 +143,20 @@ export function layoutsCollection() {
     // does.
     status: true,
     versions: { drafts: true },
-    // Kept out of the Collections section, which lists every collection that
-    // claims neither a sidebar group nor plugin ownership. Without this the
-    // store is listed twice — once there and once in this plugin's own menu —
-    // and following the plugin link then lights up Collections, so the sidebar
-    // disagrees with itself about where the author is.
-    admin: { useAsTitle: "title", isPlugin: true },
+    // Opted out of AUTOMATIC navigation, because this plugin declares its own
+    // menu entry for the store and two sources listing one screen is the
+    // problem rather than the belt-and-braces it looks like.
+    //
+    // There are two automatic sources and `hidden` is the only thing that
+    // excludes both. `isInCollectionsSection` (admin `lib/sidebar-landing`)
+    // admits every collection that is not hidden and claims no sidebar group,
+    // which is the Collections listing; `DynamicPluginNav` lists every
+    // collection marked `isPlugin`, and `SidebarNavigation` renders it
+    // immediately above this plugin's own menu — so claiming plugin ownership
+    // does not move the duplicate, it puts both copies in one section, side by
+    // side. Hidden costs nothing else: the collection keeps its URL, its API
+    // and its permissions, and only stops being offered by navigation nobody
+    // asked for.
+    admin: { useAsTitle: "title", hidden: true },
   });
 }

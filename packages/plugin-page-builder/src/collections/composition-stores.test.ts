@@ -265,21 +265,43 @@ describe("a published pattern can always be classified", () => {
   });
 });
 
-describe("each store is listed once in the sidebar", () => {
+describe("exactly one navigation source claims each store", () => {
+  // Asserted as the OUTCOME rather than as the setting that produces it. The
+  // first version of this test asserted `isPlugin: true` — the lever — and
+  // passed while the stores were still listed twice, because opting into
+  // `DynamicPluginNav` moved the duplicate into the Plugins section instead of
+  // removing it. Both automatic sources have to be named for the assertion to
+  // mean anything.
   it.each([
-    ["patterns", patternsCollection],
-    ["components", componentsCollection],
-    ["layouts", layoutsCollection],
-  ])("%s claims plugin ownership", (_label, build) => {
-    // The Collections section lists every collection claiming neither a
-    // sidebar group nor plugin ownership, and this plugin's own menu lists
-    // these three as well. Without the claim each store appears twice, and
-    // following the plugin link lights up Collections — the sidebar
-    // disagreeing with itself about where the author is.
-    const collection = build() as { admin?: { isPlugin?: boolean } };
+    ["patterns", PATTERNS_SLUG, patternsCollection],
+    ["components", COMPONENTS_SLUG, componentsCollection],
+    ["layouts", LAYOUTS_SLUG, layoutsCollection],
+  ])(
+    "%s is offered by the plugin menu and by nothing else",
+    (_l, slug, build) => {
+      const collection = build() as {
+        admin?: { hidden?: boolean; isPlugin?: boolean };
+      };
 
-    expect(collection.admin?.isPlugin).toBe(true);
-  });
+      // Source 1 — the Collections listing. `isInCollectionsSection` (admin
+      // `lib/sidebar-landing`) admits every collection that is not hidden and
+      // claims no sidebar group.
+      expect(collection.admin?.hidden).toBe(true);
+
+      // Source 2 — `DynamicPluginNav`, which lists every `isPlugin` collection
+      // and which `SidebarNavigation` renders immediately above this plugin's
+      // own menu. Opting in puts both copies in ONE section, side by side.
+      expect(collection.admin?.isPlugin).toBeUndefined();
+
+      // Source 3 — the plugin's own menu, which is the one that should claim it,
+      // once. Two entries naming one store would satisfy both assertions above
+      // and still show the author two links.
+      const menu = (pageBuilder().contributes?.admin?.menu ?? []) as {
+        collection?: string;
+      }[];
+      expect(menu.filter(item => item.collection === slug)).toHaveLength(1);
+    }
+  );
 });
 
 describe("a Layout row names no variant", () => {
