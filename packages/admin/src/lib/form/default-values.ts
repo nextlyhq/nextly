@@ -31,6 +31,10 @@
  */
 
 import type { FieldConfig } from "nextly/config";
+// The shared predicate keeps the structural-field decisions — which types
+// seed nested defaults and which treat a stored null as shape-to-materialise
+// — aligned across both stored field-group spellings.
+import { isFieldGroupFieldType } from "nextly/field-group-type";
 
 /** Convert camelCase to snake_case, for the DB column-name fallback below. */
 function toSnakeCase(str: string): string {
@@ -255,6 +259,9 @@ const DECLARED_DEFAULT: Record<
   chips: (_f, d) => d ?? [],
   group: (f, d) => seedContainer(d, (f as { fields?: FieldConfig[] }).fields),
   component: fromComponentDefault,
+  // The migrated spelling seeds identically: its nested schema arrives
+  // enriched as `componentFields` under either stored token.
+  fieldGroup: fromComponentDefault,
 };
 
 /**
@@ -334,7 +341,10 @@ export function getDefaultValues(
     // `{ metaTitle: null, ... }` the moment its sub-fields mount — so taking the
     // null verbatim guarantees the form's values can never equal its defaults,
     // and the document reports itself edited before anyone has typed.
-    const isStructural = field.type === "component" || field.type === "group";
+    // Asked through the shared predicate: a migrated field group is structural
+    // exactly like the legacy one.
+    const isStructural =
+      field.type === "group" || isFieldGroupFieldType(field.type);
     const isRepeatable =
       (field as { repeatable?: boolean }).repeatable === true;
     const nullStructural =

@@ -53,7 +53,6 @@ import {
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
-import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
@@ -785,6 +784,14 @@ ${allColumnDefs.join(",\n")}
        * the drop is then emitted only where the dialect can guard it itself.
        */
       indexNames?: ReadonlySet<string>;
+      /**
+       * Physical table name per referenced field-group slug, resolved from the
+       * REGISTRY by the caller. A field group's data table is whatever the
+       * registry says it is — the storage migration renames comp_ tables to
+       * fg_, and a slug may carry a historical custom name — so deriving the
+       * name from the slug here would target a table that does not exist.
+       */
+      fieldGroupTableNames?: ReadonlyMap<string, string>;
     }
   ): string {
     // The added columns become SQL here too, so the same refusal applies.
@@ -890,7 +897,12 @@ ${allColumnDefs.join(",\n")}
         renamedFromName = groupRename.from.name;
         renamedToName = groupRename.to.name;
         for (const slug of fieldGroupSlugList(groupRename.to)) {
-          const groupTable = resolveComponentTableName(slug);
+          // The registry resolves the physical table: comp_ today, fg_ or a
+          // historical custom name once the storage migration has run, so the
+          // name is passed in per slug rather than derived here. A slug with
+          // no resolved name has no record and no table — nothing to migrate.
+          const groupTable = options?.fieldGroupTableNames?.get(slug);
+          if (groupTable === undefined) continue;
           statements.push(
             `UPDATE ${this.quoteIdentifier(groupTable)}\n` +
               `SET ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.to.name}'\n` +

@@ -7,6 +7,7 @@ import { createHash, randomBytes } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { getService } from "../../../di";
 import { NextlyError } from "../../../errors";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -14,6 +15,7 @@ import type { MigrationStatus } from "../../../schemas/dynamic-collections/types
 import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
+import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
@@ -229,6 +231,46 @@ export class DynamicCollectionService extends BaseService {
       foreignKeysByColumn: foreignKeys,
       indexNames: indexes,
     };
+  }
+
+  /**
+   * Physical table name per field-group slug these fields reference, resolved
+   * from the REGISTRY record each group was created with.
+   *
+   * The association migration a field-group rename emits has to name the
+   * group's data table, and that table is whatever the registry says it is —
+   * the storage migration renames comp_ tables to fg_, and a group may carry a
+   * historical custom name — so deriving it from the slug again would target a
+   * table that does not exist and fail the save.
+   *
+   * Best-effort: an unavailable registry resolves nothing, and a slug with no
+   * record has no table for the association UPDATE to touch.
+   */
+  private async resolveFieldGroupTableNames(
+    fields: FieldDefinition[]
+  ): Promise<ReadonlyMap<string, string>> {
+    const slugs = new Set<string>();
+    for (const field of fields) {
+      for (const slug of fieldGroupSlugList(field)) slugs.add(slug);
+    }
+    if (slugs.size === 0) return new Map();
+
+    const resolved = new Map<string, string>();
+    try {
+      const registry = getService(
+        "fieldGroupRegistryService"
+      );
+      await Promise.all(
+        [...slugs].map(async slug => {
+          const record = await registry.getComponentBySlug(slug);
+          if (record) resolved.set(slug, record.tableName);
+        })
+      );
+    } catch {
+      // Registry unavailable — no association migration is emitted for these
+      // slugs rather than one against a guessed table name.
+    }
+    return resolved;
   }
 
   /**
@@ -829,7 +871,15 @@ export class DynamicCollectionService extends BaseService {
           collection.tableName,
           oldShared,
           newShared,
-          { wasStatus, hasStatus, ...(await liveTable()) }
+          {
+            wasStatus,
+            hasStatus,
+            ...(await liveTable()),
+            fieldGroupTableNames: await this.resolveFieldGroupTableNames([
+              ...oldShared,
+              ...newShared,
+            ]),
+          }
         );
         const {
           sql: companionSQL,
@@ -867,7 +917,15 @@ export class DynamicCollectionService extends BaseService {
           collection.tableName,
           oldUserFields,
           userDefinedFields,
-          { wasStatus, hasStatus, ...(await liveTable()) }
+          {
+            wasStatus,
+            hasStatus,
+            ...(await liveTable()),
+            fieldGroupTableNames: await this.resolveFieldGroupTableNames([
+              ...oldUserFields,
+              ...userDefinedFields,
+            ]),
+          }
         );
       }
       migrationFileName = `${Date.now()}_update_${collectionName}.sql`;

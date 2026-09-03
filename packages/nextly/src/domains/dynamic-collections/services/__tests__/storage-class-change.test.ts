@@ -71,14 +71,19 @@ describe.each(DIALECTS)(
       // The separating assertion the no-rename test alone cannot make: the
       // rename must still migrate the existing rows, or the registry adopts
       // the new field name while every instance stays keyed by the old one
-      // and reads return no nested data.
+      // and reads return no nested data. The generator names the group's
+      // table ONLY from the registry-resolved map — deriving it from the slug
+      // would target comp_ on a database the storage migration has already
+      // renamed to fg_.
       const sql = service.generateAlterTableMigration(
         TABLE,
         [asField({ name: "seo", type: "fieldGroup", fieldGroup: "seo" })],
-        [asField({ name: "meta", type: "fieldGroup", fieldGroup: "seo" })]
+        [asField({ name: "meta", type: "fieldGroup", fieldGroup: "seo" })],
+        { fieldGroupTableNames: new Map([["seo", "comp_seo"]]) }
       );
 
       expect(sql).toContain("UPDATE");
+      expect(sql).toContain("comp_seo");
       // The generators quote identifiers per dialect, so match the association
       // columns either way.
       expect(sql).toMatch(/["'`]_parent_field["'`] = 'meta'/);
@@ -86,6 +91,19 @@ describe.each(DIALECTS)(
       // Scoped to this parent's rows only: the same group can be embedded
       // under the same field name in other collections.
       expect(sql).toMatch(/["'`]_parent_table["'`] = 'dc_storage_class'/);
+    });
+
+    it("emits no association UPDATE for a slug the registry cannot resolve", () => {
+      // A slug with no record has no table: guessing its name would emit an
+      // UPDATE against a table that does not exist and fail the save.
+      const sql = service.generateAlterTableMigration(
+        TABLE,
+        [asField({ name: "seo", type: "fieldGroup", fieldGroup: "seo" })],
+        [asField({ name: "meta", type: "fieldGroup", fieldGroup: "seo" })],
+        { fieldGroupTableNames: new Map() }
+      );
+
+      expect(sql).not.toContain("UPDATE");
     });
   }
 );
