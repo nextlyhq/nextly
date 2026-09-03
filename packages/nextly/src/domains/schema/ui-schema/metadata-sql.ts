@@ -216,10 +216,11 @@ function hooksColumns(entity: UiSchemaEntity, dialect: Dialect): Column[] {
 /**
  * The `admin` column, when the manifest says anything about presentation.
  *
- * 🔴 CONDITIONAL, unlike `description`. An absent block must leave the stored
- * value alone rather than clear it, so this returns nothing rather than NULL --
- * a manifest that says nothing about presentation is not an instruction to
- * forget it.
+ * 🔴 CONDITIONAL, on the same rule `description` follows. An absent block must
+ * leave the stored value alone rather than clear it, so this returns nothing
+ * rather than NULL -- a manifest that says nothing about presentation is not an
+ * instruction to forget it. The two differ only in payload: this one carries a
+ * JSON block of presentation keys, that one a single string.
  *
  * One helper rather than the same block in each builder: all three kinds have
  * this column and all three must agree about when it is written.
@@ -355,9 +356,9 @@ export function buildCollectionMetadataUpsert(
   // deploy, and be ignored, leaving an entity visible that the manifest said
   // was hidden.
   //
-  // CONDITIONAL, unlike `description`: an absent block leaves the stored value
-  // alone rather than clearing it, which is what lets a manifest that says
-  // nothing about presentation not erase it.
+  // CONDITIONAL, on the same rule `description` follows: an absent block leaves
+  // the stored value alone rather than clearing it, which is what lets a
+  // manifest that says nothing about presentation not erase it.
   columns.push(...adminColumns(entity, dialect));
   columns.push(...hooksColumns(entity, dialect));
   columns.push(...timestampColumns(dialect));

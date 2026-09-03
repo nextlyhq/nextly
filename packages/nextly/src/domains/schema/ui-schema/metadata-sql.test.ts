@@ -603,9 +603,10 @@ describe("presentation metadata reaches every kind that can store it", () => {
   });
 
   it("omits the column when the manifest says nothing about presentation", () => {
-    // The control: unlike `description`, admin is CONDITIONAL — an absent block
-    // must leave the stored value alone rather than clearing it, so a builder
-    // that always emitted it would erase presentation on every save.
+    // The control: admin is CONDITIONAL, on the same rule `description`
+    // follows — an absent block must leave the stored value alone rather than
+    // clearing it, so a builder that always emitted it would erase
+    // presentation on every save.
     const sql = buildSingleMetadataUpsert(
       { slug: "x", fields: [] } as never,
       "sqlite"

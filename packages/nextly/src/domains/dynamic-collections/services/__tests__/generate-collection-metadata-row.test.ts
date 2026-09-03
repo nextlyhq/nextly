@@ -220,11 +220,11 @@ describe("the migration a Builder create writes", () => {
 
   it("emits EXACTLY what migrate:create emits for the same entity", async () => {
     // 🔴 The control the other four exist for. Each of them passes against a
-    // second, separately written statement that merely looks right — which is
-    // the divergence this change removes rather than adds to. The statement
-    // this path appends must be the one `migrate:create` writes for the same
-    // entity, because the committed file is the only thing replayed against the
-    // target database.
+    // second, separately written statement that merely LOOKS right, so none of
+    // them can tell the two authoring paths apart. The statement this path
+    // appends must be byte-for-byte the one `migrate:create` writes for the
+    // same entity, because the committed file is the only thing replayed
+    // against the target database.
     const { migrationSQL, metadata } = await generate();
     // Built from the row this service says it WROTE, not from the raw input:
     // the fields it stores are normalised, so an expectation assembled from the
