@@ -416,3 +416,201 @@ describe("webhooks column", () => {
     expect(parsed.success).toBe(false);
   });
 });
+
+describe("escaping the values a Builder-authored entity can carry", () => {
+  // A validation pattern is the ordinary way a backslash reaches this SQL.
+  const PATTERN = "^\\d+$";
+  const withPattern = {
+    slug: "posts",
+    fields: [{ name: "code", type: "text", options: { pattern: PATTERN } }],
+  } as never;
+  // What the fields column holds before any SQL quoting: JSON encodes the
+  // backslash, so this already carries two characters where the pattern had one.
+  const asJson = JSON.stringify([
+    { name: "code", type: "text", options: { pattern: PATTERN } },
+  ]);
+
+  it("DOUBLES a backslash for MySQL, which reads one as an escape", () => {
+    // 🔴 Under the default SQL mode MySQL consumes a level of backslash
+    // escaping, so the JSON it stores is not the JSON that was written — or the
+    // statement stops parsing. Either way it fails AFTER the table DDL in the
+    // same file has already run, leaving the migration half applied.
+    //
+    // The expectation is COMPUTED rather than written out: an escape sequence
+    // typed by hand is exactly the thing this test is about getting wrong.
+    const sql = buildCollectionMetadataUpsert(withPattern, "mysql");
+    expect(sql).toContain(asJson.replace(/\\/g, "\\\\"));
+  });
+
+  it("leaves it alone for PostgreSQL and SQLite, which store it verbatim", () => {
+    // The control: a rule that doubled everywhere would corrupt these two, and
+    // would still satisfy the assertion above.
+    for (const dialect of ["postgresql", "sqlite"] as const) {
+      const sql = buildCollectionMetadataUpsert(withPattern, dialect);
+      expect(sql).toContain(asJson);
+      expect(sql).not.toContain(asJson.replace(/\\/g, "\\\\"));
+    }
+  });
+
+  it("still doubles an apostrophe on every dialect", () => {
+    // The other control: delegating must not have dropped the escaping that
+    // was already right.
+    for (const dialect of ["postgresql", "sqlite", "mysql"] as const) {
+      const sql = buildCollectionMetadataUpsert(
+        {
+          slug: "posts",
+          labels: { singular: "O'Reilly", plural: "x" },
+          fields: [],
+        } as never,
+        dialect
+      );
+      expect(sql).toContain("O''Reilly");
+    }
+  });
+});
+
+describe("a column that is absent from the manifest must not clear the row", () => {
+  it("omits the description column entirely when the manifest carries none", () => {
+    // 🔴 The column is OMITTED here, and this asserts that. Were it written
+    // unconditionally — NULL when absent — it would not merely fail to set a
+    // description, it would CLEAR one: every manifest projection that does not
+    // carry the value would erase what an earlier migration deployed, and there
+    // are six such projections.
+    //
+    // Omitted, it is absent from the INSERT and from the DO UPDATE SET, so the
+    // stored value survives. `admin` has behaved this way throughout and
+    // produced none of that.
+    const sql = buildCollectionMetadataUpsert(
+      { slug: "posts", fields: [] } as never,
+      "sqlite"
+    );
+    expect(sql).not.toContain('"description"');
+  });
+
+  it("treats an explicit null the same as absent, rather than throwing", () => {
+    // `generateCollection` forwards the create body unvalidated, and `null` is
+    // what "clear it" looks like over JSON. Handed to the quoting helper it
+    // throws on `.replace` of a non-string — AFTER the table DDL in the same
+    // file has run — so the column is decided before the value is quoted.
+    const sql = buildCollectionMetadataUpsert(
+      { slug: "posts", description: null, fields: [] } as never,
+      "sqlite"
+    );
+    expect(sql).not.toContain('"description"');
+  });
+
+  it("DOES write the column when the manifest carries a description", () => {
+    // The control: a helper that returned nothing unconditionally would satisfy
+    // both assertions above and never deploy a description at all.
+    const sql = buildCollectionMetadataUpsert(
+      { slug: "posts", description: "Editorial", fields: [] } as never,
+      "sqlite"
+    );
+    expect(sql).toContain("Editorial");
+    expect(sql).toContain('"description"');
+  });
+
+  it("omits the hooks column when the manifest carries none", () => {
+    // No manifest projection carries hooks, so an unconditional NULL would
+    // disable the validation and transformation a deployed collection runs.
+    const sql = buildCollectionMetadataUpsert(
+      { slug: "posts", fields: [] } as never,
+      "sqlite"
+    );
+    expect(sql).not.toContain('"hooks"');
+  });
+});
+
+describe("hooks are a collection-only manifest key", () => {
+  const withHooks = (kind: "singles" | "components") => ({
+    collections: [],
+    singles: [],
+    components: [],
+    [kind]: [
+      {
+        slug: "x",
+        hooks: [
+          {
+            hookId: "auto-slug",
+            hookType: "beforeChange",
+            enabled: true,
+            config: {},
+            order: 0,
+          },
+        ],
+        fields: [],
+      },
+    ],
+  });
+
+  it("REFUSES hooks on a single and on a component", () => {
+    // 🔴 Only `dynamic_collections` has a hooks column, so those builders emit
+    // none. Accepting the key would let a manifest validate, deploy, and run no
+    // hooks at all, with nothing saying why — a setting the deployment cannot
+    // honour should not parse.
+    for (const kind of ["singles", "components"] as const) {
+      expect(uiSchemaManifest.safeParse(withHooks(kind)).success).toBe(false);
+    }
+  });
+
+  it("ACCEPTS hooks on a collection", () => {
+    // The control: a rule that refused the key everywhere would satisfy the
+    // refusal above and silently drop the one kind that can store them.
+    const parsed = uiSchemaManifest.safeParse({
+      collections: [
+        {
+          slug: "posts",
+          hooks: [
+            {
+              hookId: "auto-slug",
+              hookType: "beforeChange",
+              enabled: true,
+              config: {},
+              order: 0,
+            },
+          ],
+          fields: [],
+        },
+      ],
+      singles: [],
+      components: [],
+    });
+    expect(parsed.success).toBe(true);
+  });
+});
+
+describe("presentation metadata reaches every kind that can store it", () => {
+  const withAdmin = {
+    slug: "x",
+    admin: { hidden: true, icon: "Sparkles", order: 3 },
+    fields: [],
+  } as never;
+
+  it("emits the admin column for singles and components, not only collections", () => {
+    // 🔴 The shared manifest schema accepts `icon`, `hidden`, `order` and
+    // `sidebarGroup` for all three kinds, and all three registry tables HAVE an
+    // admin column — checked per table. A builder that omitted it let those
+    // settings validate, deploy, and be ignored, leaving an entity visible that
+    // the manifest said was hidden.
+    for (const build of [
+      buildSingleMetadataUpsert,
+      buildComponentMetadataUpsert,
+    ]) {
+      const sql = build(withAdmin, "sqlite");
+      expect(sql).toContain("Sparkles");
+      expect(sql).toContain('"admin"');
+    }
+  });
+
+  it("omits the column when the manifest says nothing about presentation", () => {
+    // The control: admin is CONDITIONAL, on the same rule `description`
+    // follows — an absent block must leave the stored value alone rather than
+    // clearing it, so a builder that always emitted it would erase
+    // presentation on every save.
+    const sql = buildSingleMetadataUpsert(
+      { slug: "x", fields: [] } as never,
+      "sqlite"
+    );
+    expect(sql).not.toContain('"admin"');
+  });
+});

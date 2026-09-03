@@ -48,6 +48,7 @@ import { resolveBuilderVersions } from "../../versions/builder-versions";
 import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { calculateSchemaHash } from "../services/schema-hash";
+import { quoteSqlLiteral } from "../utils/sql-literal";
 
 type Dialect = SupportedDialect;
 
@@ -64,13 +65,27 @@ function deterministicId(slug: string): string {
 }
 
 /** SQL single-quoted string literal (standard single-quote doubling). */
-function sqlStr(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
+/**
+ * A quoted SQL string literal for the target dialect.
+ *
+ * 🔴 DELEGATES rather than escaping here. This doubled apostrophes and left
+ * backslashes alone, which is correct for PostgreSQL and SQLite and wrong for
+ * MySQL, where a backslash introduces an escape. JSON is where that bites:
+ * every `\d` in a field's validation pattern, and every encoded newline, is a
+ * backslash pair that MySQL would consume -- changing the stored JSON or making
+ * the statement invalid, after the table DDL in the same file has already run.
+ *
+ * `quoteSqlLiteral` is the answer this repository already has, and its own
+ * docblock describes this exact failure. A second escaping rule beside it is
+ * how the two came to disagree.
+ */
+function sqlStr(value: string, dialect: Dialect): string {
+  return quoteSqlLiteral(value, dialect);
 }
 
 /** JSON value literal. PG casts to jsonb; MySQL/SQLite store the JSON text. */
 function jsonLiteral(value: unknown, dialect: Dialect): string {
-  const lit = sqlStr(JSON.stringify(value));
+  const lit = sqlStr(JSON.stringify(value), dialect);
   return dialect === "postgresql" ? `${lit}::jsonb` : lit;
 }
 
@@ -156,6 +171,67 @@ interface Column {
   update?: boolean;
 }
 
+/**
+ * The `description` column, when the manifest actually carries one.
+ *
+ * 🔴 CONDITIONAL, because a column written unconditionally does not merely fail
+ * to set a value — it CLEARS one. Absent-means-NULL would let any manifest
+ * projection that does not carry the description erase whatever an earlier
+ * migration deployed, and the projections are hand-written per entity kind and
+ * per page, so several of them carry only part of the settings.
+ *
+ * Omitted, the column is absent from the INSERT and from the DO UPDATE SET, so
+ * a partial projection leaves the stored value alone. `admin` behaves the same
+ * way for the same reason. The cost is that clearing a description cannot
+ * propagate through a migration, which is much the smaller defect: being unable
+ * to remove a value is recoverable, silently removing one is not.
+ */
+function descriptionColumns(
+  entity: UiSchemaEntity,
+  dialect: Dialect
+): Column[] {
+  const description = entity.description;
+  if (description === undefined || description === null) return [];
+  return [
+    { name: "description", value: sqlStr(description, dialect), update: true },
+  ];
+}
+
+/**
+ * The `hooks` column, when the manifest carries any. COLLECTIONS ONLY —
+ * `dynamic_singles` and the component registry have no such column, so naming
+ * it there would fail every migration for those kinds.
+ *
+ * Conditional for the same reason as {@link descriptionColumns}: no manifest
+ * projection carries hooks today, so writing NULL when absent would disable the
+ * validation and transformation a deployed collection was running.
+ */
+function hooksColumns(entity: UiSchemaEntity, dialect: Dialect): Column[] {
+  if (entity.hooks === undefined) return [];
+  return [
+    { name: "hooks", value: jsonLiteral(entity.hooks, dialect), update: true },
+  ];
+}
+
+/**
+ * The `admin` column, when the manifest says anything about presentation.
+ *
+ * 🔴 CONDITIONAL, on the same rule `description` follows. An absent block must
+ * leave the stored value alone rather than clear it, so this returns nothing
+ * rather than NULL -- a manifest that says nothing about presentation is not an
+ * instruction to forget it. The two differ only in payload: this one carries a
+ * JSON block of presentation keys, that one a single string.
+ *
+ * One helper rather than the same block in each builder: all three kinds have
+ * this column and all three must agree about when it is written.
+ */
+function adminColumns(entity: UiSchemaEntity, dialect: Dialect): Column[] {
+  if (entity.admin === undefined) return [];
+  return [
+    { name: "admin", value: jsonLiteral(entity.admin, dialect), update: true },
+  ];
+}
+
 /** Assemble an INSERT … upsert for the given dialect. */
 function buildUpsert(
   table: string,
@@ -212,17 +288,24 @@ export function buildCollectionMetadataUpsert(
     plural: entity.labels?.plural ?? toPluralLabel(entity.slug),
   };
   const columns: Column[] = [
-    { name: "id", value: sqlStr(deterministicId(entity.slug)) },
-    { name: "slug", value: sqlStr(entity.slug) },
+    { name: "id", value: sqlStr(deterministicId(entity.slug), dialect) },
+    { name: "slug", value: sqlStr(entity.slug, dialect) },
     { name: "labels", value: jsonLiteral(labels, dialect), update: true },
-    { name: "table_name", value: sqlStr(tableNameFor(entity.slug, "dc_")) },
+    {
+      name: "table_name",
+      value: sqlStr(tableNameFor(entity.slug, "dc_"), dialect),
+    },
     {
       name: "fields",
       value: jsonLiteral(entity.fields, dialect),
       update: true,
     },
-    { name: "source", value: sqlStr("ui") },
-    { name: "schema_hash", value: sqlStr(hashOf(entity)), update: true },
+    { name: "source", value: sqlStr("ui", dialect) },
+    {
+      name: "schema_hash",
+      value: sqlStr(hashOf(entity), dialect),
+      update: true,
+    },
     {
       name: "status",
       value: boolLiteral(entity.status === true, dialect),
@@ -264,16 +347,22 @@ export function buildCollectionMetadataUpsert(
       value: webhooksLiteral(entity.webhooks, dialect),
       update: true,
     },
-    { name: "migration_status", value: sqlStr("applied") },
+    { name: "migration_status", value: sqlStr("applied", dialect) },
   ];
-  if (entity.admin !== undefined) {
-    columns.push({
-      name: "admin",
-      value: jsonLiteral(entity.admin, dialect),
-      update: true,
-    });
-  }
+  // 🔴 Emitted for every kind, because every registry table HAS this column —
+  // checked per table rather than assumed. The shared manifest schema accepts
+  // `icon`, `hidden`, `order` and `sidebarGroup` for singles and components as
+  // well, so a builder that omitted the column let those settings validate,
+  // deploy, and be ignored, leaving an entity visible that the manifest said
+  // was hidden.
+  //
+  // CONDITIONAL, on the same rule `description` follows: an absent block leaves
+  // the stored value alone rather than clearing it, which is what lets a
+  // manifest that says nothing about presentation not erase it.
+  columns.push(...adminColumns(entity, dialect));
+  columns.push(...hooksColumns(entity, dialect));
   columns.push(...timestampColumns(dialect));
+  columns.push(...descriptionColumns(entity, dialect));
   return buildUpsert("dynamic_collections", columns, dialect);
 }
 
@@ -282,20 +371,24 @@ export function buildSingleMetadataUpsert(
   dialect: Dialect
 ): string {
   const columns: Column[] = [
-    { name: "id", value: sqlStr(deterministicId(entity.slug)) },
-    { name: "slug", value: sqlStr(entity.slug) },
-    { name: "label", value: sqlStr(singular(entity)), update: true },
+    { name: "id", value: sqlStr(deterministicId(entity.slug), dialect) },
+    { name: "slug", value: sqlStr(entity.slug, dialect) },
+    { name: "label", value: sqlStr(singular(entity), dialect), update: true },
     {
       name: "table_name",
-      value: sqlStr(tableNameFor(entity.slug, "single_")),
+      value: sqlStr(tableNameFor(entity.slug, "single_"), dialect),
     },
     {
       name: "fields",
       value: jsonLiteral(entity.fields, dialect),
       update: true,
     },
-    { name: "source", value: sqlStr("ui") },
-    { name: "schema_hash", value: sqlStr(hashOf(entity)), update: true },
+    { name: "source", value: sqlStr("ui", dialect) },
+    {
+      name: "schema_hash",
+      value: sqlStr(hashOf(entity), dialect),
+      update: true,
+    },
     {
       name: "status",
       value: boolLiteral(entity.status === true, dialect),
@@ -334,9 +427,11 @@ export function buildSingleMetadataUpsert(
       value: webhooksLiteral(entity.webhooks, dialect),
       update: true,
     },
-    { name: "migration_status", value: sqlStr("applied") },
+    { name: "migration_status", value: sqlStr("applied", dialect) },
   ];
   columns.push(...timestampColumns(dialect));
+  columns.push(...adminColumns(entity, dialect));
+  columns.push(...descriptionColumns(entity, dialect));
   return buildUpsert("dynamic_singles", columns, dialect);
 }
 
@@ -345,19 +440,22 @@ export function buildComponentMetadataUpsert(
   dialect: Dialect
 ): string {
   const columns: Column[] = [
-    { name: "id", value: sqlStr(deterministicId(entity.slug)) },
-    { name: "slug", value: sqlStr(entity.slug) },
-    { name: "label", value: sqlStr(singular(entity)), update: true },
+    { name: "id", value: sqlStr(deterministicId(entity.slug), dialect) },
+    { name: "slug", value: sqlStr(entity.slug, dialect) },
+    { name: "label", value: sqlStr(singular(entity), dialect), update: true },
     {
       name: "table_name",
-      value: sqlStr(tableNameFor(entity.slug, STORAGE_FORMAT.tablePrefix)),
+      value: sqlStr(
+        tableNameFor(entity.slug, STORAGE_FORMAT.tablePrefix),
+        dialect
+      ),
     },
     {
       name: "fields",
       value: jsonLiteral(entity.fields, dialect),
       update: true,
     },
-    { name: "source", value: sqlStr("ui") },
+    { name: "source", value: sqlStr("ui", dialect) },
     {
       // Persist the Builder localized flag so boot reads the component as localized and
       // resolves/writes its companion `comp_<slug>_locales` fields; without it the registry
@@ -366,9 +464,15 @@ export function buildComponentMetadataUpsert(
       value: boolLiteral(entity.localized === true, dialect),
       update: true,
     },
-    { name: "schema_hash", value: sqlStr(hashOf(entity)), update: true },
-    { name: "migration_status", value: sqlStr("applied") },
+    {
+      name: "schema_hash",
+      value: sqlStr(hashOf(entity), dialect),
+      update: true,
+    },
+    { name: "migration_status", value: sqlStr("applied", dialect) },
   ];
   columns.push(...timestampColumns(dialect));
+  columns.push(...adminColumns(entity, dialect));
+  columns.push(...descriptionColumns(entity, dialect));
   return buildUpsert(STORAGE_FORMAT.registryTable, columns, dialect);
 }

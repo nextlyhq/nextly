@@ -161,3 +161,40 @@ describe("cache revalidation in the manifest mirror", () => {
     });
   }
 });
+
+describe("the description a later save must not erase", () => {
+  it("carries it into the manifest entity for a collection and a single", () => {
+    // 🔴 The migration replays where the Builder's local row does not exist,
+    // so a manifest omitting the description deploys a collection without one —
+    // the help text is simply absent on the deployed copy, visible only to
+    // whoever opens it there.
+    const settings = {
+      slug: "articles",
+      singularName: "Article",
+      pluralName: "Articles",
+      description: "Long-form editorial pieces",
+      icon: "FileText",
+    } as never;
+    expect(
+      collectionEntityFromSettings("articles", settings, []).description
+    ).toBe("Long-form editorial pieces");
+    expect(singleEntityFromSettings("about", settings, []).description).toBe(
+      "Long-form editorial pieces"
+    );
+  });
+
+  it("omits the key entirely when there is no description", () => {
+    // The control: writing an explicit undefined would serialise into the
+    // manifest as a present-but-empty key, and a mapper that always set it
+    // would satisfy the assertion above.
+    const settings = {
+      slug: "articles",
+      singularName: "Article",
+      pluralName: "Articles",
+      icon: "FileText",
+    } as never;
+    expect(
+      "description" in collectionEntityFromSettings("articles", settings, [])
+    ).toBe(false);
+  });
+});

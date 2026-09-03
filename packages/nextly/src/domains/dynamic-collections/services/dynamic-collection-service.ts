@@ -3,14 +3,18 @@
  * registry services for dynamic collections.
  */
 
-import { createHash, randomBytes } from "crypto";
+import { randomBytes } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
+import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
+import type {
+  MigrationStatus,
+  StoredHookConfig,
+} from "../../../schemas/dynamic-collections/types";
 import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
@@ -28,6 +32,8 @@ import {
   readIndexNames,
   tableHasRows,
 } from "../../schema/pipeline/live-table-facts";
+import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import { buildCollectionMetadataUpsert } from "../../schema/ui-schema/metadata-sql";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
 import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
 
@@ -41,7 +47,21 @@ import { DynamicCollectionSchemaService } from "./dynamic-collection-schema-serv
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 
 export interface CollectionArtifacts {
+  /**
+   * The migration to COMMIT. Carries the `dynamic_collections` upsert, because
+   * the database this file is replayed against has no row for the collection.
+   */
   migrationSQL: string;
+  /**
+   * What to run against THIS database, which differs from the artefact.
+   *
+   * The registry row here is written by `registerCollection`, and it refuses a
+   * slug that already exists — so the upsert the artefact carries must not run
+   * locally. Optional so a caller that has no reason to distinguish the two can
+   * fall back to `migrationSQL`, which is how the update path already reads its
+   * own local variant.
+   */
+  localMigrationSQL?: string;
   migrationFileName: string;
   tableName: string;
   metadata: {
@@ -102,7 +122,12 @@ export interface CreateCollectionInput {
    */
   webhooks?: boolean;
   fields: FieldDefinition[];
-  hooks?: Record<string, unknown>[];
+  /**
+   * The canonical stored-hook shape, not a looser record: the registry row
+   * these feed is typed with it, and the executor reads `config` and `order`
+   * off every entry.
+   */
+  hooks?: StoredHookConfig[];
   createdBy?: string;
 }
 
@@ -130,7 +155,12 @@ export interface UpdateCollectionInput {
   /** Toggle webhook recording. Honoured when defined; undefined leaves it unchanged. */
   webhooks?: boolean;
   fields?: FieldDefinition[];
-  hooks?: Record<string, unknown>[];
+  /**
+   * The canonical stored-hook shape, not a looser record: the registry row
+   * these feed is typed with it, and the executor reads `config` and `order`
+   * off every entry.
+   */
+  hooks?: StoredHookConfig[];
 }
 
 export class DynamicCollectionService extends BaseService {
@@ -355,12 +385,39 @@ export class DynamicCollectionService extends BaseService {
     // fresh collection, no data to seed, no main-table columns to drop). Without
     // this, a UI-created localized collection has nowhere to store per-language
     // values and every language shares the main columns.
-    const fullMigrationSQL = data.localized
+    const withCompanion = data.localized
       ? this.appendCompanionCreateSQL(migrationSQL, normalizedName, tableName, {
           fields: userDefinedFields,
           status: data.status === true,
         })
       : migrationSQL;
+
+    // 🔴 The committed migration has to carry the REGISTRY ROW as well as the
+    // table. This file is replayed against a database that has never seen the
+    // Schema Builder -- production -- where the `dynamic_collections` row this
+    // service writes locally does not exist. Without the upsert the deploy gets
+    // the table and no row at all, and the collection is absent from the admin
+    // rather than merely stale.
+    //
+    // Built by the SAME builder `migrate:create` uses, not a second statement
+    // that would have to agree with it. What makes this file have to be
+    // self-sufficient is simply that it is the only thing replayed against the
+    // target database: nothing else recreates the registry row there.
+    // 🔴 The ARTEFACT and what runs HERE are not the same statement, and this
+    // path had no reason to distinguish them until the artefact gained the
+    // registry row. The committed file must recreate that row, because the
+    // database it is replayed against has none. THIS database is about to get
+    // one from `registerCollection`, which refuses a slug that already exists --
+    // so running the upsert locally would insert the row, make that refusal
+    // fire, and leave a created table beside a half-written registry with every
+    // retry failing on the slug it just took.
+    //
+    // The update path already draws this distinction and names it the same way;
+    // the create path simply never needed it before.
+    const fullMigrationSQL = this.appendMetadataUpsertSQL(
+      withCompanion,
+      this.manifestEntityFor(normalizedName, data, userDefinedFields)
+    );
 
     const schemaHash = this.generateSchemaHash(userDefinedFields);
 
@@ -411,10 +468,88 @@ export class DynamicCollectionService extends BaseService {
 
     return {
       migrationSQL: fullMigrationSQL,
+      // What to run against THIS database: the DDL without the registry row,
+      // which `registerCollection` writes a moment later.
+      localMigrationSQL: withCompanion,
       migrationFileName: `${Date.now()}_create_${normalizedName}.sql`,
       tableName,
       metadata,
     };
+  }
+
+  /**
+   * This collection as the manifest describes it, which is what the metadata
+   * upsert is built from.
+   *
+   * 🔴 Every optional value is passed STRAIGHT THROUGH, `undefined` included,
+   * rather than being conditionally spread in. The upsert builder hands each to
+   * its own literal helper -- `versionsLiteral`, `revalidateLiteral`,
+   * `webhooksLiteral` -- which decide what an absent flag means, and
+   * `JSON.stringify` drops an undefined member, so an omitted key and a
+   * present-but-undefined one produce the same row. Spreading conditionally
+   * bought nothing and put six branches on this mapping.
+   *
+   * The BOOLEAN forms, not the resolved objects this service stores: the
+   * builder runs the same `resolveBuilder*` helpers itself, so handing it the
+   * resolved form would resolve twice and could write a row `migrate:create`
+   * would not.
+   */
+  private manifestEntityFor(
+    slug: string,
+    data: CreateCollectionInput,
+    fields: FieldDefinition[]
+  ): UiSchemaEntity {
+    return {
+      slug,
+      description: data.description,
+      hooks: data.hooks,
+      labels: data.labels ?? {
+        singular: data.label || slug,
+        plural: (data.label || slug) + "s",
+      },
+      // 🔴 EVERY admin key the local row gets, not the two the manifest used to
+      // declare. These are what a reader sees -- whether the collection appears
+      // at all, where in the sidebar, under which icon -- so a narrower mapping
+      // here rebuilt a visibly different collection wherever the file was
+      // replayed, and looked correct in the one place it was authored.
+      admin: {
+        useAsTitle: data.useAsTitle,
+        group: data.group?.toLowerCase(),
+        icon: data.icon,
+        hidden: data.hidden,
+        order: data.order,
+        sidebarGroup: data.sidebarGroup,
+      },
+      status: data.status === true,
+      localized: data.localized === true,
+      versions: data.versions,
+      versionsMaxPerDoc: data.versionsMaxPerDoc,
+      revalidate: data.revalidate,
+      webhooks: data.webhooks,
+      fields: fields as unknown as UiSchemaEntity["fields"],
+    };
+  }
+
+  /**
+   * Append the `dynamic_collections` upsert that recreates this collection's
+   * registry row when the migration is replayed elsewhere.
+   *
+   * Separated with the breakpoint marker for the same reason the companion
+   * CREATE is: the runner splits on it, and a driver with multi-statements
+   * disabled rejects a combined chunk.
+   *
+   * The upsert conflicts on `slug` and leaves `id`, `table_name`, `source` and
+   * `migration_status` to the INSERT, so replaying it against a database that
+   * already holds the row -- this one, in development -- refreshes the fields
+   * and labels without renaming the row or overwriting a status the runtime
+   * owns.
+   */
+  private appendMetadataUpsertSQL(
+    migrationSQL: string,
+    entity: UiSchemaEntity
+  ): string {
+    const upsert = buildCollectionMetadataUpsert(entity, this.adapter.dialect);
+    return `${migrationSQL}\n--> statement-breakpoint\n${upsert}`;
   }
 
   /**
@@ -447,9 +582,25 @@ export class DynamicCollectionService extends BaseService {
     return `${migrationSQL}\n--> statement-breakpoint\n${buildCompanionCreateOnlySql(spec)}`;
   }
 
+  /**
+   * The schema hash for this collection's stored row.
+   *
+   * 🔴 DELEGATES to the canonical function, and the delegation is the point.
+   * This hashed the raw field JSON; `calculateSchemaHash` normalises the fields
+   * and folds in `SYSTEM_SCHEMA_VERSION`, so the two produce different values
+   * for the same collection. The migration this service writes carries the
+   * canonical one -- the shared upsert computes it -- so the local row and the
+   * replayed row disagreed about a collection neither had changed.
+   *
+   * What that costs is not cosmetic: `syncCodeFirstCollections` decides whether
+   * a definition changed by comparing this hash, so the two databases reach
+   * opposite answers -- one reopening `migration_status` and bumping
+   * `schema_version` for a collection the other considers settled.
+   */
   private generateSchemaHash(fields: FieldDefinition[]): string {
-    const fieldsJson = JSON.stringify(fields);
-    return createHash("sha256").update(fieldsJson).digest("hex");
+    return calculateSchemaHash(
+      fields as unknown as Parameters<typeof calculateSchemaHash>[0]
+    );
   }
 
   /**
