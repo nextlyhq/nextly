@@ -20,6 +20,11 @@ export interface DashboardEditBarProps {
   isSaving: boolean;
   /** Whether the reader has an arrangement of their own to reset. */
   canReset: boolean;
+  /** How many columns the dashboard is currently drawn in. */
+  columnCount: number;
+  /** The counts a reader may choose between. */
+  columnChoices: readonly number[];
+  onColumnCount: (columnCount: number) => void;
   onBegin: () => void;
   onSave: () => void;
   onCancel: () => void;
@@ -31,6 +36,9 @@ export function DashboardEditBar({
   hasUnsavedChanges,
   isSaving,
   canReset,
+  columnCount,
+  columnChoices,
+  onColumnCount,
   onBegin,
   onSave,
   onCancel,
@@ -59,6 +67,48 @@ export function DashboardEditBar({
           because it discards an arrangement rather than an edit. Offered only
           when there IS one: a reader already on the default has nothing to
           reset, and a button that does nothing is worse than no button. */}
+      {/* 🔴 A RADIO GROUP, not a select. Three or four short, mutually
+          exclusive choices are what radios are for: every option is visible
+          without opening anything, the arrow keys move between them, and the
+          current one is announced. A select hides the alternatives behind a
+          click and reads its own value rather than the set.
+
+          Labelled by a real element rather than an `aria-label` on the group,
+          so the name is visible to everyone rather than only to a screen
+          reader deciding what this cluster of numbers is for. */}
+      <div
+        role="radiogroup"
+        aria-labelledby="dashboard-columns-label"
+        className="mr-auto flex items-center gap-1"
+        data-testid="dashboard-column-picker"
+      >
+        <span
+          id="dashboard-columns-label"
+          className="mr-1 text-xs text-muted-foreground"
+        >
+          Columns
+        </span>
+        {columnChoices.map(choice => (
+          <Button
+            key={choice}
+            type="button"
+            role="radio"
+            aria-checked={choice === columnCount}
+            variant={choice === columnCount ? "secondary" : "ghost"}
+            size="sm"
+            disabled={isSaving}
+            onClick={() => onColumnCount(choice)}
+            // The count is in the label because the digit alone does not say
+            // what it counts, and a reader arriving on it by keyboard has no
+            // surrounding context to read.
+            aria-label={`${choice} columns`}
+            data-testid={`dashboard-column-choice-${choice}`}
+          >
+            {choice}
+          </Button>
+        ))}
+      </div>
+
       {canReset ? (
         <Button
           type="button"
@@ -66,7 +116,7 @@ export function DashboardEditBar({
           size="sm"
           onClick={onReset}
           disabled={isSaving}
-          className="mr-auto text-muted-foreground"
+          className="text-muted-foreground"
           data-testid="dashboard-edit-reset"
         >
           Reset to default

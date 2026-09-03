@@ -216,6 +216,8 @@ export function WidgetGrid() {
         // reader had no way out and every read went on logging the same decode
         // failure. The version is what says a row is there.
         canReset={(layout.layout?.version ?? 0) > 0}
+        columnCount={columnCount}
+        onColumnCount={editor.setColumnCount}
       />
 
       <DndContext

@@ -158,11 +158,10 @@ export function useDashboardArrangement(
     return rows;
   }, [hasArrangement, declared, editor.placements, editor.isEditing, byId]);
 
-  // The reader's own count, or the default while the arrangement is unread.
-  // Read from the SERVER's answer rather than assumed: the count decides which
-  // column a placement's coordinate names, so a client picking its own would
-  // draw an arrangement the reader never made.
-  const columnCount = layout.layout?.columnCount ?? DEFAULT_COLUMN_COUNT;
+  // The EDITOR's count, which is the draft's while editing and the saved one
+  // otherwise. Deriving a second answer here would draw the saved count while
+  // the reader is looking at the one they just chose.
+  const columnCount = editor.columnCount;
 
   const columns = useMemo(() => {
     const buckets: ArrangedWidget[][] = Array.from(

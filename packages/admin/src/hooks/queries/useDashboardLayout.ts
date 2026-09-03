@@ -53,6 +53,14 @@ export interface SaveLayoutInput {
   placements: WidgetPlacement[];
   version: number;
   scope: string;
+  /**
+   * The column count this arrangement was made in.
+   *
+   * Sent WITH the placements rather than saved separately: a placement's
+   * `column` only means anything against a count, so two writes could leave a
+   * row whose cards name columns the count does not have.
+   */
+  columnCount: number;
 }
 
 export interface UseDashboardLayoutResult {

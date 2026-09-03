@@ -368,3 +368,27 @@ describe("resolving where a drag landed", () => {
     expect(resolveDrop(start, "a", "a", 3)).toEqual(start);
   });
 });
+
+describe("a column move counts as an unsaved change", () => {
+  const at = (id: string, column: number, order: number): WidgetPlacement => ({
+    id,
+    widgetId: `w-${id}`,
+    column,
+    order,
+    hidden: false,
+  });
+
+  it("SEES a card that only changed column", () => {
+    // 🔴 Moving a card sideways changes `column` and nothing else. Compared on
+    // the other fields alone the arrangement reads as untouched, so Save stays
+    // disabled and the reader cannot keep the move they just made — the work
+    // is on screen and unsaveable, which is worse than an error.
+    expect(hasChanges([at("a", 0, 0)], [at("a", 1, 0)])).toBe(true);
+  });
+
+  it("still reports NO change when nothing moved", () => {
+    // The control: a comparison that answered true for everything would pass
+    // the assertion above while leaving Save permanently enabled.
+    expect(hasChanges([at("a", 0, 0)], [at("a", 0, 0)])).toBe(false);
+  });
+});

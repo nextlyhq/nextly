@@ -928,3 +928,58 @@ describe("crossing columns without dragging", () => {
     expect(screen.queryByTestId("widget-move-right")).toBeNull();
   });
 });
+
+describe("choosing how many columns", () => {
+  it("REDRAWS the dashboard at the count the reader picked", async () => {
+    // 🔴 The whole point of the control. A picker that stores a preference the
+    // grid does not read is a setting that appears to work and changes
+    // nothing — so this asserts the new column exists, not that a button
+    // became selected.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 2 }
+    );
+    renderGrid();
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    const user = await beginEditing();
+    expect(screen.queryByTestId("widget-column-3")).toBeNull();
+    await user.click(screen.getByTestId("dashboard-column-choice-4"));
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-column-3")).toBeInTheDocument()
+    );
+  });
+
+  it("lets the new count be SAVED", async () => {
+    // 🔴 Changing only the count touches no placement, so an unsaved-changes
+    // check that compares placements alone leaves Save disabled and the
+    // reader cannot keep the layout they are looking at.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 2 }
+    );
+    renderGrid();
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    const user = await beginEditing();
+    expect(screen.getByTestId("dashboard-edit-save")).toBeDisabled();
+    await user.click(screen.getByTestId("dashboard-column-choice-3"));
+    await waitFor(() =>
+      expect(screen.getByTestId("dashboard-edit-save")).toBeEnabled()
+    );
+  });
+
+  it("SENDS the count with the arrangement", async () => {
+    // A placement's `column` only means anything against a count, so saving
+    // one without the other leaves a row whose cards name columns it lacks.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 2 }
+    );
+    renderGrid();
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    const user = await beginEditing();
+    await user.click(screen.getByTestId("dashboard-column-choice-4"));
+    await user.click(screen.getByTestId("dashboard-edit-save"));
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    expect(api.put.mock.calls[0][1]).toMatchObject({ columnCount: 4 });
+  });
+});

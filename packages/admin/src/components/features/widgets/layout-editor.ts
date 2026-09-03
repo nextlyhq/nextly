@@ -217,6 +217,11 @@ export function hasChanges(
       placement.id !== other.id ||
       placement.widgetId !== other.widgetId ||
       placement.order !== other.order ||
+      // 🔴 `column` is the only field a sideways move touches. Left out, an
+      // arrangement whose cards changed columns compares as untouched, Save
+      // stays disabled, and the reader watches work they can see refuse to
+      // persist.
+      (placement.column ?? 0) !== (other.column ?? 0) ||
       placement.hidden !== other.hidden ||
       placement.size !== other.size ||
       placement.height !== other.height
@@ -356,4 +361,22 @@ export function resolveDrop(
   // inside the column it came from while the drop was aimed at another.
   const recolumned = moveToColumn(placements, activeId, over.column ?? 0);
   return renumber(movePlacementTo(recolumned, activeId, overId));
+}
+
+/**
+ * Whether a draft differs from what was last saved.
+ *
+ * 🔴 Both halves, because a reader can change either alone. Moving a card
+ * sideways touches only its `column`; switching 3 columns to 2 touches no
+ * placement at all. A check that asked about placements only would leave Save
+ * disabled on an arrangement the reader is looking at and has plainly changed,
+ * which reads as the dashboard refusing to keep their work.
+ */
+export function draftDiffers(
+  saved: readonly WidgetPlacement[],
+  savedColumnCount: number,
+  draft: readonly WidgetPlacement[],
+  draftColumnCount: number
+): boolean {
+  return hasChanges(saved, draft) || savedColumnCount !== draftColumnCount;
 }
