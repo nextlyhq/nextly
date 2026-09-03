@@ -55,6 +55,7 @@ import {
   readPlacements,
   statesColumn,
   visibilityToken,
+  type StoredLayout,
   type WidgetPlacement,
   byPosition,
   DEFAULT_COLUMN_COUNT,
@@ -159,6 +160,31 @@ function carriedPlacements(
     return partitionPlacements(storedPlacements, visibleIds).invisible;
   }
   return defaultRow(visibleIds).invisible;
+}
+
+/**
+ * The arrangement this caller was HANDED: their stored row, or the default.
+ *
+ * 🔴 One implementation, because the writer has to inherit from exactly what
+ * the reader was shown. Two separate answers went wrong in both directions at
+ * once: reading only the stored row left a caller who had never saved
+ * inheriting nothing, so a client that round-trips the default set without its
+ * columns collapsed the server's round-robin into a single column on the first
+ * save; and reading the row UNFILTERED let a submitted placement inherit the
+ * column of one this caller may not know exists, which is an existence oracle
+ * over any id — and default placement ids are widget ids, so they are
+ * guessable. The visible half of the stored row is what was sent, and the
+ * visible defaults are what was sent when there was no row.
+ */
+function visibleArrangement(
+  stored: StoredLayout | undefined,
+  widgets: readonly CanonicalWidget[]
+): WidgetPlacement[] {
+  if (!stored) return visibleDefaults(widgets);
+  return partitionPlacements(
+    stored.placements,
+    new Set(widgets.map(widget => widget.id))
+  ).visible;
 }
 
 /**
@@ -288,12 +314,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   ]);
 
   const source: LayoutSource = stored.layout ? "own" : "default";
-  const placements = stored.layout
-    ? partitionPlacements(
-        stored.layout.placements,
-        new Set(widgets.map(widget => widget.id))
-      ).visible
-    : visibleDefaults(widgets);
+  const placements = visibleArrangement(stored.layout, widgets);
 
   // Widgets this caller may see and has not placed. A stored arrangement is a
   // full snapshot, so a widget registered AFTER the reader last saved has no
@@ -569,14 +590,17 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
       ? readColumnCount(stored.layout?.columnCount)
       : readColumnCount(sentColumnCount);
 
-  // 🔴 A placement that stated no column KEEPS the one it had. Preserving the
-  // count alone was half an answer: a client written before columns omits the
-  // coordinate on every placement as well, so the row held its four columns
-  // while every card in it had been moved into the first — the arrangement
-  // destroyed by an edit that named neither. A placement nothing has seen
-  // before has nothing to inherit and keeps the reader's fallback.
+  // 🔴 A placement that stated no column KEEPS the one it was handed.
+  // Preserving the count alone was half an answer: a client written before
+  // columns omits the coordinate on every placement as well, so the row held
+  // its four columns while every card in it had been moved into the first —
+  // the arrangement destroyed by an edit that named neither.
+  //
+  // The baseline is what this caller was SHOWN, which is the stored row's
+  // visible half or the visible defaults. A placement nothing handed them has
+  // nothing to inherit and keeps the reader's fallback.
   const storedColumns = new Map(
-    (stored.layout?.placements ?? []).map(placement => [
+    visibleArrangement(stored.layout, widgets).map(placement => [
       placement.id,
       placement.column,
     ])

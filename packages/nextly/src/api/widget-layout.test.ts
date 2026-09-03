@@ -1290,6 +1290,99 @@ describe("a stored row describes itself", () => {
     expect(saved?.placements.find(p => p.id === "p2")?.column).toBe(3);
   });
 
+  it("inherits from the DEFAULT arrangement when there is no stored row", async () => {
+    // 🔴 A caller who has never saved was still handed an arrangement — the
+    // server's round-robin default, which spreads the first widgets across the
+    // columns. A pre-column client round-trips that set without the field it
+    // does not know about, and inheritance that reads only the stored row finds
+    // nothing to inherit, so the very first save flattens the default into one
+    // column. The baseline has to be what the caller was SHOWN, and with no row
+    // that is the defaults.
+    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
+    registerWidget(widget({ id: "core/b", defaultOrder: 1 }));
+    registerWidget(widget({ id: "core/c", defaultOrder: 2 }));
+
+    // Exactly what a GET hands out, so the fixture is the arrangement the
+    // client is round-tripping rather than one invented here.
+    const offered = (await bodyOf(await getWidgetLayout(getReq()))).placements;
+    expect(offered?.map(p => p.column)).toEqual([0, 1, 2]);
+
+    const res = await putWidgetLayout(
+      putReq({
+        // The same placements with `column` dropped, which is all a pre-column
+        // client can send.
+        placements: offered?.map(({ id, widgetId, order, hidden }) => ({
+          id,
+          widgetId,
+          order,
+          hidden,
+        })),
+        version: 0,
+        scope: scopeFor(["core/a", "core/b", "core/c"]),
+      })
+    );
+
+    expect(res.status).toBe(200);
+    const saved2 = (await itemOf(res)).placements;
+    expect(saved2?.map(p => p.column)).toEqual([0, 1, 2]);
+  });
+
+  it("never inherits from a placement this caller cannot SEE", async () => {
+    // 🔴 An existence oracle. Default placement ids ARE widget ids, so a caller
+    // can submit a placement whose id names a widget they may not know about
+    // and whose `widgetId` is one they may. Inheriting across the whole stored
+    // row echoed the hidden placement's column straight back, and a nonzero one
+    // distinguishes a hit — which is the disclosure `mergePreservingHidden`
+    // re-keys collisions to prevent. The baseline is the caller's own visible
+    // half, so there is nothing of the hidden row in it to leak.
+    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
+    registerWidget(
+      widget({ id: "core/gated", requiredPermission: "read-secrets" })
+    );
+    callerHoldsPermission.mockResolvedValue(false);
+    stored = {
+      version: 2,
+      layout: serializeLayout(
+        [
+          { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+          {
+            id: "probe",
+            widgetId: "core/gated",
+            column: 3,
+            order: 10,
+            hidden: false,
+          },
+        ],
+        4
+      ),
+    };
+
+    const res = await putWidgetLayout(
+      putReq({
+        placements: [
+          // The probe: an id that collides with the hidden placement, carrying
+          // a widget this caller legitimately holds, and stating no column.
+          { id: "probe", widgetId: "core/a", order: 0, hidden: false },
+        ],
+        version: 2,
+        scope: scopeFor(["core/a"]),
+      })
+    );
+
+    expect(res.status).toBe(200);
+    const echoed = (await itemOf(res)).placements ?? [];
+    expect(echoed).toHaveLength(1);
+    // Column 0 is the reader's own fallback, which says nothing. Column 3 would
+    // be the hidden placement's, and is the whole finding.
+    expect(echoed[0]?.column).toBe(0);
+    // The control: the hidden placement is still CARRIED into the row, so this
+    // is inheritance being scoped rather than the placement having vanished —
+    // which would satisfy the assertion above for the wrong reason.
+    expect(
+      saved?.placements.find(p => p.widgetId === "core/gated")?.column
+    ).toBe(3);
+  });
+
   it("still MOVES a card whose placement states a column", async () => {
     // The control. Inheriting whenever a stored placement exists would satisfy
     // the case above while making every sideways move unsaveable — the same
