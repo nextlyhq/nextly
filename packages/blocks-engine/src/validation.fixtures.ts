@@ -835,7 +835,68 @@ const KIND_FIXTURES: ValidationFixture[] = DOCUMENT_KINDS.map(kind => ({
   expected: [],
 }));
 
+// --- The component definition envelope -------------------------------------
+// In the CORPUS rather than only in the envelope's own suite, because the
+// corpus is what asserts two properties no single test states: that every code
+// a fixture emits is documented in ISSUE_CODES, and that every path emitted
+// resolves as a JSON Pointer into the document it came from. The envelope's
+// paths reach into `/exposed/0/nodeId` and `/slots/<id>/slot`, which are the
+// first pointers in this format that address a document field outside `nodes`.
+
+const COMPONENT_ENVELOPE_FIXTURES: ValidationFixture[] = [
+  {
+    name: "a component exposing a property of its own tree validates",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "box",
+          type: "core/box",
+          version: 1,
+          props: { heading: "Hello" },
+          slots: { children: [] },
+        },
+      ],
+      exposed: [
+        {
+          id: "heading",
+          label: "Heading",
+          nodeId: "box",
+          propPath: "heading",
+          type: "text",
+        },
+      ],
+      slots: {
+        body: { id: "body", label: "Body", nodeId: "box", slot: "children" },
+      },
+    } as unknown as BlockDocument,
+    expected: [],
+  },
+  {
+    name: "a component exposing a node it does not contain is refused",
+    mode: "strict",
+    doc: invalid({
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "box", type: "core/box", version: 1, props: {} }],
+      exposed: [
+        {
+          id: "heading",
+          label: "Heading",
+          nodeId: "deleted",
+          propPath: "heading",
+          type: "text",
+        },
+      ],
+    }),
+    expected: [{ path: "/exposed/0/nodeId", code: "exposed-node-missing" }],
+  },
+];
+
 VALIDATION_FIXTURES.push(
+  ...COMPONENT_ENVELOPE_FIXTURES,
   ...LIMIT_FIXTURES,
   ...HOSTILE_PROP_FIXTURES,
   ...WRITING_SYSTEM_FIXTURES,

@@ -15,6 +15,7 @@ import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  EXPOSED_PROPERTY_TYPES,
   MAX_CLASSES_PER_NODE,
   STYLE_STATES,
   isBindingSource,
@@ -43,6 +44,7 @@ import {
   validateStyleValues,
 } from "./style/validate-style-value";
 import type { ReadyStyleIssueBudget } from "./style/validate-style-value";
+import { walkNodes } from "./tree";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
 export type IssueSeverity = "error" | "warning";
@@ -175,6 +177,22 @@ export const ISSUE_CODES = {
   "invalid-format-version":
     "The document formatVersion is not the supported version.",
   "invalid-kind": "The document kind is not one of the known kinds.",
+  "component-envelope-invalid":
+    "A component document's exposed list or slot map is not the right shape.",
+  "exposed-property-invalid":
+    "An exposed property is missing a required field or declares an unknown type.",
+  "exposed-duplicate-id":
+    "Two exposed properties or slots share one id, so an override cannot address either.",
+  "exposed-node-missing":
+    "An exposed property or slot points at a node this document does not contain.",
+  "exposed-path-invalid":
+    "An exposed property's prop path is not a dot-joined chain of field identifiers.",
+  "exposed-options-invalid":
+    "An exposed property declares options without being a select, or a select declares none.",
+  "exposed-slot-missing":
+    "An exposed slot names a slot the node it points at does not declare.",
+  "variant-unknown-target":
+    "A variant names an exposed property or slot the definition does not expose.",
   "invalid-document": "The document is not an object.",
   "nodes-not-array": "The document nodes field is not an array.",
   "invalid-node": "A node is not an object.",
@@ -407,6 +425,19 @@ export function validateDocument(
     });
     // Nothing further to check without a node forest.
     return { issues, survey };
+  }
+
+  // Per-kind rules. Only `component` has any today, and it is the kind whose
+  // extra fields nothing else in the document can check: `exposed` and `slots`
+  // are pointers INTO the tree that was just confirmed to be an array, so this
+  // is the first point at which they can be resolved at all.
+  if (kind === "component") {
+    validateComponentEnvelope(
+      rawDoc,
+      rawDoc.nodes as BlockNode[],
+      limits,
+      issues
+    );
   }
 
   checkLimits(survey, issues);
@@ -1491,6 +1522,383 @@ function isConditionsShapeValid(conditions: unknown): boolean {
     }
   }
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// The component definition envelope (`kind: "component"`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every node in the forest, by id.
+ *
+ * Its own bounded walk rather than a share of the main one. The envelope needs
+ * the WHOLE index before it can judge its first pointer, while the main walk
+ * reports as it goes — so reusing it would mean either checking pointers
+ * against a half-built index, or holding the envelope's issues back to the end
+ * and reordering the report. A second walk of a component document, bounded by
+ * the same node cap, costs less than either.
+ */
+function nodesById(nodes: BlockNode[], limits: DocumentLimits) {
+  const index = new Map<string, BlockNode>();
+  walkNodes(
+    nodes,
+    node => {
+      // First writer wins. A forest with a duplicated id is already reported by
+      // the main walk, and overwriting here would make the envelope's answer
+      // depend on traversal order for a document that is being refused anyway.
+      if (!index.has(node.id)) index.set(node.id, node);
+    },
+    { maxNodes: limits.maxNodes }
+  );
+  return index;
+}
+
+/** One `exposed` entry, before anything about it has been checked. */
+type RawExposed = Record<string, unknown>;
+
+/**
+ * Check a component definition's exposed properties, slots and variants.
+ *
+ * Every rule here is about a POINTER resolving, because that is the class of
+ * fault the envelope introduces and the one nothing downstream can report. A
+ * definition whose pointer names a node that was deleted still loads, still
+ * renders, and still offers the property in the inspector — where editing it
+ * writes an override keyed to an id that resolves to nothing, on every instance
+ * in the site. The failure surfaces as "my change did nothing", far from the
+ * definition that caused it.
+ *
+ * Errors, not warnings, and in both modes. Forgiving mode exists to keep a
+ * document READABLE when a future build wrote something this one does not
+ * understand; a dangling pointer is not a future value, it is a broken
+ * reference to this document's own tree.
+ */
+function validateComponentEnvelope(
+  doc: Record<string, unknown>,
+  nodes: BlockNode[],
+  limits: DocumentLimits,
+  issues: ValidationIssue[]
+): void {
+  const index = nodesById(nodes, limits);
+  const exposedIds = new Set<string>();
+
+  const exposed = doc.exposed;
+  if (exposed !== undefined && !Array.isArray(exposed)) {
+    issues.push({
+      path: "/exposed",
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: "A component's exposed field must be an array.",
+    });
+  } else {
+    (exposed ?? []).forEach((entry: unknown, i: number) => {
+      checkExposedProperty(entry, `/exposed/${i}`, index, exposedIds, issues);
+    });
+  }
+
+  const slotIds = new Set<string>();
+  const slots = doc.slots;
+  if (slots !== undefined && !isPlainRecord(slots)) {
+    issues.push({
+      path: "/slots",
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: "A component's slots field must be an object keyed by slot id.",
+    });
+  } else {
+    for (const [id, entry] of Object.entries(slots ?? {})) {
+      checkExposedSlot(entry, id, `/slots/${id}`, index, slotIds, issues);
+    }
+  }
+
+  checkVariants(doc.variants, exposedIds, slotIds, issues);
+}
+
+/** One exposed property: its shape, its id, its pointer and its options. */
+function checkExposedProperty(
+  entry: unknown,
+  path: string,
+  index: Map<string, BlockNode>,
+  seen: Set<string>,
+  issues: ValidationIssue[]
+): void {
+  if (!isPlainRecord(entry)) {
+    issues.push({
+      path,
+      code: "exposed-property-invalid",
+      severity: "error",
+      message: "An exposed property must be an object.",
+    });
+    return;
+  }
+
+  const raw: RawExposed = entry;
+  const id = raw.id;
+  const nodeId = raw.nodeId;
+  const propPath = raw.propPath;
+  const type = raw.type;
+
+  if (typeof id !== "string" || id === "") {
+    issues.push({
+      path: pointer(path, "id"),
+      code: "exposed-property-invalid",
+      severity: "error",
+      message: "An exposed property needs a non-empty id.",
+    });
+    return;
+  }
+
+  // Before the pointer checks, so a duplicate is reported once against the
+  // second entry rather than twice against a pair that reads as unrelated.
+  if (seen.has(id)) {
+    issues.push({
+      path: pointer(path, "id"),
+      code: "exposed-duplicate-id",
+      severity: "error",
+      message: `Two exposed properties share the id "${id}".`,
+      suggestion: "Give each exposed property its own id.",
+    });
+  }
+  seen.add(id);
+
+  if (typeof raw.label !== "string" || raw.label === "") {
+    issues.push({
+      path: pointer(path, "label"),
+      code: "exposed-property-invalid",
+      severity: "error",
+      message: `Exposed property "${id}" needs a non-empty label.`,
+    });
+  }
+
+  if (
+    !EXPOSED_PROPERTY_TYPES.includes(
+      type as (typeof EXPOSED_PROPERTY_TYPES)[number]
+    )
+  ) {
+    issues.push({
+      path: pointer(path, "type"),
+      code: "exposed-property-invalid",
+      severity: "error",
+      message: `Exposed property "${id}" declares an unknown type ${describeValue(type)}.`,
+      suggestion: `Use one of: ${EXPOSED_PROPERTY_TYPES.join(", ")}.`,
+    });
+  }
+
+  if (typeof nodeId !== "string" || !index.has(nodeId)) {
+    issues.push({
+      path: pointer(path, "nodeId"),
+      code: "exposed-node-missing",
+      severity: "error",
+      message: `Exposed property "${id}" points at node ${describeValue(nodeId)}, which this document does not contain.`,
+      suggestion:
+        "Point it at a node in this component's tree, or remove the exposure.",
+    });
+  }
+
+  if (typeof propPath !== "string" || !BIND_PATH_RE.test(propPath)) {
+    issues.push({
+      path: pointer(path, "propPath"),
+      code: "exposed-path-invalid",
+      severity: "error",
+      message: `Exposed property "${id}" has prop path ${describeValue(propPath)}.`,
+      suggestion: 'Use a dot-joined chain of field identifiers, e.g. "text".',
+    });
+  }
+
+  checkExposedOptions(raw.options, type, id, path, issues);
+}
+
+/**
+ * The options list, which only a `select` may carry.
+ *
+ * Checked in both directions. Options on a non-select are dead configuration
+ * the inspector will not read, and a select WITHOUT them offers a control with
+ * nothing to choose — which reads to an author as a broken editor rather than
+ * as an incomplete definition.
+ */
+function checkExposedOptions(
+  options: unknown,
+  type: unknown,
+  id: string,
+  path: string,
+  issues: ValidationIssue[]
+): void {
+  const isSelect = type === "select";
+
+  if (!isSelect) {
+    if (options !== undefined) {
+      issues.push({
+        path: pointer(path, "options"),
+        code: "exposed-options-invalid",
+        severity: "error",
+        message: `Exposed property "${id}" declares options but is not a select.`,
+      });
+    }
+    return;
+  }
+
+  if (!Array.isArray(options) || options.length === 0) {
+    issues.push({
+      path: pointer(path, "options"),
+      code: "exposed-options-invalid",
+      severity: "error",
+      message: `Exposed property "${id}" is a select and needs at least one option.`,
+    });
+    return;
+  }
+
+  options.forEach((option: unknown, i: number) => {
+    if (
+      isPlainRecord(option) &&
+      typeof option.value === "string" &&
+      typeof option.label === "string"
+    ) {
+      return;
+    }
+    issues.push({
+      path: pointer(path, `options/${i}`),
+      code: "exposed-options-invalid",
+      severity: "error",
+      message: `An option of exposed property "${id}" needs a string value and label.`,
+    });
+  });
+}
+
+/** One exposed slot: its pointer, and that the node actually declares the slot. */
+function checkExposedSlot(
+  entry: unknown,
+  id: string,
+  path: string,
+  index: Map<string, BlockNode>,
+  seen: Set<string>,
+  issues: ValidationIssue[]
+): void {
+  if (!isPlainRecord(entry)) {
+    issues.push({
+      path,
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Exposed slot "${id}" must be an object.`,
+    });
+    return;
+  }
+
+  if (seen.has(id)) {
+    issues.push({
+      path,
+      code: "exposed-duplicate-id",
+      severity: "error",
+      message: `Two exposed slots share the id "${id}".`,
+    });
+  }
+  seen.add(id);
+
+  const nodeId = entry.nodeId;
+  const slot = entry.slot;
+  const node = typeof nodeId === "string" ? index.get(nodeId) : undefined;
+
+  if (node === undefined) {
+    issues.push({
+      path: pointer(path, "nodeId"),
+      code: "exposed-node-missing",
+      severity: "error",
+      message: `Exposed slot "${id}" points at node ${describeValue(nodeId)}, which this document does not contain.`,
+    });
+    return;
+  }
+
+  // The node exists; the SLOT on it is a separate question, and the one that a
+  // renamed container silently breaks. `slots` is undefined on a node with no
+  // children yet, which is an ordinary state for a container an author has not
+  // filled — so an absent map is judged the same as a map without the key
+  // rather than skipped.
+  if (typeof slot !== "string" || !(slot in (node.slots ?? {}))) {
+    issues.push({
+      path: pointer(path, "slot"),
+      code: "exposed-slot-missing",
+      severity: "error",
+      message: `Exposed slot "${id}" names slot ${describeValue(slot)}, which node "${node.id}" does not declare.`,
+      suggestion: `Name one of: ${Object.keys(node.slots ?? {}).join(", ") || "(none)"}.`,
+    });
+  }
+}
+
+/**
+ * Variants, checked against what the definition actually exposes.
+ *
+ * A variant is a preset of overrides, so every key it sets has to name
+ * something an instance could set itself. A key naming nothing is applied by no
+ * one and reported by nothing: the variant appears in the picker, selecting it
+ * changes nothing, and the definition looks broken rather than misconfigured.
+ */
+function checkVariants(
+  variants: unknown,
+  exposedIds: ReadonlySet<string>,
+  slotIds: ReadonlySet<string>,
+  issues: ValidationIssue[]
+): void {
+  if (variants === undefined) return;
+  if (!isPlainRecord(variants)) {
+    issues.push({
+      path: "/variants",
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: "A component's variants field must be an object keyed by name.",
+    });
+    return;
+  }
+
+  for (const [name, variant] of Object.entries(variants)) {
+    const at = `/variants/${name}`;
+    if (!isPlainRecord(variant)) {
+      issues.push({
+        path: at,
+        code: "component-envelope-invalid",
+        severity: "error",
+        message: `Variant "${name}" must be an object.`,
+      });
+      continue;
+    }
+
+    const overrides = variant.overrides;
+    if (overrides !== undefined && !isPlainRecord(overrides)) {
+      issues.push({
+        path: pointer(at, "overrides"),
+        code: "component-envelope-invalid",
+        severity: "error",
+        message: `Variant "${name}" overrides must be an object keyed by exposed id.`,
+      });
+    } else {
+      for (const key of Object.keys(overrides ?? {})) {
+        if (exposedIds.has(key)) continue;
+        issues.push({
+          path: pointer(at, `overrides/${key}`),
+          code: "variant-unknown-target",
+          severity: "error",
+          message: `Variant "${name}" overrides "${key}", which this component does not expose.`,
+        });
+      }
+    }
+
+    const variantSlots = variant.slots;
+    if (variantSlots !== undefined && !isPlainRecord(variantSlots)) {
+      issues.push({
+        path: pointer(at, "slots"),
+        code: "component-envelope-invalid",
+        severity: "error",
+        message: `Variant "${name}" slots must be an object keyed by exposed slot id.`,
+      });
+      continue;
+    }
+    for (const key of Object.keys(variantSlots ?? {})) {
+      if (slotIds.has(key)) continue;
+      issues.push({
+        path: pointer(at, `slots/${key}`),
+        code: "variant-unknown-target",
+        severity: "error",
+        message: `Variant "${name}" fills slot "${key}", which this component does not expose.`,
+      });
+    }
+  }
 }
 
 /**

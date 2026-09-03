@@ -15,6 +15,7 @@ export {
   BINDING_FORMAT_TYPES,
   DEFAULT_BINDING_SOURCE,
   COMPONENT_INSTANCE_TYPE,
+  EXPOSED_PROPERTY_TYPES,
   STYLE_STATES,
   MAX_BREAKPOINTS_PER_AXIS,
   // Public for exactly the reason the per-axis cap is. A definition whose id is
@@ -37,7 +38,9 @@ export {
   isBindingSource,
   isBlockType,
   MAX_BLOCK_TYPE_LENGTH,
+  isComponentDocument,
   isComponentInstance,
+  isUnsetOverride,
 } from "./document";
 export type {
   BlockDocument,
@@ -50,7 +53,14 @@ export type {
   BreakpointDef,
   BreakpointId,
   BreakpointSet,
+  ComponentDocument,
   ComponentInstanceProps,
+  ExposedProperty,
+  ExposedPropertyType,
+  ExposedSlot,
+  OverrideUnset,
+  OverrideValue,
+  Variant,
   Condition,
   DocumentFormatVersion,
   DocumentKind,
