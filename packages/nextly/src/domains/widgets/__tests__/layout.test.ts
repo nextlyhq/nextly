@@ -225,6 +225,48 @@ describe("the default arrangement", () => {
     for (const p of placements) expect(Number.isFinite(p.order)).toBe(true);
   });
 
+  it("orders widgets that state NO order the same way every time", () => {
+    // 🔴 The position a widget takes here becomes a COLUMN, so two instances
+    // holding the same widgets have to deal them identically. Comparing the
+    // two sentinels by SUBTRACTION gives `NaN`, which leaves the comparator
+    // inconsistent — what a sort does with one is unspecified — and the answer
+    // then falls out of registration order and the engine. A caller who has
+    // never saved would be handed a different arrangement depending on which
+    // instance answered, and their first save would keep it.
+    const registered = defaultPlacements([
+      widget({ id: "core/c" }),
+      widget({ id: "core/a" }),
+      widget({ id: "core/b" }),
+    ]);
+    const reregistered = defaultPlacements([
+      widget({ id: "core/b" }),
+      widget({ id: "core/c" }),
+      widget({ id: "core/a" }),
+    ]);
+    expect(registered.map(p => p.widgetId)).toEqual([
+      "core/a",
+      "core/b",
+      "core/c",
+    ]);
+    expect(reregistered).toEqual(registered);
+    // The control: the columns are the thing that has to agree, and asserting
+    // the sequence alone would pass on a deal that spread them differently.
+    expect(registered.map(p => p.column)).toEqual(
+      reregistered.map(p => p.column)
+    );
+  });
+
+  it("still lets a STATED order win over the tie-break", () => {
+    // The control for the case above. Ordering by id outright would satisfy it
+    // while ignoring every `defaultOrder` a plugin declares — the position
+    // authors actually control.
+    const placements = defaultPlacements([
+      widget({ id: "core/a", defaultOrder: 30 }),
+      widget({ id: "core/z", defaultOrder: 10 }),
+    ]);
+    expect(placements.map(p => p.widgetId)).toEqual(["core/z", "core/a"]);
+  });
+
   it("names each default placement after its widget, so reads are idempotent", () => {
     const once = defaultPlacements([widget({ id: "core/team" })]);
     const twice = defaultPlacements([widget({ id: "core/team" })]);

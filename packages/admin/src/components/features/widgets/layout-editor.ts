@@ -318,11 +318,13 @@ export type DropTarget =
 /**
  * Which side of the card under the pointer a drop lands on.
  *
- * 🔴 The side is what makes the BOTTOM of a populated column reachable. A
- * column disables its own droppable the moment it holds anything, so the space
- * below its last card resolves to that card — and landing every drop at the
- * target's own index put the card in front of it, leaving the last position
- * unreachable by drag however the pointer was placed.
+ * 🔴 Consulted only where a drop CROSSES columns, which is the case with no
+ * index in the destination to compare against. It is what makes the bottom of
+ * another column reachable: that column's own droppable covers only the space
+ * its cards leave, so a release below its last card resolves to the card, and
+ * a drop landing at the target's own index arrives in front of it. Within one
+ * column the two indices decide instead, because the rectangles a keyboard
+ * drag produces are identical and cannot say — see `resolveDrop`.
  *
  * Compared on vertical centres, because a column is a vertical list: past the
  * middle of the card underneath, the reader is aiming below it. The dragged
@@ -385,6 +387,55 @@ export function columnFromDropData(data: unknown): number | undefined {
  * correctly and leave the stored sequence column-major — the exact disagreement
  * with `byPosition` that `rowMajor` below exists to prevent.
  */
+/**
+ * Where a drop lands: which bucket, and the index in it.
+ *
+ * 🔴 The index names a position in the bucket as it stands BEFORE the active
+ * card is taken out, and the single adjustment for that removal is made by the
+ * caller. Each branch compensating for it itself is how one of them came to
+ * compensate twice.
+ *
+ * `undefined` when the target names a card no bucket holds, which is an
+ * ordinary end to a drag rather than an error.
+ */
+function landingSlot(
+  buckets: readonly WidgetPlacement[][],
+  target: DropTarget,
+  from: number,
+  fromIndex: number
+): { column: number; insertAt: number } | undefined {
+  if (target.kind === "column") {
+    // A column target is the empty-column case, so the card appends.
+    const column = Math.min(Math.max(0, target.column), buckets.length - 1);
+    return { column, insertAt: buckets[column].length };
+  }
+
+  const column = buckets.findIndex(bucket =>
+    bucket.some(p => p.id === target.placementId)
+  );
+  if (column === -1) return undefined;
+  const targetIndex = buckets[column].findIndex(
+    p => p.id === target.placementId
+  );
+
+  // 🔴 Within ONE column the two indices already say which way the card is
+  // going, and the side is not consulted. The keyboard sensor lands the active
+  // card exactly ON its target, so the rectangles a side is measured from are
+  // identical and answer "before" for a move that is plainly downward — which
+  // cancels against the caller's removal adjustment and makes Space,
+  // ArrowDown, Space do nothing for two cards of equal height.
+  //
+  // ACROSS columns there is no index in the destination to compare against, so
+  // the measured side is the only thing separating "above this card" from
+  // "below it" — and without it the position after a populated column's last
+  // card cannot be reached at all.
+  const offset =
+    from === column
+      ? Number(fromIndex < targetIndex)
+      : Number(target.side === "after");
+  return { column, insertAt: targetIndex + offset };
+}
+
 export function resolveDrop(
   placements: readonly WidgetPlacement[],
   activeId: string,
@@ -405,36 +456,15 @@ export function resolveDrop(
   // unreachable however the pointer is placed. Column 0 is `[A, D]` and B goes
   // at D's index, which is the position the reader aimed at.
   const buckets = placementsByColumn(placements, columnCount);
-  const last = Math.max(0, buckets.length - 1);
 
   const from = buckets.findIndex(bucket => bucket.some(p => p.id === activeId));
   if (from === -1) return [...placements];
   const fromIndex = buckets[from].findIndex(p => p.id === activeId);
 
-  // 🔴 Every branch below names a position in the bucket as it stands BEFORE
-  // the active card is taken out, and the one adjustment for that removal is
-  // made in a single place afterwards. Two branches each compensating for it
-  // themselves is how one of them came to compensate twice.
-  let column: number;
-  let insertAt: number;
-  if (target.kind === "column") {
-    column = Math.min(Math.max(0, target.column), last);
-    // A column target is the empty-column case, so the card appends.
-    insertAt = buckets[column].length;
-  } else {
-    const found = buckets.findIndex(bucket =>
-      bucket.some(p => p.id === target.placementId)
-    );
-    if (found === -1) return [...placements];
-    column = found;
-    // The side is what separates "above this card" from "below it". Without
-    // it every drop landed at the target's own index, so the position after
-    // the last card of a populated column could not be reached at all.
-    const targetIndex = buckets[found].findIndex(
-      p => p.id === target.placementId
-    );
-    insertAt = targetIndex + (target.side === "after" ? 1 : 0);
-  }
+  const slot = landingSlot(buckets, target, from, fromIndex);
+  if (slot === undefined) return [...placements];
+  const { column } = slot;
+  let { insertAt } = slot;
 
   buckets[from].splice(fromIndex, 1);
   // 🔴 The removal shifts every later index down by one, so a card moving DOWN

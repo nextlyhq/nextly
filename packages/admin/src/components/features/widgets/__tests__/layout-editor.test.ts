@@ -503,6 +503,103 @@ describe("a card can reach the MIDDLE of another column", () => {
   });
 });
 
+describe("a keyboard drag, whose rectangles cannot say which way it went", () => {
+  const at = (id: string, column: number, order: number): WidgetPlacement => ({
+    id,
+    widgetId: `w-${id}`,
+    column,
+    order,
+    hidden: false,
+  });
+  const column = (placements: WidgetPlacement[], index: number) =>
+    placements
+      .filter(p => (p.column ?? 0) === index)
+      .sort((a, b) => a.order - b.order)
+      .map(p => p.id);
+
+  // 🔴 What `sortableKeyboardCoordinates` produces. It translates the active
+  // card exactly ONTO its target, so for two cards of equal height the two
+  // centres coincide and `dropSide` answers "before" — for a move the reader
+  // made by pressing ArrowDown.
+  const asKeyboardWouldMeasure = dropSide(
+    { top: 100, height: 80 },
+    { top: 100, height: 80 }
+  );
+
+  it("measures equal rectangles as `before`, which is the whole difficulty", () => {
+    expect(asKeyboardWouldMeasure).toBe("before");
+  });
+
+  it("still moves a card DOWN within its column", () => {
+    // 🔴 Resolved from the measured side, this cancels against the adjustment
+    // for removing the active card and lands it back where it started, so
+    // Space, ArrowDown, Space does nothing at all. The two indices say which
+    // way the card is going without needing a rectangle to agree.
+    const start = [at("a", 0, 0), at("b", 0, 10)];
+    const next = resolveDrop(
+      start,
+      "a",
+      { kind: "card", placementId: "b", side: asKeyboardWouldMeasure },
+      3
+    );
+    expect(column(next, 0)).toEqual(["b", "a"]);
+  });
+
+  it("still moves a card UP within its column", () => {
+    // The control: a resolution that ignored the side by always appending
+    // would satisfy the case above and make an upward move impossible.
+    const start = [at("a", 0, 0), at("b", 0, 10)];
+    const next = resolveDrop(
+      start,
+      "b",
+      { kind: "card", placementId: "a", side: asKeyboardWouldMeasure },
+      3
+    );
+    expect(column(next, 0)).toEqual(["b", "a"]);
+  });
+
+  it("gives the SAME answer whichever side a same-column drop reports", () => {
+    // The invariant that makes the two paths agree: within a column the side is
+    // not consulted, so a pointer gesture and a keyboard one that reach the
+    // same two cards resolve identically however their rectangles measured.
+    const start = [at("a", 0, 0), at("b", 0, 10), at("c", 0, 20)];
+    const before = resolveDrop(
+      start,
+      "a",
+      { kind: "card", placementId: "c", side: "before" },
+      3
+    );
+    const after = resolveDrop(
+      start,
+      "a",
+      { kind: "card", placementId: "c", side: "after" },
+      3
+    );
+    expect(column(before, 0)).toEqual(["b", "c", "a"]);
+    expect(column(after, 0)).toEqual(column(before, 0));
+  });
+
+  it("still reads the side ACROSS columns, where no index can", () => {
+    // The other control. Ignoring the side everywhere would satisfy every case
+    // above while making the bottom of another column unreachable again.
+    const start = [at("A", 0, 0), at("D", 0, 10), at("B", 1, 20)];
+    const appended = resolveDrop(
+      start,
+      "B",
+      { kind: "card", placementId: "D", side: "after" },
+      3
+    );
+    expect(column(appended, 0)).toEqual(["A", "D", "B"]);
+    const inserted = resolveDrop(
+      start,
+      "B",
+      { kind: "card", placementId: "D", side: "before" },
+      3
+    );
+    expect(column(inserted, 0)).toEqual(["A", "B", "D"]);
+  });
+});
+
 describe("the stored sequence reads ACROSS the rows", () => {
   const at = (id: string, column: number, order: number): WidgetPlacement => ({
     id,

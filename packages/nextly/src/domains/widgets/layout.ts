@@ -425,14 +425,23 @@ export function serializeLayout(
  * `POSITIVE_INFINITY` rather than a large finite sentinel, because there is no
  * largest finite number a declaration could not legally name -- `Number.MAX_VALUE`
  * as the sentinel sorted a widget declaring it BELOW the unstated ones.
- * Two unstated widgets compare as `NaN`, which `Array.prototype.sort` treats as
- * "leave them alone", so they keep registration order.
+ *
+ * 🔴 TOTAL, and compared by value rather than by difference. Subtracting two
+ * infinities gives `NaN`, which leaves the comparator inconsistent -- what a
+ * sort does with one is unspecified -- so the position of two widgets that
+ * state no order was decided by registration order and by the engine. That
+ * position is a COLUMN once these are materialized, so two instances holding
+ * the same widgets could hand out different default arrangements, and a first
+ * save would keep whichever one it happened to be served. The id is the
+ * tie-break because it is the one thing about a widget that cannot change
+ * between two reads.
  */
 function byDeclaredOrder(a: PlaceableWidget, b: PlaceableWidget): number {
-  return (
-    (a.defaultOrder ?? Number.POSITIVE_INFINITY) -
-    (b.defaultOrder ?? Number.POSITIVE_INFINITY)
-  );
+  const aOrder = a.defaultOrder ?? Number.POSITIVE_INFINITY;
+  const bOrder = b.defaultOrder ?? Number.POSITIVE_INFINITY;
+  if (aOrder !== bOrder) return aOrder < bOrder ? -1 : 1;
+  if (a.id === b.id) return 0;
+  return a.id < b.id ? -1 : 1;
 }
 
 /**
