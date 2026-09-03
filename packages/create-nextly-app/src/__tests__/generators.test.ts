@@ -318,6 +318,54 @@ describe("generateEnv", () => {
     expect(envContent).toContain("DB_DIALECT=postgresql");
   });
 
+  it("names the variable the generated app READS for its public origin", async () => {
+    /*
+     * The scaffold wrote `NEXT_PUBLIC_APP_URL` and the base template's layout
+     * read `NEXT_PUBLIC_SITE_URL`, so a project that configured the only URL
+     * variable it was given still published `localhost` canonicals and Open
+     * Graph tags. Nothing fails at build time for a wrong absolute URL, so the
+     * first sign is a wrong link in someone else's crawler.
+     */
+    mockPathExists.mockResolvedValue(false as never);
+
+    await generateEnv("/test/project", {
+      type: "sqlite",
+      adapter: "@nextlyhq/adapter-sqlite",
+      databaseDriver: "better-sqlite3",
+      connectionUrl: "file:./data.db",
+      envExample: "file:./data.db",
+    });
+
+    const [, exampleContent] = mockWriteFile.mock.calls[0];
+    expect(exampleContent).toContain("NEXT_PUBLIC_SITE_URL");
+    // Commented, not set: the app's own origin is the right default, and an
+    // uncommented localhost here would override it in every deployment.
+    expect(exampleContent).toContain("# NEXT_PUBLIC_SITE_URL=");
+  });
+
+  it("still sets the app's own origin, which the backend reads", async () => {
+    /*
+     * The control. `NEXT_PUBLIC_APP_URL` is not decoration — the core package
+     * reads it for preview links, invite emails and absolute API URLs — so a
+     * change that introduced the public variable by replacing this one would
+     * break those and satisfy the case above.
+     */
+    mockPathExists.mockResolvedValue(false as never);
+
+    await generateEnv("/test/project", {
+      type: "sqlite",
+      adapter: "@nextlyhq/adapter-sqlite",
+      databaseDriver: "better-sqlite3",
+      connectionUrl: "file:./data.db",
+      envExample: "file:./data.db",
+    });
+
+    const [, exampleContent] = mockWriteFile.mock.calls[0];
+    expect(exampleContent).toContain(
+      "NEXT_PUBLIC_APP_URL=http://localhost:3000"
+    );
+  });
+
   it("documents the diagnostics opt-in without enabling it", async () => {
     // Without the note the feature exists and nobody finds it: an author hitting
     // an error sees the generic public shape and has no reason to suspect there

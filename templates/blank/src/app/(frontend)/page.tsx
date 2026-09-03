@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { SITE_URL } from "@/lib/site-url";
 
 /**
  * Blank-template landing page (public route via the (frontend) route group).
@@ -26,8 +27,7 @@ interface SetupStatus {
 
 async function fetchSetupStatus(): Promise<SetupStatus | null> {
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
-    const res = await fetch(`${baseUrl}/api/auth/setup-status`, {
+    const res = await fetch(`${SITE_URL}/api/auth/setup-status`, {
       cache: "no-store",
     });
     if (!res.ok) return null;
