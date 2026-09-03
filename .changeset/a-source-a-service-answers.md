@@ -39,6 +39,15 @@ cannot see.
 
 `registerSystemSource` publishes the source and its resolver together, because
 a source registered without one is discoverable, validates, and fails only when
-a reader puts the card on their dashboard. A system source nothing answers is
-refused exactly as a source that does not exist, since a distinct message would
-confirm it is real.
+a reader puts the card on their dashboard. It accepts only a `system:` source:
+the resolver store is keyed by id, and an entry under a collection id would
+answer a question the access-controlled Direct API is meant to answer. A system
+source nothing answers is refused exactly as a source that does not exist, since
+a distinct message would confirm it is real.
+
+`POST /api/dashboard/query` admits these sources, which is what makes the kind
+reachable at all. It takes no read decision of its own for one: a system
+source's rows are not an entity the permission table names, and the service that
+owns them authorizes the same caller, so a check invented at the endpoint would
+be a coarser second copy of a rule it cannot see. Collection sources are
+unchanged, and every other kind is still refused.

@@ -27,6 +27,7 @@
  * @module domains/widgets/system-sources
  */
 
+import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 
 import type { WidgetQuery } from "./query";
@@ -60,6 +61,15 @@ function resolvers(): Map<string, SystemSourceResolver> {
 }
 
 /**
+ * A source this registry may answer: one whose kind is literally `"system"`.
+ *
+ * Narrower than `WidgetSource` on purpose. The resolver store is keyed by id
+ * alone, so a resolver accepted under any other kind would sit in the map
+ * beside sources answered by an entirely different path.
+ */
+export type SystemWidgetSource = WidgetSource & { kind: "system" };
+
+/**
  * Publish a system source and the function that answers it, together.
  *
  * 🔴 One call, because the two halves are useless apart and dangerous apart in
@@ -68,14 +78,36 @@ function resolvers(): Map<string, SystemSourceResolver> {
  * Registering them separately makes that state reachable through ordinary
  * refactoring; this signature makes it unrepresentable.
  *
- * The source goes through `registerSource`, the same door a collection source
- * uses, so its shape is validated by the same rules and a duplicate id is
- * refused the same way.
+ * 🔴 And only a SYSTEM source, checked at runtime rather than left to the type.
+ * `registerSource` validates that a source's kind agrees with its namespace and
+ * nothing more, so a well-formed `collection:` source satisfies it completely --
+ * and a resolver stored under a collection id would be an answer to a question
+ * the access-controlled Direct API is supposed to answer. The type states the
+ * rule for a TypeScript caller; this states it for a plugin author compiling
+ * separately, for JavaScript, and for a cast.
+ *
+ * Refused BEFORE `registerSource`, so a rejected registration writes neither
+ * store. Checking afterwards would leave the source published and unanswerable,
+ * which is the exact state this function's signature exists to prevent.
+ *
+ * The source then goes through `registerSource`, the same door a collection
+ * source uses, so its shape is validated by the same rules and a duplicate id
+ * is refused the same way.
  */
 export function registerSystemSource(
-  source: WidgetSource,
+  source: SystemWidgetSource,
   resolve: SystemSourceResolver
 ): void {
+  if (source?.kind !== "system") {
+    // `invalidInput`, matching `sources.ts`: a source registered by core or by
+    // a plugin is developer input, not a reader's, so the message is safe to
+    // surface verbatim and says what to change.
+    throw NextlyError.invalidInput({
+      message:
+        `Invalid widget source: ${String(source?.id)}: a resolver may only be ` +
+        `registered for a "system:" source, not kind "${String(source?.kind)}"`,
+    });
+  }
   registerSource(source);
   resolvers().set(source.id, resolve);
 }

@@ -14,7 +14,7 @@ vi.mock("../../../direct-api/nextly", () => ({
 }));
 
 import { executeWidgetQuery } from "../execute";
-import { clearSources, registerSource } from "../sources";
+import { clearSources, getSource, registerSource } from "../sources";
 import {
   clearSystemResolvers,
   registerSystemSource,
@@ -145,5 +145,49 @@ describe("registering the two halves together", () => {
     registerSystemSource(releasesSource, vi.fn());
 
     expect(() => registerSystemSource(releasesSource, vi.fn())).toThrow();
+  });
+});
+
+describe("a resolver may only be registered for a system source", () => {
+  // A perfectly well-formed collection source: `registerSource` accepts it, and
+  // that is the point -- the source registry checks that a kind agrees with its
+  // namespace, which this does. Nothing there is asking the question this
+  // registry has to ask.
+  const postsSource = {
+    id: "collection:posts",
+    label: "Posts",
+    kind: "collection" as const,
+    supports: ["count", "list"] as const,
+    fields: [{ name: "title", type: "string" as const }],
+  };
+
+  it("refuses a COLLECTION source, which the source registry would accept", () => {
+    // 🔴 The resolver store is keyed by id alone. An entry under a collection
+    // id is an answer to a question the access-controlled Direct API is
+    // supposed to answer, so the id must never get one.
+    expect(() =>
+      // Cast because the type already refuses this; the runtime check is for
+      // the callers a type cannot bind -- a plugin compiled separately,
+      // JavaScript, or a cast exactly like this one.
+      registerSystemSource(
+        postsSource as unknown as Parameters<typeof registerSystemSource>[0],
+        vi.fn()
+      )
+    ).toThrow(/only be registered for a "system:" source/);
+  });
+
+  it("publishes NEITHER half when it refuses", async () => {
+    // The ordering under test: refusing after `registerSource` would leave the
+    // source published and its resolver missing, which is the state
+    // `registerSystemSource` takes both halves at once to prevent.
+    expect(() =>
+      registerSystemSource(
+        postsSource as unknown as Parameters<typeof registerSystemSource>[0],
+        vi.fn()
+      )
+    ).toThrow();
+
+    expect(getSource("collection:posts")).toBeUndefined();
+    expect(systemResolver("collection:posts")).toBeUndefined();
   });
 });

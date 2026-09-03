@@ -128,14 +128,43 @@ const GENERIC_SLOT_ERROR = "An unexpected error occurred.";
  * needs the request-resolved caller. `executeWidgetQuery`'s
  * `overrideAccess: false` remains the enforcement that decides which ROWS come
  * back; this only decides whether the caller is told anything specific.
+ *
+ * ## Why a SYSTEM source passes without a read decision
+ *
+ * 🔴 Not an omission. A system source's rows are not an entity the permission
+ * table names -- a release is not a row in a collection, and a translation gap
+ * is a relationship BETWEEN rows -- so there is no slug to put to
+ * `canReadEntity`. Its authorization lives in the service that owns those rows,
+ * and `executeWidgetQuery` hands that service THIS caller:
+ * `ReleasesService.find` asks its own `authorize` before it reads. A check
+ * invented here would be a second implementation of a rule this module cannot
+ * see, coarser than the one it shadows, agreeing on the day it is written and
+ * drifting afterwards -- which is precisely what `WidgetSource`'s
+ * `requiredPermission` docblock refuses for the same reason, and what Strapi's
+ * homepage widgets got wrong (strapi#22921).
+ *
+ * The anti-enumeration property above survives this, because it was never about
+ * source ids as such. A `collection:` id carries an author-defined slug, so
+ * walking the refusals maps the install's content schema. The `system:`
+ * namespace is core's (`RESERVED_NAMESPACE_KINDS`), its ids are the same fixed,
+ * documented set in every install, and its refusals are the domain's own:
+ * `NextlyError.forbidden` publishes a fixed sentence naming neither the
+ * resource nor the missing authority, and the same answer is already reachable
+ * through that domain's REST route by any authenticated caller. So admitting
+ * these sources tells a caller nothing a collection refusal was protecting.
+ *
+ * A `system:` source nothing answers is still refused, with the shared string,
+ * by `resolveExecutableSource` -- so "registered but unanswerable" stays
+ * indistinguishable from "does not exist".
  */
 async function assertSourceReadable(
   source: WidgetSource,
   mayRead: (slug: string) => Promise<boolean>
 ): Promise<void> {
+  if (source.kind === "system") return;
   if (source.kind !== "collection") {
     failUnavailableSourceOrOp(
-      `source "${source.id}" has kind "${source.kind}", which is not executable yet; only collections are`
+      `source "${source.id}" has kind "${source.kind}", which is not executable yet; only collections and system sources are`
     );
   }
   const slug = sourceTarget(source.id);
@@ -255,9 +284,11 @@ function prepareOne(raw: unknown): PreparedQuery {
 /**
  * The DISTINCT entities this batch will need a read decision about.
  *
- * Only collection sources: `assertSourceReadable` refuses any other kind
- * before it consults `mayRead`, so warming one would take a decision nothing
- * asks for.
+ * Only collection sources, and they are the only kind that reaches `mayRead` at
+ * all: `assertSourceReadable` refuses an unexecutable kind before consulting
+ * it, and admits a system source without one -- a system source's
+ * authorization belongs to the service that owns its rows, so warming a
+ * decision here would take one nothing asks for.
  */
 function batchSlugs(prepared: readonly PreparedQuery[]): string[] {
   const slugs = new Set<string>();

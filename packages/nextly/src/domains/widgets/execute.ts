@@ -32,7 +32,7 @@ import {
   sourceTarget,
   type WidgetSource,
 } from "./sources";
-import { systemResolver } from "./system-sources";
+import { systemResolver, type SystemSourceResolver } from "./system-sources";
 
 export type { WidgetResult, WidgetResultField };
 
@@ -45,14 +45,30 @@ function toSelect(
 }
 
 /**
+ * A resolved source together with HOW it is answered.
+ *
+ * 🔴 The two travel as one value because they must never be decided
+ * separately. Asking the resolver store "is there an entry for this id?" and
+ * asking the source "what kind are you?" are two questions with two answers,
+ * and a dispatch that took the first would send a query wherever the map
+ * happened to point -- so an entry left under a collection id, by any route,
+ * would divert that collection's rows away from the access-controlled Direct
+ * API. Deciding once, on the KIND, and carrying the resolver out of that same
+ * branch makes the disagreement unrepresentable rather than merely unlikely.
+ */
+type ExecutableSource =
+  | { kind: "system"; source: WidgetSource; resolve: SystemSourceResolver }
+  | { kind: "collection"; source: WidgetSource };
+
+/**
  * Resolves `query.source` against the live registry, or fails loudly.
  *
- * Both refusals go through `failUnavailableSourceOrOp`, so a source that does
+ * Every refusal goes through `failUnavailableSourceOrOp`, so a source that does
  * not exist and one that exists but is not executable answer the caller
  * identically -- the second would otherwise confirm the source is real. The
  * distinction survives in the log.
  */
-function resolveExecutableSource(sourceId: string) {
+function resolveExecutableSource(sourceId: string): ExecutableSource {
   // Re-resolve rather than trusting the caller's copy: a source can be
   // deregistered between configuration and execution, and a query pointing at
   // a source that no longer exists must fail rather than fall through.
@@ -66,19 +82,20 @@ function resolveExecutableSource(sourceId: string) {
   // asking for something reasonable -- and it answers like every other dead
   // end, because saying which is which would confirm the source exists.
   if (source.kind === "system") {
-    if (!systemResolver(source.id)) {
+    const resolve = systemResolver(source.id);
+    if (!resolve) {
       failUnavailableSourceOrOp(
         `system source "${sourceId}" has no registered resolver`
       );
     }
-    return source;
+    return { kind: "system", source, resolve };
   }
   if (source.kind !== "collection") {
     failUnavailableSourceOrOp(
       `source "${sourceId}" has kind "${source.kind}", which is not executable yet; only collections and system sources are`
     );
   }
-  return source;
+  return { kind: "collection", source };
 }
 
 /**
@@ -228,16 +245,18 @@ export async function executeWidgetQuery(
   query: WidgetQuery,
   caller: ReadCaller
 ): Promise<WidgetResult> {
-  const source = resolveExecutableSource(query.source);
+  const executable = resolveExecutableSource(query.source);
 
   // 🔴 Handed to the domain that owns the rows, WITH the caller, and nothing is
   // added on the way. A system source's authorization lives in its service --
   // `ReleasesService.find` asks its own `authorize` before it reads -- so a
   // filter applied here would be a second implementation of a rule this module
   // cannot see, agreeing on the day it is written and drifting afterwards.
-  const resolve = systemResolver(source.id);
-  if (resolve) return resolve(query, caller);
+  if (executable.kind === "system") {
+    return executable.resolve(query, caller);
+  }
 
+  const source = executable.source;
   const collection = sourceTarget(source.id);
 
   if (query.op === "count") return runCount(collection, query, caller);
