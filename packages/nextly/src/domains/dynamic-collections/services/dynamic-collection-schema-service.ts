@@ -792,6 +792,18 @@ ${allColumnDefs.join(",\n")}
        * name from the slug here would target a table that does not exist.
        */
       fieldGroupTableNames?: ReadonlyMap<string, string>;
+      /**
+       * A field-group association rename the caller detected from the FULL
+       * field lists. Detection here sees only the lists it was handed, and a
+       * caller that splits localized fields out of those lists would
+       * otherwise hide a renamed localized field group from this generator —
+       * the association migration is the caller's to hand over, detected on
+       * its behalf from everything the save contains.
+       */
+      associationRename?: {
+        from: FieldDefinition;
+        to: FieldDefinition;
+      };
     }
   ): string {
     // The added columns become SQL here too, so the same refusal applies.
@@ -889,10 +901,11 @@ ${allColumnDefs.join(",\n")}
       // removed/added pair whose referenced slugs are identical is migrated —
       // anything else is a genuine remove+add of different field groups and
       // stays with the loops.
-      const groupRename = this.detectFieldGroupAssociationRename(
-        oldFields,
-        newFields
-      );
+      // The caller's pair wins: it was detected from the save's full field
+      // lists, which these arguments may be a filtered subset of.
+      const groupRename =
+        options?.associationRename ??
+        this.detectFieldGroupAssociationRename(oldFields, newFields);
       if (groupRename) {
         renamedFromName = groupRename.from.name;
         renamedToName = groupRename.to.name;

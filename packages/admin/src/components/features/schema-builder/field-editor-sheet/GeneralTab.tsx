@@ -11,9 +11,9 @@
 // editor props to the unified BuilderField onChange contract. Adapters
 // were added in PR 2 alongside the page-level mount of FieldEditorSheet.
 import { Input, Label, Switch, Textarea } from "@nextlyhq/ui";
+import { isFieldGroupFieldType } from "nextly/field-group-type";
 
 import { toSnakeName } from "@admin/lib/builder";
-import { isFieldGroupFieldType } from "nextly/field-group-type";
 
 import type { BuilderField } from "../types";
 

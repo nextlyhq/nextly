@@ -7,7 +7,6 @@ import { createHash, randomBytes } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { getService } from "../../../di";
 import { NextlyError } from "../../../errors";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -15,6 +14,7 @@ import type { MigrationStatus } from "../../../schemas/dynamic-collections/types
 import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
+import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
@@ -154,6 +154,9 @@ export class DynamicCollectionService extends BaseService {
    */
   private readonly localizationConfigured?: boolean;
 
+  /** Lazily built field-group registry, owned by this instance's adapter. */
+  private fieldGroupRegistry?: FieldGroupRegistryService;
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -259,7 +262,14 @@ export class DynamicCollectionService extends BaseService {
     if (slugs.size === 0) return new Map();
 
     const resolved = new Map<string, string>();
-    const registry = getService("fieldGroupRegistryService");
+    // Instance-owned, like every other service this class news up: a caller
+    // that constructed DynamicCollectionService directly has no global
+    // container, and the rename path must not depend on one having been
+    // registered.
+    const registry = (this.fieldGroupRegistry ??= new FieldGroupRegistryService(
+      this.adapter,
+      this.logger
+    ));
     await Promise.all(
       [...slugs].map(async slug => {
         const record = await registry.getComponentBySlug(slug);
@@ -881,6 +891,13 @@ export class DynamicCollectionService extends BaseService {
           f => !excludedLocalized.has(f.name)
         );
 
+        // Detected from the FULL lists: a renamed LOCALIZED field-group field
+        // sits in neither shared list, and its association migration must not
+        // be excluded along with its column handling.
+        const groupAssociationRename = this.schemaService.detectFieldGroupAssociationRename(
+          oldUserFields,
+          userDefinedFields
+        );
         const mainSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
           oldShared,
@@ -892,13 +909,11 @@ export class DynamicCollectionService extends BaseService {
             // Strict only when an association rename will occur: the table
             // names are a precondition of THAT migration, and requiring them
             // for every edit would refuse saves unrelated to renames.
-            fieldGroupTableNames: this.schemaService.detectFieldGroupAssociationRename(
-              oldShared,
-              newShared
-            )
+            associationRename: groupAssociationRename ?? undefined,
+            fieldGroupTableNames: groupAssociationRename
               ? await this.resolveFieldGroupTableNames([
-                  ...oldShared,
-                  ...newShared,
+                  ...oldUserFields,
+                  ...userDefinedFields,
                 ])
               : new Map(),
           }
@@ -935,6 +950,10 @@ export class DynamicCollectionService extends BaseService {
           localMigrationSQL = assemble(localCompanionSQL);
         }
       } else {
+        const groupAssociationRename = this.schemaService.detectFieldGroupAssociationRename(
+          oldUserFields,
+          userDefinedFields
+        );
         migrationSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
           oldUserFields,
@@ -943,10 +962,8 @@ export class DynamicCollectionService extends BaseService {
             wasStatus,
             hasStatus,
             ...(await liveTable()),
-            fieldGroupTableNames: this.schemaService.detectFieldGroupAssociationRename(
-              oldUserFields,
-              userDefinedFields
-            )
+            associationRename: groupAssociationRename ?? undefined,
+            fieldGroupTableNames: groupAssociationRename
               ? await this.resolveFieldGroupTableNames([
                   ...oldUserFields,
                   ...userDefinedFields,
