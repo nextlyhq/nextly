@@ -122,6 +122,11 @@ export interface CreateCollectionInput {
    */
   webhooks?: boolean;
   fields: FieldDefinition[];
+  /**
+   * The canonical stored-hook shape, not a looser record: the registry row
+   * these feed is typed with it, and the executor reads `config` and `order`
+   * off every entry.
+   */
   hooks?: StoredHookConfig[];
   createdBy?: string;
 }
@@ -150,6 +155,11 @@ export interface UpdateCollectionInput {
   /** Toggle webhook recording. Honoured when defined; undefined leaves it unchanged. */
   webhooks?: boolean;
   fields?: FieldDefinition[];
+  /**
+   * The canonical stored-hook shape, not a looser record: the registry row
+   * these feed is typed with it, and the executor reads `config` and `order`
+   * off every entry.
+   */
   hooks?: StoredHookConfig[];
 }
 

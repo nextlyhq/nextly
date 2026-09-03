@@ -83,6 +83,11 @@ export interface CollectionMetadata {
     publish?: { type: string; allowedRoles?: string[] };
     unpublish?: { type: string; allowedRoles?: string[] };
   };
+  /**
+   * The canonical stored-hook shape, not a looser record: the registry row
+   * these feed is typed with it, and the executor reads `config` and `order`
+   * off every entry.
+   */
   hooks?: StoredHookConfig[];
   createdBy?: string;
 }

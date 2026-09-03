@@ -377,6 +377,11 @@ export class CollectionMetadataService extends BaseService {
      */
     webhooks?: boolean;
     fields: FieldDefinition[];
+    /**
+     * The canonical stored-hook shape, not a looser record: the registry row
+     * these feed is typed with it, and the executor reads `config` and `order`
+     * off every entry.
+     */
     hooks?: StoredHookConfig[];
     createdBy?: string;
   }): Promise<MetadataServiceResult> {
@@ -729,6 +734,11 @@ export class CollectionMetadataService extends BaseService {
       /** Toggle webhook recording. Honoured when defined; undefined leaves it unchanged. */
       webhooks?: boolean;
       fields?: FieldDefinition[];
+      /**
+       * The canonical stored-hook shape, not a looser record: the registry row
+       * these feed is typed with it, and the executor reads `config` and `order`
+       * off every entry.
+       */
       hooks?: StoredHookConfig[];
     }
   ): Promise<MetadataServiceResult> {
