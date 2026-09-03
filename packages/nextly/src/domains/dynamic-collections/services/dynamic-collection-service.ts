@@ -506,6 +506,7 @@ export class DynamicCollectionService extends BaseService {
   ): UiSchemaEntity {
     return {
       slug,
+      description: data.description,
       labels: data.labels ?? {
         singular: data.label || slug,
         plural: (data.label || slug) + "s",

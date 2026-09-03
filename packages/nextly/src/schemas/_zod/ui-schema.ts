@@ -457,6 +457,13 @@ function entity(kind?: "collection" | "single" | "component") {
     .object({
       slug,
       labels: z.object({ singular: z.string(), plural: z.string() }).optional(),
+      /**
+       * The entity's own help text, distinct from a FIELD's `admin.description`
+       * declared above. The Builder collects one and stores it on the registry
+       * row; without it here the manifest could not carry it, so a migration
+       * generated from either path rebuilt the entity with no description.
+       */
+      description: z.string().optional(),
       admin: admin.optional(),
       status: z.boolean().optional(),
       localized: z.boolean().optional(),

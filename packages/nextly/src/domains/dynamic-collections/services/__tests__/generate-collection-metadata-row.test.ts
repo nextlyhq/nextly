@@ -158,6 +158,24 @@ describe("the migration a Builder create writes", () => {
     expect(localMigrationSQL).toContain("dc_articles");
   });
 
+  it("carries the collection's own description", async () => {
+    // 🔴 The Builder's create modal collects it and the local row stores it, so
+    // an entity that omitted it wrote NULL wherever the file was replayed and
+    // the help text vanished on the deployed copy — visible only to whoever
+    // opened the collection there.
+    const sql = await sqlFor({ description: "Long-form editorial pieces" });
+    expect(sql).toContain("Long-form editorial pieces");
+  });
+
+  it("writes NULL, not the text 'undefined', when there is no description", async () => {
+    // The control the case above needs: a mapping that stringified an absent
+    // value would satisfy it and store the four characters "null" — or worse,
+    // "undefined" — as the help text of every collection created without one.
+    const sql = await sqlFor();
+    expect(sql).not.toContain("'undefined'");
+    expect(sql).toContain("NULL");
+  });
+
   it("emits EXACTLY what migrate:create emits for the same entity", async () => {
     // 🔴 The control the other four exist for. Each of them passes against a
     // second, separately written statement that merely looks right — which is
