@@ -515,3 +515,38 @@ describe("hooks are a collection-only manifest key", () => {
     expect(parsed.success).toBe(true);
   });
 });
+
+describe("presentation metadata reaches every kind that can store it", () => {
+  const withAdmin = {
+    slug: "x",
+    admin: { hidden: true, icon: "Sparkles", order: 3 },
+    fields: [],
+  } as never;
+
+  it("emits the admin column for singles and components, not only collections", () => {
+    // 🔴 The shared manifest schema accepts `icon`, `hidden`, `order` and
+    // `sidebarGroup` for all three kinds, and all three registry tables HAVE an
+    // admin column — checked per table. A builder that omitted it let those
+    // settings validate, deploy, and be ignored, leaving an entity visible that
+    // the manifest said was hidden.
+    for (const build of [
+      buildSingleMetadataUpsert,
+      buildComponentMetadataUpsert,
+    ]) {
+      const sql = build(withAdmin, "sqlite");
+      expect(sql).toContain("Sparkles");
+      expect(sql).toContain('"admin"');
+    }
+  });
+
+  it("omits the column when the manifest says nothing about presentation", () => {
+    // The control: unlike `description`, admin is CONDITIONAL — an absent block
+    // must leave the stored value alone rather than clearing it, so a builder
+    // that always emitted it would erase presentation on every save.
+    const sql = buildSingleMetadataUpsert(
+      { slug: "x", fields: [] } as never,
+      "sqlite"
+    );
+    expect(sql).not.toContain('"admin"');
+  });
+});

@@ -978,23 +978,41 @@ function quoteOpenerAt(
  * An EVEN run means the backslashes escape each other and the character stands
  * on its own; an odd run means the last one escapes it.
  */
-function precededByOddBackslashes(
+/**
+ * Whether a string literal opening at `index` honours backslash escapes.
+ *
+ * 🔴 A PROPERTY OF THE LITERAL, not of the dialect alone. MySQL escapes with
+ * backslashes in every string; SQLite never does; PostgreSQL does so only in an
+ * `E'...'` escape string and treats a backslash in an ordinary literal as an
+ * ordinary character. Deciding by dialect alone is wrong in both directions --
+ * it mis-splits a valid PostgreSQL escape string, and applying parity to every
+ * dialect mis-splits an ordinary value ending in a backslash.
+ */
+function opensBackslashEscapedString(
   text: string,
   index: number,
   dialect: SupportedDialect | undefined
 ): boolean {
-  // 🔴 MySQL ONLY. PostgreSQL and SQLite do not read a backslash as an escape
-  // inside a standard string literal — SQLite has no C-style escapes at all —
-  // so a value ending in one leaves a SINGLE backslash before the closing
-  // quote there. Counting parity unconditionally then calls that quote escaped
-  // and swallows the statement's semicolon: the same defect this function was
-  // written to remove, moved to the other two dialects.
-  // An unknown dialect takes the conservative reading: no dialect but MySQL
-  // escapes with backslashes, so treating the quote as unescaped is what the
-  // other two need and what a caller that named none most likely has.
-  if (dialect !== "mysql") return false;
+  if (dialect === "mysql") return true;
+  if (dialect !== "postgresql") return false;
+  const prev = text[index - 1];
+  if (prev !== "E" && prev !== "e") return false;
+  // Not part of a longer word: `VALUES (E'x')` opens an escape string, while an
+  // identifier merely ending in `e` before a literal does not.
+  const before = text[index - 2];
+  return before === undefined || !/[A-Za-z0-9_$]/.test(before);
+}
+
+/**
+ * Whether the character at `index` is escaped by the backslash run before it.
+ *
+ * An EVEN run means the backslashes escape each other and the character stands
+ * on its own; an odd run means the last one escapes it. Consulted only for a
+ * literal that honours backslash escapes at all.
+ */
+function precededByOddBackslashes(text: string, index: number): boolean {
   let run = 0;
-  for (let i = index - 1; i >= 0 && text[i] === "\\"; i -= 1) run += 1;
+  for (let k = index - 1; k >= 0 && text[k] === "\\"; k -= 1) run += 1;
   return run % 2 === 1;
 }
 
@@ -1035,6 +1053,7 @@ export function splitSqlStatements(
   let current = "";
   let inString = false;
   let stringChar = "";
+  let stringEscapesWithBackslash = false;
 
   for (let i = 0; i < cleanedSql.length; i++) {
     const char = cleanedSql[i];
@@ -1071,10 +1090,14 @@ export function splitSqlStatements(
     if (!inString && opener) {
       inString = true;
       stringChar = opener;
+      // Recorded when the literal OPENS: the `E` prefix is only visible here,
+      // and by the closing quote it is long past.
+      stringEscapesWithBackslash =
+        opener === "'" && opensBackslashEscapedString(cleanedSql, i, dialect);
     } else if (
       inString &&
       char === stringChar &&
-      !precededByOddBackslashes(cleanedSql, i, dialect)
+      !(stringEscapesWithBackslash && precededByOddBackslashes(cleanedSql, i))
     ) {
       inString = false;
     }

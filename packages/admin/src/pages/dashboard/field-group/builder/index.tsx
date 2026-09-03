@@ -71,6 +71,11 @@ export default function FieldGroupBuilderPage(): React.ReactElement | null {
                   slug,
                   settings: {
                     singularName: singular,
+                    // Carried for the same reason the edit path carries it: the
+                    // upsert writes this column unconditionally, so a manifest
+                    // omitting it clears a deployed description rather than
+                    // leaving it alone.
+                    description: values.description,
                     // i18n: mirror the Internationalization flag into ui-schema.json.
                     localized: values.i18n === true,
                   },

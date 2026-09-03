@@ -329,6 +329,16 @@ export function buildCollectionMetadataUpsert(
     },
     { name: "migration_status", value: sqlStr("applied", dialect) },
   ];
+  // 🔴 Emitted for every kind, because every registry table HAS this column —
+  // checked per table rather than assumed. The shared manifest schema accepts
+  // `icon`, `hidden`, `order` and `sidebarGroup` for singles and components as
+  // well, so a builder that omitted the column let those settings validate,
+  // deploy, and be ignored, leaving an entity visible that the manifest said
+  // was hidden.
+  //
+  // CONDITIONAL, unlike `description`: an absent block leaves the stored value
+  // alone rather than clearing it, which is what lets a manifest that says
+  // nothing about presentation not erase it.
   if (entity.admin !== undefined) {
     columns.push({
       name: "admin",
@@ -409,6 +419,13 @@ export function buildSingleMetadataUpsert(
     { name: "migration_status", value: sqlStr("applied", dialect) },
   ];
   columns.push(...timestampColumns(dialect));
+  if (entity.admin !== undefined) {
+    columns.push({
+      name: "admin",
+      value: jsonLiteral(entity.admin, dialect),
+      update: true,
+    });
+  }
   return buildUpsert("dynamic_singles", columns, dialect);
 }
 
@@ -454,5 +471,12 @@ export function buildComponentMetadataUpsert(
     { name: "migration_status", value: sqlStr("applied", dialect) },
   ];
   columns.push(...timestampColumns(dialect));
+  if (entity.admin !== undefined) {
+    columns.push({
+      name: "admin",
+      value: jsonLiteral(entity.admin, dialect),
+      update: true,
+    });
+  }
   return buildUpsert(STORAGE_FORMAT.registryTable, columns, dialect);
 }

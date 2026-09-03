@@ -186,3 +186,30 @@ describe("splitting a statement whose value ends in a backslash", () => {
     expect(splitSqlStatements(sql, "mysql")).toHaveLength(1);
   });
 });
+
+describe("PostgreSQL escape strings honour backslashes; ordinary literals do not", () => {
+  it("keeps an E'...' literal WHOLE when a backslash escapes its quote", () => {
+    // 🔴 PostgreSQL DOES read a backslash as an escape inside an `E'…'` string.
+    // Disabling backslash handling for the whole dialect split this valid
+    // statement at the semicolon INSIDE the literal.
+    //
+    // Asserted on CONTENT, not on the count: `splitSqlStatements` discards a
+    // fragment carrying no SQL keyword, so the tail `right';` vanishes either
+    // way and a length check passes on the broken implementation too.
+    const sql = `SELECT E'left \\'; right' AS v;`;
+    const out = splitSqlStatements(sql, "postgresql");
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain("right");
+  });
+
+  it("still splits an ORDINARY PostgreSQL literal ending in a backslash", () => {
+    // The control, and why this is a property of the LITERAL rather than the
+    // dialect: outside `E'…'` PostgreSQL stores a backslash verbatim, so the
+    // quote after it closes the string and the semicolon separates.
+    const sql = [
+      `INSERT INTO t (d) VALUES ('ends with a backslash \\\\');`,
+      `INSERT INTO u (d) VALUES ('second');`,
+    ].join("\n");
+    expect(splitSqlStatements(sql, "postgresql")).toHaveLength(2);
+  });
+});
