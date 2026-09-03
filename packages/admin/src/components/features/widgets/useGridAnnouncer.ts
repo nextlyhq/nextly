@@ -25,6 +25,22 @@ export interface GridAnnouncer {
   announcement: string;
   /** Say where a card landed. */
   announceMove: (title: string, position: number, count: number) => void;
+  /**
+   * Say that a card changed COLUMN.
+   *
+   * 🔴 Its own sentence rather than the position formatter. Passing a column
+   * through `announceMove` produced "moved to position 3 of 3" for a card that
+   * is the only one in column 3 — a position it does not hold, in a list of a
+   * length that is not its column's. Two different facts need two different
+   * wordings.
+   */
+  announceColumn: (
+    title: string,
+    column: number,
+    columnCount: number,
+    position: number,
+    count: number
+  ) => void;
 }
 
 /**
@@ -83,5 +99,23 @@ export function useGridAnnouncer(
     []
   );
 
-  return { announcement, announceMove };
+  const announceColumn = useCallback(
+    (
+      title: string,
+      column: number,
+      columnCount: number,
+      position: number,
+      count: number
+    ) => {
+      setAnnouncement(
+        current =>
+          `${title} moved to column ${column} of ${columnCount}, position ${position} of ${count}.${
+            current.endsWith("\u200b") ? "" : "\u200b"
+          }`
+      );
+    },
+    []
+  );
+
+  return { announcement, announceMove, announceColumn };
 }

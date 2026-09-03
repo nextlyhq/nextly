@@ -221,8 +221,14 @@ describe("moving a card without a drag", () => {
     await user.click(screen.getAllByTestId("widget-move-down")[0]);
 
     // Through the grid's ONE region -- a move is not worth a second announcer.
+    //
+    // 🔴 The COLUMN is named as well as the position, and the position counts
+    // that column rather than the whole dashboard. A card dropped into an
+    // otherwise empty column was announced as "position 3 of 3" -- a place it
+    // does not hold, in a list whose length is not its column's -- because a
+    // column coordinate was being passed to a position formatter.
     expect(screen.getByTestId("widget-grid-live").textContent).toMatch(
-      /Widget core\/a moved to position 2 of 3/
+      /Widget core\/a moved to column 1 of 3, position 2 of 3/
     );
   });
 
@@ -1068,5 +1074,34 @@ describe("a control is offered only where it can act", () => {
     for (const down of screen.getAllByTestId("widget-move-down")) {
       expect(down).toBeDisabled();
     }
+  });
+});
+
+describe("what a move announces", () => {
+  it("counts the DESTINATION column, not the whole dashboard", async () => {
+    // 🔴 Read from the global sequence, a card dropped into an otherwise empty
+    // column announced a position and a total that describe nothing the reader
+    // can see — cards in other columns precede it, so the numbers came from a
+    // list it is not in.
+    layoutResponse = layout(
+      [
+        { id: "p1", widgetId: "core/a", column: 0, order: 0 },
+        { id: "p2", widgetId: "core/b", column: 0, order: 10 },
+        { id: "p3", widgetId: "core/c", column: 0, order: 20 },
+      ],
+      { columnCount: 3 }
+    );
+    renderGrid();
+    await waitFor(() =>
+      expect(screen.getAllByTestId("widget-card-body").length).toBe(3)
+    );
+    const user = await beginEditing();
+    // Move the first card into column 2, which holds nothing.
+    await user.click(screen.getAllByTestId("widget-move-right")[0]);
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-grid-live").textContent).toMatch(
+        /column 2 of 3, position 1 of 1/
+      )
+    );
   });
 });

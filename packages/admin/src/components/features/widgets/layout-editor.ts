@@ -307,10 +307,25 @@ export function columnAffordance(
   };
 }
 
-/** The droppable id for a column. Unique within the grid, never interpreted. */
-export function columnDropId(column: number): string {
-  return `widget-column:${column}`;
+/**
+ * The droppable id for a column.
+ *
+ * 🔴 A NUMBER, and that is the whole of the guarantee. dnd-kit keys its
+ * droppable registry by id alone, so a string id shared with a placement makes
+ * one registration replace the other before any metadata can be read — the
+ * card becomes undroppable or the column misclassifies, depending on which
+ * registered last. Placement ids are always strings, so a numeric id cannot
+ * collide with one at all.
+ *
+ * The offset keeps a column id away from any numeric id another surface might
+ * register in the same context.
+ */
+export function columnDropId(column: number): number {
+  return COLUMN_DROP_ID_BASE + column;
 }
+
+/** Where column droppable ids start. */
+const COLUMN_DROP_ID_BASE = 1_000_000;
 
 /** What a drag was released over. */
 export type DropTarget =
@@ -360,34 +375,52 @@ export function resolveDrop(
   columnCount: number
 ): WidgetPlacement[] {
   if (target === null) return [...placements];
+  if (target.kind === "card" && target.placementId === activeId) {
+    return [...placements];
+  }
+  const active = placements.find(p => p.id === activeId);
+  if (active === undefined) return [...placements];
 
+  // 🔴 Resolved inside the DESTINATION COLUMN's bucket, not against the
+  // interleaved whole. Reordering the flat sequence cannot express a middle
+  // position: with `[A(0), B(1), C(2), D(0)]`, moving B toward A lands it
+  // before A and moving it toward D lands it after D, so `[A, B, D]` is
+  // unreachable however the pointer is placed. Column 0 is `[A, D]` and B goes
+  // at D's index, which is the position the reader aimed at.
+  const buckets = placementsByColumn(placements, columnCount);
+  const last = Math.max(0, buckets.length - 1);
+
+  const from = buckets.findIndex(bucket => bucket.some(p => p.id === activeId));
+  if (from === -1) return [...placements];
+  const fromIndex = buckets[from].findIndex(p => p.id === activeId);
+
+  let column: number;
+  let insertAt: number;
   if (target.kind === "column") {
-    const bounded = Math.min(
-      Math.max(0, target.column),
-      Math.max(0, columnCount - 1)
+    column = Math.min(Math.max(0, target.column), last);
+    // A column target is the empty-column case, so the card appends.
+    insertAt =
+      column === from ? buckets[column].length - 1 : buckets[column].length;
+  } else {
+    const found = buckets.findIndex(bucket =>
+      bucket.some(p => p.id === target.placementId)
     );
-    return renumber(moveToColumn(placements, activeId, bounded));
+    if (found === -1) return [...placements];
+    column = found;
+    // 🔴 The target's index BEFORE the active card is taken out. Removing it
+    // first shifts every later index down by one, so a card moving DOWN past
+    // its neighbour is re-inserted in front of it and nothing moves.
+    insertAt = buckets[found].findIndex(p => p.id === target.placementId);
   }
 
-  if (target.placementId === activeId) return [...placements];
-  const over = placements.find(p => p.id === target.placementId);
-  if (over === undefined) return [...placements];
+  buckets[from].splice(fromIndex, 1);
+  buckets[column].splice(insertAt, 0, { ...active, column });
 
-  // The column FIRST, then the position, and both are needed. Taking the
-  // column alone lands every card in arrival order, so a reader could never
-  // put one below another; moving the position alone would reorder a card
-  // inside the column it came from while the drop was aimed at another.
-  //
-  // 🔴 The target's RENDERED column, bounded the way the grid bounds it. A
-  // target stored past the current count is drawn in the last column, so
-  // copying its stored value looks right while narrowed and throws the card
-  // back out to column 3 the moment the dashboard is widened again.
-  const targetColumn = Math.min(
-    Math.max(0, over.column ?? 0),
-    Math.max(0, columnCount - 1)
-  );
-  const recolumned = moveToColumn(placements, activeId, targetColumn);
-  return renumber(movePlacementTo(recolumned, activeId, target.placementId));
+  // Flattened column by column, so a card's neighbours within its column are
+  // adjacent in the stored sequence and `order` stays globally unique.
+  return buckets
+    .flat()
+    .map((placement, index) => ({ ...placement, order: index * ORDER_STEP }));
 }
 
 /**

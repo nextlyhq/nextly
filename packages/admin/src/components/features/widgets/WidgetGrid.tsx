@@ -142,10 +142,17 @@ export function WidgetGrid() {
   // wrapper's identity never changes, so nothing downstream re-renders on it,
   // and by the time a reader can move a card the announcer is long since
   // assigned.
-  const announcer = useRef<(t: string, p: number, c: number) => void>(() => {});
-  const announceMove = useCallback(
-    (title: string, position: number, count: number) =>
-      announcer.current(title, position, count),
+  const announcer = useRef<
+    (t: string, col: number, cols: number, p: number, c: number) => void
+  >(() => {});
+  const announceColumn = useCallback(
+    (
+      title: string,
+      column: number,
+      columnCount: number,
+      position: number,
+      count: number
+    ) => announcer.current(title, column, columnCount, position, count),
     []
   );
 
@@ -160,7 +167,7 @@ export function WidgetGrid() {
     hasArrangement,
     sensors,
     handleDragEnd,
-  } = useDashboardArrangement(declared, layout, announceMove);
+  } = useDashboardArrangement(declared, layout, announceColumn);
 
   const byId = useMemo(
     () => new Map(declared.map(widget => [widget.id, widget])),
@@ -172,12 +179,9 @@ export function WidgetGrid() {
   const { slots, isFetching, updatedAt, requested, counted, failed, settling } =
     useWidgetBatch(widgets);
 
-  const { announcement, announceMove: announceSettledMove } = useGridAnnouncer(
-    settling,
-    counted,
-    failed
-  );
-  announcer.current = announceSettledMove;
+  const { announcement, announceColumn: announceSettledColumn } =
+    useGridAnnouncer(settling, counted, failed);
+  announcer.current = announceSettledColumn;
 
   // Nothing DECLARED. Returned after the hooks above so the hook order is the
   // same on every render, whatever the branding says.

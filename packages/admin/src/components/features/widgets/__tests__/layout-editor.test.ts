@@ -414,3 +414,44 @@ describe("a card is never mistaken for a column", () => {
     expect(columnFromDropData({ widgetColumn: 1.5 })).toBeUndefined();
   });
 });
+
+describe("a card can reach the MIDDLE of another column", () => {
+  const at = (id: string, column: number, order: number): WidgetPlacement => ({
+    id,
+    widgetId: `w-${id}`,
+    column,
+    order,
+    hidden: false,
+  });
+  // Interleaved on purpose: A and D share column 0 but are not adjacent in the
+  // flat sequence, which is what makes the middle position hard to reach.
+  const start = [at("A", 0, 0), at("B", 1, 10), at("C", 2, 20), at("D", 0, 30)];
+
+  const columnZero = (placements: WidgetPlacement[]) =>
+    placements
+      .filter(p => (p.column ?? 0) === 0)
+      .sort((a, b) => a.order - b.order)
+      .map(p => p.id);
+
+  it("lands BETWEEN two cards of the destination column", () => {
+    // 🔴 Reordering the interleaved whole cannot express this: moving B toward
+    // A puts it before A, moving it toward D puts it after D, and [A, B, D] is
+    // reachable from no card target at all. Resolved inside column 0's bucket,
+    // B takes D's index — the position the pointer was actually over.
+    const next = resolveDrop(start, "B", { kind: "card", placementId: "D" }, 3);
+    expect(columnZero(next)).toEqual(["A", "B", "D"]);
+  });
+
+  it("still lands at the TOP when aimed at the first card", () => {
+    // The control: a resolution that always inserted at the end would satisfy
+    // nothing above, and one that always inserted at the start would satisfy
+    // the first case by accident.
+    const next = resolveDrop(start, "B", { kind: "card", placementId: "A" }, 3);
+    expect(columnZero(next)).toEqual(["B", "A", "D"]);
+  });
+
+  it("APPENDS when the target is the column itself", () => {
+    const next = resolveDrop(start, "B", { kind: "column", column: 0 }, 3);
+    expect(columnZero(next)).toEqual(["A", "D", "B"]);
+  });
+});

@@ -23,6 +23,7 @@ import { useSortableFieldArray } from "../../entries/fields/structured/field-arr
 import {
   columnFromDropData,
   placementsByColumn,
+  resolveDrop,
   type DropTarget,
 } from "../layout-editor";
 
@@ -95,7 +96,13 @@ export interface DashboardArrangement {
 export function useDashboardArrangement(
   declared: DashboardWidget[],
   layout: UseDashboardLayoutResult,
-  announceMove: (title: string, position: number, count: number) => void
+  announceColumn: (
+    title: string,
+    column: number,
+    columnCount: number,
+    position: number,
+    count: number
+  ) => void
 ): DashboardArrangement {
   // The DECLARATIONS, by id. The arrangement says which cards and in what
   // order; this says what each one actually is. Two questions, two sources:
@@ -206,6 +213,39 @@ export function useDashboardArrangement(
   // and a keyboard sensor, configured identically wherever this admin drags.
   const { sensors } = useSortableFieldArray(sortableItems, () => {});
 
+  /**
+   * Say where a card ended up, in the terms the reader can verify.
+   *
+   * 🔴 Resolved AFTER the move, against the destination column's bucket. Read
+   * from the global sequence, a card dropped onto the second card of a short
+   * column announced "position 4 of 4" because cards in other columns precede
+   * it — a position and a total that describe nothing the reader can see.
+   */
+  const announceLanding = useCallback(
+    (title: string, placementId: string, target: DropTarget) => {
+      const settled = resolveDrop(
+        editor.placements,
+        placementId,
+        target,
+        columnCount
+      );
+      const buckets = placementsByColumn(settled, columnCount);
+      const column = buckets.findIndex(bucket =>
+        bucket.some(p => p.id === placementId)
+      );
+      if (column === -1) return;
+      const position = buckets[column].findIndex(p => p.id === placementId) + 1;
+      announceColumn(
+        title,
+        column + 1,
+        columnCount,
+        position,
+        buckets[column].length
+      );
+    },
+    [editor.placements, columnCount, announceColumn]
+  );
+
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const activeId = String(event.active.id);
@@ -227,20 +267,9 @@ export function useDashboardArrangement(
       // drop claimed the card had gone to the last position in the whole
       // dashboard, whichever column actually received it. The column target is
       // parsed instead, and the announcement names the column.
-      if (target.kind === "column") {
-        announceMove(moved.widget.title, target.column + 1, columnCount);
-        return;
-      }
-      const landed = visible.findIndex(
-        row => row.placementId === target.placementId
-      );
-      announceMove(
-        moved.widget.title,
-        landed === -1 ? visible.length : landed + 1,
-        visible.length
-      );
+      announceLanding(moved.widget.title, activeId, target);
     },
-    [visible, editor, announceMove, columnCount]
+    [visible, editor, announceLanding]
   );
 
   /**
@@ -257,10 +286,11 @@ export function useDashboardArrangement(
       const moved = visible.find(row => row.placementId === placementId);
       if (!moved) return;
       if (targetColumn < 0 || targetColumn >= columnCount) return;
-      editor.dropOn(placementId, { kind: "column", column: targetColumn });
-      announceMove(moved.widget.title, targetColumn + 1, columnCount);
+      const target: DropTarget = { kind: "column", column: targetColumn };
+      editor.dropOn(placementId, target);
+      announceLanding(moved.widget.title, placementId, target);
     },
-    [visible, editor, columnCount, announceMove]
+    [visible, editor, announceLanding, columnCount]
   );
 
   /**
@@ -275,18 +305,11 @@ export function useDashboardArrangement(
     (placementId: string, neighbourId: string) => {
       const moved = visible.find(row => row.placementId === placementId);
       if (!moved) return;
-      editor.dropOn(placementId, { kind: "card", placementId: neighbourId });
-      const column = placementsByColumn(visible, columnCount)[
-        Math.min(Math.max(0, moved.column ?? 0), columnCount - 1)
-      ];
-      const landed = column.findIndex(row => row.placementId === neighbourId);
-      announceMove(
-        moved.widget.title,
-        landed === -1 ? column.length : landed + 1,
-        column.length
-      );
+      const target: DropTarget = { kind: "card", placementId: neighbourId };
+      editor.dropOn(placementId, target);
+      announceLanding(moved.widget.title, placementId, target);
     },
-    [visible, editor, columnCount, announceMove]
+    [visible, editor, announceLanding]
   );
 
   return {

@@ -57,9 +57,11 @@ export function WidgetColumn({
   // anything, every drop in a populated column resolves against a card and the
   // vertical position matches the gesture.
   //
-  // The `data` is what makes the kind unambiguous. Columns and cards share one
-  // id space in dnd-kit, and a placement may legitimately be named like a
-  // column, so any decision that reads the id string has to guess.
+  // The id is NUMERIC, which is what keeps it disjoint: dnd-kit keys its
+  // registry by id alone, so a string shared with a placement would make one
+  // registration replace the other before any metadata could be read. The
+  // `data` then says which column this is, without anything having to
+  // interpret the id.
   const { setNodeRef, isOver } = useDroppable({
     id: columnDropId(column),
     disabled: items.length > 0,
@@ -78,7 +80,17 @@ export function WidgetColumn({
           // then just absent space rather than a target.
           isEditing && "min-h-24 rounded-lg border border-dashed p-2",
           isEditing && isOver && "border-primary bg-primary/5",
-          isEditing && !isOver && "border-border/60"
+          // 🔴 The border token at FULL strength, never an alpha-faded one.
+          // This outline says where a card may be dropped, so it carries
+          // information rather than decorating, and non-text contrast has to
+          // reach 3:1 — a sixty-percent alpha measures 1.13:1 on the page
+          // surface and the contrast suite refuses it.
+          //
+          // The faded variant is described here rather than written out: that
+          // suite and Tailwind's scanner both read this file as TEXT, so
+          // spelling the class in prose registers it as a usage and fails the
+          // check the comment exists to explain.
+          isEditing && !isOver && "border-border"
         )}
         data-testid={`widget-column-${column}`}
       >
