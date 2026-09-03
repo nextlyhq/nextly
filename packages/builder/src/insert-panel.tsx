@@ -286,6 +286,41 @@ function DescriptionStrip({
 }
 
 /**
+ * How to read a tile without taking it, for the pointer that cannot hover.
+ *
+ * A press moves the highlight, so the strip above describes the tile under the
+ * finger before it lifts — and lifting is what inserts. Releasing away from the
+ * tile inserts nothing, so reading and declining are both already possible; the
+ * gesture simply has nothing announcing it, which is the whole of what is
+ * missing.
+ *
+ * OUTSIDE the strip, not inside it. The strip is bounded and scrolls, so a
+ * line placed in it leaves the viewport as soon as a description is longer than
+ * the box — and the authors who need this most are the ones reading the longest
+ * descriptions.
+ *
+ * Shown only where pressing is the ONLY way to read. `(hover: none) and
+ * (pointer: coarse)` asks the browser about the primary input rather than
+ * inferring it from a user-agent string, and a mouse already reads a tile by
+ * hovering it, so the line would be answering a question that pointer never
+ * asks. It costs no tile pixels either way, which is the constraint that ruled
+ * out an on-tile control.
+ *
+ * `aria-hidden`, deliberately. It describes a POINTER gesture, and a screen
+ * reader on a touch device does not activate by lifting a finger from a
+ * control — the guidance would be wrong for exactly the people an accessible
+ * name is for. What they need is the block's description, which reaches them
+ * through each tile's own `aria-describedby`.
+ */
+function TouchGestureHint(): React.JSX.Element {
+  return (
+    <p aria-hidden className="nx-insert-panel__gesture-hint">
+      Lift to insert · slide off to cancel
+    </p>
+  );
+}
+
+/**
  * The entry a command value names, or the first one offered.
  *
  * Scoped to the GROUPS rather than to the whole catalog, because a filter can
@@ -614,6 +649,7 @@ export function InsertPanel({
           ))}
         </CommandList>
         <DescriptionStrip groups={groups} tokens={tokens} />
+        <TouchGestureHint />
       </Command>
     </div>
   );

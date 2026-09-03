@@ -327,6 +327,34 @@
   color: var(--nx-muted-foreground);
 }
 
+/*
+ * The touch gesture hint: absent unless the pointer cannot hover.
+ *
+ * `display: none` is the DEFAULT rather than the exception, so a browser that
+ * cannot evaluate the query below — or a rendering context that never applies
+ * it — shows nothing rather than showing a line about a gesture that pointer
+ * does not perform. The failure direction that matters: an unexplained
+ * instruction on a mouse is noise every author reads forever, while its
+ * absence on touch is the state that shipped.
+ */
+.nx-insert-panel__gesture-hint {
+  display: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .nx-insert-panel__gesture-hint {
+    display: block;
+    flex: none;
+    padding: 0.375rem 0.75rem 0.5rem;
+    border-top: 1px solid var(--nx-border);
+    background: var(--nx-muted);
+    font-size: 0.6875rem;
+    line-height: 1.3;
+    color: var(--nx-muted-foreground);
+    text-align: center;
+  }
+}
+
 .nx-insert-panel__describes-name {
   font-weight: 600;
   color: var(--nx-foreground);
