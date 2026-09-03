@@ -539,9 +539,10 @@ describe("an exposed slot id is usable", () => {
 
 describe("an allow entry is held to the block-type grammar", () => {
   it("refuses a string that is not a block type", () => {
-    // Every non-empty string used to pass, in the one field whose whole
-    // purpose is naming block types. `isBlockType` is the predicate the rest
-    // of this file holds a node's own `type` to.
+    // `allow` names block types, so an entry is held to the same grammar a
+    // node's own `type` is — `isBlockType`, which bounds the length and
+    // applies the namespaced-name pattern. A bare string check would accept
+    // this value in the one field whose whole purpose is naming block types.
     expect(
       codesFrom(
         componentDoc({
@@ -621,6 +622,25 @@ describe("a huge envelope is bounded whatever the survey measured", () => {
     expect(issues[0].path).toBe("/slots");
   });
 
+  it("refuses one variant whose override map is past the limit", () => {
+    // `variants` being within the budget says nothing about ONE variant's
+    // overrides. Bounded only at the outer map, a single variant holding more
+    // keys than the cap allows was enumerated twice — once to ask whether it
+    // presets anything, once per key to check the target — through a limit
+    // that had already passed.
+    const overrides: Record<string, unknown> = {};
+    for (let i = 0; i <= MAX_ENVELOPE_ENTRIES; i += 1) overrides[`k${i}`] = "x";
+    const issues = issuesFrom(
+      componentDoc({
+        exposed: [goodExposure],
+        variants: { compact: { label: "Compact", overrides } },
+      })
+    );
+
+    expect(issues.map(i => i.code)).toEqual(["component-envelope-invalid"]);
+    expect(issues[0].path).toBe("/variants/compact/overrides");
+  });
+
   it("does not tie the envelope to how many nodes the document may hold", () => {
     // Several exposures may legitimately address ONE node, so the node cap is
     // not a bound on the envelope. Tying them refused a valid one-node
@@ -675,9 +695,10 @@ describe("a malformed node does not crash the envelope", () => {
   ])(
     "refuses a slot name that is %s, even on an empty container",
     (_l, bad) => {
-      // The node question was answered first, so an empty container accepted
-      // `undefined` as its region name — the one value the contract promises a
-      // consumer will never see.
+      // The NAME is judged before the node. A slot field that is missing,
+      // numeric or empty is wrong whatever the node holds, so an empty
+      // container — which is passed, since it stores no slots to check against
+      // — must not carry an unusable region name past this point.
       const doc = {
         formatVersion: 1,
         kind: "component",

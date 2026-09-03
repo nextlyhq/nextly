@@ -80,6 +80,11 @@ export type {
 } from "./document";
 
 export {
+  // The cap on one collection of a component's envelope — its exposed
+  // properties, its slots, its variants, one variant's overrides. Published
+  // because a store or an admin form validating an envelope before it reaches
+  // the engine has to refuse at the same number: a form that accepted more
+  // than this would offer an author a definition the write path then rejects.
   MAX_ENVELOPE_ENTRIES,
   MAX_DEPTH,
   MAX_NODES,

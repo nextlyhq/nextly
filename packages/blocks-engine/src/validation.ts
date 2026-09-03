@@ -1555,11 +1555,11 @@ function isConditionsShapeValid(conditions: unknown): boolean {
  */
 function nodesById(nodes: BlockNode[], maxNodes: number) {
   const index = new Map<string, BlockNode>();
-  // Bounded even though the caller has already refused an over-limit document.
-  // The bound is unreachable through that path today and is not asserted by
-  // any test, because there is no input that reaches it — it is here so the
-  // function is safe read on its own terms, and so moving the caller's guard
-  // cannot silently make an unbounded walk.
+  // The snapshotted node bound, so this walk and the survey that measured the
+  // document agree on how many nodes there are. A caller may back
+  // `DocumentLimits` with a getter, and two readings that disagree would build
+  // an index missing a node the survey counted — reported as a sound exposure
+  // pointing at nothing.
   walkNodes(
     nodes,
     node => {
@@ -2183,17 +2183,32 @@ function checkVariant(
       severity: "error",
       message: `Variant "${name}" needs an overrides object keyed by exposed id.`,
     });
-  } else if (Object.keys(variant.overrides).length === 0) {
-    issues.push({
-      path: pointer(at, "overrides"),
-      code: "component-envelope-invalid",
-      severity: "error",
-      message: `Variant "${name}" presets nothing, so selecting it would change nothing.`,
-      suggestion: "Give it at least one override, or remove the variant.",
-    });
   } else {
-    checkVariantTargets(
+    // Bounded HERE, not only at the variant map. `variants` being within the
+    // budget says nothing about one variant's overrides, so a single variant
+    // holding a hundred thousand keys reached both the emptiness check and the
+    // per-key walk below — twice — through a cap that had already passed.
+    const overrideKeys = ownKeysBounded(
       variant.overrides,
+      pointer(at, "overrides"),
+      "variant overrides",
+      issues
+    );
+    if (overrideKeys === null) return;
+
+    if (overrideKeys.length === 0) {
+      issues.push({
+        path: pointer(at, "overrides"),
+        code: "component-envelope-invalid",
+        severity: "error",
+        message: `Variant "${name}" presets nothing, so selecting it would change nothing.`,
+        suggestion: "Give it at least one override, or remove the variant.",
+      });
+      return;
+    }
+
+    checkVariantTargets(
+      overrideKeys,
       exposedIds,
       pointer(at, "overrides"),
       key =>
@@ -2223,13 +2238,16 @@ function checkVariant(
  * about one than that its key names something.
  */
 function checkVariantTargets(
-  map: Record<string, unknown>,
+  keys: readonly string[],
   known: ReadonlySet<string>,
   at: string,
   message: (key: string) => string,
   issues: ValidationIssue[]
 ): void {
-  for (const key of Object.keys(map)) {
+  // Takes the KEYS a bounded read already produced, rather than the map. Given
+  // the map it would enumerate a second time, so one collection would be
+  // counted once and walked twice — and the second walk had no bound at all.
+  for (const key of keys) {
     if (known.has(key)) continue;
     issues.push({
       // One segment per call: `pointer` escapes its token whole, so passing
