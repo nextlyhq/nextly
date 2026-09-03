@@ -20,20 +20,16 @@
  * @module components/features/widgets/edit/useLayoutEditor
  */
 
-import { MAX_PLACEMENTS } from "nextly/config";
+import { DEFAULT_COLUMN_COUNT, MAX_PLACEMENTS } from "nextly/config";
 import { useCallback, useMemo, useState } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
 import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
-import {
-  addPlacement,
-  hasChanges,
-  movePlacementTo,
-  removePlacement,
-  renumber,
-  togglePlacementHidden,
-} from "../layout-editor";
+import { addPlacement, draftDiffers, type DropTarget } from "../layout-editor";
+
+import { useLayoutLifecycle } from "./useLayoutLifecycle";
+import { usePlacementMutations } from "./usePlacementMutations";
 
 /** Where a card's declared geometry comes from when it is added. */
 export interface WidgetGeometrySource {
@@ -85,6 +81,33 @@ export interface LayoutEditor {
   reload: () => void;
   /** Move by IDENTITY: the placement `fromId` takes the position of `toId`. */
   move: (fromId: string, toId: string) => void;
+  /**
+   * Apply a drag that may have crossed columns.
+   *
+   * A named operation rather than a placements setter, for the same reason
+   * every other mutation here is one: a setter lets a caller write an arbitrary
+   * draft, and the invariants this module keeps -- ids unique, order dense,
+   * columns in range -- would then be enforced nowhere.
+   */
+  dropOn: (activeId: string, target: DropTarget | null) => void;
+  /**
+   * Choose how many columns the dashboard is drawn in.
+   *
+   * Placements are NOT rewritten here. A card whose column falls outside the
+   * new count is folded into the last one for drawing, and its stored column
+   * is left alone -- so widening the dashboard again puts it back where the
+   * reader had it, rather than where a narrower view happened to show it.
+   */
+  setColumnCount: (columnCount: number) => void;
+  /**
+   * The count the dashboard is being drawn in RIGHT NOW.
+   *
+   * The draft's while editing, the saved one otherwise. Published rather than
+   * re-derived by each consumer: a second derivation would answer the saved
+   * count while the reader is looking at a different one, and the card that
+   * landed in a column they cannot see would be nobody's fault in particular.
+   */
+  columnCount: number;
   toggleHidden: (placementId: string) => void;
   remove: (placementId: string) => void;
   add: (widgetId: string) => void;
@@ -96,10 +119,12 @@ export interface LayoutEditor {
  * One object, so a placement list can never be sent against a version and a
  * scope it was not derived from.
  */
-interface LayoutDraft {
+export interface LayoutDraft {
   placements: WidgetPlacement[];
   version: number;
   scope: string;
+  /** The count being edited, which may differ from the one last saved. */
+  columnCount: number;
 }
 
 export function useLayoutEditor(
@@ -125,53 +150,11 @@ export function useLayoutEditor(
     [layout.layout]
   );
 
-  const begin = useCallback(() => {
-    const current = layout.layout;
-    // Nothing to edit against. Editing is offered only once a read has landed,
-    // so this is a guard rather than a state the UI can reach.
-    if (!current) return;
-    setDraft({
-      placements: [...current.placements],
-      version: current.version,
-      scope: current.scope,
-    });
-  }, [layout.layout]);
-  // 🔴 The failed-write state goes with the draft, because the message it
-  // renders describes the draft. After a non-conflict failure the chrome says
-  // "your changes are still here -- try again"; Cancel discarded them and left
-  // that sentence on screen, pointing at nothing, and it was still there when
-  // the reader next entered edit mode. A mutation error outlives the thing it
-  // is about unless something clears it.
-  const cancel = useCallback(() => {
-    setDraft(null);
-    layout.save.reset();
-    layout.reset.reset();
-  }, [layout]);
-
-  const save = useCallback(() => {
-    if (!draft) return;
-    layout.save.mutate(
-      // Renumbered on the way out: the editor reorders an ARRAY, so a moved
-      // card still carries the `order` it had before. Sent as-is, the server
-      // sorts by a number that no longer matches what the reader sees.
-      //
-      // The guards come from the DRAFT, so they are the ones this arrangement
-      // was derived from rather than whatever the last refetch produced.
-      {
-        placements: renumber(draft.placements),
-        version: draft.version,
-        scope: draft.scope,
-      },
-      // Only on success. A conflict must LEAVE the draft in place, because
-      // dropping it here would discard the reader's work at the exact moment
-      // they are being told to try again.
-      { onSuccess: () => setDraft(null) }
-    );
-  }, [draft, layout]);
-
-  const reset = useCallback(() => {
-    layout.reset.mutate(undefined, { onSuccess: () => setDraft(null) });
-  }, [layout]);
+  const { begin, cancel, save, reset } = useLayoutLifecycle(
+    layout,
+    draft,
+    setDraft
+  );
 
   const reload = useCallback(() => {
     // The draft goes first: it is the thing the reader was warned they would
@@ -192,46 +175,26 @@ export function useLayoutEditor(
   // the stored array — which is exactly the translation that was wrong: with an
   // unresolvable placement between two visible ones, a view index moved the
   // wrong card and persisted it.
-  const move = useCallback(
-    (fromId: string, toId: string) =>
+  // The reader's own count, from the SERVER's answer. `resolveDrop` clamps a
+  // target against it, so a count guessed here would let a drop land in a
+  // column the dashboard does not draw.
+  // The DRAFT's count while editing, the saved one otherwise. A drop resolved
+  // against the saved count while the reader is looking at a different one
+  // would land a card in a column they cannot see.
+  const columnCount =
+    draft?.columnCount ?? layout.layout?.columnCount ?? DEFAULT_COLUMN_COUNT;
+
+  const setColumnCount = useCallback(
+    (next: number) =>
       setDraft(current =>
-        current
-          ? {
-              ...current,
-              placements: movePlacementTo(current.placements, fromId, toId),
-            }
-          : current
+        current ? { ...current, columnCount: next } : current
       ),
     []
   );
 
-  const toggleHidden = useCallback(
-    (placementId: string) =>
-      setDraft(current =>
-        current
-          ? {
-              ...current,
-              placements: togglePlacementHidden(
-                current.placements,
-                placementId
-              ),
-            }
-          : current
-      ),
-    []
-  );
-
-  const remove = useCallback(
-    (placementId: string) =>
-      setDraft(current =>
-        current
-          ? {
-              ...current,
-              placements: removePlacement(current.placements, placementId),
-            }
-          : current
-      ),
-    []
+  const { move, dropOn, toggleHidden, remove } = usePlacementMutations(
+    setDraft,
+    columnCount
   );
 
   const add = useCallback(
@@ -276,7 +239,14 @@ export function useLayoutEditor(
     placements,
     available,
     atCapacity: placements.length >= MAX_PLACEMENTS,
-    hasUnsavedChanges: draft !== null && hasChanges(server, draft.placements),
+    hasUnsavedChanges:
+      draft !== null &&
+      draftDiffers(
+        server,
+        layout.layout?.columnCount ?? DEFAULT_COLUMN_COUNT,
+        draft.placements,
+        draft.columnCount
+      ),
     isSaving: layout.save.isPending || layout.reset.isPending,
     isConflict: layout.isConflict,
     begin,
@@ -285,6 +255,9 @@ export function useLayoutEditor(
     reset,
     reload,
     move,
+    dropOn,
+    setColumnCount,
+    columnCount,
     toggleHidden,
     remove,
     add,

@@ -15,7 +15,7 @@
 import { cn } from "@admin/lib/utils";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
 
-import { moveAffordance } from "../layout-editor";
+import { moveAffordance, columnAffordance } from "../layout-editor";
 import { widgetSpanClass } from "../sizes";
 import { WidgetRenderer } from "../WidgetRenderer";
 
@@ -32,7 +32,21 @@ export interface ArrangedCellProps {
   /** `null` when this card took no part in the batch. */
   updatedAt: Date | null;
   isFetching: boolean;
-  onMove: (index: number, delta: number) => void;
+  /**
+   * Move this card one step within ITS OWN column.
+   *
+   * 🔴 Bound by the caller rather than resolved from an index here. `index` is
+   * a position within the rendered column, and the cell has no way to turn one
+   * into the neighbour it should swap with -- the arrangement is interleaved
+   * across columns, so the card before this one in the whole sequence usually
+   * sits in a different column entirely.
+   */
+  onMove: (delta: number) => void;
+  /** How many columns the dashboard is drawn in, for the sideways controls. */
+  columnCount: number;
+  /** The column this card is DRAWN in, which a stored value may differ from. */
+  column: number;
+  onMoveColumn: (placementId: string, targetColumn: number) => void;
   onToggleHidden: (placementId: string) => void;
   onRemove: (placementId: string) => void;
 }
@@ -46,11 +60,19 @@ export function ArrangedCell({
   updatedAt,
   isFetching,
   onMove,
+  columnCount,
+  column,
+  onMoveColumn,
   onToggleHidden,
   onRemove,
 }: ArrangedCellProps) {
   const widget = row.widget;
   const { canMoveUp, canMoveDown } = moveAffordance(index, count);
+  // Derived from the column this card is DRAWN in. A card stored past the
+  // current count is folded into the last column, so computing from the stored
+  // value offers a Left that lands outside the dashboard and a label naming a
+  // column the reader cannot see.
+  const { canMoveLeft, canMoveRight } = columnAffordance(column, columnCount);
 
   return (
     <SortableWidgetCell
@@ -104,8 +126,14 @@ export function ArrangedCell({
           hidden={row.hidden}
           canMoveUp={canMoveUp}
           canMoveDown={canMoveDown}
-          onMoveUp={() => onMove(index, -1)}
-          onMoveDown={() => onMove(index, 1)}
+          column={column + 1}
+          columnCount={columnCount}
+          canMoveLeft={canMoveLeft}
+          canMoveRight={canMoveRight}
+          onMoveUp={() => onMove(-1)}
+          onMoveDown={() => onMove(1)}
+          onMoveLeft={() => onMoveColumn(row.placementId, column - 1)}
+          onMoveRight={() => onMoveColumn(row.placementId, column + 1)}
           onToggleHidden={() => onToggleHidden(row.placementId)}
           onRemove={() => onRemove(row.placementId)}
         />

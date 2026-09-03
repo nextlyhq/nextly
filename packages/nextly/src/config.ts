@@ -248,7 +248,12 @@ export { MAX_QUERIES_PER_REQUEST } from "./domains/widgets/batch-limit";
 // submission carrying more placements than this, so the editor has to know the
 // number to stop a reader building an arrangement that can never be saved --
 // and a second copy of it on the client is a second answer that drifts.
-export { MAX_PLACEMENTS } from "./domains/widgets/layout";
+export {
+  COLUMN_COUNTS,
+  DEFAULT_COLUMN_COUNT,
+  MAX_PLACEMENTS,
+  type ColumnCount,
+} from "./domains/widgets/layout";
 export type {
   WidgetOp,
   WidgetSourceField,

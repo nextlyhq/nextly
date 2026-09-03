@@ -41,6 +41,7 @@ function placement(patch: Partial<WidgetPlacement> = {}): WidgetPlacement {
   return {
     id: "p1",
     widgetId: "core/team",
+    column: 0,
     order: 0,
     hidden: false,
     ...patch,
@@ -69,7 +70,13 @@ function layoutSuite(
       const scope = `u-roundtrip-${label}`;
       const placements = [
         placement({ id: "a", order: 0, size: "md" }),
-        placement({ id: "b", widgetId: "core/other", order: 10, hidden: true }),
+        placement({
+          id: "b",
+          widgetId: "core/other",
+          column: 0,
+          order: 10,
+          hidden: true,
+        }),
       ];
 
       const version = await service.saveLayout("user", scope, placements, 0);

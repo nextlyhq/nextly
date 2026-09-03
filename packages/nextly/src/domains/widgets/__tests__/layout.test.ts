@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import type { WidgetDefinition } from "../definition";
 import {
+  DEFAULT_COLUMN_COUNT,
   LAYOUT_SCHEMA_VERSION,
   MAX_CONFIG_DEPTH,
   MAX_PLACEMENTS,
@@ -28,6 +29,7 @@ function placement(
   return {
     id: "p1",
     widgetId: "core/team",
+    column: 0,
     order: 0,
     hidden: false,
     ...patch,
@@ -128,6 +130,7 @@ describe("reading placements", () => {
     expect(read).toEqual({
       id: "p1",
       widgetId: "core/team",
+      column: 0,
       order: 0,
       hidden: false,
       config: { a: 1 },
@@ -149,7 +152,14 @@ describe("reading placements", () => {
 describe("reading a stored row", () => {
   it("round-trips what it serialized", () => {
     const placements: WidgetPlacement[] = [
-      { id: "a", widgetId: "core/team", order: 0, hidden: true, size: "md" },
+      {
+        id: "a",
+        widgetId: "core/team",
+        column: 1,
+        order: 0,
+        hidden: true,
+        size: "md",
+      },
     ];
     expect(readStoredLayout(serializeLayout(placements)).placements).toEqual(
       placements
@@ -215,6 +225,50 @@ describe("the default arrangement", () => {
     for (const p of placements) expect(Number.isFinite(p.order)).toBe(true);
   });
 
+  it("keeps widgets that state NO order in DECLARATION order", () => {
+    // 🔴 The guarantee `defaultOrder` documents: omit it and your card keeps
+    // the position it was declared in. `Array.prototype.sort` is stable, so
+    // equal elements hold their input order, and the admin's comparator rests
+    // on the same property — every widget shipping today states no order, so
+    // they all compare equal. Any tie-break, on the id or on anything else,
+    // rearranges every default dashboard holding plugin widgets and makes core
+    // answer the ordering question differently from the admin.
+    const declared = defaultPlacements([
+      widget({ id: "core/c" }),
+      widget({ id: "core/a" }),
+      widget({ id: "core/b" }),
+    ]);
+    expect(declared.map(p => p.widgetId)).toEqual([
+      "core/c",
+      "core/a",
+      "core/b",
+    ]);
+    // The control: declaring them in another order gives that order back, so
+    // this is the input being preserved rather than a sequence that happens to
+    // match. A comparator sorting by id answers "core/a, core/b, core/c" to
+    // both, and the first assertion alone cannot tell the two apart.
+    const reordered = defaultPlacements([
+      widget({ id: "core/b" }),
+      widget({ id: "core/c" }),
+      widget({ id: "core/a" }),
+    ]);
+    expect(reordered.map(p => p.widgetId)).toEqual([
+      "core/b",
+      "core/c",
+      "core/a",
+    ]);
+  });
+
+  it("still lets a STATED order override the declaration order", () => {
+    // The control in the other direction: a comparator returning 0 for every
+    // pair would preserve declaration order perfectly and ignore the field.
+    const placements = defaultPlacements([
+      widget({ id: "core/a", defaultOrder: 30 }),
+      widget({ id: "core/z", defaultOrder: 10 }),
+    ]);
+    expect(placements.map(p => p.widgetId)).toEqual(["core/z", "core/a"]);
+  });
+
   it("names each default placement after its widget, so reads are idempotent", () => {
     const once = defaultPlacements([widget({ id: "core/team" })]);
     const twice = defaultPlacements([widget({ id: "core/team" })]);
@@ -222,20 +276,56 @@ describe("the default arrangement", () => {
     expect(once[0].id).toBe("core/team");
   });
 
-  it("leaves room to insert between two neighbours", () => {
-    const placements = defaultPlacements([
-      widget({ id: "core/a", defaultOrder: 0 }),
-      widget({ id: "core/b", defaultOrder: 1 }),
-    ]);
-    expect(placements[1].order - placements[0].order).toBeGreaterThan(1);
+  it("leaves room to insert between two neighbours in a column", () => {
+    // `order` sequences a COLUMN, not the dashboard, so the two placements to
+    // compare are the ones dealt into the same column — which, with the
+    // round-robin deal, are DEFAULT_COLUMN_COUNT apart in declared order.
+    const placements = defaultPlacements(
+      Array.from({ length: DEFAULT_COLUMN_COUNT + 1 }, (_unused, i) =>
+        widget({ id: `core/${i}`, defaultOrder: i })
+      )
+    );
+    const first = placements[0];
+    const below = placements[DEFAULT_COLUMN_COUNT];
+    expect(below.column).toBe(first.column);
+    expect(below.order - first.order).toBeGreaterThan(1);
+  });
+
+  it("deals the first widgets ACROSS the columns, not down one", () => {
+    // 🔴 The property that decides whether a reader sees the widgets that were
+    // declared first. Filling column 0 before starting column 1 puts the
+    // second-most-important card below the fold on a wide screen while two
+    // columns sit empty beside it.
+    const placements = defaultPlacements(
+      Array.from({ length: DEFAULT_COLUMN_COUNT }, (_unused, i) =>
+        widget({ id: `core/${i}`, defaultOrder: i })
+      )
+    );
+    expect(new Set(placements.map(p => p.column)).size).toBe(
+      DEFAULT_COLUMN_COUNT
+    );
+    // 🔴 And `order` stays a GLOBAL sequence rather than restarting per column.
+    // Numbering within a column collides across them, and these positions are
+    // materialized twice — over the whole registry and over the set a caller
+    // may see — so a collision reorders a reader's dashboard the moment they
+    // gain a permission.
+    expect(new Set(placements.map(p => p.order)).size).toBe(
+      DEFAULT_COLUMN_COUNT
+    );
   });
 });
 
 describe("partitioning by what a reader may see", () => {
   const stored: WidgetPlacement[] = [
-    { id: "p2", widgetId: "core/visible", order: 20, hidden: false },
-    { id: "p1", widgetId: "core/secret", order: 10, hidden: false },
-    { id: "p0", widgetId: "core/visible-2", order: 0, hidden: false },
+    { id: "p2", widgetId: "core/visible", column: 0, order: 20, hidden: false },
+    { id: "p1", widgetId: "core/secret", column: 0, order: 10, hidden: false },
+    {
+      id: "p0",
+      widgetId: "core/visible-2",
+      column: 0,
+      order: 0,
+      hidden: false,
+    },
   ];
 
   it("returns the visible half sorted by order", () => {
@@ -261,7 +351,7 @@ describe("partitioning by what a reader may see", () => {
     // `hidden` is the reader's own choice to put a card away, so it must come
     // back to them -- otherwise nothing could ever put it back.
     const { visible } = partitionPlacements(
-      [{ id: "p", widgetId: "core/x", order: 0, hidden: true }],
+      [{ id: "p", widgetId: "core/x", column: 0, order: 0, hidden: true }],
       new Set(["core/x"])
     );
     expect(visible).toHaveLength(1);
@@ -270,12 +360,18 @@ describe("partitioning by what a reader may see", () => {
 
 describe("merging a write with what the writer could not see", () => {
   const invisible: WidgetPlacement[] = [
-    { id: "hidden-1", widgetId: "core/secret", order: 5, hidden: false },
+    {
+      id: "hidden-1",
+      widgetId: "core/secret",
+      column: 0,
+      order: 5,
+      hidden: false,
+    },
   ];
 
   it("carries the invisible placements through", () => {
     const merged = mergePreservingHidden(
-      [{ id: "p1", widgetId: "core/team", order: 0, hidden: false }],
+      [{ id: "p1", widgetId: "core/team", column: 0, order: 0, hidden: false }],
       invisible
     );
     expect(merged.map(p => p.widgetId)).toEqual(["core/team", "core/secret"]);
@@ -286,7 +382,15 @@ describe("merging a write with what the writer could not see", () => {
     // placement happens to hold that id -- an oracle for the existence of a
     // card this caller must not know about.
     const merged = mergePreservingHidden(
-      [{ id: "hidden-1", widgetId: "core/team", order: 0, hidden: false }],
+      [
+        {
+          id: "hidden-1",
+          widgetId: "core/team",
+          column: 0,
+          order: 0,
+          hidden: false,
+        },
+      ],
       invisible
     );
     expect(merged).toHaveLength(2);
@@ -307,6 +411,7 @@ describe("the size ceiling", () => {
     const many = Array.from({ length: MAX_PLACEMENTS + 1 }, (_, i) => ({
       id: `p${i}`,
       widgetId: "core/team",
+      column: 0,
       order: i,
       hidden: false,
     }));
@@ -321,6 +426,7 @@ describe("the size ceiling", () => {
       {
         id: "p",
         widgetId: "core/team",
+        column: 0,
         order: 0,
         hidden: false,
         config: { note: "\u{1F600}".repeat(9000) },
@@ -421,5 +527,42 @@ describe("config nesting", () => {
     expect(placementProblem(placement({ config: { a: node } }))).toMatch(
       /nest at most/
     );
+  });
+});
+
+describe("a v1 arrangement survives the move to columns", () => {
+  // 🔴 The stored row is a USER'S arrangement, and the reader throws on a
+  // version it does not know rather than resetting — so shipping v2 without a
+  // migrator turns every saved dashboard into an internal error. Reading a v1
+  // row must produce a v2 layout, not a refusal.
+  const V1 = JSON.stringify({
+    schemaVersion: 1,
+    placements: [
+      { id: "a", widgetId: "w-a", column: 0, order: 0, hidden: false },
+      { id: "b", widgetId: "w-b", column: 0, order: 10, hidden: false },
+      { id: "c", widgetId: "w-c", column: 0, order: 20, hidden: true },
+    ],
+  });
+
+  it("reads a v1 row rather than throwing on its version", () => {
+    const layout = readStoredLayout(V1);
+    expect(layout.schemaVersion).toBe(LAYOUT_SCHEMA_VERSION);
+    expect(layout.placements).toHaveLength(3);
+  });
+
+  it("gives every placement a column, and keeps the order the reader saw", () => {
+    // The arrangement is the one thing a user actually authored here, so the
+    // migration may add a coordinate but must not reorder anything.
+    const { placements } = readStoredLayout(V1);
+    expect(placements.map(p => p.widgetId)).toEqual(["w-a", "w-b", "w-c"]);
+    for (const p of placements) expect(typeof p.column).toBe("number");
+  });
+
+  it("keeps a hidden placement hidden across the migration", () => {
+    // 🔴 The control. A migration that rebuilt placements from defaults would
+    // satisfy both assertions above while silently un-hiding a card the user
+    // had put away — the one field whose loss is invisible until it reappears.
+    const { placements } = readStoredLayout(V1);
+    expect(placements.find(p => p.widgetId === "w-c")?.hidden).toBe(true);
   });
 });
