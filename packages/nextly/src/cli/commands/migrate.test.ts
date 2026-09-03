@@ -216,8 +216,7 @@ describe("PostgreSQL escape strings honour backslashes; ordinary literals do not
 
 describe("MySQL escapes inside BOTH literal quotes", () => {
   it("keeps a double-quoted MySQL value whole when a backslash escapes its quote", () => {
-    // 🔴 A regression this branch introduced and this test now pins. Under
-    // MySQL's default SQL mode a double quote also delimits a string, and the
+    // 🔴 Under MySQL's default SQL mode a double quote also delimits a string, and the
     // scanner this replaced applied its backslash check to whichever quote had
     // opened the region. Gating on the single quote alone split this valid
     // statement at the semicolon INSIDE the value.
@@ -273,6 +272,27 @@ describe("a line inside a string literal is data, not SQL", () => {
     // pollutes the next accumulated statement and MySQL rejects it.
     const sql = `CREATE TABLE "t" ("a" text);--> statement-breakpoint\nCREATE INDEX "i" ON "t" ("a");`;
     const out = splitSqlStatements(sql, "sqlite");
+    expect(out.join(";")).not.toContain("statement-breakpoint");
+    expect(out).toHaveLength(2);
+  });
+
+  it("KEEPS marker text in a literal that opens LATER on the line", () => {
+    // 🔴 A per-line answer is not enough. This line begins as ordinary SQL, so
+    // any rule keyed on where the LINE starts treats the whole line as SQL and
+    // rewrites the value inside it — storing a truncated description while the
+    // migration reports success.
+    const sql = `INSERT INTO "t" ("d") VALUES ('note --> statement-breakpoint here');`;
+    const out = splitSqlStatements(sql, "sqlite").join(";");
+    expect(out).toContain("--> statement-breakpoint here");
+  });
+
+  it("does not let an apostrophe inside a BLOCK comment open a literal", () => {
+    // 🔴 `it's` here is prose, not an opening quote. Counted as one, everything
+    // after it reads as being inside a literal, so the real breakpoint line
+    // below is treated as data and survives — and on MySQL, where `-->` is not
+    // a comment, that text reaches the driver as invalid SQL.
+    const sql = `/* it's a note\n   spanning lines */\nCREATE TABLE "t" ("a" text);\n--> statement-breakpoint\nCREATE INDEX "i" ON "t" ("a");`;
+    const out = splitSqlStatements(sql, "mysql");
     expect(out.join(";")).not.toContain("statement-breakpoint");
     expect(out).toHaveLength(2);
   });

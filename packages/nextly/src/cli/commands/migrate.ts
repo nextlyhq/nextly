@@ -1087,24 +1087,41 @@ function advanceLiteralState(
 }
 
 /**
- * For each line of `sql`, whether that line BEGINS inside a string literal.
+ * End index (exclusive) of the comment beginning at `index`, or -1 if none.
  *
- * 🔴 The line-based cleanup below removes comment lines and breakpoint markers,
- * and a physical newline inside a literal makes its continuation look like an
- * ordinary line. A description entered as `Summary\n-- internal note` puts
- * `-- internal note` at the start of a line, where the cleanup reads it as a
- * standalone SQL comment and drops it -- the migration then succeeds and stores
- * a SILENTLY TRUNCATED description, which is the failure that does not announce
- * itself.
- *
- * Scanned with the same rules the splitter itself uses, so the two agree about
- * where a literal starts and ends rather than being two answers to one question.
+ * Both comment forms in one place because a scan that knows about `--` and not
+ * about a block comment disagrees with one that knows about both -- and an
+ * apostrophe inside `/* it's a note *\/` then reads as an opening quote,
+ * putting the rest of the file "inside a literal" for that scan alone.
  */
-function lineStartsInsideLiteral(
-  sql: string,
+function commentEndAt(
+  text: string,
+  index: number,
   dialect?: SupportedDialect
-): boolean[] {
-  const flags: boolean[] = [false];
+): number {
+  if (isLineCommentAt(text, index, dialect)) {
+    const lineEnd = text.indexOf("\n", index);
+    return lineEnd === -1 ? text.length : lineEnd;
+  }
+  if (text[index] === "/" && text[index + 1] === "*") {
+    const close = text.indexOf("*/", index + 2);
+    return close === -1 ? text.length : close + 2;
+  }
+  return -1;
+}
+
+/**
+ * For every character of `sql`, whether it sits inside a string literal.
+ *
+ * 🔴 The cleanup below both DROPS lines and REWRITES them, and each is an edit
+ * to whatever it touches. A description carrying a comment marker or a
+ * breakpoint marker is data, and editing it stores a silently truncated value
+ * in the replayed database -- the migration still succeeds, so nothing reports
+ * it. A per-LINE answer is not enough: a literal can open midway through a line
+ * that began as ordinary SQL.
+ */
+function literalMask(sql: string, dialect?: SupportedDialect): boolean[] {
+  const mask: boolean[] = new Array(sql.length).fill(false);
   const state: LiteralState = {
     inString: false,
     stringChar: "",
@@ -1112,23 +1129,36 @@ function lineStartsInsideLiteral(
   };
 
   for (let i = 0; i < sql.length; i++) {
-    // Outside a literal, a comment runs to end of line and holds prose rather
-    // than SQL, so nothing inside one can open a literal.
-    if (!state.inString && isLineCommentAt(sql, i, dialect)) {
-      const lineEnd = sql.indexOf("\n", i);
-      if (lineEnd === -1) break;
-      i = lineEnd;
-      flags.push(false);
-      continue;
-    }
-    if (sql[i] === "\n") {
-      flags.push(state.inString);
-      continue;
+    if (!state.inString) {
+      const commentEnd = commentEndAt(sql, i, dialect);
+      if (commentEnd !== -1) {
+        i = commentEnd - 1;
+        continue;
+      }
     }
     advanceLiteralState(sql, i, dialect, state);
+    mask[i] = state.inString;
   }
 
-  return flags;
+  return mask;
+}
+
+/** Remove breakpoint markers that lie OUTSIDE a literal, leaving data intact. */
+function stripMarkersOutsideLiterals(
+  line: string,
+  lineStart: number,
+  mask: boolean[]
+): string {
+  const MARKER = "--> statement-breakpoint";
+  let out = "";
+  for (let i = 0; i < line.length; i++) {
+    if (!mask[lineStart + i] && line.startsWith(MARKER, i)) {
+      i += MARKER.length - 1;
+      continue;
+    }
+    out += line[i];
+  }
+  return out;
 }
 
 export function splitSqlStatements(
@@ -1141,16 +1171,19 @@ export function splitSqlStatements(
   //   2. Inline: `SQL_STATEMENT;--> statement-breakpoint` on the same line (after CREATE INDEX/ALTER)
   // Both must be cleaned out before executing, otherwise the marker text
   // ends up as invalid SQL in the next statement.
-  // A line that BEGINS inside a string literal is data, not SQL, so none of the
-  // cleanup below may touch it.
-  // A line that BEGINS inside a string literal is data, not SQL, so no cleanup
-  // below may touch it -- neither dropping it nor rewriting its contents.
-  const insideLiteral = lineStartsInsideLiteral(sql, dialect);
+  // Where every literal sits, so neither half of the cleanup edits data.
+  const mask = literalMask(sql, dialect);
+  let lineStart = 0;
   const cleanedSql = sql
     .split("\n")
-    .map((line, index) => ({ line, index }))
-    .filter(({ line, index }) => {
-      if (insideLiteral[index]) return true;
+    .map(line => {
+      const entry = { line, start: lineStart };
+      lineStart += line.length + 1;
+      return entry;
+    })
+    .filter(({ line, start }) => {
+      // A line that BEGINS inside a literal is a continuation of a value.
+      if (mask[start]) return true;
       const trimmed = line.trim();
       if (trimmed.startsWith("--> statement-breakpoint")) return false;
       // Remove pure SQL comment lines (but keep lines that have SQL after comments)
@@ -1167,13 +1200,10 @@ export function splitSqlStatements(
     // Strip inline markers (pattern 2) that appear after semicolons on the
     // same line, e.g. `CREATE INDEX ...;--> statement-breakpoint`. Without
     // this, the text after the semicolon pollutes the next accumulated
-    // statement and causes a MySQL syntax error. Keyed on the ORIGINAL index,
-    // which a map chained after a filter no longer has.
-    .map(({ line, index }) =>
-      insideLiteral[index]
-        ? line
-        : line.replace(/--> statement-breakpoint/g, "")
-    )
+    // statement and causes a MySQL syntax error. Per OCCURRENCE rather than
+    // per line: a literal can open midway through a line of ordinary SQL, and
+    // rewriting the whole line edits the value inside it.
+    .map(({ line, start }) => stripMarkersOutsideLiterals(line, start, mask))
     .join("\n");
 
   const statements: string[] = [];
