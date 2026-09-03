@@ -1136,3 +1136,39 @@ describe("the column count travels with the arrangement", () => {
     expect([2, 3, 4]).toContain(body.columnCount);
   });
 });
+
+describe("a stored row describes itself", () => {
+  it("BOUNDS a submitted column against the count that was accepted", async () => {
+    // 🔴 The two tolerances disagreed. An unsupported `columnCount` is coerced
+    // to the default, while a placement's `column` was only bounded downward —
+    // so `{ columnCount: 5, column: 4 }` persisted as a 3-column row holding a
+    // card in column 4. Nothing rejects that row; every reader silently
+    // reinterprets it, and the arrangement a reader gets back is not the one
+    // they sent.
+    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
+    const res = await putWidgetLayout(
+      putReq({
+        placements: [
+          {
+            id: "p1",
+            widgetId: "core/a",
+            column: 4,
+            order: 0,
+            hidden: false,
+          },
+        ],
+        version: 0,
+        scope: scopeFor(["core/a"]),
+        columnCount: 5,
+      })
+    );
+    expect(res.status).toBe(200);
+    const saved = await itemOf(res);
+    // Coerced ONCE, at the boundary, so the row is self-describing rather than
+    // reinterpreted differently by whoever reads it next.
+    expect(saved.columnCount).toBeLessThanOrEqual(4);
+    for (const placement of saved.placements ?? []) {
+      expect(placement.column).toBeLessThan(saved.columnCount ?? 3);
+    }
+  });
+});

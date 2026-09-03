@@ -349,6 +349,17 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
  * reader's arrangement to protect a field nothing depends on. A count from a
  * NEWER admin is exactly the case this has to survive.
  */
+/** Placements whose columns all fall inside `columnCount`. */
+function boundColumns(
+  placements: readonly WidgetPlacement[],
+  columnCount: ColumnCount
+): WidgetPlacement[] {
+  const last = columnCount - 1;
+  return placements.map(placement =>
+    placement.column > last ? { ...placement, column: last } : placement
+  );
+}
+
 function readColumnCount(value: unknown): ColumnCount {
   return COLUMN_COUNTS.includes(value as ColumnCount)
     ? (value as ColumnCount)
@@ -463,6 +474,14 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const submittedColumnCount = readColumnCount(
     (body as Record<string, unknown>).columnCount
   );
+  // 🔴 BOUNDED against the count that was accepted, not the one that was sent.
+  // The two tolerances would otherwise disagree: an unsupported count is
+  // coerced to the default while a column was only bounded downward, so
+  // `{ columnCount: 5, column: 4 }` stored a three-column row holding a card in
+  // column 4. Nothing rejects such a row -- every reader reinterprets it, and
+  // the arrangement handed back is not the one that was sent. Coerced ONCE,
+  // here, so the stored row describes itself.
+  const bounded = boundColumns(submitted, submittedColumnCount);
   const expectedVersion = readVersion(body as Record<string, unknown>);
   const submittedScope = readScope(body as Record<string, unknown>);
 
@@ -540,7 +559,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const stored = await service.getLayout(SCOPE_KIND, caller.userId);
   const carried = carriedPlacements(stored.layout?.placements, visibleIds);
 
-  const toStore = mergePreservingHidden(submitted, carried);
+  const toStore = mergePreservingHidden(bounded, carried);
   const version = await service.saveLayout(
     SCOPE_KIND,
     caller.userId,
@@ -558,12 +577,17 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // Echoing the raw array made this response a SECOND representation of the
   // same arrangement: a client trusting it to chain another edit without
   // re-reading would render `[10, 0]` where a reload gives `[0, 10]`.
-  const echoed = [...submitted].sort(byPosition);
+  const echoed = [...bounded].sort(byPosition);
 
   return respondMutation(
     "Dashboard layout saved.",
     {
       placements: echoed,
+      // Echoed for the same reason the placements are: a client making a
+      // second edit without a round trip needs the count its coordinates mean
+      // something against, and this is the accepted one rather than the sent
+      // one.
+      columnCount: submittedColumnCount,
       version,
       source: "own" satisfies LayoutSource,
       // Echoed so a client can make a second edit without a round trip. It is
