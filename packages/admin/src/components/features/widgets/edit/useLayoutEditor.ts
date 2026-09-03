@@ -20,20 +20,15 @@
  * @module components/features/widgets/edit/useLayoutEditor
  */
 
-import { MAX_PLACEMENTS } from "nextly/config";
+import { DEFAULT_COLUMN_COUNT, MAX_PLACEMENTS } from "nextly/config";
 import { useCallback, useMemo, useState } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
 import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
-import {
-  addPlacement,
-  hasChanges,
-  movePlacementTo,
-  removePlacement,
-  renumber,
-  togglePlacementHidden,
-} from "../layout-editor";
+import { addPlacement, hasChanges, renumber } from "../layout-editor";
+
+import { usePlacementMutations } from "./usePlacementMutations";
 
 /** Where a card's declared geometry comes from when it is added. */
 export interface WidgetGeometrySource {
@@ -85,6 +80,15 @@ export interface LayoutEditor {
   reload: () => void;
   /** Move by IDENTITY: the placement `fromId` takes the position of `toId`. */
   move: (fromId: string, toId: string) => void;
+  /**
+   * Apply a drag that may have crossed columns.
+   *
+   * A named operation rather than a placements setter, for the same reason
+   * every other mutation here is one: a setter lets a caller write an arbitrary
+   * draft, and the invariants this module keeps -- ids unique, order dense,
+   * columns in range -- would then be enforced nowhere.
+   */
+  dropOn: (activeId: string, overId: string | null) => void;
   toggleHidden: (placementId: string) => void;
   remove: (placementId: string) => void;
   add: (widgetId: string) => void;
@@ -96,7 +100,7 @@ export interface LayoutEditor {
  * One object, so a placement list can never be sent against a version and a
  * scope it was not derived from.
  */
-interface LayoutDraft {
+export interface LayoutDraft {
   placements: WidgetPlacement[];
   version: number;
   scope: string;
@@ -192,46 +196,14 @@ export function useLayoutEditor(
   // the stored array — which is exactly the translation that was wrong: with an
   // unresolvable placement between two visible ones, a view index moved the
   // wrong card and persisted it.
-  const move = useCallback(
-    (fromId: string, toId: string) =>
-      setDraft(current =>
-        current
-          ? {
-              ...current,
-              placements: movePlacementTo(current.placements, fromId, toId),
-            }
-          : current
-      ),
-    []
-  );
+  // The reader's own count, from the SERVER's answer. `resolveDrop` clamps a
+  // target against it, so a count guessed here would let a drop land in a
+  // column the dashboard does not draw.
+  const columnCount = layout.layout?.columnCount ?? DEFAULT_COLUMN_COUNT;
 
-  const toggleHidden = useCallback(
-    (placementId: string) =>
-      setDraft(current =>
-        current
-          ? {
-              ...current,
-              placements: togglePlacementHidden(
-                current.placements,
-                placementId
-              ),
-            }
-          : current
-      ),
-    []
-  );
-
-  const remove = useCallback(
-    (placementId: string) =>
-      setDraft(current =>
-        current
-          ? {
-              ...current,
-              placements: removePlacement(current.placements, placementId),
-            }
-          : current
-      ),
-    []
+  const { move, dropOn, toggleHidden, remove } = usePlacementMutations(
+    setDraft,
+    columnCount
   );
 
   const add = useCallback(
@@ -285,6 +257,7 @@ export function useLayoutEditor(
     reset,
     reload,
     move,
+    dropOn,
     toggleHidden,
     remove,
     add,

@@ -66,6 +66,7 @@ function layout(
     order: number;
     hidden?: boolean;
     size?: string;
+    column?: number;
   }>,
   patch: Partial<DashboardLayoutResponse> = {}
 ): DashboardLayoutResponse {
@@ -801,5 +802,69 @@ describe("reset", () => {
 
     await waitFor(() => expect(api.delete).toHaveBeenCalledTimes(1));
     expect(api.put).not.toHaveBeenCalled();
+  });
+});
+
+describe("the dashboard draws columns", () => {
+  it("renders one column per the count the SERVER reported", async () => {
+    // 🔴 The count comes from the arrangement, not from a client default. A
+    // grid that picked its own would draw a dashboard the reader never made
+    // and then save that back on their next edit.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 4 }
+    );
+    renderGrid();
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-column-3")).toBeInTheDocument()
+    );
+  });
+
+  it("draws an EMPTY column, so a card can be moved back into it", async () => {
+    // 🔴 A column is a drop target only while it is rendered. Collapsing the
+    // empty ones would let a reader move the last card out of a column and
+    // never move one back.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 3 }
+    );
+    renderGrid();
+    // 🔴 Waited on the ARRANGEMENT, not on a column. Every column exists from
+    // the first paint, so waiting for one is satisfied before the stored
+    // layout has arrived — and the default arrangement drawn in the meantime
+    // has a card in every column, which is what a weaker wait asserts against.
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    // "Holds no card" rather than an empty DOM node: the column legitimately
+    // carries its own drop-target chrome while editing, and a node-level
+    // emptiness check would fail on that rather than on a card.
+    expect(
+      screen
+        .getByTestId("widget-column-2")
+        .querySelector("[data-testid^='widget-cell-']")
+    ).toBeNull();
+  });
+
+  it("KEEPS a card whose column is past the count", async () => {
+    // 🔴 The property that decides whether narrowing the dashboard destroys
+    // work: a card stored in column 3 must still be drawn when the reader has
+    // asked for two columns.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 3, order: 0 }],
+      { columnCount: 2 }
+    );
+    renderGrid();
+    // 🔴 Wait for the ARRANGEMENT first. Until the stored layout arrives the
+    // grid draws the declared defaults, which include core/a in a column that
+    // exists — so asserting core/a directly passes whether or not the
+    // out-of-range card was kept, and the test certifies nothing. core/b is
+    // absent only once the single-placement arrangement is the one on screen.
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    expect(screen.getByText("Widget core/a")).toBeInTheDocument();
+    // And it is drawn in the LAST column that exists, not left nowhere.
+    expect(
+      screen
+        .getByTestId("widget-column-1")
+        .querySelector("[data-testid^='widget-cell-']")
+    ).not.toBeNull();
   });
 });

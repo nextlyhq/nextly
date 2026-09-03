@@ -12,6 +12,8 @@
  * @module components/features/widgets/edit/useDashboardArrangement
  */
 
+import type { DragEndEvent } from "@dnd-kit/core";
+import { DEFAULT_COLUMN_COUNT } from "nextly/config";
 import { useCallback, useMemo } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
@@ -34,11 +36,24 @@ export interface ArrangedWidget {
    * span helper already falls back on a value it does not recognise.
    */
   size?: string;
+  /** Which column this card is drawn in. Absent on a pre-column arrangement. */
+  column?: number;
 }
 
 export interface DashboardArrangement {
   /** The cards to draw, in the arrangement's order. */
   visible: ArrangedWidget[];
+  /**
+   * The same cards, grouped into the columns the grid renders.
+   *
+   * Derived from `visible` rather than resolved a second time: two answers to
+   * "which cards are drawn" drift, and the one nobody looks at is the one that
+   * goes wrong. Always `columnCount` buckets, empty ones included, because a
+   * column is a drop target only while the grid draws it.
+   */
+  columns: ArrangedWidget[][];
+  /** How many columns this reader arranged their dashboard into. */
+  columnCount: number;
   editor: LayoutEditor;
   /** Move the card at a VIEW index one step, resolving ids for the editor. */
   moveBy: (index: number, delta: number) => void;
@@ -101,10 +116,14 @@ export function useDashboardArrangement(
     // No arrangement yet: draw the declarations in their declared order, which
     // is exactly what this dashboard did before it could be arranged at all.
     if (!hasArrangement) {
-      return declared.map(widget => ({
+      // Dealt across the columns exactly as the server's defaults are, so the
+      // dashboard a reader sees before they arrange anything matches the one
+      // they get the moment they save.
+      return declared.map((widget, index) => ({
         placementId: widget.id,
         widget,
         hidden: false,
+        column: index % DEFAULT_COLUMN_COUNT,
       }));
     }
     const rows: ArrangedWidget[] = [];
@@ -123,10 +142,30 @@ export function useDashboardArrangement(
         widget,
         hidden: placement.hidden,
         ...(placement.size === undefined ? {} : { size: placement.size }),
+        ...(placement.column === undefined ? {} : { column: placement.column }),
       });
     }
     return rows;
   }, [hasArrangement, declared, editor.placements, editor.isEditing, byId]);
+
+  // The reader's own count, or the default while the arrangement is unread.
+  // Read from the SERVER's answer rather than assumed: the count decides which
+  // column a placement's coordinate names, so a client picking its own would
+  // draw an arrangement the reader never made.
+  const columnCount = layout.layout?.columnCount ?? DEFAULT_COLUMN_COUNT;
+
+  const columns = useMemo(() => {
+    const buckets: ArrangedWidget[][] = Array.from(
+      { length: Math.max(1, columnCount) },
+      () => []
+    );
+    for (const row of visible) {
+      const declaredColumn = row.column ?? 0;
+      const index = Math.min(Math.max(0, declaredColumn), buckets.length - 1);
+      buckets[index].push(row);
+    }
+    return buckets;
+  }, [visible, columnCount]);
 
   const sortableItems = useMemo(
     () => visible.map(row => ({ id: row.placementId })),
@@ -141,15 +180,33 @@ export function useDashboardArrangement(
   // that list is the filtered view. They are turned into placement ids here,
   // once, so the editor never sees a position that means something different to
   // it than it did to the grid.
-  const { sensors, handleDragEnd } = useSortableFieldArray(
-    sortableItems,
-    (from, to) => {
-      const moved = visible[from];
-      const target = visible[to];
-      if (!moved || !target) return;
-      editor.move(moved.placementId, target.placementId);
-      announceMove(moved.widget.title, to + 1, visible.length);
-    }
+  // Only the SENSORS are borrowed. `useSortableFieldArray` resolves a drop to a
+  // pair of indices into one list, which cannot express a column: an index says
+  // where in a sequence a card landed and says nothing about which column it
+  // landed in. The sensors are the half that is genuinely shared -- a pointer
+  // and a keyboard sensor, configured identically wherever this admin drags.
+  const { sensors } = useSortableFieldArray(sortableItems, () => {});
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const activeId = String(event.active.id);
+      const overId = event.over ? String(event.over.id) : null;
+      if (overId === null || overId === activeId) return;
+      const moved = visible.find(row => row.placementId === activeId);
+      if (!moved) return;
+      editor.dropOn(activeId, overId);
+      // Announced from the position the card is moving TO, resolved against
+      // the view it was dropped in. A card dropped onto a column has no
+      // neighbour to count from, so it is announced as the column's arrival
+      // rather than with a position that would be invented.
+      const target = visible.findIndex(row => row.placementId === overId);
+      announceMove(
+        moved.widget.title,
+        target === -1 ? visible.length : target + 1,
+        visible.length
+      );
+    },
+    [visible, editor, announceMove]
   );
 
   /**
@@ -172,6 +229,8 @@ export function useDashboardArrangement(
   return {
     visible,
     editor,
+    columns,
+    columnCount,
     moveBy,
     hasArrangement,
     sortableItems,
