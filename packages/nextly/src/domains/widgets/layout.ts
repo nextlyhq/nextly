@@ -426,22 +426,26 @@ export function serializeLayout(
  * largest finite number a declaration could not legally name -- `Number.MAX_VALUE`
  * as the sentinel sorted a widget declaring it BELOW the unstated ones.
  *
- * 🔴 TOTAL, and compared by value rather than by difference. Subtracting two
- * infinities gives `NaN`, which leaves the comparator inconsistent -- what a
- * sort does with one is unspecified -- so the position of two widgets that
- * state no order was decided by registration order and by the engine. That
- * position is a COLUMN once these are materialized, so two instances holding
- * the same widgets could hand out different default arrangements, and a first
- * save would keep whichever one it happened to be served. The id is the
- * tie-break because it is the one thing about a widget that cannot change
- * between two reads.
+ * 🔴 Equal orders compare EQUAL, and the declaration order then stands, which
+ * is the guarantee this field documents: a widget that omits `defaultOrder`
+ * keeps the position it was declared in. `Array.prototype.sort` has been
+ * stable since ES2019, so equal elements keep their input order, and the
+ * admin's own comparator relies on exactly that -- every widget shipping today
+ * states no order, so they all compare equal and keep the arrangement they
+ * have. Any tie-break here, on the id or on anything else, rearranges every
+ * default dashboard holding plugin widgets and puts core's answer at odds with
+ * the admin's.
+ *
+ * Written as a value comparison rather than a subtraction only so that no
+ * branch produces `NaN`. Two infinities subtract to `NaN`, which the spec then
+ * converts to +0 -- the same answer, reached by a route that reads like an
+ * accident.
  */
 function byDeclaredOrder(a: PlaceableWidget, b: PlaceableWidget): number {
   const aOrder = a.defaultOrder ?? Number.POSITIVE_INFINITY;
   const bOrder = b.defaultOrder ?? Number.POSITIVE_INFINITY;
-  if (aOrder !== bOrder) return aOrder < bOrder ? -1 : 1;
-  if (a.id === b.id) return 0;
-  return a.id < b.id ? -1 : 1;
+  if (aOrder === bOrder) return 0;
+  return aOrder < bOrder ? -1 : 1;
 }
 
 /**

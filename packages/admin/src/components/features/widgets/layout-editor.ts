@@ -391,9 +391,8 @@ export function columnFromDropData(data: unknown): number | undefined {
  * Where a drop lands: which bucket, and the index in it.
  *
  * 🔴 The index names a position in the bucket as it stands BEFORE the active
- * card is taken out, and the single adjustment for that removal is made by the
- * caller. Each branch compensating for it itself is how one of them came to
- * compensate twice.
+ * card is taken out, and the single adjustment for that removal belongs to the
+ * caller. A branch that compensated for it here would compensate twice.
  *
  * `undefined` when the target names a card no bucket holds, which is an
  * ordinary end to a drag rather than an error.

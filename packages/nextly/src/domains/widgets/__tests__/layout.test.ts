@@ -225,41 +225,43 @@ describe("the default arrangement", () => {
     for (const p of placements) expect(Number.isFinite(p.order)).toBe(true);
   });
 
-  it("orders widgets that state NO order the same way every time", () => {
-    // 🔴 The position a widget takes here becomes a COLUMN, so two instances
-    // holding the same widgets have to deal them identically. Comparing the
-    // two sentinels by SUBTRACTION gives `NaN`, which leaves the comparator
-    // inconsistent — what a sort does with one is unspecified — and the answer
-    // then falls out of registration order and the engine. A caller who has
-    // never saved would be handed a different arrangement depending on which
-    // instance answered, and their first save would keep it.
-    const registered = defaultPlacements([
+  it("keeps widgets that state NO order in DECLARATION order", () => {
+    // 🔴 The guarantee `defaultOrder` documents: omit it and your card keeps
+    // the position it was declared in. `Array.prototype.sort` is stable, so
+    // equal elements hold their input order, and the admin's comparator rests
+    // on the same property — every widget shipping today states no order, so
+    // they all compare equal. Any tie-break, on the id or on anything else,
+    // rearranges every default dashboard holding plugin widgets and makes core
+    // answer the ordering question differently from the admin.
+    const declared = defaultPlacements([
       widget({ id: "core/c" }),
       widget({ id: "core/a" }),
       widget({ id: "core/b" }),
     ]);
-    const reregistered = defaultPlacements([
-      widget({ id: "core/b" }),
-      widget({ id: "core/c" }),
-      widget({ id: "core/a" }),
-    ]);
-    expect(registered.map(p => p.widgetId)).toEqual([
+    expect(declared.map(p => p.widgetId)).toEqual([
+      "core/c",
       "core/a",
       "core/b",
-      "core/c",
     ]);
-    expect(reregistered).toEqual(registered);
-    // The control: the columns are the thing that has to agree, and asserting
-    // the sequence alone would pass on a deal that spread them differently.
-    expect(registered.map(p => p.column)).toEqual(
-      reregistered.map(p => p.column)
-    );
+    // The control: declaring them in another order gives that order back, so
+    // this is the input being preserved rather than a sequence that happens to
+    // match. A comparator sorting by id answers "core/a, core/b, core/c" to
+    // both, and the first assertion alone cannot tell the two apart.
+    const reordered = defaultPlacements([
+      widget({ id: "core/b" }),
+      widget({ id: "core/c" }),
+      widget({ id: "core/a" }),
+    ]);
+    expect(reordered.map(p => p.widgetId)).toEqual([
+      "core/b",
+      "core/c",
+      "core/a",
+    ]);
   });
 
-  it("still lets a STATED order win over the tie-break", () => {
-    // The control for the case above. Ordering by id outright would satisfy it
-    // while ignoring every `defaultOrder` a plugin declares — the position
-    // authors actually control.
+  it("still lets a STATED order override the declaration order", () => {
+    // The control in the other direction: a comparator returning 0 for every
+    // pair would preserve declaration order perfectly and ignore the field.
     const placements = defaultPlacements([
       widget({ id: "core/a", defaultOrder: 30 }),
       widget({ id: "core/z", defaultOrder: 10 }),
