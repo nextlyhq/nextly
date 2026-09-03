@@ -40,6 +40,7 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollections } from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { collectionSingularLabel } from "@admin/lib/collection-label";
 
 /**
  * How many shortcuts are drawn before the rest are counted.
@@ -50,15 +51,34 @@ import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermission
  */
 const MAX_SHORTCUTS = 6;
 
+/**
+ * How many collections are asked for.
+ *
+ * The card needs the first few CREATABLE ones, and the server cannot filter on
+ * that, so it reads a page and narrows it here. A page rather than every
+ * collection because this is a shortcut card on a dashboard, not a directory —
+ * and the empty state refuses to speak when the page was truncated, so the
+ * bound costs a missing shortcut rather than a false claim.
+ */
+const COLLECTION_PAGE_SIZE = 100;
+
 export function QuickCreate() {
   // 🔴 The SERVER's list, not the whole registry. This is the same query the
   // sidebar reads, and it is already filtered to what this reader may see — so
   // a collection they are not allowed to know exists is absent before any
   // permission check here runs, rather than being drawn and then hidden.
-  const { data, isLoading } = useCollections({
-    pagination: { page: 0, pageSize: 100 },
+  const {
+    data,
+    isLoading: collectionsLoading,
+    error: collectionsError,
+  } = useCollections({
+    pagination: { page: 0, pageSize: COLLECTION_PAGE_SIZE },
   });
-  const { hasPermission } = useCurrentUserPermissions();
+  const {
+    hasPermission,
+    isLoading: permissionsLoading,
+    error: permissionsError,
+  } = useCurrentUserPermissions();
 
   const creatable = useMemo(() => {
     const items = data?.items ?? [];
@@ -67,10 +87,24 @@ export function QuickCreate() {
     );
   }, [data?.items, hasPermission]);
 
-  // Nothing at all while the list is in flight. A card that drew its empty
-  // state first and then filled in would tell the reader they may create
-  // nothing, which is a claim rather than a delay.
-  if (isLoading) return null;
+  // 🔴 BOTH requests, and a failure of either. `hasPermission` answers from an
+  // empty set until `/me/permissions` lands, so a collection list that resolves
+  // first filters every row out and the card says the reader may create
+  // nothing — for the whole of that interval, and permanently if either request
+  // fails. Absence is the honest answer until both have arrived, because a
+  // claim about what someone may do cannot be made from an answer that has not
+  // come back.
+  if (collectionsLoading || permissionsLoading) return null;
+  if (collectionsError || permissionsError) return null;
+
+  // 🔴 A truncated list cannot support the empty claim either. The page holds
+  // the first `COLLECTION_PAGE_SIZE` collections, so an install with more than
+  // that may have every creatable one beyond the boundary — and "you may create
+  // nothing" would then be false rather than merely incomplete. Saying nothing
+  // is wrong in a way the reader can recover from; saying the wrong thing is
+  // not.
+  const truncated = data?.meta?.hasNext === true;
+  if (creatable.length === 0 && truncated) return null;
 
   if (creatable.length === 0) {
     return (
@@ -99,27 +133,17 @@ export function QuickCreate() {
             className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm transition-colors hover:border-primary hover:bg-accent"
           >
             <Plus className="size-4 text-muted-foreground" aria-hidden="true" />
-            {/* 🔴 The author's declared singular, then the display label, then
-                the slug -- the same order `useEntryForm` resolves, so the
-                button and the form it opens name the entity identically.
-                Written out rather than shared because the admin currently
-                answers this question in four places that disagree: the sidebar
-                honours `labels.plural`, the entry list ignores `labels`
-                entirely. Matching the most correct of them adds no fifth
-                variant; converging them is its own change. */}
-            <span>
-              New{" "}
-              {collection.labels?.singular ||
-                collection.label ||
-                collection.name}
-            </span>
+            {/* The SHARED resolver, which the entry form asks too, so the
+                button and the page it opens name the entity identically. */}
+            <span>New {collectionSingularLabel(collection)}</span>
           </Link>
         ))}
       </div>
       {hidden > 0 && (
-        <p className="text-xs text-muted-foreground">
-          {hidden} more in the sidebar.
-        </p>
+        // Counted, not located. The surplus is reachable from the sidebar only
+        // while it reads the same page this does, so naming it as the way there
+        // is a promise this card cannot keep on a large install.
+        <p className="text-xs text-muted-foreground">{hidden} more.</p>
       )}
     </div>
   );

@@ -239,6 +239,53 @@ describe("what a collection does NOT get", () => {
     expect(table?.query?.sort).toBe("-updatedAt");
   });
 
+  it("gives a collection BOTH recent cards or NEITHER", () => {
+    // 🔴 The list and the table put the same question to a source — can it be
+    // listed, does a field name its rows, is there an `updatedAt` — so a
+    // collection that gets one must get the other. Asked twice, the two answers
+    // drift: a change to one card's conditions leaves a collection with a table
+    // and no list, from an edit that pointed at neither.
+    const sources = [
+      // Eligible.
+      source({ id: "collection:posts", label: "posts" }),
+      // No field names its rows.
+      source({
+        id: "collection:events",
+        label: "events",
+        titleField: undefined,
+        fields: [
+          { name: "id", type: "string" },
+          { name: "updatedAt", type: "date" },
+        ],
+      }),
+      // Nothing to order "recent" by.
+      source({
+        id: "collection:tags",
+        label: "tags",
+        fields: [
+          { name: "id", type: "string" },
+          { name: "title", type: "string" },
+        ],
+      }),
+      // Cannot be listed at all.
+      source({ id: "collection:audit", label: "audit", supports: ["count"] }),
+    ];
+
+    for (const one of sources) {
+      const kinds = new Set(
+        collectionWidgets([one]).map(widget => widget.archetype)
+      );
+      expect(kinds.has("list")).toBe(kinds.has("table"));
+    }
+
+    // The control: at least one of those sources DOES produce the pair, so the
+    // agreement above is not satisfied by a generator that makes neither for
+    // anything.
+    const eligible = collectionWidgets([sources[0]]).map(w => w.archetype);
+    expect(eligible).toContain("list");
+    expect(eligible).toContain("table");
+  });
+
   it("nothing at all for a source that is not a collection", () => {
     // Singles hold one entry, so a count of them is a constant and a list of
     // them is that one entry. Neither is a card worth offering.

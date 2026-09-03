@@ -43,15 +43,25 @@ function collection(
   return { id: patch.name, label: patch.name, ...patch };
 }
 
-function listing(items: TestCollection[], isLoading = false) {
-  return { data: { items }, isLoading } as unknown as ReturnType<
-    typeof useCollections
-  >;
+function listing(
+  items: TestCollection[],
+  extra: { isLoading?: boolean; error?: Error; hasNext?: boolean } = {}
+) {
+  return {
+    data: { items, meta: { hasNext: extra.hasNext ?? false } },
+    isLoading: extra.isLoading ?? false,
+    error: extra.error ?? null,
+  } as unknown as ReturnType<typeof useCollections>;
 }
 
-function granting(slugs: string[]) {
+function granting(
+  slugs: string[],
+  extra: { isLoading?: boolean; error?: Error } = {}
+) {
   return {
     hasPermission: (slug: string) => slugs.includes(slug),
+    isLoading: extra.isLoading ?? false,
+    error: extra.error ?? null,
   } as unknown as ReturnType<typeof useCurrentUserPermissions>;
 }
 
@@ -122,7 +132,7 @@ describe("the quick-create card", () => {
     // the reader they may create nothing, which is a claim rather than a
     // delay — and it is wrong for most readers for the whole of every page
     // load. Absence is the honest answer until the list has arrived.
-    mockCollections.mockReturnValue(listing([], true));
+    mockCollections.mockReturnValue(listing([], { isLoading: true }));
     mockPermissions.mockReturnValue(granting([]));
 
     render(<QuickCreate />);
@@ -136,6 +146,64 @@ describe("the quick-create card", () => {
     // empty would satisfy the loading test and leave a reader who genuinely
     // has no create grant looking at a titled card with no body.
     mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
+    mockPermissions.mockReturnValue(granting([]));
+
+    render(<QuickCreate />);
+
+    expect(screen.getByTestId("quick-create-empty")).toBeInTheDocument();
+  });
+
+  it("says nothing while the PERMISSIONS are still in flight", () => {
+    // 🔴 The two requests resolve independently. `hasPermission` answers from
+    // an empty set until `/me/permissions` lands, so a collection list that
+    // arrives first filters every row out — and the card tells the reader they
+    // may create nothing, for the whole of that interval, on every page load.
+    mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
+    mockPermissions.mockReturnValue(granting([], { isLoading: true }));
+
+    render(<QuickCreate />);
+
+    expect(screen.queryByTestId("quick-create-empty")).toBeNull();
+    expect(screen.queryByTestId("quick-create")).toBeNull();
+  });
+
+  it("says nothing when either request FAILED", () => {
+    // A failure is not an answer. Drawing the empty state from one turns a
+    // transport error into a claim about this reader's permissions, and it
+    // never clears.
+    mockCollections.mockReturnValue(
+      listing([collection({ name: "posts" })], { error: new Error("boom") })
+    );
+    mockPermissions.mockReturnValue(granting(["create-posts"]));
+
+    render(<QuickCreate />);
+
+    expect(screen.queryByTestId("quick-create-empty")).toBeNull();
+    expect(screen.queryByTestId("quick-create")).toBeNull();
+  });
+
+  it("does not claim an empty set when the page was TRUNCATED", () => {
+    // 🔴 The card reads one page. On an install with more collections than
+    // that, every creatable one can sit beyond the boundary — so "nothing to
+    // create" is false rather than merely incomplete. Saying nothing is
+    // recoverable; saying the wrong thing is not.
+    mockCollections.mockReturnValue(
+      listing([collection({ name: "posts" })], { hasNext: true })
+    );
+    mockPermissions.mockReturnValue(granting([]));
+
+    render(<QuickCreate />);
+
+    expect(screen.queryByTestId("quick-create-empty")).toBeNull();
+  });
+
+  it("STILL says so on a complete page with nothing creatable", () => {
+    // The control for the case above. Withholding the empty state whenever it
+    // is empty would satisfy it and leave every reader without a create grant
+    // looking at a titled card with no body.
+    mockCollections.mockReturnValue(
+      listing([collection({ name: "posts" })], { hasNext: false })
+    );
     mockPermissions.mockReturnValue(granting([]));
 
     render(<QuickCreate />);
@@ -157,6 +225,6 @@ describe("the quick-create card", () => {
     render(<QuickCreate />);
 
     expect(screen.getAllByRole("link")).toHaveLength(6);
-    expect(screen.getByText("3 more in the sidebar.")).toBeInTheDocument();
+    expect(screen.getByText("3 more.")).toBeInTheDocument();
   });
 });

@@ -107,6 +107,49 @@ function countWidget(source: WidgetSource): WidgetDefinition | undefined {
 }
 
 /**
+ * Whether a source can answer a RECENT-ENTRIES query, and what it needs to.
+ *
+ * 🔴 One decision, asked by both cards that draw one. The list and the table
+ * put the same question to a source -- can it be listed, does a field name its
+ * rows, is there an `updatedAt` for "recent" to mean anything -- and asking it
+ * twice lets the two disagree about which collections support the same query.
+ * A collection would then get a table and no list, or the reverse, from a
+ * change to one function that nothing points at the other.
+ *
+ * `undefined` for a source this cannot draw HONESTLY, and each condition is a
+ * refusal rather than a fallback:
+ *
+ * - no field names the entries, so every row would read as an identifier. The
+ *   renderers already refuse a widget that selects nothing rather than guessing
+ *   a key out of a document they know nothing about; generating one that
+ *   selects the wrong key defeats that by answering the question badly instead
+ *   of declining it.
+ * - no `updatedAt`, so "recently" has nothing to sort by. Sorting by id would
+ *   produce a card whose title is a claim its rows do not support.
+ */
+interface RecentEntries {
+  /** The field that names a row, from the source's own resolution. */
+  label: string;
+  /** Every field name the source carries, for asking what else it has. */
+  names: ReadonlySet<string>;
+}
+
+function recentEntries(source: WidgetSource): RecentEntries | undefined {
+  if (!source.supports.includes("list")) return undefined;
+  // The source's own answer, which already went through the shared rule with
+  // the author's `admin.useAsTitle` AND the full field list. Resolving it again
+  // from `fields` alone would ignore the nomination and pick a conventional
+  // name instead, so a collection whose author chose `headline` would be
+  // labelled by something else -- two answers to one question, and the
+  // dashboard holding the worse one.
+  const label = source.titleField;
+  if (label === undefined) return undefined;
+  const names = new Set(source.fields.map(field => field.name));
+  if (!names.has("updatedAt")) return undefined;
+  return { label, names };
+}
+
+/**
  * The list card for a source: the entries touched most recently.
  *
  * Returns `undefined` for a collection this cannot draw HONESTLY, and both
@@ -121,17 +164,9 @@ function countWidget(source: WidgetSource): WidgetDefinition | undefined {
  *   produce a card whose title is a claim its rows do not support.
  */
 function recentWidget(source: WidgetSource): WidgetDefinition | undefined {
-  if (!source.supports.includes("list")) return undefined;
-  const names = source.fields.map(field => field.name);
-  // The source's own answer, which already went through the shared rule with
-  // the author's `admin.useAsTitle` AND the full field list. Resolving it again
-  // here from `fields` alone would ignore the nomination and pick a
-  // conventional name instead, so a collection whose author chose `headline`
-  // would be labelled by something else -- two answers to one question, and the
-  // dashboard holding the worse one.
-  const label = source.titleField;
-  if (label === undefined) return undefined;
-  if (!names.includes("updatedAt")) return undefined;
+  const recent = recentEntries(source);
+  if (recent === undefined) return undefined;
+  const { label } = recent;
   const id = widgetId(source, "recent");
   if (id === undefined) return undefined;
 
@@ -166,6 +201,9 @@ function recentWidget(source: WidgetSource): WidgetDefinition | undefined {
  * dashboard of collections scannable rather than a wall of separate boxes.
  * Neither is placed; a reader picks the one their dashboard wants.
  *
+ * Its eligibility is `recentEntries`, the same decision the list card asks, so
+ * a collection cannot end up with one of the two and not the other.
+ *
  * ## Why the columns are ASKED of the source
  *
  * `status` and `updatedAt` are per-collection facts, not constants. The schema
@@ -181,14 +219,9 @@ function recentWidget(source: WidgetSource): WidgetDefinition | undefined {
  * scrolls inside a card, and a table that scrolls is one nobody reads.
  */
 function tableWidget(source: WidgetSource): WidgetDefinition | undefined {
-  if (!source.supports.includes("list")) return undefined;
-  // The same two refusals `recentWidget` makes, and for the same reasons: with
-  // no field naming a row every line reads as an identifier, and with no
-  // `updatedAt` the card's own title is a claim its rows cannot support.
-  const label = source.titleField;
-  if (label === undefined) return undefined;
-  const names = new Set(source.fields.map(field => field.name));
-  if (!names.has("updatedAt")) return undefined;
+  const recent = recentEntries(source);
+  if (recent === undefined) return undefined;
+  const { label, names } = recent;
   const id = widgetId(source, "table");
   if (id === undefined) return undefined;
 

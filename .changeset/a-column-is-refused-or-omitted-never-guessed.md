@@ -68,3 +68,17 @@ collection list the server already filtered, narrowed again by the create
 grant. Neither half is a security boundary and the card does not pretend to be
 one: the create endpoint enforces regardless, so a shortcut shown in error
 costs a click rather than an entry nobody was allowed to make.
+
+The singular label of a collection now has ONE resolver, which the create
+shortcut and the entry form both ask, so a button and the page it opens name
+the entity identically. The two recent-entry cards likewise share ONE
+eligibility decision, so a collection cannot be given a table without its list.
+
+The shortcut card also waits for both of its requests before speaking. Its two
+queries resolve independently, so a collection list arriving before the
+permission set filtered every row out and the card told the reader they could
+create nothing -- for the whole of that interval, and permanently when either
+request failed. It now says nothing until both have answered, and says nothing
+about an empty set when the page it read was truncated, because "you may create
+nothing" is false rather than incomplete on an install with more collections
+than one page holds.
