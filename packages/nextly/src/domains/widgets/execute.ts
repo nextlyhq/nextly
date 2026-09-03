@@ -25,45 +25,16 @@ import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WhereFilter } from "../collections/query/query-operators";
 
 import type { WidgetQuery } from "./query";
+import type { WidgetResult, WidgetResultField } from "./result";
 import {
   failUnavailableSourceOrOp,
   getSource,
   sourceTarget,
   type WidgetSource,
 } from "./sources";
+import { systemResolver } from "./system-sources";
 
-/**
- * One column of a list result, as the admin needs to head it.
- *
- * Carried on the RESULT rather than published as source metadata, and the
- * difference is an access-control one. A widget's declared source is proven
- * readable by the caller before a row is returned, and `select` names the
- * fields they asked for -- so answering with labels for exactly those fields
- * tells them nothing they did not already have. Publishing a source's field
- * list separately would be an enumeration surface: the endpoint is careful
- * that a source the caller may not read answers exactly as one that does not
- * exist, and a metadata channel beside it would undo that.
- */
-export interface WidgetResultField {
-  name: string;
-  /** Absent when the source has no human label for this field. */
-  label?: string;
-}
-
-export type WidgetResult =
-  | { op: "count"; total: number }
-  | {
-      op: "list";
-      items: Record<string, unknown>[];
-      /**
-       * The selected fields, in the order they were asked for.
-       *
-       * Present only when the query declared `select`: without it the rows
-       * carry whatever the collection holds, so there are no columns the
-       * widget chose and nothing honest to head them with.
-       */
-      fields?: WidgetResultField[];
-    };
+export type { WidgetResult, WidgetResultField };
 
 /** `["title","status"]` -> `{ title: true, status: true }`. */
 function toSelect(
@@ -89,9 +60,22 @@ function resolveExecutableSource(sourceId: string) {
   if (!source) {
     failUnavailableSourceOrOp(`unknown source "${sourceId}" at execution`);
   }
+  // A SYSTEM source is executable exactly when something registered a resolver
+  // for it. The two halves are published together, so a source with no
+  // resolver means a registration that never completed rather than a caller
+  // asking for something reasonable -- and it answers like every other dead
+  // end, because saying which is which would confirm the source exists.
+  if (source.kind === "system") {
+    if (!systemResolver(source.id)) {
+      failUnavailableSourceOrOp(
+        `system source "${sourceId}" has no registered resolver`
+      );
+    }
+    return source;
+  }
   if (source.kind !== "collection") {
     failUnavailableSourceOrOp(
-      `source "${sourceId}" has kind "${source.kind}", which is not executable yet; only collections are`
+      `source "${sourceId}" has kind "${source.kind}", which is not executable yet; only collections and system sources are`
     );
   }
   return source;
@@ -245,6 +229,15 @@ export async function executeWidgetQuery(
   caller: ReadCaller
 ): Promise<WidgetResult> {
   const source = resolveExecutableSource(query.source);
+
+  // 🔴 Handed to the domain that owns the rows, WITH the caller, and nothing is
+  // added on the way. A system source's authorization lives in its service --
+  // `ReleasesService.find` asks its own `authorize` before it reads -- so a
+  // filter applied here would be a second implementation of a rule this module
+  // cannot see, agreeing on the day it is written and drifting afterwards.
+  const resolve = systemResolver(source.id);
+  if (resolve) return resolve(query, caller);
+
   const collection = sourceTarget(source.id);
 
   if (query.op === "count") return runCount(collection, query, caller);
