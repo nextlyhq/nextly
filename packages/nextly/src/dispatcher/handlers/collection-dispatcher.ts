@@ -77,10 +77,7 @@ import {
 import type { ServiceContainer } from "../../services";
 import type { WhereFilter } from "../../services/collections/query-operators";
 import type { CollectionsHandler } from "../../services/collections-handler";
-import {
-  isSuperAdmin,
-  listEffectivePermissions,
-} from "../../services/lib/permissions";
+import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import {
   readAuthenticatedActor,
@@ -402,11 +399,26 @@ const COLLECTIONS_METHODS: Record<
   },
   listCollections: {
     // Translates the legacy CollectionServiceResult `{ data, meta }`
-    // envelope to the canonical `{ items, meta }` body. Permission
-    // filtering (non-super-admins only see collections they can read)
-    // runs after unwrap so the meta we ship reflects the FILTERED
-    // counts, not the pre-filter totals.
+    // envelope to the canonical `{ items, meta }` body.
+    //
+    // 🔴 Permission filtering runs BEFORE the query, as a slug allowlist the
+    // registry puts in its WHERE clause. Filtering the returned page instead
+    // made the meta describe a different set from the rows: `total` became the
+    // count of one filtered page, so `totalPages` collapsed to 1 and `hasNext`
+    // was false however many pages the reader could actually see. A client
+    // reading that stops at the first page, and everything past it is
+    // unreachable. The singles dispatcher resolves its allowlist the same way.
     execute: async (svc, p) => {
+      const userId = p._authenticatedUserId
+        ? String(p._authenticatedUserId)
+        : undefined;
+
+      // The SHARED resolver, which the singles listing asks too. `undefined`
+      // means no filter — an unauthenticated caller, gated at the route layer,
+      // or a super admin. An empty list means nothing is visible, which the
+      // registry short-circuits to a zero-row, zero-total answer.
+      const slugAllowlist = await readableSlugAllowlist(userId);
+
       const result = await svc.listCollections({
         page: toNumber(p.page),
         limit: toNumber(p.limit),
@@ -418,6 +430,7 @@ const COLLECTIONS_METHODS: Record<
           | "updatedAt"
           | undefined,
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
+        slugAllowlist,
       });
       // Service returns legacy { success, data, meta }. Unwrap throws on
       // failure (which the dispatcher converts to a NextlyError response).
@@ -445,46 +458,9 @@ const COLLECTIONS_METHODS: Record<
             : 1,
       };
 
-      const userId = p._authenticatedUserId
-        ? String(p._authenticatedUserId)
-        : undefined;
-      if (!userId) {
-        return respondList(items, toPaginationMeta(baseMeta));
-      }
-
-      const superAdmin = await isSuperAdmin(userId);
-      if (superAdmin) {
-        return respondList(items, toPaginationMeta(baseMeta));
-      }
-
-      // Non-super-admin: filter the page to collections this user can
-      // actually read. We rebuild total + totalPages on the filtered
-      // array so the admin's pagination footer matches what the user
-      // actually sees.
-      const permissionPairs = await listEffectivePermissions(userId);
-      const readableResources = new Set(
-        permissionPairs
-          .filter(pair => pair.endsWith(":read"))
-          .map(pair => pair.split(":")[0])
-      );
-
-      type CollectionItem = { slug?: string; name?: string };
-      const filtered = (items as CollectionItem[]).filter(collection => {
-        const slug = collection?.slug ?? collection?.name;
-        return slug ? readableResources.has(String(slug)) : false;
-      });
-
-      const filteredMeta = {
-        total: filtered.length,
-        page: baseMeta.page,
-        limit: baseMeta.limit,
-        totalPages:
-          baseMeta.limit > 0
-            ? Math.max(1, Math.ceil(filtered.length / baseMeta.limit))
-            : 1,
-      };
-
-      return respondList(filtered, toPaginationMeta(filteredMeta));
+      // The rows and the meta now describe one set, because the allowlist was
+      // a condition on the query that produced both.
+      return respondList(items, toPaginationMeta(baseMeta));
     },
   },
   getCollection: {
