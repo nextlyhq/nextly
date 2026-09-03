@@ -1042,6 +1042,95 @@ function precededByOddBackslashes(text: string, index: number): boolean {
   return run % 2 === 1;
 }
 
+/** Where a scan currently stands with respect to an open string literal. */
+type LiteralState = {
+  inString: boolean;
+  stringChar: string;
+  escapesWithBackslash: boolean;
+};
+
+/**
+ * Advance `state` across the character at `index`.
+ *
+ * The splitter and the line pre-scan both have to agree about where a literal
+ * begins and ends; two copies of this decision would drift, and the drift would
+ * be silent because each looks correct beside its own caller.
+ */
+function advanceLiteralState(
+  text: string,
+  index: number,
+  dialect: SupportedDialect | undefined,
+  state: LiteralState
+): void {
+  const char = text[index];
+  const opener = quoteOpenerAt(char, dialect);
+  if (!state.inString && opener) {
+    state.inString = true;
+    state.stringChar = opener;
+    // Recorded when the literal OPENS: the `E` prefix is only visible here,
+    // and by the closing quote it is long past.
+    state.escapesWithBackslash = opensBackslashEscapedString(
+      text,
+      index,
+      opener,
+      dialect
+    );
+    return;
+  }
+  if (
+    state.inString &&
+    char === state.stringChar &&
+    closesLiteral(text, index, state.escapesWithBackslash)
+  ) {
+    state.inString = false;
+  }
+}
+
+/**
+ * For each line of `sql`, whether that line BEGINS inside a string literal.
+ *
+ * 🔴 The line-based cleanup below removes comment lines and breakpoint markers,
+ * and a physical newline inside a literal makes its continuation look like an
+ * ordinary line. A description entered as `Summary\n-- internal note` puts
+ * `-- internal note` at the start of a line, where the cleanup reads it as a
+ * standalone SQL comment and drops it -- the migration then succeeds and stores
+ * a SILENTLY TRUNCATED description, which is the failure that does not announce
+ * itself.
+ *
+ * Scanned with the same rules the splitter itself uses, so the two agree about
+ * where a literal starts and ends rather than being two answers to one question.
+ */
+function lineStartsInsideLiteral(
+  sql: string,
+  dialect?: SupportedDialect
+): boolean[] {
+  const flags: boolean[] = [false];
+  const state: LiteralState = {
+    inString: false,
+    stringChar: "",
+    escapesWithBackslash: false,
+  };
+
+  for (let i = 0; i < sql.length; i++) {
+    // Outside a literal, a comment runs to end of line and holds prose rather
+    // than SQL, so nothing inside one can open a literal.
+    if (!state.inString && isLineCommentAt(sql, i, dialect)) {
+      const lineEnd = sql.indexOf("\n", i);
+      if (lineEnd === -1) break;
+      i = lineEnd;
+      flags.push(false);
+      continue;
+    }
+    if (sql[i] === "\n") {
+      flags.push(state.inString);
+      continue;
+    }
+    advanceLiteralState(sql, i, dialect, state);
+  }
+
+  return flags;
+}
+
 export function splitSqlStatements(
   sql: string,
   dialect?: SupportedDialect
@@ -1052,9 +1141,16 @@ export function splitSqlStatements(
   //   2. Inline: `SQL_STATEMENT;--> statement-breakpoint` on the same line (after CREATE INDEX/ALTER)
   // Both must be cleaned out before executing, otherwise the marker text
   // ends up as invalid SQL in the next statement.
+  // A line that BEGINS inside a string literal is data, not SQL, so none of the
+  // cleanup below may touch it.
+  // A line that BEGINS inside a string literal is data, not SQL, so no cleanup
+  // below may touch it -- neither dropping it nor rewriting its contents.
+  const insideLiteral = lineStartsInsideLiteral(sql, dialect);
   const cleanedSql = sql
     .split("\n")
-    .filter(line => {
+    .map((line, index) => ({ line, index }))
+    .filter(({ line, index }) => {
+      if (insideLiteral[index]) return true;
       const trimmed = line.trim();
       if (trimmed.startsWith("--> statement-breakpoint")) return false;
       // Remove pure SQL comment lines (but keep lines that have SQL after comments)
@@ -1071,15 +1167,22 @@ export function splitSqlStatements(
     // Strip inline markers (pattern 2) that appear after semicolons on the
     // same line, e.g. `CREATE INDEX ...;--> statement-breakpoint`. Without
     // this, the text after the semicolon pollutes the next accumulated
-    // statement and causes a MySQL syntax error.
-    .map(line => line.replace(/--> statement-breakpoint/g, ""))
+    // statement and causes a MySQL syntax error. Keyed on the ORIGINAL index,
+    // which a map chained after a filter no longer has.
+    .map(({ line, index }) =>
+      insideLiteral[index]
+        ? line
+        : line.replace(/--> statement-breakpoint/g, "")
+    )
     .join("\n");
 
   const statements: string[] = [];
   let current = "";
-  let inString = false;
-  let stringChar = "";
-  let stringEscapesWithBackslash = false;
+  const state: LiteralState = {
+    inString: false,
+    stringChar: "",
+    escapesWithBackslash: false,
+  };
 
   for (let i = 0; i < cleanedSql.length; i++) {
     const char = cleanedSql[i];
@@ -1089,14 +1192,14 @@ export function splitSqlStatements(
     // retained comment ("SQLite doesn't support ...") would otherwise open a
     // string that never closes, and every semicolon after it stops separating
     // statements — the whole file then reaches the driver as one statement.
-    if (!inString && isLineCommentAt(cleanedSql, i, dialect)) {
+    if (!state.inString && isLineCommentAt(cleanedSql, i, dialect)) {
       const lineEnd = cleanedSql.indexOf("\n", i);
       const end = lineEnd === -1 ? cleanedSql.length : lineEnd;
       current += cleanedSql.slice(i, end);
       i = end - 1;
       continue;
     }
-    if (!inString && char === "/" && cleanedSql[i + 1] === "*") {
+    if (!state.inString && char === "/" && cleanedSql[i + 1] === "*") {
       const close = cleanedSql.indexOf("*/", i + 2);
       const end = close === -1 ? cleanedSql.length : close + 2;
       current += cleanedSql.slice(i, end);
@@ -1112,27 +1215,9 @@ export function splitSqlStatements(
     // The bracket and backtick forms are applied per dialect rather than
     // everywhere: `[` is not a quote in Postgres, where it subscripts an array,
     // so treating it as one there would swallow ordinary SQL.
-    const opener = quoteOpenerAt(char, dialect);
-    if (!inString && opener) {
-      inString = true;
-      stringChar = opener;
-      // Recorded when the literal OPENS: the `E` prefix is only visible here,
-      // and by the closing quote it is long past.
-      stringEscapesWithBackslash = opensBackslashEscapedString(
-        cleanedSql,
-        i,
-        opener,
-        dialect
-      );
-    } else if (
-      inString &&
-      char === stringChar &&
-      closesLiteral(cleanedSql, i, stringEscapesWithBackslash)
-    ) {
-      inString = false;
-    }
+    advanceLiteralState(cleanedSql, i, dialect, state);
 
-    if (char === ";" && !inString) {
+    if (char === ";" && !state.inString) {
       const statement = current.trim();
       const hasSQL =
         /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|SELECT|TRUNCATE|GRANT|REVOKE)\b/i.test(

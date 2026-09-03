@@ -238,3 +238,42 @@ describe("MySQL escapes inside BOTH literal quotes", () => {
     expect(splitSqlStatements(sql, "mysql")).toHaveLength(2);
   });
 });
+
+describe("a line inside a string literal is data, not SQL", () => {
+  it("KEEPS a continuation line that begins with a comment marker", () => {
+    // 🔴 A multiline description whose second line starts with `--` puts
+    // comment-looking text at the start of a line. Read as a standalone SQL
+    // comment it is dropped, the migration still succeeds, and the replayed
+    // database stores a SILENTLY TRUNCATED description — no error anywhere.
+    const sql = `INSERT INTO "t" ("d") VALUES ('Summary\n-- internal note');`;
+    const out = splitSqlStatements(sql, "sqlite").join(";");
+    expect(out).toContain("internal note");
+  });
+
+  it("KEEPS a literal that contains the breakpoint marker text", () => {
+    // The same rule for the rewrite half of the cleanup: stripping the marker
+    // out of prose corrupts the stored value exactly as dropping the line does.
+    const sql = `INSERT INTO "t" ("d") VALUES ('note\n--> statement-breakpoint here');`;
+    const out = splitSqlStatements(sql, "sqlite").join(";");
+    expect(out).toContain("--> statement-breakpoint here");
+  });
+
+  it("still DROPS a standalone comment line outside any literal", () => {
+    // 🔴 The control. Both cases above pass on an implementation that simply
+    // stopped cleaning up, which would put marker text and comments back into
+    // the SQL the driver receives — so the cleanup must be shown to still run.
+    const sql = `-- a leading note\nCREATE TABLE "t" ("a" text);`;
+    const out = splitSqlStatements(sql, "sqlite").join(";");
+    expect(out).not.toContain("a leading note");
+    expect(out).toContain("CREATE TABLE");
+  });
+
+  it("still STRIPS an inline breakpoint marker outside any literal", () => {
+    // The rewrite half of the same control: unstripped, the marker text
+    // pollutes the next accumulated statement and MySQL rejects it.
+    const sql = `CREATE TABLE "t" ("a" text);--> statement-breakpoint\nCREATE INDEX "i" ON "t" ("a");`;
+    const out = splitSqlStatements(sql, "sqlite");
+    expect(out.join(";")).not.toContain("statement-breakpoint");
+    expect(out).toHaveLength(2);
+  });
+});
