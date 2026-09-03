@@ -181,17 +181,25 @@
 
     // check-types - Run TypeScript compiler for type validation
     //
-    // Fast Parallel Execution:
-    //   - NO "^build" dependency (optimized in TASK-MONO-007)
-    //   - Can run in parallel with builds for faster CI/CD
-    //   - Validates source code directly (doesn't need built artifacts)
+    // What it depends on, and why each edge is there:
+    //   - "^check-types" = a dependency's HASH, so editing a file that this
+    //     package's program reaches through a tsconfig path mapping moves this
+    //     task's hash
+    //   - "^build" = a dependency's ARTIFACT, because only five packages map a
+    //     neighbour at its source and the rest resolve through package exports,
+    //     which point at `dist`
+    //   - "build" = this package's OWN artifact, for ordering rather than
+    //     coverage: both tasks write one `.tsbuildinfo` per package
     //
-    // Why This Matters:
-    //   - Catches type errors early in development
-    //   - Runs faster than full build (type-check only, no emit)
-    //   - Can lint and type-check while builds run in parallel
+    // This section previously said the opposite — no `^build`, runs in parallel
+    // with builds, validates source without artifacts. That was true of the
+    // packages that motivated it and of almost none of the others, and a
+    // typecheck reading a stale `dist` answers about code that is gone. It is
+    // recorded rather than deleted because the claim is an attractive one to
+    // re-derive from the task name.
     //
-    // Note: Uses incremental compilation (.tsbuildinfo) for speed
+    // Note: Uses incremental compilation (.tsbuildinfo) for speed. That file is
+    // shared with `build`, which is what the third edge orders.
     "check-types": {
       // A package's TypeScript PROGRAM crosses workspace boundaries, so its
       // hash has to as well. `packages/admin` maps the bare `nextly` specifier
@@ -237,7 +245,25 @@
       // ships, while its `check-types` also covers the test files its shipping
       // tsconfig excludes, so a type error confined to a dependency's tests is
       // invisible to `^build` alone.
-      "dependsOn": ["^check-types", "^build"],
+      //
+      // `build` WITHOUT the caret is this package's own, and it is here for a
+      // different reason than the two beside it: ordering, not coverage.
+      // `${configDir}/.tsbuildinfo` is one file per package, `incremental` is on
+      // in the shared config, and BOTH tasks write it — `tsup`'s declaration
+      // pass and this `tsc --noEmit` alike, which is why both declare it under
+      // `outputs`. Before `^build` existed the two never shared a run, so
+      // nothing ordered them and nothing had to. Pulling every dependency's
+      // build into this graph put 19 packages' `build` and `check-types` in one
+      // run as unordered siblings, free to write and restore that file at the
+      // same moment — and the note in `packages/tsconfig/base.json` records what
+      // a shared build-info file does when two writers reach it.
+      //
+      // Ordering is what removes that, rather than a second output path: the
+      // file is named by the shared tsconfig, so splitting it means every
+      // package's script carrying its own `--tsBuildInfoFile`, which is a
+      // second place for the two halves to disagree. The build this waits on is
+      // one turbo has almost always already done.
+      "dependsOn": ["^check-types", "^build", "build"],
       // Every extension TypeScript follows, not only `.ts`/`.tsx`. A task input
       // glob decides what turbo HASHES: a change confined to an extension
       // missing here leaves the hash unmoved, so CI replays a cached green

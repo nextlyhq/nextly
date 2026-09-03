@@ -374,6 +374,43 @@ describe("a package's hash covers the program it actually compiles", () => {
       ).toContain("^check-types");
     }
   });
+
+  // Each edge gets its own case, because they answer different questions and a
+  // single assertion over the array would report the wrong one as missing.
+  it("reads each dependency's BUILD, not only its hash", () => {
+    // Five packages map a neighbour at its source; every other one resolves
+    // `@nextlyhq/*` through package exports, which point at `dist`. Without
+    // this edge such a package typechecks against whatever artifact survived,
+    // and a stale one answers about code that is gone — silently, in the
+    // passing direction.
+    const withCommand = resolvedTasks().filter(
+      task => !String(task.command).includes("NONEXISTENT")
+    );
+    expect(withCommand.length).toBeGreaterThan(15);
+    for (const task of withCommand) {
+      expect(
+        task.resolvedTaskDefinition.dependsOn,
+        `${task.package} typechecks without building its dependencies, so a stale dist answers for them`
+      ).toContain("^build");
+    }
+  });
+
+  it("orders its OWN build before it, so one build-info file has one writer", () => {
+    // `${configDir}/.tsbuildinfo` is one file per package and both tasks write
+    // it. The `^build` edge above puts both in a single run, so without this
+    // they are unordered siblings free to write and restore it at once.
+    // Asserted as the un-prefixed `build`: `^build` is a different edge and
+    // satisfies neither this nor the case above.
+    const withCommand = resolvedTasks().filter(
+      task => !String(task.command).includes("NONEXISTENT")
+    );
+    for (const task of withCommand) {
+      expect(
+        task.resolvedTaskDefinition.dependsOn,
+        `${task.package} may typecheck while its own build writes the same .tsbuildinfo`
+      ).toContain("build");
+    }
+  });
 });
 
 describe("the shared TypeScript config is hashed", () => {
