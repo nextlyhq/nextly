@@ -12,6 +12,28 @@ export const MAX_DEPTH = 12;
 export const MAX_NODES = 5000;
 
 /**
+ * Maximum levels of component nesting a resolved tree may reach.
+ *
+ * Separate from {@link MAX_DEPTH}, and neither bounds the other. `MAX_DEPTH`
+ * limits one STORED document; an instance is a single node there whatever its
+ * definition holds, so a page at depth 1 can resolve to a tree of any depth.
+ * This is the cap on that expansion.
+ *
+ * Small, because the growth is multiplicative rather than additive: every level
+ * can expand one node into a whole definition, so depth is the exponent on how
+ * much work one page costs. It is not a cap on how much a designer may
+ * compose — a header made of a nav made of a button is three, and past a
+ * handful nobody can predict what editing a definition will change.
+ *
+ * A document that exceeds it fails PER INSTANCE. The instance that would cross
+ * the line is left unresolved and the rest of the page renders, because the
+ * alternative — refusing the page — hands a visitor a blank screen for a
+ * problem in one region of it. Storyblok truncates at depth two and says
+ * nothing; the truncation is the same, the report is the difference.
+ */
+export const MAX_COMPOSED_DEPTH = 5;
+
+/**
  * Maximum entries in one collection of a component's envelope.
  *
  * Its own limit rather than {@link MAX_NODES}, because the envelope is not
