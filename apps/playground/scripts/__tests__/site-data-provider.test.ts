@@ -17,6 +17,25 @@ import { createSiteDataProvider } from "../../src/lib/site-content";
 /** The app directory every page route is found under. */
 const APP_DIR = fileURLToPath(new URL("../../src/app", import.meta.url));
 
+/**
+ * Source with its comments removed.
+ *
+ * The assertion below reads text, so without this it is satisfied by a property
+ * that is commented out — and by prose in a docblock that merely mentions the
+ * option. Both describe a route whose `createBlocksPage` receives no provider,
+ * which is exactly the state being guarded against.
+ *
+ * Stripping is deliberately blunt: a `//` inside a string literal would take
+ * the rest of that line with it. That direction is safe here — it can only
+ * remove the text the assertion looks for, failing the test — whereas leaving
+ * comments in place is what lets a broken route pass.
+ */
+function withoutComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
 /** Every `page.tsx` beneath the app directory, path and source together. */
 function pageRoutes(): { path: string; source: string }[] {
   const found: { path: string; source: string }[] = [];
@@ -25,7 +44,10 @@ function pageRoutes(): { path: string; source: string }[] {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
       else if (entry.name === "page.tsx")
-        found.push({ path: full, source: readFileSync(full, "utf-8") });
+        found.push({
+          path: full,
+          source: withoutComments(readFileSync(full, "utf-8")),
+        });
     }
   };
   walk(APP_DIR);
