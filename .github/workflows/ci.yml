@@ -462,15 +462,23 @@ jobs:
         run: pnpm lint:workspace
 
       # Identified for the same reason `install` is, and the reason is in
-      # AGENTS.md rather than here: `turbo.jsonc` gives `lint` no dependency at
-      # all and `check-types` only `^check-types`, so neither rebuilds — they
-      # read whatever `dist` survived. On an unbuilt tree `check-types` fails
-      # workspace-wide on TS2307 through the siblings' export maps and `lint`
-      # fails on `import-x/no-unresolved`, and the dangerous half is that every
-      # TYPE-AWARE lint rule then reports on types the checker cannot see: the
+      # AGENTS.md rather than here: these steps read `dist`, and what they say
+      # without one is misleading rather than merely absent.
+      #
+      # `turbo.jsonc` gives `lint` no dependency at all, so it reads whatever
+      # `dist` survived. On an unbuilt tree it fails on
+      # `import-x/no-unresolved`, and the dangerous half is that every
+      # TYPE-AWARE rule then reports on types the checker cannot see: the
       # message names YOUR EXPRESSION and reads as a correctness defect whose
       # obvious remedy is a real regression. `publint` and `arethetypeswrong`
       # read `dist` directly and have nothing to say without one.
+      #
+      # `check-types` carries `^build`, so it rebuilds its own dependencies and
+      # no longer fails workspace-wide on TS2307 through the siblings' export
+      # maps. It stays on this gate anyway, for a different reason than the
+      # others: the build it would run is the one the Build step just ran and
+      # failed, so letting it proceed reports a single defect a second time
+      # under a name that points at the wrong package.
       #
       # So a failed Build legitimately skips those FOUR, exactly as a failed
       # install skips everything: reporting one defect four ways, all of them
