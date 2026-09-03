@@ -1040,3 +1040,33 @@ describe("the per-card controls act on the column a reader sees", () => {
     );
   });
 });
+
+describe("a control is offered only where it can act", () => {
+  it("DISABLES Up on the first card of every column, not just the first", async () => {
+    // 🔴 Derived from the global sequence, the first card of columns 2 and 3
+    // had an enabled Up whose neighbour does not exist in its own column — the
+    // click resolved against `rowsInColumn` and found nothing, so the control
+    // was enabled and inert. That is the SC 2.5.7 failure again, not a
+    // cosmetic one.
+    layoutResponse = layout(
+      [
+        { id: "p1", widgetId: "core/a", column: 0, order: 0 },
+        { id: "p2", widgetId: "core/b", column: 1, order: 10 },
+        { id: "p3", widgetId: "core/c", column: 2, order: 20 },
+      ],
+      { columnCount: 3 }
+    );
+    renderGrid();
+    await waitFor(() =>
+      expect(screen.getAllByTestId("widget-card-body").length).toBe(3)
+    );
+    await beginEditing();
+    // Every card is alone in its column, so no card may move up or down.
+    for (const up of screen.getAllByTestId("widget-move-up")) {
+      expect(up).toBeDisabled();
+    }
+    for (const down of screen.getAllByTestId("widget-move-down")) {
+      expect(down).toBeDisabled();
+    }
+  });
+});

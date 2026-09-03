@@ -21,9 +21,9 @@ import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { useSortableFieldArray } from "../../entries/fields/structured/field-array-helpers";
 import {
-  columnDropId,
-  columnFromDropId,
+  columnFromDropData,
   placementsByColumn,
+  type DropTarget,
 } from "../layout-editor";
 
 import { useLayoutEditor, type LayoutEditor } from "./useLayoutEditor";
@@ -209,25 +209,34 @@ export function useDashboardArrangement(
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const activeId = String(event.active.id);
-      const overId = event.over ? String(event.over.id) : null;
-      if (overId === null || overId === activeId) return;
+      if (!event.over) return;
       const moved = visible.find(row => row.placementId === activeId);
       if (!moved) return;
-      editor.dropOn(activeId, overId);
+      // 🔴 Read from the droppable's DATA, not from the shape of its id. Only a
+      // column carries `widgetColumn`, so a card named like a column cannot be
+      // mistaken for one.
+      const droppedColumn = columnFromDropData(event.over.data.current);
+      const target: DropTarget | null =
+        droppedColumn !== undefined
+          ? { kind: "column", column: droppedColumn }
+          : { kind: "card", placementId: String(event.over.id) };
+      if (target.kind === "card" && target.placementId === activeId) return;
+      editor.dropOn(activeId, target);
       // 🔴 A drop onto a COLUMN has no neighbouring card to count from, and
       // `findIndex` answers -1 for it. Announced from that, every empty-column
       // drop claimed the card had gone to the last position in the whole
       // dashboard, whichever column actually received it. The column target is
       // parsed instead, and the announcement names the column.
-      const droppedColumn = columnFromDropId(overId);
-      if (droppedColumn !== undefined) {
-        announceMove(moved.widget.title, droppedColumn + 1, columnCount);
+      if (target.kind === "column") {
+        announceMove(moved.widget.title, target.column + 1, columnCount);
         return;
       }
-      const target = visible.findIndex(row => row.placementId === overId);
+      const landed = visible.findIndex(
+        row => row.placementId === target.placementId
+      );
       announceMove(
         moved.widget.title,
-        target === -1 ? visible.length : target + 1,
+        landed === -1 ? visible.length : landed + 1,
         visible.length
       );
     },
@@ -248,7 +257,7 @@ export function useDashboardArrangement(
       const moved = visible.find(row => row.placementId === placementId);
       if (!moved) return;
       if (targetColumn < 0 || targetColumn >= columnCount) return;
-      editor.dropOn(placementId, columnDropId(targetColumn));
+      editor.dropOn(placementId, { kind: "column", column: targetColumn });
       announceMove(moved.widget.title, targetColumn + 1, columnCount);
     },
     [visible, editor, columnCount, announceMove]
@@ -266,7 +275,7 @@ export function useDashboardArrangement(
     (placementId: string, neighbourId: string) => {
       const moved = visible.find(row => row.placementId === placementId);
       if (!moved) return;
-      editor.dropOn(placementId, neighbourId);
+      editor.dropOn(placementId, { kind: "card", placementId: neighbourId });
       const column = placementsByColumn(visible, columnCount)[
         Math.min(Math.max(0, moved.column ?? 0), columnCount - 1)
       ];

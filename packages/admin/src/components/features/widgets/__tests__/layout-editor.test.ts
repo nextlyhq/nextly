@@ -8,8 +8,7 @@ import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 import {
   addPlacement,
   columnAffordance,
-  columnDropId,
-  columnFromDropId,
+  columnFromDropData,
   resolveDrop,
   moveToColumn,
   placementsByColumn,
@@ -342,12 +341,12 @@ describe("resolving where a drag landed", () => {
     // 🔴 The case a card-to-card resolution cannot express. An empty column
     // holds no card to drop onto, so unless the column itself is a target it
     // is reachable only until its last card leaves and never again.
-    const next = resolveDrop(start, "a", columnDropId(2), 3);
+    const next = resolveDrop(start, "a", { kind: "column", column: 2 }, 3);
     expect(next.find(p => p.id === "a")?.column).toBe(2);
   });
 
   it("takes the column of the card it was dropped onto", () => {
-    const next = resolveDrop(start, "a", "c", 3);
+    const next = resolveDrop(start, "a", { kind: "card", placementId: "c" }, 3);
     expect(next.find(p => p.id === "a")?.column).toBe(1);
   });
 
@@ -355,7 +354,7 @@ describe("resolving where a drag landed", () => {
     // 🔴 The control for the case above. Setting the column and stopping there
     // passes "took the column" while every card lands in arrival order, so a
     // reader can never place one BELOW another in the same column.
-    const next = resolveDrop(start, "b", "a", 3);
+    const next = resolveDrop(start, "b", { kind: "card", placementId: "a" }, 3);
     const column0 = next.filter(p => (p.column ?? 0) === 0).map(p => p.id);
     expect(column0).toEqual(["b", "a"]);
   });
@@ -366,7 +365,9 @@ describe("resolving where a drag landed", () => {
   });
 
   it("leaves the arrangement alone when a card is dropped on itself", () => {
-    expect(resolveDrop(start, "a", "a", 3)).toEqual(start);
+    expect(
+      resolveDrop(start, "a", { kind: "card", placementId: "a" }, 3)
+    ).toEqual(start);
   });
 });
 
@@ -395,30 +396,21 @@ describe("a column move counts as an unsaved change", () => {
 });
 
 describe("a card is never mistaken for a column", () => {
-  const at = (id: string, column: number, order: number): WidgetPlacement => ({
-    id,
-    widgetId: `w-${id}`,
-    column,
-    order,
-    hidden: false,
+  it("reads the KIND from droppable data, not from an id", () => {
+    // 🔴 Columns and cards share one id space in dnd-kit, and a placement may
+    // legitimately be named `widget-column:1` — ids are opaque, the layout API
+    // accepts any non-empty string, and a widget id becomes a default
+    // placement id under no prefix rule. Only a column carries this data, so
+    // there is nothing for a collision to be mistaken for.
+    expect(columnFromDropData({ widgetColumn: 2 })).toBe(2);
+    expect(columnFromDropData(undefined)).toBeUndefined();
+    expect(columnFromDropData({})).toBeUndefined();
+    // A card's own data never names a column, whatever the card is called.
+    expect(columnFromDropData({ sortable: { index: 1 } })).toBeUndefined();
   });
 
-  it("treats a placement NAMED like a column as the card it is", () => {
-    // 🔴 Placement ids are opaque and the layout API accepts any non-empty
-    // string; a widget id also becomes a default placement id, and no prefix
-    // rule governs those. A card called `widget-column:1` must stay a card, or
-    // dropping onto it silently re-columns instead of reordering.
-    const colliding = columnDropId(1);
-    const start = [at("a", 0, 0), { ...at("x", 2, 10), id: colliding }];
-    const next = resolveDrop(start, "a", colliding, 3);
-    // It took the CARD's column (2), not the column the name spells (1).
-    expect(next.find(p => p.id === "a")?.column).toBe(2);
-  });
-
-  it("refuses a column id whose remainder is not all digits", () => {
-    // 🔴 `parseInt` reads a numeric prefix and stops, so `widget-column:1-card`
-    // parsed as column 1 — a card id classified as a column.
-    expect(columnFromDropId(`${columnDropId(1)}-card`)).toBeUndefined();
-    expect(columnFromDropId(columnDropId(1))).toBe(1);
+  it("refuses a non-integer or negative column in data", () => {
+    expect(columnFromDropData({ widgetColumn: -1 })).toBeUndefined();
+    expect(columnFromDropData({ widgetColumn: 1.5 })).toBeUndefined();
   });
 });

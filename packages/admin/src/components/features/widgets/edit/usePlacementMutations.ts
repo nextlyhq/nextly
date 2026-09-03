@@ -22,6 +22,7 @@ import {
   movePlacementTo,
   removePlacement,
   resolveDrop,
+  type DropTarget,
   togglePlacementHidden,
 } from "../layout-editor";
 
@@ -29,7 +30,7 @@ import type { LayoutDraft } from "./useLayoutEditor";
 
 export interface PlacementMutations {
   move: (fromId: string, toId: string) => void;
-  dropOn: (activeId: string, overId: string | null) => void;
+  dropOn: (activeId: string, target: DropTarget | null) => void;
   toggleHidden: (placementId: string) => void;
   remove: (placementId: string) => void;
 }
@@ -64,9 +65,9 @@ export function usePlacementMutations(
   );
 
   const dropOn = useCallback(
-    (activeId: string, overId: string | null) =>
+    (activeId: string, target: DropTarget | null) =>
       mutatePlacements(placements =>
-        resolveDrop(placements, activeId, overId, columnCount)
+        resolveDrop(placements, activeId, target, columnCount)
       ),
     [mutatePlacements, columnCount]
   );

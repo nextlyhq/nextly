@@ -174,6 +174,11 @@ export function addPlacement(
       id: newPlacementId(),
       widgetId,
       order: last ? last.order + ORDER_STEP : 0,
+      // 🔴 The LAST placement's column, not the missing-column fallback of 0.
+      // `addPlacement` appends, and the picker sits below the grid — landing a
+      // new card at the top of column 0 puts it above everything the reader
+      // was looking at, which reads as the button having done nothing.
+      column: last?.column ?? 0,
       hidden: false,
       ...(geometry?.size === undefined ? {} : { size: geometry.size }),
       ...(geometry?.height === undefined ? {} : { height: geometry.height }),
@@ -302,30 +307,37 @@ export function columnAffordance(
   };
 }
 
-/** The prefix that marks a droppable id as a COLUMN rather than a card. */
-const COLUMN_DROP_PREFIX = "widget-column:";
-
-/**
- * The droppable id for a column.
- *
- * 🔴 Built and read in one place. A column and a card share one id space in
- * dnd-kit, so the only thing separating them is this spelling — and two copies
- * of it drift the moment one is edited, which reads as "dropping onto a column
- * silently does nothing".
- */
+/** The droppable id for a column. Unique within the grid, never interpreted. */
 export function columnDropId(column: number): string {
-  return `${COLUMN_DROP_PREFIX}${column}`;
+  return `widget-column:${column}`;
 }
 
-/** The column a droppable id names, or `undefined` when it names a card. */
-export function columnFromDropId(id: string): number | undefined {
-  if (!id.startsWith(COLUMN_DROP_PREFIX)) return undefined;
-  const rest = id.slice(COLUMN_DROP_PREFIX.length);
-  // 🔴 The WHOLE remainder must be digits. `parseInt` reads a numeric prefix
-  // and stops, so `widget-column:1-card` would parse as column 1 -- a card id
-  // silently classified as a column.
-  if (!/^\d+$/.test(rest)) return undefined;
-  return Number.parseInt(rest, 10);
+/** What a drag was released over. */
+export type DropTarget =
+  | { kind: "column"; column: number }
+  | { kind: "card"; placementId: string };
+
+/**
+ * The droppable data a column registers.
+ *
+ * 🔴 The KIND travels in dnd-kit's `data`, not in the shape of the id. Columns
+ * and cards share one id space, so a placement is free to be called
+ * `widget-column:1` -- ids are opaque, the layout API accepts any non-empty
+ * string, and a widget id becomes a default placement id under no prefix rule
+ * at all. Any rule that reads the string has to guess which of the two a
+ * collision meant; data cannot collide, because only a column carries it.
+ */
+export interface ColumnDropData {
+  widgetColumn: number;
+}
+
+/** The column a droppable's data names, or `undefined` when it names a card. */
+export function columnFromDropData(data: unknown): number | undefined {
+  if (typeof data !== "object" || data === null) return undefined;
+  const column = (data as { widgetColumn?: unknown }).widgetColumn;
+  return typeof column === "number" && Number.isInteger(column) && column >= 0
+    ? column
+    : undefined;
 }
 
 /**
@@ -344,30 +356,38 @@ export function columnFromDropId(id: string): number | undefined {
 export function resolveDrop(
   placements: readonly WidgetPlacement[],
   activeId: string,
-  overId: string | null,
+  target: DropTarget | null,
   columnCount: number
 ): WidgetPlacement[] {
-  if (overId === null || overId === activeId) return [...placements];
+  if (target === null) return [...placements];
 
-  // 🔴 A PLACEMENT wins over the column namespace. Placement ids are opaque and
-  // the layout API accepts any non-empty string, so a card can legitimately be
-  // named `widget-column:1` -- and a widget id becomes a default placement id,
-  // which no prefix rule governs. Asking the placements first means a real card
-  // is never mistaken for a column, whatever it is called.
-  const over = placements.find(placement => placement.id === overId);
-  if (over === undefined) {
-    const targetColumn = columnFromDropId(overId);
-    if (targetColumn === undefined) return [...placements];
-    const bounded = Math.min(targetColumn, Math.max(0, columnCount - 1));
+  if (target.kind === "column") {
+    const bounded = Math.min(
+      Math.max(0, target.column),
+      Math.max(0, columnCount - 1)
+    );
     return renumber(moveToColumn(placements, activeId, bounded));
   }
+
+  if (target.placementId === activeId) return [...placements];
+  const over = placements.find(p => p.id === target.placementId);
+  if (over === undefined) return [...placements];
 
   // The column FIRST, then the position, and both are needed. Taking the
   // column alone lands every card in arrival order, so a reader could never
   // put one below another; moving the position alone would reorder a card
   // inside the column it came from while the drop was aimed at another.
-  const recolumned = moveToColumn(placements, activeId, over.column ?? 0);
-  return renumber(movePlacementTo(recolumned, activeId, overId));
+  //
+  // 🔴 The target's RENDERED column, bounded the way the grid bounds it. A
+  // target stored past the current count is drawn in the last column, so
+  // copying its stored value looks right while narrowed and throws the card
+  // back out to column 3 the moment the dashboard is widened again.
+  const targetColumn = Math.min(
+    Math.max(0, over.column ?? 0),
+    Math.max(0, columnCount - 1)
+  );
+  const recolumned = moveToColumn(placements, activeId, targetColumn);
+  return renumber(movePlacementTo(recolumned, activeId, target.placementId));
 }
 
 /**

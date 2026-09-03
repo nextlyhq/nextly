@@ -338,7 +338,7 @@ export function readStoredLayout(raw: string): StoredLayout {
 }
 
 /** The stored column count, or the default when it names none this core has. */
-function readColumnCount(value: unknown): ColumnCount {
+export function readColumnCount(value: unknown): ColumnCount {
   return COLUMN_COUNTS.includes(value as ColumnCount)
     ? (value as ColumnCount)
     : DEFAULT_COLUMN_COUNT;

@@ -32,7 +32,7 @@ import type { ReactNode } from "react";
 
 import { cn } from "@admin/lib/utils";
 
-import { columnDropId } from "../layout-editor";
+import { columnDropId, type ColumnDropData } from "../layout-editor";
 
 export interface WidgetColumnProps {
   column: number;
@@ -48,7 +48,23 @@ export function WidgetColumn({
   isEditing,
   children,
 }: WidgetColumnProps) {
-  const { setNodeRef, isOver } = useDroppable({ id: columnDropId(column) });
+  // 🔴 A target only while EMPTY, and the kind travels in `data`.
+  //
+  // Empty is the case a column droppable exists for: a column with cards has
+  // cards to aim at, and leaving the container active there meant a release in
+  // its padding resolved to the column rather than to a position, so a card
+  // dropped at the bottom could appear at the top. Disabled once it holds
+  // anything, every drop in a populated column resolves against a card and the
+  // vertical position matches the gesture.
+  //
+  // The `data` is what makes the kind unambiguous. Columns and cards share one
+  // id space in dnd-kit, and a placement may legitimately be named like a
+  // column, so any decision that reads the id string has to guess.
+  const { setNodeRef, isOver } = useDroppable({
+    id: columnDropId(column),
+    disabled: items.length > 0,
+    data: { widgetColumn: column } satisfies ColumnDropData,
+  });
 
   return (
     <SortableContext items={items} strategy={verticalListSortingStrategy}>

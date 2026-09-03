@@ -26,7 +26,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
 import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
-import { addPlacement, draftDiffers } from "../layout-editor";
+import { addPlacement, draftDiffers, type DropTarget } from "../layout-editor";
 
 import { useLayoutLifecycle } from "./useLayoutLifecycle";
 import { usePlacementMutations } from "./usePlacementMutations";
@@ -89,7 +89,7 @@ export interface LayoutEditor {
    * draft, and the invariants this module keeps -- ids unique, order dense,
    * columns in range -- would then be enforced nowhere.
    */
-  dropOn: (activeId: string, overId: string | null) => void;
+  dropOn: (activeId: string, target: DropTarget | null) => void;
   /**
    * Choose how many columns the dashboard is drawn in.
    *

@@ -56,8 +56,8 @@ import {
   visibilityToken,
   type WidgetPlacement,
   byPosition,
-  COLUMN_COUNTS,
   DEFAULT_COLUMN_COUNT,
+  readColumnCount,
   type ColumnCount,
 } from "../domains/widgets/layout";
 import {
@@ -340,16 +340,17 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
  * an empty string, would be read as asserting the row does not exist and would
  * overwrite a real arrangement through the insert path.
  */
+
 /**
- * The submitted column count, or the default.
+ * Placements whose columns all fall inside `columnCount`.
  *
- * TOLERANT rather than strict, and for the same reason a placement's `size` is
- * typed `string` here: the count is presentation, an unknown value has an
- * obviously safe reading, and refusing an entire save over it would discard a
- * reader's arrangement to protect a field nothing depends on. A count from a
- * NEWER admin is exactly the case this has to survive.
+ * 🔴 Applied to the MERGED row, not to what the caller sent. A carried
+ * placement -- one this reader can no longer see, kept so it is not lost --
+ * holds the column it had when it was last visible, so bounding only the
+ * submission lets a hidden card smuggle a column past the count the row
+ * declares. The invariant is about the stored ROW, so it is enforced where the
+ * row is assembled.
  */
-/** Placements whose columns all fall inside `columnCount`. */
 function boundColumns(
   placements: readonly WidgetPlacement[],
   columnCount: ColumnCount
@@ -358,12 +359,6 @@ function boundColumns(
   return placements.map(placement =>
     placement.column > last ? { ...placement, column: last } : placement
   );
-}
-
-function readColumnCount(value: unknown): ColumnCount {
-  return COLUMN_COUNTS.includes(value as ColumnCount)
-    ? (value as ColumnCount)
-    : DEFAULT_COLUMN_COUNT;
 }
 
 function readVersion(body: Record<string, unknown>): number {
@@ -481,7 +476,6 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // column 4. Nothing rejects such a row -- every reader reinterprets it, and
   // the arrangement handed back is not the one that was sent. Coerced ONCE,
   // here, so the stored row describes itself.
-  const bounded = boundColumns(submitted, submittedColumnCount);
   const expectedVersion = readVersion(body as Record<string, unknown>);
   const submittedScope = readScope(body as Record<string, unknown>);
 
@@ -559,7 +553,10 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const stored = await service.getLayout(SCOPE_KIND, caller.userId);
   const carried = carriedPlacements(stored.layout?.placements, visibleIds);
 
-  const toStore = mergePreservingHidden(bounded, carried);
+  const toStore = boundColumns(
+    mergePreservingHidden(submitted, carried),
+    submittedColumnCount
+  );
   const version = await service.saveLayout(
     SCOPE_KIND,
     caller.userId,
@@ -577,7 +574,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // Echoing the raw array made this response a SECOND representation of the
   // same arrangement: a client trusting it to chain another edit without
   // re-reading would render `[10, 0]` where a reload gives `[0, 10]`.
-  const echoed = [...bounded].sort(byPosition);
+  const echoed = boundColumns(submitted, submittedColumnCount).sort(byPosition);
 
   return respondMutation(
     "Dashboard layout saved.",

@@ -47,7 +47,7 @@ function EmptyArrangement({
   return (
     <p
       data-testid="widget-grid-empty"
-      className="col-span-12 rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground"
+      className="col-span-full rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground"
     >
       {isEditing
         ? "Every card is put away. Add one back below, or reset to the default arrangement."
@@ -100,8 +100,13 @@ export function ArrangedColumns({
             <ArrangedCell
               key={row.placementId}
               row={row}
-              index={visible.indexOf(row)}
-              count={visible.length}
+              // 🔴 The SAME list the click resolves against. Derived from the
+              // global sequence, the first card of column 2 had an enabled Up
+              // whose neighbour does not exist in its column -- an enabled
+              // control that does nothing, which is the failure SC 2.5.7 is
+              // about rather than a cosmetic one.
+              index={indexInColumn}
+              count={rowsInColumn.length}
               isEditing={isEditing}
               slot={slots[row.widget.id]}
               // Only a widget that actually ASKED can be waiting on an answer. A
