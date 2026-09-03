@@ -223,3 +223,77 @@ export function hasChanges(
     );
   });
 }
+
+/** Whether a card at `column` may move left or right, given the count. */
+export interface ColumnAffordance {
+  canMoveLeft: boolean;
+  canMoveRight: boolean;
+}
+
+/**
+ * The placements of each column, in reading order, one bucket per column.
+ *
+ * 🔴 Always `columnCount` buckets, including empty ones. A column exists as a
+ * drop target only because the grid renders it, so collapsing an empty bucket
+ * would make a column unreachable the moment its last card left — the reader
+ * could move a card out of column 3 and never move one back.
+ *
+ * A card whose column is out of range is KEPT, folded into the last column
+ * rather than dropped. Narrowing the dashboard is a presentation change and the
+ * cards in the columns that went away are still the reader's; showing one
+ * somewhere unexpected is recoverable, deleting it is not.
+ */
+export function placementsByColumn(
+  placements: readonly WidgetPlacement[],
+  columnCount: number
+): WidgetPlacement[][] {
+  const columns: WidgetPlacement[][] = Array.from(
+    { length: Math.max(1, columnCount) },
+    () => []
+  );
+  for (const placement of placements) {
+    const declared = placement.column ?? 0;
+    const index = Math.min(Math.max(0, declared), columns.length - 1);
+    columns[index].push(placement);
+  }
+  return columns.map(column => [...column].sort((a, b) => a.order - b.order));
+}
+
+/**
+ * The same placements, with one card moved into `column`.
+ *
+ * Identified by id rather than by position, for the reason `movePlacementTo`
+ * gives: a view index means something different from a stored index the moment
+ * one placement is unresolvable, and translating between them moved the wrong
+ * card. An id nobody holds is an ordinary outcome, not an error.
+ */
+export function moveToColumn(
+  placements: readonly WidgetPlacement[],
+  placementId: string,
+  column: number
+): WidgetPlacement[] {
+  return placements.map(placement =>
+    placement.id === placementId
+      ? { ...placement, column: Math.max(0, column) }
+      : placement
+  );
+}
+
+/**
+ * Which sideways moves a card may offer.
+ *
+ * 🔴 These back the CLICKABLE controls, not the drag. WCAG 2.2 SC 2.5.7 says
+ * functionality reachable by dragging must also be reachable with a single
+ * pointer, and states that a keyboard equivalent does not satisfy it on its
+ * own. Crossing columns is new functionality, so it arrives with its buttons or
+ * it regresses the conformance `WidgetEditControls` already argues for.
+ */
+export function columnAffordance(
+  column: number,
+  columnCount: number
+): ColumnAffordance {
+  return {
+    canMoveLeft: column > 0,
+    canMoveRight: column < columnCount - 1,
+  };
+}

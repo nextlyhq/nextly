@@ -7,6 +7,9 @@ import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
 import {
   addPlacement,
+  columnAffordance,
+  moveToColumn,
+  placementsByColumn,
   hasChanges,
   moveAffordance,
   movePlacement,
@@ -233,5 +236,91 @@ describe("addPlacement at the write contract's ceiling", () => {
 
     expect(after).toHaveLength(MAX_PLACEMENTS);
     expect(after.map(p => p.widgetId)).toContain("core/surplus");
+  });
+});
+
+describe("arranging across columns", () => {
+  const at = (id: string, column: number, order: number): WidgetPlacement => ({
+    id,
+    widgetId: `w-${id}`,
+    column,
+    order,
+    hidden: false,
+  });
+
+  describe("grouping for the grid", () => {
+    it("puts each placement under its own column, in order", () => {
+      const grouped = placementsByColumn(
+        [at("a", 0, 0), at("b", 1, 10), at("c", 0, 20)],
+        2
+      );
+      expect(grouped.map(col => col.map(p => p.id))).toEqual([
+        ["a", "c"],
+        ["b"],
+      ]);
+    });
+
+    it("KEEPS a card whose column no longer exists", () => {
+      // 🔴 The property that decides whether narrowing the dashboard destroys
+      // work. A reader who moves 4 columns down to 2 still owns the cards that
+      // were in columns 2 and 3; dropping them would silently delete an
+      // arrangement, which is worse than showing them somewhere unexpected.
+      const grouped = placementsByColumn([at("a", 0, 0), at("far", 3, 10)], 2);
+      expect(grouped.flat().map(p => p.id)).toContain("far");
+      expect(grouped).toHaveLength(2);
+    });
+
+    it("returns one bucket PER COLUMN even when a column is empty", () => {
+      // 🔴 The control an empty column needs: a drop target only exists if the
+      // grid renders that column, so collapsing empty buckets would make a
+      // column unreachable the moment its last card left it.
+      const grouped = placementsByColumn([at("a", 0, 0)], 3);
+      expect(grouped).toHaveLength(3);
+      expect(grouped[1]).toEqual([]);
+      expect(grouped[2]).toEqual([]);
+    });
+  });
+
+  describe("moving between columns", () => {
+    it("moves a card into the column asked for", () => {
+      const moved = moveToColumn([at("a", 0, 0), at("b", 1, 10)], "a", 1);
+      expect(moved.find(p => p.id === "a")?.column).toBe(1);
+    });
+
+    it("leaves the other placements' columns alone", () => {
+      // The control: a rebuild that renumbered every column would satisfy the
+      // assertion above while quietly rearranging the whole dashboard.
+      const moved = moveToColumn([at("a", 0, 0), at("b", 1, 10)], "a", 1);
+      expect(moved.find(p => p.id === "b")?.column).toBe(1);
+      expect(moved).toHaveLength(2);
+    });
+
+    it("ignores an id it does not hold, rather than throwing", () => {
+      const before = [at("a", 0, 0)];
+      expect(moveToColumn(before, "nope", 1)).toEqual(before);
+    });
+  });
+
+  describe("what the single-pointer controls may offer", () => {
+    it("refuses left at the first column and right at the last", () => {
+      // 🔴 WCAG 2.2 SC 2.5.7: crossing columns must be reachable by CLICK, not
+      // only by dragging — so these buttons are the conformance, and their
+      // enabled state has to be right or they are a control that lies.
+      expect(columnAffordance(0, 3)).toEqual({
+        canMoveLeft: false,
+        canMoveRight: true,
+      });
+      expect(columnAffordance(2, 3)).toEqual({
+        canMoveLeft: true,
+        canMoveRight: false,
+      });
+    });
+
+    it("offers both in the middle", () => {
+      expect(columnAffordance(1, 3)).toEqual({
+        canMoveLeft: true,
+        canMoveRight: true,
+      });
+    });
   });
 });
