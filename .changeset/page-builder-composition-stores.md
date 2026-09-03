@@ -45,5 +45,14 @@ publishing is the single act that ships it. Each appears in the admin behind
 its own read permission, and each accepts only its own kind of document, so a
 page cannot be stored as a pattern.
 
+A Layout may fill each area only once, so one Layout cannot name two headers
+and leave whatever reads it first to decide which page gets which.
+
+Plugin menu items may now name the collection they point at, with
+`collection: "patterns"` beside `to`. The item's destination and its read
+permission are then derived from the slug the host actually registered, so a
+`.rename({ patterns: "saved-patterns" })` no longer leaves the link pointing
+at a list that does not exist or gates it on a permission nobody is seeded.
+
 Nothing yet renders a component instance or resolves a Layout — this is the
 storage and the permissions the rest of the feature is built on.
