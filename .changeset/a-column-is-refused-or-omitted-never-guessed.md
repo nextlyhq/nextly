@@ -57,3 +57,14 @@ for a collection with a status and two without, rather than a fixed shape
 padded with blanks or a select the read path refuses. A collection whose rows
 nothing names, or that has no `updatedAt` to mean "recent", gets no table at
 all, which are the two refusals the list card already makes.
+
+The dashboard also offers a QUICK CREATE card: one click from the dashboard to
+an empty entry form, for the collections this reader may create in.
+
+Its shortcuts depend on the reader, which a declaration cannot express -- the
+collection set changes while the process runs, and which of them a caller may
+create in is a second question on top of that. So it is drawn from the
+collection list the server already filtered, narrowed again by the create
+grant. Neither half is a security boundary and the card does not pretend to be
+one: the create endpoint enforces regardless, so a shortcut shown in error
+costs a click rather than an entry nobody was allowed to make.
