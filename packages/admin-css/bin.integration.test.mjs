@@ -28,12 +28,20 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
  * 630ms while the case took 5547ms end to end and was killed at the limit,
  * having done nothing wrong.
  *
- * Generous rather than tuned to that number. A timeout set just above what was
- * observed once turns every slower runner into a red build, and the cost of a
- * high limit is paid only when something genuinely hangs — where the difference
- * between failing at 5s and at 60s is a wait, not a wrong answer.
+ * TWO limits, because a vitest timeout cannot bound this work on its own.
+ * `execSync` blocks the worker's event loop for as long as the child runs, and
+ * a timer that cannot be serviced cannot fire — so against a child that HANGS
+ * rather than merely running slowly, the case-level budget below expires
+ * unnoticed and the suite sits until the workflow's own limit kills it.
+ *
+ * `CHILD_TIMEOUT_MS` is therefore the real bound: node enforces it on the child
+ * and kills it, which unblocks the loop and surfaces a normal assertion
+ * failure. The case-level budget is deliberately LARGER, so a hung child is
+ * reported as the child failing rather than as vitest giving up on a test whose
+ * subprocess is still alive.
  */
-const COMPILE_TIMEOUT_MS = 60_000;
+const CHILD_TIMEOUT_MS = 60_000;
+const COMPILE_TIMEOUT_MS = CHILD_TIMEOUT_MS + 30_000;
 
 describe("nextly-build-admin-css (POC)", () => {
   it(
@@ -45,7 +53,7 @@ describe("nextly-build-admin-css (POC)", () => {
       );
       execSync(
         `node "${ROOT}/bin/nextly-build-admin-css.mjs" "${ROOT}/__fixtures__/poc-plugin/admin.css" "${out}"`,
-        { cwd: ROOT }
+        { cwd: ROOT, timeout: CHILD_TIMEOUT_MS }
       );
       const css = fs.readFileSync(out, "utf-8");
 
