@@ -240,8 +240,8 @@ describe("GET /api/dashboard/layout", () => {
     stored = {
       version: 4,
       layout: serializeLayout([
-        { id: "p2", widgetId: "core/b", order: 0, hidden: false },
-        { id: "p1", widgetId: "core/a", order: 10, hidden: true },
+        { id: "p2", widgetId: "core/b", column: 0, order: 0, hidden: false },
+        { id: "p1", widgetId: "core/a", column: 0, order: 10, hidden: true },
       ]),
     };
 
@@ -259,8 +259,14 @@ describe("GET /api/dashboard/layout", () => {
     stored = {
       version: 1,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", order: 0, hidden: false },
-        { id: "p2", widgetId: "plugin/uninstalled", order: 10, hidden: false },
+        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+        {
+          id: "p2",
+          widgetId: "plugin/uninstalled",
+          column: 0,
+          order: 10,
+          hidden: false,
+        },
       ]),
     };
 
@@ -311,7 +317,13 @@ describe("a widget that only CONTRIBUTED", () => {
     const res = await putWidgetLayout(
       putReq({
         placements: [
-          { id: "p1", widgetId: "forms/latest", order: 0, hidden: false },
+          {
+            id: "p1",
+            widgetId: "forms/latest",
+            column: 0,
+            order: 0,
+            hidden: false,
+          },
         ],
         version: 0,
         scope: scopeFor(["forms/latest"]),
@@ -328,7 +340,7 @@ describe("a widget that only CONTRIBUTED", () => {
     stored = {
       version: 2,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", order: 0, hidden: false },
+        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
       ]),
     };
 
@@ -372,7 +384,7 @@ describe("a widget registered after the reader last saved", () => {
     stored = {
       version: 3,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", order: 0, hidden: false },
+        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
       ]),
     };
 
@@ -391,7 +403,7 @@ describe("a widget registered after the reader last saved", () => {
     stored = {
       version: 3,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", order: 0, hidden: false },
+        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
       ]),
     };
 
@@ -411,7 +423,7 @@ describe("a widget registered after the reader last saved", () => {
     stored = {
       version: 1,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", order: 0, hidden: false },
+        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
       ]),
     };
 
@@ -445,7 +457,13 @@ describe("opaque config survives the response pipeline", () => {
         putWidgetLayout(
           putReq({
             placements: [
-              { id: "p1", widgetId: "core/a", order: 0, hidden: false },
+              {
+                id: "p1",
+                widgetId: "core/a",
+                column: 0,
+                order: 0,
+                hidden: false,
+              },
             ],
             version: 0,
             scope: visibilityToken(["core/a"]),
@@ -469,7 +487,7 @@ describe("opaque config survives the response pipeline", () => {
 
 describe("PUT /api/dashboard/layout", () => {
   const onePlacement: WidgetPlacement[] = [
-    { id: "p1", widgetId: "core/a", order: 0, hidden: false },
+    { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
   ];
 
   it("stores what the caller submitted", async () => {
@@ -497,8 +515,14 @@ describe("PUT /api/dashboard/layout", () => {
     stored = {
       version: 2,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", order: 0, hidden: false },
-        { id: "p9", widgetId: "core/gated", order: 10, hidden: false },
+        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+        {
+          id: "p9",
+          widgetId: "core/gated",
+          column: 0,
+          order: 10,
+          hidden: false,
+        },
       ]),
     };
 
@@ -525,7 +549,13 @@ describe("PUT /api/dashboard/layout", () => {
     stored = {
       version: 2,
       layout: serializeLayout([
-        { id: "p9", widgetId: "core/gated", order: 10, hidden: false },
+        {
+          id: "p9",
+          widgetId: "core/gated",
+          column: 0,
+          order: 10,
+          hidden: false,
+        },
       ]),
     };
 
@@ -555,7 +585,13 @@ describe("PUT /api/dashboard/layout", () => {
     const res = await putWidgetLayout(
       putReq({
         placements: [
-          { id: "p1", widgetId: "core/gated", order: 0, hidden: false },
+          {
+            id: "p1",
+            widgetId: "core/gated",
+            column: 0,
+            order: 0,
+            hidden: false,
+          },
         ],
         version: 0,
         // The visible set is EMPTY here, and that is the scope the client
@@ -575,8 +611,8 @@ describe("PUT /api/dashboard/layout", () => {
     const res = await putWidgetLayout(
       putReq({
         placements: [
-          { id: "dup", widgetId: "core/a", order: 0, hidden: false },
-          { id: "dup", widgetId: "core/a", order: 1, hidden: false },
+          { id: "dup", widgetId: "core/a", column: 0, order: 0, hidden: false },
+          { id: "dup", widgetId: "core/a", column: 0, order: 1, hidden: false },
         ],
         version: 0,
         scope: scopeFor(),
@@ -621,8 +657,14 @@ describe("PUT /api/dashboard/layout", () => {
     stored = {
       version: 2,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", order: 0, hidden: false },
-        { id: "p9", widgetId: "core/gated", order: 10, hidden: false },
+        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+        {
+          id: "p9",
+          widgetId: "core/gated",
+          column: 0,
+          order: 10,
+          hidden: false,
+        },
       ]),
     };
     // The grant has landed by the time the PUT arrives.
@@ -654,7 +696,13 @@ describe("PUT /api/dashboard/layout", () => {
     const res = await putWidgetLayout(
       putReq({
         placements: [
-          { id: "p1", widgetId: "core/gated", order: 0, hidden: false },
+          {
+            id: "p1",
+            widgetId: "core/gated",
+            column: 0,
+            order: 0,
+            hidden: false,
+          },
         ],
         version: 0,
         scope: scopeFor(["core/a", "core/gated"]),
@@ -708,6 +756,7 @@ describe("PUT /api/dashboard/layout", () => {
           {
             id: "p1",
             widgetId: "core/a",
+            column: 0,
             order: 0,
             hidden: false,
             config: { blob: "x".repeat(40_000) },
@@ -820,6 +869,7 @@ describe("PUT /api/dashboard/layout", () => {
         {
           id: "p9",
           widgetId: "core/gated",
+          column: 0,
           order: 0,
           hidden: false,
           config: { blob: "y".repeat(60_000) },
@@ -833,7 +883,13 @@ describe("PUT /api/dashboard/layout", () => {
     stored = {
       version: 1,
       layout: serializeLayout([
-        { id: "p9", widgetId: "core/gated", order: 0, hidden: false },
+        {
+          id: "p9",
+          widgetId: "core/gated",
+          column: 0,
+          order: 0,
+          hidden: false,
+        },
       ]),
     };
     const withoutHidden = await putWidgetLayout(putReq(submission));
@@ -892,6 +948,7 @@ describe("PUT /api/dashboard/layout", () => {
         {
           id: "p1",
           widgetId: "core/a",
+          column: 0,
           order: 0,
           hidden: false,
           config: { blob: "z".repeat(200_000) },
@@ -923,6 +980,7 @@ describe("PUT /api/dashboard/layout", () => {
     const many = Array.from({ length: 400 }, (_, i) => ({
       id: `p${i}`,
       widgetId: "core/a",
+      column: 0,
       order: i,
       hidden: false,
     }));
@@ -955,7 +1013,7 @@ describe("DELETE /api/dashboard/layout", () => {
     stored = {
       version: 4,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", order: 0, hidden: true },
+        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: true },
       ]),
     };
 
@@ -977,7 +1035,7 @@ describe("DELETE /api/dashboard/layout", () => {
     stored = {
       version: 4,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", order: 0, hidden: true },
+        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: true },
       ]),
     };
 

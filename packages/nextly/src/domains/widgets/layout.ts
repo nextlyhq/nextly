@@ -59,7 +59,22 @@ import { NextlyError } from "../../errors/nextly-error";
  * refused rather than guessed at, because guessing would silently discard the
  * fields this core cannot see.
  */
-export const LAYOUT_SCHEMA_VERSION = 1;
+export const LAYOUT_SCHEMA_VERSION = 2;
+
+/**
+ * How many columns a dashboard has when nobody has chosen.
+ *
+ * Three rather than two or four: it is the widest count that still leaves a
+ * card readable at the admin's content width, and folding 3 -> 2 -> 1 by
+ * breakpoint keeps a placement's column derivable at every width.
+ */
+export const DEFAULT_COLUMN_COUNT = 3;
+
+/** The column counts a dashboard may have. */
+export const COLUMN_COUNTS = [2, 3, 4] as const;
+
+/** One of the column counts a dashboard may have. */
+export type ColumnCount = (typeof COLUMN_COUNTS)[number];
 
 /**
  * One card, at one position, for one reader.
@@ -72,7 +87,16 @@ export interface WidgetPlacement {
   id: string;
   /** Which registry entry this draws. Resolved live on every read. */
   widgetId: string;
-  /** Ascending. Finite, so it survives a JSON round trip. */
+  /**
+   * Which column this card sits in, 0-based.
+   *
+   * CLAMPED on read rather than refused: the stored count and the count being
+   * rendered can differ -- a reader who narrows a 4-column dashboard to 2 still
+   * owns every card that was in columns 2 and 3, and losing them would be a
+   * worse answer than moving them.
+   */
+  column: number;
+  /** Ascending WITHIN a column. Finite, so it survives a JSON round trip. */
   order: number;
   /** Hidden placements are RETURNED, so the reader can put them back. */
   hidden: boolean;
@@ -85,6 +109,8 @@ export interface WidgetPlacement {
 /** The decoded contents of one `nextly_widget_layout.layout` column. */
 export interface StoredLayout {
   schemaVersion: number;
+  /** How many columns the reader arranged these placements into. */
+  columnCount: ColumnCount;
   placements: WidgetPlacement[];
 }
 
@@ -216,6 +242,13 @@ function toPlacement(value: Record<string, unknown>): WidgetPlacement {
   return {
     id: value.id as string,
     widgetId: value.widgetId as string,
+    // Absent means column 0 rather than a refusal. A caller PUTting a
+    // placement without one is describing a single-column intent, and the
+    // migrator below is what spreads a pre-column arrangement out.
+    column:
+      typeof value.column === "number" && Number.isFinite(value.column)
+        ? Math.max(0, Math.trunc(value.column))
+        : 0,
     order: value.order as number,
     hidden: value.hidden as boolean,
     ...(value.size === undefined ? {} : { size: value.size as string }),
@@ -285,6 +318,8 @@ export function readStoredLayout(raw: string): StoredLayout {
   // from a NEWER core and holds fields we would silently drop on the next
   // write; a version below ours means a migrator is missing. Neither is a
   // shape to guess at. When v2 arrives this is where `migrateLayout` runs.
+  if (decoded.schemaVersion === 1) return migrateV1(decoded);
+
   if (decoded.schemaVersion !== LAYOUT_SCHEMA_VERSION) {
     throw NextlyError.internal({
       logContext: {
@@ -297,16 +332,72 @@ export function readStoredLayout(raw: string): StoredLayout {
 
   return {
     schemaVersion: LAYOUT_SCHEMA_VERSION,
+    columnCount: readColumnCount(decoded.columnCount),
     placements: readPlacements(decoded.placements),
   };
 }
 
+/** The stored column count, or the default when it names none this core has. */
+function readColumnCount(value: unknown): ColumnCount {
+  return COLUMN_COUNTS.includes(value as ColumnCount)
+    ? (value as ColumnCount)
+    : DEFAULT_COLUMN_COUNT;
+}
+
+/**
+ * A v1 arrangement, read as a v2 one.
+ *
+ * 🔴 Migrated on READ and not written back. The row is the reader's own
+ * arrangement and this core refuses a version it cannot name, so shipping v2
+ * without this turns every saved dashboard into an internal error -- the
+ * failure the reader would meet as "your dashboard is gone".
+ *
+ * v1 had one flat `order` and no column, over a grid that flowed left to right
+ * and wrapped. Dealing the placements round-robin across the columns is what
+ * that flow becomes when the same sequence is read down columns instead of
+ * across rows, so a reader's arrangement stays recognisable rather than being
+ * rebuilt from defaults.
+ */
+function migrateV1(decoded: Record<string, unknown>): StoredLayout {
+  const flat = readPlacements(decoded.placements);
+  const ordered = [...flat].sort((a, b) => a.order - b.order);
+  return {
+    schemaVersion: LAYOUT_SCHEMA_VERSION,
+    columnCount: DEFAULT_COLUMN_COUNT,
+    // The reader's own `order` values are KEPT: they are the arrangement, and
+    // v1 already spread them. Only the column is new.
+    placements: ordered.map((placement, index) => ({
+      ...placement,
+      column: index % DEFAULT_COLUMN_COUNT,
+    })),
+  };
+}
+
+/**
+ * The one order in which placements are read as a SEQUENCE.
+ *
+ * 🔴 `order` alone stopped being a total order when columns arrived: the deal
+ * puts the first N widgets at `order: 0` in N different columns, so a sort on
+ * `order` falls back to whatever order the array happened to be in. Comparing
+ * the column second reproduces the row-major reading of the dashboard -- across
+ * the top, then the next row down -- which is what "position" means everywhere
+ * a placement list is presented as a line rather than as columns.
+ *
+ * Drawing the grid does NOT use this: that groups by column and sorts each
+ * column by `order`. Two different questions, and this is only the first.
+ */
+export function byPosition(a: WidgetPlacement, b: WidgetPlacement): number {
+  return a.order - b.order || a.column - b.column;
+}
+
 /** The payload written into the `layout` column. */
 export function serializeLayout(
-  placements: readonly WidgetPlacement[]
+  placements: readonly WidgetPlacement[],
+  columnCount: ColumnCount = DEFAULT_COLUMN_COUNT
 ): string {
   return JSON.stringify({
     schemaVersion: LAYOUT_SCHEMA_VERSION,
+    columnCount,
     placements,
   });
 }
@@ -354,6 +445,17 @@ export function defaultPlacements(
   return [...widgets].sort(byDeclaredOrder).map((widget, index) => ({
     id: widget.id,
     widgetId: widget.id,
+    // Dealt across the columns in declared order, so the first widgets a
+    // reader is meant to see sit along the TOP of the dashboard rather than
+    // filling column 0 and pushing the rest below the fold.
+    column: index % DEFAULT_COLUMN_COUNT,
+    // 🔴 The GLOBAL sequence, not a per-column one. Numbering within a column
+    // would restart at each column and collide across them, and positions here
+    // are materialized twice -- once over the whole registry and once over the
+    // set a caller may see -- so two placements landing on one number is how a
+    // reader's arrangement reorders itself the moment a permission is granted.
+    // A globally unique `order` keeps that impossible; the column is a second
+    // coordinate beside it, never a replacement for it.
     order: index * DEFAULT_ORDER_STEP,
     hidden: false,
     // The declared geometry travels WITH the placement, rather than being left
@@ -396,7 +498,7 @@ export function partitionPlacements(
     if (visibleWidgetIds.has(placement.widgetId)) visible.push(placement);
     else invisible.push(placement);
   }
-  visible.sort((a, b) => a.order - b.order);
+  visible.sort(byPosition);
   return { visible, invisible };
 }
 
@@ -434,9 +536,7 @@ export function mergePreservingHidden(
   const room = Math.max(0, MAX_STORED_PLACEMENTS - submitted.length);
   // Oldest-positioned first, so the cap keeps a stable, order-derived subset
   // rather than whichever ones happened to arrive last.
-  const bounded = [...invisible]
-    .sort((a, b) => a.order - b.order)
-    .slice(0, room);
+  const bounded = [...invisible].sort(byPosition).slice(0, room);
   const carried = bounded.map(placement => {
     if (!taken.has(placement.id)) {
       taken.add(placement.id);

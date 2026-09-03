@@ -55,6 +55,7 @@ import {
   readPlacements,
   visibilityToken,
   type WidgetPlacement,
+  byPosition,
 } from "../domains/widgets/layout";
 import {
   holdsWidgetPermission,
@@ -529,7 +530,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // Echoing the raw array made this response a SECOND representation of the
   // same arrangement: a client trusting it to chain another edit without
   // re-reading would render `[10, 0]` where a reload gives `[0, 10]`.
-  const echoed = [...submitted].sort((a, b) => a.order - b.order);
+  const echoed = [...submitted].sort(byPosition);
 
   return respondMutation(
     "Dashboard layout saved.",
