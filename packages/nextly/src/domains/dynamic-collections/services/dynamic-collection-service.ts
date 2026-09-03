@@ -400,9 +400,9 @@ export class DynamicCollectionService extends BaseService {
     // rather than merely stale.
     //
     // Built by the SAME builder `migrate:create` uses, not a second statement
-    // that would have to agree with it. The two authoring paths are otherwise
-    // disjoint -- this one writes no `meta/` snapshot, so `migrate:create` never
-    // sees its tables -- which is exactly why each has to be self-sufficient.
+    // that would have to agree with it. What makes this file have to be
+    // self-sufficient is simply that it is the only thing replayed against the
+    // target database: nothing else recreates the registry row there.
     // 🔴 The ARTEFACT and what runs HERE are not the same statement, and this
     // path had no reason to distinguish them until the artefact gained the
     // registry row. The committed file must recreate that row, because the
@@ -478,25 +478,6 @@ export class DynamicCollectionService extends BaseService {
   }
 
   /**
-   * i18n: append the create-only companion `<table>_locales` CREATE statement to a
-   * fresh localized collection's migration. Returns the original SQL unchanged when
-   * the collection has no translatable fields (nothing to store per-locale).
-   */
-  /**
-   * Append the `dynamic_collections` upsert that recreates this collection's
-   * registry row when the migration is replayed elsewhere.
-   *
-   * Separated with the breakpoint marker for the same reason the companion
-   * CREATE is: the runner splits on it, and a driver with multi-statements
-   * disabled rejects a combined chunk.
-   *
-   * The upsert conflicts on `slug` and leaves `id`, `table_name`, `source` and
-   * `migration_status` to the INSERT, so replaying it against a database that
-   * already holds the row -- this one, in development -- refreshes the fields
-   * and labels without renaming the row or overwriting a status the runtime
-   * owns.
-   */
-  /**
    * This collection as the manifest describes it, which is what the metadata
    * upsert is built from.
    *
@@ -549,6 +530,20 @@ export class DynamicCollectionService extends BaseService {
     };
   }
 
+  /**
+   * Append the `dynamic_collections` upsert that recreates this collection's
+   * registry row when the migration is replayed elsewhere.
+   *
+   * Separated with the breakpoint marker for the same reason the companion
+   * CREATE is: the runner splits on it, and a driver with multi-statements
+   * disabled rejects a combined chunk.
+   *
+   * The upsert conflicts on `slug` and leaves `id`, `table_name`, `source` and
+   * `migration_status` to the INSERT, so replaying it against a database that
+   * already holds the row -- this one, in development -- refreshes the fields
+   * and labels without renaming the row or overwriting a status the runtime
+   * owns.
+   */
   private appendMetadataUpsertSQL(
     migrationSQL: string,
     entity: UiSchemaEntity
@@ -557,6 +552,11 @@ export class DynamicCollectionService extends BaseService {
     return `${migrationSQL}\n--> statement-breakpoint\n${upsert}`;
   }
 
+  /**
+   * i18n: append the create-only companion `<table>_locales` CREATE statement to a
+   * fresh localized collection's migration. Returns the original SQL unchanged when
+   * the collection has no translatable fields (nothing to store per-locale).
+   */
   private appendCompanionCreateSQL(
     migrationSQL: string,
     slug: string,

@@ -431,19 +431,6 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
 );
 
 /**
- * The admin presentation a UI-built entity carries.
- *
- * 🔴 WIDER than the three keys this began with, because the Schema Builder
- * stores more than it could express here. A zod object strips what it does not
- * declare, so a collection created hidden, with an icon, an explicit order or a
- * sidebar group lost all four on the way into a manifest -- and a migration
- * generated from that manifest rebuilt a visibly different collection
- * elsewhere: shown when it was hidden, unordered, no icon.
- *
- * These are presentation only. Nothing here changes a table, which is why they
- * can be added without a migration concern of their own.
- */
-/**
  * A stored hook config, validated as the executor actually requires it.
  *
  * 🔴 NOT a loose record. `StoredHookExecutor` reads `config` and `order` off
@@ -500,6 +487,19 @@ const _schemaAcceptsEveryStoredHook: SchemaAcceptsEveryStoredHook = true;
 void _schemaAcceptsOnlyStoredHooks;
 void _schemaAcceptsEveryStoredHook;
 
+/**
+ * The admin presentation a UI-built entity carries.
+ *
+ * 🔴 WIDER than the three keys this began with, because the Schema Builder
+ * stores more than it could express here. A zod object strips what it does not
+ * declare, so a collection created hidden, with an icon, an explicit order or a
+ * sidebar group lost all four on the way into a manifest -- and a migration
+ * generated from that manifest rebuilt a visibly different collection
+ * elsewhere: shown when it was hidden, unordered, no icon.
+ *
+ * These are presentation only. Nothing here changes a table, which is why they
+ * can be added without a migration concern of their own.
+ */
 const admin = z.object({
   useAsTitle: z.string().optional(),
   defaultColumns: z.array(z.string()).optional(),

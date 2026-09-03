@@ -36,6 +36,5 @@ rather than merely showing a stale status.
 
 The migration now carries the row too, built by the same builder `migrate:create`
 uses rather than a second statement that would have to agree with it. The two
-authoring paths are disjoint by construction -- the Builder writes no `meta/`
-snapshot, so `migrate:create` never sees its tables -- which is why each has to
-be self-sufficient.
+committed migration is the only thing replayed against the target database, so
+it has to be self-sufficient: nothing else recreates the registry row there.

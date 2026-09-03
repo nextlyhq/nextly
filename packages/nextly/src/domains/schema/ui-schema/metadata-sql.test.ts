@@ -471,10 +471,11 @@ describe("escaping the values a Builder-authored entity can carry", () => {
 
 describe("a column that is absent from the manifest must not clear the row", () => {
   it("omits the description column entirely when the manifest carries none", () => {
-    // 🔴 Written unconditionally — NULL when absent — the column does not merely
-    // fail to set a description, it CLEARS one: every manifest projection that
-    // does not carry the value erases what an earlier migration deployed, and
-    // there are six such projections.
+    // 🔴 The column is OMITTED here, and this asserts that. Were it written
+    // unconditionally — NULL when absent — it would not merely fail to set a
+    // description, it would CLEAR one: every manifest projection that does not
+    // carry the value would erase what an earlier migration deployed, and there
+    // are six such projections.
     //
     // Omitted, it is absent from the INSERT and from the DO UPDATE SET, so the
     // stored value survives. `admin` has behaved this way throughout and

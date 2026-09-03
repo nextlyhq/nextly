@@ -185,11 +185,10 @@ export default function FieldGroupBuilderEditPage({
               slug,
               settings: {
                 singularName: settings?.singularName,
-                // 🔴 The description travels too. The migration's upsert writes
-                // that column unconditionally so that clearing one propagates,
-                // so a manifest omitting it does not leave the stored value
-                // alone — it replaces it with NULL, erasing on this save a
-                // description an earlier migration had deployed.
+                // 🔴 The description travels too, so it reaches a database
+                // the manifest is replayed against. The upsert omits the column
+                // when a manifest carries none, so this supplies the value
+                // rather than protecting it from being nulled.
                 description: settings?.description,
                 // Mirror the Internationalization flag into ui-schema.json.
                 localized: settings?.i18n === true,

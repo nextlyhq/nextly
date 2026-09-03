@@ -964,21 +964,6 @@ function quoteOpenerAt(
 }
 
 /**
- * Whether the character at `index` is escaped by the backslash run before it.
- *
- * 🔴 PARITY, not the single preceding character. A doubled backslash is one
- * LITERAL backslash — which is how MySQL string escaping writes it — so a value
- * ending in a backslash puts `\\` immediately before its closing quote.
- * Reading only that last character calls the quote escaped, leaves the splitter
- * inside a string it has actually left, swallows the statement's semicolon, and
- * concatenates the next statement onto it. A driver with multi-statements
- * disabled then rejects the pair, after earlier statements in the same file
- * have already run.
- *
- * An EVEN run means the backslashes escape each other and the character stands
- * on its own; an odd run means the last one escapes it.
- */
-/**
  * Whether a string literal opening at `index` honours backslash escapes.
  *
  * 🔴 A PROPERTY OF THE LITERAL, not of the dialect alone. MySQL escapes with
@@ -1015,13 +1000,6 @@ function opensBackslashEscapedString(
 }
 
 /**
- * Whether the character at `index` is escaped by the backslash run before it.
- *
- * An EVEN run means the backslashes escape each other and the character stands
- * on its own; an odd run means the last one escapes it. Consulted only for a
- * literal that honours backslash escapes at all.
- */
-/**
  * Whether a quote at `index` CLOSES the literal it appears in.
  *
  * The two questions — does this literal escape at all, and is this particular
@@ -1036,6 +1014,21 @@ function closesLiteral(
   return !(escapesWithBackslash && precededByOddBackslashes(text, index));
 }
 
+/**
+ * Whether the character at `index` is escaped by the backslash run before it.
+ *
+ * 🔴 PARITY, not the single preceding character. A doubled backslash is one
+ * LITERAL backslash — which is how MySQL string escaping writes it — so a value
+ * ending in a backslash puts `\\` immediately before its closing quote.
+ * Reading only that last character calls the quote escaped, leaves the splitter
+ * inside a string it has actually left, swallows the statement's semicolon, and
+ * concatenates the next statement onto it. A driver with multi-statements
+ * disabled then rejects the pair, after earlier statements in the same file
+ * have already run.
+ *
+ * An EVEN run means the backslashes escape each other and the character stands
+ * on its own; an odd run means the last one escapes it.
+ */
 function precededByOddBackslashes(text: string, index: number): boolean {
   let run = 0;
   for (let k = index - 1; k >= 0 && text[k] === "\\"; k -= 1) run += 1;

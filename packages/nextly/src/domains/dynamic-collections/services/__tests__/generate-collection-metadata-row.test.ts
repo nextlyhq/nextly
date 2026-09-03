@@ -167,13 +167,22 @@ describe("the migration a Builder create writes", () => {
     expect(sql).toContain("Long-form editorial pieces");
   });
 
-  it("writes NULL, not the text 'undefined', when there is no description", async () => {
-    // The control the case above needs: a mapping that stringified an absent
-    // value would satisfy it and store the four characters "null" — or worse,
-    // "undefined" — as the help text of every collection created without one.
+  it("OMITS the description column entirely when there is none", async () => {
+    // 🔴 Searching the statement for NULL cannot separate the two
+    // implementations: the default `versions`, `revalidate` and `webhooks`
+    // columns already emit NULL, so that assertion passes on an unconditional
+    // description column as readily as on an omitted one. Whether the column is
+    // NAMED at all is the property that differs — omitted, it is absent from
+    // the INSERT and from the DO UPDATE SET, so replaying a manifest that
+    // carries no description leaves a deployed one alone.
     const sql = await sqlFor();
+    expect(sql).not.toContain('"description"');
+    // A mapping that stringified an absent value would store the characters
+    // "undefined" as the help text of every collection created without one.
     expect(sql).not.toContain("'undefined'");
-    expect(sql).toContain("NULL");
+    // The control: a run that generated no statement would satisfy both
+    // refusals above without the column having been omitted by anything.
+    expect(sql).toContain("dynamic_collections");
   });
 
   it("carries stored hooks, which the hook service runs off the row", async () => {
@@ -212,9 +221,10 @@ describe("the migration a Builder create writes", () => {
   it("emits EXACTLY what migrate:create emits for the same entity", async () => {
     // 🔴 The control the other four exist for. Each of them passes against a
     // second, separately written statement that merely looks right — which is
-    // the divergence this change removes rather than adds to. The two authoring
-    // paths are disjoint by construction: this one writes no `meta/` snapshot,
-    // so `migrate:create` never sees its tables and cannot correct it.
+    // the divergence this change removes rather than adds to. The statement
+    // this path appends must be the one `migrate:create` writes for the same
+    // entity, because the committed file is the only thing replayed against the
+    // target database.
     const { migrationSQL, metadata } = await generate();
     // Built from the row this service says it WROTE, not from the raw input:
     // the fields it stores are normalised, so an expectation assembled from the
