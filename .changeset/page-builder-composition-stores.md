@@ -57,8 +57,16 @@ permission are then derived from the slug the host actually registered, so a
 `.rename({ patterns: "saved-patterns" })` no longer leaves the link pointing
 at a list that does not exist or gates it on a permission nobody is seeded.
 
-A menu item naming a collection its plugin does not contribute is refused at
-registration rather than serialized into a link nobody can follow.
+A menu item naming a collection its plugin does not contribute is refused when
+the plugin is registered, rather than throwing on every admin request once the
+app is already running. An item that names a collection keeps the destination
+it declared — including any list state such as `?status=draft` — and only has
+its collection segment rewritten when a rename actually moves it.
+
+Creating a document in a blocks field now seeds an empty document of a kind
+that field accepts. Previously it always seeded a page, so a store declaring
+`kinds: ["pattern"]` offered an editor that looked like it worked and a save
+the server refused.
 
 Nothing yet renders a component instance or resolves a Layout — this is the
 storage and the permissions the rest of the feature is built on. A Layout row

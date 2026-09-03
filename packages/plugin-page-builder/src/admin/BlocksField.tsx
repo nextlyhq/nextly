@@ -49,6 +49,7 @@ import {
   previewContainerFor,
   newId,
   type BlockDocument,
+  type DocumentKind,
   type BreakpointSet,
   type NamedClass,
   type SiteTokenSet,
@@ -139,6 +140,7 @@ import {
 
 import { classUsageOf } from "../class-usage";
 import { emptyBlockDocument } from "../fields/blocks-document";
+import { acceptedKinds } from "../fields/blocks-options";
 import { hostFetchPolicy, readRemotePatterns } from "../host-policy";
 import {
   classOverrideOf,
@@ -168,6 +170,21 @@ export interface BlocksFieldProps<
   name: Path<TFieldValues>;
   /** React Hook Form control the entry form owns. */
   control: Control<TFieldValues>;
+  /**
+   * The field's own declaration, as the admin passes it to every plugin field
+   * editor.
+   *
+   * Read for the kinds it accepts, and for nothing else. Without it the editor
+   * has to guess what an empty document should be, and its only available
+   * guess is a page — which is the one answer a pattern or component store
+   * refuses.
+   *
+   * Named `field` because that is the name the admin passes it under
+   * (`FieldRenderer` spreads `{ ...commonProps, field }` into every plugin
+   * field editor). A prop named for what this file wants to call it would type
+   * fine, arrive never, and leave the defect in place looking fixed.
+   */
+  field?: { blocks?: unknown };
   /**
    * The document is being READ, not edited, so no way in is offered.
    *
@@ -275,16 +292,28 @@ function emptyContainerAppenderHidden(
  * rather than at this boundary, and an editor that crashes on open gives an
  * author no way to repair the value.
  *
+ * The KINDS the field accepts are a parameter rather than a default, because
+ * the substitute has to be a document the same field will accept. Seeding a
+ * `page` into a field declaring `kinds: ["pattern"]` produces an editor that
+ * looks like it works and a save the server refuses with
+ * `DISALLOWED_DOCUMENT_KIND` — so the store cannot be authored at all through
+ * the UI that advertises it, and nothing says why until the author presses
+ * Done.
+ *
  * Exported for its own tests: it is the only place a malformed stored document
  * is turned into a safe one, and it is worth asserting directly rather than
  * through a rendered editor.
  */
-export function documentFrom(value: unknown): BlockDocument {
-  if (typeof value !== "object" || value === null) return emptyBlockDocument();
+export function documentFrom(
+  value: unknown,
+  kinds?: readonly DocumentKind[]
+): BlockDocument {
+  if (typeof value !== "object" || value === null)
+    return emptyBlockDocument(kinds);
   const candidate = value as Partial<BlockDocument>;
   return Array.isArray(candidate.nodes)
     ? (value as BlockDocument)
-    : emptyBlockDocument();
+    : emptyBlockDocument(kinds);
 }
 
 /**
@@ -314,9 +343,17 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   control,
   readOnly = false,
   disabled = false,
+  // Renamed locally because `field` is also what `useController` calls the
+  // bound value below, and the two are different things: this is the schema's
+  // declaration, that is the form's state.
+  field: declaration,
 }: BlocksFieldProps<TFieldValues>) {
   const [open, setOpen] = useState(false);
   const { field } = useController({ name, control });
+
+  // What an empty document has to be for THIS field. Asked once and passed
+  // down, so the resting card and the open editor cannot seed different kinds.
+  const kinds = acceptedKinds(declaration);
 
   const editable = canEditBlocks({ readOnly, disabled });
 
@@ -361,6 +398,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
       // undo stack rather than carrying it into a document it cannot describe.
       key={String(field.value === undefined ? "empty" : "seeded")}
       initialValue={field.value}
+      kinds={kinds}
       onCommit={field.onChange}
       onClose={() => setOpen(false)}
       // Named and controlled so the editor can record its live document as
@@ -370,7 +408,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
     />
   ) : (
     <PageBuilderCard
-      document={documentFrom(field.value)}
+      document={documentFrom(field.value, kinds)}
       siteStyles={resting.siteStyles}
       styleState={resting.styleState}
       render={resting.render}
@@ -1555,12 +1593,15 @@ function useDocumentDirty<TFieldValues extends FieldValues>(
 
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
+  kinds,
   onCommit,
   onClose,
   name,
   control,
 }: {
   initialValue: unknown;
+  /** The kinds the field accepts, so a seeded document is one it will take. */
+  kinds: readonly DocumentKind[] | undefined;
   onCommit: (value: BlockDocument) => void;
   onClose: () => void;
   name: Path<TFieldValues>;
@@ -1573,8 +1614,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   ensureCoreBlocksRegistered();
 
   const initialDocument = useMemo(
-    () => documentFrom(initialValue),
-    [initialValue]
+    () => documentFrom(initialValue, kinds),
+    [initialValue, kinds]
   );
   const editor = useEditorState({ initialDocument });
 

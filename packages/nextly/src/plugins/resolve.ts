@@ -2,6 +2,7 @@ import type { PluginDefinition } from "./plugin-context";
 import { topoSortPlugins } from "./topo-sort";
 import { assertAdminWidgets } from "./validate-admin-widgets";
 import { assertClientConfigs } from "./validate-client-config";
+import { validatePluginMenus } from "./validate-menus";
 import { validatePluginSlugs } from "./validate-slugs";
 import { validatePluginVersions } from "./validate-versions";
 
@@ -42,5 +43,10 @@ export function resolvePlugins(
   // what a correct lookup returns. Registration is where the ambiguity is still
   // observable.
   validatePluginSlugs(plugins);
+  // A menu item naming a collection its plugin does not contribute is the same
+  // kind of mistake, and is equally unobservable downstream: the sidebar hides
+  // the item from everyone without the never-seeded permission, which is what
+  // a role legitimately lacking access looks like.
+  validatePluginMenus(plugins);
   return topoSortPlugins(plugins);
 }

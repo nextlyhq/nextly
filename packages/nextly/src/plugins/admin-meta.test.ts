@@ -1036,6 +1036,67 @@ describe("buildPluginAdminMeta menu slugs", () => {
     expect(logMessage).toContain("patterns");
   });
 
+  it("keeps a destination that carries list state when nothing is renamed", () => {
+    const plugin = definePlugin({
+      ...base,
+      contributes: {
+        collections: [{ slug: "patterns" } as never],
+        admin: {
+          menu: [
+            {
+              label: "Drafts",
+              collection: "patterns",
+              to: "/admin/collections/patterns?status=draft",
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition);
+
+    // Naming a collection is how an item opts into rename-safety and RBAC, not
+    // a request to be sent somewhere canonical. Overwriting `to` made adding
+    // `collection` to a working link silently change where that link went —
+    // and the contract on the field says the opposite.
+    expect(menuOf(plugin)?.[0]).toMatchObject({
+      to: "/admin/collections/patterns?status=draft",
+      requiredPermission: "read-patterns",
+    });
+
+    // And when the slug DOES move, only the collection segment is rewritten.
+    const renamed = plugin.rename?.({ patterns: "saved" }) ?? plugin;
+    expect(menuOf(renamed)?.[0]).toMatchObject({
+      to: "/admin/collections/saved?status=draft",
+      requiredPermission: "read-saved",
+    });
+  });
+
+  it("does not resolve a slug through an inherited object property", () => {
+    const plugin = definePlugin({
+      ...base,
+      contributes: {
+        // A legal slug that is also a key every object inherits.
+        collections: [{ slug: "constructor" } as never],
+        admin: {
+          menu: [
+            {
+              label: "Constructor",
+              collection: "constructor",
+              to: "/admin/collections/constructor",
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition);
+
+    // With no rename the map is `{}`, and `{}["constructor"]` is the Object
+    // constructor — a function, so `??` never fires and the destination
+    // becomes the source text of a native function.
+    expect(menuOf(plugin)?.[0]).toMatchObject({
+      to: "/admin/collections/constructor",
+      requiredPermission: "read-constructor",
+    });
+  });
+
   it("resolves a nested item too", () => {
     const plugin = definePlugin({
       ...base,

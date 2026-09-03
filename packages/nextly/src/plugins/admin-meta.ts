@@ -26,11 +26,11 @@ import type {
   PluginDefinition,
 } from "./plugin-context";
 import { pluginAdminSlug } from "./plugin-slug";
-import { resolutionError } from "./resolution-error";
 import { collectPluginRoutes } from "./routes/collect-routes";
 import { isRouteError } from "./routes/route-error";
 import { validatedAdminWidgets } from "./validate-admin-widgets";
 import { validatedClientConfig } from "./validate-client-config";
+import { validatePluginMenus } from "./validate-menus";
 import { validatePluginSlugs } from "./validate-slugs";
 
 /**
@@ -190,12 +190,10 @@ export { pluginAdminSlug } from "./plugin-slug";
  */
 function resolvedMenuItem(
   item: PluginMenuItem,
-  renameMap: Record<string, string>,
-  owned: readonly string[],
-  name: string
+  renameMap: Record<string, string>
 ): PluginMenuItem {
   const children = item.children?.map(child =>
-    resolvedMenuItem(child, renameMap, owned, name)
+    resolvedMenuItem(child, renameMap)
   );
   const withChildren = children ? { ...item, children } : item;
 
@@ -205,33 +203,55 @@ function resolvedMenuItem(
   const { collection, ...rest } = withChildren;
   if (collection === undefined) return withChildren;
 
-  // Refused at registration, because there is nothing to observe later. A slug
-  // this plugin does not own resolves to a perfectly well-formed path and a
-  // perfectly well-formed permission, and both are wrong in the quietest way
-  // available: the permission is never seeded, so every non-super-admin simply
-  // does not see the item, and the super-admins who do see it get a link to a
-  // list that does not exist. Neither surface can tell that from a role
-  // legitimately lacking access.
-  if (!owned.includes(collection)) {
-    throw resolutionError(
-      "menu-item-unowned-collection",
-      `Plugin "${name}" has a menu item ("${withChildren.label}") naming ` +
-        `collection "${collection}", which it does not contribute. Name one ` +
-        `of: ${owned.join(", ") || "(none)"}.`,
-      { plugin: name, collection, owned }
-    );
-  }
+  // An OWN property only. `renameMap` is an ordinary object, so a plugin whose
+  // collection is legitimately called `constructor` or `toString` would index
+  // into `Object.prototype` and resolve its slug to a function — and `??`
+  // cannot see that, because an inherited method is neither null nor
+  // undefined. The destination becomes `/admin/collections/function Object()
+  // { [native code] }` and the gate an equally unseeded permission.
+  const renamed = Object.prototype.hasOwnProperty.call(renameMap, collection)
+    ? renameMap[collection]
+    : undefined;
+  const slug = typeof renamed === "string" ? renamed : collection;
 
-  const slug = renameMap[collection] ?? collection;
   return {
     ...rest,
-    to: `/admin/collections/${slug}`,
+    to: retargetedTo(rest.to, collection, slug),
     // The seeded per-collection read verb. Written from the resolved slug for
-    // the same reason `to` is: a rename moves the permission the seeder
-    // creates, and a gate naming the declared slug would hide the item from
-    // exactly the readers who can open the list.
+    // the same reason the destination is: a rename moves the permission the
+    // seeder creates, and a gate naming the declared slug would hide the item
+    // from exactly the readers who can open the list.
     requiredPermission: `read-${slug}`,
   };
+}
+
+/**
+ * The item's destination, pointed at the slug the host registered.
+ *
+ * Returns the declared `to` UNCHANGED when nothing was renamed. Naming a
+ * collection is how an item opts into rename-safety and RBAC, not a request to
+ * be sent somewhere canonical, so an item whose destination carries list state
+ * — `?status=draft`, a hash, a sub-path — keeps it. Overwriting it made adding
+ * `collection` to a working link change where that link went.
+ *
+ * When the slug DID move, only the collection segment is rewritten and
+ * whatever followed it is carried across. A destination that does not address
+ * the declared collection at all is left alone: the item named a collection so
+ * its permission still moves, but a path this function does not recognise is
+ * not one it should be inventing a new spelling for.
+ */
+function retargetedTo(to: string, declared: string, resolved: string): string {
+  if (declared === resolved) return to;
+
+  const prefix = `/admin/collections/${declared}`;
+  const addressesTheList =
+    to === prefix ||
+    to.startsWith(`${prefix}/`) ||
+    to.startsWith(`${prefix}?`) ||
+    to.startsWith(`${prefix}#`);
+  if (!addressesTheList) return to;
+
+  return `/admin/collections/${resolved}${to.slice(prefix.length)}`;
 }
 
 /**
@@ -307,6 +327,7 @@ export function buildPluginAdminMeta(
   // rewrite `config.plugins` after `resolvePlugins` has already run. Both
   // would publish ambiguous addresses from a list nothing had checked.
   validatePluginSlugs(plugins);
+  validatePluginMenus(plugins);
 
   return plugins.map(plugin => {
     const slug = pluginAdminSlug(plugin.name);
@@ -374,12 +395,7 @@ export function buildPluginAdminMeta(
     if (isEnabled && admin) {
       if (admin.menu && admin.menu.length > 0) {
         meta.menu = admin.menu.map(item =>
-          resolvedMenuItem(
-            item,
-            plugin.renameMap ?? {},
-            pluginCollectionSlugs(plugin),
-            plugin.name
-          )
+          resolvedMenuItem(item, plugin.renameMap ?? {})
         );
       }
       if (admin.pages && admin.pages.length > 0) meta.pages = admin.pages;
