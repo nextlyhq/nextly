@@ -261,7 +261,15 @@ export function placementsByColumn<
     () => []
   );
   for (const placement of placements) {
-    const declared = placement.column ?? 0;
+    // 🔴 TRUNCATED, because this value indexes an array. A fractional column
+    // survives the clamp and `columns[0.5]` is undefined, so the push throws
+    // and takes the whole grid with it. The reader that builds a stored
+    // placement truncates already, so nothing reaches here fractional today —
+    // which is what makes the guard cheap rather than what makes it
+    // unnecessary: this is exported, it is called on placements from the
+    // editor as well as from the wire, and reachability is a property of the
+    // call graph rather than of the code.
+    const declared = Math.trunc(placement.column ?? 0);
     const index = Math.min(Math.max(0, declared), columns.length - 1);
     columns[index].push(placement);
   }

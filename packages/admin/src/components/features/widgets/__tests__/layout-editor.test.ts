@@ -647,6 +647,26 @@ describe("the stored sequence reads ACROSS the rows", () => {
   });
 });
 
+describe("a column that is not a whole number", () => {
+  it("places the card instead of throwing", () => {
+    // 🔴 The value indexes an array. Clamping alone leaves a fraction intact,
+    // `columns[0.5]` is undefined, and the push throws — which does not lose one
+    // card, it takes the whole grid down. Nothing produces a fractional column
+    // today, because the reader truncates before storing one; this is exported
+    // and called on placements from the editor as well as from the wire, so the
+    // guard costs one operation on a value already in hand.
+    const grouped = placementsByColumn([{ id: "a", column: 0.5, order: 0 }], 2);
+    expect(grouped.map(bucket => bucket.map(p => p.id))).toEqual([["a"], []]);
+  });
+
+  it("still sends a whole number to the column it names", () => {
+    // The control: truncating toward zero would satisfy the case above while
+    // moving every card in column 1 into column 0.
+    const grouped = placementsByColumn([{ id: "a", column: 1, order: 0 }], 2);
+    expect(grouped.map(bucket => bucket.map(p => p.id))).toEqual([[], ["a"]]);
+  });
+});
+
 describe("narrowing the dashboard renumbers what is on screen", () => {
   const at = (id: string, column: number, order: number): WidgetPlacement => ({
     id,
