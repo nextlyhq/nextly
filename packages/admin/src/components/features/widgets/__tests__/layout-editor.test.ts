@@ -9,8 +9,8 @@ import {
   addPlacement,
   columnAffordance,
   columnFromDropData,
+  dropSide,
   resolveDrop,
-  moveToColumn,
   placementsByColumn,
   hasChanges,
   moveAffordance,
@@ -283,26 +283,6 @@ describe("arranging across columns", () => {
     });
   });
 
-  describe("moving between columns", () => {
-    it("moves a card into the column asked for", () => {
-      const moved = moveToColumn([at("a", 0, 0), at("b", 1, 10)], "a", 1);
-      expect(moved.find(p => p.id === "a")?.column).toBe(1);
-    });
-
-    it("leaves the other placements' columns alone", () => {
-      // The control: a rebuild that renumbered every column would satisfy the
-      // assertion above while quietly rearranging the whole dashboard.
-      const moved = moveToColumn([at("a", 0, 0), at("b", 1, 10)], "a", 1);
-      expect(moved.find(p => p.id === "b")?.column).toBe(1);
-      expect(moved).toHaveLength(2);
-    });
-
-    it("ignores an id it does not hold, rather than throwing", () => {
-      const before = [at("a", 0, 0)];
-      expect(moveToColumn(before, "nope", 1)).toEqual(before);
-    });
-  });
-
   describe("what the single-pointer controls may offer", () => {
     it("refuses left at the first column and right at the last", () => {
       // 🔴 WCAG 2.2 SC 2.5.7: crossing columns must be reachable by CLICK, not
@@ -346,7 +326,12 @@ describe("resolving where a drag landed", () => {
   });
 
   it("takes the column of the card it was dropped onto", () => {
-    const next = resolveDrop(start, "a", { kind: "card", placementId: "c" }, 3);
+    const next = resolveDrop(
+      start,
+      "a",
+      { kind: "card", placementId: "c", side: "before" },
+      3
+    );
     expect(next.find(p => p.id === "a")?.column).toBe(1);
   });
 
@@ -354,7 +339,12 @@ describe("resolving where a drag landed", () => {
     // 🔴 The control for the case above. Setting the column and stopping there
     // passes "took the column" while every card lands in arrival order, so a
     // reader can never place one BELOW another in the same column.
-    const next = resolveDrop(start, "b", { kind: "card", placementId: "a" }, 3);
+    const next = resolveDrop(
+      start,
+      "b",
+      { kind: "card", placementId: "a", side: "before" },
+      3
+    );
     const column0 = next.filter(p => (p.column ?? 0) === 0).map(p => p.id);
     expect(column0).toEqual(["b", "a"]);
   });
@@ -366,7 +356,12 @@ describe("resolving where a drag landed", () => {
 
   it("leaves the arrangement alone when a card is dropped on itself", () => {
     expect(
-      resolveDrop(start, "a", { kind: "card", placementId: "a" }, 3)
+      resolveDrop(
+        start,
+        "a",
+        { kind: "card", placementId: "a", side: "before" },
+        3
+      )
     ).toEqual(start);
   });
 });
@@ -438,7 +433,12 @@ describe("a card can reach the MIDDLE of another column", () => {
     // A puts it before A, moving it toward D puts it after D, and [A, B, D] is
     // reachable from no card target at all. Resolved inside column 0's bucket,
     // B takes D's index — the position the pointer was actually over.
-    const next = resolveDrop(start, "B", { kind: "card", placementId: "D" }, 3);
+    const next = resolveDrop(
+      start,
+      "B",
+      { kind: "card", placementId: "D", side: "before" },
+      3
+    );
     expect(columnZero(next)).toEqual(["A", "B", "D"]);
   });
 
@@ -446,12 +446,136 @@ describe("a card can reach the MIDDLE of another column", () => {
     // The control: a resolution that always inserted at the end would satisfy
     // nothing above, and one that always inserted at the start would satisfy
     // the first case by accident.
-    const next = resolveDrop(start, "B", { kind: "card", placementId: "A" }, 3);
+    const next = resolveDrop(
+      start,
+      "B",
+      { kind: "card", placementId: "A", side: "before" },
+      3
+    );
     expect(columnZero(next)).toEqual(["B", "A", "D"]);
   });
 
   it("APPENDS when the target is the column itself", () => {
     const next = resolveDrop(start, "B", { kind: "column", column: 0 }, 3);
     expect(columnZero(next)).toEqual(["A", "D", "B"]);
+  });
+
+  it("lands BELOW the last card when the drop is on its lower half", () => {
+    // 🔴 The bottom of a populated column is otherwise unreachable by drag. A
+    // column disables its own droppable once it holds anything, so releasing
+    // in the space under D resolves to D -- and inserting at D's own index put
+    // the card in front of it, so no gesture at all produced [A, D, B].
+    const next = resolveDrop(
+      start,
+      "B",
+      { kind: "card", placementId: "D", side: "after" },
+      3
+    );
+    expect(columnZero(next)).toEqual(["A", "D", "B"]);
+  });
+
+  it("still lands ABOVE that same card on its upper half", () => {
+    // The control for the case above, on the SAME target. A resolution that
+    // ignored the side and always appended would satisfy it while making the
+    // position above the last card unreachable instead -- the same defect
+    // pointing the other way.
+    const next = resolveDrop(
+      start,
+      "B",
+      { kind: "card", placementId: "D", side: "before" },
+      3
+    );
+    expect(columnZero(next)).toEqual(["A", "B", "D"]);
+  });
+
+  it("moves a card DOWN past its own neighbour", () => {
+    // Within one column the active card is removed from the bucket it is being
+    // re-inserted into, so the index read before the removal is one too many
+    // afterwards. Uncorrected, A lands back above D and the gesture does
+    // nothing -- which reads as the drag having been dropped.
+    const next = resolveDrop(
+      start,
+      "A",
+      { kind: "card", placementId: "D", side: "after" },
+      3
+    );
+    expect(columnZero(next)).toEqual(["D", "A"]);
+  });
+});
+
+describe("the stored sequence reads ACROSS the rows", () => {
+  const at = (id: string, column: number, order: number): WidgetPlacement => ({
+    id,
+    widgetId: `w-${id}`,
+    column,
+    order,
+    hidden: false,
+  });
+  const start = [at("A", 0, 0), at("B", 1, 10), at("C", 2, 20), at("D", 0, 30)];
+
+  it("orders the placements row-major, not column by column", () => {
+    // 🔴 `byPosition` sorts on `order` and reads the dashboard across the top
+    // before going down, so the stored numbers have to agree with that reading.
+    // Numbering column by column stored [D, A, B, C] for a grid drawn as
+    // [D, B, C] then [A], and every client consuming the canonical sequence
+    // reordered cards nobody had touched.
+    const next = resolveDrop(
+      start,
+      "D",
+      { kind: "card", placementId: "A", side: "before" },
+      3
+    );
+    const sequence = [...next]
+      .sort((a, b) => a.order - b.order || (a.column ?? 0) - (b.column ?? 0))
+      .map(p => p.id);
+    expect(sequence).toEqual(["D", "B", "C", "A"]);
+  });
+
+  it("still orders each column top to bottom", () => {
+    // The control: a sequence that interleaved wrongly could satisfy the row
+    // reading while scrambling the column the reader is actually looking at.
+    // Both are read off the same numbers, so both have to hold at once.
+    const next = resolveDrop(
+      start,
+      "D",
+      { kind: "card", placementId: "A", side: "before" },
+      3
+    );
+    const column0 = next
+      .filter(p => (p.column ?? 0) === 0)
+      .sort((a, b) => a.order - b.order)
+      .map(p => p.id);
+    expect(column0).toEqual(["D", "A"]);
+  });
+});
+
+describe("which side of a card a drop landed on", () => {
+  it("is AFTER once the dragged card's middle passes the target's", () => {
+    expect(dropSide({ top: 120, height: 40 }, { top: 100, height: 40 })).toBe(
+      "after"
+    );
+  });
+
+  it("is BEFORE while it is still above", () => {
+    expect(dropSide({ top: 80, height: 40 }, { top: 100, height: 40 })).toBe(
+      "before"
+    );
+  });
+
+  it("compares CENTRES, not edges", () => {
+    // 🔴 The separating case. A tall card overlapping the target's top edge has
+    // a lower top and a higher centre, so an edge comparison answers "before"
+    // for a gesture whose weight is plainly below -- and the two agree on every
+    // pair of equal-height cards, which is most of them.
+    expect(dropSide({ top: 90, height: 100 }, { top: 100, height: 40 })).toBe(
+      "after"
+    );
+  });
+
+  it("falls back to BEFORE when a rectangle is missing", () => {
+    // The position a drop resolved to before sides existed, so a measurement
+    // that cannot be taken costs the old behaviour rather than an arbitrary one.
+    expect(dropSide(null, { top: 100, height: 40 })).toBe("before");
+    expect(dropSide({ top: 100, height: 40 }, undefined)).toBe("before");
   });
 });

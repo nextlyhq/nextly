@@ -269,26 +269,6 @@ export function placementsByColumn<
 }
 
 /**
- * The same placements, with one card moved into `column`.
- *
- * Identified by id rather than by position, for the reason `movePlacementTo`
- * gives: a view index means something different from a stored index the moment
- * one placement is unresolvable, and translating between them moved the wrong
- * card. An id nobody holds is an ordinary outcome, not an error.
- */
-export function moveToColumn(
-  placements: readonly WidgetPlacement[],
-  placementId: string,
-  column: number
-): WidgetPlacement[] {
-  return placements.map(placement =>
-    placement.id === placementId
-      ? { ...placement, column: Math.max(0, column) }
-      : placement
-  );
-}
-
-/**
  * Which sideways moves a card may offer.
  *
  * 🔴 These back the CLICKABLE controls, not the drag. WCAG 2.2 SC 2.5.7 says
@@ -327,10 +307,41 @@ export function columnDropId(column: number): number {
 /** Where column droppable ids start. */
 const COLUMN_DROP_ID_BASE = 1_000_000;
 
+/** Which side of a card a drop lands on. */
+export type DropSide = "before" | "after";
+
 /** What a drag was released over. */
 export type DropTarget =
   | { kind: "column"; column: number }
-  | { kind: "card"; placementId: string };
+  | { kind: "card"; placementId: string; side: DropSide };
+
+/**
+ * Which side of the card under the pointer a drop lands on.
+ *
+ * 🔴 The side is what makes the BOTTOM of a populated column reachable. A
+ * column disables its own droppable the moment it holds anything, so the space
+ * below its last card resolves to that card — and landing every drop at the
+ * target's own index put the card in front of it, leaving the last position
+ * unreachable by drag however the pointer was placed.
+ *
+ * Compared on vertical centres, because a column is a vertical list: past the
+ * middle of the card underneath, the reader is aiming below it. The dragged
+ * rectangle is the TRANSLATED one, which is where the card currently is rather
+ * than where the gesture started.
+ *
+ * Defaults to `before` when either rectangle is missing. That is the position a
+ * drop resolved to before sides existed, so a measurement this cannot take
+ * costs the old behaviour rather than an arbitrary one.
+ */
+export function dropSide(
+  active: { top: number; height: number } | null | undefined,
+  over: { top: number; height: number } | null | undefined
+): DropSide {
+  if (!active || !over) return "before";
+  return active.top + active.height / 2 > over.top + over.height / 2
+    ? "after"
+    : "before";
+}
 
 /**
  * The droppable data a column registers.
@@ -367,6 +378,12 @@ export function columnFromDropData(data: unknown): number | undefined {
  * A drop that resolves to nothing returns the arrangement unchanged. Released
  * over empty space, or onto itself, is an ordinary end to a drag rather than an
  * error worth reporting.
+ *
+ * 🔴 This is the ONLY way a card changes column, and the single-pointer
+ * controls go through it too rather than through a helper of their own. A
+ * second one that set `column` and left `order` alone would move the card
+ * correctly and leave the stored sequence column-major — the exact disagreement
+ * with `byPosition` that `rowMajor` below exists to prevent.
  */
 export function resolveDrop(
   placements: readonly WidgetPlacement[],
@@ -394,33 +411,71 @@ export function resolveDrop(
   if (from === -1) return [...placements];
   const fromIndex = buckets[from].findIndex(p => p.id === activeId);
 
+  // 🔴 Every branch below names a position in the bucket as it stands BEFORE
+  // the active card is taken out, and the one adjustment for that removal is
+  // made in a single place afterwards. Two branches each compensating for it
+  // themselves is how one of them came to compensate twice.
   let column: number;
   let insertAt: number;
   if (target.kind === "column") {
     column = Math.min(Math.max(0, target.column), last);
     // A column target is the empty-column case, so the card appends.
-    insertAt =
-      column === from ? buckets[column].length - 1 : buckets[column].length;
+    insertAt = buckets[column].length;
   } else {
     const found = buckets.findIndex(bucket =>
       bucket.some(p => p.id === target.placementId)
     );
     if (found === -1) return [...placements];
     column = found;
-    // 🔴 The target's index BEFORE the active card is taken out. Removing it
-    // first shifts every later index down by one, so a card moving DOWN past
-    // its neighbour is re-inserted in front of it and nothing moves.
-    insertAt = buckets[found].findIndex(p => p.id === target.placementId);
+    // The side is what separates "above this card" from "below it". Without
+    // it every drop landed at the target's own index, so the position after
+    // the last card of a populated column could not be reached at all.
+    const targetIndex = buckets[found].findIndex(
+      p => p.id === target.placementId
+    );
+    insertAt = targetIndex + (target.side === "after" ? 1 : 0);
   }
 
   buckets[from].splice(fromIndex, 1);
+  // 🔴 The removal shifts every later index down by one, so a card moving DOWN
+  // past a neighbour in its OWN column would be re-inserted in front of it and
+  // nothing would move. Across columns nothing shifted, so nothing is adjusted.
+  if (from === column && fromIndex < insertAt) insertAt -= 1;
   buckets[column].splice(insertAt, 0, { ...active, column });
 
-  // Flattened column by column, so a card's neighbours within its column are
-  // adjacent in the stored sequence and `order` stays globally unique.
-  return buckets
-    .flat()
-    .map((placement, index) => ({ ...placement, order: index * ORDER_STEP }));
+  return rowMajor(buckets);
+}
+
+/**
+ * The buckets as ONE sequence, read ACROSS the rows.
+ *
+ * 🔴 Row-major, not column by column. `byPosition` is the single order in which
+ * the API presents a placement list as a line, and it reads the dashboard the
+ * way a person does: across the top, then the next row down. Numbering column
+ * by column made the stored `order` disagree with that — an arrangement drawn
+ * as `[A, D] [B] [C]` was stored as `A, D, B, C` while the reader sees
+ * `A, B, C, D` — so every client consuming the canonical sequence reordered
+ * cards nobody had moved.
+ *
+ * Sparse steps rather than 0..n, for the reason `renumber` gives: an insertion
+ * between two cards then needs no renumbering at all.
+ */
+function rowMajor(buckets: readonly WidgetPlacement[][]): WidgetPlacement[] {
+  const depth = buckets.reduce(
+    (deepest, bucket) => Math.max(deepest, bucket.length),
+    0
+  );
+  const sequence: WidgetPlacement[] = [];
+  for (let row = 0; row < depth; row += 1) {
+    for (const bucket of buckets) {
+      const placement = bucket[row];
+      if (placement !== undefined) sequence.push(placement);
+    }
+  }
+  return sequence.map((placement, index) => ({
+    ...placement,
+    order: index * ORDER_STEP,
+  }));
 }
 
 /**

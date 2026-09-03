@@ -466,16 +466,9 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const submitted = readPlacements(
     (body as Record<string, unknown>).placements
   );
-  const submittedColumnCount = readColumnCount(
-    (body as Record<string, unknown>).columnCount
-  );
-  // 🔴 BOUNDED against the count that was accepted, not the one that was sent.
-  // The two tolerances would otherwise disagree: an unsupported count is
-  // coerced to the default while a column was only bounded downward, so
-  // `{ columnCount: 5, column: 4 }` stored a three-column row holding a card in
-  // column 4. Nothing rejects such a row -- every reader reinterprets it, and
-  // the arrangement handed back is not the one that was sent. Coerced ONCE,
-  // here, so the stored row describes itself.
+  // Read RAW, and resolved against the stored row further down. `undefined` is
+  // an omission rather than a value, and the two need different answers.
+  const sentColumnCount = (body as Record<string, unknown>).columnCount;
   const expectedVersion = readVersion(body as Record<string, unknown>);
   const submittedScope = readScope(body as Record<string, unknown>);
 
@@ -552,6 +545,20 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
 
   const stored = await service.getLayout(SCOPE_KIND, caller.userId);
   const carried = carriedPlacements(stored.layout?.placements, visibleIds);
+
+  // 🔴 An OMITTED count inherits the stored one; only a row that does not exist
+  // yet falls back to the default. Every client written before columns sends no
+  // `columnCount`, and defaulting on their behalf saved a four-column row as a
+  // three-column one -- after which `boundColumns` folds every card in the
+  // fourth column into the third, permanently, during an edit that touched
+  // neither. A value that was actually SENT is still coerced, because the two
+  // tolerances have to agree: an unsupported count becoming the default while a
+  // column was only bounded downward stored `{ columnCount: 5, column: 4 }`, a
+  // three-column row holding a card in column 4 that every reader reinterprets.
+  const submittedColumnCount =
+    sentColumnCount === undefined
+      ? readColumnCount(stored.layout?.columnCount)
+      : readColumnCount(sentColumnCount);
 
   const toStore = boundColumns(
     mergePreservingHidden(submitted, carried),

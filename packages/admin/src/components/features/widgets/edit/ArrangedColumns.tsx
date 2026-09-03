@@ -12,6 +12,7 @@
 import { cn } from "@admin/lib/utils";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
 
+import type { DropSide } from "../layout-editor";
 import { COLUMN_TRACK_CLASSES } from "../sizes";
 
 import { ArrangedCell } from "./ArrangedCell";
@@ -30,7 +31,7 @@ export interface ArrangedColumnsProps {
   isFetching: boolean;
   announcement: string;
   /** Move one card one step within the column it is drawn in. */
-  onMove: (placementId: string, neighbourId: string) => void;
+  onMove: (placementId: string, neighbourId: string, side: DropSide) => void;
   onMoveColumn: (placementId: string, targetColumn: number) => void;
   onToggleHidden: (placementId: string) => void;
   onRemove: (placementId: string) => void;
@@ -124,7 +125,17 @@ export function ArrangedColumns({
               // toward it swapped two cards a reader could not see move.
               onMove={(delta: number) => {
                 const neighbour = rowsInColumn[indexInColumn + delta];
-                if (neighbour) onMove(row.placementId, neighbour.placementId);
+                // The delta already says which way the reader asked to go, so
+                // it says which side of that neighbour the card lands on. Up
+                // is above it, down is below -- and below is the side that
+                // makes the bottom of a column reachable at all.
+                if (neighbour) {
+                  onMove(
+                    row.placementId,
+                    neighbour.placementId,
+                    delta < 0 ? "before" : "after"
+                  );
+                }
               }}
               columnCount={columnCount}
               column={columnIndex}

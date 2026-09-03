@@ -22,8 +22,10 @@ import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 import { useSortableFieldArray } from "../../entries/fields/structured/field-array-helpers";
 import {
   columnFromDropData,
+  dropSide,
   placementsByColumn,
   resolveDrop,
+  type DropSide,
   type DropTarget,
 } from "../layout-editor";
 
@@ -68,8 +70,19 @@ export interface DashboardArrangement {
   /** How many columns this reader arranged their dashboard into. */
   columnCount: number;
   editor: LayoutEditor;
-  /** Swap one card with a named neighbour in the same column. */
-  moveWithinColumn: (placementId: string, neighbourId: string) => void;
+  /**
+   * Swap one card with a named neighbour in the same column.
+   *
+   * `side` says whether that neighbour sits above or below, which is the same
+   * answer a drag reads off the pointer. The caller renders the column and
+   * already knows; resolving it here would be a second reading of the
+   * arrangement, free to disagree with the one the reader is looking at.
+   */
+  moveWithinColumn: (
+    placementId: string,
+    neighbourId: string,
+    side: DropSide
+  ) => void;
   /**
    * Move one card into `targetColumn`, named absolutely.
    *
@@ -198,6 +211,12 @@ export function useDashboardArrangement(
     [visible]
   );
 
+  /** The placements the grid actually draws, which is what a position counts. */
+  const renderedIds = useMemo(
+    () => new Set(visible.map(row => row.placementId)),
+    [visible]
+  );
+
   // The drag path and the button path move a card through the SAME function.
   // Two implementations of "where does this land" agree until one is edited,
   // and a grid whose drag and whose buttons disagreed would be impossible to
@@ -229,7 +248,16 @@ export function useDashboardArrangement(
         target,
         columnCount
       );
-      const buckets = placementsByColumn(settled, columnCount);
+      // 🔴 Counted over the cards the grid DRAWS, not over every stored
+      // placement. A placement whose declaration this admin cannot resolve is
+      // skipped from the render and still sits in `editor.placements`, so a
+      // column holding one announced "position 3 of 3" for a card the reader
+      // sees second of two — a position and a total describing a grid nobody
+      // is looking at.
+      const buckets = placementsByColumn(
+        settled.filter(p => renderedIds.has(p.id)),
+        columnCount
+      );
       const column = buckets.findIndex(bucket =>
         bucket.some(p => p.id === placementId)
       );
@@ -243,7 +271,7 @@ export function useDashboardArrangement(
         buckets[column].length
       );
     },
-    [editor.placements, columnCount, announceColumn]
+    [editor.placements, columnCount, announceColumn, renderedIds]
   );
 
   const handleDragEnd = useCallback(
@@ -259,7 +287,18 @@ export function useDashboardArrangement(
       const target: DropTarget | null =
         droppedColumn !== undefined
           ? { kind: "column", column: droppedColumn }
-          : { kind: "card", placementId: String(event.over.id) };
+          : {
+              kind: "card",
+              placementId: String(event.over.id),
+              // Which SIDE of that card the gesture ended on. A populated
+              // column disables its own droppable, so releasing below its last
+              // card resolves to that card and the side is the only thing
+              // saying the reader meant underneath it rather than above.
+              side: dropSide(
+                event.active.rect.current.translated,
+                event.over.rect
+              ),
+            };
       if (target.kind === "card" && target.placementId === activeId) return;
       editor.dropOn(activeId, target);
       // 🔴 A drop onto a COLUMN has no neighbouring card to count from, and
@@ -302,10 +341,18 @@ export function useDashboardArrangement(
    * translation that moved the wrong card.
    */
   const moveWithinColumn = useCallback(
-    (placementId: string, neighbourId: string) => {
+    (placementId: string, neighbourId: string, side: DropSide) => {
       const moved = visible.find(row => row.placementId === placementId);
       if (!moved) return;
-      const target: DropTarget = { kind: "card", placementId: neighbourId };
+      // The caller renders the column, so it knows whether the neighbour it
+      // named sits above or below — which is exactly the side the card lands
+      // on. Deriving it here would answer from the stored arrangement a second
+      // time, and the two readings are what already moved the wrong card.
+      const target: DropTarget = {
+        kind: "card",
+        placementId: neighbourId,
+        side,
+      };
       editor.dropOn(placementId, target);
       announceLanding(moved.widget.title, placementId, target);
     },

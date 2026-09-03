@@ -41,6 +41,7 @@ vi.mock("../auth/entity-read-access", async importOriginal => {
 import { requireAuthentication } from "../auth/middleware";
 import type { WidgetDefinition } from "../domains/widgets/definition";
 import {
+  DEFAULT_COLUMN_COUNT,
   MAX_PLACEMENTS,
   layoutSizeProblem,
   serializeLayout,
@@ -65,7 +66,9 @@ const reqAuth = vi.mocked(requireAuthentication);
 
 /** A stand-in for the row, so a test can state what is stored and read it back. */
 let stored: { layout: string; version: number } | undefined;
-let saved: { placements: WidgetPlacement[]; expected: number } | undefined;
+let saved:
+  | { placements: WidgetPlacement[]; expected: number; columnCount?: number }
+  | undefined;
 let saveThrows: Error | undefined;
 let deleted: { kind: string; scope: string } | undefined;
 const logged: object[] = [];
@@ -95,10 +98,14 @@ const fakeService = {
     _kind: string,
     _scope: string,
     placements: WidgetPlacement[],
-    expected: number
+    expected: number,
+    columnCount?: number
   ) => {
     if (saveThrows) throw saveThrows;
-    saved = { placements, expected };
+    // The count is recorded because the response ECHOES one: a writer that
+    // answered with the right number while storing another would satisfy every
+    // assertion made on the body alone.
+    saved = { placements, expected, columnCount };
     return expected + 1;
   },
 };
@@ -1170,5 +1177,93 @@ describe("a stored row describes itself", () => {
     for (const placement of saved.placements ?? []) {
       expect(placement.column).toBeLessThan(saved.columnCount ?? 3);
     }
+  });
+
+  it("KEEPS the stored count when a PUT omits one", async () => {
+    // 🔴 Every client written before columns sends no `columnCount`, and this
+    // endpoint accepts the omission. Defaulting on their behalf rewrote a
+    // four-column row as a three-column one, after which the bounding step
+    // folds every card in the fourth column into the third — permanently, and
+    // during an edit that touched neither the count nor that card.
+    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
+    stored = {
+      version: 2,
+      layout: serializeLayout(
+        [{ id: "p1", widgetId: "core/a", column: 3, order: 0, hidden: false }],
+        4
+      ),
+    };
+
+    const res = await putWidgetLayout(
+      putReq({
+        placements: [
+          { id: "p1", widgetId: "core/a", column: 3, order: 0, hidden: false },
+        ],
+        version: 2,
+        scope: scopeFor(["core/a"]),
+      })
+    );
+
+    expect(res.status).toBe(200);
+    const item = await itemOf(res);
+    expect(item.columnCount).toBe(4);
+    // The consequence, not only the number: the card in the fourth column is
+    // still in the fourth column. A row that kept the count while the bounding
+    // step had already moved the card would satisfy the assertion above.
+    expect(item.placements?.[0]?.column).toBe(3);
+    expect(saved?.columnCount).toBe(4);
+    expect(saved?.placements[0]?.column).toBe(3);
+  });
+
+  it("still takes a count the client actually SENT", async () => {
+    // The control. Inheriting whenever the stored row has a count would
+    // satisfy the case above while making the picker unable to narrow a
+    // dashboard at all — the same defect pointing the other way.
+    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
+    stored = {
+      version: 2,
+      layout: serializeLayout(
+        [{ id: "p1", widgetId: "core/a", column: 3, order: 0, hidden: false }],
+        4
+      ),
+    };
+
+    const res = await putWidgetLayout(
+      putReq({
+        placements: [
+          { id: "p1", widgetId: "core/a", column: 3, order: 0, hidden: false },
+        ],
+        version: 2,
+        scope: scopeFor(["core/a"]),
+        columnCount: 2,
+      })
+    );
+
+    expect(res.status).toBe(200);
+    const item = await itemOf(res);
+    expect(item.columnCount).toBe(2);
+    // Narrowing folds the card into the last column that now exists, which is
+    // the documented behaviour for a column that went away.
+    expect(item.placements?.[0]?.column).toBe(1);
+  });
+
+  it("DEFAULTS the count when there is no stored row to inherit from", async () => {
+    // The other control. Inheriting is only right where something exists to
+    // inherit; a first save has to land on a count this core supports rather
+    // than on whatever an absent row reads as.
+    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
+
+    const res = await putWidgetLayout(
+      putReq({
+        placements: [
+          { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+        ],
+        version: 0,
+        scope: scopeFor(["core/a"]),
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect((await itemOf(res)).columnCount).toBe(DEFAULT_COLUMN_COUNT);
   });
 });

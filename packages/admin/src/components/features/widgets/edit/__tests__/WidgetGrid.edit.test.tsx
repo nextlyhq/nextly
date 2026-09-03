@@ -232,6 +232,35 @@ describe("moving a card without a drag", () => {
     );
   });
 
+  it("counts only the cards the grid DRAWS", async () => {
+    // 🔴 A placement whose declaration this admin cannot resolve is skipped
+    // from the render and still sits in the arrangement, so a position read
+    // from the stored list describes a grid nobody is looking at. Here the
+    // reader sees two cards and the unrendered one sits between them: counted
+    // from storage, moving the first card down announces "position 3 of 3"
+    // while the screen plainly shows it second of two.
+    mockBranding = branding(["core/a", "core/b"]);
+    layoutResponse = layout([
+      { id: "p1", widgetId: "core/a", order: 0, column: 0 },
+      { id: "pX", widgetId: "plugin/absent", order: 10, column: 0 },
+      { id: "p2", widgetId: "core/b", order: 20, column: 0 },
+    ]);
+
+    renderGrid();
+    const user = await beginEditing();
+
+    // The control for the fixture itself: the unresolvable placement really is
+    // absent from the grid, so the case being tested is the case being set up.
+    expect(screen.queryByTestId("widget-cell-plugin/absent")).toBeNull();
+    expect(screen.getAllByTestId("widget-move-down")).toHaveLength(2);
+
+    await user.click(screen.getAllByTestId("widget-move-down")[0]);
+
+    expect(screen.getByTestId("widget-grid-live").textContent).toMatch(
+      /Widget core\/a moved to column 1 of 3, position 2 of 2/
+    );
+  });
+
   it("names the position in each button, so a reader knows where they are", async () => {
     renderGrid();
     await beginEditing();
