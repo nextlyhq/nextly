@@ -45,6 +45,15 @@ import { listSources, type WidgetSource } from "./sources";
 const LIST_ROWS = 5;
 
 /**
+ * How many rows a generated table asks for.
+ *
+ * The same as a list's, and asked separately rather than shared, because the
+ * two renderers cap independently -- a table's rows are wider, so its own limit
+ * is lower than a list's and may move without dragging the list with it.
+ */
+const TABLE_ROWS = 5;
+
+/**
  * The id of a generated widget, from the source it draws.
  *
  * Namespaced under `collection/` so it cannot collide with core's own `core/`
@@ -54,7 +63,7 @@ const LIST_ROWS = 5;
  */
 function widgetId(
   source: WidgetSource,
-  kind: "count" | "recent"
+  kind: "count" | "recent" | "table"
 ): string | undefined {
   // 🔴 An underscore is legal in a collection slug (`SLUG_PATTERN` permits it)
   // and illegal in a widget id, so `customer_notes` produced an id the registry
@@ -98,6 +107,49 @@ function countWidget(source: WidgetSource): WidgetDefinition | undefined {
 }
 
 /**
+ * Whether a source can answer a RECENT-ENTRIES query, and what it needs to.
+ *
+ * 🔴 One decision, asked by both cards that draw one. The list and the table
+ * put the same question to a source -- can it be listed, does a field name its
+ * rows, is there an `updatedAt` for "recent" to mean anything -- and asking it
+ * twice lets the two disagree about which collections support the same query.
+ * A collection would then get a table and no list, or the reverse, from a
+ * change to one function that nothing points at the other.
+ *
+ * `undefined` for a source this cannot draw HONESTLY, and each condition is a
+ * refusal rather than a fallback:
+ *
+ * - no field names the entries, so every row would read as an identifier. The
+ *   renderers already refuse a widget that selects nothing rather than guessing
+ *   a key out of a document they know nothing about; generating one that
+ *   selects the wrong key defeats that by answering the question badly instead
+ *   of declining it.
+ * - no `updatedAt`, so "recently" has nothing to sort by. Sorting by id would
+ *   produce a card whose title is a claim its rows do not support.
+ */
+interface RecentEntries {
+  /** The field that names a row, from the source's own resolution. */
+  label: string;
+  /** Every field name the source carries, for asking what else it has. */
+  names: ReadonlySet<string>;
+}
+
+function recentEntries(source: WidgetSource): RecentEntries | undefined {
+  if (!source.supports.includes("list")) return undefined;
+  // The source's own answer, which already went through the shared rule with
+  // the author's `admin.useAsTitle` AND the full field list. Resolving it again
+  // from `fields` alone would ignore the nomination and pick a conventional
+  // name instead, so a collection whose author chose `headline` would be
+  // labelled by something else -- two answers to one question, and the
+  // dashboard holding the worse one.
+  const label = source.titleField;
+  if (label === undefined) return undefined;
+  const names = new Set(source.fields.map(field => field.name));
+  if (!names.has("updatedAt")) return undefined;
+  return { label, names };
+}
+
+/**
  * The list card for a source: the entries touched most recently.
  *
  * Returns `undefined` for a collection this cannot draw HONESTLY, and both
@@ -112,17 +164,9 @@ function countWidget(source: WidgetSource): WidgetDefinition | undefined {
  *   produce a card whose title is a claim its rows do not support.
  */
 function recentWidget(source: WidgetSource): WidgetDefinition | undefined {
-  if (!source.supports.includes("list")) return undefined;
-  const names = source.fields.map(field => field.name);
-  // The source's own answer, which already went through the shared rule with
-  // the author's `admin.useAsTitle` AND the full field list. Resolving it again
-  // here from `fields` alone would ignore the nomination and pick a
-  // conventional name instead, so a collection whose author chose `headline`
-  // would be labelled by something else -- two answers to one question, and the
-  // dashboard holding the worse one.
-  const label = source.titleField;
-  if (label === undefined) return undefined;
-  if (!names.includes("updatedAt")) return undefined;
+  const recent = recentEntries(source);
+  if (recent === undefined) return undefined;
+  const { label } = recent;
   const id = widgetId(source, "recent");
   if (id === undefined) return undefined;
 
@@ -141,6 +185,62 @@ function recentWidget(source: WidgetSource): WidgetDefinition | undefined {
       select: [label, "updatedAt"],
       sort: "-updatedAt",
       limit: LIST_ROWS,
+    },
+  };
+}
+
+/**
+ * The table card for a source: the same recent entries, across named columns.
+ *
+ * ## Why this is offered BESIDE the list rather than replacing it
+ *
+ * They answer different questions. A list is a column of titles with one muted
+ * line under each, which suits a narrow card in a three-column dashboard. A
+ * table aligns its values, so a reader compares them down a column -- which
+ * status is draft, what changed most recently -- and that is what makes a
+ * dashboard of collections scannable rather than a wall of separate boxes.
+ * Neither is placed; a reader picks the one their dashboard wants.
+ *
+ * Its eligibility is `recentEntries`, the same decision the list card asks, so
+ * a collection cannot end up with one of the two and not the other.
+ *
+ * ## Why the columns are ASKED of the source
+ *
+ * `status` and `updatedAt` are per-collection facts, not constants. The schema
+ * pipeline injects a `status` column only for a collection declaring
+ * `status: true`, and the timestamps only when it has not turned them off, so
+ * the source lists exactly the ones that exist. Selecting a column the rows do
+ * not carry is refused by the read path -- a refusal about a field nothing
+ * declared, on a card the reader did not misconfigure.
+ *
+ * The result is three columns for a collection with a status and two without,
+ * rather than a fixed shape padded with blanks. `defaultSize` is `lg` for the
+ * same reason the renderer caps its rows: a table narrower than its content
+ * scrolls inside a card, and a table that scrolls is one nobody reads.
+ */
+function tableWidget(source: WidgetSource): WidgetDefinition | undefined {
+  const recent = recentEntries(source);
+  if (recent === undefined) return undefined;
+  const { label, names } = recent;
+  const id = widgetId(source, "table");
+  if (id === undefined) return undefined;
+
+  return {
+    id,
+    title: `${source.label} table`,
+    description: `Recent ${source.label} entries across their columns`,
+    archetype: "table",
+    defaultSize: "lg",
+    query: {
+      source: source.id,
+      op: "list",
+      status: "all",
+      // Read left to right by the renderer, so the row's own name leads and the
+      // timestamp the sort is on closes. `status` sits between them when the
+      // collection has one.
+      select: [label, ...(names.has("status") ? ["status"] : []), "updatedAt"],
+      sort: "-updatedAt",
+      limit: TABLE_ROWS,
     },
   };
 }
@@ -165,7 +265,11 @@ export function collectionWidgets(
   const candidates: WidgetDefinition[] = [];
   for (const source of sources) {
     if (source.kind !== "collection") continue;
-    for (const widget of [countWidget(source), recentWidget(source)]) {
+    for (const widget of [
+      countWidget(source),
+      recentWidget(source),
+      tableWidget(source),
+    ]) {
       if (!widget) continue;
       claimed.set(widget.id, (claimed.get(widget.id) ?? 0) + 1);
       candidates.push(widget);

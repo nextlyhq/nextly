@@ -261,7 +261,15 @@ export function placementsByColumn<
     () => []
   );
   for (const placement of placements) {
-    const declared = placement.column ?? 0;
+    // 🔴 TRUNCATED, because this value indexes an array. A fractional column
+    // survives the clamp and `columns[0.5]` is undefined, so the push throws
+    // and takes the whole grid with it. The reader that builds a stored
+    // placement truncates already, so nothing reaches here fractional today —
+    // which is what makes the guard cheap rather than what makes it
+    // unnecessary: this is exported, it is called on placements from the
+    // editor as well as from the wire, and reachability is a property of the
+    // call graph rather than of the code.
+    const declared = Math.trunc(placement.column ?? 0);
     const index = Math.min(Math.max(0, declared), columns.length - 1);
     columns[index].push(placement);
   }
@@ -489,6 +497,23 @@ export function resolveDrop(
  * Sparse steps rather than 0..n, for the reason `renumber` gives: an insertion
  * between two cards then needs no renumbering at all.
  */
+/**
+ * The arrangement as it will be STORED, for the column count in force.
+ *
+ * 🔴 Bucketed at that count BEFORE the orders are assigned, because the count
+ * decides which cards share a column and therefore what the row-major reading
+ * is. Renumbering the array instead numbers the sequence the cards happened to
+ * be in: narrowing four columns to two folds two of them into the last, so the
+ * stored sequence keeps a reading of a grid that is no longer on screen, and
+ * the canonical order disagrees with the arrangement until the next drag.
+ */
+export function renumberForColumns(
+  placements: readonly WidgetPlacement[],
+  columnCount: number
+): WidgetPlacement[] {
+  return rowMajor(placementsByColumn(placements, columnCount));
+}
+
 function rowMajor(buckets: readonly WidgetPlacement[][]): WidgetPlacement[] {
   const depth = buckets.reduce(
     (deepest, bucket) => Math.max(deepest, bucket.length),

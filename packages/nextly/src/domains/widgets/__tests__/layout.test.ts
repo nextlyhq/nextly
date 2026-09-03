@@ -189,6 +189,43 @@ describe("reading a stored row", () => {
   });
 });
 
+describe("a placement's column, when it states one", () => {
+  const base = { id: "p1", widgetId: "core/a", order: 0, hidden: false };
+
+  it("REFUSES a column that is present and not a number", () => {
+    // 🔴 Absent and malformed are different answers, and without a rule they
+    // collapse into one. A client sending `column: "2"` fails the "did this
+    // state a column" predicate, becomes a 0, and is then read as an OMISSION
+    // — so a broken client is silently told nothing and has its card kept
+    // where it was, or moved to the first column.
+    expect(placementProblem({ ...base, column: "2" })).toMatch(/column/);
+  });
+
+  it("REFUSES a column JSON cannot carry", () => {
+    // The reason `order` uses `Number.isFinite` rather than a typeof check:
+    // NaN and the infinities are numbers that serialize to `null` and come
+    // back failing this same rule, so accepting one writes a row that can
+    // never be read.
+    expect(placementProblem({ ...base, column: Number.NaN })).toMatch(/column/);
+    expect(
+      placementProblem({ ...base, column: Number.POSITIVE_INFINITY })
+    ).toMatch(/column/);
+  });
+
+  it("ACCEPTS a placement that states no column at all", () => {
+    // 🔴 The control, and the reason this is not simply a required field. A
+    // client written before columns sends none, and that payload is supported
+    // — the layout endpoint keeps the column such a card already had.
+    expect(placementProblem(base)).toBeUndefined();
+  });
+
+  it("ACCEPTS a column that is a finite number", () => {
+    // The other control: a rule refusing everything would satisfy both
+    // refusals above and reject every well-formed request.
+    expect(placementProblem({ ...base, column: 2 })).toBeUndefined();
+  });
+});
+
 describe("the default arrangement", () => {
   it("follows the declared order and materializes it as finite numbers", () => {
     const placements = defaultPlacements([

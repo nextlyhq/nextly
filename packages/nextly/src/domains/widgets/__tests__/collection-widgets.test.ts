@@ -29,11 +29,12 @@ function source(patch: Partial<WidgetSource>): WidgetSource {
 }
 
 describe("what a collection gets", () => {
-  it("derives a metric and a list from one source", () => {
+  it("derives a metric, a list and a table from one source", () => {
     const widgets = collectionWidgets([source({})]);
     expect(widgets.map(w => [w.id, w.archetype])).toEqual([
       ["collection/posts-count", "metric"],
       ["collection/posts-recent", "list"],
+      ["collection/posts-table", "table"],
     ]);
   });
 
@@ -48,7 +49,7 @@ describe("what a collection gets", () => {
     const widgets = collectionWidgets([
       source({ requiredPermission: "read-articles" }),
     ]);
-    expect(widgets).toHaveLength(2);
+    expect(widgets).toHaveLength(3);
     for (const widget of widgets) {
       expect(widget).not.toHaveProperty("requiredPermission");
     }
@@ -64,6 +65,7 @@ describe("what a collection gets", () => {
     expect(widgets.map(w => w.id)).toEqual([
       "collection/customer-notes-count",
       "collection/customer-notes-recent",
+      "collection/customer-notes-table",
     ]);
   });
 
@@ -90,6 +92,7 @@ describe("what a collection gets", () => {
     expect(widgets.map(w => w.id)).toEqual([
       "collection/posts-count",
       "collection/posts-recent",
+      "collection/posts-table",
     ]);
   });
 
@@ -162,7 +165,125 @@ describe("what a collection does NOT get", () => {
 
   it("no metric when the source does not answer count", () => {
     const widgets = collectionWidgets([source({ supports: ["list"] })]);
-    expect(widgets.map(w => w.archetype)).toEqual(["list"]);
+    expect(widgets.map(w => w.archetype)).toEqual(["list", "table"]);
+  });
+
+  it("selects the status column when the collection HAS one", () => {
+    // 🔴 Asked of the source, because `status` is a per-collection fact: the
+    // schema pipeline injects the column only for a collection declaring
+    // `status: true`, and the source lists it only then. Selecting it
+    // unconditionally is refused by the read path — a refusal about a field
+    // nothing declared, on a card the reader did not misconfigure.
+    const [table] = collectionWidgets([
+      source({
+        fields: [
+          { name: "id", type: "string" },
+          { name: "title", type: "string" },
+          { name: "status", type: "string" },
+          { name: "updatedAt", type: "date" },
+        ],
+      }),
+    ]).filter(w => w.archetype === "table");
+    expect(table?.query?.select).toEqual(["title", "status", "updatedAt"]);
+  });
+
+  it("OMITS it when the collection has none", () => {
+    // The control. Selecting `status` unconditionally satisfies the case above
+    // and breaks every collection that turned it off, which is the direction
+    // that fails on the reader's dashboard rather than in a test.
+    const [table] = collectionWidgets([source({})]).filter(
+      w => w.archetype === "table"
+    );
+    expect(table?.query?.select).toEqual(["title", "updatedAt"]);
+  });
+
+  it("gives NO table to a collection nothing names its rows by", () => {
+    // 🔴 The same refusal the list makes, for the same reason: with no field
+    // naming a row, every line of the table reads as an identifier. A table is
+    // worse than a list here, not better — a column of ids under a heading
+    // looks like data rather than like a card that declined to guess.
+    const widgets = collectionWidgets([
+      source({
+        titleField: undefined,
+        fields: [
+          { name: "id", type: "string" },
+          { name: "updatedAt", type: "date" },
+        ],
+      }),
+    ]);
+    expect(widgets.map(w => w.archetype)).toEqual(["metric"]);
+  });
+
+  it("gives NO table when nothing can order it", () => {
+    // "Recent" is a claim, and `updatedAt` is what supports it. Sorting by id
+    // would produce a card whose title its rows do not bear out.
+    const widgets = collectionWidgets([
+      source({
+        fields: [
+          { name: "id", type: "string" },
+          { name: "title", type: "string" },
+        ],
+      }),
+    ]);
+    expect(widgets.map(w => w.archetype)).toEqual(["metric"]);
+  });
+
+  it("asks for every entry, so a draft is visible in the table", () => {
+    // The counterpart of the metric counting drafts. A table that silently
+    // excluded them would disagree with the collection's own list view, and a
+    // reader has no way to tell which of the two answers a narrower question.
+    const [table] = collectionWidgets([source({})]).filter(
+      w => w.archetype === "table"
+    );
+    expect(table?.query?.status).toBe("all");
+    expect(table?.query?.sort).toBe("-updatedAt");
+  });
+
+  it("gives a collection BOTH recent cards or NEITHER", () => {
+    // 🔴 The list and the table put the same question to a source — can it be
+    // listed, does a field name its rows, is there an `updatedAt` — so a
+    // collection that gets one must get the other. Asked twice, the two answers
+    // drift: a change to one card's conditions leaves a collection with a table
+    // and no list, from an edit that pointed at neither.
+    const sources = [
+      // Eligible.
+      source({ id: "collection:posts", label: "posts" }),
+      // No field names its rows.
+      source({
+        id: "collection:events",
+        label: "events",
+        titleField: undefined,
+        fields: [
+          { name: "id", type: "string" },
+          { name: "updatedAt", type: "date" },
+        ],
+      }),
+      // Nothing to order "recent" by.
+      source({
+        id: "collection:tags",
+        label: "tags",
+        fields: [
+          { name: "id", type: "string" },
+          { name: "title", type: "string" },
+        ],
+      }),
+      // Cannot be listed at all.
+      source({ id: "collection:audit", label: "audit", supports: ["count"] }),
+    ];
+
+    for (const one of sources) {
+      const kinds = new Set(
+        collectionWidgets([one]).map(widget => widget.archetype)
+      );
+      expect(kinds.has("list")).toBe(kinds.has("table"));
+    }
+
+    // The control: at least one of those sources DOES produce the pair, so the
+    // agreement above is not satisfied by a generator that makes neither for
+    // anything.
+    const eligible = collectionWidgets([sources[0]]).map(w => w.archetype);
+    expect(eligible).toContain("list");
+    expect(eligible).toContain("table");
   });
 
   it("nothing at all for a source that is not a collection", () => {

@@ -15,7 +15,7 @@ import { useCallback, type Dispatch, type SetStateAction } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
 
-import { renumber } from "../layout-editor";
+import { renumberForColumns } from "../layout-editor";
 
 import type { LayoutDraft } from "./useLayoutEditor";
 
@@ -60,14 +60,16 @@ export function useLayoutLifecycle(
   const save = useCallback(() => {
     if (!draft) return;
     layout.save.mutate(
-      // Renumbered on the way out: the editor reorders an ARRAY, so a moved
-      // card still carries the `order` it had before. Sent as-is, the server
-      // sorts by a number that no longer matches what the reader sees.
+      // Renumbered on the way out, AT THE DRAFT'S COLUMN COUNT: the editor
+      // reorders an array, so a moved card still carries the `order` it had
+      // before, and the count decides which cards share a column and therefore
+      // what reading across the rows means. Narrowing the dashboard moves no
+      // card and changes every one of those answers.
       //
       // The guards come from the DRAFT, so they are the ones this arrangement
       // was derived from rather than whatever the last refetch produced.
       {
-        placements: renumber(draft.placements),
+        placements: renumberForColumns(draft.placements, draft.columnCount),
         version: draft.version,
         scope: draft.scope,
         columnCount: draft.columnCount,
