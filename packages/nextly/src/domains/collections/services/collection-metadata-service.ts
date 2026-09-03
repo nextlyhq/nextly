@@ -11,6 +11,7 @@ import { toDbError } from "../../../database/errors";
 import type { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
 import { NextlyError, isProgrammerError } from "../../../errors";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
+import type { StoredHookConfig } from "../../../schemas/dynamic-collections/types";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -376,7 +377,7 @@ export class CollectionMetadataService extends BaseService {
      */
     webhooks?: boolean;
     fields: FieldDefinition[];
-    hooks?: Record<string, unknown>[];
+    hooks?: StoredHookConfig[];
     createdBy?: string;
   }): Promise<MetadataServiceResult> {
     try {
@@ -728,7 +729,7 @@ export class CollectionMetadataService extends BaseService {
       /** Toggle webhook recording. Honoured when defined; undefined leaves it unchanged. */
       webhooks?: boolean;
       fields?: FieldDefinition[];
-      hooks?: Record<string, unknown>[];
+      hooks?: StoredHookConfig[];
     }
   ): Promise<MetadataServiceResult> {
     try {

@@ -526,7 +526,21 @@ describe("hooks are a collection-only manifest key", () => {
     collections: [],
     singles: [],
     components: [],
-    [kind]: [{ slug: "x", hooks: [{ type: "beforeChange" }], fields: [] }],
+    [kind]: [
+      {
+        slug: "x",
+        hooks: [
+          {
+            hookId: "auto-slug",
+            hookType: "beforeChange",
+            enabled: true,
+            config: {},
+            order: 0,
+          },
+        ],
+        fields: [],
+      },
+    ],
   });
 
   it("REFUSES hooks on a single and on a component", () => {
@@ -544,7 +558,19 @@ describe("hooks are a collection-only manifest key", () => {
     // refusal above and silently drop the one kind that can store them.
     const parsed = uiSchemaManifest.safeParse({
       collections: [
-        { slug: "posts", hooks: [{ type: "beforeChange" }], fields: [] },
+        {
+          slug: "posts",
+          hooks: [
+            {
+              hookId: "auto-slug",
+              hookType: "beforeChange",
+              enabled: true,
+              config: {},
+              order: 0,
+            },
+          ],
+          fields: [],
+        },
       ],
       singles: [],
       components: [],

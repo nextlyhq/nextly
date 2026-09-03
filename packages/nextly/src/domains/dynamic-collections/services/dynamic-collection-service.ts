@@ -11,7 +11,10 @@ import { NextlyError } from "../../../errors";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
+import type {
+  MigrationStatus,
+  StoredHookConfig,
+} from "../../../schemas/dynamic-collections/types";
 import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
@@ -119,7 +122,7 @@ export interface CreateCollectionInput {
    */
   webhooks?: boolean;
   fields: FieldDefinition[];
-  hooks?: Record<string, unknown>[];
+  hooks?: StoredHookConfig[];
   createdBy?: string;
 }
 
@@ -147,7 +150,7 @@ export interface UpdateCollectionInput {
   /** Toggle webhook recording. Honoured when defined; undefined leaves it unchanged. */
   webhooks?: boolean;
   fields?: FieldDefinition[];
-  hooks?: Record<string, unknown>[];
+  hooks?: StoredHookConfig[];
 }
 
 export class DynamicCollectionService extends BaseService {

@@ -22,6 +22,7 @@ import {
 } from "../../plugins/plugin-options";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { pluginStorageFieldType } from "../../shared/lib/plugin-storage";
+import type { StoredHookConfig } from "../dynamic-collections/types";
 
 /**
  * Canonical field-type tokens supported in ui-schema.json. Mirrors the set
@@ -442,6 +443,45 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
  * These are presentation only. Nothing here changes a table, which is why they
  * can be added without a migration concern of their own.
  */
+/**
+ * A stored hook config, validated as the executor actually requires it.
+ *
+ * 🔴 NOT a loose record. `StoredHookExecutor` reads `config` and `order` off
+ * each entry, so a manifest carrying `{ hookId, hookType, enabled }` and
+ * nothing else parses, deploys, and then throws on the next content write —
+ * an accepted manifest turning into failed writes, which is worse than a
+ * refused one.
+ *
+ * The assertion below is what keeps this in step with `StoredHookConfig`
+ * rather than drifting from it: if that interface gains a required field, this
+ * stops being assignable and the build says so.
+ */
+const storedHookConfig = z.object({
+  hookId: z.string().min(1),
+  hookType: z.enum([
+    "beforeOperation",
+    "beforeCreate",
+    "afterCreate",
+    "beforeUpdate",
+    "afterUpdate",
+    "beforeDelete",
+    "afterDelete",
+    "beforeRead",
+    "afterRead",
+    "beforeChange",
+    "afterChange",
+  ]),
+  enabled: z.boolean(),
+  config: z.record(z.string(), z.unknown()),
+  order: z.number(),
+});
+
+/** Compile-time proof that the schema above still describes the stored shape. */
+type StoredHookSchemaMatchesInterface =
+  z.infer<typeof storedHookConfig> extends StoredHookConfig ? true : never;
+const _storedHookShapeHolds: StoredHookSchemaMatchesInterface = true;
+void _storedHookShapeHolds;
+
 const admin = z.object({
   useAsTitle: z.string().optional(),
   defaultColumns: z.array(z.string()).optional(),
@@ -471,7 +511,7 @@ function entity(kind?: "collection" | "single" | "component") {
        * ran them where it was authored and silently ran none where the file was
        * replayed.
        */
-      hooks: z.array(z.record(z.string(), z.unknown())).optional(),
+      hooks: z.array(storedHookConfig).optional(),
       admin: admin.optional(),
       status: z.boolean().optional(),
       localized: z.boolean().optional(),

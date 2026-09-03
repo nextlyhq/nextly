@@ -183,7 +183,15 @@ describe("the migration a Builder create writes", () => {
     // where it was deployed. Not reachable from the Builder's own modal, which
     // sends no hooks, but the service accepts them and stores them.
     const sql = await sqlFor({
-      hooks: [{ type: "beforeChange", handler: "slugify" }],
+      hooks: [
+        {
+          hookId: "slugify",
+          hookType: "beforeChange",
+          enabled: true,
+          config: {},
+          order: 0,
+        },
+      ],
     });
     expect(sql).toContain("slugify");
   });
