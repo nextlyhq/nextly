@@ -140,6 +140,15 @@ export interface WidgetPlacement {
   /** Opaque, and unique within a layout. Not a widget id, except by default. */
   id: string;
   widgetId: string;
+  /**
+   * Which column this card sits in, 0-based.
+   *
+   * Optional on the wire because a row written before columns existed carries
+   * none, and the server migrates those on read rather than refusing them — so
+   * a client that treats absent as column 0 agrees with the server instead of
+   * inventing a second answer.
+   */
+  column?: number;
   order: number;
   hidden: boolean;
   size?: string;
@@ -150,6 +159,15 @@ export interface WidgetPlacement {
 /** What `GET /api/dashboard/layout` answers. */
 export interface DashboardLayoutResponse {
   placements: WidgetPlacement[];
+  /**
+   * How many columns this reader's arrangement is drawn in.
+   *
+   * The SERVER's answer, not a client default: the count decides which column
+   * a placement's coordinate names, so drawing a stored arrangement in a count
+   * the client picked would render something the reader never arranged — and
+   * then save it back on their next edit.
+   */
+  columnCount?: number;
   /**
    * Widget ids this reader may see and has not placed.
    *

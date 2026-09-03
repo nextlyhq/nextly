@@ -56,6 +56,9 @@ import {
   visibilityToken,
   type WidgetPlacement,
   byPosition,
+  COLUMN_COUNTS,
+  DEFAULT_COLUMN_COUNT,
+  type ColumnCount,
 } from "../domains/widgets/layout";
 import {
   holdsWidgetPermission,
@@ -317,6 +320,12 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       available,
       version: stored.version,
       source,
+      // The reader's own column count, or the default when they have never
+      // arranged anything. Sent rather than left for the client to assume: the
+      // count decides which column each placement's coordinate refers to, so a
+      // client guessing it would draw a DIFFERENT arrangement from the stored
+      // one and then save that back.
+      columnCount: stored.layout?.columnCount ?? DEFAULT_COLUMN_COUNT,
       scope: visibilityToken(widgets.map(w => w.id)),
     },
     { headers: OPAQUE_CONFIG_HEADERS }
@@ -331,6 +340,21 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
  * an empty string, would be read as asserting the row does not exist and would
  * overwrite a real arrangement through the insert path.
  */
+/**
+ * The submitted column count, or the default.
+ *
+ * TOLERANT rather than strict, and for the same reason a placement's `size` is
+ * typed `string` here: the count is presentation, an unknown value has an
+ * obviously safe reading, and refusing an entire save over it would discard a
+ * reader's arrangement to protect a field nothing depends on. A count from a
+ * NEWER admin is exactly the case this has to survive.
+ */
+function readColumnCount(value: unknown): ColumnCount {
+  return COLUMN_COUNTS.includes(value as ColumnCount)
+    ? (value as ColumnCount)
+    : DEFAULT_COLUMN_COUNT;
+}
+
 function readVersion(body: Record<string, unknown>): number {
   const { version } = body;
   if (!Number.isInteger(version) || (version as number) < 0) {
@@ -436,6 +460,9 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const submitted = readPlacements(
     (body as Record<string, unknown>).placements
   );
+  const submittedColumnCount = readColumnCount(
+    (body as Record<string, unknown>).columnCount
+  );
   const expectedVersion = readVersion(body as Record<string, unknown>);
   const submittedScope = readScope(body as Record<string, unknown>);
 
@@ -518,7 +545,8 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     SCOPE_KIND,
     caller.userId,
     toStore,
-    expectedVersion
+    expectedVersion,
+    submittedColumnCount
   );
 
   // `respondMutation`, not `respondData`: this is a write, and every write in

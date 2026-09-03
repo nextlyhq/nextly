@@ -14,6 +14,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq } from "drizzle-orm";
 
 import {
+  DEFAULT_COLUMN_COUNT,
+  type ColumnCount,
   readStoredLayout,
   serializeLayout,
   type StoredLayout,
@@ -175,10 +177,11 @@ export class WidgetLayoutService extends BaseService {
     kind: LayoutScopeKind,
     scopeId: string,
     placements: readonly WidgetPlacement[],
-    expectedVersion: number
+    expectedVersion: number,
+    columnCount: ColumnCount = DEFAULT_COLUMN_COUNT
   ): Promise<number> {
     const id = layoutRowId(kind, scopeId);
-    const layout = serializeLayout(placements);
+    const layout = serializeLayout(placements, columnCount);
     const now = new Date();
 
     if (expectedVersion === NO_STORED_LAYOUT_VERSION) {

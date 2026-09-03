@@ -143,6 +143,7 @@ interface LayoutPayload {
   version?: number;
   source?: string;
   scope?: string;
+  columnCount?: number;
 }
 
 /** A GET answers with the object itself. */
@@ -1117,5 +1118,21 @@ describe("the submission cap, when an install declares more than one write may c
     expect(layoutSizeProblem(body.placements ?? [])).toBeUndefined();
     // The surplus is reachable rather than lost.
     expect(body.available).toContain(`core/w${MAX_PLACEMENTS}`);
+  });
+});
+
+describe("the column count travels with the arrangement", () => {
+  it("ANSWERS a column count on a dashboard nobody has arranged", async () => {
+    // 🔴 The count decides which column a placement's coordinate names, so a
+    // client left to assume it draws a DIFFERENT arrangement from the stored
+    // one — and then saves that back. Sending it is what stops a dashboard
+    // being silently re-columned by whatever the client guessed.
+    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    expect(typeof body.columnCount).toBe("number");
+    // The control: not merely present, but a count this core would honour on
+    // the way back in. A response carrying a value the reader refuses is worse
+    // than one carrying none.
+    expect([2, 3, 4]).toContain(body.columnCount);
   });
 });
