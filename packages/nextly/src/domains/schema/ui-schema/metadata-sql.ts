@@ -183,16 +183,17 @@ interface Column {
 /**
  * The `description` column, when the manifest actually carries one.
  *
- * 🔴 CONDITIONAL, and that is a correction rather than a preference. Written
- * unconditionally — NULL when absent — it does not merely fail to set a
- * description, it CLEARS one: every manifest projection that does not carry the
- * value erases whatever an earlier migration deployed. There are six such
- * projections and each was found one review round at a time.
+ * 🔴 CONDITIONAL, because a column written unconditionally does not merely fail
+ * to set a value — it CLEARS one. Absent-means-NULL would let any manifest
+ * projection that does not carry the description erase whatever an earlier
+ * migration deployed, and the projections are hand-written per entity kind and
+ * per page, so several of them carry only part of the settings.
  *
- * `admin` has been conditional throughout and produced none of that, which is
- * the precedent this now follows. The cost is that clearing a description
- * cannot propagate through a migration, and that is the smaller defect by far:
- * not being able to remove a value is recoverable, silently removing one is not.
+ * Omitted, the column is absent from the INSERT and from the DO UPDATE SET, so
+ * a partial projection leaves the stored value alone. `admin` behaves the same
+ * way for the same reason. The cost is that clearing a description cannot
+ * propagate through a migration, which is much the smaller defect: being unable
+ * to remove a value is recoverable, silently removing one is not.
  */
 function descriptionColumns(
   entity: UiSchemaEntity,
