@@ -1022,6 +1022,116 @@ export function reidSubtree(node: BlockNode): BlockNode {
   return rebuilt ?? node;
 }
 
+/**
+ * What re-identifying a subtree produced, when the caller needs to follow it.
+ *
+ * {@link reidSubtree} drops a copy's DOM ids, which is right when the copy is
+ * all anyone will look at. It is wrong when the subtree REFERS to itself: a
+ * link inside a saved pattern pointing at `#pricing` resolves to a node in the
+ * same pattern, and dropping the target's id leaves the copy carrying a link to
+ * nowhere — worse, to whatever `#pricing` the destination page happens to own.
+ *
+ * So the ids are remapped rather than dropped, and both maps are handed back.
+ * The engine cannot rewrite the references itself: a link's target lives in a
+ * block's props, and which prop holds one is a property of the block's
+ * definition rather than of the document format.
+ */
+export interface ReidentifiedSubtree {
+  /** The rebuilt subtree. */
+  node: BlockNode;
+  /** Every node's old id → its new one. */
+  nodeIds: ReadonlyMap<string, string>;
+  /**
+   * Every DOM id the subtree carried → its replacement.
+   *
+   * Keyed by the id as written. A subtree that already used one id on two nodes
+   * is malformed — validation reports it as a duplicate — and appears here once,
+   * mapped to the first replacement minted.
+   */
+  domIds: ReadonlyMap<string, string>;
+}
+
+/**
+ * Deep-clone a subtree with fresh ids, KEEPING its internal references usable.
+ *
+ * The same rebuild as {@link reidSubtree}, differing in what happens to a DOM
+ * id: dropped there, minted afresh here and recorded. Two copies of one pattern
+ * on a page must not emit the same HTML `id`, and a copy's internal anchor must
+ * still reach its own target — remapping is the only answer that satisfies
+ * both.
+ *
+ * The minted id is DERIVED from the original (`pricing` becomes
+ * `pricing-<suffix>`) rather than freshly random, because it is a value authors
+ * read and write: it appears in a URL fragment, in a stylesheet and in the
+ * attribute panel. A UUID would be unique and unusable.
+ *
+ * Uniqueness is guaranteed WITHIN the returned subtree, not against the
+ * document it is going into — this function is given a subtree and cannot see
+ * anything else. A caller inserting into a page it can read should check
+ * {@link ReidentifiedSubtree.domIds} against that page.
+ */
+export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
+  const nodeIds = new Map<string, string>();
+  const domIds = new Map<string, string>();
+
+  const [rebuilt] = mapForest([node], original =>
+    reidOneKeepingReferences(original, nodeIds, domIds)
+  );
+  return { node: rebuilt ?? node, nodeIds, domIds };
+}
+
+/** One node, re-identified, with its DOM id remapped rather than removed. */
+function reidOneKeepingReferences(
+  node: BlockNode,
+  nodeIds: Map<string, string>,
+  domIds: Map<string, string>
+): BlockNode {
+  const { slots, ...own } = node;
+  const copy: BlockNode = { ...structuredClone(own), id: newId() };
+  if (typeof node.id === "string") nodeIds.set(node.id, copy.id);
+
+  // `mintDomId` is asked once per distinct ORIGINAL id, so a subtree whose two
+  // nodes carry the same DOM id maps both to one replacement. That preserves
+  // the document's own meaning: the pair pointed at one target before, and a
+  // reference to it still reaches one target after.
+  const remap = (value: string): string => {
+    const existing = domIds.get(value);
+    if (existing !== undefined) return existing;
+    const minted = mintDomId(value, copy.id);
+    domIds.set(value, minted);
+    return minted;
+  };
+
+  if (typeof copy.cssId === "string" && copy.cssId !== "") {
+    copy.cssId = remap(copy.cssId);
+  }
+  if (copy.attributes) {
+    copy.attributes = Object.fromEntries(
+      Object.entries(copy.attributes).map(([key, value]) =>
+        key.toLowerCase() === "id" && typeof value === "string" && value !== ""
+          ? [key, remap(value)]
+          : [key, value]
+      )
+    );
+  }
+
+  if (slots !== undefined) copy.slots = slots;
+  return copy;
+}
+
+/**
+ * A replacement DOM id, derived from the original.
+ *
+ * The suffix comes from the node's NEW id, so the same original inside two
+ * copies of one pattern produces two different replacements — which is the
+ * collision the remap exists to avoid. Trimmed to keep the result readable in a
+ * URL fragment; the full node id is not needed for uniqueness within a subtree
+ * that has exactly one node per new id.
+ */
+function mintDomId(original: string, newNodeId: string): string {
+  return `${original}-${newNodeId.replace(/-/g, "").slice(0, 8)}`;
+}
+
 /** One node's own fields, freshly identified. Slots are the rebuild's job. */
 function reidOne(node: BlockNode): BlockNode {
   // Clone only this node's own fields; descendants are cloned as the rebuild

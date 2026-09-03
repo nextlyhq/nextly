@@ -110,10 +110,16 @@ export {
   removeNode,
   moveNode,
   reidSubtree,
+  reidSubtreeWithMap,
   duplicateNode,
   updateNode,
 } from "./tree";
-export type { NodeLocation, SlotDefaultSource, TreePosition } from "./tree";
+export type {
+  NodeLocation,
+  ReidentifiedSubtree,
+  SlotDefaultSource,
+  TreePosition,
+} from "./tree";
 
 // The node selection every reader of a stored document shares. Public because
 // the page-builder plugin's class-usage record has to stop exactly where the
