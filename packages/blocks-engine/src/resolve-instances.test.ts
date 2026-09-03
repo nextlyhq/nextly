@@ -535,7 +535,7 @@ describe("resolveComponentInstances refusals", () => {
 
     expect(atCap.unresolved).toEqual([]);
     expect(flatten(atCap.document.nodes)).toHaveLength(1);
-    expect(belowCap.unresolved.map(e => e.reason)).toEqual(["depth"]);
+    expect(belowCap.unresolved.map(e => e.reason)).toEqual(["composed-depth"]);
   });
 
   it("refuses a whole instance rather than inlining part of it", () => {
@@ -582,7 +582,9 @@ describe("resolveComponentInstances nesting", () => {
     const flat = flatten(result.document.nodes);
     expect(flat).toHaveLength(2);
     expect(result.referenced).toEqual(["outer", "inner"]);
-    expect(flat[1]!.instanceOf).toBe(flat[0]!.slots!.children![0]!.instanceOf);
+    // The HOST's instance at both depths, not the inner one, which is not a
+    // node of the resolved document at all.
+    expect(flat.map(e => e.instanceOf)).toEqual(["i1", "i1"]);
   });
 
   it("resolves an instance inside supplied slot content in the host's scope", () => {
@@ -609,6 +611,152 @@ describe("resolveComponentInstances nesting", () => {
 
     expect(result.unresolved).toEqual([]);
     expect(flatten(result.document.nodes)).toHaveLength(2);
+  });
+});
+
+describe("resolveComponentInstances limits and speculative work", () => {
+  const nestedDefs = defs({
+    outer: component(
+      [instance("o1", "inner", {}, { slots: { body: [node("shared")] } })],
+      { slots: { outerBody: { label: "Body", nodeId: "o1", slot: "body" } } }
+    ),
+    inner: component([box("l1", [])], {
+      slots: { body: { label: "Body", nodeId: "l1", slot: "children" } },
+    }),
+  });
+
+  it("re-identifies the slot children of an instance the definition holds", () => {
+    const doc = page([instance("i1", "outer"), instance("i2", "outer")]);
+
+    const result = resolveComponentInstances(doc, nestedDefs);
+    const ids = idsOf(result.document);
+
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(idsOf(result.document)).not.toContain("shared");
+  });
+
+  it("marks a nested instance's default children with the outer instance", () => {
+    const doc = page([instance("i1", "outer")]);
+
+    const result = resolveComponentInstances(doc, nestedDefs);
+
+    expect(byInstanceOf(result.document, "i1")).toHaveLength(2);
+  });
+
+  it("routes page content through a slot exposed on a nested instance", () => {
+    const doc = page([
+      instance("i1", "outer", {}, { slots: { outerBody: [node("fromPage")] } }),
+    ]);
+
+    const result = resolveComponentInstances(doc, nestedDefs);
+
+    const children = result.document.nodes[0]!.slots!.children!;
+    expect(children.map(e => e.id)).toEqual(["fromPage"]);
+  });
+
+  it("composes nothing when the host survey stopped at the node budget", () => {
+    const doc = page([instance("i1", "hero"), node("a"), node("b")]);
+    const definitions = defs({ hero: component([node("d1")]) });
+
+    const result = resolveComponentInstances(doc, definitions, {
+      limits: { ...DEFAULT_LIMITS, maxNodes: 2 },
+    });
+
+    expect(result.document).toBe(doc);
+  });
+
+  it("discards the diagnostics of an instance it then refuses", () => {
+    const doc = page([instance("i1", "outer")]);
+    const definitions = defs({
+      outer: component([instance("o1", "gone"), node("d2"), node("d3")]),
+    });
+
+    const result = resolveComponentInstances(doc, definitions, {
+      limits: { ...DEFAULT_LIMITS, maxNodes: 2 },
+    });
+
+    expect(result.unresolved).toEqual([
+      { instanceId: "i1", componentId: "outer", reason: "budget" },
+    ]);
+  });
+
+  it("gives back the budget an instance's slot content spent before it failed", () => {
+    const definitions = defs({
+      big: component([node("b1"), node("b2")]),
+      small: component([node("s1"), node("s2"), node("s3")]),
+    });
+    const doc = page([
+      instance("i1", "big", {}, { slots: { any: [instance("i2", "small")] } }),
+      instance("i3", "small"),
+    ]);
+
+    // Three: the host's own node count, and exactly what `small` costs. The
+    // slot content inside `i1` spends all of it and is then thrown away with
+    // `i1`, so the sibling fits only if that spend was given back.
+    const result = resolveComponentInstances(doc, definitions, {
+      limits: { ...DEFAULT_LIMITS, maxNodes: 3 },
+    });
+
+    expect(result.unresolved.map(e => e.instanceId)).toEqual(["i1"]);
+    expect(byInstanceOf(result.document, "i3")).toHaveLength(3);
+  });
+
+  it("keeps an inlined id stable when an unrelated node joins its definition", () => {
+    const inner = component([node("n")]);
+    const nested = () => instance("a", "inner");
+    const doc = page([instance("i1", "outer")]);
+
+    // The composed id must be a function of the instances above a node and of
+    // the definition node itself. Deriving it from the HOST instance instead
+    // makes `n` collide with the outer definition's own `n`, and the collision
+    // suffix then lands on whichever was minted second — so adding one node to
+    // the outer component silently rewrites ids inside a component it merely
+    // contains, detaching every rule and overlay keyed to them.
+    const without = resolveComponentInstances(
+      doc,
+      defs({ outer: component([nested(), instance("b", "inner")]), inner })
+    );
+    const with_ = resolveComponentInstances(
+      doc,
+      defs({
+        outer: component([node("n"), nested(), instance("b", "inner")]),
+        inner,
+      })
+    );
+
+    expect(idsOf(without.document)[0]).toBe(idsOf(with_.document)[1]);
+  });
+
+  it("refuses an instance whose definition is deeper than the limits allow", () => {
+    const doc = page([instance("i1", "deep")]);
+    const definitions = defs({
+      deep: component([box("d1", [box("d2", [node("d3")])])]),
+    });
+
+    const result = resolveComponentInstances(doc, definitions, {
+      limits: { ...DEFAULT_LIMITS, maxDepth: 2 },
+    });
+
+    expect(result.unresolved.map(e => e.reason)).toEqual(["node-depth"]);
+    expect(result.document.nodes[0]!.unresolvedComponent).toBe("node-depth");
+  });
+
+  it("counts every entry of a definition against the node budget", () => {
+    const doc = page([instance("i1", "junk")]);
+    const definitions = defs({
+      junk: component([
+        null,
+        null,
+        null,
+        node("d1"),
+      ] as unknown as ResolvedBlockNode[]),
+    });
+
+    const result = resolveComponentInstances(doc, definitions, {
+      limits: { ...DEFAULT_LIMITS, maxNodes: 2 },
+    });
+
+    expect(result.unresolved.map(e => e.reason)).toEqual(["budget"]);
   });
 });
 

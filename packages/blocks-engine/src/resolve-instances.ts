@@ -79,8 +79,16 @@ export const COMPONENT_UNRESOLVED_REASONS = [
   "missing",
   /** The component reaches itself through its own tree. */
   "cycle",
-  /** Nesting passed `MAX_COMPOSED_DEPTH`. */
-  "depth",
+  /** Components nested inside components passed `MAX_COMPOSED_DEPTH`. */
+  "composed-depth",
+  /**
+   * The definition's OWN tree is deeper than `limits.maxDepth`.
+   *
+   * Its own reason rather than sharing `composed-depth`, because the author's
+   * remedy is the opposite one: flatten this component's content, rather than
+   * stop nesting it inside others.
+   */
+  "node-depth",
   /** Inlining it would pass the run's node budget. */
   "budget",
   /** The instance node does not name a component id. */
@@ -102,13 +110,19 @@ export type ComponentUnresolvedReason =
  */
 export interface ResolvedBlockNode extends BlockNode {
   /**
-   * The component instance this node was inlined for.
+   * The instance node, IN THE HOST DOCUMENT, this node was composed for.
    *
    * Set on every node that came from a definition, never on one an author
    * placed. It is the discrimination the editor cannot make any other way: an
    * instance's slot content is nested INSIDE the inlined tree and is the
    * page's own, so "sits under an inlined root" answers "is this editable?"
    * wrongly for exactly the nodes a marketer is there to edit.
+   *
+   * The HOST's instance at every depth, not the nearest one. A component that
+   * holds another component is replaced by the tree it stands for, so its own
+   * node is not in the resolved document and naming it would hand the editor
+   * an id it cannot select — and the author never placed that inner instance
+   * anyway; they placed the one on the page.
    */
   instanceOf?: string;
   /**
@@ -237,12 +251,18 @@ export function resolveComponentInstances(
 
   const limits = options.limits ?? DEFAULT_LIMITS;
   const survey = surveyHost(document.nodes, limits.maxNodes);
-  // Identity for an ordinary page is guaranteed twice over — `inlineForest`
-  // returns its input array when nothing changed — so this is not what makes
-  // the common case allocation-free. What it decides is the case the survey
-  // could NOT read: a document already past `maxNodes` is composed not at all
-  // rather than up to the cap, because a partial composition mints ids that
-  // stay stable only until someone raises the limit.
+  // A survey that stopped at the cap collected a PREFIX of the document's ids,
+  // so every id minted afterwards would be checked against a set missing
+  // whatever the walk never reached — and an unread later node carrying a
+  // minted id is exactly the duplicate the seeding exists to prevent. A
+  // document past `maxNodes` is therefore composed not at all rather than up
+  // to the cap: proceeding on a partial answer is worse than not composing.
+  if (survey.truncated) return unchanged;
+  // An optimisation, and stated as one because no test can hold it: identity
+  // is already guaranteed by `inlineForest`, which returns its input array
+  // when nothing changed, so removing this line changes no output. What it
+  // saves is building the run and walking the tree at all, which is the whole
+  // cost this module adds to a page that uses no components.
   if (!survey.hasInstance) return unchanged;
 
   const run: ResolveRun = {
@@ -251,6 +271,8 @@ export function resolveComponentInstances(
     maxComposedDepth: options.maxComposedDepth ?? MAX_COMPOSED_DEPTH,
     budget: limits.maxNodes,
     taken: survey.ids,
+    minted: [],
+    abort: undefined,
     referenced: [],
     referencedSeen: new Set<string>(),
     unresolved: [],
@@ -276,6 +298,21 @@ interface ResolveRun {
   budget: number;
   /** Every id in use, so a minted one cannot shadow a stored node. */
   taken: Set<string>;
+  /**
+   * The ids this run minted, in order, so a refused instance can give them
+   * back. Host ids are not in it: they were never this run's to release.
+   */
+  minted: string[];
+  /**
+   * Why the clone in progress gave up, set on the path that returns `null`.
+   *
+   * A field rather than a richer return type because the two failures — the
+   * node budget and the definition's own depth — are raised several frames
+   * below the one that has an instance to mark, and threading a reason back
+   * through every slot and forest frame would put a second meaning on every
+   * one of those returns.
+   */
+  abort: ComponentUnresolvedReason | undefined;
   referenced: string[];
   referencedSeen: Set<string>;
   unresolved: UnresolvedInstance[];
@@ -292,6 +329,8 @@ const ROOT_SCOPE: ComposedScope = { depth: 0, onPath: new Set<string>() };
 /** What the host document holds, read once before anything is rebuilt. */
 interface HostSurvey {
   hasInstance: boolean;
+  /** The walk stopped at the node cap, so `ids` is a PREFIX of what is there. */
+  truncated: boolean;
   ids: Set<string>;
 }
 
@@ -305,9 +344,13 @@ interface HostSurvey {
 function surveyHost(nodes: readonly unknown[], maxNodes: number): HostSurvey {
   const ids = new Set<string>();
   let hasInstance = false;
+  let truncated = false;
   let budget = maxNodes;
   walkForest(nodes, entry => {
-    if (budget <= 0) return "stop";
+    if (budget <= 0) {
+      truncated = true;
+      return "stop";
+    }
     budget -= 1;
     const node = entry.node;
     if (!isPlainRecord(node)) return "descend";
@@ -315,7 +358,7 @@ function surveyHost(nodes: readonly unknown[], maxNodes: number): HostSurvey {
     if (node.type === COMPONENT_INSTANCE_TYPE) hasInstance = true;
     return "descend";
   });
-  return { hasInstance, ids };
+  return { hasInstance, truncated, ids };
 }
 
 /** The component a node references, or `undefined` if it references none. */
@@ -423,7 +466,9 @@ function expandInstance(
   instance: ResolvedBlockNode,
   run: ResolveRun,
   scope: ComposedScope,
-  depth: number
+  depth: number,
+  presupplied?: Record<string, ResolvedBlockNode[]>,
+  owner?: string
 ): ResolvedBlockNode[] {
   const componentId = componentIdOf(instance);
   if (componentId === undefined) {
@@ -439,10 +484,18 @@ function expandInstance(
   // Established by `refusalFor`, which is the only reader that can tell a
   // missing definition from an unreadable one.
   const definition = run.definitions.get(componentId) as ComponentDocument;
-  const supplied = suppliedSlots(instance, run, scope, depth);
+
+  // Taken before ANY speculative work, `suppliedSlots` included. Resolving an
+  // instance's slot content spends budget and mints ids, and a refusal below
+  // discards that content — `refuse` returns the instance with its STORED
+  // slots — so a mark taken after it would leave a refused instance having
+  // permanently charged the page for a tree nobody receives.
+  const mark = savepoint(run);
+  const supplied = presupplied ?? suppliedSlots(instance, run, scope, depth);
   const ctx: InlineContext = {
     run,
-    instanceId: instance.id,
+    scopeKey: instance.id,
+    owner: owner ?? instance.id,
     plans: planEdits(definition, instance, supplied),
     scope: {
       depth: scope.depth + 1,
@@ -450,15 +503,55 @@ function expandInstance(
     },
   };
 
-  const before = run.budget;
   const inlined = cloneDefinitionForest(definition.nodes, ctx, 1);
   if (inlined === null) {
-    // Restored so the page's remaining instances are judged against the budget
-    // this one did not spend. A partially inlined component is not a component.
-    run.budget = before;
-    return [refuse(run, instance, componentId, "budget")];
+    const reason = run.abort ?? "budget";
+    run.abort = undefined;
+    rollback(run, mark);
+    return [refuse(run, instance, componentId, reason)];
   }
   return inlined;
+}
+
+/** Everything one speculative expansion may have to give back. */
+interface Savepoint {
+  budget: number;
+  unresolved: number;
+  minted: number;
+}
+
+/** Where the run stood before an instance was attempted. */
+function savepoint(run: ResolveRun): Savepoint {
+  return {
+    budget: run.budget,
+    unresolved: run.unresolved.length,
+    minted: run.minted.length,
+  };
+}
+
+/**
+ * Undo a whole attempted expansion.
+ *
+ * All three, not the budget alone. A nested instance refused INSIDE an
+ * expansion that is itself then refused has already reported itself, and that
+ * report names a scoped id no node in the returned document carries — a
+ * diagnostic about a tree the reader never receives, which is worse than
+ * silence because a surface will offer the author a remedy for it. The minted
+ * ids go back for the same reason: an id reserved for a node that does not
+ * exist pushes a later, real node onto a disambiguated spelling.
+ *
+ * `referenced` is deliberately NOT rolled back. Its consumer is cache tagging,
+ * and this page's render DID read that definition — a change to it can change
+ * whether this instance fits the budget at all, so the page has to regenerate.
+ * A tag list trimmed to what survived is the list that never recovers.
+ */
+function rollback(run: ResolveRun, mark: Savepoint): void {
+  run.budget = mark.budget;
+  run.unresolved.length = mark.unresolved;
+  for (let i = run.minted.length - 1; i >= mark.minted; i -= 1) {
+    run.taken.delete(run.minted[i]);
+  }
+  run.minted.length = mark.minted;
 }
 
 /** Why this instance cannot be inlined here, if it cannot. */
@@ -468,7 +561,7 @@ function refusalFor(
   scope: ComposedScope
 ): ComponentUnresolvedReason | undefined {
   if (scope.onPath.has(componentId)) return "cycle";
-  if (scope.depth >= run.maxComposedDepth) return "depth";
+  if (scope.depth >= run.maxComposedDepth) return "composed-depth";
   const definition = run.definitions.get(componentId);
   if (!isPlainRecord(definition) || !Array.isArray(definition.nodes)) {
     return "missing";
@@ -698,8 +791,25 @@ function planFor(plans: Map<string, NodePlan>, nodeId: string): NodePlan {
 /** One instance's inlining, in progress. */
 interface InlineContext {
   run: ResolveRun;
-  /** The id every node produced here is scoped to and marked with. */
-  instanceId: string;
+  /**
+   * What ids produced here are derived from: the NEAREST instance.
+   *
+   * Separate from `owner` because they answer different questions. Deriving
+   * from the nearest instance is what keeps two components that happen to
+   * share a node id apart; recording the nearest instance would name a node
+   * the reader cannot find, since a nested instance is itself replaced by the
+   * tree it stands for.
+   */
+  scopeKey: string;
+  /**
+   * What `instanceOf` records: the instance in the HOST DOCUMENT.
+   *
+   * Always a node the stored document contains, which is the whole use — the
+   * editor holds the stored document and needs a click on a composed node to
+   * select something it can address. The nearest-instance answer is unusable
+   * for that at any depth below the first.
+   */
+  owner: string;
   plans: ReadonlyMap<string, NodePlan>;
   /** The scope INSIDE this component, for instances the definition itself holds. */
   scope: ComposedScope;
@@ -718,12 +828,26 @@ function cloneDefinitionForest(
   ctx: InlineContext,
   depth: number
 ): ResolvedBlockNode[] | null {
-  if (depth > ctx.run.maxDepth) return [];
+  // A refusal rather than an empty forest. Returning `[]` publishes a
+  // component whose deeper content is silently gone, with nothing in
+  // `unresolved` to say so — the truncation Storyblok is criticised for in the
+  // design's prior art, arrived at by accident.
+  if (depth > ctx.run.maxDepth) {
+    ctx.run.abort = "node-depth";
+    return null;
+  }
   const out: ResolvedBlockNode[] = [];
   for (const node of nodes) {
-    if (!isPlainRecord(node) || typeof node.id !== "string") continue;
-    if (ctx.run.budget <= 0) return null;
+    // Charged BEFORE the entry is judged, the way `countNodes` counts every
+    // entry including malformed ones. A definition nothing validated can hold
+    // a million nulls, and skipping them free lets it be walked in full under
+    // any cap — then resolve to a partial tree rather than reporting `budget`.
+    if (ctx.run.budget <= 0) {
+      ctx.run.abort = "budget";
+      return null;
+    }
     ctx.run.budget -= 1;
+    if (!isPlainRecord(node) || typeof node.id !== "string") continue;
     const produced = cloneDefinitionNode(
       node as unknown as ResolvedBlockNode,
       ctx,
@@ -745,13 +869,30 @@ function cloneDefinitionNode(
   if (plan?.visible === false) return [];
 
   const scoped = scopeNode(node, ctx, plan);
-  if (scoped.type === COMPONENT_INSTANCE_TYPE) {
-    return expandInstance(scoped, ctx.run, ctx.scope, depth);
-  }
 
+  // Cloned BEFORE the instance branch, not after it. A component-instance node
+  // inside a definition carries slot content like any container, and skipping
+  // this for it left that content holding the DEFINITION's own node ids — so
+  // two instances of the outer component published the same ids — and left a
+  // planned slot substitution aimed at the nested instance unapplied, so
+  // page-supplied content lost to the definition's default.
   const slots = cloneSlots(node, ctx, depth, plan);
   if (slots === null) return null;
   if (slots !== undefined) scoped.slots = slots;
+
+  if (scoped.type === COMPONENT_INSTANCE_TYPE) {
+    // Handed on rather than re-derived: these children are already resolved in
+    // this component's scope, and asking `expandInstance` to read them again
+    // would walk a tree that holds no instance left to expand.
+    return expandInstance(
+      scoped,
+      ctx.run,
+      ctx.scope,
+      depth,
+      slots ?? {},
+      ctx.owner
+    );
+  }
   return [scoped];
 }
 
@@ -763,8 +904,8 @@ function scopeNode(
 ): ResolvedBlockNode {
   const scoped: ResolvedBlockNode = {
     ...node,
-    id: mintScopedId(ctx.run, ctx.instanceId, node.id),
-    instanceOf: ctx.instanceId,
+    id: mintScopedId(ctx.run, ctx.scopeKey, node.id),
+    instanceOf: ctx.owner,
   };
   // Removing the envelope rather than emptying it: `conditions` is only half of
   // what gates a node, and an instance saying "show this" means the reader
@@ -875,6 +1016,7 @@ function mintScopedId(
   const base = `${SCOPED_ID_PREFIX}${hashId(`${instanceId} ${definitionNodeId}`)}`;
   if (!run.taken.has(base)) {
     run.taken.add(base);
+    run.minted.push(base);
     return base;
   }
   // Terminates: `taken` is finite and the suffix strictly increases.
@@ -882,6 +1024,7 @@ function mintScopedId(
     const candidate = `${base}-${n}`;
     if (run.taken.has(candidate)) continue;
     run.taken.add(candidate);
+    run.minted.push(candidate);
     return candidate;
   }
 }
