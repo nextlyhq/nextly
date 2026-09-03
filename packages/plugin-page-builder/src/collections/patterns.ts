@@ -106,6 +106,11 @@ export function patternsCollection() {
     // so the library never offers a half-built starting point.
     status: true,
     versions: { drafts: true },
-    admin: { useAsTitle: "title" },
+    // Kept out of the Collections section, which lists every collection that
+    // claims neither a sidebar group nor plugin ownership. Without this the
+    // store is listed twice — once there and once in this plugin's own menu —
+    // and following the plugin link then lights up Collections, so the sidebar
+    // disagrees with itself about where the author is.
+    admin: { useAsTitle: "title", isPlugin: true },
   });
 }

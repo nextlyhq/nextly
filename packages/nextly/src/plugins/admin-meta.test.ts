@@ -993,6 +993,49 @@ describe("buildPluginAdminMeta menu slugs", () => {
     });
   });
 
+  it("refuses an item naming a collection the plugin does not contribute", () => {
+    const plugin = definePlugin({
+      ...base,
+      contributes: {
+        collections: [{ slug: "patterns" } as never],
+        admin: {
+          menu: [
+            {
+              label: "Patterns",
+              collection: "pattrens",
+              to: "/admin/collections/patterns",
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition);
+
+    // A typo resolves to a well-formed path and a well-formed permission, and
+    // both are wrong in the quietest way available: the permission is never
+    // seeded, so a non-super-admin cannot tell the item from one they are not
+    // allowed to see. Registration is the last moment it is visible as a
+    // mistake, so it is refused there rather than serialized.
+    let caught: unknown;
+    try {
+      menuOf(plugin);
+    } catch (error) {
+      caught = error;
+    }
+
+    // Asserted on the reason and the log message rather than on `message`,
+    // which every plugin resolution error answers with the same sentence — a
+    // match on it would pass for a duplicate admin slug just as readily.
+    expect(
+      (caught as { logContext?: { reason?: string } })?.logContext?.reason
+    ).toBe("menu-item-unowned-collection");
+    // Names the offending slug AND what it could have been. Neither is
+    // recoverable from the other, and a reader looking at a typo is exactly
+    // the reader who cannot see it.
+    const logMessage = (caught as { logMessage?: string })?.logMessage ?? "";
+    expect(logMessage).toContain("pattrens");
+    expect(logMessage).toContain("patterns");
+  });
+
   it("resolves a nested item too", () => {
     const plugin = definePlugin({
       ...base,

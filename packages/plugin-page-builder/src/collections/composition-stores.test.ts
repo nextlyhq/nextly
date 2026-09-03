@@ -264,3 +264,35 @@ describe("a published pattern can always be classified", () => {
     );
   });
 });
+
+describe("each store is listed once in the sidebar", () => {
+  it.each([
+    ["patterns", patternsCollection],
+    ["components", componentsCollection],
+    ["layouts", layoutsCollection],
+  ])("%s claims plugin ownership", (_label, build) => {
+    // The Collections section lists every collection claiming neither a
+    // sidebar group nor plugin ownership, and this plugin's own menu lists
+    // these three as well. Without the claim each store appears twice, and
+    // following the plugin link lights up Collections — the sidebar
+    // disagreeing with itself about where the author is.
+    const collection = build() as { admin?: { isPlugin?: boolean } };
+
+    expect(collection.admin?.isPlugin).toBe(true);
+  });
+});
+
+describe("a Layout row names no variant", () => {
+  it("offers no variant field", () => {
+    // A component has no variants: nothing declares them, no registry lists
+    // them, and the components collection carries no such field. A free-text
+    // `variant` would accept every string and validate against none, and a
+    // resolver could not tell one that was never built from a typo.
+    const rowFields =
+      named(fieldsOf(layoutsCollection()), "areas")?.fields ?? [];
+
+    // The control: the row does carry the fields it is supposed to, so this
+    // is an assertion about `variant` rather than about an empty row.
+    expect(rowFields.map(field => field.name)).toEqual(["area", "component"]);
+  });
+});

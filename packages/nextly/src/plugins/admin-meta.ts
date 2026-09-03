@@ -26,6 +26,7 @@ import type {
   PluginDefinition,
 } from "./plugin-context";
 import { pluginAdminSlug } from "./plugin-slug";
+import { resolutionError } from "./resolution-error";
 import { collectPluginRoutes } from "./routes/collect-routes";
 import { isRouteError } from "./routes/route-error";
 import { validatedAdminWidgets } from "./validate-admin-widgets";
@@ -189,10 +190,12 @@ export { pluginAdminSlug } from "./plugin-slug";
  */
 function resolvedMenuItem(
   item: PluginMenuItem,
-  renameMap: Record<string, string>
+  renameMap: Record<string, string>,
+  owned: readonly string[],
+  name: string
 ): PluginMenuItem {
   const children = item.children?.map(child =>
-    resolvedMenuItem(child, renameMap)
+    resolvedMenuItem(child, renameMap, owned, name)
   );
   const withChildren = children ? { ...item, children } : item;
 
@@ -201,6 +204,23 @@ function resolvedMenuItem(
   // reads of two objects as far as the checker is concerned.
   const { collection, ...rest } = withChildren;
   if (collection === undefined) return withChildren;
+
+  // Refused at registration, because there is nothing to observe later. A slug
+  // this plugin does not own resolves to a perfectly well-formed path and a
+  // perfectly well-formed permission, and both are wrong in the quietest way
+  // available: the permission is never seeded, so every non-super-admin simply
+  // does not see the item, and the super-admins who do see it get a link to a
+  // list that does not exist. Neither surface can tell that from a role
+  // legitimately lacking access.
+  if (!owned.includes(collection)) {
+    throw resolutionError(
+      "menu-item-unowned-collection",
+      `Plugin "${name}" has a menu item ("${withChildren.label}") naming ` +
+        `collection "${collection}", which it does not contribute. Name one ` +
+        `of: ${owned.join(", ") || "(none)"}.`,
+      { plugin: name, collection, owned }
+    );
+  }
 
   const slug = renameMap[collection] ?? collection;
   return {
@@ -354,7 +374,12 @@ export function buildPluginAdminMeta(
     if (isEnabled && admin) {
       if (admin.menu && admin.menu.length > 0) {
         meta.menu = admin.menu.map(item =>
-          resolvedMenuItem(item, plugin.renameMap ?? {})
+          resolvedMenuItem(
+            item,
+            plugin.renameMap ?? {},
+            pluginCollectionSlugs(plugin),
+            plugin.name
+          )
         );
       }
       if (admin.pages && admin.pages.length > 0) meta.pages = admin.pages;

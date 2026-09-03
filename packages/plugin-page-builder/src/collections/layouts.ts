@@ -21,6 +21,31 @@
  * component named by a Layout is a reference rather than an id inside a blob
  * nothing checks.
  *
+ * ## There is no `variant` field here yet
+ *
+ * A Layout row says WHICH component fills an area, not which of its variants,
+ * because a component has no variants to name. Nothing declares them, no
+ * registry lists them and the components collection carries no such field, so
+ * a free-text `variant` would accept every string and validate against none —
+ * and a resolver reading one back could not tell a variant that was never
+ * built from a typo. It lands with the declarations it selects from.
+ *
+ * ## A component reference here is not enforced by the database
+ *
+ * `areas` is a repeater, and a repeater is stored as ONE JSON column, so the
+ * `relationship` nested in it never becomes a column of its own and emits no
+ * foreign key and no delete policy. Deleting a component therefore leaves its
+ * id sitting in every Layout that named it, and nothing reports that.
+ *
+ * Stated rather than papered over. A write-time existence check would read as
+ * integrity while providing none — the component can be deleted the moment
+ * after it passes — and no foreign key would help with the other half of the
+ * problem anyway, since a component that still exists but is unpublished is
+ * equally unusable to a resolver. What this actually needs is a delete policy
+ * (refuse, or orphan and degrade), which is a decision about what an author
+ * should experience rather than a repair, and it belongs with the resolver
+ * that will be the first thing to read these references.
+ *
  * ## There is no `isDefault` field here yet
  *
  * Which Layout a page ends up with is resolved through a chain — the site's
@@ -110,10 +135,6 @@ export function layoutsCollection() {
             required: true,
             relationTo: COMPONENTS_SLUG,
           }),
-          // Which of the component's named variants this Layout places. Left
-          // empty to place the component as defined, which is what a Layout
-          // that only wants the header does.
-          text({ name: "variant" }),
         ],
       }),
     ],
@@ -122,6 +143,11 @@ export function layoutsCollection() {
     // does.
     status: true,
     versions: { drafts: true },
-    admin: { useAsTitle: "title" },
+    // Kept out of the Collections section, which lists every collection that
+    // claims neither a sidebar group nor plugin ownership. Without this the
+    // store is listed twice — once there and once in this plugin's own menu —
+    // and following the plugin link then lights up Collections, so the sidebar
+    // disagrees with itself about where the author is.
+    admin: { useAsTitle: "title", isPlugin: true },
   });
 }

@@ -54,5 +54,9 @@ permission are then derived from the slug the host actually registered, so a
 `.rename({ patterns: "saved-patterns" })` no longer leaves the link pointing
 at a list that does not exist or gates it on a permission nobody is seeded.
 
+A menu item naming a collection its plugin does not contribute is refused at
+registration rather than serialized into a link nobody can follow.
+
 Nothing yet renders a component instance or resolves a Layout — this is the
-storage and the permissions the rest of the feature is built on.
+storage and the permissions the rest of the feature is built on. A Layout row
+names no variant yet, because a component has none to name.
