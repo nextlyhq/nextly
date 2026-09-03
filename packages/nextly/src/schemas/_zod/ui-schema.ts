@@ -353,51 +353,62 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       }
       // A component / field-group field references a schema by slug: either a
       // single `component` / `fieldGroup`, or a `components[]` / `fieldGroups[]` whitelist
-      // for a polymorphic slot. Exactly one form must be present, and every referenced slug
+      // for a polymorphic slot. Exactly one KEY must be declared, and every referenced slug
       // must be a real slug — a blank or malformed reference points at no loadable
-      // definition, so runtime writes to it would be silently dropped.
+      // definition, so runtime writes to it would be silently dropped. The keys are
+      // counted BEFORE any value is read: coalescing the two spellings of one shape
+      // first would silently prefer the legacy value and accept an ambiguous field
+      // the code-first validator rejects.
       if (isFieldGroupType(f.type)) {
         // Both spellings are declared on the object above, so they survive
         // parsing and are readable off the node without a cast.
-        const singleRef = f.component ?? f.fieldGroup;
-        const multiRef = f.components ?? f.fieldGroups;
-        const hasSingle = singleRef !== undefined;
-        const hasMulti = multiRef !== undefined;
-        const singlePath =
-          f.fieldGroup !== undefined
-            ? "fieldGroup"
-            : STORAGE_FORMAT.refKeys.single;
-        const multiPath =
-          f.fieldGroups !== undefined
-            ? "fieldGroups"
-            : STORAGE_FORMAT.refKeys.many;
+        const singleKeys = ["component", "fieldGroup"] as const;
+        const multiKeys = ["components", "fieldGroups"] as const;
+        const declaredSingle = singleKeys.filter(k => f[k] !== undefined);
+        const declaredMulti = multiKeys.filter(k => f[k] !== undefined);
+        const declaredCount = declaredSingle.length + declaredMulti.length;
 
-        if (hasSingle === hasMulti) {
+        if (declaredCount > 1) {
+          const found = [...declaredSingle, ...declaredMulti]
+            .map(k => `'${k}'`)
+            .join(", ");
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `component fields must declare exactly one reference key (found ${found})`,
+            path: [[...declaredSingle, ...declaredMulti][1]],
+          });
+        } else if (declaredCount === 0) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message:
               "component fields require either a `component` slug or a `components[]` list, but not both",
-            path: [hasSingle ? multiPath : singlePath],
+            path: ["component"],
           });
-        } else if (hasSingle) {
+        } else if (declaredSingle.length > 0) {
+          const key = declaredSingle[0];
+          const singleRef = f[key];
           if (typeof singleRef !== "string" || !SLUG_RE.test(singleRef)) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               message: "component must be a valid component slug",
-              path: [singlePath],
+              path: [key],
             });
           }
-        } else if (
-          !Array.isArray(multiRef) ||
-          multiRef.length === 0 ||
-          !multiRef.every(s => typeof s === "string" && SLUG_RE.test(s))
-        ) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message:
-              "components must be a non-empty list of valid component slugs",
-            path: [multiPath],
-          });
+        } else {
+          const key = declaredMulti[0];
+          const multiRef = f[key];
+          if (
+            !Array.isArray(multiRef) ||
+            multiRef.length === 0 ||
+            !multiRef.every(s => typeof s === "string" && SLUG_RE.test(s))
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "components must be a non-empty list of valid component slugs",
+              path: [key],
+            });
+          }
         }
       }
       if (RESERVED_FIELD_NAMES.has(f.name)) {

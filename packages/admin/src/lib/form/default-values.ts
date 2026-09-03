@@ -83,6 +83,11 @@ const FROM_STORED: Record<
   boolean: coerceStoredBoolean,
   chips: coerceStoredChips,
   component: unwrapStoredComponent,
+  // The migrated spelling of `component` arrives with the same populated
+  // array shape, so the same reconciliation applies. Keyed by raw stored
+  // token: this map is looked up by whatever discriminator the definition
+  // carries.
+  fieldGroup: unwrapStoredComponent,
 };
 
 /** The value a STORED field takes in the form. */

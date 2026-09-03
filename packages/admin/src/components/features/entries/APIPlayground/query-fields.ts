@@ -12,6 +12,7 @@
  * @module components/entries/APIPlayground/query-fields
  */
 
+import { isFieldGroupFieldType } from "nextly/field-group-type";
 import { encodeSelectParam, readSelectParam } from "nextly/query";
 
 /** The parts of a field definition the playground needs. */
@@ -47,6 +48,17 @@ const NON_SCALAR_TYPES = new Set([
 ]);
 
 /**
+ * Whether a field type holds nothing sortable: the literal list above, plus
+ * field-group fields, which hold no column of their own under either spelling
+ * of the stored token. Asked through the predicate rather than listing the
+ * migrated spelling, so the vocabulary moves without this selector offering a
+ * field that cannot be ordered.
+ */
+function isNonScalarType(type: string): boolean {
+  return NON_SCALAR_TYPES.has(type) || isFieldGroupFieldType(type);
+}
+
+/**
  * Columns every collection has, which are absent from its field list because
  * nobody declared them.
  */
@@ -67,7 +79,7 @@ export function sortableFields(
 ): string[] {
   const declared = fields
     .filter(
-      f => !LAYOUT_ONLY_TYPES.has(f.type) && !NON_SCALAR_TYPES.has(f.type)
+      f => !LAYOUT_ONLY_TYPES.has(f.type) && !isNonScalarType(f.type)
     )
     .map(f => f.name);
 

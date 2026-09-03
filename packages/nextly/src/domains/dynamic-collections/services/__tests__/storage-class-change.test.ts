@@ -66,5 +66,26 @@ describe.each(DIALECTS)(
 
       expect(sql).not.toContain("RENAME COLUMN");
     });
+
+    it("renaming a field group migrates the association key on its own table", () => {
+      // The separating assertion the no-rename test alone cannot make: the
+      // rename must still migrate the existing rows, or the registry adopts
+      // the new field name while every instance stays keyed by the old one
+      // and reads return no nested data.
+      const sql = service.generateAlterTableMigration(
+        TABLE,
+        [asField({ name: "seo", type: "fieldGroup", fieldGroup: "seo" })],
+        [asField({ name: "meta", type: "fieldGroup", fieldGroup: "seo" })]
+      );
+
+      expect(sql).toContain("UPDATE");
+      // The generators quote identifiers per dialect, so match the association
+      // columns either way.
+      expect(sql).toMatch(/["'`]_parent_field["'`] = 'meta'/);
+      expect(sql).toMatch(/["'`]_parent_field["'`] = 'seo'/);
+      // Scoped to this parent's rows only: the same group can be embedded
+      // under the same field name in other collections.
+      expect(sql).toMatch(/["'`]_parent_table["'`] = 'dc_storage_class'/);
+    });
   }
 );

@@ -1,4 +1,7 @@
 import { arrayMove } from "@dnd-kit/sortable";
+// The shared readers preserve both reference spellings across the builder
+// round trip: a migrated definition loads with its references intact and
+// saves them back resolved, rather than losing them into pluginOptions.
 import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,

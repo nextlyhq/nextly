@@ -6,6 +6,9 @@
  * here — they are handled at output time or are intentionally raw.
  */
 
+// The shared vocabulary readers keep the nested-document descent identical
+// across both stored field-group spellings: which fields are field groups,
+// what a definition references, and the wire key a zone row announces under.
 import { typeHasNestedFields } from "../../collections/fields/guards";
 import {
   extractFieldGroupReferences,
@@ -252,27 +255,39 @@ function sanitizeFieldGroupValue(
   }
 }
 
-/** How deep the enrichment walk follows container fields. Matches the editor's nesting limit. */
+/**
+ * How deep the enrichment walk follows field-group-to-field-group edges.
+ * Matches the editor's nesting limit. Inline containers cost nothing: the
+ * declared schema is finite, so a deep group/repeater hierarchy is walked
+ * without spending this budget, and a self-referencing container is
+ * terminated by the path-scoped open set in the walk below.
+ */
 const MAX_FIELD_GROUP_RESOLVE_DEPTH = 3;
 
 /**
  * Attach one field-group field's referenced children, single reference or zone.
  *
- * Each resolved child schema recurses through the same attachment, so a field
- * group whose registered fields reference another field group is enriched at
- * every depth the editor allows — the descent reaches B's text only when B's
- * own children were attached.
+ * Each resolved child schema recurses through the same attachment at the next
+ * field-group depth, so a field group whose registered fields reference
+ * another field group is enriched at every depth the editor allows — the
+ * descent reaches B's text only when B's own children were attached.
  */
 async function attachFieldGroupReferences(
   field: FieldDefinition,
   resolveChildren: (slug: string) => Promise<FieldDefinition[] | undefined>,
-  depth: number
+  depth: number,
+  openContainers: WeakSet<object>
 ): Promise<void> {
   const { single, many } = extractFieldGroupReferences(field);
   if (single !== undefined) {
     const children = await resolveChildren(single);
     if (children !== undefined) {
-      await attachFieldGroupChildren(children, resolveChildren, depth + 1);
+      await attachFieldGroupChildren(
+        children,
+        resolveChildren,
+        depth + 1,
+        openContainers
+      );
       (field as { componentFields?: FieldDefinition[] }).componentFields =
         children;
     }
@@ -283,7 +298,12 @@ async function attachFieldGroupReferences(
   for (const slug of many) {
     const children = await resolveChildren(slug);
     if (children !== undefined) {
-      await attachFieldGroupChildren(children, resolveChildren, depth + 1);
+      await attachFieldGroupChildren(
+        children,
+        resolveChildren,
+        depth + 1,
+        openContainers
+      );
       schemas[slug] = { fields: children };
     }
   }
@@ -306,19 +326,28 @@ async function attachFieldGroupReferences(
  *
  * Resolved children recurse through the same walk — containers (repeater/group)
  * so their nested field-group references resolve, and resolved field-group
- * schemas so a group nested inside a group enriches too — bounded by the depth
- * the editor allows, which also terminates a registry cycle.
+ * schemas so a group nested inside a group enriches too. Only field-group
+ * edges spend the depth budget: an inline container hierarchy is as deep as
+ * its schema declares and is walked at the same depth, with `openContainers`
+ * — scoped to the current path and released on the way out — terminating a
+ * self-referencing container instead.
  */
 export async function attachFieldGroupChildren(
   fields: FieldDefinition[],
   resolveChildren: (slug: string) => Promise<FieldDefinition[] | undefined>,
-  depth = 0
+  depth = 0,
+  openContainers: WeakSet<object> = new WeakSet<object>()
 ): Promise<FieldDefinition[]> {
   if (depth > MAX_FIELD_GROUP_RESOLVE_DEPTH) return fields;
 
   for (const field of fields) {
     if (isFieldGroupType(field.type)) {
-      await attachFieldGroupReferences(field, resolveChildren, depth);
+      await attachFieldGroupReferences(
+        field,
+        resolveChildren,
+        depth,
+        openContainers
+      );
       continue;
     }
     if (
@@ -326,7 +355,15 @@ export async function attachFieldGroupChildren(
       Array.isArray(field.fields) &&
       field.fields.length > 0
     ) {
-      await attachFieldGroupChildren(field.fields, resolveChildren, depth + 1);
+      if (openContainers.has(field)) continue;
+      openContainers.add(field);
+      await attachFieldGroupChildren(
+        field.fields,
+        resolveChildren,
+        depth,
+        openContainers
+      );
+      openContainers.delete(field);
     }
   }
   return fields;

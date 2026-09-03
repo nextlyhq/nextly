@@ -211,6 +211,22 @@ describe("ui-schema field types (widened set)", () => {
       ).success
     ).toBe(false);
   });
+
+  it("rejects two aliases of one reference shape instead of preferring the legacy value", () => {
+    // The code-first validator rejects this exact input as a conflict: the
+    // manifest boundary must agree, or validity would depend on which
+    // schema reads the field and one reference could be silently discarded
+    // on a round trip.
+    const result = uiSchemaManifest.safeParse(
+      manifestWith({
+        name: "seo",
+        type: "fieldGroup",
+        component: "seo",
+        fieldGroup: "other",
+      })
+    );
+    expect(result.success).toBe(false);
+  });
 });
 
 // The owner column (`created_by`) is injected only on collection tables, so the

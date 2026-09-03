@@ -225,6 +225,26 @@ describe("attachFieldGroupChildren", () => {
     expect(childrenOf(nested[0])).toHaveLength(1);
   });
 
+  it("reaches a field group nested deeper than the budget inside inline containers", async () => {
+    // The editor's nesting limit counts field-group-to-field-group edges, not
+    // inline group/repeater wrappers: a deep wrapper hierarchy is valid schema
+    // and its reference must still resolve.
+    let inner: FieldDefinition = field({
+      name: "seo",
+      type: "fieldGroup",
+      fieldGroup: "seo",
+    });
+    for (let i = 0; i < 6; i++) {
+      inner = field({ name: `wrap${i}`, type: "group", fields: [inner] });
+    }
+    const fields = await attachFieldGroupChildren([inner], resolver);
+    let deepest = fields[0];
+    while (deepest.fields && deepest.fields.length > 0) {
+      deepest = deepest.fields[0] as FieldDefinition;
+    }
+    expect(childrenOf(deepest)).toHaveLength(1);
+  });
+
   it("leaves a field untouched when its reference resolves to nothing", async () => {
     const raw = field({ name: "seo", type: "component", component: "gone" });
     const fields = await attachFieldGroupChildren([raw], resolver);

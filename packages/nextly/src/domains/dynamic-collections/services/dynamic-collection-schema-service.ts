@@ -23,6 +23,7 @@
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   validateNumberDecimalDimensionsShared,
   type BaseValidationError,
@@ -32,6 +33,10 @@ import {
   pluginEmptyColumnDefault,
   storageTypeToken,
 } from "../../../shared/lib/plugin-storage";
+import {
+  fieldGroupSlugList,
+  isFieldGroupType,
+} from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { generateSQL } from "../../schema/pipeline/sql-templates/index";
 import {
@@ -48,6 +53,7 @@ import {
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
+import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
@@ -849,8 +855,8 @@ ${allColumnDefs.join(",\n")}
     // alternative (data destruction). Track as a follow-up; admin UI
     // ideally splits combined edits into two saves.
     const rename = this.detectFieldRename(oldFields, newFields);
-    const renamedFromName = rename?.from.name ?? null;
-    const renamedToName = rename?.to.name ?? null;
+    let renamedFromName = rename?.from.name ?? null;
+    let renamedToName = rename?.to.name ?? null;
     if (rename) {
       const fromCol = toSnakeCase(rename.from.name);
       const toCol = toSnakeCase(rename.to.name);
@@ -865,6 +871,33 @@ ${allColumnDefs.join(",\n")}
         statements.push(
           `ALTER TABLE ${this.quoteIdentifier(tableName)} RENAME COLUMN ${this.quoteIdentifier(fromCol)} TO ${this.quoteIdentifier(toCol)};`
         );
+      }
+    } else {
+      // Rename detection returned null — possibly because the pair produces no
+      // parent column (a field-group rename). Before falling through to the
+      // add/drop loops, migrate the ASSOCIATION: a field group's instances are
+      // keyed by the field name in its own table, so a rename that emitted no
+      // DDL would leave every existing row keyed by the old field name and
+      // reads would return no nested data. Only an unambiguous single
+      // removed/added pair whose referenced slugs are identical is migrated —
+      // anything else is a genuine remove+add of different field groups and
+      // stays with the loops.
+      const groupRename = this.detectFieldGroupAssociationRename(
+        oldFields,
+        newFields
+      );
+      if (groupRename) {
+        renamedFromName = groupRename.from.name;
+        renamedToName = groupRename.to.name;
+        for (const slug of fieldGroupSlugList(groupRename.to)) {
+          const groupTable = resolveComponentTableName(slug);
+          statements.push(
+            `UPDATE ${this.quoteIdentifier(groupTable)}\n` +
+              `SET ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.to.name}'\n` +
+              `WHERE ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.from.name}'\n` +
+              `  AND ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentTable)} = '${tableName}';`
+          );
+        }
       }
     }
 
@@ -1414,6 +1447,51 @@ ${allColumnDefs.join(",\n")}
           `type-changing rename, do it in two steps: first rename ` +
           `without changing type, then change the type.`
       );
+      return null;
+    }
+
+    return { from, to };
+  }
+
+  /**
+   * The field-group rename {@link detectFieldRename} cannot see.
+   *
+   * That detector requires both sides to produce a parent column, so a renamed
+   * field-group field returns null there and the add/drop loops skip both
+   * sides — emitting no migration at all. But a field group's instances are
+   * keyed by the FIELD NAME in the group's own table, so the rename is real:
+   * it migrates `_parent_field` instead of renaming a column.
+   *
+   * Pairs only when exactly one field was removed and one added — the same
+   * zero-ambiguity heuristic its column-producing sibling applies — and only
+   * when both sides reference the same slugs under the same cardinality, so
+   * this is a pure rename and not a remove-one-group-add-another edit in
+   * disguise. Anything else stays with the loops.
+   */
+  detectFieldGroupAssociationRename(
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): { from: FieldDefinition; to: FieldDefinition } | null {
+    const oldNames = new Set(oldFields.map(f => f.name));
+    const newNames = new Set(newFields.map(f => f.name));
+
+    const oldOnly = oldFields.filter(f => !newNames.has(f.name));
+    const newOnly = newFields.filter(f => !oldNames.has(f.name));
+    if (oldOnly.length !== 1 || newOnly.length !== 1) return null;
+
+    const from = oldOnly[0];
+    const to = newOnly[0];
+    if (!isFieldGroupType(from.type) || !isFieldGroupType(to.type)) {
+      return null;
+    }
+    if (from.repeatable !== to.repeatable) return null;
+
+    const fromSlugs = fieldGroupSlugList(from);
+    const toSlugs = fieldGroupSlugList(to);
+    if (
+      fromSlugs.length !== toSlugs.length ||
+      fromSlugs.some((slug, i) => slug !== toSlugs[i])
+    ) {
       return null;
     }
 

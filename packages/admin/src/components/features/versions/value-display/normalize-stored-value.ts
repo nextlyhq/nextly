@@ -18,6 +18,9 @@
  */
 
 import type { FieldConfig } from "nextly/config";
+// The shared predicate keeps migrated and legacy field-group definitions
+// normalizing to the same shape here, where the core normalizer's unwrap is
+// mirrored for the preview surface.
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 
 /** Field types whose value is persisted as JSON. */
