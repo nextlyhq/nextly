@@ -15,6 +15,11 @@ export {
   BINDING_FORMAT_TYPES,
   DEFAULT_BINDING_SOURCE,
   COMPONENT_INSTANCE_TYPE,
+  // The component-definition contract, published so the stores and the admin
+  // DERIVE the vocabulary rather than restating it. A schema branch or a
+  // picker that listed these values itself would agree on the day it was
+  // written and accept a type this engine refuses the day one is added.
+  EXPOSED_PROPERTY_TYPES,
   STYLE_STATES,
   MAX_BREAKPOINTS_PER_AXIS,
   // Public for exactly the reason the per-axis cap is. A definition whose id is
@@ -37,7 +42,9 @@ export {
   isBindingSource,
   isBlockType,
   MAX_BLOCK_TYPE_LENGTH,
+  isComponentDocument,
   isComponentInstance,
+  isUnsetOverride,
 } from "./document";
 export type {
   BlockDocument,
@@ -50,7 +57,14 @@ export type {
   BreakpointDef,
   BreakpointId,
   BreakpointSet,
+  ComponentDocument,
   ComponentInstanceProps,
+  ExposedProperty,
+  ExposedPropertyType,
+  ExposedSlot,
+  OverrideUnset,
+  OverrideValue,
+  Variant,
   Condition,
   DocumentFormatVersion,
   DocumentKind,
@@ -66,6 +80,12 @@ export type {
 } from "./document";
 
 export {
+  // The cap on one collection of a component's envelope — its exposed
+  // properties, its slots, its variants, one variant's overrides. Published
+  // because a store or an admin form validating an envelope before it reaches
+  // the engine has to refuse at the same number: a form that accepted more
+  // than this would offer an author a definition the write path then rejects.
+  MAX_ENVELOPE_ENTRIES,
   MAX_DEPTH,
   MAX_NODES,
   DEFAULT_MAX_DOCUMENT_BYTES,
@@ -90,10 +110,16 @@ export {
   removeNode,
   moveNode,
   reidSubtree,
+  reidSubtreeWithMap,
   duplicateNode,
   updateNode,
 } from "./tree";
-export type { NodeLocation, SlotDefaultSource, TreePosition } from "./tree";
+export type {
+  NodeLocation,
+  ReidentifiedSubtree,
+  SlotDefaultSource,
+  TreePosition,
+} from "./tree";
 
 // The node selection every reader of a stored document shares. Public because
 // the page-builder plugin's class-usage record has to stop exactly where the

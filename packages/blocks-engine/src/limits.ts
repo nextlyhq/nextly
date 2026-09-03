@@ -11,6 +11,22 @@ export const MAX_DEPTH = 12;
 /** Maximum total nodes in one document. */
 export const MAX_NODES = 5000;
 
+/**
+ * Maximum entries in one collection of a component's envelope.
+ *
+ * Its own limit rather than {@link MAX_NODES}, because the envelope is not
+ * bounded by the tree it points into: several exposed properties, slots and
+ * variants may legitimately address ONE node, so a host configuring a small
+ * node cap would otherwise see a valid one-node component refused for exposing
+ * two of its props.
+ *
+ * Generous, because it is a bound on work rather than a design opinion — an
+ * author who has designated a thousand editable properties on one component
+ * has built something no inspector can present, and every number past that
+ * only decides how long a malformed import is walked before it is refused.
+ */
+export const MAX_ENVELOPE_ENTRIES = 1000;
+
 /** Default maximum serialized document size in bytes (2 MiB). */
 // Written as a literal rather than as `2 * 1024 * 1024`, because the literal
 // TYPE is what the freeze asserts. TypeScript does not fold the arithmetic when
