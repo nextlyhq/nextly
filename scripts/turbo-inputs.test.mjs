@@ -286,6 +286,14 @@ describe("every tracked file a compiler reads is covered by some hash", () => {
   const dry = dryRun();
   const globalFiles = new Set(Object.keys(dry.globalCacheInputs.files));
   const byPackage = new Map(dry.tasks.map(task => [task.package, task]));
+  // Every runnable task in the run, `build` included — not just `check-types`.
+  //
+  // Unlike `resolvedTasks`, this block asks what a task's compiler READS and
+  // whether the hash covers it, which is as true of a build as of a typecheck:
+  // inputs that miss a source file leave the cache valid across an edit to it
+  // either way. `check-types` depends on `^build`, so the build tasks arrive
+  // here through that edge rather than by being asked for, and stating it is
+  // what stops them disappearing unremarked if the edge ever moves.
   const runnable = dry.tasks.filter(
     task => !String(task.command).includes("NONEXISTENT")
   );
