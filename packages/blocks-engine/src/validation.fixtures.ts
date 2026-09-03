@@ -869,7 +869,7 @@ const COMPONENT_ENVELOPE_FIXTURES: ValidationFixture[] = [
         },
       ],
       slots: {
-        body: { id: "body", label: "Body", nodeId: "box", slot: "children" },
+        body: { label: "Body", nodeId: "box", slot: "children" },
       },
     } as unknown as BlockDocument,
     expected: [],

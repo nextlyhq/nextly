@@ -122,6 +122,23 @@ describe("a component's exposed properties must resolve", () => {
     ).toEqual(["exposed-path-invalid"]);
   });
 
+  it("reports only the id when an exposure has none", () => {
+    // An entry with no usable id cannot be NAMED, and every other message about
+    // it reads `Exposed property "<id>"`. Without stopping, the author gets
+    // three more issues all describing a property called "undefined", and the
+    // one telling them what to do is buried among them. The nodeId and prop
+    // path below are both broken on purpose: they are the messages that must
+    // not appear.
+    const issues = issuesFrom(
+      componentDoc({
+        exposed: [{ label: "Heading", nodeId: "deleted", propPath: "a.b()" }],
+      })
+    );
+
+    expect(issues.map(i => i.code)).toEqual(["exposed-property-invalid"]);
+    expect(JSON.stringify(issues)).not.toContain("undefined");
+  });
+
   it("refuses two exposures sharing one id", () => {
     // An override addresses an exposure by id, so a duplicate makes the pair
     // unaddressable rather than merely untidy.
@@ -185,11 +202,24 @@ describe("a select exposure carries the choices it offers", () => {
 
 describe("a component's exposed slots must resolve", () => {
   const goodSlot = {
-    id: "body",
     label: "Body",
     nodeId: "box",
     slot: "children",
   };
+
+  it("cannot represent two slots sharing one id", () => {
+    // Not a validation rule — a shape fact. The slot id IS the key of the map,
+    // so a duplicate cannot be written down. This is pinned because the
+    // alternative shape (a record whose values also carry an `id`) states the
+    // identity twice and lets the two disagree, and only a test naming the
+    // guarantee explains why the field is absent.
+    const doc = componentDoc({
+      slots: { body: goodSlot, other: { ...goodSlot, label: "Other" } },
+    }) as unknown as { slots: Record<string, object> };
+
+    expect(Object.keys(doc.slots)).toEqual(["body", "other"]);
+    expect(doc.slots.body).not.toHaveProperty("id");
+  });
 
   it("accepts a slot naming a region its node declares", () => {
     expect(codesFrom(componentDoc({ slots: { body: goodSlot } }))).toEqual([]);
@@ -244,6 +274,23 @@ describe("a variant may only preset what the component exposes", () => {
         })
       )
     ).toEqual(["variant-unknown-target"]);
+  });
+
+  it("accepts a variant filling a slot the component exposes", () => {
+    // The control for the refusal below. Without it a validator that treated
+    // EVERY slot as unexposed would satisfy that assertion while refusing
+    // every legitimate variant — and the slot ids come from the map keys, so
+    // "no slot is ever exposed" is a single-line mistake away.
+    expect(
+      codesFrom(
+        componentDoc({
+          slots: { body: { label: "Body", nodeId: "box", slot: "children" } },
+          variants: {
+            compact: { label: "Compact", overrides: {}, slots: { body: [] } },
+          },
+        })
+      )
+    ).toEqual([]);
   });
 
   it("refuses a variant filling a slot nothing exposes", () => {

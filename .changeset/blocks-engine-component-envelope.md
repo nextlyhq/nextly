@@ -31,7 +31,8 @@ override, and which regions an instance may fill.
 
 A `component` document carries an `exposed` list — each entry pointing at a
 node in its own tree and the prop on it an instance may replace — and a `slots`
-map naming the regions an instance may put its own blocks into. Named variants
+map — keyed by slot id — naming the regions an instance may put its own
+blocks into. Named variants
 preset those values. A component that exposes nothing is still a component: a
 footer nobody may edit is the point of one, not an unfinished definition.
 

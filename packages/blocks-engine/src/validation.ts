@@ -1595,7 +1595,6 @@ function validateComponentEnvelope(
     });
   }
 
-  const slotIds = new Set<string>();
   const slots = doc.slots;
   if (slots !== undefined && !isPlainRecord(slots)) {
     issues.push({
@@ -1606,14 +1605,28 @@ function validateComponentEnvelope(
     });
   } else {
     for (const [id, entry] of Object.entries(slots ?? {})) {
-      checkExposedSlot(entry, id, `/slots/${id}`, index, slotIds, issues);
+      checkExposedSlot(entry, id, `/slots/${id}`, index, issues);
     }
   }
 
+  // The KEYS are the slot ids, which is what a variant addresses. Derived here
+  // rather than accumulated during the walk above, so a slot whose entry was
+  // malformed still counts as declared — otherwise one broken slot would make
+  // every variant filling it report a second, misleading "nothing exposes
+  // this" on top of the fault the author actually has to fix.
+  const slotIds = new Set(Object.keys(isPlainRecord(slots) ? slots : {}));
   checkVariants(doc.variants, exposedIds, slotIds, issues);
 }
 
-/** One exposed property: its shape, its id, its pointer and its options. */
+/**
+ * One exposed property.
+ *
+ * Split three ways — identity, pointer, options — rather than checked in one
+ * pass, because the id has to be established before anything else can be
+ * REPORTED. Every message below names the exposure, and an entry with no
+ * usable id is one the author cannot pick out of a list whose entries
+ * otherwise look alike.
+ */
 function checkExposedProperty(
   entry: unknown,
   path: string,
@@ -1632,11 +1645,26 @@ function checkExposedProperty(
   }
 
   const raw: RawExposed = entry;
-  const id = raw.id;
-  const nodeId = raw.nodeId;
-  const propPath = raw.propPath;
-  const type = raw.type;
+  const id = checkExposedIdentity(raw, path, seen, issues);
+  if (id === undefined) return;
 
+  checkExposedPointer(raw, id, path, index, issues);
+  checkExposedOptions(raw.options, raw.type, id, path, issues);
+}
+
+/**
+ * The id, its uniqueness and the label; returns the id when it is usable.
+ *
+ * `undefined` stops the caller rather than letting it report the remaining
+ * faults against an entry it has no way to name.
+ */
+function checkExposedIdentity(
+  raw: RawExposed,
+  path: string,
+  seen: Set<string>,
+  issues: ValidationIssue[]
+): string | undefined {
+  const id = raw.id;
   if (typeof id !== "string" || id === "") {
     issues.push({
       path: pointer(path, "id"),
@@ -1644,11 +1672,11 @@ function checkExposedProperty(
       severity: "error",
       message: "An exposed property needs a non-empty id.",
     });
-    return;
+    return undefined;
   }
 
-  // Before the pointer checks, so a duplicate is reported once against the
-  // second entry rather than twice against a pair that reads as unrelated.
+  // Reported against the SECOND entry, so one message names one thing to fix
+  // rather than two that each read as unrelated.
   if (seen.has(id)) {
     issues.push({
       path: pointer(path, "id"),
@@ -1669,6 +1697,18 @@ function checkExposedProperty(
     });
   }
 
+  return id;
+}
+
+/** Where the exposure points: its type, its node, and the prop path on it. */
+function checkExposedPointer(
+  raw: RawExposed,
+  id: string,
+  path: string,
+  index: Map<string, BlockNode>,
+  issues: ValidationIssue[]
+): void {
+  const type = raw.type;
   if (
     !EXPOSED_PROPERTY_TYPES.includes(
       type as (typeof EXPOSED_PROPERTY_TYPES)[number]
@@ -1683,6 +1723,7 @@ function checkExposedProperty(
     });
   }
 
+  const nodeId = raw.nodeId;
   if (typeof nodeId !== "string" || !index.has(nodeId)) {
     issues.push({
       path: pointer(path, "nodeId"),
@@ -1694,6 +1735,7 @@ function checkExposedProperty(
     });
   }
 
+  const propPath = raw.propPath;
   if (typeof propPath !== "string" || !BIND_PATH_RE.test(propPath)) {
     issues.push({
       path: pointer(path, "propPath"),
@@ -1703,8 +1745,6 @@ function checkExposedProperty(
       suggestion: 'Use a dot-joined chain of field identifiers, e.g. "text".',
     });
   }
-
-  checkExposedOptions(raw.options, type, id, path, issues);
 }
 
 /**
@@ -1763,13 +1803,12 @@ function checkExposedOptions(
   });
 }
 
-/** One exposed slot: its pointer, and that the node actually declares the slot. */
+/** One exposed slot: that its node exists, and that the node declares the region. */
 function checkExposedSlot(
   entry: unknown,
   id: string,
   path: string,
   index: Map<string, BlockNode>,
-  seen: Set<string>,
   issues: ValidationIssue[]
 ): void {
   if (!isPlainRecord(entry)) {
@@ -1782,20 +1821,8 @@ function checkExposedSlot(
     return;
   }
 
-  if (seen.has(id)) {
-    issues.push({
-      path,
-      code: "exposed-duplicate-id",
-      severity: "error",
-      message: `Two exposed slots share the id "${id}".`,
-    });
-  }
-  seen.add(id);
-
   const nodeId = entry.nodeId;
-  const slot = entry.slot;
   const node = typeof nodeId === "string" ? index.get(nodeId) : undefined;
-
   if (node === undefined) {
     issues.push({
       path: pointer(path, "nodeId"),
@@ -1806,29 +1833,48 @@ function checkExposedSlot(
     return;
   }
 
-  // The node exists; the SLOT on it is a separate question, and the one that a
-  // renamed container silently breaks. `slots` is undefined on a node with no
-  // children yet, which is an ordinary state for a container an author has not
-  // filled — so an absent map is judged the same as a map without the key
-  // rather than skipped.
-  if (typeof slot !== "string" || !(slot in (node.slots ?? {}))) {
-    issues.push({
-      path: pointer(path, "slot"),
-      code: "exposed-slot-missing",
-      severity: "error",
-      message: `Exposed slot "${id}" names slot ${describeValue(slot)}, which node "${node.id}" does not declare.`,
-      suggestion: `Name one of: ${Object.keys(node.slots ?? {}).join(", ") || "(none)"}.`,
-    });
-  }
+  checkSlotOnNode(entry.slot, node, id, path, issues);
+}
+
+/**
+ * That the node actually declares the named region.
+ *
+ * A separate question from whether the node exists, and the one a renamed
+ * container leaves behind: the node is still there, the definition still
+ * loads, and nothing in the tree looks wrong.
+ *
+ * `slots` is undefined on a container an author has not filled yet, which is an
+ * ordinary state — so an absent map is judged the same as a map without the
+ * key rather than skipped, which would let the pointer go unchecked exactly
+ * when the container is empty.
+ */
+function checkSlotOnNode(
+  slot: unknown,
+  node: BlockNode,
+  id: string,
+  path: string,
+  issues: ValidationIssue[]
+): void {
+  const declared = node.slots ?? {};
+  if (typeof slot === "string" && slot in declared) return;
+
+  issues.push({
+    path: pointer(path, "slot"),
+    code: "exposed-slot-missing",
+    severity: "error",
+    message: `Exposed slot "${id}" names slot ${describeValue(slot)}, which node "${node.id}" does not declare.`,
+    suggestion: `Name one of: ${Object.keys(declared).join(", ") || "(none)"}.`,
+  });
 }
 
 /**
  * Variants, checked against what the definition actually exposes.
  *
  * A variant is a preset of overrides, so every key it sets has to name
- * something an instance could set itself. A key naming nothing is applied by no
- * one and reported by nothing: the variant appears in the picker, selecting it
- * changes nothing, and the definition looks broken rather than misconfigured.
+ * something an instance could set itself. A key naming nothing is applied by
+ * no one and reported by nothing: the variant appears in the picker, selecting
+ * it changes nothing, and the definition looks broken rather than
+ * misconfigured.
  */
 function checkVariants(
   variants: unknown,
@@ -1848,56 +1894,91 @@ function checkVariants(
   }
 
   for (const [name, variant] of Object.entries(variants)) {
-    const at = `/variants/${name}`;
-    if (!isPlainRecord(variant)) {
-      issues.push({
-        path: at,
-        code: "component-envelope-invalid",
-        severity: "error",
-        message: `Variant "${name}" must be an object.`,
-      });
-      continue;
-    }
+    checkVariant(name, variant, exposedIds, slotIds, issues);
+  }
+}
 
-    const overrides = variant.overrides;
-    if (overrides !== undefined && !isPlainRecord(overrides)) {
-      issues.push({
-        path: pointer(at, "overrides"),
-        code: "component-envelope-invalid",
-        severity: "error",
-        message: `Variant "${name}" overrides must be an object keyed by exposed id.`,
-      });
-    } else {
-      for (const key of Object.keys(overrides ?? {})) {
-        if (exposedIds.has(key)) continue;
-        issues.push({
-          path: pointer(at, `overrides/${key}`),
-          code: "variant-unknown-target",
-          severity: "error",
-          message: `Variant "${name}" overrides "${key}", which this component does not expose.`,
-        });
-      }
-    }
+/** One variant: its shape, its override targets and its slot targets. */
+function checkVariant(
+  name: string,
+  variant: unknown,
+  exposedIds: ReadonlySet<string>,
+  slotIds: ReadonlySet<string>,
+  issues: ValidationIssue[]
+): void {
+  const at = `/variants/${name}`;
+  if (!isPlainRecord(variant)) {
+    issues.push({
+      path: at,
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Variant "${name}" must be an object.`,
+    });
+    return;
+  }
 
-    const variantSlots = variant.slots;
-    if (variantSlots !== undefined && !isPlainRecord(variantSlots)) {
-      issues.push({
-        path: pointer(at, "slots"),
-        code: "component-envelope-invalid",
-        severity: "error",
-        message: `Variant "${name}" slots must be an object keyed by exposed slot id.`,
-      });
-      continue;
-    }
-    for (const key of Object.keys(variantSlots ?? {})) {
-      if (slotIds.has(key)) continue;
-      issues.push({
-        path: pointer(at, `slots/${key}`),
-        code: "variant-unknown-target",
-        severity: "error",
-        message: `Variant "${name}" fills slot "${key}", which this component does not expose.`,
-      });
-    }
+  checkVariantTargets({
+    map: variant.overrides,
+    known: exposedIds,
+    at,
+    field: "overrides",
+    issues,
+    shapeMessage: `Variant "${name}" overrides must be an object keyed by exposed id.`,
+    unknownMessage: key =>
+      `Variant "${name}" overrides "${key}", which this component does not expose.`,
+  });
+
+  checkVariantTargets({
+    map: variant.slots,
+    known: slotIds,
+    at,
+    field: "slots",
+    issues,
+    shapeMessage: `Variant "${name}" slots must be an object keyed by exposed slot id.`,
+    unknownMessage: key =>
+      `Variant "${name}" fills slot "${key}", which this component does not expose.`,
+  });
+}
+
+/**
+ * One of a variant's two keyed maps, against the ids the definition exposes.
+ *
+ * Both maps ask the identical question of different vocabularies, so they are
+ * one function taking the vocabulary. Written twice they drifted immediately —
+ * the slots half lost its shape check to an early `continue` on the first
+ * draft, which no test would have caught because a malformed map has no keys
+ * to report.
+ */
+function checkVariantTargets(args: {
+  map: unknown;
+  known: ReadonlySet<string>;
+  at: string;
+  field: "overrides" | "slots";
+  issues: ValidationIssue[];
+  shapeMessage: string;
+  unknownMessage: (key: string) => string;
+}): void {
+  const { map, known, at, field, issues } = args;
+  if (map === undefined) return;
+
+  if (!isPlainRecord(map)) {
+    issues.push({
+      path: pointer(at, field),
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: args.shapeMessage,
+    });
+    return;
+  }
+
+  for (const key of Object.keys(map)) {
+    if (known.has(key)) continue;
+    issues.push({
+      path: pointer(at, `${field}/${key}`),
+      code: "variant-unknown-target",
+      severity: "error",
+      message: args.unknownMessage(key),
+    });
   }
 }
 

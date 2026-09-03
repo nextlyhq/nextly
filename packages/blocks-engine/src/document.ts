@@ -715,8 +715,17 @@ export interface ExposedProperty {
  * node through copy, duplication, pattern-save and export.
  */
 export interface ExposedSlot {
-  /** Stable slug, minted once, for the same reason {@link ExposedProperty.id} is. */
-  id: string;
+  /**
+   * No `id` field: the KEY of {@link ComponentDocument.slots} is the id.
+   *
+   * A record keyed by id whose values also carry one states the same identity
+   * twice, and nothing reconciles them — a definition whose key says `body`
+   * and whose field says `header` is well formed under both readings, and
+   * which one an instance's slot content is addressed by depends on which the
+   * next reader happened to use. One spelling makes the disagreement
+   * unrepresentable rather than merely detectable.
+   */
+
   /** What the layers panel calls it. */
   label: string;
   /** The container node in THIS document's tree. Validated to exist. */
