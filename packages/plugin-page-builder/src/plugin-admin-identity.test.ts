@@ -28,18 +28,24 @@ describe("page-builder admin identity", () => {
     expect(plugin.admin?.appearance?.label).not.toBe(plugin.name);
   });
 
-  it("stays in the plugins section, so its menu entry is the only main-rail item", () => {
+  it("stays in the plugins section, so its own name is not a second main-rail item", () => {
     const plugin = pageBuilder();
+    const menu = plugin.contributes?.admin?.menu ?? [];
 
     // The neighbouring case, and the reason the form builder carries a similar
     // assertion: it takes `placement: "standalone"` and contributes NO menu
     // item, so "Forms" appears exactly once. This plugin does the opposite — it
-    // contributes a "Pages" menu entry — so taking standalone placement too
-    // would put "Page Builder" and "Pages" in the main rail as two entries for
-    // one feature.
+    // contributes its own menu entries — so taking standalone placement too
+    // would put "Page Builder" in the main rail beside the entries it already
+    // puts there, as two names for one feature.
     expect(plugin.admin?.placement).toBeUndefined();
-    expect(plugin.contributes?.admin?.menu ?? []).toEqual([
-      { label: "Pages", to: "/admin/collections/pages", icon: "Layout" },
-    ]);
+
+    // The pairing is the property, so the menu being non-empty is what makes
+    // the placement assertion above mean anything: standalone placement is
+    // only a duplication when something is already listed. Which entries
+    // those are is not this test's question — asserting the whole list here
+    // made adding a screen look like a change to the plugin's identity.
+    expect(menu.length).toBeGreaterThan(0);
+    expect(menu.map(item => item.label)).toContain("Pages");
   });
 });

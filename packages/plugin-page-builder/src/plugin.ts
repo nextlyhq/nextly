@@ -29,8 +29,14 @@ import {
   CLASS_USAGE_INDEX_SLUG,
   classUsageIndexCollection,
 } from "./collections/class-usage-index";
+import {
+  COMPONENTS_SLUG,
+  componentsCollection,
+} from "./collections/components";
+import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { pagesCollection } from "./collections/pages";
+import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
@@ -377,8 +383,19 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // describes. Its table existing is what lets the maintenance path write
       // to it without a first-run branch, exactly as the site style single is
       // registered whether or not the host stated any defaults.
+      // The composition stores, contributed unconditionally beside the pages
+      // they serve. Each is a collection rather than a shape inside one,
+      // because a collection is what core seeds permissions for: the six
+      // actions on `patterns` are separate rows from the six on `components`,
+      // so "may create a pattern" and "may publish a component to every page
+      // that carries it" are already different grants on the day this ships.
+      // A single table discriminated by a column would leave both behind one
+      // permission and could not declare a slug unique per kind.
       collections: [
         pagesCollection(pagesOptions(opts, configStyle)),
+        patternsCollection(),
+        componentsCollection(),
+        layoutsCollection(),
         classUsageIndexCollection(),
       ],
       // The Site Style global: one versioned, access-controlled document the
@@ -464,8 +481,37 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
               },
             }
           : {}),
+        // Each entry names the permission that makes its screen reachable, so
+        // a role without it is not offered a link into a list it would be
+        // refused. Pages carries none for the same reason it always has: it is
+        // the plugin's front door, and a reader who cannot read pages has
+        // nothing to do here at all.
+        //
+        // They sit beside Pages rather than under a section of their own. The
+        // sidebar's section vocabulary is a closed list in core with no design
+        // entry, so grouping them would mean widening that list — a change to
+        // the admin's navigation model, which is a larger question than where
+        // three links go.
         menu: [
           { label: "Pages", to: "/admin/collections/pages", icon: "Layout" },
+          {
+            label: "Patterns",
+            to: `/admin/collections/${PATTERNS_SLUG}`,
+            icon: "LayoutTemplate",
+            requiredPermission: `read-${PATTERNS_SLUG}`,
+          },
+          {
+            label: "Components",
+            to: `/admin/collections/${COMPONENTS_SLUG}`,
+            icon: "Component",
+            requiredPermission: `read-${COMPONENTS_SLUG}`,
+          },
+          {
+            label: "Layouts",
+            to: `/admin/collections/${LAYOUTS_SLUG}`,
+            icon: "PanelsTopLeft",
+            requiredPermission: `read-${LAYOUTS_SLUG}`,
+          },
         ],
         // No `schemaBuilderSlot` and no `entryFormToolbarSlot`.
         //
