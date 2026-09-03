@@ -13,15 +13,15 @@
  * Without it the scan starts at this file and walks UP, so it reads the whole
  * monorepo and generates a utility for every class any package happens to use.
  * A published plugin has no such neighbours: it scans its own package and emits
- * what its own markup asks for, and the point of this fixture is to compile the
- * way that plugin does.
+ * what its own markup asks for, and compiling the way that plugin does is the
+ * point of this fixture.
  *
- * It is also what makes the assertions below mean anything. Scanning upward,
- * the emitted sheet reached 240KB and carried 38 colour declarations with
- * literal values — `dark:hover:bg-[#ccc]` from a `create-nextly-app` template
- * among them — so `checkAdminStyles` refused a fixture that never wrote a
- * colour, and the refusal moved with whatever unrelated markup the repository
- * gained. Confined, the same compile emits 13KB and no literal colour at all.
+ * It is also what makes the assertions below mean anything. Scanning upward
+ * pulls in utilities carrying literal colours that this fixture never wrote —
+ * an arbitrary-value class in any unrelated package is enough — so
+ * `checkAdminStyles` refuses the build, and what it refuses moves with whatever
+ * markup the repository happens to gain. That makes the result a statement
+ * about the monorepo rather than about this stylesheet.
  */
 @import "tailwindcss" source("./");
 /*
