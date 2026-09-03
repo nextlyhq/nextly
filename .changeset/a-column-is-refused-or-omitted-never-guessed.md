@@ -44,3 +44,16 @@ so the cards sharing a column are not the ones they were. The save renumbered
 the array it was handed, which stored a reading of a grid that was no longer
 on screen -- the canonical sequence disagreed with the arrangement until the
 next drag. It is now numbered from the buckets at the count in force.
+
+A collection also offers a TABLE card beside its count and its list: the same
+recent entries drawn across named columns, which is the first consumer of the
+`table` archetype the admin has always been able to draw and nothing has ever
+generated.
+
+Its columns are asked of the SOURCE rather than assumed. `status` exists only
+for a collection declaring it and the timestamps only for one that has not
+turned them off, so the card selects the ones that are there -- three columns
+for a collection with a status and two without, rather than a fixed shape
+padded with blanks or a select the read path refuses. A collection whose rows
+nothing names, or that has no `updatedAt` to mean "recent", gets no table at
+all, which are the two refusals the list card already makes.

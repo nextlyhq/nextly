@@ -45,6 +45,15 @@ import { listSources, type WidgetSource } from "./sources";
 const LIST_ROWS = 5;
 
 /**
+ * How many rows a generated table asks for.
+ *
+ * The same as a list's, and asked separately rather than shared, because the
+ * two renderers cap independently -- a table's rows are wider, so its own limit
+ * is lower than a list's and may move without dragging the list with it.
+ */
+const TABLE_ROWS = 5;
+
+/**
  * The id of a generated widget, from the source it draws.
  *
  * Namespaced under `collection/` so it cannot collide with core's own `core/`
@@ -54,7 +63,7 @@ const LIST_ROWS = 5;
  */
 function widgetId(
   source: WidgetSource,
-  kind: "count" | "recent"
+  kind: "count" | "recent" | "table"
 ): string | undefined {
   // 🔴 An underscore is legal in a collection slug (`SLUG_PATTERN` permits it)
   // and illegal in a widget id, so `customer_notes` produced an id the registry
@@ -146,6 +155,64 @@ function recentWidget(source: WidgetSource): WidgetDefinition | undefined {
 }
 
 /**
+ * The table card for a source: the same recent entries, across named columns.
+ *
+ * ## Why this is offered BESIDE the list rather than replacing it
+ *
+ * They answer different questions. A list is a column of titles with one muted
+ * line under each, which suits a narrow card in a three-column dashboard. A
+ * table aligns its values, so a reader compares them down a column -- which
+ * status is draft, what changed most recently -- and that is what makes a
+ * dashboard of collections scannable rather than a wall of separate boxes.
+ * Neither is placed; a reader picks the one their dashboard wants.
+ *
+ * ## Why the columns are ASKED of the source
+ *
+ * `status` and `updatedAt` are per-collection facts, not constants. The schema
+ * pipeline injects a `status` column only for a collection declaring
+ * `status: true`, and the timestamps only when it has not turned them off, so
+ * the source lists exactly the ones that exist. Selecting a column the rows do
+ * not carry is refused by the read path -- a refusal about a field nothing
+ * declared, on a card the reader did not misconfigure.
+ *
+ * The result is three columns for a collection with a status and two without,
+ * rather than a fixed shape padded with blanks. `defaultSize` is `lg` for the
+ * same reason the renderer caps its rows: a table narrower than its content
+ * scrolls inside a card, and a table that scrolls is one nobody reads.
+ */
+function tableWidget(source: WidgetSource): WidgetDefinition | undefined {
+  if (!source.supports.includes("list")) return undefined;
+  // The same two refusals `recentWidget` makes, and for the same reasons: with
+  // no field naming a row every line reads as an identifier, and with no
+  // `updatedAt` the card's own title is a claim its rows cannot support.
+  const label = source.titleField;
+  if (label === undefined) return undefined;
+  const names = new Set(source.fields.map(field => field.name));
+  if (!names.has("updatedAt")) return undefined;
+  const id = widgetId(source, "table");
+  if (id === undefined) return undefined;
+
+  return {
+    id,
+    title: `${source.label} table`,
+    description: `Recent ${source.label} entries across their columns`,
+    archetype: "table",
+    defaultSize: "lg",
+    query: {
+      source: source.id,
+      op: "list",
+      status: "all",
+      // Read left to right by the renderer, so the row's own name leads and the
+      // timestamp the sort is on closes. `status` sits between them when the
+      // collection has one.
+      select: [label, ...(names.has("status") ? ["status"] : []), "updatedAt"],
+      sort: "-updatedAt",
+      limit: TABLE_ROWS,
+    },
+  };
+}
+
+/**
  * Every generated card the given sources support, in source order.
  *
  * Pure, so the derivation can be asserted without a container: the refresh
@@ -165,7 +232,11 @@ export function collectionWidgets(
   const candidates: WidgetDefinition[] = [];
   for (const source of sources) {
     if (source.kind !== "collection") continue;
-    for (const widget of [countWidget(source), recentWidget(source)]) {
+    for (const widget of [
+      countWidget(source),
+      recentWidget(source),
+      tableWidget(source),
+    ]) {
       if (!widget) continue;
       claimed.set(widget.id, (claimed.get(widget.id) ?? 0) + 1);
       candidates.push(widget);
