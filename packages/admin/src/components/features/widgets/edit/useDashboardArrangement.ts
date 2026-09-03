@@ -20,6 +20,7 @@ import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboard
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { useSortableFieldArray } from "../../entries/fields/structured/field-array-helpers";
+import { columnDropId } from "../layout-editor";
 
 import { useLayoutEditor, type LayoutEditor } from "./useLayoutEditor";
 
@@ -57,6 +58,15 @@ export interface DashboardArrangement {
   editor: LayoutEditor;
   /** Move the card at a VIEW index one step, resolving ids for the editor. */
   moveBy: (index: number, delta: number) => void;
+  /**
+   * Move one card sideways by `delta` columns.
+   *
+   * The CLICKABLE route across columns. Dragging one there is the same
+   * capability, and WCAG 2.2 SC 2.5.7 asks for a single-pointer alternative to
+   * anything a drag achieves -- so this is not a convenience beside the drag,
+   * it is what makes the drag permissible.
+   */
+  moveColumn: (placementId: string, delta: number) => void;
   /**
    * Whether an arrangement has been READ — not whether it holds anything.
    *
@@ -215,6 +225,21 @@ export function useDashboardArrangement(
    * Resolved to the neighbour's id here rather than to `index + delta`, because
    * the neighbour in the view may not be the neighbour in the stored array.
    */
+  const moveColumn = useCallback(
+    (placementId: string, delta: number) => {
+      const moved = visible.find(row => row.placementId === placementId);
+      if (!moved) return;
+      const target = (moved.column ?? 0) + delta;
+      // Refused rather than clamped. Clamping would let a button that LOOKS
+      // disabled still act -- the affordance and the handler would disagree,
+      // and the one a reader trusts is whichever moved the card.
+      if (target < 0 || target >= columnCount) return;
+      editor.dropOn(placementId, columnDropId(target));
+      announceMove(moved.widget.title, target + 1, columnCount);
+    },
+    [visible, editor, columnCount, announceMove]
+  );
+
   const moveBy = useCallback(
     (index: number, delta: number) => {
       const moved = visible[index];
@@ -232,6 +257,7 @@ export function useDashboardArrangement(
     columns,
     columnCount,
     moveBy,
+    moveColumn,
     hasArrangement,
     sortableItems,
     sensors,

@@ -868,3 +868,63 @@ describe("the dashboard draws columns", () => {
     ).not.toBeNull();
   });
 });
+
+describe("crossing columns without dragging", () => {
+  it("offers a CLICKABLE control for every column move a drag can make", async () => {
+    // 🔴 WCAG 2.2 SC 2.5.7: anything a drag achieves needs a single-pointer
+    // route, and the Understanding document states that a keyboard equivalent
+    // does not satisfy it on its own. Dragging a card into another column is
+    // new functionality, so these buttons are the conformance — without them
+    // the column layout regresses what this toolbar already established.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 3 }
+    );
+    renderGrid();
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    await beginEditing();
+    expect(screen.getByTestId("widget-move-right")).toBeEnabled();
+    // Left is refused in the first column: a control that looks available and
+    // does nothing is worse than one that says it cannot act.
+    expect(screen.getByTestId("widget-move-left")).toBeDisabled();
+  });
+
+  it("actually moves the card, rather than only enabling a button", async () => {
+    // 🔴 The control the assertion above needs. Rendering an enabled button
+    // satisfies "a single-pointer route exists" while clicking it does
+    // nothing — which is the shape of a conformance claim that is not true.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 3 }
+    );
+    renderGrid();
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    const user = await beginEditing();
+    expect(
+      screen
+        .getByTestId("widget-column-0")
+        .querySelector("[data-testid^='widget-cell-']")
+    ).not.toBeNull();
+    await user.click(screen.getByTestId("widget-move-right"));
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("widget-column-1")
+          .querySelector("[data-testid^='widget-cell-']")
+      ).not.toBeNull()
+    );
+  });
+
+  it("hides the sideways controls when there is only ONE column", async () => {
+    // A control that can never be enabled is noise in a toolbar a reader tabs
+    // through card by card.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 1 }
+    );
+    renderGrid();
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    await beginEditing();
+    expect(screen.queryByTestId("widget-move-right")).toBeNull();
+  });
+});

@@ -30,6 +30,7 @@ export interface ArrangedColumnsProps {
   isFetching: boolean;
   announcement: string;
   onMove: (index: number, delta: number) => void;
+  onMoveColumn: (placementId: string, delta: number) => void;
   onToggleHidden: (placementId: string) => void;
   onRemove: (placementId: string) => void;
 }
@@ -65,6 +66,7 @@ export function ArrangedColumns({
   isFetching,
   announcement,
   onMove,
+  onMoveColumn,
   onToggleHidden,
   onRemove,
 }: ArrangedColumnsProps) {
@@ -111,6 +113,8 @@ export function ArrangedColumns({
               // resolves the destination -- announcing here would name a
               // position computed a second time, and the two would drift.
               onMove={onMove}
+              columnCount={columnCount}
+              onMoveColumn={onMoveColumn}
               onToggleHidden={onToggleHidden}
               onRemove={onRemove}
             />

@@ -156,6 +156,7 @@ export function WidgetGrid() {
     columnCount,
     editor,
     moveBy,
+    moveColumn,
     hasArrangement,
     sensors,
     handleDragEnd,
@@ -240,6 +241,7 @@ export function WidgetGrid() {
           isFetching={isFetching}
           announcement={announcement}
           onMove={moveBy}
+          onMoveColumn={moveColumn}
           onToggleHidden={editor.toggleHidden}
           onRemove={editor.remove}
         />

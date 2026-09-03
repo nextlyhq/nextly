@@ -15,7 +15,7 @@
 import { cn } from "@admin/lib/utils";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
 
-import { moveAffordance } from "../layout-editor";
+import { moveAffordance, columnAffordance } from "../layout-editor";
 import { widgetSpanClass } from "../sizes";
 import { WidgetRenderer } from "../WidgetRenderer";
 
@@ -33,6 +33,9 @@ export interface ArrangedCellProps {
   updatedAt: Date | null;
   isFetching: boolean;
   onMove: (index: number, delta: number) => void;
+  /** How many columns the dashboard is drawn in, for the sideways controls. */
+  columnCount: number;
+  onMoveColumn: (placementId: string, delta: number) => void;
   onToggleHidden: (placementId: string) => void;
   onRemove: (placementId: string) => void;
 }
@@ -46,11 +49,17 @@ export function ArrangedCell({
   updatedAt,
   isFetching,
   onMove,
+  columnCount,
+  onMoveColumn,
   onToggleHidden,
   onRemove,
 }: ArrangedCellProps) {
   const widget = row.widget;
   const { canMoveUp, canMoveDown } = moveAffordance(index, count);
+  const { canMoveLeft, canMoveRight } = columnAffordance(
+    row.column ?? 0,
+    columnCount
+  );
 
   return (
     <SortableWidgetCell
@@ -104,8 +113,14 @@ export function ArrangedCell({
           hidden={row.hidden}
           canMoveUp={canMoveUp}
           canMoveDown={canMoveDown}
+          column={(row.column ?? 0) + 1}
+          columnCount={columnCount}
+          canMoveLeft={canMoveLeft}
+          canMoveRight={canMoveRight}
           onMoveUp={() => onMove(index, -1)}
           onMoveDown={() => onMove(index, 1)}
+          onMoveLeft={() => onMoveColumn(row.placementId, -1)}
+          onMoveRight={() => onMoveColumn(row.placementId, 1)}
           onToggleHidden={() => onToggleHidden(row.placementId)}
           onRemove={() => onRemove(row.placementId)}
         />
