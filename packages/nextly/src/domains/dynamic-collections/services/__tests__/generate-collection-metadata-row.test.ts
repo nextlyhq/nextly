@@ -127,14 +127,20 @@ describe("the migration a Builder create writes", () => {
       useAsTitle: "title",
       group: "Content",
     });
-    for (const fragment of [
-      "Sparkles",
-      "sidebarGroup",
-      "Editorial",
-      "hidden",
-    ]) {
-      expect(sql).toContain(fragment);
-    }
+    // Asserted as the whole serialized block rather than as a handful of
+    // fragments: a fragment list is a SAMPLE, and the key it happens to omit is
+    // the one that goes missing. `order` is the interesting member — it is the
+    // only number, so a mapping that survived every string would still drop it.
+    expect(sql).toContain(
+      JSON.stringify({
+        useAsTitle: "title",
+        group: "content",
+        icon: "Sparkles",
+        hidden: true,
+        order: 7,
+        sidebarGroup: "Editorial",
+      })
+    );
   });
 
   it("does not run the registry row against THIS database", async () => {
