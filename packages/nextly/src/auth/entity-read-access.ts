@@ -285,17 +285,35 @@ export async function readableEntities(
   slugs: readonly string[],
   caller: ReadAccessCaller
 ): Promise<Set<string>> {
+  // DEDUPLICATED, because several callers name one entity more than once — a
+  // dashboard offering two cards per collection asks about each twice — and a
+  // permission decision resolves a session caller through a per-user TTL cache,
+  // so the repeat is a second database read for an answer already in hand.
+  const distinct = [
+    ...new Set(
+      slugs.filter(
+        (slug): slug is string => typeof slug === "string" && slug !== ""
+      )
+    ),
+  ];
+
   const allowed = new Set<string>();
-  for (const group of authorizationGroups(slugs)) {
-    const verdicts = await Promise.all(
-      group.map(async slug => ({
-        slug,
-        allowed: await canReadEntity(slug, caller),
-      }))
+  for (const group of authorizationGroups(distinct)) {
+    // 🔴 `allSettled`, not `all`. A single rejected decision used to reject the
+    // WHOLE calculation, so one unreachable RBAC lookup turned every surface
+    // built on this — the dashboard's readable resources, the widget layout,
+    // the workspace payload — into an error rather than a narrower answer. A
+    // check that threw has told us nothing, and "nothing" must not read as
+    // "allowed" either: the slug is denied and the rest of the set still
+    // answers. That is the direction `canReadEntity` itself takes when RBAC is
+    // unreachable.
+    const settled = await Promise.allSettled(
+      group.map(slug => canReadEntity(slug, caller))
     );
-    for (const verdict of verdicts) {
-      if (verdict.allowed) allowed.add(verdict.slug);
-    }
+    group.forEach((slug, index) => {
+      const outcome = settled[index];
+      if (outcome.status === "fulfilled" && outcome.value) allowed.add(slug);
+    });
   }
   return allowed;
 }

@@ -402,3 +402,41 @@ describe("a registered source is a detached snapshot", () => {
     expect(Object.isFrozen(listed)).toBe(true);
   });
 });
+
+describe("a source's title field", () => {
+  const base = {
+    id: "plugin:acme/orders",
+    label: "Orders",
+    kind: "plugin" as const,
+    supports: ["list" as const],
+    fields: [{ name: "reference", type: "string" as const }],
+  };
+
+  it("refuses a field the source does not declare", () => {
+    // 🔴 The value becomes a `select` entry on a generated card, and `select` is
+    // checked against this source's own field allowlist when the query runs --
+    // so a source naming a field it does not declare produces a card whose every
+    // request is refused, per reader, rather than failing where it was declared.
+    expect(() => registerSource({ ...base, titleField: "headline" })).toThrow(
+      /titleField "headline" is not one of its fields/
+    );
+  });
+
+  it("refuses a blank one", () => {
+    expect(() => registerSource({ ...base, titleField: "   " })).toThrow(
+      /titleField, when given, must be a non-empty string/
+    );
+  });
+
+  it("accepts one the source declares", () => {
+    // The control: without it both refusals are satisfied by a validator that
+    // rejects every `titleField`.
+    registerSource({ ...base, titleField: "reference" });
+    expect(getSource("plugin:acme/orders")?.titleField).toBe("reference");
+  });
+
+  it("accepts a source that names none", () => {
+    registerSource(base);
+    expect(getSource("plugin:acme/orders")?.titleField).toBeUndefined();
+  });
+});

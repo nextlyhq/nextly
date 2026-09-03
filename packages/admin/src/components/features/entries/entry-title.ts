@@ -16,55 +16,35 @@
  */
 
 /**
- * Field names that conventionally hold a title, in preference order.
+ * Which field NAMES an entry, and the conventional names used when nothing is
+ * nominated.
  *
- * `subject` and `heading` are here because a mail-like or article-like
- * collection names its entries with them, and a reader scanning a list of
- * either sees nothing useful without them.
+ * Re-exported from core rather than defined here. The server resolves the same
+ * question -- the activity feed labels a row with it, and the dashboard's
+ * generated list widgets pick a row label with it before the query is made --
+ * so the rule lives beside the collection domain and both sides ask it. Kept
+ * exported from this module because this is where the admin's entry-title
+ * questions are answered from.
  */
-export const COMMON_TITLE_FIELDS = [
-  "title",
-  "name",
-  "label",
-  "subject",
-  "heading",
-] as const;
+import {
+  COMMON_TITLE_FIELDS,
+  entryTitleField,
+  readableTitleText,
+} from "nextly/config";
 
-/**
- * The field that names an entry, from the author's choice then convention.
- *
- * `undefined` where neither applies, so a caller can tell "no conventional
- * title field" from "the title field is empty" and answer each in its own way.
- */
-export function entryTitleField(
-  useAsTitle: string | undefined,
-  fieldNames: readonly string[]
-): string | undefined {
-  // `id` is not a title even when nominated: it is what the fallbacks already
-  // show, and treating it as one would hide a real title field behind it.
-  if (useAsTitle && useAsTitle !== "id" && fieldNames.includes(useAsTitle)) {
-    return useAsTitle;
-  }
-  return COMMON_TITLE_FIELDS.find(name => fieldNames.includes(name));
-}
+export { COMMON_TITLE_FIELDS, entryTitleField };
 
 /**
  * A value counts as a title if it is a scalar with something in it.
  *
- * Numbers included, because an author who nominates an invoice or issue number
- * as the title means it — and the entry table already shows that column, the
- * translation worklist already converts it, so rejecting it here would name one
- * entry three ways. Objects and arrays are refused: they stringify to something
- * no reader recognises as a name.
+ * Asked of core rather than answered here. This rule had three spellings and
+ * they disagreed: one accepted a whitespace-only string, one refused a number,
+ * and one refused a bigint. Which FIELD names an entry and whether that field's
+ * VALUE can name one are halves of the same question, and they now live
+ * together -- so the answer cannot drift again in a direction nothing happens
+ * to exercise.
  */
-function readableText(value: unknown): string | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? String(value) : undefined;
-  }
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
+const readableText = readableTitleText;
 
 /**
  * What to call this entry, or `undefined` when it says nothing about itself.

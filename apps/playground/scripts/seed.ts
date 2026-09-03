@@ -21,6 +21,11 @@ import { seedPermissions, seedSuperAdmin } from "nextly/database/seeders";
 
 import { isCliEntry } from "../../../scripts/cli-entry.mjs";
 import config from "../nextly.config";
+import {
+  KITCHEN_SINK_DOCUMENT,
+  KITCHEN_SINK_SLUG,
+  KITCHEN_SINK_TITLE,
+} from "../seed/kitchen-sink";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLAYGROUND_DIR = path.resolve(HERE, "..");
@@ -58,6 +63,7 @@ export interface SeedResult {
   tagsCreated: number;
   postsCreated: number;
   mediaUploaded: number;
+  blockPagesCreated: number;
 }
 
 const EMPTY_RESULT: SeedResult = {
@@ -67,6 +73,7 @@ const EMPTY_RESULT: SeedResult = {
   tagsCreated: 0,
   postsCreated: 0,
   mediaUploaded: 0,
+  blockPagesCreated: 0,
 };
 
 async function loadSeedData(): Promise<SeedData> {
@@ -224,6 +231,89 @@ async function seedPosts(
 /**
  * Run the seed unconditionally. Used by reset.ts after a wipe.
  */
+/**
+ * The kitchen-sink page, which is the only content in this repo that renders a
+ * block at all.
+ *
+ * Published rather than draft: the `/blocks/<slug>` route reads with the default
+ * `published` scope, so a draft row 404s from a page that looks entirely correct.
+ *
+ * Idempotent on the SLUG, like every seeder beside it. The document is expected
+ * to change as blocks gain defaults, and an existing row is left alone rather
+ * than overwritten — a re-seed must not discard whatever a developer was in the
+ * middle of trying on the page.
+ */
+/**
+ * The slice of the Nextly client this seeder uses, stated rather than widened.
+ *
+ * The seeders around it take the instance as `any`, because they reach across
+ * users, media and dynamic collections and the instance's shape is assembled at
+ * boot. This one asks two questions of one collection, so the contract is small
+ * enough to write down — and writing it down is what makes a change to either
+ * call a type error here rather than a runtime failure during a seed.
+ */
+interface BlockPageStore {
+  find(args: {
+    collection: string;
+    where: { slug: { equals: string } };
+    limit: number;
+  }): Promise<{ meta: { total: number } }>;
+  create(args: {
+    collection: string;
+    data: Record<string, unknown>;
+  }): Promise<unknown>;
+}
+
+async function seedBlockPages(nextly: BlockPageStore) {
+  const existing = await nextly.find({
+    collection: "block-pages",
+    where: { slug: { equals: KITCHEN_SINK_SLUG } },
+    limit: 1,
+  });
+  if (existing.meta.total > 0) return { created: 0 };
+
+  try {
+    await nextly.create({
+      collection: "block-pages",
+      data: {
+        title: KITCHEN_SINK_TITLE,
+        slug: KITCHEN_SINK_SLUG,
+        content: KITCHEN_SINK_DOCUMENT,
+        status: "published",
+      },
+    });
+  } catch (error) {
+    /*
+     * The find above and this create are two operations, and `slug` carries a
+     * database-level unique constraint — so two seed runs starting together can
+     * both find nothing and the loser's insert is refused. Reaching that is
+     * ordinary rather than exotic: booting the app runs a seed, and a
+     * contributor running `db:seed` beside it is the race.
+     *
+     * Refused for THAT reason means the page is already there, which is the
+     * outcome this function exists to reach, so it is not a failure. Pinned to
+     * the code rather than swallowing everything: a bare catch here would claim
+     * "already seeded" about a dropped connection or a validation error, and the
+     * seed would report success having written nothing.
+     *
+     * Measured rather than assumed — inserting this slug twice against the dev
+     * database throws `NextlyError` with `code: "DUPLICATE"` and status 409.
+     */
+    if (!isDuplicateRefusal(error)) throw error;
+    return { created: 0 };
+  }
+  return { created: 1 };
+}
+
+/** Whether a create was refused because the row is already there. */
+function isDuplicateRefusal(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "DUPLICATE"
+  );
+}
+
 export async function seedForce(): Promise<SeedResult> {
   const nextly = await getNextly({ config });
   const data = await loadSeedData();
@@ -258,6 +348,12 @@ export async function seedForce(): Promise<SeedResult> {
   );
   result.postsCreated = posts.created;
 
+  // AFTER the posts, because the page's `core/collection-loop` draws them. Seeded
+  // in the other order the loop renders an empty container on a fresh database,
+  // which reads as a broken block rather than as an empty collection.
+  const blockPages = await seedBlockPages(nextly);
+  result.blockPagesCreated = blockPages.created;
+
   return result;
 }
 
@@ -269,7 +365,24 @@ export async function seedIfEmpty(): Promise<SeedResult> {
   const nextly = await getNextly({ config });
   const existing = await nextly.users.find({ limit: 1 });
   if (existing.meta.total > 0) {
-    return { ...EMPTY_RESULT, skipped: true, reason: "users-exist" };
+    /*
+     * The content seeders are gated on an empty database because they write
+     * rows an author may since have edited or deleted, and re-creating those
+     * would fight whoever owns the database.
+     *
+     * The kitchen-sink page is not one of those. It is keyed on a slug nothing
+     * else writes and it is idempotent on that slug, so it is safe to offer to a
+     * database that already has users — and gating it behind the empty check
+     * meant an existing checkout never received the page at all, since a
+     * contributor reaches this path on every run after their first.
+     */
+    const blockPages = await seedBlockPages(nextly);
+    return {
+      ...EMPTY_RESULT,
+      skipped: true,
+      reason: "users-exist",
+      blockPagesCreated: blockPages.created,
+    };
   }
   return seedForce();
 }
@@ -281,12 +394,20 @@ if (isCliEntry(import.meta.url)) {
     try {
       const result = await seedIfEmpty();
       if (result.skipped) {
-        console.log(`[nextly] seed skipped (${result.reason ?? "no-op"})`);
+        // The page is reported separately, because the skip message otherwise
+        // says nothing happened on a run that created it.
+        console.log(
+          `[nextly] seed skipped (${result.reason ?? "no-op"})` +
+            (result.blockPagesCreated > 0
+              ? `, added ${result.blockPagesCreated} block page`
+              : "")
+        );
       } else {
         console.log(
           `[nextly] seed complete: ${result.usersCreated} user, ` +
             `${result.postsCreated} posts, ${result.categoriesCreated} categories, ` +
-            `${result.tagsCreated} tags, ${result.mediaUploaded} media`
+            `${result.tagsCreated} tags, ${result.mediaUploaded} media, ` +
+            `${result.blockPagesCreated} block pages`
         );
       }
       process.exit(0);

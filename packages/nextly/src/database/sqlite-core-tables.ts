@@ -1,3 +1,5 @@
+import { STORAGE_FORMAT } from "../schemas/storage-format";
+
 // Raw CREATE TABLE IF NOT EXISTS DDL for all Nextly core SQLite tables.
 //
 // Kept here (not in cli/commands/dev.ts where it used to live) so that any
@@ -325,7 +327,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "dynamic_singles" ("created_at")`,
     `CREATE INDEX IF NOT EXISTS "dynamic_singles_updated_at_idx"
       ON "dynamic_singles" ("updated_at")`,
-    `CREATE TABLE IF NOT EXISTS "dynamic_components" (
+    `CREATE TABLE IF NOT EXISTS "${STORAGE_FORMAT.registryTable}" (
       "id" TEXT PRIMARY KEY NOT NULL,
       "slug" TEXT NOT NULL UNIQUE,
       "label" TEXT NOT NULL,
@@ -345,16 +347,16 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL
     )`,
-    `CREATE INDEX IF NOT EXISTS "dynamic_components_source_idx"
-      ON "dynamic_components" ("source")`,
-    `CREATE INDEX IF NOT EXISTS "dynamic_components_migration_status_idx"
-      ON "dynamic_components" ("migration_status")`,
-    `CREATE INDEX IF NOT EXISTS "dynamic_components_created_by_idx"
-      ON "dynamic_components" ("created_by")`,
-    `CREATE INDEX IF NOT EXISTS "dynamic_components_created_at_idx"
-      ON "dynamic_components" ("created_at")`,
-    `CREATE INDEX IF NOT EXISTS "dynamic_components_updated_at_idx"
-      ON "dynamic_components" ("updated_at")`,
+    `CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_source_idx"
+      ON "${STORAGE_FORMAT.registryTable}" ("source")`,
+    `CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_migration_status_idx"
+      ON "${STORAGE_FORMAT.registryTable}" ("migration_status")`,
+    `CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_created_by_idx"
+      ON "${STORAGE_FORMAT.registryTable}" ("created_by")`,
+    `CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_created_at_idx"
+      ON "${STORAGE_FORMAT.registryTable}" ("created_at")`,
+    `CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_updated_at_idx"
+      ON "${STORAGE_FORMAT.registryTable}" ("updated_at")`,
     // Content-version store. Columns match schemas/versions/sqlite.ts. The
     // durable-sequence unique index is created here too, not just the table:
     // once a fallback-created DB exists, later boots skip ensureCoreTables and
@@ -527,4 +529,62 @@ export function generateSqliteCoreTableStatements(): string[] {
     `CREATE INDEX IF NOT EXISTS "email_deliveries_retention_idx"
       ON "email_deliveries" ("retention_class", "created_at")`,
   ];
+}
+
+/**
+ * The bootstrap statements for one database, given the registry it actually
+ * uses.
+ *
+ * The field-group registry has two spellings, and `chooseRegistryTable`
+ * prefers the LEGACY one whenever it is present — so creating
+ * `dynamic_components` beside a populated `dynamic_field_groups` does not add
+ * a table, it makes every reader switch to an empty one and every migrated
+ * component unreachable. Two rules follow, and they are different.
+ *
+ * **The registry's CREATE TABLE.** Emitted only for a database that may still
+ * need one AND is not already using the migrated spelling. A replay over an
+ * established database never gets it: a point-in-time probe cannot make that
+ * statement safe, because a migration renaming the table between the probe and
+ * the replay puts the empty legacy table back, and the exclusion that would
+ * prevent that cannot be held here — its own lock table is one of the core
+ * tables this bootstrap creates. An established database gets its registry
+ * from the fresh path or from `SystemTableService`.
+ *
+ * **The registry's INDEXES.** Always emitted, retargeted to the registry this
+ * database really uses. Dropping them would mean a migrated installation never
+ * has its indexes reconciled — one created by the older fallback has none of
+ * the five, and the rename carries that gap across. An index statement naming
+ * a table a concurrent rename has moved fails harmlessly rather than
+ * resurrecting anything.
+ */
+export function sqliteCoreStatementsFor(options: {
+  /**
+   * The registry table this database uses, resolved through the canonical
+   * resolver so this and the readers cannot disagree about case folding or
+   * preference order.
+   */
+  registryTable: string;
+  /**
+   * Whether this database may still have its registry TABLE created — true on
+   * the fresh path, false for a replay over a database that already exists.
+   */
+  mayCreateRegistryTable: boolean;
+}): string[] {
+  const legacy = STORAGE_FORMAT.registryTable;
+  const createsRegistry =
+    options.mayCreateRegistryTable && options.registryTable === legacy;
+
+  const statements: string[] = [];
+  for (const statement of generateSqliteCoreTableStatements()) {
+    if (statement.includes(`CREATE TABLE IF NOT EXISTS "${legacy}"`)) {
+      if (createsRegistry) statements.push(statement);
+      continue;
+    }
+    statements.push(
+      statement.includes(`ON "${legacy}"`)
+        ? statement.replace(`ON "${legacy}"`, `ON "${options.registryTable}"`)
+        : statement
+    );
+  }
+  return statements;
 }

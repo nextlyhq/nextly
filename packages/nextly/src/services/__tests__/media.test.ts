@@ -306,7 +306,9 @@ describe("MediaService", () => {
     });
 
     it("should reject files exceeding size limit", async () => {
-      const buffer = Buffer.from("large-file");
+      // Real bytes: the gate measures the buffer rather than reading the
+      // `size` beside it, so a small buffer declaring 11MB is now accepted.
+      const buffer = Buffer.alloc(11 * 1024 * 1024);
       const result = await mediaService.uploadMedia({
         file: buffer,
         filename: "large.jpg",
@@ -319,6 +321,46 @@ describe("MediaService", () => {
       expect(result.statusCode).toBe(400);
       expect(result.message).toContain("File too large");
       expect(result.data).toBeNull();
+    });
+
+    it("refuses by the BYTES, not by the size the caller declared", async () => {
+      /*
+       * `uploadMedia` is exported, so the buffer and the `size` beside it are
+       * two claims a caller can make disagree. Trusting the declared one let a
+       * caller past a cap its bytes exceeded, and wrote a row that misdescribed
+       * its own object — which every later reader then has to distrust.
+       */
+      const result = await mediaService.uploadMedia({
+        file: Buffer.alloc(11 * 1024 * 1024),
+        filename: "big.jpg",
+        mimeType: "image/jpeg",
+        // Declared as one byte.
+        size: 1,
+        uploadedBy: testUserId,
+      });
+
+      expect(result.statusCode).toBe(400);
+      expect(result.message).toContain("File too large");
+    });
+
+    it("records the size of the bytes it stored, not the declared one", async () => {
+      /*
+       * Declared deliberately UNEQUAL to the buffer. A row that repeated the
+       * caller's number would describe an object that is not there, and this
+       * harness writes a real row, so the persisted value is observable.
+       */
+      const buffer = Buffer.from("a short but honest payload");
+      const result = await mediaService.uploadMedia({
+        file: buffer,
+        filename: "small.jpg",
+        mimeType: "image/jpeg",
+        size: 999_999,
+        uploadedBy: testUserId,
+      });
+
+      expect(result.success).toBe(true);
+      expect(buffer.length).not.toBe(999_999);
+      expect(result.data?.size).toBe(buffer.length);
     });
 
     it("should reject invalid image files", async () => {
@@ -536,6 +578,70 @@ describe("MediaService", () => {
 
       const check = await mediaService.getMediaById(mediaId);
       expect(check.success).toBe(false);
+    });
+  });
+
+  describe("the size cap the installation configured", () => {
+    /*
+     * This writer sits UNDER the validator on every path — the unified service
+     * wraps it, and the published server action calls it directly — so a cap of
+     * its own refuses, from the inside, a file the configured policy has already
+     * allowed, and names a limit the install never set.
+     *
+     * Real bytes throughout. The gate measures the buffer rather than the `size`
+     * beside it, so a small buffer declaring a large size no longer reaches it.
+     */
+    const ONE_MB = 1024 * 1024;
+
+    /** The writer as its constructors build it, carrying a configured cap. */
+    function writerWithCap(maxUploadBytes: number | undefined): MediaService {
+      return new MediaService(
+        testDb.adapter,
+        testLogger,
+        undefined,
+        undefined,
+        maxUploadBytes
+      );
+    }
+
+    async function upload(service: MediaService, bytes: number) {
+      return service.uploadMedia({
+        file: Buffer.alloc(bytes, 0x61),
+        filename: "payload.bin",
+        mimeType: "application/octet-stream",
+        size: bytes,
+        uploadedBy: testUserId,
+      });
+    }
+
+    it("refuses past the INSTALL's limit, naming that limit", async () => {
+      const result = await upload(writerWithCap(ONE_MB), 2 * ONE_MB);
+
+      expect(result.statusCode).toBe(400);
+      // The install's number, not this module's built-in 10MB.
+      expect(result.message).toContain("1MB");
+    });
+
+    it("accepts what that same cap allows", async () => {
+      /*
+       * Without this, the case above is equally satisfied by a writer that
+       * refuses every upload.
+       */
+      const result = await upload(writerWithCap(ONE_MB), 1024);
+
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts the REFUSED file when no cap was configured", async () => {
+      /*
+       * The control that makes the refusal above attributable. The same bytes
+       * are under the built-in 10MB default, so a service refusing them for any
+       * reason other than the injected cap would refuse them here too — and the
+       * first case would prove nothing about which number decided.
+       */
+      const result = await upload(writerWithCap(undefined), 2 * ONE_MB);
+
+      expect(result.success).toBe(true);
     });
   });
 

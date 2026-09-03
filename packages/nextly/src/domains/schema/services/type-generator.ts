@@ -47,6 +47,11 @@ import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-defi
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { currentFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 
+import { renderFieldMember } from "./field-nullability";
+import {
+  hasLifecycleStatus,
+  lifecycleStatusMember,
+} from "./generated-lifecycle";
 import {
   asScalarStorageField,
   pluginDeclaredImportNames,
@@ -500,6 +505,12 @@ export class TypeGenerator {
       lines.push("  updatedAt: string;");
     }
 
+    // The publish lifecycle, when this collection declares one. Without it a
+    // consumer of these types cannot tell a draft from a published entry.
+    if (hasLifecycleStatus(collection)) {
+      lines.push(lifecycleStatusMember());
+    }
+
     lines.push("}");
 
     return {
@@ -578,6 +589,11 @@ export class TypeGenerator {
 
     // Singles always have updatedAt (no createdAt)
     lines.push("  updatedAt: string;");
+
+    // A Single declares the lifecycle on the same flag a collection does.
+    if (hasLifecycleStatus(single)) {
+      lines.push(lifecycleStatusMember());
+    }
 
     lines.push("}");
 
@@ -759,6 +775,49 @@ export class TypeGenerator {
   // ============================================================
 
   /**
+   * The type a plugin states for this field, recorded as an emission so the
+   * imports it names reach the generated file.
+   *
+   * `undefined` means the plugin renders nothing of its own. That is also what
+   * tells a caller the type it ends up with was built here rather than
+   * contributed, so one call answers both what the type is and where it came
+   * from — and a change to what counts as contributed lands in one place.
+   */
+  private adoptContributedType(
+    field: Parameters<typeof pluginTsType>[0]
+  ): string | undefined {
+    const contributed = pluginTsType(field);
+    if (contributed === undefined) return undefined;
+    this.pluginExpressions.set(field, contributed);
+    this.pluginEmissions.push({
+      expression: contributed,
+      imported: pluginDeclaredImportNames(field, "tsImports"),
+    });
+    return contributed;
+  }
+
+  /**
+   * The rendered member for a field whose type a plugin states, or `undefined`
+   * when the plugin renders nothing of its own.
+   *
+   * Rendering here rather than returning a flag is what keeps the two callers
+   * from diverging: provenance is expressed by WHICH return runs, so there is
+   * no value to thread and none to forget. Every other path reaches the plain
+   * return at the end of its method, where the type was built in this file and
+   * needs no bracketing.
+   */
+  private contributedMember(
+    fieldName: string,
+    field: Parameters<typeof pluginTsType>[0]
+  ): string | undefined {
+    const contributed = this.adoptContributedType(field);
+    if (contributed === undefined) return undefined;
+    return renderFieldMember(fieldName, contributed, field, {
+      contributed: true,
+    });
+  }
+
+  /**
    * Generates a TypeScript type string for a single field.
    */
   private generateFieldType(
@@ -772,8 +831,6 @@ export class TypeGenerator {
     }
 
     const fieldName = field.name;
-    const isRequired = "required" in field && field.required;
-    const optional = isRequired ? "" : "?";
 
     let tsType: string;
 
@@ -855,14 +912,9 @@ export class TypeGenerator {
     // state its own rendering; asked once, because the callback is plugin code
     // and nothing requires it to be pure.
     else {
-      const contributed = pluginTsType(field);
-      if (contributed !== undefined) {
-        this.pluginExpressions.set(field, contributed);
-        this.pluginEmissions.push({
-          expression: contributed,
-          imported: pluginDeclaredImportNames(field, "tsImports"),
-        });
-        tsType = contributed;
+      const member = this.contributedMember(fieldName, field);
+      if (member !== undefined) {
+        return member;
       } else {
         // No rendering of its own, but the registry still knows what it stores.
         // Re-entered as the storage primitive's built-in type so the branch
@@ -882,7 +934,7 @@ export class TypeGenerator {
       }
     }
 
-    return `  ${fieldName}${optional}: ${tsType};`;
+    return renderFieldMember(fieldName, tsType, field);
   }
 
   // ============================================================
@@ -903,8 +955,6 @@ export class TypeGenerator {
     }
 
     const isCodeSourced = field.source === "code";
-    const isRequired = field.required;
-    const optional = isRequired ? "" : "?";
 
     let tsType: string;
 
@@ -951,15 +1001,9 @@ export class TypeGenerator {
         // registry says it stores. `string` remains the fallback only for a
         // type nothing in the process knows about, which is what a UI-authored
         // field of a since-removed plugin type is.
-        const contributed = pluginTsType(field);
-        if (contributed !== undefined) {
-          this.pluginExpressions.set(field, contributed);
-          this.pluginEmissions.push({
-            expression: contributed,
-            imported: pluginDeclaredImportNames(field, "tsImports"),
-          });
-          tsType = contributed;
-          break;
+        const member = this.contributedMember(field.name, field);
+        if (member !== undefined) {
+          return member;
         }
         const storageType = pluginStorageFieldType(field);
         const asStorage =
@@ -974,7 +1018,7 @@ export class TypeGenerator {
       }
     }
 
-    return `  ${field.name}${optional}: ${tsType};`;
+    return renderFieldMember(field.name, tsType, field);
   }
 
   /**
@@ -1275,8 +1319,20 @@ ${properties}
       omitFields.push("createdAt", "updatedAt");
     }
 
+    // The lifecycle column is NOT NULL with a default, so a read always has a
+    // value and the interface states it as required. A CREATE may omit it and
+    // take the default, so it is dropped from the `Omit` and reintroduced as an
+    // optional member rather than inherited as a required one.
+    const createOmits = hasLifecycleStatus(collection)
+      ? [...omitFields, "status"]
+      : omitFields;
+    const createBase = `Omit<${interfaceName}, ${createOmits.map(f => `"${f}"`).join(" | ")}>`;
     lines.push(
-      `export type ${interfaceName}CreateInput = Omit<${interfaceName}, ${omitFields.map(f => `"${f}"`).join(" | ")}>;`
+      `export type ${interfaceName}CreateInput = ${
+        hasLifecycleStatus(collection)
+          ? `${createBase} & { status?: ${interfaceName}["status"] }`
+          : createBase
+      };`
     );
     lines.push("");
 

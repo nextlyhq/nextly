@@ -2,9 +2,15 @@
  * One answer to "which widgets exist", across two channels that do not share a
  * shape.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { canonicalWidgets, type CanonicalWidget } from "../canonical";
+import {
+  allWidgets,
+  canonicalWidgets,
+  declaredWidgets,
+  type CanonicalWidget,
+} from "../canonical";
+import { setGeneratedWidgets } from "../collection-widgets";
 import type { WidgetDefinition } from "../definition";
 import { clearWidgets, registerWidget } from "../registry";
 
@@ -144,5 +150,79 @@ describe("the canonical widget set", () => {
 
   it("is empty when neither channel has anything", () => {
     expect(canonicalWidgets([])).toEqual([]);
+  });
+});
+
+describe("generated cards in the canonical set", () => {
+  const generated = {
+    id: "collection/posts-count",
+    title: "posts",
+    archetype: "metric",
+    defaultSize: "sm",
+    requiredPermission: "read-posts",
+    query: { source: "collection:posts", op: "count" },
+  } as unknown as Parameters<typeof setGeneratedWidgets>[0][number];
+
+  afterEach(() => setGeneratedWidgets([]));
+
+  it("places and offers a card nobody declared", () => {
+    // 🔴 The whole point of generating them. Without this the layout endpoint
+    // answers "unavailable widget" for every id the picker offers, so the card
+    // is visible and unaddable -- which is the state a contributed widget was
+    // in before `canonicalWidgets` learned about that channel.
+    setGeneratedWidgets([generated]);
+    expect(canonicalWidgets([]).map(w => w.id)).toEqual([
+      "collection/posts-count",
+    ]);
+  });
+
+  it("carries the permission that gates the collection", () => {
+    setGeneratedWidgets([generated]);
+    expect(canonicalWidgets([])[0].requiredPermission).toBe("read-posts");
+  });
+
+  it("LOSES the id to a contribution that already claimed it", () => {
+    // A plugin that declared this widget meant it; core's derived guess must
+    // not displace it. The reader sees the plugin's card, and the server places
+    // the plugin's declaration -- one answer, not two.
+    setGeneratedWidgets([generated]);
+    const merged = canonicalWidgets([
+      { id: "collection/posts-count", defaultOrder: 3 },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].defaultOrder).toBe(3);
+  });
+
+  it("is NOT part of the set a default arrangement is built from", () => {
+    // 🔴 The whole "offered, never placed" claim rests on this. `defaultPlacements`
+    // is materialized from `declaredWidgets`, so a generated card appearing there
+    // would be auto-placed for every reader with no stored layout -- forty
+    // collections opening onto eighty cards nobody chose, and past the cap a
+    // dashboard they cannot add to. It still EXISTS, so it can be offered and a
+    // write naming it is accepted.
+    setGeneratedWidgets([generated]);
+    expect(allWidgets().map(w => w.id)).toEqual(["collection/posts-count"]);
+    expect(declaredWidgets()).toEqual([]);
+  });
+
+  it("IS placed once a declaration claims its id", () => {
+    // The control, and the reason the flag describes the surviving declaration
+    // rather than which ids core can generate: an author who declared this
+    // widget gets it placed like any other.
+    setGeneratedWidgets([generated]);
+    registerWidget(registered({ id: "collection/posts-count" }));
+    expect(declaredWidgets().map(w => w.id)).toEqual([
+      "collection/posts-count",
+    ]);
+  });
+
+  it("LOSES the id to an explicit registration too", () => {
+    setGeneratedWidgets([generated]);
+    registerWidget(
+      registered({ id: "collection/posts-count", defaultOrder: 7 })
+    );
+    const merged = canonicalWidgets([]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].defaultOrder).toBe(7);
   });
 });

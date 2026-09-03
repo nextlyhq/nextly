@@ -19,12 +19,26 @@
  * @module lib/entry-heading
  */
 
+import {
+  COMMON_TITLE_FIELDS,
+  readableTitleText,
+} from "../domains/collections/entry-title";
+
 /**
  * The first candidate that is a usable heading, else `fallback`.
  *
  * Candidates, in descending preference: the collection's configured title
- * field, then a `title` field, then a `name` field. An absent `titleField`
- * simply starts the walk at `title`.
+ * field, then each conventional title name in {@link COMMON_TITLE_FIELDS}. An
+ * absent `titleField` simply starts the walk at `title`.
+ *
+ * 🔴 The conventional names are IMPORTED rather than written out here, so this
+ * walk and the field-level rule that decides which column a list or a generated
+ * card SELECTS cannot disagree about which names count. Two spellings of one
+ * list is precisely the drift the paragraph above says this module exists to
+ * prevent, and it would be invisible: a collection naming its entries with
+ * `subject` gets that field as its title on the dashboard, and a walk that
+ * stopped at `name` would answer the activity feed with a bare id instead --
+ * both surfaces behaving exactly as each was written.
  *
  * An EMPTY string is skipped rather than returned. `??` only skips `null` and
  * `undefined`, so an untitled draft used to render as no heading at all --
@@ -42,14 +56,11 @@ export function entryHeading<TFallback extends string | undefined>(
 ): string | TFallback {
   const candidates = [
     titleField ? data[titleField] : undefined,
-    data.title,
-    data.name,
+    ...COMMON_TITLE_FIELDS.map(name => data[name]),
   ];
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.length > 0) return candidate;
-    if (typeof candidate === "number" || typeof candidate === "bigint") {
-      return String(candidate);
-    }
+    const text = readableTitleText(candidate);
+    if (text !== undefined) return text;
   }
   return fallback;
 }

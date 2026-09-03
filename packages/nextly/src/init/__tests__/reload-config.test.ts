@@ -67,6 +67,15 @@ const {
   errorSpy: vi.fn(),
 }));
 
+const setDeferredCollectionsSpy = vi.fn();
+// The reload PUBLISHES which collections it refused, and the widget source
+// refresh is the consumer. Mocked here so this file can assert the call
+// without pulling the DI container in through the widgets domain.
+vi.mock("../../domains/widgets/collection-sources", () => ({
+  setDeferredCollections: (slugs: readonly string[]) =>
+    setDeferredCollectionsSpy(slugs),
+}));
+
 vi.mock("../../cli/utils/config-loader", () => ({
   loadConfig: loadConfigSpy,
   clearConfigCache: clearConfigCacheSpy,
@@ -111,6 +120,10 @@ describe("reloadNextlyConfig", () => {
     introspectSpy.mockReset();
     warnSpy.mockReset();
     errorSpy.mockReset();
+    // Its call history is what several assertions read, and it lives at module
+    // scope: without this, one test's publish satisfies the next one's
+    // expectation and a "not called" assertion can never hold.
+    setDeferredCollectionsSpy.mockReset();
     pipelineApplySpy.mockResolvedValue({
       success: true,
       statementsExecuted: 1,
@@ -152,6 +165,15 @@ describe("reloadNextlyConfig", () => {
     failComponentSync?: boolean;
     /** Seed a `nextly_meta` migration marker the storage guard will read. */
     migrationMarker?: unknown;
+    /**
+     * What the collection metadata sync REPORTS it rewrote.
+     *
+     * The real `syncCodeFirstCollections` answers a `SyncResult`, and the
+     * reload reads its `updated` list to learn which existing rows it just
+     * reset to `pending`. A fake resolving `{}` says "nothing was rewritten",
+     * so a test about an EDITED collection has to state the report.
+     */
+    collectionSyncResult?: unknown;
   }) {
     const withAdapter = opts?.withAdapter ?? true;
     const lockDouble = createLockingAdapter({
@@ -195,7 +217,7 @@ describe("reloadNextlyConfig", () => {
       collectionRegistryService: {
         syncCodeFirstCollections: opts?.failCollectionMetaSync
           ? vi.fn().mockRejectedValue(new Error("meta sync failed"))
-          : vi.fn().mockResolvedValue({}),
+          : vi.fn().mockResolvedValue(opts?.collectionSyncResult ?? {}),
         // Mirrors CollectionRegistryService.getAllCollections — the DB-backed
         // list of every registered collection (code + UI). Defaults to empty.
         getAllCollections: vi
@@ -491,6 +513,360 @@ describe("reloadNextlyConfig", () => {
       "books",
       "applied"
     );
+  });
+
+  it("PUBLISHES the collections it refused, so nothing queries an unapplied shape", async () => {
+    // 🔴 A refused collection still gets its new field list written to the
+    // registry -- the sync payload is the whole config and knows nothing about
+    // what applied -- so its stored metadata describes a shape its table never
+    // received. Anything deciding what a query may NAME has to be told, and
+    // `migration_status` cannot say it: the same value is written by paths that
+    // deferred nothing.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "books",
+            tableName: "dc_books",
+            fields: [{ name: "active", type: "checkbox" }],
+          },
+          {
+            slug: "authors",
+            tableName: "dc_authors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "dc_books",
+          columns: [
+            ...reservedColumns("dc_books"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+        { name: "dc_authors", columns: reservedColumns("dc_authors") },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver: buildResolver() });
+
+    expect(setDeferredCollectionsSpy).toHaveBeenCalledWith(["books"]);
+  });
+
+  it("does NOT clear refusals when the metadata sync reports per-slug errors", async () => {
+    // 🔴 `syncCodeFirstCollections` reports a per-collection failure by
+    // RESOLVING a SyncResult carrying `errors[]`, not by rejecting -- the
+    // singles sync beside it already reads that. Awaiting and discarding the
+    // answer read a partial failure as a clean pass, so a reverted
+    // collection's refusal was lifted while its registry row could still hold
+    // fields its table never received.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "authors",
+            tableName: "dc_authors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+      },
+    });
+    // Every diff is zero-op, which is the no-DDL landing this branch guards.
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "dc_authors",
+          columns: [
+            ...reservedColumns("dc_authors"),
+            { name: "name", type: "text", nullable: true },
+          ],
+        },
+      ])
+    );
+
+    const resolver = buildResolver({
+      collectionSyncResult: {
+        created: [],
+        updated: [],
+        unchanged: [],
+        errors: [{ slug: "authors", error: "write failed" }],
+      },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    // The control that this reload took the no-DDL landing at all.
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    expect(setDeferredCollectionsSpy).not.toHaveBeenCalled();
+  });
+
+  it("DOES clear refusals when that same sync reports no errors", async () => {
+    // The control the refusal above needs: without it, "do not clear on error"
+    // is satisfied by a branch that stopped clearing at all, which would leave
+    // every refusal standing for the life of the process.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "authors",
+            tableName: "dc_authors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "dc_authors",
+          columns: [
+            ...reservedColumns("dc_authors"),
+            { name: "name", type: "text", nullable: true },
+          ],
+        },
+      ])
+    );
+
+    const resolver = buildResolver({
+      collectionSyncResult: {
+        created: [],
+        updated: [],
+        unchanged: ["authors"],
+        errors: [],
+      },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    expect(setDeferredCollectionsSpy).toHaveBeenCalledWith([]);
+  });
+
+  it("publishes NOTHING when the reload carries only a refusal", async () => {
+    // 🔴 A reload whose only change is refused never reaches the metadata sync:
+    // `hasChanges` stays false, and the metadata-only landing is gated on
+    // `!deferredSchemaChange` exactly so that refused `fields` are not
+    // persisted. The registry therefore still describes the unchanged table, so
+    // nothing is ahead of anything -- and announcing a deferral here would
+    // withhold cards that work, for the rest of the session.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "books",
+            tableName: "dc_books",
+            fields: [{ name: "active", type: "checkbox" }],
+          },
+        ],
+      },
+    });
+    // The live `active` column is text; the config declares a checkbox. That is
+    // the type change the gate refuses, and it is the ONLY change in the batch.
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "dc_books",
+          columns: [
+            ...reservedColumns("dc_books"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver: buildResolver() });
+
+    // The control that this reload took the no-DDL path rather than applying.
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    expect(setDeferredCollectionsSpy).not.toHaveBeenCalled();
+  });
+
+  it("publishes an EMPTY refusal set when everything applied", async () => {
+    // The control: without it the assertion above is satisfied by a call that
+    // always names every collection, which would withhold the whole dashboard.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "authors",
+            tableName: "dc_authors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        { name: "dc_authors", columns: reservedColumns("dc_authors") },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver: buildResolver() });
+
+    expect(setDeferredCollectionsSpy).toHaveBeenCalledWith([]);
+  });
+
+  it("marks an EDITED code-first collection as 'applied' after a successful apply", async () => {
+    // The other half of the same bug. `updateCollection` resets an existing
+    // row's migration_status to 'pending' whenever the fields change, and the
+    // DDL for that change is what the apply just performed -- but the table was
+    // present before the apply, so the pre-pipeline `liveByTable` snapshot
+    // cannot tell that its migration is done. The row then reports an
+    // outstanding migration for a table already at the new shape, and the
+    // widget source refresh (which reads migration_status to decide whether a
+    // collection can be queried) withdraws that collection's generated cards
+    // for the rest of the dev session.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "books",
+            tableName: "dc_books",
+            fields: [{ name: "title", type: "text" }],
+          },
+        ],
+      },
+    });
+    // dc_books ALREADY EXISTS and is missing the new column -- an ALTER of a
+    // live table, which is the case the snapshot branch cannot see.
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        { name: "dc_books", columns: reservedColumns("dc_books") },
+      ])
+    );
+
+    const resolver = buildResolver({
+      collectionSyncResult: { created: [], updated: ["books"], unchanged: [] },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(resolver.updateCollectionMigrationStatusSpy).toHaveBeenCalledWith(
+      "books",
+      "applied"
+    );
+  });
+
+  it("does NOT mark a DEFERRED collection 'applied' in a mixed batch", async () => {
+    // A batch can apply one collection's safe change while REFUSING another's.
+    // The refused one goes into `deferredEntities` and its DDL never runs --
+    // but the metadata sync is built from every configured collection, so a
+    // deferred collection whose fields changed still comes back in `updated`.
+    // Marking it 'applied' from that list would state the opposite of what the
+    // reload just decided, and publish its cards against the shape the reload
+    // declined to apply.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          // REFUSED: live `active` is text, the config declares a checkbox --
+          // a column type change the gate defers rather than applies.
+          {
+            slug: "books",
+            tableName: "dc_books",
+            fields: [{ name: "active", type: "checkbox" }],
+          },
+          // APPLIED: purely additive, so this reload reaches the post-DDL
+          // commit at all. Without it the deferred branch bails earlier and
+          // the marking under test is never reached.
+          {
+            slug: "authors",
+            tableName: "dc_authors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "dc_books",
+          columns: [
+            ...reservedColumns("dc_books"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+        { name: "dc_authors", columns: reservedColumns("dc_authors") },
+      ])
+    );
+
+    // The sync reports BOTH as rewritten -- which is exactly the trap: its
+    // payload is every configured collection, so it cannot know one was
+    // deferred.
+    const resolver = buildResolver({
+      collectionSyncResult: {
+        created: [],
+        updated: ["books", "authors"],
+        unchanged: [],
+      },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    // The control that this reload reached the post-DDL commit rather than
+    // bailing on the deferred branch, which withholds for its own reason.
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(resolver.updateCollectionMigrationStatusSpy).toHaveBeenCalledWith(
+      "authors",
+      "applied"
+    );
+    expect(
+      resolver.updateCollectionMigrationStatusSpy
+    ).not.toHaveBeenCalledWith("books", "applied");
+  });
+
+  it("leaves an UNCHANGED collection's migration status alone", async () => {
+    // The control the assertion above needs: marking every target 'applied'
+    // would pass that test too, and would overwrite a status that legitimately
+    // says a migration is outstanding. Only the rows the sync REPORTS it
+    // rewrote are re-marked.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "books",
+            tableName: "dc_books",
+            fields: [{ name: "title", type: "text" }],
+          },
+          {
+            slug: "authors",
+            tableName: "dc_authors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+      },
+    });
+    // BOTH tables already exist, so neither is caught by the snapshot branch.
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        { name: "dc_books", columns: reservedColumns("dc_books") },
+        { name: "dc_authors", columns: reservedColumns("dc_authors") },
+      ])
+    );
+
+    const resolver = buildResolver({
+      collectionSyncResult: {
+        created: [],
+        updated: ["books"],
+        unchanged: ["authors"],
+      },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(resolver.updateCollectionMigrationStatusSpy).toHaveBeenCalledWith(
+      "books",
+      "applied"
+    );
+    expect(
+      resolver.updateCollectionMigrationStatusSpy
+    ).not.toHaveBeenCalledWith("authors", "applied");
   });
 
   it("preserves UI-created singles (registry-only) in the desired schema", async () => {
@@ -1845,6 +2221,79 @@ describe("reloadNextlyConfig", () => {
       });
       await reloadNextlyConfig({
         resolver: buildResolver({ failCollectionMetaSync: true }),
+      });
+
+      await registry.execute("afterRead", {
+        collection: SLUG,
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(original).toHaveBeenCalledTimes(1);
+      expect(edited).not.toHaveBeenCalled();
+    });
+
+    it("holds hooks back when the post-DDL sync REPORTS a failure rather than throwing", async () => {
+      // 🔴 The same sync answers two ways. A rejection was already handled; a
+      // per-collection failure RESOLVES with `errors[]`, and the post-DDL path
+      // read only the rejection -- so a partial failure published handlers
+      // against a field tree the registry had not accepted, which is exactly
+      // what the test above exists to prevent for the other shape.
+      const registry = getHookRegistry();
+      const original = vi.fn(() => undefined);
+      const edited = vi.fn(() => undefined);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      // An additive second collection, so this reload reaches the POST-DDL
+      // landing rather than the metadata-only one. Without it the sync under
+      // test is not the one that runs.
+      const withAdditive = (hook: () => undefined) => ({
+        collections: [
+          settledCollection({ afterRead: [hook] }),
+          {
+            slug: "hookauthors",
+            tableName: "dc_hookauthors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+      });
+      const settleBoth = (): void => {
+        introspectSpy.mockResolvedValue(
+          buildSnapshot([
+            {
+              name: TABLE,
+              columns: [
+                ...reservedColumns(TABLE),
+                { name: "body", type: "text", nullable: true },
+              ],
+            },
+            {
+              name: "dc_hookauthors",
+              columns: reservedColumns("dc_hookauthors"),
+            },
+          ])
+        );
+      };
+
+      settleBoth();
+      loadConfigSpy.mockResolvedValue({ config: withAdditive(original) });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      // The control: a healthy reload of the SAME shape installs the handler,
+      // so the assertion below is about the reported failure rather than about
+      // this path never publishing at all.
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+      settleBoth();
+      loadConfigSpy.mockResolvedValue({ config: withAdditive(edited) });
+      await reloadNextlyConfig({
+        resolver: buildResolver({
+          collectionSyncResult: {
+            created: [],
+            updated: [],
+            unchanged: [],
+            errors: [{ slug: SLUG, error: "write failed" }],
+          },
+        }),
       });
 
       await registry.execute("afterRead", {

@@ -295,6 +295,20 @@ describe("recent entry headings", () => {
     ).toBe("Fallback title");
   });
 
+  it("PROJECTS every candidate the walk considers, not just title and name", async () => {
+    // 🔴 The projection and the walk are one mechanism in two places. The walk
+    // gained `label`, `subject` and `heading`; a projection still naming only
+    // `title` and `name` leaves those absent from every real read, so the walk
+    // looks widened and cannot reach them -- the dead-code state this file's
+    // projecting mock exists to catch, wearing a different shape.
+    expect(
+      await headingFor({ id: "p7", subject: "Re: hello", updatedAt: "" })
+    ).toBe("Re: hello");
+    expect(
+      await headingFor({ id: "p8", label: "Invoice 4021", updatedAt: "" })
+    ).toBe("Invoice 4021");
+  });
+
   it("keeps an ordinary string title", async () => {
     expect(
       await headingFor({ id: "p6", title: "Real title", updatedAt: "" })

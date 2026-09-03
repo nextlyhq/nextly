@@ -12,16 +12,27 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../collections/fields/types/index";
-import { getDialectTables } from "../../database/index";
+import {
+  getDialectTables,
+  getDialectTablesForPush,
+} from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
-import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-tables";
+import {
+  generateSqliteCoreTableStatements,
+  sqliteCoreStatementsFor,
+} from "../../database/sqlite-core-tables";
+import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
+import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
+import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
+import {
+  forgetFieldGroupStorageNames,
+  resolveRegistryNameFromCatalog,
+} from "../../domains/field-groups/storage/resolve-storage-names";
 // F8 PR 1: per-call factory pattern (matches reload-config.ts) so the
 // MySQL `databaseName` can be threaded through to drizzle-kit.pushSchema.
 // The DI-bound `applyDesiredSchema` from pipeline/index.ts throws on
 // MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
 // the two paths, this can collapse back to a single import.
-import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
-import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -56,6 +67,7 @@ import { resolveSingleTableName } from "../../domains/singles/services/resolve-s
 import { describeError, immediateMessage } from "../../errors/index";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {
   FieldGroupRegistryService,
@@ -90,6 +102,75 @@ import type { ResolvedDevOptions } from "./db-sync";
  * these tables to exist.
  */
 /**
+ * Which field-group registry this database uses.
+ *
+ * Through the canonical resolver, not a `tableExists` probe on the migrated
+ * name. That probe compares `sqlite_master.name` exactly, while
+ * `chooseRegistryTable` applies SQLite's case-folding rules — so a database
+ * holding `DYNAMIC_FIELD_GROUPS` reads as un-migrated here and as migrated by
+ * every reader, and the bootstrap would create the legacy table that readers
+ * then prefer. One question, one implementation.
+ *
+ * `null` means it could not be established. Both consumers treat that as
+ * "neither": the push bundle omits the registry rather than naming the wrong
+ * one, and the raw DDL retargets without creating. A CREATE is additive and no
+ * safety net undoes it, so guessing is the one thing neither may do.
+ */
+async function resolveRegistryTable(
+  adapter: DrizzleAdapter,
+  logger: CommandContext["logger"]
+): Promise<string | null> {
+  try {
+    return await resolveRegistryNameFromCatalog(adapter);
+  } catch (error) {
+    logger.debug(
+      `Could not resolve the field-group registry: ${describeError(error)}`
+    );
+    return null;
+  }
+}
+
+/**
+ * Create the system tables this bootstrap does not, under the right spelling.
+ *
+ * `SystemTableService` resolves the registry before creating it, so a database
+ * whose registry has been migrated is not given a second, empty legacy one.
+ * That resolution is why this is the path that creates a genuinely missing
+ * registry, rather than the raw DDL replay: the replay's `CREATE TABLE` is a
+ * fixed string, and a rename landing beside it would put the empty table back.
+ */
+async function ensureSystemTables(
+  drizzleAdapter: DrizzleAdapter,
+  logger: CommandContext["logger"]
+): Promise<boolean> {
+  try {
+    const { SystemTableService } = await import(
+      "../../services/system/system-table-service"
+    );
+    const serviceLogger: ServiceLogger = {
+      info: (m: string) => logger.debug(m),
+      warn: (m: string) => logger.warn(m),
+      error: (m: string) => logger.error(m),
+      debug: (m: string) => logger.debug(m),
+    };
+    // The result is READ. `ensureSystemTables` catches its own failures and
+    // reports `{ success: false }` rather than throwing, so discarding it lets
+    // a repair that did nothing be reported as one that worked.
+    const result = await new SystemTableService(
+      drizzleAdapter,
+      serviceLogger
+    ).ensureSystemTables();
+    if (!result.success) {
+      logger.debug(`System table creation: ${result.error ?? "unknown error"}`);
+    }
+    return result.success;
+  } catch (sysError) {
+    logger.debug(`System table creation: ${describeError(sysError)}`);
+    return false;
+  }
+}
+
+/**
  * Run the SQLite core bootstrap statements against this database.
  *
  * Every statement is IF NOT EXISTS, so this both creates a fresh database and
@@ -102,9 +183,10 @@ import type { ResolvedDevOptions } from "./db-sync";
  */
 async function applyCoreStatements(
   drizzleAdapter: DrizzleAdapter,
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  statements: string[] = generateSqliteCoreTableStatements()
 ): Promise<void> {
-  for (const statement of generateSqliteCoreTableStatements()) {
+  for (const statement of statements) {
     try {
       await drizzleAdapter.executeQuery(statement);
     } catch (error) {
@@ -119,7 +201,7 @@ async function applyCoreStatements(
 
 export async function ensureCoreTables(
   adapter: CLIDatabaseAdapter,
-  _options: ResolvedDevOptions,
+  options: ResolvedDevOptions,
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
@@ -141,78 +223,202 @@ export async function ensureCoreTables(
   // It does NOT repair a table whose COLUMNS drifted: SQLite skips a CREATE
   // TABLE wholesale once the table exists, which needs a migration rather than
   // this pass.
+  // Resolved ONCE, before either path is chosen. `users` being absent does not
+  // mean the database is empty — one holding a MIGRATED registry and no `users`
+  // takes the fresh path below — so the push bundle needs this answer just as
+  // much as the replay does.
+  const registryTable = await resolveRegistryTable(drizzleAdapter, logger);
+
+  // Only the probe is guarded. Everything the branch below does — the replay,
+  // and the exclusion around the registry step — must be able to fail the
+  // command: a `withMigrationExcluded` refusal means a migration owns the lock,
+  // and swallowing it here would fall through and push schema at a database
+  // whose registry is being renamed, which is the one thing the exclusion
+  // exists to prevent.
+  let usersExists = false;
   try {
-    const usersExists = await drizzleAdapter.tableExists("users");
-    if (usersExists) {
-      if (dialect === "sqlite") {
-        await applyCoreStatements(drizzleAdapter, logger);
-        logger.debug("Core tables reconciled");
-      } else {
-        logger.debug("Core tables already exist, skipping ensureCoreTables");
-      }
-      return;
-    }
+    usersExists = await drizzleAdapter.tableExists("users");
   } catch {
-    // tableExists may fail if the DB is completely empty — continue with creation
+    // The probe itself can fail on a completely empty database; that reads as
+    // "no users table", which is the answer the fresh path wants anyway.
+  }
+
+  if (usersExists) {
+    // `--no-auto-sync` promises to leave schema changes to migrations, and the
+    // reconcile below is schema change: it replays every core CREATE and then
+    // repairs system tables. Gating only the lock helper's DDL was not enough —
+    // the reconcile itself is the thing the option forbids. A database run this
+    // way is left exactly as the option says it will be.
+    const mayChangeSchema = options.autoSync !== false;
+
+    if (dialect === "sqlite" && mayChangeSchema) {
+      await applyCoreStatements(
+        drizzleAdapter,
+        logger,
+        sqliteCoreStatementsFor({
+          registryTable: registryTable ?? STORAGE_FORMAT.registryTable,
+          // Not this replay's to create: its CREATE TABLE is a fixed string,
+          // and a rename landing beside it would restore the empty legacy
+          // table. A registry that is genuinely absent is created below,
+          // through the service that resolves the spelling first.
+          mayCreateRegistryTable: false,
+        })
+      );
+      // Under the exclusion, and only now: the service resolves the registry
+      // name and then creates it, with awaits in between, so a migration
+      // renaming the table between those two steps would put the empty legacy
+      // one back. The replay above has already run, so the lock's own table is
+      // available — which is why this could not wrap the replay itself.
+      const repaired = await withMigrationExcluded(
+        {
+          adapter: drizzleAdapter,
+          logger,
+          label: "core table reconcile",
+          mayCreateLock: mayChangeSchema,
+          // Idempotent table creation, and the documented way to stop a sync
+          // is Ctrl+C — a claim stuck behind a dead process is the worse
+          // outcome, which is the trade a sync already makes.
+          releaseOnInterrupt: true,
+        },
+        () => ensureSystemTables(drizzleAdapter, logger)
+      );
+
+      // Dropped as soon as the claim is: the resolver memoises per adapter for
+      // the process's life, and this scope releases its lock before `db:sync`
+      // takes the outer one. A migration completing in that window would leave
+      // the sync reading a name resolved before it, against a table that has
+      // since been renamed. Re-resolving costs one catalog query.
+      forgetFieldGroupStorageNames(drizzleAdapter);
+
+      if (!repaired) {
+        logger.error(
+          "Core tables could not be reconciled. Run `nextly migrate` to " +
+            "repair the schema before syncing."
+        );
+        process.exit(1);
+      }
+      logger.debug("Core tables reconciled");
+    } else {
+      logger.debug("Core tables already exist, skipping ensureCoreTables");
+    }
+    return;
+  }
+
+  // Refused rather than half-built. The push can create `users` and every
+  // other core table while the bundle omits a registry it could not name, and
+  // the next run then sees `users`, takes the branch above, and never creates
+  // the missing one — a database that cannot repair itself. Aborting leaves
+  // nothing to repair, and the catalog read that failed can be fixed and the
+  // command re-run.
+  if (registryTable === null) {
+    logger.error(
+      "Could not read the database catalog to determine which field-group " +
+        "registry this database uses, so core tables were not created. " +
+        "Re-run once the database is reachable."
+    );
+    process.exit(1);
   }
 
   logger.newline();
   logger.info("Creating core database tables...");
 
-  // F8 PR 2: use the freshPushSchema helper for the static-tables push.
-  // No diff, no prompts, no journal — this is fresh-DB setup, not a user
-  // schema change. Behavior matches the legacy DrizzlePushService.apply
-  // verbatim (PG: pushSchema().apply; SQLite: manual statement loop;
-  // MySQL: generateMigration path).
-  try {
-    const db = drizzleAdapter.getDrizzle();
-    const staticSchemas = getDialectTables(dialect);
-    const result = await freshPushSchema(dialect, db, staticSchemas);
-
-    if (result.statementsExecuted.length > 0) {
-      logger.debug(
-        `[schema] Created ${result.statementsExecuted.length} tables via pushSchema`
-      );
-    }
-    logger.success("Core tables created");
-  } catch (pushError) {
-    // pushSchema failed (e.g., TTY prompt needed, or drizzle-kit error).
-    // Fall back to raw SQL for SQLite, or error for PG/MySQL.
-    const pushMsg = describeError(pushError);
-    logger.debug(`pushSchema failed: ${pushMsg}`);
-
-    if (dialect === "sqlite") {
-      logger.debug("Falling back to raw SQL table creation for SQLite...");
-      await applyCoreStatements(drizzleAdapter, logger);
-
-      // Also create system tables (dynamic_collections, etc.)
-      try {
-        const { SystemTableService } = await import(
-          "../../services/system/system-table-service"
-        );
-        const serviceLogger: ServiceLogger = {
-          info: (m: string) => logger.debug(m),
-          warn: (m: string) => logger.warn(m),
-          error: (m: string) => logger.error(m),
-          debug: (m: string) => logger.debug(m),
-        };
-        const systemTableService = new SystemTableService(
-          drizzleAdapter,
-          serviceLogger
-        );
-        await systemTableService.ensureSystemTables();
-      } catch (sysError) {
-        const msg = describeError(sysError);
-        logger.debug(`System table creation: ${msg}`);
+  // Held around the whole bootstrap, not just the registry step. `users` being
+  // absent does not prove the database is fresh — one holding a registry and no
+  // `users` reaches here — and the name resolved above was sampled before this
+  // point. A migration renaming the registry in between would let the push
+  // recreate the spelling it had just moved away from. The exclusion in
+  // `db-sync.ts` is acquired only after this function returns, so it is too
+  // late to help.
+  let pushFailed = false;
+  await withMigrationExcluded(
+    {
+      adapter: drizzleAdapter,
+      logger,
+      label: "core table bootstrap",
+      mayCreateLock: options.autoSync !== false,
+      releaseOnInterrupt: true,
+    },
+    async () => {
+      // Resolved again, INSIDE the exclusion. The reading above happened before
+      // the lock was held, so a migration completing in between would leave the
+      // push naming the spelling that was just moved away from — and the push
+      // is the one caller that creates rather than retargets. Re-reading here
+      // costs one catalog query and is the only value the push may trust.
+      const pushRegistry = await resolveRegistryTable(drizzleAdapter, logger);
+      if (pushRegistry === null) {
+        pushFailed = true;
+        return;
       }
+      // F8 PR 2: use the freshPushSchema helper for the static-tables push.
+      // No diff, no prompts, no journal — this is fresh-DB setup, not a user
+      // schema change. Behavior matches the legacy DrizzlePushService.apply
+      // verbatim (PG: pushSchema().apply; SQLite: manual statement loop;
+      // MySQL: generateMigration path).
+      try {
+        const db = drizzleAdapter.getDrizzle();
+        // Through the push bundle, not the raw dialect tables: naming the legacy
+        // registry here creates it, and the push succeeding means the fallback
+        // below never runs to correct it. `null` declares NEITHER, so the bundle
+        // omits the registry rather than guessing.
+        const staticSchemas = getDialectTablesForPush(dialect, {
+          fieldGroupRegistryTable: pushRegistry,
+        });
+        const result = await freshPushSchema(dialect, db, staticSchemas);
 
-      logger.success("Core tables created (fallback)");
-    } else {
-      logger.error(
-        "Core tables not found. Please run `nextly migrate` first to create the database schema."
-      );
-      process.exit(1);
+        if (result.statementsExecuted.length > 0) {
+          logger.debug(
+            `[schema] Created ${result.statementsExecuted.length} tables via pushSchema`
+          );
+        }
+        logger.success("Core tables created");
+      } catch (pushError) {
+        // pushSchema failed (e.g., TTY prompt needed, or drizzle-kit error).
+        // Fall back to raw SQL for SQLite, or error for PG/MySQL.
+        const pushMsg = describeError(pushError);
+        logger.debug(`pushSchema failed: ${pushMsg}`);
+
+        if (dialect === "sqlite") {
+          logger.debug("Falling back to raw SQL table creation for SQLite...");
+          await applyCoreStatements(
+            drizzleAdapter,
+            logger,
+            sqliteCoreStatementsFor({
+              registryTable: pushRegistry,
+              // A database with no `users` may still legitimately need its
+              // registry created; the helper declines when the resolved name is
+              // the migrated one.
+              mayCreateRegistryTable: true,
+            })
+          );
+
+          // Also create system tables (dynamic_collections, etc.)
+          await ensureSystemTables(drizzleAdapter, logger);
+
+          logger.success("Core tables created (fallback)");
+        } else {
+          // Recorded, not exited. `process.exit` here terminates from inside
+          // the exclusion's callback, so its `finally` never runs and the claim
+          // stays live until the 120-second lease expires — refusing the very
+          // `nextly migrate` this message tells the operator to run. The exit
+          // happens after the exclusion has unwound.
+          pushFailed = true;
+        }
+      }
     }
+  );
+
+  // Dropped here for the same reason as the reconcile branch: the SQLite
+  // fallback above also calls `ensureSystemTables`, which memoises the registry
+  // name on this adapter for the process's life, and this scope releases its
+  // claim before `db:sync` takes the outer one. A migration completing in that
+  // window would leave the sync querying a table that has since been renamed.
+  forgetFieldGroupStorageNames(drizzleAdapter);
+
+  if (pushFailed) {
+    logger.error(
+      "Core tables not found. Please run `nextly migrate` first to create the database schema."
+    );
+    process.exit(1);
   }
 }
 

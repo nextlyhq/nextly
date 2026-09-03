@@ -95,18 +95,27 @@ const SETUP_STEPS = new Set([
 ]);
 
 /**
- * The four steps that cannot say anything without `dist`.
+ * The steps that cannot say anything without `dist`.
  *
  * `Test` is NOT one of them, though it reads built output too: `turbo.jsonc`
  * gives `test` `dependsOn: ["^build"]`, so it rebuilds the dependency subgraph
  * of whatever it is filtered to. Gating it on Build would silence seventeen
  * suites for a failure in a package none of them depends on.
+ *
+ * `Playground tests` IS one, and the contrast with `Test` is the reason: it runs
+ * `vitest` directly rather than through turbo, so nothing rebuilds for it. The
+ * playground declares no tsconfig path mapping for the block packages, so
+ * `@nextlyhq/blocks-react/blocks` resolves to
+ * `packages/blocks-react/dist/blocks/index.mjs` — measured with `require.resolve`
+ * rather than assumed — and without a build the suite cannot import what it
+ * exists to check.
  */
 const BUILD_DEPENDENT = new Set([
   "Lint",
   "Typecheck",
   "publint",
   "arethetypeswrong",
+  "Playground tests",
 ]);
 
 /**

@@ -297,13 +297,27 @@ function emitContentWidth(
 }
 
 /**
- * Compile the stylesheet every page of a site shares.
+ * The tiers that do not read `breakpoints`: font faces, tokens, content width.
  *
- * Order is the cascade, so it is fixed: font faces, then tokens, then the block-type defaults,
- * then the named classes. A page's own sheet is appended after this one, which is what lets a
- * node's own value beat a class and a class beat a block default.
+ * Separated because these three are compilable when the site's breakpoints are unknown and the
+ * block-default tier below them is not. `emitTokenBlocks` declares its custom properties under
+ * `:root` and the only at-rule it can reach for is `(prefers-color-scheme:dark)`, which is a
+ * colour-scheme query rather than a width one — so no answer about breakpoints changes a byte of
+ * what this emits. A caller holding only a compiled artifact can therefore still be handed the
+ * declarations that artifact's `var()` references resolve against, which is the whole reason this
+ * boundary is drawn here rather than left inside {@link compileSiteSheet}.
  */
-export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
+function compileBreakpointIndependentTiers(
+  input: Omit<SiteSheetInput, "breakpoints">
+): {
+  blocks: string[];
+  warnings: ValidationIssue[];
+  // Carried out rather than re-derived by the caller: this file resolves the prefix once
+  // precisely so the half that DECLARES `--site-*` and the half that REFERENCES it cannot
+  // disagree, and a second `input.tokenPrefix ?? input.tokens?.prefix` beside it would be the
+  // drift that guard exists to prevent.
+  tokenPrefix: string | undefined;
+} {
   const warnings: ValidationIssue[] = [];
   const blocks: string[] = [];
 
@@ -349,6 +363,41 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
   // compiling a set that omits it arrives here with the property undeclared —
   // and half of this rule is worse than none of it.
   blocks.push(emitContentWidth(declaredTokens, tokenPrefix));
+
+  return { blocks, warnings, tokenPrefix };
+}
+
+/**
+ * Compile the token declarations a stored artifact's `var()` references resolve against.
+ *
+ * For a consumer that compiles a page once, stores the CSS and hands it back: that artifact still
+ * carries every `var(--site-*)` it was compiled with, and a custom property nothing declares makes
+ * its declaration invalid at computed-value time, so the property falls to its INITIAL value
+ * rather than to the site's. The two initial values differ in kind — `background-color` is
+ * `transparent`, `border-color` is `currentColor` — so the omission does not merely mute a block,
+ * it repaints it in the text colour.
+ *
+ * The block-default and named-class tiers are deliberately absent: both are emitted under the
+ * at-rules the site's breakpoints imply, and a caller on this path has stated none.
+ */
+export function compileSiteTokenSheet(
+  input: Omit<SiteSheetInput, "breakpoints">
+): SiteSheetArtifact {
+  const { blocks, warnings } = compileBreakpointIndependentTiers(input);
+  const css = blocks.filter(block => block !== "").join("\n");
+  return { css, contentHash: hashId(css), warnings };
+}
+
+/**
+ * Compile the stylesheet every page of a site shares.
+ *
+ * Order is the cascade, so it is fixed: font faces, then tokens, then the block-type defaults,
+ * then the named classes. A page's own sheet is appended after this one, which is what lets a
+ * node's own value beat a class and a class beat a block default.
+ */
+export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
+  const { blocks, warnings, tokenPrefix } =
+    compileBreakpointIndependentTiers(input);
 
   const blockBases = input.blockBases ?? {};
   const tiers = compilePageCss(documentUsingEveryType(blockBases), {

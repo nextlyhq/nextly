@@ -37,6 +37,12 @@ import {
 } from "../../../collections/fields/guards";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 
+import { fieldAdmitsNull } from "./field-nullability";
+import {
+  hasLifecycleStatus,
+  lifecycleCreateSchemaClosing,
+  lifecycleStatusZodMember,
+} from "./generated-lifecycle";
 import {
   asScalarStorageField,
   pluginDeclaredImportNames,
@@ -355,6 +361,12 @@ export class ZodGenerator {
       lines.push(`  updatedAt: z.string().datetime(),`);
     }
 
+    // The same lifecycle the TypeScript interface declares, so a payload valid
+    // against one is valid against the other.
+    if (hasLifecycleStatus(collection)) {
+      lines.push(lifecycleStatusZodMember());
+    }
+
     lines.push(`});`);
     lines.push("");
 
@@ -380,7 +392,7 @@ export class ZodGenerator {
     for (const field of omitFields) {
       lines.push(`  ${field}: true,`);
     }
-    lines.push(`});`);
+    lines.push(lifecycleCreateSchemaClosing(collection));
     lines.push("");
 
     // Update input schema (all optional except id)
@@ -415,9 +427,6 @@ export class ZodGenerator {
     const fieldName = field.name;
     let zodSchema: string;
     const modifiers: string[] = [];
-
-    // Handle required/optional
-    const isRequired = "required" in field && field.required;
 
     // Text fields
     if (isTextField(field)) {
@@ -531,10 +540,15 @@ export class ZodGenerator {
     // Apply modifiers
     const schemaWithModifiers = zodSchema + modifiers.join("");
 
-    // Apply optional if not required
-    const finalSchema = isRequired
-      ? schemaWithModifiers
-      : `${schemaWithModifiers}.optional()`;
+    // `.nullish()`, not `.optional()`: a non-required field is a nullable
+    // column, so the API accepts null and a read hands it back. `.optional()`
+    // admits undefined ONLY, so the validator generated from this schema
+    // rejected a payload the same generator's TypeScript type declared legal
+    // and the API accepted. The nullability answer comes from
+    // `fieldAdmitsNull` so the two artifacts cannot drift apart again.
+    const finalSchema = fieldAdmitsNull(field)
+      ? `${schemaWithModifiers}.nullish()`
+      : schemaWithModifiers;
 
     return `  ${fieldName}: ${finalSchema},`;
   }

@@ -518,7 +518,7 @@ export type { StyleQuery, StyleSubject } from "./style/style-origin";
 
 // The stylesheet every page of a site shares, compiled once and addressed by its content.
 export type { SiteSheetArtifact, SiteSheetInput } from "./style/site-sheet";
-export { compileSiteSheet } from "./style/site-sheet";
+export { compileSiteSheet, compileSiteTokenSheet } from "./style/site-sheet";
 // `outranksEntry` is published beside `styleOrigin` because that function
 // cannot answer every form of the question it answers: it is asked once per
 // STATE, so comparing two states' winners falls to the caller. Published, that

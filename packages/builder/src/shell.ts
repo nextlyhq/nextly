@@ -473,7 +473,7 @@ export type {
  * inspector can ask it.
  */
 export { FontsPanel } from "./fonts-panel";
-export type { FontsPanelProps } from "./fonts-panel";
+export type { FontsPanelProps, FontFaceUpload } from "./fonts-panel";
 export { fontTokenRows, readStack, rowsNeedingAttention } from "./font-library";
 export type {
   FamilyReading,

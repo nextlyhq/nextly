@@ -189,6 +189,44 @@ type ComponentDef = {
   admin?: unknown;
 };
 
+/**
+ * The slugs a metadata sync REFUSED, read defensively from an untyped result.
+ *
+ * `syncCodeFirstCollections` resolves rather than rejecting on a per-collection
+ * failure, so a caller that only catches sees a partial failure as a success.
+ * Read through a guard for the same reason its sibling below is: the surface
+ * this module holds is duck-typed, and a fake may resolve anything at all.
+ */
+function syncFailedSlugs(result: unknown): string[] {
+  if (typeof result !== "object" || result === null) return [];
+  const errors = (result as { errors?: unknown }).errors;
+  if (!Array.isArray(errors)) return [];
+  return errors
+    .map(entry =>
+      typeof entry === "object" && entry !== null
+        ? (entry as { slug?: unknown }).slug
+        : undefined
+    )
+    .filter((slug): slug is string => typeof slug === "string");
+}
+
+/**
+ * The slugs a metadata sync rewrote, read defensively from an untyped result.
+ *
+ * `SyncResult.updated` names the rows that went through `updateCollection`,
+ * which is the one path that resets `migration_status` on a collection that
+ * already existed. Read through a guard rather than a cast because the surface
+ * this module holds is duck-typed: a partial resolver fake may resolve anything
+ * at all, and a sync that reports nothing must leave the marking alone rather
+ * than throw inside the metadata step.
+ */
+function rewrittenSlugs(result: unknown): string[] {
+  if (typeof result !== "object" || result === null) return [];
+  const updated = (result as { updated?: unknown }).updated;
+  if (!Array.isArray(updated)) return [];
+  return updated.filter((slug): slug is string => typeof slug === "string");
+}
+
 // Minimal duck-typed surfaces of registry services used here.
 interface CollectionRegistrySurface {
   syncCodeFirstCollections(configs: unknown[]): Promise<unknown>;
@@ -449,7 +487,25 @@ async function syncCodeFirstMetadataOnly(
       "collectionRegistryService"
     )) as CollectionRegistrySurface;
     const payload = buildCollectionSyncPayload(newConfig.collections ?? []);
-    if (payload.length > 0) await registry.syncCodeFirstCollections(payload);
+    // 🔴 The RESULT decides, not merely the absence of a throw. This sync
+    // reports a per-collection failure by resolving a `SyncResult` carrying
+    // `errors[]`, exactly as the singles sync below does -- so awaiting it and
+    // discarding the answer read a partial failure as a clean pass. Anything
+    // gated on `collections` then acted on metadata that had not landed: the
+    // recording policies would publish against a stale field tree, and the
+    // refusal set would be cleared while a reverted collection's registry row
+    // still held fields its table never received.
+    const result =
+      payload.length > 0
+        ? await registry.syncCodeFirstCollections(payload)
+        : undefined;
+    const failed = syncFailedSlugs(result);
+    if (failed.length > 0) {
+      collections = false;
+      logger?.warn(
+        `[Nextly HMR] metadata-only collection sync failed for ${failed.join(", ")}`
+      );
+    }
   } catch (err) {
     collections = false;
     logger?.warn(
@@ -1910,6 +1966,24 @@ async function applyReload(opts?: {
         newConfig,
         logger
       );
+      // Every diff was zero-op and the sync ran, so the stored field lists and
+      // the physical tables are in step: nothing is ahead of its table, and a
+      // refusal recorded by an earlier reload is over. Gated on the sync having
+      // SUCCEEDED -- a failed one leaves the metadata wherever it was, which is
+      // not a statement that anything caught up.
+      //
+      // The mirror of this is the deliberate absence of any publish on the
+      // OTHER `!hasChanges` path. There the sync is skipped precisely so that
+      // refused `fields` are not persisted, so nothing moved ahead of its table
+      // and nothing landed either. Replacing the set there would clear a
+      // refusal an earlier reload correctly recorded, and take working cards
+      // away for the rest of the session.
+      if (synced.collections) {
+        const { setDeferredCollections } = await import(
+          "../domains/widgets/collection-sources"
+        );
+        setDeferredCollections([]);
+      }
       // Publish each scope's (possibly toggled) recording policy ONLY when that
       // scope's metadata sync succeeded — a `webhooks` change surfaces as no
       // schema diff, so this is the path a live opt-out/opt-in toggle flows
@@ -2230,21 +2304,101 @@ async function applyReload(opts?: {
       const codeFirstConfigs = buildCollectionSyncPayload(
         newConfig.collections ?? []
       );
-      await registry.syncCodeFirstCollections(codeFirstConfigs);
+      const collectionSync =
+        await registry.syncCodeFirstCollections(codeFirstConfigs);
 
       // registerCollection defaults migration_status to 'pending'; the pipeline
       // just created any missing tables, so mark them 'applied' (mirrors the
       // singles branch / di/register.ts). Without this a code collection added
       // after initial setup shows "pending" forever. Absent in the pre-pipeline
       // liveByTable snapshot ⇒ just created.
+      //
+      // 🔴 A successful apply leaves a row saying `pending` in TWO ways, and the
+      // pre-apply snapshot only sees one of them. `registerCollection` defaults a
+      // NEW row to `pending`, which the absent-table check below catches. But
+      // `updateCollection` ALSO RESETS an EXISTING row to `pending` whenever the
+      // fields, status or localized flag change -- and the DDL for that change is
+      // precisely what the apply above just performed. Such a collection's table
+      // was present before the apply, so `!liveByTable.has` skips it, and the row
+      // goes on reporting an outstanding migration for a table already at the new
+      // shape until a restart re-marks it.
+      //
+      // That row is not merely cosmetic. Anything deciding whether a collection's
+      // table can be queried reads it -- the widget source refresh does -- so a
+      // field edit under `next dev` silently withdrew that collection's generated
+      // cards from the dashboard for the rest of the session.
+      //
+      // The edited set is taken from the SYNC'S OWN REPORT rather than from the
+      // snapshot, because the snapshot answers "did this table exist before the
+      // apply": the right question for a table the pipeline CREATED and the wrong
+      // one for a table it ALTERED.
+      //
+      // 🔴 A DEFERRED collection is excluded from BOTH halves, and the metadata
+      // sync cannot tell you which those are. `deferredEntities` holds a target
+      // whose diff threw -- omitted from `desiredCollections` outright, so the
+      // apply never carried its DDL -- and one whose change classified unsafe,
+      // where auto-apply is deliberately skipped and the terminal says so. In
+      // both cases the reload SAW the collection and decided not to migrate it.
+      //
+      // The sync payload, though, is built from every configured collection, so
+      // a deferred collection whose fields changed still comes back in
+      // `updated`. Marking that `applied` would state the opposite of what the
+      // reload just decided -- and, through the same queryability check this
+      // commit exists to feed, publish cards against the shape the reload
+      // explicitly declined to apply.
+      const isDeferred = (slug: string): boolean =>
+        deferredEntities.has(`collection:${slug}`);
+      const migrated = new Set<string>(
+        rewrittenSlugs(collectionSync).filter(slug => !isDeferred(slug))
+      );
       for (const target of targets) {
-        if (!liveByTable.has(target.tableName)) {
-          try {
-            await registry.updateMigrationStatus(target.slug, "applied");
-          } catch {
-            // Non-fatal: migration status is metadata only.
-          }
+        if (!liveByTable.has(target.tableName) && !isDeferred(target.slug)) {
+          migrated.add(target.slug);
         }
+      }
+      for (const slug of migrated) {
+        try {
+          await registry.updateMigrationStatus(slug, "applied");
+        } catch {
+          // Non-fatal: migration status is metadata only.
+        }
+      }
+
+      // 🔴 Published HERE, on the path where the metadata sync actually ran,
+      // and not before the branch above. The sync writes the new field list for
+      // every configured collection, so a collection whose DDL this reload
+      // refused now has metadata its table never received -- that, and only
+      // that, is what a consumer deciding what a query may NAME has to be told.
+      //
+      // Computing it earlier looked equivalent and was not: a reload carrying
+      // ONLY a refused change never reaches this sync at all, so its registry
+      // still describes the unchanged table, and announcing a deferral for it
+      // would withhold cards that work.
+      //
+      // Replacing the set is what lets a later reload lift a refusal: every
+      // collection not named here had its DDL applied in the same pass.
+      const { setDeferredCollections } = await import(
+        "../domains/widgets/collection-sources"
+      );
+      setDeferredCollections(
+        [...deferredEntities]
+          .filter(entity => entity.startsWith("collection:"))
+          .map(entity => entity.slice("collection:".length))
+      );
+
+      // 🔴 The same reading the metadata-only landing makes, because this is
+      // the same sync answering the same way. A per-collection failure RESOLVES
+      // with `errors[]` rather than rejecting, so a `catch` alone sees a partial
+      // failure as a clean pass -- and `collectionSynced` gates two things that
+      // must not act on metadata the registry did not accept: the recording
+      // policies, and the hook publication below. Both would then run against a
+      // field tree that is not the one stored.
+      const failedCollections = syncFailedSlugs(collectionSync);
+      if (failedCollections.length > 0) {
+        collectionSynced = false;
+        logger?.warn(
+          `[Nextly HMR] collection metadata sync failed for ${failedCollections.join(", ")}`
+        );
       }
     } catch {
       // Non-fatal: DDL was applied; metadata sync failed. The next boot
