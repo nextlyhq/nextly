@@ -176,6 +176,31 @@ describe("the migration a Builder create writes", () => {
     expect(sql).toContain("NULL");
   });
 
+  it("carries stored hooks, which the hook service runs off the row", async () => {
+    // 🔴 The hook service reads `collection.hooks` from the registry row and
+    // executes them, so a replayed row without them runs none — the collection
+    // validates and transforms where it was authored and silently does neither
+    // where it was deployed. Not reachable from the Builder's own modal, which
+    // sends no hooks, but the service accepts them and stores them.
+    const sql = await sqlFor({
+      hooks: [{ type: "beforeChange", handler: "slugify" }],
+    });
+    expect(sql).toContain("slugify");
+  });
+
+  it("hashes the local row the SAME way the migration does", async () => {
+    // 🔴 One question, one answer. The row this service writes and the row the
+    // migration recreates must agree about the schema hash, because
+    // `syncCodeFirstCollections` decides whether a definition changed by
+    // comparing it — so two values mean the two databases reach opposite
+    // answers, one reopening `migration_status` for a collection the other
+    // considers settled.
+    const { migrationSQL, metadata } = await generate();
+    expect(migrationSQL).toContain(
+      (metadata as unknown as { schemaHash: string }).schemaHash
+    );
+  });
+
   it("emits EXACTLY what migrate:create emits for the same entity", async () => {
     // 🔴 The control the other four exist for. Each of them passes against a
     // second, separately written statement that merely looks right — which is

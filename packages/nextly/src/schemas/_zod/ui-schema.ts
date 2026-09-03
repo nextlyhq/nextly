@@ -464,6 +464,14 @@ function entity(kind?: "collection" | "single" | "component") {
        * generated from either path rebuilt the entity with no description.
        */
       description: z.string().optional(),
+      /**
+       * Stored hook CONFIGS, which are data rather than functions — the hook
+       * service reads them off the registry row and runs them. Declared here so
+       * a migration can carry them: without it a collection created with hooks
+       * ran them where it was authored and silently ran none where the file was
+       * replayed.
+       */
+      hooks: z.array(z.record(z.string(), z.unknown())).optional(),
       admin: admin.optional(),
       status: z.boolean().optional(),
       localized: z.boolean().optional(),

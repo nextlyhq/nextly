@@ -3,7 +3,7 @@
  * registry services for dynamic collections.
  */
 
-import { createHash, randomBytes } from "crypto";
+import { randomBytes } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
@@ -29,6 +29,7 @@ import {
   readIndexNames,
   tableHasRows,
 } from "../../schema/pipeline/live-table-facts";
+import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import { buildCollectionMetadataUpsert } from "../../schema/ui-schema/metadata-sql";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
 import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
@@ -507,6 +508,7 @@ export class DynamicCollectionService extends BaseService {
     return {
       slug,
       description: data.description,
+      hooks: data.hooks,
       labels: data.labels ?? {
         singular: data.label || slug,
         plural: (data.label || slug) + "s",
@@ -567,9 +569,25 @@ export class DynamicCollectionService extends BaseService {
     return `${migrationSQL}\n--> statement-breakpoint\n${buildCompanionCreateOnlySql(spec)}`;
   }
 
+  /**
+   * The schema hash for this collection's stored row.
+   *
+   * 🔴 DELEGATES to the canonical function, and the delegation is the point.
+   * This hashed the raw field JSON; `calculateSchemaHash` normalises the fields
+   * and folds in `SYSTEM_SCHEMA_VERSION`, so the two produce different values
+   * for the same collection. The migration this service writes carries the
+   * canonical one -- the shared upsert computes it -- so the local row and the
+   * replayed row disagreed about a collection neither had changed.
+   *
+   * What that costs is not cosmetic: `syncCodeFirstCollections` decides whether
+   * a definition changed by comparing this hash, so the two databases reach
+   * opposite answers -- one reopening `migration_status` and bumping
+   * `schema_version` for a collection the other considers settled.
+   */
   private generateSchemaHash(fields: FieldDefinition[]): string {
-    const fieldsJson = JSON.stringify(fields);
-    return createHash("sha256").update(fieldsJson).digest("hex");
+    return calculateSchemaHash(
+      fields as unknown as Parameters<typeof calculateSchemaHash>[0]
+    );
   }
 
   /**

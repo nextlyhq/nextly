@@ -147,3 +147,26 @@ describe("splitSqlStatements", () => {
     expect(splitSqlStatements(sql, "postgresql")).toHaveLength(2);
   });
 });
+
+describe("splitting a statement whose value ends in a backslash", () => {
+  it("closes the quote when the backslash run is EVEN", () => {
+    // 🔴 A doubled backslash is ONE literal backslash — how MySQL escaping
+    // writes a value ending in one — so it sits immediately before the closing
+    // quote. Reading only that last character calls the quote escaped, leaves
+    // the splitter inside a string it has left, swallows the semicolon and
+    // concatenates the next statement. A driver with multi-statements disabled
+    // then rejects the pair, after earlier statements in the file have run.
+    const sql = [
+      `INSERT INTO t (d) VALUES ('ends with a backslash \\\\');`,
+      `INSERT INTO u (d) VALUES ('second');`,
+    ].join("\n");
+    expect(splitSqlStatements(sql, "mysql")).toHaveLength(2);
+  });
+
+  it("still treats an ODD run as escaping the quote", () => {
+    // The control: a rule that stopped honouring backslash escapes entirely
+    // would satisfy the case above and split this one in the wrong place.
+    const sql = `INSERT INTO t (d) VALUES ('not \\' the end; still inside');`;
+    expect(splitSqlStatements(sql, "mysql")).toHaveLength(1);
+  });
+});

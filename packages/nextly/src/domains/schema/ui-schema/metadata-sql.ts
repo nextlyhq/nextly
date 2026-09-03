@@ -251,6 +251,21 @@ export function buildCollectionMetadataUpsert(
       update: true,
     },
     {
+      // 🔴 COLLECTIONS ONLY. Stored hook configs travel with the row for the
+      // same reason its fields do: the hook service reads them from here, so a
+      // row without them runs none. `dynamic_singles` and the component
+      // registry have NO such column, so emitting it there would name a column
+      // that does not exist and fail every migration for those kinds.
+      // NULL when absent, and always emitted, so removing every hook
+      // propagates rather than leaving the previous set standing.
+      name: "hooks",
+      value:
+        entity.hooks === undefined
+          ? "NULL"
+          : jsonLiteral(entity.hooks, dialect),
+      update: true,
+    },
+    {
       name: "table_name",
       value: sqlStr(tableNameFor(entity.slug, "dc_"), dialect),
     },

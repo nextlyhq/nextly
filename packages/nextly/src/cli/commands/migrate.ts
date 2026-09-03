@@ -963,6 +963,27 @@ function quoteOpenerAt(
   return undefined;
 }
 
+/**
+ * Whether the character at `index` is escaped by the backslash run before it.
+ *
+ * 🔴 PARITY, not the single preceding character. A doubled backslash is one
+ * LITERAL backslash — which is how MySQL string escaping writes it — so a value
+ * ending in a backslash puts `\\` immediately before its closing quote.
+ * Reading only that last character calls the quote escaped, leaves the splitter
+ * inside a string it has actually left, swallows the statement's semicolon, and
+ * concatenates the next statement onto it. A driver with multi-statements
+ * disabled then rejects the pair, after earlier statements in the same file
+ * have already run.
+ *
+ * An EVEN run means the backslashes escape each other and the character stands
+ * on its own; an odd run means the last one escapes it.
+ */
+function precededByOddBackslashes(text: string, index: number): boolean {
+  let run = 0;
+  for (let i = index - 1; i >= 0 && text[i] === "\\"; i -= 1) run += 1;
+  return run % 2 === 1;
+}
+
 export function splitSqlStatements(
   sql: string,
   dialect?: SupportedDialect
@@ -1003,7 +1024,6 @@ export function splitSqlStatements(
 
   for (let i = 0; i < cleanedSql.length; i++) {
     const char = cleanedSql[i];
-    const prevChar = cleanedSql[i - 1];
 
     // Comments are copied through verbatim without being scanned, because the
     // characters inside one are prose rather than SQL. An apostrophe in a
@@ -1037,7 +1057,11 @@ export function splitSqlStatements(
     if (!inString && opener) {
       inString = true;
       stringChar = opener;
-    } else if (inString && char === stringChar && prevChar !== "\\") {
+    } else if (
+      inString &&
+      char === stringChar &&
+      !precededByOddBackslashes(cleanedSql, i)
+    ) {
       inString = false;
     }
 
