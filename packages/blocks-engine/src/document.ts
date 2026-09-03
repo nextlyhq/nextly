@@ -571,8 +571,18 @@ export const MAX_CLASSES_PER_NODE = 64;
 /**
  * The node type marking a linked component instance. The node's `props` carry
  * the reference; instance-provided slot content lives in `node.slots` like any
- * container. Resolution (definition lookup, variant application, per-instance
- * overrides) happens where components are stored and rendered, not here.
+ * container.
+ *
+ * PURE resolution — inlining a definition, applying a variant then the
+ * instance's overrides, re-identifying the inlined nodes — belongs in this
+ * package. Only the FETCH belongs to the stores, which alone know whether a
+ * caller wants the draft or the published definition.
+ *
+ * Four consumers need that resolution and none of them is the renderer alone:
+ * the canvas renders in the same document as the admin rather than in an
+ * iframe, and the class-usage index and SEO derivation each read a resolved
+ * tree without rendering at all. A resolver living beside any one of them
+ * would be reimplemented by the other three.
  */
 export const COMPONENT_INSTANCE_TYPE = "nextly/component-instance";
 
@@ -582,11 +592,217 @@ export interface ComponentInstanceProps {
   componentId: string;
   /** The selected variant name, when the component defines variants. */
   variant?: string;
+  /**
+   * Per-instance values for the definition's exposed properties, keyed by
+   * {@link ExposedProperty.id}.
+   *
+   * Three states, not two, and the third is the reason this is not simply an
+   * optional value. An id ABSENT from this record inherits whatever the
+   * definition (or the selected variant) provides; an id mapped to
+   * {@link OverrideUnset} renders empty; any other value replaces. Without the
+   * middle state an author could not clear a subtitle the definition fills in
+   * — writing `""` or `null` is a value the definition may itself treat as
+   * meaningful, and omitting the key means "inherit", which is what they are
+   * trying not to do.
+   */
+  overrides?: Record<string, OverrideValue>;
+}
+
+/**
+ * The sentinel that clears an exposed property instead of inheriting it.
+ *
+ * A wrapper object rather than a reserved primitive, because every primitive
+ * an author might otherwise mean — `null`, `""`, `0`, `false` — is a legitimate
+ * value for some exposed property, and a sentinel that collides with a real
+ * value is one that cannot be distinguished from it later.
+ */
+export interface OverrideUnset {
+  $unset: true;
+}
+
+/**
+ * What an instance may store against one exposed property.
+ *
+ * `unknown`, not a union with {@link OverrideUnset}. An override replaces a
+ * node prop and props are unconstrained (`BlockNode.props` is
+ * `Record<string, unknown>`), so writing the union would widen straight back
+ * to `unknown` while reading as though the sentinel were discriminable at
+ * compile time — a type that documents a guarantee it does not provide. The
+ * sentinel is one of the values this may hold and is recognised at runtime by
+ * {@link isUnsetOverride}.
+ */
+export type OverrideValue = unknown;
+
+/**
+ * True if an override clears its property rather than replacing it.
+ *
+ * The EXACT shape, not merely an object carrying the marker. Override values
+ * are unconstrained, so a structured one may legitimately hold a `$unset` key
+ * of its own — a link value of `{ href: "/docs", $unset: true }` is a value to
+ * apply, and matching on the marker alone would clear the property instead of
+ * setting it. Requiring the sentinel to be its own sole key leaves every
+ * richer object a value.
+ */
+export function isUnsetOverride(value: OverrideValue): value is OverrideUnset {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const keys = Object.keys(value);
+  return keys.length === 1 && (value as { $unset?: unknown }).$unset === true;
 }
 
 /** True if a node is a linked component instance. */
 export function isComponentInstance(node: BlockNode): boolean {
   return node.type === COMPONENT_INSTANCE_TYPE;
+}
+
+// ---------------------------------------------------------------------------
+// Component definitions — the envelope a `kind: "component"` document carries
+// ---------------------------------------------------------------------------
+
+/** The value shapes an exposed property may be edited as. */
+export const EXPOSED_PROPERTY_TYPES = [
+  "text",
+  "richText",
+  "image",
+  "link",
+  "visibility",
+  "select",
+] as const;
+
+/**
+ * Derived from the list for the same reason {@link DocumentKind} is: a
+ * hand-written union and a runtime list are two declarations that happen to
+ * agree, and the pair can be half-changed without either side failing.
+ */
+export type ExposedPropertyType = (typeof EXPOSED_PROPERTY_TYPES)[number];
+
+/**
+ * One property of a definition that an instance may override.
+ *
+ * A POINTER into the definition's own tree, not a copy of the value. The value
+ * lives on the node where the author designed it, so the definition renders
+ * correctly on its own, and an instance that overrides nothing is identical to
+ * the definition.
+ */
+export interface ExposedProperty {
+  /**
+   * Stable slug, minted once.
+   *
+   * Never derived from `nodeId` or `label`, and this is the whole reason it
+   * exists as a separate field: instances address their overrides by this id,
+   * so a derived one would silently re-point every override the moment an
+   * author renamed the label or the exposure moved to a different node.
+   */
+  id: string;
+  /** What the inspector calls it. */
+  label: string;
+  /** The node in THIS document's tree carrying the value. Validated to exist. */
+  nodeId: string;
+  /** Dot path into that node's props, in the binding-path grammar. */
+  propPath: string;
+  /** How the inspector edits it. */
+  type: ExposedPropertyType;
+  /**
+   * The choices, for `select` only.
+   *
+   * An option's value may be a named class or a token reference, which is how
+   * a definition offers constrained STYLE choices without exposing the style
+   * system to the instance author.
+   */
+  options?: readonly { value: string; label: string }[];
+}
+
+/**
+ * A region of a definition an instance may fill with its own children.
+ *
+ * Points at a slot on a container node in the definition's tree. Instance
+ * content lives in the instance node's own `slots`, so it travels with the
+ * node through copy, duplication, pattern-save and export.
+ */
+export interface ExposedSlot {
+  /**
+   * No `id` field: the KEY of {@link ComponentDocument.slots} is the id.
+   *
+   * A record keyed by id whose values also carry one states the same identity
+   * twice, and nothing reconciles them — a definition whose key says `body`
+   * and whose field says `header` is well formed under both readings, and
+   * which one an instance's slot content is addressed by depends on which the
+   * next reader happened to use. One spelling makes the disagreement
+   * unrepresentable rather than merely detectable.
+   */
+
+  /** What the layers panel calls it. */
+  label: string;
+  /** The container node in THIS document's tree. Validated to exist. */
+  nodeId: string;
+  /** Which of that node's slots. Validated to exist on the node. */
+  slot: string;
+  /** Block types this slot accepts; unset accepts whatever the container does. */
+  allow?: readonly string[];
+}
+
+/**
+ * A named preset of override values, offered alongside the definition.
+ *
+ * No slot content. A variant that supplied its own children would be handing
+ * the validator a second node forest, and the one place a forest is checked —
+ * for malformed nodes, duplicated ids, depth and node count — is the walk over
+ * `nodes`. Declaring the field without reaching it there would accept an
+ * arbitrary tree at the persistence gate under the name of a validated
+ * document, so it lands with the resolver that inlines it, checked by the same
+ * walk. A document carrying one today is refused rather than quietly stored.
+ */
+export interface Variant {
+  /** What the inspector calls it. */
+  label: string;
+  /** Values keyed by {@link ExposedProperty.id}, applied before the instance's own. */
+  overrides: Record<string, OverrideValue>;
+}
+
+/**
+ * A document that defines a reusable component.
+ *
+ * An extension of {@link BlockDocument} rather than a member of a union with
+ * it, deliberately. Every existing consumer reads a stored document as a
+ * `BlockDocument` and none of them can narrow, so a union would make the whole
+ * package's type surface a breaking change to gain a discrimination only two
+ * call sites need. The narrowing is available where it matters through
+ * {@link isComponentDocument}, and the envelope is validated per kind
+ * regardless of which type the reader used.
+ */
+export interface ComponentDocument extends BlockDocument {
+  kind: "component";
+  /**
+   * Properties an instance may override. Absent exposes none.
+   *
+   * Optional rather than a required empty array, matching every other
+   * "absent means none" field in this contract (`settings`, `BlockNode.slots`,
+   * `variants`). A component that exposes nothing is not a malformed one — it
+   * is a locked, reusable block, which is the whole point of a footer — so
+   * requiring the empty array would refuse a legitimate definition and force a
+   * migration over every stored component to add a field meaning what its
+   * absence already means.
+   */
+  exposed?: ExposedProperty[];
+  /** Regions an instance may fill, keyed by slot id. Absent exposes none. */
+  slots?: Record<string, ExposedSlot>;
+  /** Named override presets, keyed by variant name. */
+  variants?: Record<string, Variant>;
+}
+
+/**
+ * True if a document declares itself a component definition.
+ *
+ * Reads the KIND only. Whether its envelope is well formed is a question for
+ * validation, and answering it here would make a malformed definition read as
+ * "not a component" — which is how a document with a dangling pointer gets
+ * quietly treated as an ordinary page instead of being reported.
+ */
+export function isComponentDocument(
+  doc: BlockDocument
+): doc is ComponentDocument {
+  return doc.kind === "component";
 }
 
 // ---------------------------------------------------------------------------

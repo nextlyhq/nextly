@@ -205,11 +205,17 @@ expectTypeOf<BindingFormat["type"]>().toEqualTypeOf<BindingFormatType>();
  * else: the runtime schema treats `props` as an open record on purpose, so
  * renaming `componentId` would pass every parse test while silently orphaning
  * every stored instance. The key set is pinned here for the same reason the
- * envelope's is, and the value types are pinned too because both fields are
- * identifiers rather than open content.
+ * envelope's is, and the identifier fields' value types are pinned too because
+ * they are identifiers rather than open content.
+ *
+ * `overrides` is deliberately NOT pinned to a value type. It holds whatever an
+ * exposed property holds, and props are unconstrained, so any pin here would
+ * be `unknown` — an assertion that cannot fail and therefore reports nothing.
+ * Its KEY is pinned like the others, because that is the part a rename would
+ * orphan.
  */
 expectTypeOf<keyof ComponentInstanceProps>().toEqualTypeOf<
-  "componentId" | "variant"
+  "componentId" | "variant" | "overrides"
 >();
 expectTypeOf<ComponentInstanceProps["componentId"]>().toEqualTypeOf<string>();
 expectTypeOf<ComponentInstanceProps["variant"]>().toEqualTypeOf<
