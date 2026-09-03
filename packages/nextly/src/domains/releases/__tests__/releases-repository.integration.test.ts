@@ -68,6 +68,64 @@ const FUTURE = new Date("2099-01-01T00:00:00Z");
 describe.each(getConfiguredTestDialects())(
   "ReleasesRepository (%s)",
   dialect => {
+    it("takes the SOONEST releases when a limited query asks for them", async () => {
+      // 🔴 The oracle has to be real rows in a real order. The defect this
+      // guards is not a wrong row set but a wrong END of the right one: under
+      // the recent-first default, "the next two releases" returns the two
+      // furthest out — real releases, plausibly ordered, with nothing in the
+      // result to say the answer is backwards.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+
+      const soon = new Date("2099-01-01T00:00:00Z");
+      const later = new Date("2099-06-01T00:00:00Z");
+      const latest = new Date("2099-12-01T00:00:00Z");
+      // Created in an order that does NOT match the schedule, so a result that
+      // merely preserved insertion order cannot pass.
+      for (const [title, at] of [
+        ["Later", later],
+        ["Latest", latest],
+        ["Soon", soon],
+      ] as const) {
+        const release = await repo.createRelease({ title });
+        await repo.scheduleRelease(release.id, at, "UTC");
+      }
+
+      const next = await repo.findReleases({
+        state: "scheduled",
+        order: "soonest",
+        limit: 2,
+      });
+      expect(next.map(row => row.title)).toEqual(["Soon", "Later"]);
+
+      // The control, and the reason `order` is an option rather than a change:
+      // the default must still answer the other question. Without this, making
+      // the order unconditionally ascending passes the assertion above.
+      const recent = await repo.findReleases({
+        state: "scheduled",
+        limit: 2,
+      });
+      expect(recent.map(row => row.title)).toEqual(["Latest", "Later"]);
+    });
+
+    it("keeps an unscheduled draft out of BOTH ends of the timeline", async () => {
+      // A null instant orders differently per dialect and the direction flips
+      // which end it lands on, so this is asserted in both. A draft is not the
+      // next thing to ship, and it is not the most recent one either.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+
+      await repo.createRelease({ title: "Unscheduled draft" });
+      const scheduled = await repo.createRelease({ title: "Real release" });
+      await repo.scheduleRelease(scheduled.id, FUTURE, "UTC");
+
+      const soonest = await repo.findReleases({ order: "soonest", limit: 1 });
+      expect(soonest.map(row => row.title)).toEqual(["Real release"]);
+
+      const latest = await repo.findReleases({ limit: 1 });
+      expect(latest.map(row => row.title)).toEqual(["Real release"]);
+    });
+
     it("stores a release and its members", async () => {
       const app = await boot(dialect);
       const repo = new ReleasesRepository(app.adapter);

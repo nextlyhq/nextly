@@ -69,6 +69,7 @@ import { documentRefKey } from "../releases-repository";
 import type {
   DocumentRef,
   NewRelease,
+  ReleaseListOrder,
   ReleaseMemberRow,
   ReleaseRow,
   ReleasesRepository,
@@ -353,6 +354,16 @@ export interface FindReleasesQuery {
    * move as releases publish.
    */
   limit?: number;
+  /**
+   * Which end of the timeline a `limit` keeps.
+   *
+   * Defaults to `"latest"`, the recent-first order every caller before the
+   * dashboard wanted. `"soonest"` exists because the two are not the same
+   * question narrowed differently: asking for the next five releases under the
+   * recent-first order returns the five FURTHEST OUT, and answers with real
+   * rows in a plausible order, so nothing about the result says it is wrong.
+   */
+  order?: ReleaseListOrder;
 }
 
 /**
