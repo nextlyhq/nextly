@@ -171,15 +171,6 @@ interface Column {
   update?: boolean;
 }
 
-/** Assemble an INSERT … upsert for the given dialect. */
-/**
- * The `description` column value: the text, or NULL when the entity has none.
- *
- * 🔴 ALWAYS emitted, including when absent. A column left out of the upsert is
- * untouched by its `DO UPDATE SET`, so omitting it would make clearing a
- * description impossible to propagate -- the same reasoning `versions`,
- * `revalidate` and `webhooks` state beside their own columns.
- */
 /**
  * The `description` column, when the manifest actually carries one.
  *
@@ -240,6 +231,7 @@ function adminColumns(entity: UiSchemaEntity, dialect: Dialect): Column[] {
   ];
 }
 
+/** Assemble an INSERT … upsert for the given dialect. */
 function buildUpsert(
   table: string,
   columns: Column[],

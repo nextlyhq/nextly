@@ -156,10 +156,11 @@ export interface ManifestEntity {
   /**
    * The entity's own help text.
    *
-   * Carried because the migration's upsert writes this column
-   * unconditionally — so that clearing a description propagates — which means a
-   * manifest omitting it REPLACES the stored value with NULL rather than
-   * leaving it alone.
+   * Carried so the description reaches a database the manifest is replayed
+   * against, where the Builder's local row does not exist. The upsert omits
+   * the column when a manifest carries none, so this SUPPLIES the value rather
+   * than protecting it — the standing limitation being that a cleared
+   * description cannot propagate through a migration.
    */
   description?: string;
   admin?: { useAsTitle?: string; defaultColumns?: string[]; group?: string };
@@ -263,11 +264,10 @@ export function applyCommonSettings(
   }
   if (group) admin.group = group;
   if (Object.keys(admin).length > 0) entity.admin = admin;
-  // 🔴 Carried, because the migration's upsert writes this column
-  // UNCONDITIONALLY so that clearing a description propagates. A manifest that
-  // omitted it therefore did not leave the stored value alone — it replaced it
-  // with NULL, erasing on the next save a description an earlier migration had
-  // correctly deployed.
+  // 🔴 Carried so the description reaches a database the manifest is replayed
+  // against. The upsert omits the column when a manifest carries none, so a
+  // partial projection leaves the stored value alone rather than erasing it;
+  // this supplies the value, it does not protect it.
   if (description !== undefined) entity.description = description;
   if (status !== undefined) entity.status = status;
   if (localized !== undefined) entity.localized = localized;

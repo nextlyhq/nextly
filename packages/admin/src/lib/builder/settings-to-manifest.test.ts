@@ -164,10 +164,10 @@ describe("cache revalidation in the manifest mirror", () => {
 
 describe("the description a later save must not erase", () => {
   it("carries it into the manifest entity for a collection and a single", () => {
-    // 🔴 The migration's upsert writes this column UNCONDITIONALLY so that
-    // clearing a description propagates. A manifest omitting it therefore does
-    // not leave the stored value alone — it replaces it with NULL, erasing on
-    // the next Builder save a description the create migration had deployed.
+    // 🔴 The migration replays where the Builder's local row does not exist,
+    // so a manifest omitting the description deploys a collection without one —
+    // the help text is simply absent on the deployed copy, visible only to
+    // whoever opens it there.
     const settings = {
       slug: "articles",
       singularName: "Article",

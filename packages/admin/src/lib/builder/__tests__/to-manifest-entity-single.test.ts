@@ -58,11 +58,10 @@ describe("fieldGroupToManifestEntity", () => {
 
 describe("a description survives a field-group save", () => {
   it("reaches the manifest entity", () => {
-    // 🔴 The migration's upsert writes this column unconditionally so that
-    // clearing a description propagates, so a manifest omitting it does not
-    // leave the deployed value alone — it replaces it with NULL. The field-group
-    // projections pass their settings inline, so the mapper carrying it is only
-    // half the fix; the call sites have to send it.
+    // 🔴 The migration replays where the Builder's local row does not exist,
+    // so a manifest omitting the description deploys a field group without one.
+    // The field-group projections pass their settings inline, so the mapper
+    // carrying it is only half the fix; the call sites have to send it.
     const entity = fieldGroupToManifestEntity({
       slug: "seo",
       settings: { singularName: "SEO", description: "Search metadata" },
