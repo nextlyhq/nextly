@@ -429,6 +429,12 @@ export class CollectionsHandler {
     sortBy?: "name" | "slug" | "createdAt" | "updatedAt";
     sortOrder?: "asc" | "desc";
     includeSchema?: boolean;
+    /**
+     * Restrict results to these slugs. Carried through to the registry's WHERE
+     * clause, so the `total` and `totalPages` this returns count only rows the
+     * caller may see.
+     */
+    slugAllowlist?: string[];
   }) {
     return this.metadataService.listCollections(options);
   }
