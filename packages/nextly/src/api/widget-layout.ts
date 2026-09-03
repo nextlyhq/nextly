@@ -53,6 +53,7 @@ import {
   mergePreservingHidden,
   partitionPlacements,
   readPlacements,
+  statesColumn,
   visibilityToken,
   type WidgetPlacement,
   byPosition,
@@ -463,8 +464,16 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
       ],
     });
   }
-  const submitted = readPlacements(
-    (body as Record<string, unknown>).placements
+  const rawPlacements = (body as Record<string, unknown>).placements;
+  const submitted = readPlacements(rawPlacements);
+  // Which placements NAMED a column, asked through the reader's own predicate
+  // so the two cannot disagree about what counts as naming one. An id missing
+  // from this set stated nothing, which is not the same as stating zero.
+  const statedColumns = new Set(
+    (Array.isArray(rawPlacements) ? rawPlacements : [])
+      .filter(statesColumn)
+      .map(placement => (placement as { id?: unknown }).id)
+      .filter((id): id is string => typeof id === "string")
   );
   // Read RAW, and resolved against the stored row further down. `undefined` is
   // an omission rather than a value, and the two need different answers.
@@ -560,8 +569,29 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
       ? readColumnCount(stored.layout?.columnCount)
       : readColumnCount(sentColumnCount);
 
+  // 🔴 A placement that stated no column KEEPS the one it had. Preserving the
+  // count alone was half an answer: a client written before columns omits the
+  // coordinate on every placement as well, so the row held its four columns
+  // while every card in it had been moved into the first — the arrangement
+  // destroyed by an edit that named neither. A placement nothing has seen
+  // before has nothing to inherit and keeps the reader's fallback.
+  const storedColumns = new Map(
+    (stored.layout?.placements ?? []).map(placement => [
+      placement.id,
+      placement.column,
+    ])
+  );
+  const positioned = submitted.map(placement =>
+    statedColumns.has(placement.id)
+      ? placement
+      : {
+          ...placement,
+          column: storedColumns.get(placement.id) ?? placement.column,
+        }
+  );
+
   const toStore = boundColumns(
-    mergePreservingHidden(submitted, carried),
+    mergePreservingHidden(positioned, carried),
     submittedColumnCount
   );
   const version = await service.saveLayout(
@@ -581,7 +611,9 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // Echoing the raw array made this response a SECOND representation of the
   // same arrangement: a client trusting it to chain another edit without
   // re-reading would render `[10, 0]` where a reload gives `[0, 10]`.
-  const echoed = boundColumns(submitted, submittedColumnCount).sort(byPosition);
+  const echoed = boundColumns(positioned, submittedColumnCount).sort(
+    byPosition
+  );
 
   return respondMutation(
     "Dashboard layout saved.",

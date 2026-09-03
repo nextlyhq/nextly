@@ -15,11 +15,23 @@
  * `verticalListSortingStrategy` is built for, and it supports items of varying
  * HEIGHT — the one dimension a dashboard card genuinely varies in.
  *
- * ## Why the column is droppable as well as its cards
+ * ## Why the droppable sits BELOW the cards rather than around them
  *
- * An empty column holds no card to aim at. Without a drop target of its own it
- * is reachable only until its last card leaves, and never again — a reader
- * could empty column three and have no way to put anything back.
+ * A column's own empty space belongs to no card, and collision detection
+ * resolves a release there to whichever card is geometrically nearest — which,
+ * when the neighbouring column is longer, is a card in a DIFFERENT column. So a
+ * release under a short column's last card moved the card sideways instead of
+ * appending to the column it was released over.
+ *
+ * Wrapping the whole column in a droppable fixes that and creates the opposite
+ * fault: the container's rectangle covers the cards too, so a release aimed at
+ * a position between two of them can resolve to the container instead, and the
+ * position the reader aimed at is lost.
+ *
+ * A zone occupying only the space the cards do not is both. It cannot compete
+ * with a card, because it never overlaps one; and it covers exactly the region
+ * whose nearest card is in the wrong column. It grows to fill whatever is left,
+ * so a short column's target is as large as its empty space.
  *
  * @module components/features/widgets/edit/WidgetColumn
  */
@@ -36,6 +48,8 @@ import { columnDropId, type ColumnDropData } from "../layout-editor";
 
 export interface WidgetColumnProps {
   column: number;
+  /** How many columns the dashboard has, so this one can say which it is. */
+  columnCount: number;
   /** The placement ids in this column, in the order they are drawn. */
   items: string[];
   isEditing: boolean;
@@ -44,57 +58,64 @@ export interface WidgetColumnProps {
 
 export function WidgetColumn({
   column,
+  columnCount,
   items,
   isEditing,
   children,
 }: WidgetColumnProps) {
-  // 🔴 A target only while EMPTY, and the kind travels in `data`.
-  //
-  // Empty is the case a column droppable exists for: a column with cards has
-  // cards to aim at, and leaving the container active there meant a release in
-  // its padding resolved to the column rather than to a position, so a card
-  // dropped at the bottom could appear at the top. Disabled once it holds
-  // anything, every drop in a populated column resolves against a card and the
-  // vertical position matches the gesture.
-  //
-  // The id is NUMERIC, which is what keeps it disjoint: dnd-kit keys its
+  // 🔴 The id is NUMERIC, which is what keeps it disjoint: dnd-kit keys its
   // registry by id alone, so a string shared with a placement would make one
   // registration replace the other before any metadata could be read. The
   // `data` then says which column this is, without anything having to
   // interpret the id.
+  //
+  // Registered only while editing. Outside it there is no zone to attach the
+  // ref to, and a droppable with no element has no rectangle to collide with.
   const { setNodeRef, isOver } = useDroppable({
     id: columnDropId(column),
-    disabled: items.length > 0,
+    disabled: !isEditing,
     data: { widgetColumn: column } satisfies ColumnDropData,
   });
 
   return (
     <SortableContext items={items} strategy={verticalListSortingStrategy}>
       <div
-        ref={setNodeRef}
-        className={cn(
-          "flex min-w-0 flex-col gap-6",
-          // A column with nothing in it still has to be AIMED AT, so while
-          // editing it keeps a minimum height and shows where a card would
-          // land. Outside editing it collapses, because an empty column is
-          // then just absent space rather than a target.
-          isEditing && "min-h-24 rounded-lg border border-dashed p-2",
-          isEditing && isOver && "border-primary bg-primary/5",
-          // 🔴 The border token at FULL strength, never an alpha-faded one.
-          // This outline says where a card may be dropped, so it carries
-          // information rather than decorating, and non-text contrast has to
-          // reach 3:1 — a sixty-percent alpha measures 1.13:1 on the page
-          // surface and the contrast suite refuses it.
-          //
-          // The faded variant is described here rather than written out: that
-          // suite and Tailwind's scanner both read this file as TEXT, so
-          // spelling the class in prose registers it as a usage and fails the
-          // check the comment exists to explain.
-          isEditing && !isOver && "border-border"
-        )}
+        // Named as a group so a reader moving through the dashboard is told
+        // when they cross a column boundary. The cards say which column they
+        // are in visually; without this the same fact is available to a screen
+        // reader only from the move announcement, which a reader browsing
+        // rather than rearranging never hears.
+        role="group"
+        aria-label={`Column ${column + 1} of ${columnCount}`}
+        className="flex min-w-0 flex-col gap-6"
         data-testid={`widget-column-${column}`}
       >
         {children}
+        {isEditing && (
+          <div
+            ref={setNodeRef}
+            data-testid={`widget-column-drop-${column}`}
+            className={cn(
+              // Grows into whatever the cards leave, so the target is the whole
+              // of this column's empty space rather than a strip inside it. The
+              // grid stretches every column to the tallest, so a short column
+              // has space to fill and the tallest keeps its stated minimum.
+              "flex-1 rounded-lg border border-dashed",
+              items.length === 0 ? "min-h-24" : "min-h-12",
+              // 🔴 The border token at FULL strength, never an alpha-faded one.
+              // This outline says where a card may be dropped, so it carries
+              // information rather than decorating, and non-text contrast has
+              // to reach 3:1 — a sixty-percent alpha measures 1.13:1 on the
+              // page surface and the contrast suite refuses it.
+              //
+              // The faded variant is described here rather than written out:
+              // that suite and Tailwind's scanner both read this file as TEXT,
+              // so spelling the class in prose registers it as a usage and
+              // fails the check the comment exists to explain.
+              isOver ? "border-primary bg-primary/5" : "border-border"
+            )}
+          />
+        )}
       </div>
     </SortableContext>
   );

@@ -237,18 +237,34 @@ export function placementProblem(value: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * Whether a caller's placement NAMED a column, as opposed to omitting one.
+ *
+ * 🔴 The two are different answers and the stored type cannot hold the
+ * difference: `column` is a required number, so an omission has already become
+ * a 0 by the time anything downstream looks. A writer that needs to tell them
+ * apart — to leave a card where it was rather than to move it to the first
+ * column — has to ask before the rebuild, and this is the one predicate that
+ * decides it, so the rebuild below and the writer cannot disagree.
+ */
+export function statesColumn(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const column = (value as { column?: unknown }).column;
+  return typeof column === "number" && Number.isFinite(column);
+}
+
 /** A placement, with only the fields this core stores, in a stable order. */
 function toPlacement(value: Record<string, unknown>): WidgetPlacement {
   return {
     id: value.id as string,
     widgetId: value.widgetId as string,
-    // Absent means column 0 rather than a refusal. A caller PUTting a
-    // placement without one is describing a single-column intent, and the
-    // migrator below is what spreads a pre-column arrangement out.
-    column:
-      typeof value.column === "number" && Number.isFinite(value.column)
-        ? Math.max(0, Math.trunc(value.column))
-        : 0,
+    // Absent becomes 0 here because the stored shape has no way to say
+    // "unstated". A writer that can do better asks `statesColumn` first: the
+    // layout endpoint keeps the column a card already had rather than reading
+    // an omission as a move to the first column.
+    column: statesColumn(value)
+      ? Math.max(0, Math.trunc(value.column as number))
+      : 0,
     order: value.order as number,
     hidden: value.hidden as boolean,
     ...(value.size === undefined ? {} : { size: value.size as string }),

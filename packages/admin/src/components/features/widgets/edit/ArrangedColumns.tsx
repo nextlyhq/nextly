@@ -94,6 +94,7 @@ export function ArrangedColumns({
         <WidgetColumn
           key={columnIndex}
           column={columnIndex}
+          columnCount={columnCount}
           items={rowsInColumn.map(row => row.placementId)}
           isEditing={isEditing}
         >

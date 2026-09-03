@@ -1247,6 +1247,77 @@ describe("a stored row describes itself", () => {
     expect(item.placements?.[0]?.column).toBe(1);
   });
 
+  it("KEEPS each card's column when the placements state none", async () => {
+    // 🔴 Preserving the count alone was half an answer. A client written before
+    // columns omits the coordinate on every placement as well, and the reader
+    // has to turn an omission into a number — so the row kept its four columns
+    // while every card in it had been moved into the first. The arrangement was
+    // destroyed by an edit that named neither the count nor any column.
+    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
+    registerWidget(widget({ id: "core/b", defaultOrder: 1 }));
+    stored = {
+      version: 2,
+      layout: serializeLayout(
+        [
+          { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+          { id: "p2", widgetId: "core/b", column: 3, order: 10, hidden: false },
+        ],
+        4
+      ),
+    };
+
+    const res = await putWidgetLayout(
+      putReq({
+        // Exactly what a pre-column client sends: no `columnCount`, and no
+        // `column` on any placement.
+        placements: [
+          { id: "p1", widgetId: "core/a", order: 0, hidden: false },
+          { id: "p2", widgetId: "core/b", order: 10, hidden: false },
+        ],
+        version: 2,
+        scope: scopeFor(["core/a", "core/b"]),
+      })
+    );
+
+    expect(res.status).toBe(200);
+    const byId = new Map(
+      (await itemOf(res)).placements?.map(p => [p.id, p.column]) ?? []
+    );
+    expect(byId.get("p2")).toBe(3);
+    // The control: `p1` was already in column 0, so it alone cannot tell
+    // "kept its column" from "collapsed everything into the first".
+    expect(byId.get("p1")).toBe(0);
+    expect(saved?.placements.find(p => p.id === "p2")?.column).toBe(3);
+  });
+
+  it("still MOVES a card whose placement states a column", async () => {
+    // The control. Inheriting whenever a stored placement exists would satisfy
+    // the case above while making every sideways move unsaveable — the same
+    // defect pointing the other way, and the one a reader would notice first.
+    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
+    stored = {
+      version: 2,
+      layout: serializeLayout(
+        [{ id: "p1", widgetId: "core/a", column: 3, order: 0, hidden: false }],
+        4
+      ),
+    };
+
+    const res = await putWidgetLayout(
+      putReq({
+        placements: [
+          { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+        ],
+        version: 2,
+        scope: scopeFor(["core/a"]),
+        columnCount: 4,
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect((await itemOf(res)).placements?.[0]?.column).toBe(0);
+  });
+
   it("DEFAULTS the count when there is no stored row to inherit from", async () => {
     // The other control. Inheriting is only right where something exists to
     // inherit; a first save has to land on a count this core supports rather

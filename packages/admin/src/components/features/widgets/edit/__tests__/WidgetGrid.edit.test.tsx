@@ -1052,6 +1052,78 @@ describe("the per-card controls act on the column a reader sees", () => {
     );
   });
 
+  it("gives a POPULATED column a drop zone of its own", async () => {
+    // 🔴 A column's empty space belongs to no card, so a release there resolves
+    // to whichever card is geometrically nearest — and when the neighbouring
+    // column is longer that is a card in a DIFFERENT column, so releasing under
+    // a short column's last card moved it sideways. A zone of this column's own
+    // is what makes that space reachable.
+    layoutResponse = layout([
+      { id: "p1", widgetId: "core/a", order: 0, column: 0 },
+      { id: "p2", widgetId: "core/b", order: 10, column: 0 },
+      { id: "p3", widgetId: "core/c", order: 20, column: 1 },
+    ]);
+    renderGrid();
+    await beginEditing();
+
+    // Column 1 holds a card, so it is the case that had no target at all.
+    expect(
+      screen
+        .getByTestId("widget-column-1")
+        .querySelectorAll("[data-testid^='widget-cell-']")
+    ).toHaveLength(1);
+    expect(screen.getByTestId("widget-column-drop-1")).toBeInTheDocument();
+  });
+
+  it("puts that zone BELOW the cards rather than around them", async () => {
+    // 🔴 The property that stops it competing with a position. Wrapping the
+    // column would cover the cards too, so a release aimed between two of them
+    // could resolve to the container and lose the position the reader aimed at.
+    // Occupying only what the cards leave, it cannot be nearer than a card the
+    // pointer is actually over.
+    renderGrid();
+    await beginEditing();
+
+    const column = screen.getByTestId("widget-column-0");
+    const zone = screen.getByTestId("widget-column-drop-0");
+    expect(column.lastElementChild).toBe(zone);
+    // The control: the zone holds no card, which is what "below rather than
+    // around" means and what a wrapping droppable would fail.
+    expect(zone.querySelector("[data-testid^='widget-cell-']")).toBeNull();
+    expect(
+      column.querySelectorAll("[data-testid^='widget-cell-']").length
+    ).toBeGreaterThan(0);
+  });
+
+  it("shows no drop zone outside editing", async () => {
+    // Outside editing an empty column is absent space rather than a target, and
+    // a dashed rectangle under every column would be chrome for a gesture that
+    // is not on offer.
+    renderGrid();
+    await waitFor(() =>
+      expect(screen.getAllByTestId("widget-card-body").length).toBeGreaterThan(
+        0
+      )
+    );
+    expect(screen.queryByTestId("widget-column-drop-0")).toBeNull();
+  });
+
+  it("names each column, so crossing one is audible", async () => {
+    // The move announcement says which column a card landed in, but a reader
+    // BROWSING rather than rearranging never triggers it. The group name is
+    // where that same fact is available to them.
+    renderGrid();
+    await waitFor(() =>
+      expect(screen.getAllByTestId("widget-card-body").length).toBeGreaterThan(
+        0
+      )
+    );
+    expect(screen.getByTestId("widget-column-1")).toHaveAttribute(
+      "aria-label",
+      "Column 2 of 3"
+    );
+  });
+
   it("offers Left from the column a card is DRAWN in, not its stored one", async () => {
     // 🔴 A card stored past the count is folded into the last column for
     // drawing. Computing from the stored value offered a Left that resolved
