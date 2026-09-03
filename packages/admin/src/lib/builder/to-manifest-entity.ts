@@ -86,6 +86,8 @@ export interface BuilderFieldInput {
 export interface BuilderSettingsInput {
   singularName?: string;
   pluralName?: string;
+  /** The entity's own help text, distinct from a field's description. */
+  description?: string;
   status?: boolean;
   /** i18n: collection has translatable fields (companion `_locales` table). */
   localized?: boolean;
@@ -151,6 +153,15 @@ export interface ManifestField {
 export interface ManifestEntity {
   slug: string;
   labels?: { singular: string; plural: string };
+  /**
+   * The entity's own help text.
+   *
+   * Carried because the migration's upsert writes this column
+   * unconditionally — so that clearing a description propagates — which means a
+   * manifest omitting it REPLACES the stored value with NULL rather than
+   * leaving it alone.
+   */
+  description?: string;
   admin?: { useAsTitle?: string; defaultColumns?: string[]; group?: string };
   status?: boolean;
   /** i18n: collection has translatable fields. */
@@ -234,6 +245,7 @@ export function applyCommonSettings(
   settings: BuilderSettingsInput
 ): void {
   const {
+    description,
     useAsTitle,
     defaultColumns,
     group,
@@ -251,6 +263,12 @@ export function applyCommonSettings(
   }
   if (group) admin.group = group;
   if (Object.keys(admin).length > 0) entity.admin = admin;
+  // 🔴 Carried, because the migration's upsert writes this column
+  // UNCONDITIONALLY so that clearing a description propagates. A manifest that
+  // omitted it therefore did not leave the stored value alone — it replaced it
+  // with NULL, erasing on the next save a description an earlier migration had
+  // correctly deployed.
+  if (description !== undefined) entity.description = description;
   if (status !== undefined) entity.status = status;
   if (localized !== undefined) entity.localized = localized;
   if (versions !== undefined) entity.versions = versions;

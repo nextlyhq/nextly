@@ -978,7 +978,21 @@ function quoteOpenerAt(
  * An EVEN run means the backslashes escape each other and the character stands
  * on its own; an odd run means the last one escapes it.
  */
-function precededByOddBackslashes(text: string, index: number): boolean {
+function precededByOddBackslashes(
+  text: string,
+  index: number,
+  dialect: SupportedDialect | undefined
+): boolean {
+  // 🔴 MySQL ONLY. PostgreSQL and SQLite do not read a backslash as an escape
+  // inside a standard string literal — SQLite has no C-style escapes at all —
+  // so a value ending in one leaves a SINGLE backslash before the closing
+  // quote there. Counting parity unconditionally then calls that quote escaped
+  // and swallows the statement's semicolon: the same defect this function was
+  // written to remove, moved to the other two dialects.
+  // An unknown dialect takes the conservative reading: no dialect but MySQL
+  // escapes with backslashes, so treating the quote as unescaped is what the
+  // other two need and what a caller that named none most likely has.
+  if (dialect !== "mysql") return false;
   let run = 0;
   for (let i = index - 1; i >= 0 && text[i] === "\\"; i -= 1) run += 1;
   return run % 2 === 1;
@@ -1060,7 +1074,7 @@ export function splitSqlStatements(
     } else if (
       inString &&
       char === stringChar &&
-      !precededByOddBackslashes(cleanedSql, i)
+      !precededByOddBackslashes(cleanedSql, i, dialect)
     ) {
       inString = false;
     }

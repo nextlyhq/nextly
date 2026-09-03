@@ -468,3 +468,50 @@ describe("escaping the values a Builder-authored entity can carry", () => {
     }
   });
 });
+
+describe("values the create body can carry that the schema does not validate", () => {
+  it("writes NULL for an explicit null description rather than throwing", () => {
+    // 🔴 `generateCollection` forwards the create body unvalidated, and `null`
+    // is what "clear it" looks like over JSON. Reaching the quoting helper with
+    // a non-string threw on `.replace`, turning an ordinary create into a 500
+    // AFTER the table DDL in the same file had run.
+    const sql = buildCollectionMetadataUpsert(
+      { slug: "posts", description: null, fields: [] } as never,
+      "sqlite"
+    );
+    expect(sql).toContain("NULL");
+    expect(sql).not.toContain("'null'");
+  });
+});
+
+describe("hooks are a collection-only manifest key", () => {
+  const withHooks = (kind: "singles" | "components") => ({
+    collections: [],
+    singles: [],
+    components: [],
+    [kind]: [{ slug: "x", hooks: [{ type: "beforeChange" }], fields: [] }],
+  });
+
+  it("REFUSES hooks on a single and on a component", () => {
+    // 🔴 Only `dynamic_collections` has a hooks column, so those builders emit
+    // none. Accepting the key would let a manifest validate, deploy, and run no
+    // hooks at all, with nothing saying why — a setting the deployment cannot
+    // honour should not parse.
+    for (const kind of ["singles", "components"] as const) {
+      expect(uiSchemaManifest.safeParse(withHooks(kind)).success).toBe(false);
+    }
+  });
+
+  it("ACCEPTS hooks on a collection", () => {
+    // The control: a rule that refused the key everywhere would satisfy the
+    // refusal above and silently drop the one kind that can store them.
+    const parsed = uiSchemaManifest.safeParse({
+      collections: [
+        { slug: "posts", hooks: [{ type: "beforeChange" }], fields: [] },
+      ],
+      singles: [],
+      components: [],
+    });
+    expect(parsed.success).toBe(true);
+  });
+});

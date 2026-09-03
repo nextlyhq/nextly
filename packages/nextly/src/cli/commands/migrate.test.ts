@@ -163,6 +163,22 @@ describe("splitting a statement whose value ends in a backslash", () => {
     expect(splitSqlStatements(sql, "mysql")).toHaveLength(2);
   });
 
+  it("does NOT treat a backslash as an escape on PostgreSQL or SQLite", () => {
+    // 🔴 Only MySQL reads a backslash as an escape inside a string literal;
+    // SQLite has no C-style escapes at all. `quoteSqlLiteral` therefore leaves
+    // a trailing backslash SINGLE on those dialects, so a parity rule applied
+    // unconditionally calls the closing quote escaped and swallows the
+    // semicolon — the very defect the parity check was added to remove, moved
+    // to the other two dialects.
+    const sql = [
+      `INSERT INTO t (d) VALUES ('ends with a backslash \\');`,
+      `INSERT INTO u (d) VALUES ('second');`,
+    ].join("\n");
+    for (const dialect of ["postgresql", "sqlite"] as const) {
+      expect(splitSqlStatements(sql, dialect)).toHaveLength(2);
+    }
+  });
+
   it("still treats an ODD run as escaping the quote", () => {
     // The control: a rule that stopped honouring backslash escapes entirely
     // would satisfy the case above and split this one in the wrong place.

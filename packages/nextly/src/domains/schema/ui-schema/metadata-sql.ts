@@ -181,10 +181,16 @@ interface Column {
  * `revalidate` and `webhooks` state beside their own columns.
  */
 function descriptionLiteral(
-  description: string | undefined,
+  description: string | undefined | null,
   dialect: Dialect
 ): string {
-  return description === undefined ? "NULL" : sqlStr(description, dialect);
+  // 🔴 `null` as well as `undefined`. The create body reaches this unvalidated,
+  // so a caller sending `description: null` — which is what "clear it" looks
+  // like over JSON — otherwise reached `quoteSqlLiteral` and threw on `.replace`
+  // of a non-string, turning a routine create into a 500.
+  return description === undefined || description === null
+    ? "NULL"
+    : sqlStr(description, dialect);
 }
 
 function buildUpsert(

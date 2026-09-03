@@ -590,6 +590,18 @@ function entity(kind?: "collection" | "single" | "component") {
           path: ["webhooks"],
         });
       }
+      // 🔴 Only `dynamic_collections` has a `hooks` column. Singles and
+      // components have none, so their upsert builders cannot emit one — and a
+      // manifest that ACCEPTED hooks there would validate, deploy, and run
+      // none of them, with nothing saying why. Refusing the key is the honest
+      // answer: a setting the deployment cannot honour should not parse.
+      if (kind !== "collection" && e.hooks !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `'hooks' is only supported on collections`,
+          path: ["hooks"],
+        });
+      }
       // `status` reserved as a field name only when the lifecycle column is on.
       if (e.status === true && e.fields.some(f => f.name === "status")) {
         ctx.addIssue({
