@@ -427,19 +427,6 @@ export function validateDocument(
     return { issues, survey };
   }
 
-  // Per-kind rules. Only `component` has any today, and it is the kind whose
-  // extra fields nothing else in the document can check: `exposed` and `slots`
-  // are pointers INTO the tree that was just confirmed to be an array, so this
-  // is the first point at which they can be resolved at all.
-  if (kind === "component") {
-    validateComponentEnvelope(
-      rawDoc,
-      rawDoc.nodes as BlockNode[],
-      limits,
-      issues
-    );
-  }
-
   checkLimits(survey, issues);
   //
   // `document-unwritable` belongs here for a sharper reason than tidiness: the
@@ -467,6 +454,30 @@ export function validateDocument(
   // back changed. It is a measurement that STOPPED SHORT which leaves nothing
   // bounded, and that is exactly what `traversed` reports.
   const overLimits = !survey.traversed;
+
+  // Per-kind rules. Only `component` has any today, and it is the kind whose
+  // extra fields nothing else in the document can check: `exposed` and `slots`
+  // are pointers INTO the node forest, so this is the first point at which
+  // they can be resolved at all.
+  //
+  // After the limits verdict, and skipped once it is negative, for the same
+  // reason the per-value work below is: a document the survey could not
+  // traverse is refused already, and an envelope with a million entries would
+  // otherwise be walked in full — and produce an issue per entry — to add
+  // nothing to a refusal that has already been made.
+  if (kind === "component" && !overLimits) {
+    // The SURVEY's snapshot, not `limits`. `DocumentLimits` is an ordinary
+    // object a caller may back with a getter, and `surveyDocument` snapshots
+    // it precisely so two readings cannot disagree. Re-reading here would let
+    // a shrinking limit report a node the survey counted as missing from the
+    // index, which surfaces as `exposed-node-missing` on a sound definition.
+    validateComponentEnvelope(
+      rawDoc,
+      rawDoc.nodes as BlockNode[],
+      survey.limits.maxNodes,
+      issues
+    );
+  }
 
   const styleBudget = newStyleIssueBudget();
   const nodeState: NodeCheckState = {
@@ -1536,10 +1547,15 @@ function isConditionsShapeValid(conditions: unknown): boolean {
  * reports as it goes — so reusing it would mean either checking pointers
  * against a half-built index, or holding the envelope's issues back to the end
  * and reordering the report. A second walk of a component document, bounded by
- * the same node cap, costs less than either.
+ * the same snapshotted node cap, costs less than either.
  */
-function nodesById(nodes: BlockNode[], limits: DocumentLimits) {
+function nodesById(nodes: BlockNode[], maxNodes: number) {
   const index = new Map<string, BlockNode>();
+  // Bounded even though the caller has already refused an over-limit document.
+  // The bound is unreachable through that path today and is not asserted by
+  // any test, because there is no input that reaches it — it is here so the
+  // function is safe read on its own terms, and so moving the caller's guard
+  // cannot silently make an unbounded walk.
   walkNodes(
     nodes,
     node => {
@@ -1548,7 +1564,7 @@ function nodesById(nodes: BlockNode[], limits: DocumentLimits) {
       // depend on traversal order for a document that is being refused anyway.
       if (!index.has(node.id)) index.set(node.id, node);
     },
-    { maxNodes: limits.maxNodes }
+    { maxNodes }
   );
   return index;
 }
@@ -1556,16 +1572,21 @@ function nodesById(nodes: BlockNode[], limits: DocumentLimits) {
 /** One `exposed` entry, before anything about it has been checked. */
 type RawExposed = Record<string, unknown>;
 
+/** True when a record declares `key` itself rather than inheriting it. */
+function declares(record: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
 /**
  * Check a component definition's exposed properties, slots and variants.
  *
- * Every rule here is about a POINTER resolving, because that is the class of
- * fault the envelope introduces and the one nothing downstream can report. A
- * definition whose pointer names a node that was deleted still loads, still
- * renders, and still offers the property in the inspector — where editing it
- * writes an override keyed to an id that resolves to nothing, on every instance
- * in the site. The failure surfaces as "my change did nothing", far from the
- * definition that caused it.
+ * Every rule here is about a POINTER resolving or a field being present,
+ * because those are the faults the envelope introduces and the ones nothing
+ * downstream can report. A definition whose pointer names a deleted node still
+ * loads, still renders, and still offers the property in the inspector — where
+ * editing it writes an override keyed to an id that resolves to nothing, on
+ * every instance in the site. The failure surfaces as "my change did nothing",
+ * far from the definition that caused it.
  *
  * Errors, not warnings, and in both modes. Forgiving mode exists to keep a
  * document READABLE when a future build wrote something this one does not
@@ -1575,10 +1596,10 @@ type RawExposed = Record<string, unknown>;
 function validateComponentEnvelope(
   doc: Record<string, unknown>,
   nodes: BlockNode[],
-  limits: DocumentLimits,
+  maxNodes: number,
   issues: ValidationIssue[]
 ): void {
-  const index = nodesById(nodes, limits);
+  const index = nodesById(nodes, maxNodes);
   const exposedIds = new Set<string>();
 
   const exposed = doc.exposed;
@@ -1605,17 +1626,11 @@ function validateComponentEnvelope(
     });
   } else {
     for (const [id, entry] of Object.entries(slots ?? {})) {
-      checkExposedSlot(entry, id, `/slots/${id}`, index, issues);
+      checkExposedSlot(entry, id, pointer("/slots", id), index, issues);
     }
   }
 
-  // The KEYS are the slot ids, which is what a variant addresses. Derived here
-  // rather than accumulated during the walk above, so a slot whose entry was
-  // malformed still counts as declared — otherwise one broken slot would make
-  // every variant filling it report a second, misleading "nothing exposes
-  // this" on top of the fault the author actually has to fix.
-  const slotIds = new Set(Object.keys(isPlainRecord(slots) ? slots : {}));
-  checkVariants(doc.variants, exposedIds, slotIds, issues);
+  checkVariants(doc.variants, exposedIds, issues);
 }
 
 /**
@@ -1735,6 +1750,12 @@ function checkExposedPointer(
     });
   }
 
+  // The GRAMMAR only. Whether the path names a prop the node's block actually
+  // declares is a question about the block's schema, and the schema is not
+  // reachable from here — `BlockTypeLookup` answers `has(type)` and nothing
+  // else. Checking the path against `node.props` instead would refuse a sound
+  // exposure of any prop whose value comes from the block's default, since a
+  // defaulted prop is absent from the stored node.
   const propPath = raw.propPath;
   if (typeof propPath !== "string" || !BIND_PATH_RE.test(propPath)) {
     issues.push({
@@ -1786,6 +1807,7 @@ function checkExposedOptions(
     return;
   }
 
+  const at = pointer(path, "options");
   options.forEach((option: unknown, i: number) => {
     if (
       isPlainRecord(option) &&
@@ -1795,7 +1817,11 @@ function checkExposedOptions(
       return;
     }
     issues.push({
-      path: pointer(path, `options/${i}`),
+      // One segment per call. `pointer` escapes its token whole, so a single
+      // call with "options/0" emits `options~10` — a pointer that resolves to
+      // nothing, in the field whose purpose is to let a machine locate the
+      // value.
+      path: pointer(at, i),
       code: "exposed-options-invalid",
       severity: "error",
       message: `An option of exposed property "${id}" needs a string value and label.`,
@@ -1803,7 +1829,7 @@ function checkExposedOptions(
   });
 }
 
-/** One exposed slot: that its node exists, and that the node declares the region. */
+/** One exposed slot: its metadata, its node, and the region on that node. */
 function checkExposedSlot(
   entry: unknown,
   id: string,
@@ -1821,6 +1847,8 @@ function checkExposedSlot(
     return;
   }
 
+  checkExposedSlotMetadata(entry, id, path, issues);
+
   const nodeId = entry.nodeId;
   const node = typeof nodeId === "string" ? index.get(nodeId) : undefined;
   if (node === undefined) {
@@ -1837,16 +1865,65 @@ function checkExposedSlot(
 }
 
 /**
+ * The label the layers panel shows, and the block types the slot accepts.
+ *
+ * Both are read straight out of the stored envelope by consumers that treat
+ * the declared types as guarantees: a missing label renders as `undefined` in
+ * the panel, and an `allow` that is a bare string is iterated character by
+ * character, silently permitting nothing.
+ */
+function checkExposedSlotMetadata(
+  entry: Record<string, unknown>,
+  id: string,
+  path: string,
+  issues: ValidationIssue[]
+): void {
+  if (typeof entry.label !== "string" || entry.label === "") {
+    issues.push({
+      path: pointer(path, "label"),
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Exposed slot "${id}" needs a non-empty label.`,
+    });
+  }
+
+  const allow = entry.allow;
+  if (allow === undefined) return;
+  if (!Array.isArray(allow)) {
+    issues.push({
+      path: pointer(path, "allow"),
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Exposed slot "${id}" allow must be an array of block types.`,
+    });
+    return;
+  }
+
+  const at = pointer(path, "allow");
+  allow.forEach((type: unknown, i: number) => {
+    if (typeof type === "string" && type !== "") return;
+    issues.push({
+      path: pointer(at, i),
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Exposed slot "${id}" allows ${describeValue(type)}, which is not a block type.`,
+    });
+  });
+}
+
+/**
  * That the node actually declares the named region.
  *
  * A separate question from whether the node exists, and the one a renamed
  * container leaves behind: the node is still there, the definition still
  * loads, and nothing in the tree looks wrong.
  *
- * `slots` is undefined on a container an author has not filled yet, which is an
- * ordinary state — so an absent map is judged the same as a map without the
- * key rather than skipped, which would let the pointer go unchecked exactly
- * when the container is empty.
+ * An OWN property. `slots` is an ordinary object, so `"toString" in slots` is
+ * true of every node — a slot by that name would pass here and then resolve to
+ * nothing, which is precisely the dangling reference this check exists to
+ * refuse. `slots` is also undefined on a container an author has not filled
+ * yet, which is an ordinary state, so an absent map is judged the same as a
+ * map without the key rather than skipped.
  */
 function checkSlotOnNode(
   slot: unknown,
@@ -1856,7 +1933,7 @@ function checkSlotOnNode(
   issues: ValidationIssue[]
 ): void {
   const declared = node.slots ?? {};
-  if (typeof slot === "string" && slot in declared) return;
+  if (typeof slot === "string" && declares(declared, slot)) return;
 
   issues.push({
     path: pointer(path, "slot"),
@@ -1879,7 +1956,6 @@ function checkSlotOnNode(
 function checkVariants(
   variants: unknown,
   exposedIds: ReadonlySet<string>,
-  slotIds: ReadonlySet<string>,
   issues: ValidationIssue[]
 ): void {
   if (variants === undefined) return;
@@ -1894,19 +1970,18 @@ function checkVariants(
   }
 
   for (const [name, variant] of Object.entries(variants)) {
-    checkVariant(name, variant, exposedIds, slotIds, issues);
+    checkVariant(name, variant, exposedIds, issues);
   }
 }
 
-/** One variant: its shape, its override targets and its slot targets. */
+/** One variant: its label, and the exposures its overrides address. */
 function checkVariant(
   name: string,
   variant: unknown,
   exposedIds: ReadonlySet<string>,
-  slotIds: ReadonlySet<string>,
   issues: ValidationIssue[]
 ): void {
-  const at = `/variants/${name}`;
+  const at = pointer("/variants", name);
   if (!isPlainRecord(variant)) {
     issues.push({
       path: at,
@@ -1917,71 +1992,76 @@ function checkVariant(
     return;
   }
 
-  checkVariantTargets({
-    map: variant.overrides,
-    known: exposedIds,
-    at,
-    field: "overrides",
-    issues,
-    shapeMessage: `Variant "${name}" overrides must be an object keyed by exposed id.`,
-    unknownMessage: key =>
-      `Variant "${name}" overrides "${key}", which this component does not expose.`,
-  });
+  if (typeof variant.label !== "string" || variant.label === "") {
+    issues.push({
+      path: pointer(at, "label"),
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Variant "${name}" needs a non-empty label.`,
+    });
+  }
 
-  checkVariantTargets({
-    map: variant.slots,
-    known: slotIds,
-    at,
-    field: "slots",
-    issues,
-    shapeMessage: `Variant "${name}" slots must be an object keyed by exposed slot id.`,
-    unknownMessage: key =>
-      `Variant "${name}" fills slot "${key}", which this component does not expose.`,
-  });
+  // Required, not optional. A variant is a preset, and the picker offering one
+  // that presets nothing is a control that does nothing when chosen — which is
+  // a defect in the definition rather than a variant with no opinions.
+  if (!isPlainRecord(variant.overrides)) {
+    issues.push({
+      path: pointer(at, "overrides"),
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Variant "${name}" needs an overrides object keyed by exposed id.`,
+    });
+  } else {
+    checkVariantTargets(
+      variant.overrides,
+      exposedIds,
+      pointer(at, "overrides"),
+      key =>
+        `Variant "${name}" overrides "${key}", which this component does not expose.`,
+      issues
+    );
+  }
+
+  // `slots` carries no content in this format yet, so a variant naming one can
+  // only be addressing a slot id — see `Variant` in `document.ts`.
+  if (variant.slots !== undefined) {
+    issues.push({
+      path: pointer(at, "slots"),
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Variant "${name}" declares slot content, which this format version does not carry.`,
+      suggestion: "Put the content in the instance's own slots.",
+    });
+  }
 }
 
 /**
- * One of a variant's two keyed maps, against the ids the definition exposes.
+ * A variant's override map, against the ids the definition exposes.
  *
- * Both maps ask the identical question of different vocabularies, so they are
- * one function taking the vocabulary. Written twice they drifted immediately —
- * the slots half lost its shape check to an early `continue` on the first
- * draft, which no test would have caught because a malformed map has no keys
- * to report.
+ * The keys are the whole check: a value may be anything an exposed property
+ * holds, and props are unconstrained, so there is nothing narrower to say
+ * about one than that its key names something.
  */
-function checkVariantTargets(args: {
-  map: unknown;
-  known: ReadonlySet<string>;
-  at: string;
-  field: "overrides" | "slots";
-  issues: ValidationIssue[];
-  shapeMessage: string;
-  unknownMessage: (key: string) => string;
-}): void {
-  const { map, known, at, field, issues } = args;
-  if (map === undefined) return;
-
-  if (!isPlainRecord(map)) {
-    issues.push({
-      path: pointer(at, field),
-      code: "component-envelope-invalid",
-      severity: "error",
-      message: args.shapeMessage,
-    });
-    return;
-  }
-
+function checkVariantTargets(
+  map: Record<string, unknown>,
+  known: ReadonlySet<string>,
+  at: string,
+  message: (key: string) => string,
+  issues: ValidationIssue[]
+): void {
   for (const key of Object.keys(map)) {
     if (known.has(key)) continue;
     issues.push({
-      path: pointer(at, `${field}/${key}`),
+      // One segment per call: `pointer` escapes its token whole, so passing
+      // "overrides/missing" emits `overrides~1missing`, which resolves to
+      // nothing.
+      path: pointer(at, key),
       code: "variant-unknown-target",
       severity: "error",
-      message: args.unknownMessage(key),
+      message: message(key),
     });
   }
 }
-
 /**
  * A binding path is a dot-joined chain of field identifiers, e.g. "title" or
  * "author.name". This rejects expression-like or otherwise malformed strings so
@@ -2092,6 +2172,24 @@ function validateComponentInstance(
       severity: "error",
       message:
         "A component-instance node must set props.componentId to the component's id.",
+    });
+  }
+
+  // `overrides` is a MAP keyed by exposed id, and only the shape is checkable
+  // here: which ids exist is a property of a definition this document does not
+  // carry. The shape still has to be refused, because a resolver enumerating
+  // it either throws on a string and an array, or reads their indices as
+  // exposure ids and applies values to properties nobody named.
+  //
+  // Only when present. Absent means the instance overrides nothing, which is
+  // the ordinary state of a freshly placed component.
+  const overrides = node.props.overrides;
+  if (overrides !== undefined && !isPlainRecord(overrides)) {
+    issues.push({
+      path: pointer(pointer(path, "props"), "overrides"),
+      code: "invalid-component-instance",
+      severity: "error",
+      message: `A component instance's props.overrides must be an object keyed by exposed id, not ${describeValue(overrides)}.`,
     });
   }
 }

@@ -736,14 +736,22 @@ export interface ExposedSlot {
   allow?: readonly string[];
 }
 
-/** A named preset of override values, offered alongside the definition. */
+/**
+ * A named preset of override values, offered alongside the definition.
+ *
+ * No slot content. A variant that supplied its own children would be handing
+ * the validator a second node forest, and the one place a forest is checked —
+ * for malformed nodes, duplicated ids, depth and node count — is the walk over
+ * `nodes`. Declaring the field without reaching it there would accept an
+ * arbitrary tree at the persistence gate under the name of a validated
+ * document, so it lands with the resolver that inlines it, checked by the same
+ * walk. A document carrying one today is refused rather than quietly stored.
+ */
 export interface Variant {
   /** What the inspector calls it. */
   label: string;
   /** Values keyed by {@link ExposedProperty.id}, applied before the instance's own. */
   overrides: Record<string, OverrideValue>;
-  /** Slot content keyed by {@link ExposedSlot.id}. */
-  slots?: Record<string, BlockNode[]>;
 }
 
 /**

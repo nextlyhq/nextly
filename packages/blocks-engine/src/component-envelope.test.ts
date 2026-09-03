@@ -276,41 +276,216 @@ describe("a variant may only preset what the component exposes", () => {
     ).toEqual(["variant-unknown-target"]);
   });
 
-  it("accepts a variant filling a slot the component exposes", () => {
-    // The control for the refusal below. Without it a validator that treated
-    // EVERY slot as unexposed would satisfy that assertion while refusing
-    // every legitimate variant — and the slot ids come from the map keys, so
-    // "no slot is ever exposed" is a single-line mistake away.
+  it("refuses a variant that carries slot content", () => {
+    // The format does not carry it. A variant's slot content is a second node
+    // forest, and the one place a forest is checked — for malformed nodes,
+    // duplicate ids, depth and node count — is the walk over `nodes`. Accepting
+    // it here would store an unchecked tree under the name of a validated
+    // document, so it is refused until it lands with the resolver that inlines
+    // it and can be walked by the same machinery.
+    const issues = issuesFrom(
+      componentDoc({
+        slots: { body: { label: "Body", nodeId: "box", slot: "children" } },
+        variants: {
+          compact: { label: "Compact", overrides: {}, slots: { body: [] } },
+        },
+      })
+    );
+
+    expect(issues.map(i => i.code)).toEqual(["component-envelope-invalid"]);
+    expect(issues[0].path).toBe("/variants/compact/slots");
+  });
+});
+
+describe("a variant states what a picker and a resolver need", () => {
+  it("refuses a variant with no label", () => {
+    // The picker renders the label. Without one it offers a row reading
+    // "undefined", which is indistinguishable from a rendering bug.
+    expect(
+      codesFrom(componentDoc({ variants: { compact: { overrides: {} } } }))
+    ).toEqual(["component-envelope-invalid"]);
+  });
+
+  it("refuses a variant with no overrides map", () => {
+    // A variant is a preset. One that presets nothing is a control that does
+    // nothing when chosen, which is a defect in the definition rather than a
+    // variant with no opinions — and it leaves resolution with no map to read.
+    expect(
+      codesFrom(componentDoc({ variants: { compact: { label: "Compact" } } }))
+    ).toEqual(["component-envelope-invalid"]);
+  });
+});
+
+describe("an exposed slot states what the layers panel needs", () => {
+  const at = { nodeId: "box", slot: "children" };
+
+  it("refuses a slot with no label", () => {
+    expect(codesFrom(componentDoc({ slots: { body: at } }))).toEqual([
+      "component-envelope-invalid",
+    ]);
+  });
+
+  it("refuses an allow list that is a bare string", () => {
+    // Iterated character by character, a string permits nothing and reports
+    // nothing — the slot silently accepts no block at all.
     expect(
       codesFrom(
         componentDoc({
-          slots: { body: { label: "Body", nodeId: "box", slot: "children" } },
-          variants: {
-            compact: { label: "Compact", overrides: {}, slots: { body: [] } },
-          },
+          slots: { body: { ...at, label: "Body", allow: "core/text" } },
+        })
+      )
+    ).toEqual(["component-envelope-invalid"]);
+  });
+
+  it.each([
+    ["a number", 7],
+    ["an empty string", ""],
+    ["null", null],
+  ])("refuses %s inside the allow list", (_label, bad) => {
+    // The array being an array is not the same question as its entries being
+    // block types. A list holding a number permits nothing that node could
+    // hold, and reports nothing about why.
+    const issues = issuesFrom(
+      componentDoc({
+        slots: { body: { ...at, label: "Body", allow: ["core/text", bad] } },
+      })
+    );
+
+    expect(issues.map(i => i.code)).toEqual(["component-envelope-invalid"]);
+    // Addressed at the entry, not at the list, so a long allow-list names the
+    // one entry to fix.
+    expect(issues[0].path).toBe("/slots/body/allow/1");
+  });
+
+  it("accepts an allow list of block types", () => {
+    expect(
+      codesFrom(
+        componentDoc({
+          slots: { body: { ...at, label: "Body", allow: ["core/text"] } },
         })
       )
     ).toEqual([]);
   });
 
-  it("refuses a variant filling a slot nothing exposes", () => {
+  it("refuses a slot named after an inherited object member", () => {
+    // `"toString" in node.slots` is true of every node, so a membership test
+    // would pass here and then resolve to nothing — exactly the dangling
+    // reference this check exists to refuse.
     expect(
       codesFrom(
         componentDoc({
-          slots: {
-            body: {
-              id: "body",
-              label: "Body",
-              nodeId: "box",
-              slot: "children",
-            },
-          },
-          variants: {
-            compact: { label: "Compact", overrides: {}, slots: { other: [] } },
-          },
+          slots: { body: { ...at, label: "Body", slot: "toString" } },
         })
       )
-    ).toEqual(["variant-unknown-target"]);
+    ).toEqual(["exposed-slot-missing"]);
+  });
+});
+
+describe("every reported path is a resolvable JSON Pointer", () => {
+  it("addresses an unknown override one segment at a time", () => {
+    // `pointer` escapes its token whole, so one call with "overrides/missing"
+    // emits `overrides~1missing` — a pointer that resolves to nothing, in the
+    // field whose only purpose is letting a machine find the value.
+    const issues = issuesFrom(
+      componentDoc({
+        exposed: [goodExposure],
+        variants: { compact: { label: "C", overrides: { missing: "x" } } },
+      })
+    );
+
+    expect(issues[0].path).toBe("/variants/compact/overrides/missing");
+  });
+
+  it("addresses a bad select option one segment at a time", () => {
+    const issues = issuesFrom(
+      componentDoc({
+        exposed: [{ ...goodExposure, type: "select", options: [{}] }],
+      })
+    );
+
+    expect(issues[0].path).toBe("/exposed/0/options/0");
+  });
+});
+
+describe("an instance's override map is a map", () => {
+  /** A page holding one component instance with the given props. */
+  const pageWithInstance = (props: Record<string, unknown>) =>
+    ({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "nextly/component-instance",
+          version: 1,
+          props: { componentId: "c1", ...props },
+        },
+      ],
+    }) as unknown as BlockDocument;
+
+  it("accepts an instance that overrides nothing", () => {
+    // The ordinary state of a freshly placed component, and the control for
+    // the refusals below.
+    expect(codesFrom(pageWithInstance({}))).toEqual([]);
+  });
+
+  it("accepts a record of overrides", () => {
+    expect(
+      codesFrom(pageWithInstance({ overrides: { heading: "Hi" } }))
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["null", null],
+    ["a string", "heading"],
+    ["an array", ["heading"]],
+  ])("refuses overrides given as %s", (_label, value) => {
+    // A resolver enumerating these either throws, or reads their indices as
+    // exposure ids and applies values to properties nobody named.
+    expect(codesFrom(pageWithInstance({ overrides: value }))).toEqual([
+      "invalid-component-instance",
+    ]);
+  });
+});
+
+describe("an over-limit document does not pay for its envelope", () => {
+  it("stops before walking an oversized exposed list", () => {
+    // A document the survey could not traverse is refused already. Without the
+    // guard an imported definition with a million exposures is walked in full,
+    // and appends an issue per entry, to add nothing to a refusal that has
+    // already been made.
+    const exposed = Array.from({ length: 400 }, (_, i) => ({
+      id: `e${i}`,
+      label: "L",
+      nodeId: "missing",
+      propPath: "a",
+      type: "text",
+    }));
+    const doc = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: Array.from({ length: 40 }, (_, i) => ({
+        id: `n${i}`,
+        type: "core/box",
+        version: 1,
+        props: {},
+      })),
+      exposed,
+    } as unknown as BlockDocument;
+
+    // Over the node cap, so the survey stops short and the envelope is skipped.
+    const overLimit = validate(doc, {
+      ...context("strict"),
+      limits: { maxDepth: 12, maxNodes: 5, maxBytes: 2_097_152 },
+    });
+    expect(overLimit.some(i => i.code === "exposed-node-missing")).toBe(false);
+
+    // The control: under the cap the very same document reports every dangling
+    // exposure, so the guard is skipping work rather than losing the check.
+    const underLimit = validate(doc, context("strict"));
+    expect(
+      underLimit.filter(i => i.code === "exposed-node-missing")
+    ).toHaveLength(400);
   });
 });
 
