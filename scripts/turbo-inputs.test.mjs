@@ -87,7 +87,16 @@ function dryRun() {
 }
 
 function resolvedTasks() {
-  return dryRun().tasks;
+  // The `check-types` tasks ONLY, rather than everything the run contains.
+  //
+  // `check-types` depends on `^build`, so the graph carries a `build` task for
+  // every dependency as well, and each assertion below is about how a package's
+  // TYPE-CHECK is hashed and what it depends on. Unfiltered, they read a
+  // `build` task's definition and report it under a check-types message — which
+  // is how a correct `build` (`dependsOn: ["^build"]`, and no command at all in
+  // a package that ships no build) arrives as a package that "has no runnable
+  // check-types command".
+  return dryRun().tasks.filter(entry => entry.task === "check-types");
 }
 
 /** The TypeScript modules git tracks inside a package. */
