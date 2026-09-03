@@ -28,11 +28,11 @@ export interface GridAnnouncer {
   /**
    * Say that a card changed COLUMN.
    *
-   * 🔴 Its own sentence rather than the position formatter. Passing a column
-   * through `announceMove` produced "moved to position 3 of 3" for a card that
-   * is the only one in column 3 — a position it does not hold, in a list of a
-   * length that is not its column's. Two different facts need two different
-   * wordings.
+   * 🔴 Its own sentence rather than the position formatter. A column and a
+   * position within one are different facts, so passing a column through
+   * `announceMove` says "moved to position 3 of 3" about a card that is the
+   * only one in column 3 — a position it does not hold, in a list whose length
+   * is not its column's. Two facts, two wordings.
    */
   announceColumn: (
     title: string,

@@ -103,8 +103,8 @@ export function ArrangedColumns({
               key={row.placementId}
               row={row}
               // 🔴 The SAME list the click resolves against. Derived from the
-              // global sequence, the first card of column 2 had an enabled Up
-              // whose neighbour does not exist in its column -- an enabled
+              // global sequence instead, the first card of column 2 gets an
+              // enabled Up whose neighbour is not in its column -- an enabled
               // control that does nothing, which is the failure SC 2.5.7 is
               // about rather than a cosmetic one.
               index={indexInColumn}
@@ -122,8 +122,8 @@ export function ArrangedColumns({
               // position computed a second time, and the two would drift.
               // 🔴 Resolved against THIS column, not the whole arrangement.
               // The sequence is interleaved across columns, so the row before
-              // this one globally is usually in a different column -- moving
-              // toward it swapped two cards a reader could not see move.
+              // this one globally is usually in a different column, and moving
+              // toward it swaps two cards a reader cannot see move.
               onMove={(delta: number) => {
                 const neighbour = rowsInColumn[indexInColumn + delta];
                 // The delta already says which way the reader asked to go, so

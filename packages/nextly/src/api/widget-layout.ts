@@ -165,16 +165,19 @@ function carriedPlacements(
 /**
  * The arrangement this caller was HANDED: their stored row, or the default.
  *
- * 🔴 One implementation, because the writer has to inherit from exactly what
- * the reader was shown. Two separate answers went wrong in both directions at
- * once: reading only the stored row left a caller who had never saved
- * inheriting nothing, so a client that round-trips the default set without its
- * columns collapsed the server's round-robin into a single column on the first
- * save; and reading the row UNFILTERED let a submitted placement inherit the
- * column of one this caller may not know exists, which is an existence oracle
- * over any id — and default placement ids are widget ids, so they are
- * guessable. The visible half of the stored row is what was sent, and the
- * visible defaults are what was sent when there was no row.
+ * 🔴 One implementation, because the writer inherits from exactly what the
+ * reader was shown, and each half of that is load-bearing in a different
+ * direction.
+ *
+ * The DEFAULT half matters because a caller who has never saved was still
+ * handed an arrangement. A baseline reading only the stored row gives them
+ * nothing to inherit, so a client that round-trips the default set without its
+ * columns collapses the round-robin into a single column on its first save.
+ *
+ * The VISIBILITY half is a trust boundary. A baseline reading the row
+ * unfiltered lets a submitted placement inherit the column of one this caller
+ * may not know exists, which is an existence oracle over any id — and default
+ * placement ids are widget ids, so the probe space is guessable.
  */
 function visibleArrangement(
   stored: StoredLayout | undefined,
@@ -590,11 +593,11 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
       ? readColumnCount(stored.layout?.columnCount)
       : readColumnCount(sentColumnCount);
 
-  // 🔴 A placement that stated no column KEEPS the one it was handed.
-  // Preserving the count alone was half an answer: a client written before
-  // columns omits the coordinate on every placement as well, so the row held
-  // its four columns while every card in it had been moved into the first —
-  // the arrangement destroyed by an edit that named neither.
+  // 🔴 A placement that stated no column KEEPS the one it was handed. A client
+  // written before columns omits the coordinate on every placement as well as
+  // the count, so a row whose count is preserved while its coordinates are not
+  // holds four columns with every card moved into the first — an arrangement
+  // destroyed by an edit that names neither.
   //
   // The baseline is what this caller was SHOWN, which is the stored row's
   // visible half or the visible defaults. A placement nothing handed them has
