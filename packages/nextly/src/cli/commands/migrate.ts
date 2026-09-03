@@ -983,10 +983,10 @@ function opensBackslashEscapedString(
   // not a literal — so only the two literal quotes are candidates.
   if (opener !== "'" && opener !== '"') return false;
   // 🔴 MySQL escapes in BOTH literal quotes. Under its default SQL mode a
-  // double quote also delimits a string, and the scanner this replaced applied
-  // its backslash check to whatever quote had opened the region — so gating on
-  // the single quote alone silently regressed `SELECT "left \"; right"`, which
-  // then splits at the semicolon inside the value.
+  // double quote also delimits a string, so backslash handling has to apply to
+  // whichever of the two opened the region. Gating on the single quote alone
+  // leaves `SELECT "left \"; right"` splitting at the semicolon INSIDE the
+  // value.
   if (dialect === "mysql") return true;
   if (dialect !== "postgresql") return false;
   // PostgreSQL's escape strings are single-quoted only: `E"…"` is not one.

@@ -489,9 +489,9 @@ describe("a column that is absent from the manifest must not clear the row", () 
 
   it("treats an explicit null the same as absent, rather than throwing", () => {
     // `generateCollection` forwards the create body unvalidated, and `null` is
-    // what "clear it" looks like over JSON. It previously reached the quoting
-    // helper and threw on `.replace` of a non-string, AFTER the table DDL in
-    // the same file had run.
+    // what "clear it" looks like over JSON. Handed to the quoting helper it
+    // throws on `.replace` of a non-string — AFTER the table DDL in the same
+    // file has run — so the column is decided before the value is quoted.
     const sql = buildCollectionMetadataUpsert(
       { slug: "posts", description: null, fields: [] } as never,
       "sqlite"

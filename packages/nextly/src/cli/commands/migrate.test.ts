@@ -25,9 +25,10 @@ describe("registerMigrateCommand", () => {
 
 describe("splitSqlStatements", () => {
   // A comment mentioning a DDL keyword survives the line filter, so its prose
-  // reaches the scanner. An apostrophe there used to open a string that never
-  // closed, which stopped every later semicolon from separating statements and
-  // handed the driver one merged statement it rejects.
+  // reaches the scanner. An apostrophe there is prose, not an opening quote:
+  // counted as one it opens a string that never closes, which stops every later
+  // semicolon from separating statements and hands the driver one merged
+  // statement it rejects.
   it("does not let an apostrophe in a comment merge the statements after it", () => {
     const sql = [
       `CREATE TABLE "a" ("id" TEXT);`,
@@ -216,10 +217,10 @@ describe("PostgreSQL escape strings honour backslashes; ordinary literals do not
 
 describe("MySQL escapes inside BOTH literal quotes", () => {
   it("keeps a double-quoted MySQL value whole when a backslash escapes its quote", () => {
-    // 🔴 Under MySQL's default SQL mode a double quote also delimits a string, and the
-    // scanner this replaced applied its backslash check to whichever quote had
-    // opened the region. Gating on the single quote alone split this valid
-    // statement at the semicolon INSIDE the value.
+    // 🔴 Under MySQL's default SQL mode a double quote also delimits a string,
+    // so the backslash check has to apply to whichever quote opened the region.
+    // Gating on the single quote alone splits this valid statement at the
+    // semicolon INSIDE the value.
     //
     // Asserted on CONTENT: a fragment carrying no SQL keyword is discarded, so
     // a length check passes on the broken implementation too.
