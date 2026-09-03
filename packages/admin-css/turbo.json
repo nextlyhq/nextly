@@ -1,0 +1,37 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      // The root inputs are `src/**`-centric, and almost nothing this package's
+      // suite exercises lives there. `bin.integration.test.mjs` sits at the
+      // package root, it runs `bin/nextly-build-admin-css.mjs`, and what that
+      // compiles is `__fixtures__/poc-plugin/admin.css` — so the task hash
+      // covered `src/**` while the CLI, the fixture and the test itself could
+      // all change without moving it. Turbo would then restore a previous pass
+      // for exactly the edits this suite exists to judge, and a cached green is
+      // indistinguishable from a real one.
+      //
+      // `$TURBO_EXTENDS$` appends to the root list rather than replacing it: a
+      // package task's `inputs` is a whole replacement otherwise, so restating
+      // the list here would silently drop whatever the root gains later.
+      //
+      // The theme is reached by RELATIVE PATH out of the package, which is
+      // unusual and is the only way this edge can exist. The fixture imports
+      // `../../../ui/src/styles/theme.css` because `@nextlyhq/ui` cannot be a
+      // dependency of this package — `ui` already depends on `admin-css` for
+      // the scoper, so the reverse edge is a cycle — and with no dependency
+      // there is no `^`-edge to carry the hash. Verified rather than assumed:
+      // editing that file moves this task's hash from `b1496e6d8c945e32` to a
+      // different value and restoring it returns the original, so the entry is
+      // doing work rather than merely being accepted.
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "bin/**",
+        "__fixtures__/**",
+        "*.test.mjs",
+        "../ui/src/styles/theme.css"
+      ]
+    }
+  }
+}
