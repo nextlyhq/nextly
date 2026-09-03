@@ -8,15 +8,29 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createSiteDataProvider } from "../../src/lib/site-content";
 
-/** The route whose dynamic blocks depend on a provider being wired in. */
-const BLOCKS_ROUTE = fileURLToPath(
-  new URL("../../src/app/blocks/[[...slug]]/page.tsx", import.meta.url)
-);
+/** The app directory every page route is found under. */
+const APP_DIR = fileURLToPath(new URL("../../src/app", import.meta.url));
+
+/** Every `page.tsx` beneath the app directory, path and source together. */
+function pageRoutes(): { path: string; source: string }[] {
+  const found: { path: string; source: string }[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name === "page.tsx")
+        found.push({ path: full, source: readFileSync(full, "utf-8") });
+    }
+  };
+  walk(APP_DIR);
+  return found;
+}
 
 /** A reader that records what it was asked and answers with one row. */
 function stubReader() {
@@ -35,31 +49,54 @@ function stubReader() {
   };
 }
 
-describe("the blocks route", () => {
-  it("hands its dynamic blocks a provider", () => {
-    /*
-     * Everything else in this file tests the provider in isolation, so all of it
-     * stays green when the route stops passing one — and a route with no `data`
-     * gets `emptyDataProvider`, which answers every `core/collection-loop` with
-     * nothing. The page then renders a section that lists posts and shows an
-     * empty box.
-     *
-     * Read from the route's SOURCE, which is the honest limit of a unit test
-     * here: a Next page module exports what the framework expects and nothing
-     * this file could import to inspect. The repository already checks a
-     * configuration file this way, in `ci-steps-report-independently.test.mjs`.
-     */
-    const source = readFileSync(BLOCKS_ROUTE, "utf-8");
+describe("every route that renders stored blocks", () => {
+  /*
+   * DERIVED from the app directory rather than named, so a route added later
+   * inherits this without anyone remembering to extend the list. The previous
+   * version checked one path by hand and stayed green while the authored route
+   * — the one real authors publish to — shipped without a provider.
+   *
+   * Read from SOURCE, which is the honest limit here: a Next page module
+   * exports what the framework expects and nothing this file could import to
+   * inspect. The repository already checks a configuration file this way, in
+   * `ci-steps-report-independently.test.mjs`.
+   */
+  const routes = pageRoutes().filter(route =>
+    route.source.includes("createBlocksPage(")
+  );
 
-    // Must-be-found: the file was read and is the route, so an absent `data`
-    // below means it is missing rather than that the path is wrong.
-    expect(source).toContain("createBlocksPage(");
-    expect(
-      source,
-      "the blocks route passes no `data` provider, so every core/collection-loop " +
-        "on a stored page renders an empty container"
-    ).toMatch(/\bdata:\s*siteDataProvider\b/);
+  it("finds the routes it is meant to judge", () => {
+    // Must-be-found, and by IDENTITY rather than count: a walk that reached the
+    // wrong directory, or a filter that matched nothing, would leave the case
+    // below asserting over an empty list and passing for that reason alone.
+    const paths = routes.map(route => route.path);
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths.some(p => p.includes("blocks"))).toBe(true);
+    expect(paths.some(p => p.includes("(frontend)"))).toBe(true);
   });
+
+  it.each(routes.map(route => [route.path, route] as const))(
+    "%s hands its dynamic blocks a provider",
+    (_path, route) => {
+      /*
+       * Everything else in this file tests the provider in isolation, so all of
+       * it stays green when a route stops passing one — and a route with no
+       * `data` gets `emptyDataProvider`, which answers every
+       * `core/collection-loop` with nothing. The page then renders a section
+       * that lists posts and shows an empty box.
+       *
+       * `\bdata:` rather than `data:`, because the latter is a substring of
+       * `metadata:`, which every one of these routes declares — an assertion
+       * satisfied by the wrong option would pass on exactly the defect this
+       * exists to catch.
+       */
+      expect(
+        route.source,
+        "this route passes no `data` provider, so every core/collection-loop " +
+          "on a stored page renders an empty container"
+      ).toMatch(/\bdata:\s*siteDataProvider\b/);
+    }
+  );
 });
 
 describe("the site's data provider", () => {
