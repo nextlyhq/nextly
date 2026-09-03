@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import type { BlockDocument, BlockNode } from "./document";
 import { isUnsetOverride } from "./document";
 import type { ValidationContext } from "./validation";
+import { MAX_ENVELOPE_ENTRIES } from "./limits";
 import { validate } from "./validation";
 
 /** A container node with one named slot, so slot pointers have a target. */
@@ -584,24 +585,155 @@ describe("the unset sentinel is an exact shape", () => {
 });
 
 describe("a huge envelope is bounded whatever the survey measured", () => {
-  it("refuses an exposed list longer than the document may have nodes", () => {
+  const exposure = (i: number) => ({
+    id: `e${i}`,
+    label: "L",
+    nodeId: "box",
+    propPath: "heading",
+    type: "text",
+  });
+
+  it("refuses a collection past the envelope limit", () => {
     // The survey measures what `JSON.stringify` would emit, so a field with a
     // `toJSON` returning `[]` is measured as two bytes while this walk reads
     // the real array. The envelope bounds what it actually reads.
-    const exposed = Array.from({ length: 12 }, (_, i) => ({
-      id: `e${i}`,
-      label: "L",
-      nodeId: "box",
-      propPath: "heading",
-      type: "text",
-    }));
-    const issues = validate(componentDoc({ exposed }), {
-      ...context("strict"),
-      limits: { maxDepth: 12, maxNodes: 10, maxBytes: 2_097_152 },
-    });
+    const exposed = Array.from({ length: MAX_ENVELOPE_ENTRIES + 1 }, (_, i) =>
+      exposure(i)
+    );
+    const issues = issuesFrom(componentDoc({ exposed }));
 
     expect(issues.map(i => i.code)).toEqual(["component-envelope-invalid"]);
-    expect(issues[0].message).toContain("12 exposed properties");
+    expect(issues[0].message).toContain(String(MAX_ENVELOPE_ENTRIES));
+  });
+
+  it("refuses an oversized keyed map without listing it first", () => {
+    // The map is counted with `for...in` and stopped at the budget rather than
+    // materialized through `Object.keys`, which would allocate the whole list
+    // before anything could refuse it — the allocation the budget exists to
+    // prevent.
+    const slots: Record<string, unknown> = {};
+    for (let i = 0; i <= MAX_ENVELOPE_ENTRIES; i += 1) {
+      slots[`s${i}`] = { label: "L", nodeId: "box", slot: "children" };
+    }
+    const issues = issuesFrom(componentDoc({ slots }));
+
+    expect(issues.map(i => i.code)).toEqual(["component-envelope-invalid"]);
+    expect(issues[0].path).toBe("/slots");
+  });
+
+  it("does not tie the envelope to how many nodes the document may hold", () => {
+    // Several exposures may legitimately address ONE node, so the node cap is
+    // not a bound on the envelope. Tying them refused a valid one-node
+    // component for exposing two of its own props.
+    const doc = componentDoc({
+      exposed: [
+        { ...exposure(1), propPath: "heading" },
+        { ...exposure(2), propPath: "subtitle" },
+      ],
+    });
+
+    expect(
+      validate(doc, {
+        ...context("strict"),
+        limits: { maxDepth: 12, maxNodes: 1, maxBytes: 2_097_152 },
+      })
+    ).toEqual([]);
+  });
+
+  it("reports rather than throwing when an array shadows forEach", () => {
+    // The array is a caller's object. Its `forEach` may be anything, and this
+    // function's whole contract is to RETURN issues about malformed input
+    // rather than throw on it.
+    const exposed: unknown[] = [exposure(1)];
+    (exposed as { forEach?: unknown }).forEach = null;
+
+    expect(() => codesFrom(componentDoc({ exposed }))).not.toThrow();
+  });
+});
+
+describe("a malformed node does not crash the envelope", () => {
+  it("reports rather than throwing when a node stores a null slots map", () => {
+    // `hasOwnProperty.call(null, ...)` throws. A malformed import is what this
+    // function exists to describe, so turning one into a crash describes
+    // nothing — and the main node walk is what reports the bad map itself.
+    const doc = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        { id: "box", type: "core/box", version: 1, props: {}, slots: null },
+      ],
+      slots: { body: { label: "Body", nodeId: "box", slot: "children" } },
+    } as unknown as BlockDocument;
+
+    expect(() => issuesFrom(doc)).not.toThrow();
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["a number", 7],
+    ["empty", ""],
+  ])(
+    "refuses a slot name that is %s, even on an empty container",
+    (_l, bad) => {
+      // The node question was answered first, so an empty container accepted
+      // `undefined` as its region name — the one value the contract promises a
+      // consumer will never see.
+      const doc = {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [{ id: "box", type: "core/box", version: 1, props: {} }],
+        slots: { body: { label: "Body", nodeId: "box", slot: bad } },
+      } as unknown as BlockDocument;
+
+      // `toContain`, because a missing key is ALSO a JSON loss the survey
+      // reports as `document-lossy` — a separate and correct signal, not a
+      // second complaint about the slot.
+      expect(codesFrom(doc)).toContain("exposed-slot-missing");
+    }
+  );
+});
+
+describe("a select offers each value once", () => {
+  it("refuses two options sharing a value", () => {
+    // An override stores only the value, so the two are indistinguishable
+    // after the author chooses: the menu shows two labels and both resolve
+    // identically, with nothing recording which was picked.
+    const issues = issuesFrom(
+      componentDoc({
+        exposed: [
+          {
+            ...goodExposure,
+            type: "select",
+            options: [
+              { value: "a", label: "First" },
+              { value: "a", label: "Second" },
+            ],
+          },
+        ],
+      })
+    );
+
+    expect(issues.map(i => i.code)).toEqual(["exposed-options-invalid"]);
+    expect(issues[0].path).toBe("/exposed/0/options/1");
+  });
+
+  it("accepts distinct values with distinct labels", () => {
+    expect(
+      codesFrom(
+        componentDoc({
+          exposed: [
+            {
+              ...goodExposure,
+              type: "select",
+              options: [
+                { value: "a", label: "First" },
+                { value: "b", label: "Second" },
+              ],
+            },
+          ],
+        })
+      )
+    ).toEqual([]);
   });
 });
 

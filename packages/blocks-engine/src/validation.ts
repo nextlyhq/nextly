@@ -22,7 +22,11 @@ import {
   isBlockType,
 } from "./document";
 import { describeValue, pointer } from "./issue-text";
-import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
+import {
+  DEFAULT_LIMITS,
+  LIMIT_WARNING_RATIO,
+  MAX_ENVELOPE_ENTRIES,
+} from "./limits";
 import type { DocumentLimits } from "./limits";
 import { surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
@@ -1570,35 +1574,77 @@ function nodesById(nodes: BlockNode[], maxNodes: number) {
 }
 
 /**
- * Whether a collection is small enough to be worth walking, reporting once
- * when it is not.
+ * Walk an untrusted array, bounded, without calling a method on it.
  *
- * Its OWN budget rather than a share of the survey's verdict. The survey
- * measures what `JSON.stringify` would emit, so a field carrying a `toJSON`
- * that returns `[]` is measured as two bytes while the walks below read the
- * real array by ordinary property access — a document that passes a 200-byte
- * survey can still hold a hundred thousand entries here. The envelope has to
- * bound the collection it actually reads.
+ * Two hazards in one helper, because the envelope reads arrays a caller
+ * supplied and both apply to every one of them.
  *
- * The node cap is the bound because the envelope POINTS INTO the node forest:
- * more exposures than the document may contain nodes describes pointers that
- * cannot all resolve, whatever else is wrong with it.
+ * BOUNDED, on the collection's own terms. The survey measures what
+ * `JSON.stringify` would emit, so a field carrying a `toJSON` returning `[]`
+ * is measured as two bytes while this reads the real array by ordinary
+ * property access — a document that passes a 200-byte survey can still hold a
+ * hundred thousand entries. Nothing upstream bounds what is read here.
+ *
+ * BY INDEX, never `forEach`. The array is a caller's object, so its `forEach`
+ * may be shadowed with a non-function, and validation would throw where its
+ * whole contract is to RETURN issues about malformed input.
+ *
+ * @returns false when the collection was refused for its size, so a caller
+ * skips the work rather than reporting a fault per entry on top of it.
  */
-function withinBudget(
+function eachBounded(
   items: readonly unknown[],
   path: string,
   what: string,
-  maxNodes: number,
+  issues: ValidationIssue[],
+  visit: (entry: unknown, index: number) => void
+): boolean {
+  if (!withinBudget(items.length, path, what, issues)) return false;
+  for (let i = 0; i < items.length; i += 1) visit(items[i], i);
+  return true;
+}
+
+/** Report once when a collection is too large to be worth walking. */
+function withinBudget(
+  size: number,
+  path: string,
+  what: string,
   issues: ValidationIssue[]
 ): boolean {
-  if (items.length <= maxNodes) return true;
+  if (size <= MAX_ENVELOPE_ENTRIES) return true;
   issues.push({
     path,
     code: "component-envelope-invalid",
     severity: "error",
-    message: `A component declares ${items.length} ${what}, more than the ${maxNodes} nodes a document may contain.`,
+    message: `A component declares ${size} ${what}, more than the ${MAX_ENVELOPE_ENTRIES} an envelope may hold.`,
   });
   return false;
+}
+
+/**
+ * The own keys of an untrusted record, or `null` when there are too many.
+ *
+ * Counted with `for...in` and stopped at the budget rather than materializing
+ * `Object.keys` first: a map with a hundred thousand keys would otherwise be
+ * enumerated into an array in full before anything could refuse it, which is
+ * the allocation the budget exists to prevent.
+ */
+function ownKeysBounded(
+  record: object,
+  path: string,
+  what: string,
+  issues: ValidationIssue[]
+): string[] | null {
+  const keys: string[] = [];
+  for (const key in record) {
+    if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
+    if (keys.length >= MAX_ENVELOPE_ENTRIES) {
+      withinBudget(keys.length + 1, path, what, issues);
+      return null;
+    }
+    keys.push(key);
+  }
+  return keys;
 }
 
 /** One `exposed` entry, before anything about it has been checked. */
@@ -1632,9 +1678,9 @@ function validateComponentEnvelope(
   issues: ValidationIssue[]
 ): void {
   const index = nodesById(nodes, maxNodes);
-  const exposedIds = checkExposedList(doc.exposed, index, maxNodes, issues);
-  checkExposedSlots(doc.slots, index, maxNodes, issues);
-  checkVariants(doc.variants, exposedIds, maxNodes, issues);
+  const exposedIds = checkExposedList(doc.exposed, index, issues);
+  checkExposedSlots(doc.slots, index, issues);
+  checkVariants(doc.variants, exposedIds, issues);
 }
 
 /**
@@ -1647,7 +1693,6 @@ function validateComponentEnvelope(
 function checkExposedList(
   exposed: unknown,
   index: Map<string, BlockNode>,
-  maxNodes: number,
   issues: ValidationIssue[]
 ): ReadonlySet<string> {
   const exposedIds = new Set<string>();
@@ -1663,13 +1708,7 @@ function checkExposedList(
     return exposedIds;
   }
 
-  if (
-    !withinBudget(exposed, "/exposed", "exposed properties", maxNodes, issues)
-  ) {
-    return exposedIds;
-  }
-
-  exposed.forEach((entry: unknown, i: number) => {
+  eachBounded(exposed, "/exposed", "exposed properties", issues, (entry, i) => {
     checkExposedProperty(entry, `/exposed/${i}`, index, exposedIds, issues);
   });
   return exposedIds;
@@ -1679,7 +1718,6 @@ function checkExposedList(
 function checkExposedSlots(
   slots: unknown,
   index: Map<string, BlockNode>,
-  maxNodes: number,
   issues: ValidationIssue[]
 ): void {
   if (slots === undefined) return;
@@ -1694,8 +1732,8 @@ function checkExposedSlots(
     return;
   }
 
-  const ids = Object.keys(slots);
-  if (!withinBudget(ids, "/slots", "exposed slots", maxNodes, issues)) return;
+  const ids = ownKeysBounded(slots, "/slots", "exposed slots", issues);
+  if (ids === null) return;
 
   for (const id of ids) {
     checkExposedSlot(slots[id], id, pointer("/slots", id), index, issues);
@@ -1877,24 +1915,40 @@ function checkExposedOptions(
   }
 
   const at = pointer(path, "options");
-  options.forEach((option: unknown, i: number) => {
+  const seen = new Set<string>();
+  eachBounded(options, at, "select options", issues, (option, i) => {
     if (
-      isPlainRecord(option) &&
-      typeof option.value === "string" &&
-      typeof option.label === "string"
+      !isPlainRecord(option) ||
+      typeof option.value !== "string" ||
+      typeof option.label !== "string"
     ) {
+      issues.push({
+        // One segment per call. `pointer` escapes its token whole, so a single
+        // call with "options/0" emits `options~10` — a pointer that resolves
+        // to nothing, in the field whose purpose is to let a machine locate
+        // the value.
+        path: pointer(at, i),
+        code: "exposed-options-invalid",
+        severity: "error",
+        message: `An option of exposed property "${id}" needs a string value and label.`,
+      });
       return;
     }
-    issues.push({
-      // One segment per call. `pointer` escapes its token whole, so a single
-      // call with "options/0" emits `options~10` — a pointer that resolves to
-      // nothing, in the field whose purpose is to let a machine locate the
-      // value.
-      path: pointer(at, i),
-      code: "exposed-options-invalid",
-      severity: "error",
-      message: `An option of exposed property "${id}" needs a string value and label.`,
-    });
+
+    // An override stores only the VALUE, so two options sharing one cannot be
+    // told apart after the author chooses: the menu shows two labels and both
+    // resolve identically, with nothing recording which was picked.
+    if (seen.has(option.value)) {
+      issues.push({
+        path: pointer(at, i),
+        code: "exposed-options-invalid",
+        severity: "error",
+        message: `Exposed property "${id}" offers the value "${option.value}" twice.`,
+        suggestion: "Give each option its own value.",
+      });
+      return;
+    }
+    seen.add(option.value);
   });
 }
 
@@ -1983,7 +2037,7 @@ function checkExposedSlotMetadata(
   }
 
   const at = pointer(path, "allow");
-  allow.forEach((type: unknown, i: number) => {
+  eachBounded(allow, at, "allowed block types", issues, (type, i) => {
     // The same predicate the rest of this file holds a node's `type` to. A
     // second, weaker definition here would accept `"not-a-block"` as a block
     // type in the one place the field's whole purpose is naming block types.
@@ -2026,15 +2080,34 @@ function checkSlotOnNode(
   path: string,
   issues: ValidationIssue[]
 ): void {
+  // The NAME first, before any question about the node. A slot field that is
+  // missing, numeric or empty is wrong whatever the node holds, and answering
+  // the node question first let an empty container accept `undefined` as a
+  // region name — handing a consumer the one value the contract promises it
+  // will never see.
+  if (typeof slot !== "string" || slot === "") {
+    issues.push({
+      path: pointer(path, "slot"),
+      code: "exposed-slot-missing",
+      severity: "error",
+      message: `Exposed slot "${id}" names ${describeValue(slot)}, which is not a slot name.`,
+    });
+    return;
+  }
+
+  // A stored `slots` that is not a record is the main node walk's to report as
+  // `invalid-slots`. Reading it here first would reach `hasOwnProperty.call`
+  // with `null` and throw — turning a malformed import, which this function
+  // exists to describe, into a crash that describes nothing.
   const declared = node.slots;
-  if (declared === undefined) return;
-  if (typeof slot === "string" && declares(declared, slot)) return;
+  if (!isPlainRecord(declared)) return;
+  if (declares(declared, slot)) return;
 
   issues.push({
     path: pointer(path, "slot"),
     code: "exposed-slot-missing",
     severity: "error",
-    message: `Exposed slot "${id}" names slot ${describeValue(slot)}, which node "${node.id}" does not hold.`,
+    message: `Exposed slot "${id}" names slot "${slot}", which node "${node.id}" does not hold.`,
     suggestion: `Name one of: ${Object.keys(declared).join(", ") || "(none)"}.`,
   });
 }
@@ -2051,7 +2124,6 @@ function checkSlotOnNode(
 function checkVariants(
   variants: unknown,
   exposedIds: ReadonlySet<string>,
-  maxNodes: number,
   issues: ValidationIssue[]
 ): void {
   if (variants === undefined) return;
@@ -2065,20 +2137,11 @@ function checkVariants(
     return;
   }
 
-  if (
-    !withinBudget(
-      Object.keys(variants),
-      "/variants",
-      "variants",
-      maxNodes,
-      issues
-    )
-  ) {
-    return;
-  }
+  const names = ownKeysBounded(variants, "/variants", "variants", issues);
+  if (names === null) return;
 
-  for (const [name, variant] of Object.entries(variants)) {
-    checkVariant(name, variant, exposedIds, issues);
+  for (const name of names) {
+    checkVariant(name, variants[name], exposedIds, issues);
   }
 }
 

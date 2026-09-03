@@ -80,6 +80,7 @@ export type {
 } from "./document";
 
 export {
+  MAX_ENVELOPE_ENTRIES,
   MAX_DEPTH,
   MAX_NODES,
   DEFAULT_MAX_DOCUMENT_BYTES,
