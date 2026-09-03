@@ -2,6 +2,8 @@ import {
   blockPartClassName,
   blockTypeClassName,
   type BlockNode,
+  type ComponentUnresolvedReason,
+  type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
 import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
@@ -16,9 +18,31 @@ import {
 import type { BlockResolver } from "./resolver";
 import { isUnconditional } from "./visibility";
 
+/**
+ * What an author is told when a component did not load.
+ *
+ * Wording per cause, because the remedies are five different things and a
+ * single message would send an author looking in the wrong place for four of
+ * them. Development only: the production placeholder renders nothing.
+ */
+const UNRESOLVED_DETAIL: Readonly<Record<ComponentUnresolvedReason, string>> = {
+  missing: "No published component was found for this reference",
+  cycle: "This component contains itself",
+  "composed-depth": "This component is nested inside too many components",
+  "node-depth": "This component's own content is nested too deeply",
+  budget: "This page is already at its node limit",
+  malformed: "This instance names no component",
+};
+
 /** What a render needs to turn one node into output. */
 export interface BlockBoundaryProps {
-  node: BlockNode;
+  /**
+   * A node of the RESOLVED tree. Widened from `BlockNode` rather than narrowed
+   * to it: every stored node already satisfies this, so no caller changes, and
+   * the boundary is the one place that has to tell a composed node apart from
+   * an authored one.
+   */
+  node: ResolvedBlockNode;
   context: PageContext;
   blocks: BlockResolver;
   /** Node id to generated class, from the compiled stylesheet. */
@@ -911,6 +935,21 @@ export function BlockBoundary({
   // `=== true`, not truthy. A stored `"false"` or `{}` is truthy and would drop
   // public content that never failed anything; the repair pass normalises
   // structure but leaves this control flag as written.
+  // Asked before the definition lookup, because the reserved instance type has
+  // no registered block: falling through would draw "no block is registered
+  // for this type", which is true, tells an author nothing, and hides the one
+  // fact they can act on — that a component they placed did not load.
+  if (node.unresolvedComponent !== undefined) {
+    return (
+      <BlockPlaceholder
+        reason="unresolved-component"
+        type={node.type}
+        id={node.id}
+        detail={UNRESOLVED_DETAIL[node.unresolvedComponent]}
+      />
+    );
+  }
+
   if (node.migrationFailed === true) {
     return (
       <BlockPlaceholder
