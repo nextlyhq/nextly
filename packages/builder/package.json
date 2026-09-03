@@ -40,6 +40,11 @@
       "types": "./dist/shell-state.d.ts",
       "import": "./dist/shell-state.mjs",
       "default": "./dist/shell-state.mjs"
+    },
+    "./ops": {
+      "types": "./dist/ops.d.ts",
+      "import": "./dist/ops.mjs",
+      "default": "./dist/ops.mjs"
     }
   },
   "files": [
