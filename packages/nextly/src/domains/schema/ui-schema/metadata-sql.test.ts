@@ -471,8 +471,7 @@ describe("escaping the values a Builder-authored entity can carry", () => {
 
 describe("a column that is absent from the manifest must not clear the row", () => {
   it("omits the description column entirely when the manifest carries none", () => {
-    // 🔴 The correction this branch made after four rounds of the same finding.
-    // Written unconditionally — NULL when absent — the column does not merely
+    // 🔴 Written unconditionally — NULL when absent — the column does not merely
     // fail to set a description, it CLEARS one: every manifest projection that
     // does not carry the value erases what an earlier migration deployed, and
     // there are six such projections.
