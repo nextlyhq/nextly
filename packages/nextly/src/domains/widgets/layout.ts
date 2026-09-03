@@ -182,6 +182,17 @@ const PLACEMENT_RULES: ReadonlyArray<
     Number.isFinite(p.order) ? undefined : '"order" must be a finite number',
   p =>
     typeof p.hidden === "boolean" ? undefined : '"hidden" must be a boolean',
+  // 🔴 Optional, because a client written before columns sends none and that is
+  // a supported payload. Present and malformed is a different answer: without a
+  // rule, `column: "2"` fails the "did this state a column" predicate, becomes a
+  // 0, and is then read as an OMISSION -- so a broken client silently has its
+  // card kept where it was, or moved to the first column, instead of being told
+  // its request is malformed. `Number.isFinite` for the reason `order` gives:
+  // NaN and the infinities are numbers JSON cannot carry.
+  p =>
+    p.column === undefined || Number.isFinite(p.column)
+      ? undefined
+      : '"column", when given, must be a finite number',
   p => optionalTextProblem(p.size, "size"),
   p => optionalTextProblem(p.height, "height"),
   p =>

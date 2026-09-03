@@ -489,6 +489,23 @@ export function resolveDrop(
  * Sparse steps rather than 0..n, for the reason `renumber` gives: an insertion
  * between two cards then needs no renumbering at all.
  */
+/**
+ * The arrangement as it will be STORED, for the column count in force.
+ *
+ * 🔴 Bucketed at that count BEFORE the orders are assigned, because the count
+ * decides which cards share a column and therefore what the row-major reading
+ * is. Renumbering the array instead numbers the sequence the cards happened to
+ * be in: narrowing four columns to two folds two of them into the last, so the
+ * stored sequence keeps a reading of a grid that is no longer on screen, and
+ * the canonical order disagrees with the arrangement until the next drag.
+ */
+export function renumberForColumns(
+  placements: readonly WidgetPlacement[],
+  columnCount: number
+): WidgetPlacement[] {
+  return rowMajor(placementsByColumn(placements, columnCount));
+}
+
 function rowMajor(buckets: readonly WidgetPlacement[][]): WidgetPlacement[] {
   const depth = buckets.reduce(
     (deepest, bucket) => Math.max(deepest, bucket.length),

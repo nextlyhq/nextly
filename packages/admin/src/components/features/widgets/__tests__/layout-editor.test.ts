@@ -10,6 +10,7 @@ import {
   columnAffordance,
   columnFromDropData,
   dropSide,
+  renumberForColumns,
   resolveDrop,
   placementsByColumn,
   hasChanges,
@@ -643,6 +644,67 @@ describe("the stored sequence reads ACROSS the rows", () => {
       .sort((a, b) => a.order - b.order)
       .map(p => p.id);
     expect(column0).toEqual(["D", "A"]);
+  });
+});
+
+describe("narrowing the dashboard renumbers what is on screen", () => {
+  const at = (id: string, column: number, order: number): WidgetPlacement => ({
+    id,
+    widgetId: `w-${id}`,
+    column,
+    order,
+    hidden: false,
+  });
+
+  it("numbers the arrangement for the count in FORCE, not the one it was built at", () => {
+    // 🔴 Changing the count moves no card and changes every answer about where
+    // the cards are. At four columns these sit one per column with E under A;
+    // at two, the grid folds columns 2 and 3 into the last, so the reader sees
+    // [A, E] and [B, C, D] — read across the rows, A, B, E, C, D. Renumbering
+    // the array instead stores A, B, C, D, E, a reading of a grid that is no
+    // longer on screen, and the canonical order stays wrong until a drag.
+    const draft = [
+      at("A", 0, 0),
+      at("B", 1, 10),
+      at("C", 2, 20),
+      at("D", 3, 30),
+      at("E", 0, 40),
+    ];
+    const stored = renumberForColumns(draft, 2);
+    const sequence = [...stored]
+      .sort((a, b) => a.order - b.order || (a.column ?? 0) - (b.column ?? 0))
+      .map(p => p.id);
+    expect(sequence).toEqual(["A", "B", "E", "C", "D"]);
+  });
+
+  it("still orders each column of the NARROWED grid top to bottom", () => {
+    // The control: a sequence that interleaved wrongly could satisfy the row
+    // reading while scrambling the column the reader is looking at. Both are
+    // read off the same numbers, so both have to hold at once.
+    const draft = [
+      at("A", 0, 0),
+      at("B", 1, 10),
+      at("C", 2, 20),
+      at("D", 3, 30),
+      at("E", 0, 40),
+    ];
+    const stored = renumberForColumns(draft, 2);
+    expect(placementsByColumn(stored, 2).map(b => b.map(p => p.id))).toEqual([
+      ["A", "E"],
+      ["B", "C", "D"],
+    ]);
+  });
+
+  it("leaves an arrangement alone when the count did not change", () => {
+    // The other control. A renumber that always reshuffled would satisfy both
+    // cases above while rewriting every save that touched nothing.
+    const draft = [at("A", 0, 0), at("B", 1, 10), at("C", 0, 20)];
+    const stored = renumberForColumns(draft, 2);
+    expect(stored.map(p => p.id)).toEqual(["A", "B", "C"]);
+    expect(placementsByColumn(stored, 2).map(b => b.map(p => p.id))).toEqual([
+      ["A", "C"],
+      ["B"],
+    ]);
   });
 });
 
