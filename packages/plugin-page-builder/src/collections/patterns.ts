@@ -79,8 +79,17 @@ export function patternsCollection() {
       // looking for this, separated however they like. Held as one string
       // because it is matched, never enumerated.
       text({ name: "keywords" }),
+      // Required, and given no default. The browser reads this to decide
+      // whether a pattern is offered as something to INSERT or as a way to
+      // START a page, so a row without one cannot be placed anywhere — and
+      // nothing downstream can tell an author who has not answered yet from
+      // one whose answer happens to be the default. A default would make the
+      // form completable without a decision and file the mistakes silently;
+      // requiring it costs one click and the answer is always known to
+      // whoever saved the pattern.
       select({
         name: "granularity",
+        required: true,
         options: PATTERN_GRANULARITIES.map(value => ({
           label: value,
           value,

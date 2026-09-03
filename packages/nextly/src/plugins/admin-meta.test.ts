@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PluginDefinition } from "./plugin-context";
+import { definePlugin } from "./plugin-context";
 
 import { NEXTLY_ERROR_STATUS } from "../errors/error-codes";
 import { NextlyError } from "../errors/nextly-error";
@@ -896,5 +897,131 @@ describe("dormant routes against the enabled set", () => {
     expect(metas.find(m => m.name === "foo")?.routes).toEqual([
       { method: "GET", path: "/bar/x", fullPath: "/plugins/foo/bar/x" },
     ]);
+  });
+});
+
+/**
+ * A menu item that spells a slug survives boot and breaks at navigation.
+ *
+ * `.rename()` moves a contributed collection and the permission its slug
+ * seeds, and nothing type-checks a path or a permission string, so the
+ * broken versions of these items all serialize. Each assertion below is
+ * written against one of them: a `to` still naming the declared slug, a
+ * `requiredPermission` still naming it, a literal path rewritten by a rule
+ * that should not have touched it, and the declared slug leaking through to
+ * the client beside the resolved one.
+ */
+describe("buildPluginAdminMeta menu slugs", () => {
+  /** A plugin owning `patterns`, offering it a menu item, optionally renamed. */
+  function withPatternsMenu(map?: Record<string, string>): PluginDefinition {
+    const plugin = definePlugin({
+      ...base,
+      contributes: {
+        collections: [{ slug: "patterns" } as never],
+        admin: {
+          menu: [
+            {
+              label: "Patterns",
+              collection: "patterns",
+              to: "/admin/collections/patterns",
+              icon: "LayoutTemplate",
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition);
+    return map ? (plugin.rename?.(map) ?? plugin) : plugin;
+  }
+
+  const menuOf = (plugin: PluginDefinition) =>
+    buildPluginAdminMeta([plugin], undefined)[0].menu;
+
+  it("points the item at the slug the host registered", () => {
+    // The control: the same declaration with nothing renamed has to resolve to
+    // the declared slug. Without it, a resolver that returned a constant, or
+    // one that dropped the item, would satisfy the renamed assertion below.
+    expect(menuOf(withPatternsMenu())?.[0]).toMatchObject({
+      to: "/admin/collections/patterns",
+      requiredPermission: "read-patterns",
+    });
+
+    expect(
+      menuOf(withPatternsMenu({ patterns: "saved-patterns" }))?.[0]
+    ).toMatchObject({
+      to: "/admin/collections/saved-patterns",
+      // The gate moves with the link. A rename seeds `read-saved-patterns`,
+      // so an item still asking for `read-patterns` is withheld from every
+      // non-super-admin who can open the list.
+      requiredPermission: "read-saved-patterns",
+    });
+  });
+
+  it("does not ship the declared slug beside the resolved one", () => {
+    const item = menuOf(withPatternsMenu({ patterns: "saved-patterns" }))?.[0];
+
+    // Two answers to one question, of which the stale one reads as
+    // authoritative because it is the name the plugin's own code uses.
+    expect(item).not.toHaveProperty("collection");
+  });
+
+  it("leaves an item that names no collection exactly as written", () => {
+    const plugin = definePlugin({
+      ...base,
+      contributes: {
+        collections: [{ slug: "patterns" } as never],
+        admin: {
+          menu: [
+            {
+              label: "Pages",
+              to: "/admin/collections/patterns",
+              icon: "Layout",
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition);
+    // The rename map COVERS the slug spelled in the path, so a resolver that
+    // rewrote paths by matching text rather than by reading `collection`
+    // would move this one. It must not: the item named no collection, and an
+    // author's literal path is not the framework's to reinterpret.
+    const renamed = plugin.rename?.({ patterns: "saved-patterns" }) ?? plugin;
+
+    expect(menuOf(renamed)?.[0]).toEqual({
+      label: "Pages",
+      to: "/admin/collections/patterns",
+      icon: "Layout",
+    });
+  });
+
+  it("resolves a nested item too", () => {
+    const plugin = definePlugin({
+      ...base,
+      contributes: {
+        collections: [{ slug: "patterns" } as never],
+        admin: {
+          menu: [
+            {
+              label: "Design",
+              to: "/admin/collections/patterns",
+              children: [
+                {
+                  label: "Patterns",
+                  collection: "patterns",
+                  to: "/admin/collections/patterns",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition);
+    const renamed = plugin.rename?.({ patterns: "saved-patterns" }) ?? plugin;
+
+    // A child is exactly as stranded as a parent, and is the one a resolver
+    // that only walked the top level would leave behind.
+    expect(menuOf(renamed)?.[0].children?.[0]).toMatchObject({
+      to: "/admin/collections/saved-patterns",
+      requiredPermission: "read-saved-patterns",
+    });
   });
 });

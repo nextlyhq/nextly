@@ -29,6 +29,10 @@ interface DeclaredField {
   relationTo?: string | string[];
   fields?: DeclaredField[];
   blocks?: { kinds?: string[] };
+  validate?: (
+    value: unknown,
+    args: { data: Record<string, unknown>; req: unknown }
+  ) => string | true;
 }
 
 /** Every collection the plugin contributes, by slug. */
@@ -61,26 +65,26 @@ describe("the composition stores reach a running site", () => {
     expect(bySlug.has(LAYOUTS_SLUG)).toBe(true);
   });
 
-  it("offers each store a menu entry gated on being able to read it", () => {
+  it("names the collection each entry points at, rather than spelling it", () => {
     const menu = (pageBuilder().contributes?.admin?.menu ?? []) as {
-      to?: string;
-      requiredPermission?: string;
+      label?: string;
+      collection?: string;
     }[];
-    const entry = (slug: string) =>
-      menu.find(item => item.to === `/admin/collections/${slug}`);
+    const entry = (label: string) => menu.find(item => item.label === label);
 
-    // A link offered to a role that will be refused the list behind it is
-    // worse than no link: the refusal arrives after the navigation, with
-    // nothing having said the screen was not theirs.
-    expect(entry(PATTERNS_SLUG)?.requiredPermission).toBe(
-      `read-${PATTERNS_SLUG}`
-    );
-    expect(entry(COMPONENTS_SLUG)?.requiredPermission).toBe(
-      `read-${COMPONENTS_SLUG}`
-    );
-    expect(entry(LAYOUTS_SLUG)?.requiredPermission).toBe(
-      `read-${LAYOUTS_SLUG}`
-    );
+    // Naming the collection is what makes the destination and the read gate
+    // follow a host's `.rename()`. An entry that spelled the slug into `to`
+    // and into `requiredPermission` would look identical on an installation
+    // that renamed nothing, and would send readers to a list that does not
+    // exist on one that did. Core resolves both; asserted there.
+    expect(entry("Patterns")?.collection).toBe(PATTERNS_SLUG);
+    expect(entry("Components")?.collection).toBe(COMPONENTS_SLUG);
+    expect(entry("Layouts")?.collection).toBe(LAYOUTS_SLUG);
+
+    // The control, and the reason the three above are not simply "every entry
+    // names a collection": Pages deliberately names none, so it keeps the
+    // ungated front door it has always had.
+    expect(entry("Pages")?.collection).toBeUndefined();
   });
 });
 
@@ -195,5 +199,68 @@ describe("a name identifies one row", () => {
 
     expect(slug?.required).toBe(true);
     expect(slug?.unique).toBe(true);
+  });
+});
+
+describe("a Layout fills each area once", () => {
+  const validateAreas = () => {
+    const areas = named(fieldsOf(layoutsCollection()), "areas");
+    return areas?.validate;
+  };
+
+  it("refuses two rows claiming the same area", () => {
+    // Not a cosmetic rule. An area is a POSITION, and the resolver reads the
+    // rows to decide what wraps a page: two `header` rows leave it picking
+    // whichever it reaches first, so the same Layout renders a different page
+    // depending on iteration order. The refusal has to happen at the write —
+    // once stored, nothing downstream can tell which row the author meant.
+    expect(
+      validateAreas()?.(
+        [
+          { area: "header", component: "a" },
+          { area: "header", component: "b" },
+        ],
+        { data: {}, req: {} }
+      )
+    ).toBe("Two rows both fill the header area");
+  });
+
+  it("accepts one row per area", () => {
+    // The control. A validator that refused everything would satisfy the
+    // assertion above while making every Layout unsaveable.
+    expect(
+      validateAreas()?.(
+        [
+          { area: "header", component: "a" },
+          { area: "footer", component: "b" },
+        ],
+        { data: {}, req: {} }
+      )
+    ).toBe(true);
+  });
+
+  it("says nothing about rows whose area is still unset", () => {
+    // Mid-edit: a row added and not yet filled in. Two of them are not two
+    // claims on one area, and reporting a collision here would refuse a save
+    // for a reason the author cannot act on. The `required` on that select is
+    // what speaks to an empty area.
+    expect(
+      validateAreas()?.([{ component: "a" }, { component: "b" }], {
+        data: {},
+        req: {},
+      })
+    ).toBe(true);
+  });
+});
+
+describe("a published pattern can always be classified", () => {
+  it("requires a granularity", () => {
+    // The browser reads granularity to decide whether a pattern is offered as
+    // something to insert or as a way to start a page. Optional, it saves and
+    // publishes as null, and the row is then valid, offered nowhere, and
+    // indistinguishable from one whose author simply has not answered.
+    expect(named(fieldsOf(patternsCollection()), "granularity")?.required).toBe(
+      true
+    );
   });
 });

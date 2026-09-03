@@ -108,6 +108,33 @@ export interface PluginMenuItem {
   label: string;
   /** Admin path to navigate to, e.g. `"/admin/collections/forms"`. */
   to: string;
+  /**
+   * The DECLARED slug of one of this plugin's own collections, when the item
+   * points at that collection's list.
+   *
+   * An integrator may `.rename({ forms: "contact-forms" })`, and the schema
+   * then registers only the renamed collection and seeds only its
+   * permissions. An item that spelled the declared slug into `to` would send
+   * every reader to a list that does not exist, and one that spelled it into
+   * `requiredPermission` would be withheld from the readers who hold the
+   * permission that WAS seeded. Naming the collection instead lets
+   * `buildPluginAdminMeta` re-derive both from the slug the host actually
+   * registered.
+   *
+   * `to` stays required, and stays the item's destination when nothing is
+   * renamed. Both are written from one slug constant at the declaration site,
+   * so they cannot say different things.
+   *
+   * Declaring this also gates the item on being able to READ that collection,
+   * because an item pointing at a list is worth offering only to someone the
+   * list will open for. An item that must carry no gate omits `collection`
+   * and writes its own `to`.
+   *
+   * Resolved away during serialization: the admin receives `to` and
+   * `requiredPermission` already carrying the resolved slug, and never sees
+   * this field.
+   */
+  collection?: string;
   /** Lucide icon name (resolved client-side). */
   icon?: string;
   /** Sort order within the plugin's items; lower = higher. Default 100. */

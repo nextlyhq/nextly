@@ -492,25 +492,32 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         // entry, so grouping them would mean widening that list — a change to
         // the admin's navigation model, which is a larger question than where
         // three links go.
+        //
+        // Each of the three names its `collection`, so a host that renames one
+        // gets a link to the collection it actually registered and a gate on
+        // the permission that slug actually seeds. Spelling either literally
+        // would strand the link and hide the item from the readers who can
+        // open the list. Pages names none, keeping the destination and the
+        // absent gate it has always had.
         menu: [
           { label: "Pages", to: "/admin/collections/pages", icon: "Layout" },
           {
             label: "Patterns",
+            collection: PATTERNS_SLUG,
             to: `/admin/collections/${PATTERNS_SLUG}`,
             icon: "LayoutTemplate",
-            requiredPermission: `read-${PATTERNS_SLUG}`,
           },
           {
             label: "Components",
+            collection: COMPONENTS_SLUG,
             to: `/admin/collections/${COMPONENTS_SLUG}`,
             icon: "Component",
-            requiredPermission: `read-${COMPONENTS_SLUG}`,
           },
           {
             label: "Layouts",
+            collection: LAYOUTS_SLUG,
             to: `/admin/collections/${LAYOUTS_SLUG}`,
             icon: "PanelsTopLeft",
-            requiredPermission: `read-${LAYOUTS_SLUG}`,
           },
         ],
         // No `schemaBuilderSlot` and no `entryFormToolbarSlot`.

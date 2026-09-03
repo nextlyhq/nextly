@@ -34,6 +34,7 @@
  *
  * @module collections/layouts
  */
+import type { RepeaterFieldValue } from "nextly/config";
 import {
   defineCollection,
   relationship,
@@ -48,6 +49,31 @@ import { COMPONENTS_SLUG } from "./components";
 
 /** The slug layouts are stored under. */
 export const LAYOUTS_SLUG = "layouts";
+
+/**
+ * Refuse a Layout that fills one area twice.
+ *
+ * Reads the rows rather than counting them: a row whose `area` is still empty
+ * is the author mid-edit, and the `required` on that select is what speaks to
+ * it. Only values actually chosen can collide.
+ */
+function rejectRepeatedAreas(value: RepeaterFieldValue): string | true {
+  const chosen: string[] = [];
+  for (const row of value ?? []) {
+    const area = (row as { area?: unknown }).area;
+    if (typeof area === "string" && area !== "") chosen.push(area);
+  }
+
+  const seen = new Set<string>();
+  for (const area of chosen) {
+    // Names the offending area rather than reporting that "an area" repeats.
+    // The rows carry no visible index, so a message without the name leaves
+    // the author scanning a list to find which two they have to reconcile.
+    if (seen.has(area)) return `Two rows both fill the ${area} area`;
+    seen.add(area);
+  }
+  return true;
+}
 
 /**
  * The plugin-owned `layouts` collection.
@@ -66,6 +92,13 @@ export function layoutsCollection() {
       textarea({ name: "description" }),
       repeater({
         name: "areas",
+        // An area is a POSITION, so two rows claiming one is not a richer
+        // layout — it is a question with two answers. Without this the write
+        // succeeds and the ambiguity is handed to the resolver, which will
+        // pick whichever row it happens to reach first and render a second
+        // header on every page carrying the Layout. Refused at the write
+        // instead, where the author is still looking at the two rows.
+        validate: rejectRepeatedAreas,
         fields: [
           select({
             name: "area",

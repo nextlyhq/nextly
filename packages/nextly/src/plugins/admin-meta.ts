@@ -171,6 +171,50 @@ export { pluginAdminSlug } from "./plugin-slug";
  * applies) but contribute NO behavioral admin UI — no menu/pages/settings.
  */
 /**
+ * Resolve a menu item's destination and gate through the plugin's renameMap.
+ *
+ * An item naming one of the plugin's own collections is re-pointed at the slug
+ * the host REGISTERED, and gated on the read permission that slug seeds. An
+ * item naming none is copied through: it addresses something the rename cannot
+ * move, and rewriting a path the author wrote literally would be a different
+ * and much harder-to-predict rule.
+ *
+ * `collection` is dropped rather than forwarded. The admin's contract is a
+ * resolved `to` and a resolved `requiredPermission`; shipping the declared
+ * slug alongside them would offer a second answer to the same question, and
+ * the stale one is the one that looks authoritative.
+ *
+ * Children are resolved too, so a nested item is no more likely to be stranded
+ * than a top-level one.
+ */
+function resolvedMenuItem(
+  item: PluginMenuItem,
+  renameMap: Record<string, string>
+): PluginMenuItem {
+  const children = item.children?.map(child =>
+    resolvedMenuItem(child, renameMap)
+  );
+  const withChildren = children ? { ...item, children } : item;
+
+  // Destructured before the guard so the narrowing survives it: reading
+  // `item.collection` and then indexing `withChildren.collection` are two
+  // reads of two objects as far as the checker is concerned.
+  const { collection, ...rest } = withChildren;
+  if (collection === undefined) return withChildren;
+
+  const slug = renameMap[collection] ?? collection;
+  return {
+    ...rest,
+    to: `/admin/collections/${slug}`,
+    // The seeded per-collection read verb. Written from the resolved slug for
+    // the same reason `to` is: a rename moves the permission the seeder
+    // creates, and a gate naming the declared slug would hide the item from
+    // exactly the readers who can open the list.
+    requiredPermission: `read-${slug}`,
+  };
+}
+
+/**
  * The routes a plugin would actually serve, with the namespace they answer at.
  *
  * Asks `collectPluginRoutes` rather than restating its rules. That function is
@@ -308,7 +352,11 @@ export function buildPluginAdminMeta(
     // Behavioral admin UI only for enabled plugins.
     const admin = plugin.contributes?.admin;
     if (isEnabled && admin) {
-      if (admin.menu && admin.menu.length > 0) meta.menu = admin.menu;
+      if (admin.menu && admin.menu.length > 0) {
+        meta.menu = admin.menu.map(item =>
+          resolvedMenuItem(item, plugin.renameMap ?? {})
+        );
+      }
       if (admin.pages && admin.pages.length > 0) meta.pages = admin.pages;
       if (admin.settings) meta.settings = admin.settings;
       // Header customization. `header.slot` supersedes the
