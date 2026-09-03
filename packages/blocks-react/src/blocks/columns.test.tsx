@@ -144,30 +144,29 @@ describe("the columns pair", () => {
        */
       const css = compiledCss();
 
-      expect(css).toContain("gap: 1rem");
+      // The REFERENCE reaching the compiled sheet. That it resolves to a real
+      // length is the next case, which reads a rendered page — a compiled `var()`
+      // proves the property survived the catalog, not that anything defines it.
+      expect(css).toContain("gap: var(--site-space-4)");
       // Must-differ: the row is still a grid, so this is about the gutter and
       // not about the layout having been replaced by something simpler.
       expect(css).toContain("display: grid");
     });
 
-    it("keeps the gutter on a STORED stylesheet handed back with no context", () => {
+    it("RESOLVES the gutter on a STORED stylesheet handed back with no context", () => {
       /*
-       * The gutter as a VALUE on the rendered page, on the path a consumer with
-       * no write path takes: compile once, store the artifact, hand it back as
-       * `styles`.
+       * The path a consumer with no write path takes: compile once, store the
+       * artifact, hand it back as `styles`. It is the path a token gutter did
+       * not survive — nothing declared `--site-*` there, so the reference was a
+       * `var()` with nothing behind it, invalid at computed-value time, and
+       * `gap` fell back to `normal`: zero for a grid, and the exact defect this
+       * block was fixed for.
        *
-       * This case was written when that path defined no `--site-*` at all, so a
-       * `{ $token }` gutter arrived as a `var()` with nothing behind it — invalid
-       * at computed-value time, `gap` falling back to `normal`, which is zero for
-       * a grid and the exact defect this block was fixed for. The renderer now
-       * emits the token tier alongside the page CSS, so that reason no longer
-       * holds and the gutter is a length only because nothing has migrated it.
-       *
-       * Which changes what the assertion below DOES. It was a guard against a
-       * silent regression; it is now a pin, and it will fail on a migration that
-       * would render correctly. Read a failure here as the migration having
-       * happened and this case needing to assert the resolved gutter instead —
-       * not as the gutter having been lost.
+       * Both halves are asserted on ONE rendered page, because either alone is
+       * satisfied by the broken state. The reference without the declaration is
+       * precisely the defect; the declaration without the reference says only
+       * that a sheet was emitted, which is true of a page whose gutter went
+       * missing entirely.
        */
       const resolver = createBlockResolver([...coreBlocks]);
       const stored = resolvePageStyles(
@@ -185,10 +184,15 @@ describe("the columns pair", () => {
         <PageRenderer document={DOC} blocks={resolver} styles={stored} />
       );
 
-      expect(markup).toContain("gap: 1rem");
-      // Must-differ: no unresolved custom property is carrying the gutter, which
-      // is the failure this case exists to refuse rather than merely to describe.
-      expect(markup).not.toMatch(/gap:\s*var\(/);
+      // The reference the page CSS carries.
+      expect(markup).toContain("gap: var(--site-space-4)");
+      // And the declaration it resolves against, on the same page. Without this
+      // the assertion above passes on exactly the broken state.
+      expect(markup).toContain("--site-space-4:");
+      // The VALUE, so the migration is behaviour-preserving rather than merely
+      // resolvable: matched up to `;` or `}`, since the token block runs
+      // straight into the theme block after it.
+      expect(markup).toMatch(/--site-space-4:\s*1rem\s*[;}]/);
     });
 
     it("emits the column's min-width so a long child cannot force overflow", () => {
