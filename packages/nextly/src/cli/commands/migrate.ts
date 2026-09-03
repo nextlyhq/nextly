@@ -1054,29 +1054,42 @@ function advanceLiteralState(
   index: number,
   dialect: SupportedDialect | undefined,
   state: LiteralState
-): void {
+): number {
   const char = text[index];
-  const opener = quoteOpenerAt(char, dialect);
-  if (!state.inString && opener) {
-    state.inString = true;
-    state.stringChar = opener;
-    // Recorded when the literal OPENS: the `E` prefix is only visible here,
-    // and by the closing quote it is long past.
-    state.escapesWithBackslash = opensBackslashEscapedString(
-      text,
-      index,
-      opener,
-      dialect
-    );
-    return;
+  if (!state.inString) {
+    const opener = quoteOpenerAt(char, dialect);
+    if (opener) {
+      state.inString = true;
+      state.stringChar = opener;
+      // Recorded when the literal OPENS: the `E` prefix is only visible here,
+      // and by the closing quote it is long past.
+      state.escapesWithBackslash = opensBackslashEscapedString(
+        text,
+        index,
+        opener,
+        dialect
+      );
+    }
+    return 1;
   }
-  if (
-    state.inString &&
-    char === state.stringChar &&
-    closesLiteral(text, index, state.escapesWithBackslash)
-  ) {
-    state.inString = false;
-  }
+
+  if (char !== state.stringChar) return 1;
+
+  // Backslash-escaped: an ordinary character that happens to be the delimiter.
+  if (!closesLiteral(text, index, state.escapesWithBackslash)) return 1;
+
+  // 🔴 A DOUBLED delimiter escapes the delimiter and does NOT leave the
+  // literal. Closing on the first and reopening on the second looks harmless
+  // -- the state toggles twice and comes back correct -- but the REOPENED
+  // literal is a different one: `escapesWithBackslash` is recorded from the
+  // prefix at the opening quote, and the second quote of a pair is no longer
+  // adjacent to the `E` of a Postgres escape string. The mode is silently
+  // lost, so a later `\'` reads as the closing quote and the statement is cut
+  // at the next semicolon INSIDE the value.
+  if (text[index + 1] === state.stringChar) return 2;
+
+  state.inString = false;
+  return 1;
 }
 
 /**
@@ -1129,8 +1142,12 @@ function literalMask(sql: string, dialect?: SupportedDialect): boolean[] {
         continue;
       }
     }
-    advanceLiteralState(sql, i, dialect, state);
+    const consumed = advanceLiteralState(sql, i, dialect, state);
     mask[i] = state.inString;
+    if (consumed === 2) {
+      mask[i + 1] = state.inString;
+      i += 1;
+    }
   }
 
   return mask;
@@ -1238,7 +1255,12 @@ export function splitSqlStatements(
     // The bracket and backtick forms are applied per dialect rather than
     // everywhere: `[` is not a quote in Postgres, where it subscripts an array,
     // so treating it as one there would swallow ordinary SQL.
-    advanceLiteralState(cleanedSql, i, dialect, state);
+    const consumed = advanceLiteralState(cleanedSql, i, dialect, state);
+    if (consumed === 2) {
+      current += cleanedSql[i] + cleanedSql[i + 1];
+      i += 1;
+      continue;
+    }
 
     if (char === ";" && !state.inString) {
       const statement = current.trim();

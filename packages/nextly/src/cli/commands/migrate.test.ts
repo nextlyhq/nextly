@@ -297,3 +297,41 @@ describe("a line inside a string literal is data, not SQL", () => {
     expect(out).toHaveLength(2);
   });
 });
+
+describe("a doubled delimiter escapes the delimiter, it does not end the literal", () => {
+  it("keeps a Postgres escape string whole across a doubled quote", () => {
+    // 🔴 Closing on the first quote of `''` and reopening on the second looks
+    // harmless — the state toggles twice and comes back correct — but the
+    // reopened literal is a DIFFERENT one. `escapesWithBackslash` is read from
+    // the prefix at the opening quote, and the second quote of a pair is no
+    // longer adjacent to the `E`. The mode is lost, the later `\'` reads as the
+    // closing quote, and the statement is cut at the semicolon INSIDE the
+    // value.
+    //
+    // Asserted on CONTENT, not on the number of statements: the splitter drops
+    // fragments carrying no SQL keyword, so the tail of a mis-split statement
+    // disappears and a count assertion passes on the broken implementation.
+    const sql = `SELECT E'it''s left \\'; right' AS v;`;
+    expect(splitSqlStatements(sql, "postgresql").join(" | ")).toBe(
+      `SELECT E'it''s left \\'; right' AS v`
+    );
+  });
+
+  it("keeps an ordinary literal whole across a doubled quote", () => {
+    // The control. This case is correct even when the pair is treated as a
+    // close followed by an open, because both literals carry the same escape
+    // mode — so it passes on the broken implementation and shows that the fix
+    // is about the MODE rather than about doubled quotes in general.
+    const sql = `INSERT INTO "t" ("d") VALUES ('it''s fine; really');`;
+    expect(splitSqlStatements(sql, "postgresql").join(" | ")).toBe(
+      `INSERT INTO "t" ("d") VALUES ('it''s fine; really')`
+    );
+  });
+
+  it("still CLOSES on a single delimiter, so a doubled one is not assumed", () => {
+    // 🔴 The other direction: an implementation that never closed on a quote
+    // adjacent to another would swallow the boundary between two statements.
+    const sql = `INSERT INTO "t" ("d") VALUES ('a');INSERT INTO "t" ("d") VALUES ('b');`;
+    expect(splitSqlStatements(sql, "postgresql")).toHaveLength(2);
+  });
+});
