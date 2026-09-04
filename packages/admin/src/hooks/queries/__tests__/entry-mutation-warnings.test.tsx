@@ -251,3 +251,56 @@ describe("a BULK write", () => {
     expect(infoSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("a bulk consumer that renders its own feedback", () => {
+  it("receives the warnings in the callback payload", async () => {
+    // With `showToast` off, the built-in presenter is the ONLY thing that was
+    // reading `response.warnings` — so the surface that opted out in order to
+    // handle them itself was the one surface that could not see them.
+    bulkUpdateSpy.mockResolvedValue({
+      message: "Updated 1 entry.",
+      items: [entry],
+      errors: [],
+      warnings: [
+        {
+          severity: "notice",
+          phase: "afterUpdate",
+          collection: "posts",
+          code: "COMPONENTS_NOT_PUBLISHED",
+          message: "This page embeds 1 component that is not published.",
+          entryId: "e1",
+        },
+      ],
+    });
+
+    let seen: unknown;
+    const client = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    const { result } = renderHook(
+      () =>
+        useBulkUpdateEntries({
+          collectionSlug: "posts",
+          showToast: false,
+          onComplete: (payload: unknown) => {
+            seen = payload;
+          },
+        }) as MutationLike,
+      { wrapper: makeWrapper(client) }
+    );
+
+    await result.current.mutateAsync({
+      ids: ["e1"],
+      data: { status: "published" },
+    });
+
+    await waitFor(() => {
+      expect(seen).toBeDefined();
+    });
+    expect((seen as { warnings?: unknown[] }).warnings).toHaveLength(1);
+    // The control: the toast really was suppressed, so this asserts the
+    // callback route rather than passing because both fired.
+    expect(successSpy).not.toHaveBeenCalled();
+    expect(infoSpy).not.toHaveBeenCalled();
+  });
+});

@@ -79,7 +79,6 @@ export interface ReadinessDirectApi {
     limit?: number;
     status?: "published" | "draft" | "all";
     overrideAccess?: boolean;
-    depth?: number;
     // Part of this call's SHAPE, so a caller cannot build a read here that
     // omits one and silently inherits the instance's identity.
     user?: undefined;
@@ -449,6 +448,13 @@ function parseJson(value: string): unknown {
  * every published component missing from it reads as unpublished — a warning
  * manufactured by the read rather than by the data.
  *
+ * Relationship DEPTH is left unstated, which is what the renderer's own
+ * component read does. Forcing it to zero would hand an `afterRead` hook bare
+ * ids where the render gives it expanded relationships, so a hook whose blocks
+ * output depends on one produces a different component graph here than the page
+ * actually draws — and this check would then miss an unpublished component, or
+ * name one no visitor meets.
+ *
  * `overrideAccess` because the question is about the document's lifecycle, not
  * about what this caller may read: an author who cannot read a component still
  * needs to know their page has a hole, and judging it by their permissions
@@ -468,7 +474,6 @@ function storeSource(
         limit: chunk.length,
         status: "published",
         overrideAccess: true,
-        depth: 0,
         // BOTH identity channels cleared, stated rather than omitted.
         // `mergeConfig` spreads the pooled reader's defaults UNDER the call, so
         // an omitted key restores whatever identity the instance was booted
