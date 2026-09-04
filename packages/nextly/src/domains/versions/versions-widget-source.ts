@@ -59,14 +59,17 @@ import {
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
-import { registeredContentSlugs } from "../../services/lib/registered-content-slugs";
 import type { WidgetQuery } from "../widgets/query";
 import type { WidgetResult } from "../widgets/result";
 import { failUnavailableSourceOrOp } from "../widgets/sources";
 import { VERSIONS_SOURCE_ID } from "../widgets/system-source-ids";
 import { registerSystemSource } from "../widgets/system-sources";
 
-import { visiblePendingEdits } from "./pending-edit-visibility";
+import {
+  resolvePendingEditScope,
+  visiblePendingEdits,
+  type PendingEditScope,
+} from "./pending-edit-visibility";
 import {
   documentKey,
   newestPerDocument,
@@ -97,6 +100,34 @@ const DEFAULT_LIMIT = 5;
  * a wrong answer: a document quota could not tell "exactly this many" from "more
  * than this many", and a shortcut on documents already seen conflated meeting a
  * document with deciding it, since authorization is per language.
+ *
+ * 🔴 A KNOWN, ACCEPTED disclosure lives here, recorded so nobody has to
+ * rediscover it and nobody removes it believing it accidental. `atLeast` is set
+ * when this budget binds, and the budget counts RAW rows — so whether a caller
+ * sees `5` or `5+` depends on how many draft rows exist in the collections they
+ * can reach, their colleagues' included. One bit, about total VOLUME: never
+ * which documents, whose, or when they were touched, which is what the
+ * pre-`visiblePendingEdits` card exposed.
+ *
+ * It is not removable while any bound exists, and that is the whole argument.
+ * The budget is here to bound WORK, work is raw rows, and any flag derived from
+ * a bound on unfiltered data is a fact about unfiltered data. Deriving it from
+ * the visible set instead means having no bound at all, so one dashboard load
+ * on a large install walks the entire pending-edit index — a self-inflicted
+ * denial of service on a page every session opens, traded for one bit.
+ *
+ * Nor does the index make the bound cheap enough to raise out of reach. The
+ * page-level cost is not the row read: each page also asks the ordinary read
+ * path which of its documents survive, once per slug and language, and THOSE
+ * scale with the number of pages. Raising this multiplies the authorization
+ * round trips behind every dashboard, which is the cost the number was chosen
+ * against.
+ *
+ * The general fix is to let the database apply the access rule itself, as
+ * Payload and Directus do — exact, cheap and leak-free. It needs the version
+ * row to carry or join the fields a rule names, and a `custom` rule is an
+ * arbitrary function that cannot be pushed down at all, so it closes the common
+ * case and not this one. Its own piece of work, not a patch here.
  */
 const COUNT_ROW_BUDGET = 2000;
 
@@ -296,7 +327,8 @@ async function gatherVisibleDocuments(
   rowBudget: number,
   order: PendingEditOrder,
   readableSlugs: readonly string[],
-  caller: ReadCaller
+  caller: ReadCaller,
+  scope: PendingEditScope
 ): Promise<{ documents: VersionMeta[]; exhausted: boolean }> {
   const gathered: Gathered = { documents: [], seen: new Set() };
   let after: PendingEditCursor | undefined;
@@ -318,7 +350,7 @@ async function gatherVisibleDocuments(
     const last = rows[rows.length - 1];
     after = { updatedAt: last.updatedAt, id: last.id };
 
-    const visible = await visiblePendingEdits(rows, caller);
+    const visible = await visiblePendingEdits(rows, caller, scope);
     if (absorbPage(gathered, visible, wanted)) {
       return { documents: gathered.documents, exhausted: false };
     }
@@ -340,9 +372,26 @@ async function resolveVersions(
   // Resolved ONCE per query and passed down, rather than each read asking
   // again: the two ops answer about the same set, and two resolutions of one
   // caller's permissions are two chances to disagree.
+  //
+  // 🔴 The candidate slugs come from the SAME snapshot the per-page visibility
+  // pass is judged against, so one query cannot be bounded by one enumeration
+  // of the registry and then filtered by another. Two reads can disagree — a
+  // collection registered between them is in the second and not the first —
+  // and the rows in between would be decided by a set that never bounded them.
+  const scope = await resolvePendingEditScope();
+  if (scope.degraded) {
+    // A registry that could not be enumerated makes every answer here a floor
+    // with nothing to say so. `0` would be a positive claim about documents
+    // this never managed to look for, and reporting a failure is the honest
+    // form of "not known" -- the grid renders one per card, so the rest of the
+    // dashboard still draws.
+    throw NextlyError.internal({
+      logContext: { reason: "content-registry-unreachable" },
+    });
+  }
   const readableSlugs = [
     ...(await readableEntities(
-      await registeredContentSlugs(),
+      [...scope.kinds.keys()],
       readAccessCaller(caller)
     )),
   ];
@@ -362,7 +411,8 @@ async function resolveVersions(
       // an id cannot be outrun by the rows being enumerated.
       "identity",
       readableSlugs,
-      caller
+      caller,
+      scope
     );
     return {
       op: "count",
@@ -385,7 +435,8 @@ async function resolveVersions(
       // reading a moving set -- and is why the COUNT does not order this way.
       "recency",
       readableSlugs,
-      caller
+      caller,
+      scope
     )
   ).documents;
   const names = selectedNames(query);

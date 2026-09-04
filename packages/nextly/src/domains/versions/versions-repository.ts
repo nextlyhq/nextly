@@ -42,8 +42,13 @@ const TABLE = VERSIONS_TABLE;
  * that does not match the documents it points at.
  *
  * Never mutated -- both consumers spread it into a fresh `and` array.
+ *
+ * Exported so `nextly_versions_pending_edits_idx` can be checked against it
+ * rather than against a second list of the same column names: an index that
+ * does not cover every predicate here stops serving the query it exists for,
+ * and a copy of this shape in a test could not notice that.
  */
-const WORKING_DRAFT_SHAPE: readonly VersionsWhereCondition[] = [
+export const WORKING_DRAFT_SHAPE: readonly VersionsWhereCondition[] = [
   { column: "isAutosave", op: "=", value: false },
   { column: "versionNo", op: "IS NULL" },
   { column: "status", op: "=", value: "draft" },
@@ -183,13 +188,24 @@ function olderThan(
   };
 }
 
-/** The ordering clause for `order`, unique in both cases so a cursor is exact. */
+/**
+ * The ordering clause for `order`, unique in both cases so a cursor is exact.
+ *
+ * 🔴 No `nulls` placement, and its absence is deliberate. `updated_at` is
+ * NOT NULL on all three dialects, so no row can sit in either group and the
+ * per-dialect default has nothing to disagree about — but asking for one is not
+ * free: the adapter spells `nulls` as a LEADING `updated_at IS NULL` sort key,
+ * an expression `nextly_versions_pending_edits_idx` cannot supply, so SQLite
+ * sorted the rows in a temp B-tree rather than reading them in index order. It
+ * bought a guarantee the column's own nullability already gives, and paid for
+ * it in the one place this ordering is used.
+ */
 function orderClause(
   order: PendingEditOrder
-): { column: string; direction: "desc"; nulls?: "last" }[] {
+): { column: string; direction: "desc" }[] {
   if (order === "identity") return [{ column: "id", direction: "desc" }];
   return [
-    { column: "updatedAt", direction: "desc", nulls: "last" },
+    { column: "updatedAt", direction: "desc" },
     { column: "id", direction: "desc" },
   ];
 }
@@ -435,6 +451,23 @@ export class VersionsRepository {
    * The snapshot is projected away. It is the largest column in the table and a
    * card that lists titles has no use for it.
    */
+  /**
+   * 🔴 Served by `nextly_versions_pending_edits_idx`, and by nothing else on
+   * this table. Every other index leads with `scope_kind`, which this query
+   * never constrains, so before that index existed SQLite answered the count
+   * with `SCAN nextly_versions USING INDEX sqlite_autoindex_nextly_versions_1`
+   * and the list with `SCAN nextly_versions` plus a temp B-tree, per page.
+   * Proving the count had seen every pending edit therefore meant reading every
+   * version ever captured: the caller's row budget bounded the rows it RECEIVED
+   * and nothing about the work the database did to find them.
+   *
+   * The index columns are this WHERE clause in order, then the cursor's own
+   * ordering. A single-collection install reads it in order and sorts nothing;
+   * with several collections the `IN` list is several ranges no engine here can
+   * merge, and the sort that follows is over working drafts alone rather than
+   * the whole table -- proportional to the number the card reports, not to the
+   * history behind it.
+   */
   async findPendingEditRows(input: {
     slugs: readonly string[];
     limit: number;
@@ -452,8 +485,7 @@ export class VersionsRepository {
       // a position exactly: `updatedAt` alone is not total -- SQLite stores
       // whole seconds, so drafts saved together tie -- and a cursor over a
       // non-unique key cannot say which of the tied rows a page ended on.
-      // `nulls` is stated because the default differs per dialect, and a limited
-      // list must not return different rows per engine.
+      // Neither states a `nulls` placement; `orderClause` says why.
       orderBy: orderClause(input.order),
       limit: input.limit,
     });

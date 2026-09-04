@@ -97,6 +97,17 @@ export const nextlyVersionsPg = pgTable(
       table.entryId,
       table.createdAt
     ),
+    // The dashboard's pending-edit cards. Column order is the WHERE clause of
+    // `findPendingEditRows` followed by its cursor; that function's docblock
+    // says why none of the indexes above can serve it.
+    index("nextly_versions_pending_edits_idx").on(
+      table.isAutosave,
+      table.status,
+      table.versionNo,
+      table.scopeSlug,
+      table.updatedAt,
+      table.id
+    ),
   ]
 );
 

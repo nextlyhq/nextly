@@ -22,33 +22,45 @@
 
 import { container } from "../../di/container";
 
+/** A registry's slugs, and whether they are all of them. */
+interface RegistryRead {
+  slugs: string[];
+  reachable: boolean;
+}
+
 /** The registered collection slugs, or none when the registry is unreachable. */
-async function collectionSlugs(): Promise<string[]> {
+async function collectionSlugs(): Promise<RegistryRead> {
   try {
     const collections = await container
       .get<{
         getAllCollections: () => Promise<Array<{ slug: string }>>;
       }>("collectionRegistryService")
       .getAllCollections();
-    return collections.map(collection => String(collection.slug));
+    return {
+      slugs: collections.map(collection => String(collection.slug)),
+      reachable: true,
+    };
   } catch {
     // Unreachable registry: contribute nothing rather than guess.
-    return [];
+    return { slugs: [], reachable: false };
   }
 }
 
 /** The registered single slugs, or none when the registry is unreachable. */
-async function singleSlugs(): Promise<string[]> {
+async function singleSlugs(): Promise<RegistryRead> {
   try {
     const singles = await container
       .get<{
         getAllSingles: () => Promise<Array<{ slug: string }>>;
       }>("singleRegistryService")
       .getAllSingles();
-    return singles.map(single => String(single.slug));
+    return {
+      slugs: singles.map(single => String(single.slug)),
+      reachable: true,
+    };
   } catch {
     // As above.
-    return [];
+    return { slugs: [], reachable: false };
   }
 }
 
@@ -84,12 +96,43 @@ export async function registeredContentSlugs(): Promise<string[]> {
 export async function registeredContentKinds(): Promise<
   Map<string, "collection" | "single">
 > {
+  return (await registeredContentSnapshot()).kinds;
+}
+
+/** What one registry enumeration saw, and whether it saw everything. */
+export interface ContentRegistrySnapshot {
+  kinds: Map<string, "collection" | "single">;
+  /**
+   * True when a registry could not be reached, so `kinds` is a FLOOR.
+   *
+   * 🔴 Reported rather than swallowed, because the two callers of this want
+   * opposite things from the same failure. An access decision wants the
+   * fail-closed empty set: admitting nothing is safe. A COUNT does not — "no
+   * documents have pending edits" is a positive claim, and answering it from a
+   * registry that could not be enumerated states as fact something never
+   * observed. Both readings stay available; neither is imposed here.
+   */
+  degraded: boolean;
+}
+
+/**
+ * One enumeration of both registries, with the kinds and the confidence.
+ *
+ * Resolved ONCE by a caller that makes several decisions from it. Asking again
+ * per page let a transient failure answer differently mid-walk: the pages read
+ * before it kept their rows, the page during it silently dropped every row it
+ * held, and the walk went on to publish the shortfall as a whole number.
+ */
+export async function registeredContentSnapshot(): Promise<ContentRegistrySnapshot> {
   const [collections, singles] = await Promise.all([
     collectionSlugs(),
     singleSlugs(),
   ]);
   const kinds = new Map<string, "collection" | "single">();
-  for (const slug of singles) kinds.set(slug, "single");
-  for (const slug of collections) kinds.set(slug, "collection");
-  return kinds;
+  for (const slug of singles.slugs) kinds.set(slug, "single");
+  for (const slug of collections.slugs) kinds.set(slug, "collection");
+  return {
+    kinds,
+    degraded: !collections.reachable || !singles.reachable,
+  };
 }
