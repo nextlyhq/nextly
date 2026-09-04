@@ -55,6 +55,7 @@ import {
 } from "./document";
 import { walkForest } from "./forest-walk";
 import {
+  countNodes,
   DEFAULT_LIMITS,
   MAX_COMPOSED_DEPTH,
   MAX_ENVELOPE_ENTRIES,
@@ -63,7 +64,7 @@ import {
 import { isPlainRecord } from "./plain-record";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
 import { hashId } from "./style/node-class";
-import { mintDomId } from "./tree";
+import { mintDomId, remapIdReferences } from "./tree";
 import { isConditionGated } from "./visibility";
 
 /**
@@ -285,6 +286,7 @@ export function resolveComponentInstances(
     // every one of those passes believes it is reading a bounded document.
     budget: limits.maxNodes - survey.count,
     taken: survey.ids,
+    takenDomIds: survey.domIds,
     minted: [],
     abort: undefined,
     referenced: [],
@@ -312,6 +314,8 @@ interface ResolveRun {
   budget: number;
   /** Every id in use, so a minted one cannot shadow a stored node. */
   taken: Set<string>;
+  /** The same, for the ids that reach the DOM rather than the document. */
+  takenDomIds: Set<string>;
   /**
    * The ids this run minted, in order, so a refused instance can give them
    * back. Host ids are not in it: they were never this run's to release.
@@ -348,6 +352,15 @@ interface HostSurvey {
   /** How many nodes the host already holds, instances included. */
   count: number;
   ids: Set<string>;
+  /**
+   * Every DOM id the host page already publishes.
+   *
+   * Seeded for the same reason node ids are. `mintDomId` promises uniqueness
+   * within the SUBTREE it copies, and the host is not in that subtree — so a
+   * page whose own `cssId` happens to equal a minted one gets back exactly the
+   * duplicate this remapping exists to remove.
+   */
+  domIds: Set<string>;
 }
 
 /**
@@ -359,6 +372,7 @@ interface HostSurvey {
  */
 function surveyHost(nodes: readonly unknown[], maxNodes: number): HostSurvey {
   const ids = new Set<string>();
+  const domIds = new Set<string>();
   let hasInstance = false;
   let truncated = false;
   let count = 0;
@@ -373,10 +387,26 @@ function surveyHost(nodes: readonly unknown[], maxNodes: number): HostSurvey {
     const node = entry.node;
     if (!isPlainRecord(node)) return "descend";
     if (typeof node.id === "string") ids.add(node.id);
+    collectDomIds(node, domIds);
     if (node.type === COMPONENT_INSTANCE_TYPE) hasInstance = true;
     return "descend";
   });
-  return { hasInstance, truncated, count, ids };
+  return { hasInstance, truncated, count, ids, domIds };
+}
+
+/** Every DOM id one stored node publishes, in either of the two places. */
+function collectDomIds(node: Record<string, unknown>, into: Set<string>): void {
+  const cssId = node.cssId;
+  if (typeof cssId === "string" && cssId !== "") into.add(cssId);
+  const attributes = node.attributes;
+  if (!isPlainRecord(attributes)) return;
+  const names = boundedOwnKeys(attributes, MAX_ENVELOPE_ENTRIES);
+  if (names === null) return;
+  for (const name of names) {
+    if (name.toLowerCase() !== "id") continue;
+    const value = ownEntry(attributes, name);
+    if (typeof value === "string" && value !== "") into.add(value);
+  }
 }
 
 /** The component a node references, or `undefined` if it references none. */
@@ -542,7 +572,10 @@ function expandInstance(
     },
   };
 
-  const inlined = cloneDefinitionForest(definition.nodes, ctx, 1);
+  const inlined = withRemappedIdReferences(
+    cloneDefinitionForest(definition.nodes, ctx, 1),
+    ctx
+  );
   if (inlined === null) {
     const reason = run.abort ?? "budget";
     run.abort = undefined;
@@ -569,8 +602,12 @@ function withInstanceDevices(
   roots: ResolvedBlockNode[],
   instance: ResolvedBlockNode
 ): ResolvedBlockNode[] {
+  // `isPlainRecord`, not `!== undefined`. A stored `visibility: null` is read
+  // as UNGATED by `isConditionGated`, so a null envelope reaches this line on
+  // the successful path and a direct property read throws — turning a
+  // resolvable page into an exception.
   const envelope = instance.visibility;
-  if (envelope === undefined) return roots;
+  if (!isPlainRecord(envelope)) return roots;
   const devices = envelope.devices;
   if (!isPlainRecord(devices)) return roots;
   const hidden = boundedOwnKeys(devices, MAX_ENVELOPE_ENTRIES);
@@ -578,6 +615,13 @@ function withInstanceDevices(
 
   return roots.map(root => {
     const own = root.visibility;
+    // An UNREADABLE envelope is left exactly as it is. `isConditionGated`
+    // reads a string or an array as gated — an author wrote a restriction it
+    // cannot parse — and rebuilding it as a plain object carrying only
+    // `devices` produces an envelope that same predicate calls unconditional.
+    // The node would then be served, which is the failure this whole function
+    // exists to prevent, reintroduced by the repair.
+    if (own !== undefined && !isPlainRecord(own)) return root;
     const merged: Record<string, unknown> = isPlainRecord(own?.devices)
       ? { ...own.devices }
       : {};
@@ -596,6 +640,53 @@ function withInstanceDevices(
       },
     };
   });
+}
+
+/**
+ * Point the inlined tree's id REFERENCES at where those ids ended up.
+ *
+ * A second pass, after every node has been minted, because a node may
+ * reference an id defined on one the walk had not reached yet — rewriting
+ * during the copy would leave every forward reference pointing at the
+ * original. `aria-labelledby` and `aria-describedby` are how a control is
+ * named and described to a screen reader, and a reference to an id that no
+ * longer exists is ignored in silence: the element simply loses its name,
+ * visibly to nobody who is not using assistive technology.
+ */
+function withRemappedIdReferences(
+  roots: ResolvedBlockNode[] | null,
+  ctx: InlineContext
+): ResolvedBlockNode[] | null {
+  if (roots === null || ctx.domIds.size === 0) return roots;
+  const rewrite = (nodes: ResolvedBlockNode[]): ResolvedBlockNode[] =>
+    nodes.map(node => {
+      const attributes = isPlainRecord(node.attributes)
+        ? remapIdReferences(node.attributes, ctx.domIds)
+        : node.attributes;
+      const slots = isPlainRecord(node.slots)
+        ? rewriteSlots(node.slots)
+        : node.slots;
+      if (attributes === node.attributes && slots === node.slots) return node;
+      return { ...node, attributes, slots };
+    });
+  const rewriteSlots = (
+    slots: Record<string, ResolvedBlockNode[]>
+  ): Record<string, ResolvedBlockNode[]> => {
+    let changed = false;
+    const next: Record<string, unknown> = {};
+    for (const name of Object.keys(slots)) {
+      const children = ownEntry(slots, name);
+      if (!Array.isArray(children)) {
+        defineEntry(next, name, children);
+        continue;
+      }
+      const rewritten = rewrite(children);
+      if (rewritten !== children) changed = true;
+      defineEntry(next, name, rewritten);
+    }
+    return changed ? (next as Record<string, ResolvedBlockNode[]>) : slots;
+  };
+  return rewrite(roots);
 }
 
 /** Everything one speculative expansion may have to give back. */
@@ -705,7 +796,7 @@ function suppliedSlots(
 ): Record<string, ResolvedBlockNode[]> | undefined {
   const slots = instance.slots;
   if (!isPlainRecord(slots)) return undefined;
-  const wanted = exposedSlotContent(slots, definition);
+  const wanted = exposedSlotContent(slots, definition, run);
   if (wanted === undefined) return undefined;
   return inlineHostSlots(wanted, run, scope, depth);
 }
@@ -726,12 +817,14 @@ function suppliedSlots(
  */
 function exposedSlotContent(
   slots: Record<string, ResolvedBlockNode[]>,
-  definition: ComponentDocument
+  definition: ComponentDocument,
+  run: ResolveRun
 ): Record<string, ResolvedBlockNode[]> | undefined {
-  const exposed = definition.slots;
-  if (!isPlainRecord(exposed)) return undefined;
+  const exposed = isPlainRecord(definition.slots) ? definition.slots : {};
   const ids = boundedOwnKeys(exposed, MAX_ENVELOPE_ENTRIES);
-  if (ids === null) return undefined;
+  refundDiscardedSlots(slots, new Set(ids ?? []), run);
+  if (ids === null || ids.length === 0) return undefined;
+
   const wanted: Record<string, ResolvedBlockNode[]> = {};
   let any = false;
   for (const id of ids) {
@@ -741,6 +834,33 @@ function exposedSlotContent(
     defineEntry(wanted, id, content);
   }
   return any ? wanted : undefined;
+}
+
+/**
+ * Give back the budget charged for slot content this composition discards.
+ *
+ * The host survey counts every node the document holds and the budget is what
+ * is LEFT under the cap after it, so content under a slot the definition no
+ * longer exposes is charged for and then dropped — and the page is refused
+ * room for a component whose result would have fitted. Refunded here rather
+ * than subtracted in the survey because only the definition knows which keys
+ * survive, and the survey runs before any definition is read.
+ *
+ * The savepoint covers it. If the instance is then refused, its stored slots
+ * travel with it into the result, and the refund is rolled back along with
+ * everything else so those nodes stay charged exactly as they should.
+ */
+function refundDiscardedSlots(
+  slots: Record<string, ResolvedBlockNode[]>,
+  kept: ReadonlySet<string>,
+  run: ResolveRun
+): void {
+  for (const name of Object.keys(slots)) {
+    if (kept.has(name)) continue;
+    const children = ownEntry(slots, name);
+    if (!Array.isArray(children)) continue;
+    run.budget += countNodes(children);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1075,7 +1195,7 @@ function applyScopedDomIds(
   const remap = (value: string): string => {
     const existing = ctx.domIds.get(value);
     if (existing !== undefined) return existing;
-    const minted = mintDomId(value, scoped.id);
+    const minted = claimDomId(ctx.run, mintDomId(value, scoped.id));
     ctx.domIds.set(value, minted);
     return minted;
   };
@@ -1172,6 +1292,30 @@ function fillPlannedSlots(
   for (const [name, content] of planned) {
     if (Object.prototype.hasOwnProperty.call(into, name)) continue;
     defineEntry(into, name, content);
+  }
+}
+
+/**
+ * Take a minted DOM id, or the first spelling of it nothing else is using.
+ *
+ * `mintDomId` is unique within the subtree it copies and says so; the host is
+ * outside that subtree, and so is every other instance on the page. Without
+ * this the remapping removes one class of duplicate id and leaves another.
+ *
+ * Deterministic: the same page and definitions mint in the same order, so the
+ * same suffix lands on the same node on every render.
+ */
+function claimDomId(run: ResolveRun, base: string): string {
+  if (!run.takenDomIds.has(base)) {
+    run.takenDomIds.add(base);
+    return base;
+  }
+  // Terminates: the set is finite and the suffix strictly increases.
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base}-${n}`;
+    if (run.takenDomIds.has(candidate)) continue;
+    run.takenDomIds.add(candidate);
+    return candidate;
   }
 }
 

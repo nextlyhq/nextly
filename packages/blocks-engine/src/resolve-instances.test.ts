@@ -16,6 +16,7 @@ import {
   type ComponentDocument,
 } from "./document";
 import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
+import { isConditionGated } from "./visibility";
 import {
   componentIdsIn,
   resolveComponentInstances,
@@ -74,6 +75,18 @@ const component = (
 
 const defs = (entries: Record<string, BlockDocument>): DefinitionsById =>
   new Map(Object.entries(entries));
+
+/**
+ * A node carrying a stored shape the published type forbids.
+ *
+ * Documents arrive from a database, an import or an older writer, so the
+ * resolver's contract is to survive shapes `BlockNode` cannot express — and a
+ * test that can only build well-typed nodes cannot reach the branches that
+ * exist for them. The hop through `unknown` is the assertion that this value
+ * came from storage rather than from a caller.
+ */
+const stored = (base: ResolvedBlockNode, extra: Record<string, unknown>) =>
+  ({ ...base, ...extra }) as unknown as ResolvedBlockNode;
 
 /** Every node of a resolved forest, in document order. */
 function flatten(nodes: readonly ResolvedBlockNode[]): ResolvedBlockNode[] {
@@ -933,6 +946,151 @@ describe("resolveComponentInstances bounds", () => {
 
     expect(result.unresolved.map(e => e.reason)).toEqual(["malformed"]);
     expect(idsOf(result.document)).toEqual(["i1"]);
+  });
+});
+
+describe("resolveComponentInstances defensive reads and references", () => {
+  it("rewrites an IDREF attribute to the id it now points at", () => {
+    const doc = page([instance("i1", "hero"), instance("i2", "hero")]);
+    const definitions = defs({
+      hero: component([
+        node("d1", { cssId: "help" }),
+        node("d2", { attributes: { "aria-describedby": "help" } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    // The reference must resolve to its target INSIDE the same instance.
+    expect(nodes[1]!.attributes!["aria-describedby"]).toBe(nodes[0]!.cssId);
+    expect(nodes[3]!.attributes!["aria-describedby"]).toBe(nodes[2]!.cssId);
+    // And the two instances must not both point at one target.
+    expect(nodes[1]!.attributes!["aria-describedby"]).not.toBe(
+      nodes[3]!.attributes!["aria-describedby"]
+    );
+    // A reference pointing at the ORIGINAL is the silent failure: it resolves
+    // to nothing and the element simply loses its accessible description.
+    expect(nodes[1]!.attributes!["aria-describedby"]).not.toBe("help");
+  });
+
+  it("survives an instance whose stored visibility is null", () => {
+    const doc = page([stored(instance("i1", "hero"), { visibility: null })]);
+    const definitions = defs({ hero: component([node("d1")]) });
+
+    expect(() => resolveComponentInstances(doc, definitions)).not.toThrow();
+  });
+
+  it("keeps a malformed root envelope fail-closed while merging devices", () => {
+    const doc = page([
+      {
+        ...instance("i1", "hero"),
+        visibility: { devices: { mobile: false } },
+      },
+    ]);
+    const definitions = defs({
+      hero: component([stored(node("d1"), { visibility: "restricted" })]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    // `isConditionGated` reads an unreadable envelope as GATED. Normalising it
+    // into a plain object with no `conditions` makes the later pass serve what
+    // was withheld.
+    expect(isConditionGated(nodes[0]!)).toBe(true);
+  });
+
+  it("refunds nodes discarded with an unexposed slot", () => {
+    const doc = page([
+      instance("i1", "hero", {}, { slots: { gone: [node("x"), node("y")] } }),
+    ]);
+    const definitions = defs({ hero: component([node("d1"), node("d2")]) });
+
+    // Host holds three nodes; two of them are discarded with the unexposed
+    // slot, so a two-node definition fits under a cap of three.
+    const result = resolveComponentInstances(doc, definitions, {
+      limits: { ...DEFAULT_LIMITS, maxNodes: 3 },
+    });
+
+    expect(result.unresolved).toEqual([]);
+    expect(flatten(result.document.nodes)).toHaveLength(2);
+  });
+
+  it("never mints a DOM id the host page already carries", () => {
+    const definitions = defs({
+      hero: component([node("d1", { cssId: "signup" })]),
+    });
+    const minted = resolveComponentInstances(
+      page([instance("i1", "hero")]),
+      definitions
+    ).document.nodes[0]!.cssId!;
+
+    const doc = page([node("host", { cssId: minted }), instance("i1", "hero")]);
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[0]!.cssId).toBe(minted);
+    expect(nodes[1]!.cssId).not.toBe(minted);
+  });
+
+  it("rewrites an id reference nested inside a slot", () => {
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        box("c1", [
+          node("d1", { cssId: "help" }),
+          node("d2", { attributes: { "aria-describedby": "help" } }),
+        ]),
+      ]),
+    });
+
+    const kids = resolveComponentInstances(doc, definitions).document.nodes[0]!
+      .slots!.children!;
+
+    // A rewrite that only walks the roots leaves every nested reference
+    // dangling, which is most of them: a component's markup is a tree.
+    expect(kids[1]!.attributes!["aria-describedby"]).toBe(kids[0]!.cssId);
+  });
+
+  it("refunds only the slots it discards, never the ones it uses", () => {
+    const doc = page([
+      instance("i1", "hero", {}, { slots: { body: [node("x"), node("y")] } }),
+    ]);
+    const definitions = defs({
+      hero: component([box("c1", []), node("d2")], {
+        slots: { body: { label: "Body", nodeId: "c1", slot: "children" } },
+      }),
+    });
+
+    // The instance's two slot nodes ARE in the result, so refunding them would
+    // buy room the document then spends twice and overrun the cap.
+    const result = resolveComponentInstances(doc, definitions, {
+      limits: { ...DEFAULT_LIMITS, maxNodes: 3 },
+    });
+
+    expect(flatten(result.document.nodes).length).toBeLessThanOrEqual(3);
+  });
+
+  it("leaves an id reference the definition does not own alone", () => {
+    const doc = page([
+      node("outside", { cssId: "app-status" }),
+      instance("i1", "hero"),
+    ]);
+    const definitions = defs({
+      hero: component([
+        node("d1", {
+          cssId: "own",
+          attributes: { "aria-controls": "own app-status" },
+        }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    // The first token addresses the definition's own node and moves; the
+    // second addresses the host page and must not, or a working relationship
+    // is broken by a copy that had nothing to do with it.
+    expect(nodes[1]!.attributes!["aria-controls"]).toBe(
+      `${nodes[1]!.cssId} app-status`
+    );
   });
 });
 

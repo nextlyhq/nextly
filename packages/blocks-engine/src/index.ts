@@ -121,6 +121,13 @@ export {
   // apply it — pattern insert and component composition — and a page may hold
   // the output of both, so a second spelling would put two ids on one target.
   mintDomId,
+  // And the other half of it: an id that MOVED leaves every reference to it
+  // pointing at nothing, and `aria-labelledby` resolving to nothing is an
+  // element losing its accessible name in silence. Published as data and as a
+  // function, because a surface that copies nodes without going through these
+  // helpers still has to know which attributes carry an id.
+  ID_REFERENCE_ATTRIBUTES,
+  remapIdReferences,
   duplicateNode,
   updateNode,
 } from "./tree";

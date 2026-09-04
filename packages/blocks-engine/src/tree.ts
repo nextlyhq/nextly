@@ -1077,7 +1077,16 @@ export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
   const [rebuilt] = mapForest([node], original =>
     reidOneKeepingReferences(original, nodeIds, domIds)
   );
-  return { node: rebuilt ?? node, nodeIds, domIds };
+  // A SECOND pass, because a node may reference an id defined on a node the
+  // first had not reached yet. Without it a copied `aria-labelledby` points at
+  // the original's id, so the copy loses its accessible name — the same gap
+  // composition has, closed the same way.
+  const [linked] = mapForest([rebuilt ?? node], copy =>
+    copy.attributes === undefined
+      ? copy
+      : { ...copy, attributes: remapIdReferences(copy.attributes, domIds) }
+  );
+  return { node: linked ?? rebuilt ?? node, nodeIds, domIds };
 }
 
 /** One node, re-identified, with its DOM id remapped rather than removed. */
@@ -1117,6 +1126,89 @@ function reidOneKeepingReferences(
 
   if (slots !== undefined) copy.slots = slots;
   return copy;
+}
+
+/**
+ * Attributes whose VALUE is an id, or a whitespace-separated list of ids.
+ *
+ * Remapping a `cssId` without these breaks every relationship built on it:
+ * `aria-labelledby` and `aria-describedby` are how a control is NAMED and
+ * DESCRIBED to a screen reader, and a reference to an id that no longer exists
+ * is silently ignored — the element simply loses its name. That failure is
+ * invisible to everyone who does not use assistive technology, which is why it
+ * is listed as data here rather than left to each copier to remember.
+ *
+ * Single-id and list-valued attributes are not separated, because the rewrite
+ * does not need them to be: a single id is a one-token list, and splitting on
+ * whitespace handles both without a second table to keep in step.
+ *
+ * Lowercase, and compared after folding, because HTML attribute names are
+ * case-insensitive and a stored `aria-labelledBy` addresses the same thing.
+ */
+export const ID_REFERENCE_ATTRIBUTES: readonly string[] = [
+  // HTML
+  "for",
+  "form",
+  "list",
+  "headers",
+  "itemref",
+  "popovertarget",
+  "anchor",
+  // ARIA
+  "aria-activedescendant",
+  "aria-controls",
+  "aria-describedby",
+  "aria-details",
+  "aria-errormessage",
+  "aria-flowto",
+  "aria-labelledby",
+  "aria-owns",
+];
+
+const ID_REFERENCE_SET = new Set(ID_REFERENCE_ATTRIBUTES);
+
+/**
+ * Point a node's id REFERENCES at wherever those ids ended up.
+ *
+ * Applied as a second pass, after every id has been minted, and that ordering
+ * is the whole reason it is a separate function: a node may reference an id
+ * defined on a node the walk has not reached yet, so rewriting during the copy
+ * would leave every forward reference pointing at the original.
+ *
+ * A token with no entry in the map is left ALONE rather than dropped. It
+ * addresses something outside the copied subtree — an element the host page
+ * owns, or one the application renders — and rewriting or removing it would
+ * break a relationship that was working.
+ *
+ * Returns the SAME record when nothing referenced anything, so the ordinary
+ * node allocates nothing.
+ */
+export function remapIdReferences(
+  attributes: Record<string, string>,
+  domIds: ReadonlyMap<string, string>
+): Record<string, string> {
+  if (domIds.size === 0) return attributes;
+  let changed = false;
+  const next: Record<string, string> = {};
+  for (const name of Object.keys(attributes)) {
+    const value = ownEntry(attributes, name);
+    if (
+      typeof value !== "string" ||
+      !ID_REFERENCE_SET.has(name.toLowerCase())
+    ) {
+      defineEntry(next, name, value as string);
+      continue;
+    }
+    // Split on whitespace so an IDREFS list is rewritten token by token; the
+    // separator is normalised to one space, which is what every parser reads
+    // the original as anyway.
+    const tokens = value.split(/\s+/).filter(token => token !== "");
+    const mapped = tokens.map(token => domIds.get(token) ?? token);
+    const rewritten = mapped.join(" ");
+    if (rewritten !== value) changed = true;
+    defineEntry(next, name, rewritten);
+  }
+  return changed ? next : attributes;
 }
 
 /**
