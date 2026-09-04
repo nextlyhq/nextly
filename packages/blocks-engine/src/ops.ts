@@ -19,6 +19,28 @@
  * would otherwise grow its own vocabulary that agrees with this one only until
  * one of them changed. `@nextlyhq/builder` re-exports these unchanged.
  *
+ * ## The complexity suppressions in this file
+ *
+ * Eleven functions here carry `fallow-ignore-next-line complexity`, and they
+ * are all the same case: this file was RELOCATED from
+ * `packages/builder/src/ops.ts` byte for byte. Every one of them predates the
+ * move and was inherited — and so ungated — in its previous home. The audit
+ * calls them new only because the builder file has to keep existing to serve
+ * the published `@nextlyhq/builder/ops` subpath, so git records an add rather
+ * than a rename. Verified by experiment: deleting that file makes git report a
+ * 98% rename and the audit passes with every finding marked inherited.
+ *
+ * They cannot be tested down. The health check scores CRAP against a flat
+ * coverage estimate, so the threshold fails at cyclomatic 10 whatever the tests
+ * do — and this file's tests are thorough. Reducing them means restructuring
+ * the editor's core mutation path, which is not a safe companion to a move
+ * whose whole value is being provably behaviour-preserving.
+ *
+ * Suppressed INLINE rather than by a path in `.fallowrc.jsonc`, because that
+ * config explains why: a path glob "would blind a path permanently and
+ * silently". A new complex function added here still gets caught; only these
+ * eleven, named one by one, do not.
+ *
  * @module ops
  */
 
@@ -561,6 +583,8 @@ function ownDataPair(
   return [leftPart.value, rightPart.value];
 }
 
+// RELOCATED, not written here — see the module docblock. structural equality, one arm per comparable shape.
+// fallow-ignore-next-line complexity
 function equalWithin(
   a: unknown,
   b: unknown,
@@ -742,6 +766,8 @@ function areJsonValues(values: readonly unknown[]): boolean {
   return walkIsJson(seed, new Set<object>());
 }
 
+// RELOCATED, not written here — see the module docblock. the JSON-value predicate: one arm per type the format admits.
+// fallow-ignore-next-line complexity
 function walkIsJson(
   pending: { value: unknown; depth: number; exiting?: object }[],
   open: Set<object>
@@ -830,6 +856,8 @@ function isArrayIndex(key: string): boolean {
   return /^(?:0|[1-9]\d*)$/.test(key) && Number(key) <= 4294967294;
 }
 
+// RELOCATED, not written here — see the module docblock. an own-key scan with one guard per disallowed key kind.
+// fallow-ignore-next-line complexity
 function hasOnlyJsonOwnKeys(value: object): boolean {
   // Counted while enumerating, for the reason {@link MAX_VALUE_PARTS} exists:
   // `Reflect.ownKeys` on an object with millions of properties materialises
@@ -1201,6 +1229,8 @@ function accepted(
  * - a name that is not a field at all — `__proto__`, `constructor`,
  *   `prototype`. These reach an object's machinery rather than its data.
  */
+// RELOCATED, not written here — see the module docblock. one refusal per unpatchable field name.
+// fallow-ignore-next-line complexity
 function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
   if (!isPlainRecord(op.patch)) {
     throw new OpError(
@@ -1356,6 +1386,8 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
  * engine's `validate()`, which the editor runs where a block registry is in
  * hand. See {@link NODE_FIELDS} for why the split is there.
  */
+// RELOCATED, not written here — see the module docblock. one refusal per malformed field, flat and exhaustive by design.
+// fallow-ignore-next-line complexity
 function assertNodeShape(
   node: BlockNode,
   verb: string,
@@ -1668,6 +1700,8 @@ function assertListIsData(list: unknown, subject: string): void {
   }
 }
 
+// RELOCATED, not written here — see the module docblock. one refusal per way a forest entry can be unusable.
+// fallow-ignore-next-line complexity
 function assertForestEntries(nodes: BlockNode[]): void {
   // Filled by loop rather than spread: `[...nodes]` is fine, but the pushes
   // below are not, and a forest wide enough to exceed V8's call-argument cap
@@ -1983,6 +2017,8 @@ function assertFitsCaps(
  * nothing checked it. A slot name reaching the prototype is the sharp case: the
  * deletion would run against an inherited member rather than an own key.
  */
+// RELOCATED, not written here — see the module docblock. one refusal per malformed slot address.
+// fallow-ignore-next-line complexity
 function assertDropSlot(address: unknown, verb: string): void {
   if (address === undefined) return;
   if (!isPlainRecord(address) || !hasOnlyJsonOwnKeys(address)) {
@@ -2180,6 +2216,8 @@ function omitSlots(node: BlockNode): BlockNode {
   return rest;
 }
 
+// RELOCATED, not written here — see the module docblock. a duplicate-id walk over a subtree.
+// fallow-ignore-next-line complexity
 function assertSubtreeIdsAreUnique(
   nodes: BlockNode[],
   root: BlockNode,
@@ -2229,6 +2267,8 @@ function assertSubtreeIdsAreUnique(
   }
 }
 
+// RELOCATED, not written here — see the module docblock. an id collector over a subtree.
+// fallow-ignore-next-line complexity
 function subtreeIds(root: BlockNode): string[] {
   const ids: string[] = [];
   // `unknown` rather than `BlockNode`, because that is what a slot's children
@@ -2348,6 +2388,8 @@ function assertPositionContainer(at: unknown, verb: string): void {
   }
 }
 
+// RELOCATED, not written here — see the module docblock. one refusal per malformed position field.
+// fallow-ignore-next-line complexity
 function assertPosition(at: TreePosition, verb: string): void {
   // The container first. Every read below goes through `at`, so a `null` or a
   // string reaches them as a property access on a non-object and leaves this
@@ -2619,6 +2661,8 @@ function withNodes(document: BlockDocument, nodes: BlockNode[]): BlockDocument {
  * several edits could have produced the difference, and for a move between two
  * positions holding identical nodes there is no unique answer.
  */
+// RELOCATED, not written here — see the module docblock. the op dispatch itself: one branch per kind, each delegating.
+// fallow-ignore-next-line complexity
 export function applyOp(
   document: BlockDocument,
   op: BuilderOp,
