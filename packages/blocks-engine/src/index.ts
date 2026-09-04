@@ -167,6 +167,7 @@ export {
   COMPONENT_UNRESOLVED_REASONS,
 } from "./resolve-instances";
 export type {
+  ComponentLookup,
   ComponentUnresolvedReason,
   DefinitionsById,
   ResolveComponentOptions,

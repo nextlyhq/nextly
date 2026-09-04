@@ -75,9 +75,9 @@ import { isConditionGated } from "./visibility";
  * A closed list rather than a message, because each reason has a different
  * remedy and the surface showing it has to pick one: `missing` asks the author
  * to publish or restore a component, `cycle` asks them to break a containment
- * loop, `depth` and `budget` are limits, and `malformed` is a document fault
- * no author action fixes. A rendered string would carry the same information
- * in a form nothing can branch on and nothing can translate.
+ * loop, `depth` and `budget` are limits, and `malformed` and `unreadable` are
+ * document faults no author action fixes. A rendered string would carry the
+ * same information in a form nothing can branch on and nothing can translate.
  */
 export const COMPONENT_UNRESOLVED_REASONS = [
   /** No definition was supplied for the referenced id. */
@@ -96,14 +96,20 @@ export const COMPONENT_UNRESOLVED_REASONS = [
   "node-depth",
   /** Inlining it would pass the run's node budget. */
   "budget",
-  /**
-   * The instance or its definition is not the shape composition needs — a node
-   * naming no component, or a definition that is not a component document.
-   *
-   * Both are faults no author action fixes, which is what separates this from
-   * `missing`: that one asks somebody to publish or restore a component.
-   */
+  /** The instance node names no component at all. */
   "malformed",
+  /**
+   * A definition WAS supplied under this id and cannot be read — an envelope
+   * this build does not understand, or a document that is not a component.
+   *
+   * Its own reason rather than sharing `malformed`, because the two point at
+   * different documents. `malformed` is a fault in the page holding the
+   * instance; this is a fault in the component the instance correctly names,
+   * and a surface that cannot tell them apart sends whoever is debugging to
+   * the healthy one. Both differ from `missing`, which asks somebody to
+   * publish or restore a component that was never supplied.
+   */
+  "unreadable",
 ] as const;
 
 /** Derived from the list, so the pair cannot be half-changed. */
@@ -165,6 +171,33 @@ export interface ResolvedDocument extends BlockDocument {
  * method and inline whatever a property read of `.nodes` on it returned.
  */
 export type DefinitionsById = ReadonlyMap<string, BlockDocument>;
+
+/**
+ * How a resolution reaches a definition.
+ *
+ * A lookup rather than the map itself, so that PREPARING a definition and
+ * DECIDING to read one are the same act. A caller that repairs its definitions
+ * up front has to predict which ones this run will reach, and reachability is
+ * decided here: after an instance's overrides have chosen a component, under
+ * the composition cap, over the tree the caller's own shape pass retained.
+ * Every one of those is a place a second traversal answers differently, and a
+ * disagreement costs the page a definition that WAS supplied.
+ *
+ * `has` and `get` are separate questions and both are asked. Absence means
+ * nobody supplied a definition; a value that cannot be read means one was
+ * supplied and is corrupt, and the reasons this module reports keep them
+ * apart — so a lookup must not answer `has` from whether `get` produced
+ * something.
+ *
+ * A `ReadonlyMap` satisfies it, which is what every caller holding its
+ * definitions in memory passes.
+ */
+export interface ComponentLookup {
+  /** Whether anybody supplied a definition under this id. */
+  has(id: string): boolean;
+  /** That definition, or nothing when it cannot be read. */
+  get(id: string): BlockDocument | undefined;
+}
 
 /** How much work one resolution may do. */
 export interface ResolveComponentOptions {
@@ -248,7 +281,7 @@ export function componentIdsIn(
  */
 export function resolveComponentInstances(
   document: BlockDocument,
-  definitions: DefinitionsById,
+  definitions: ComponentLookup,
   options: ResolveComponentOptions = {}
 ): ResolvedComposition {
   const unchanged: ResolvedComposition = {
@@ -308,7 +341,7 @@ export function resolveComponentInstances(
 
 /** Everything one resolution accumulates. */
 interface ResolveRun {
-  definitions: DefinitionsById;
+  definitions: ComponentLookup;
   maxDepth: number;
   maxComposedDepth: number;
   /** Nodes this resolution may still produce, across every instance. */
@@ -900,13 +933,13 @@ function refusalFor(
   if (scope.depth >= run.maxComposedDepth) return "composed-depth";
   // ABSENT from the map is `missing` — nobody supplied one, and the remedy is
   // to publish or restore it. A value that IS supplied and cannot be read is a
-  // document fault, so it takes `malformed`: offering the publish remedy for
+  // document fault, so it takes `unreadable`: offering the publish remedy for
   // corrupt component data sends an author to the wrong screen, which is the
   // whole reason these reasons are a closed list rather than a message.
   if (!run.definitions.has(componentId)) return "missing";
   const definition = run.definitions.get(componentId);
   if (!isPlainRecord(definition) || !Array.isArray(definition.nodes)) {
-    return "malformed";
+    return "unreadable";
   }
   // A structural check is not the discrimination. `DefinitionsById` is keyed to
   // `BlockDocument`, so a page, a region or a template satisfies "has a nodes
@@ -914,7 +947,7 @@ function refusalFor(
   // another document appearing inside this one, with its exposed properties
   // and slots meaning nothing. The kind is what the engine already publishes
   // an answer for.
-  if (!isComponentDocument(definition)) return "malformed";
+  if (!isComponentDocument(definition)) return "unreadable";
   return undefined;
 }
 

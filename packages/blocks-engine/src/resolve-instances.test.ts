@@ -941,13 +941,15 @@ describe("resolveComponentInstances bounds", () => {
     expect(result.document.nodes[0]!.props.text).toBe("base");
   });
 
-  it("refuses a definition that is not a component document", () => {
+  it("calls a definition that is not a component document unreadable", () => {
     const doc = page([instance("i1", "hero")]);
     const definitions = defs({ hero: page([node("d1")]) });
 
     const result = resolveComponentInstances(doc, definitions);
 
-    expect(result.unresolved.map(e => e.reason)).toEqual(["malformed"]);
+    // A page filed under a component's id is a fault in THAT document, not in
+    // the instance naming it — the discrimination `malformed` cannot make.
+    expect(result.unresolved.map(e => e.reason)).toEqual(["unreadable"]);
     expect(idsOf(result.document)).toEqual(["i1"]);
   });
 });
@@ -1226,7 +1228,7 @@ describe("resolveComponentInstances references, bands and cost", () => {
     expect(cta.links[0]!.href).toBe(`#${String(nodes[0]!.cssId)}`);
   });
 
-  it("calls a definition supplied as null malformed, not missing", () => {
+  it("calls a definition supplied as null unreadable, not missing", () => {
     const doc = page([instance("i1", "hero")]);
     const definitions = new Map<string, BlockDocument>([
       ["hero", null as unknown as BlockDocument],
@@ -1237,7 +1239,7 @@ describe("resolveComponentInstances references, bands and cost", () => {
     // Present-and-unreadable, so the key's PRESENCE is what separates it from
     // absent — a falsy value would read as absent to anything asking the map
     // for the value instead.
-    expect(result.unresolved.map(e => e.reason)).toEqual(["malformed"]);
+    expect(result.unresolved.map(e => e.reason)).toEqual(["unreadable"]);
   });
 
   it("keeps the true that ends an instance's hidden band", () => {
@@ -1309,7 +1311,7 @@ describe("resolveComponentInstances references, bands and cost", () => {
     expect(flatten(result.document.nodes)).toHaveLength(2);
   });
 
-  it("calls a supplied-but-unreadable definition malformed", () => {
+  it("calls a supplied-but-unreadable definition unreadable", () => {
     const doc = page([instance("i1", "hero")]);
     const definitions = new Map<string, BlockDocument>([
       [
@@ -1323,7 +1325,47 @@ describe("resolveComponentInstances references, bands and cost", () => {
     // `missing` asks somebody to publish or restore a component; a supplied
     // record that cannot be read is a document fault, and offering the wrong
     // remedy is the whole reason the reasons are a closed list.
-    expect(result.unresolved.map(e => e.reason)).toEqual(["malformed"]);
+    expect(result.unresolved.map(e => e.reason)).toEqual(["unreadable"]);
+  });
+});
+
+describe("how a resolution reaches a definition", () => {
+  it("asks a lookup for a definition only when it is about to read one", () => {
+    // A caller that prepares its definitions cannot predict which ones a
+    // resolution will read — an override may name a different component than
+    // the definition stored, and the composition cap stops a chain long before
+    // a catalog does. Asking here is what makes preparation and reachability
+    // one answer instead of two that disagree.
+    const asked: string[] = [];
+    const stored = new Map<string, BlockDocument>([
+      ["a", component([instance("n1", "b")])],
+      ["b", component([node("d1")])],
+      ["unused", component([node("d2")])],
+    ]);
+
+    const result = resolveComponentInstances(page([instance("i1", "a")]), {
+      has: id => stored.has(id),
+      get: id => {
+        asked.push(id);
+        return stored.get(id);
+      },
+    });
+
+    expect(asked).toEqual(["a", "a", "b", "b"]);
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it("takes `has` as the answer even when `get` produces nothing", () => {
+    // The two are different questions. A lookup that answered presence from
+    // whether a document came back would report a corrupt definition as one
+    // nobody supplied, and send whoever is debugging to publish a component
+    // that is already there.
+    const result = resolveComponentInstances(page([instance("i1", "hero")]), {
+      has: () => true,
+      get: () => undefined,
+    });
+
+    expect(result.unresolved.map(e => e.reason)).toEqual(["unreadable"]);
   });
 });
 

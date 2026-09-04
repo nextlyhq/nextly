@@ -305,7 +305,15 @@ const SOURCE_MODULES: ReadonlyArray<{
     // turn stages into something a reader presents must apply identically. It
     // is exported to delete the second copy, not to be called on its own: it
     // takes stages, and a consumer holding stages is already past this surface.
+    //
+    // `isUnresolvedInstance` is the same shape as `pruneKnownPlaceholders`: it
+    // crosses to the block boundary so that ONE reading of the marker decides
+    // both what the pipeline keeps and what the renderer draws. Two readings
+    // is precisely how the renderer came to hide a node the exported reader
+    // returns. A consumer never holds a resolved node without also holding the
+    // stages that explain it, so there is nothing here to offer.
     internal: [
+      "isUnresolvedInstance",
       "prepareDocumentReadStages",
       "pruneKnownPlaceholders",
       "readingViewOf",
