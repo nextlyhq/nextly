@@ -48,6 +48,13 @@ export type WidgetHeight = (typeof WIDGET_HEIGHTS)[number];
  */
 export const WIDGET_ARCHETYPES = [
   "metric",
+  // Several labelled, clickable numbers. Named "stats" rather than the obvious
+  // "metrics", and the near-miss is the reason: `metric` and `metrics` differ by
+  // one character, both are valid members of this union, and confusing them
+  // draws ONE number where six were declared -- a card that looks finished and
+  // answers a narrower question than it claims. A name that cannot be reached
+  // by a typo from an existing one costs nothing and removes that.
+  "stats",
   "table",
   "list",
   "text",
@@ -68,12 +75,80 @@ export type WidgetArchetype = (typeof WIDGET_ARCHETYPES)[number];
  */
 export const DATA_ARCHETYPES = ["metric", "table", "list"] as const;
 
+/**
+ * Archetypes drawn from MANY queries, declared as `cells`.
+ *
+ * 🔴 A third vocabulary rather than a member of either existing one, because
+ * both would be a lie in a way that reaches real code. `DATA_ARCHETYPES` means
+ * "requires the singular `query` field", and a `stats` card declaring one would
+ * be refused. `QUERYLESS_ARCHETYPES` means "requires no data at all" -- the
+ * admin derives its `DeclaredBody` dispatch from it, the kind of body that
+ * never enters the batch and waits for no slot -- and a `stats` card placed
+ * there would be drawn from its declaration with its numbers never fetched.
+ *
+ * The two names have agreed until now because no archetype needed data without
+ * using `query`. `stats` is the first, so it gets its own name rather than
+ * being filed under whichever existing one is closer.
+ */
+export const CELL_ARCHETYPES = ["stats"] as const;
+
+/** An archetype core draws from several query results. */
+export type CellWidgetArchetype = (typeof CELL_ARCHETYPES)[number];
+
+const CELL_ARCHETYPE_SET: ReadonlySet<WidgetArchetype> = new Set(
+  CELL_ARCHETYPES
+);
+
 /** An archetype core draws from a query result. */
 export type DataWidgetArchetype = (typeof DATA_ARCHETYPES)[number];
 
 const DATA_ARCHETYPE_SET: ReadonlySet<WidgetArchetype> = new Set(
   DATA_ARCHETYPES
 );
+
+/**
+ * How many numbers one `stats` card may declare.
+ *
+ * A bound rather than a style note. Each cell is its OWN count query, so a card
+ * declaring thirty would consume the entire batch (`MAX_QUERIES_PER_REQUEST`)
+ * and leave every other widget on the dashboard without a slot -- one card
+ * silently darkening the rest of the page. Eight also happens to be past the
+ * point a row of numbers can be read at a glance, which is what the card is
+ * for, so the readable limit and the affordable one agree.
+ */
+export const MAX_STAT_CELLS = 8;
+
+/**
+ * One number on a `stats` card.
+ *
+ * 🔴 Each cell carries its OWN query rather than the card carrying one query
+ * that returns several numbers. The difference is access control: a cell is an
+ * ordinary `count` against an ordinary source, so it is judged by the same rule
+ * every other widget query is judged by, and a reader who may not read one of
+ * the collections simply loses that number. A single composite query would need
+ * a source that knows about every domain it counts -- and one authorization
+ * decision covering all of them, which is the second implementation this domain
+ * exists to avoid.
+ *
+ * `link` is per CELL, not per card. The point of the card is that every number
+ * navigates: "14 drafts" goes to the drafts, not to the collection's front page.
+ */
+export interface WidgetStatCell {
+  /** Identifies this cell's answer within the card. Unique across the card. */
+  key: string;
+  /** What the number is called, beneath it. */
+  label: string;
+  /**
+   * 🔴 A COUNT, narrowed in the type and checked at registration. The card
+   * draws one number per cell and refuses any other result shape, so a `list`
+   * here would pass validation, reach the source, succeed, and then render a
+   * muted dash forever -- a declaration mistake wearing the appearance of
+   * unavailable data, which is the one reading nobody investigates.
+   */
+  query: WidgetQuery & { op: "count" };
+  /** Where this number navigates. A cell without one draws as plain text. */
+  link?: { label: string; href: string };
+}
 
 /**
  * One shortcut on an `actions` widget.
@@ -156,6 +231,8 @@ export interface WidgetDefinition {
   component?: string;
   /** Required for `actions`; forbidden otherwise. */
   actions?: WidgetAction[];
+  /** Required for `stats`; forbidden otherwise. */
+  cells?: WidgetStatCell[];
   /** Where a "view all" footer link points. */
   link?: { label: string; href: string };
 }
@@ -601,10 +678,10 @@ const QUERYLESS_ARCHETYPE_SET: ReadonlySet<WidgetArchetype> = new Set(
 );
 
 /**
- * Any archetype belonging to none of the three groups.
+ * Any archetype belonging to none of the four groups.
  *
- * `custom` is drawn by the plugin; the other two sets are drawn by core with
- * and without a query. Adding a name to `WIDGET_ARCHETYPES` and forgetting to
+ * `custom` is drawn by the plugin; the other three are drawn by core -- from one
+ * query, from many (`cells`), and from none. Adding a name to `WIDGET_ARCHETYPES` and forgetting to
  * classify it would otherwise leave it silently outside every rule below --
  * accepted with or without a query, and undeclarable through the contributions
  * union that derives from these names.
@@ -615,7 +692,10 @@ const QUERYLESS_ARCHETYPE_SET: ReadonlySet<WidgetArchetype> = new Set(
  */
 export type UnclassifiedArchetype = Exclude<
   WidgetArchetype,
-  DataWidgetArchetype | QuerylessWidgetArchetype | "custom"
+  | DataWidgetArchetype
+  | QuerylessWidgetArchetype
+  | CellWidgetArchetype
+  | "custom"
 >;
 
 /**
@@ -816,10 +896,141 @@ function validateDefaultOrder(d: Partial<WidgetDefinition>): void {
   if (problem !== undefined) fail(`${d.id}: ${problem}`);
 }
 
+/**
+ * Confirms one cell of a `stats` card is usable, or names what is wrong.
+ *
+ * Every condition is a refusal rather than a fallback, for the reason the
+ * source validator gives about its own fields: a card is registered ONCE and
+ * read by every reader, so a malformed cell that is tolerated here becomes a
+ * number that is blank, mislabelled or unclickable on every dashboard, arriving
+ * per reader rather than at the point the mistake was made.
+ */
+/** Confirms one named part of a cell carries real, non-whitespace text. */
+function blankCellText(
+  value: unknown,
+  at: string,
+  field: string
+): string | undefined {
+  if (typeof value === "string" && value.trim() !== "") return undefined;
+  return `${at} requires a non-empty ${field}`;
+}
+
+/**
+ * Confirms a cell's query is a count.
+ *
+ * Its own check, and its own reason: a missing query means there is no number
+ * to draw at all, while a `list` one means the card asks for something it
+ * refuses on arrival -- a declaration mistake that renders as unavailable data.
+ */
+function cellQueryProblem(query: unknown, at: string): string | undefined {
+  if (typeof query !== "object" || query === null) {
+    return `${at} requires a query object`;
+  }
+  // Checked at RUNTIME as well as in the type, for the callers a type does not
+  // bind: a plugin compiled separately, JavaScript, and a cast.
+  if ((query as WidgetQuery).op !== "count") {
+    return `${at} must be a "count" query, because a stats cell draws one number`;
+  }
+  return undefined;
+}
+
+/**
+ * Confirms a cell's optional link, when it has one, can actually be followed.
+ *
+ * A blank or non-string `href` reaches the admin's `Link`, whose
+ * external-destination check calls `href.startsWith` -- so activating the number
+ * throws instead of navigating, and the card that exists to navigate is the one
+ * place that breaks. Refused here, where the mistake was made.
+ */
+function cellLinkProblem(
+  link: WidgetStatCell["link"],
+  at: string
+): string | undefined {
+  if (link === undefined) return undefined;
+  if (typeof link !== "object" || link === null) {
+    return `${at} link, when given, must be an object`;
+  }
+  return (
+    blankCellText(link.label, `${at} link`, "label") ??
+    blankCellText(link.href, `${at} link`, "href")
+  );
+}
+
+export function statCellProblem(cell: unknown, at: string): string | undefined {
+  if (typeof cell !== "object" || cell === null) {
+    return `${at} must be an object`;
+  }
+  const c = cell as Partial<WidgetStatCell>;
+  return (
+    blankCellText(c.key, at, "key") ??
+    blankCellText(c.label, at, "label") ??
+    cellQueryProblem(c.query, at) ??
+    cellLinkProblem(c.link, at)
+  );
+}
+
+/**
+ * Everything wrong with a `cells` list, or `undefined`.
+ *
+ * 🔴 Exported so the CONTRIBUTIONS channel asks the same question rather than a
+ * similar one. `validateWidgetDefinition` refuses a malformed cell and the
+ * plugin path checked only that the array was non-empty, so a contribution
+ * carrying a `list` query, a missing query or two cells under one key was
+ * published -- the exact values the registry refuses, arriving by the other
+ * door and rendering as silent dashes or one answer drawn twice.
+ */
+export function cellsProblem(
+  cells: unknown,
+  max: number = MAX_STAT_CELLS
+): string | undefined {
+  if (!Array.isArray(cells) || cells.length === 0) {
+    return 'archetype "stats" requires a non-empty cells array';
+  }
+  if (cells.length > max) {
+    return `a stats card may declare at most ${max} cells, got ${cells.length}`;
+  }
+  const seen = new Set<string>();
+  for (const [index, cell] of cells.entries()) {
+    const problem = statCellProblem(cell, `cells[${index}]`);
+    if (problem !== undefined) return problem;
+    const key = (cell as WidgetStatCell).key;
+    if (seen.has(key)) return `cells declare the key "${key}" more than once`;
+    seen.add(key);
+  }
+  return undefined;
+}
+
+/**
+ * Confirms `cells` is present exactly for `stats`, and well formed.
+ *
+ * The duplicate-key check matters more than it looks: the card keys each
+ * answer back by `key`, so two cells sharing one would collapse into a single
+ * answer and the card would draw the same number twice under two different
+ * labels -- which is not wrong-looking in any way a reader could detect.
+ */
+function validateCells(d: Partial<WidgetDefinition>): void {
+  if (d.archetype !== "stats") {
+    if (d.cells !== undefined) {
+      fail(`${d.id}: cells are only valid for archetype "stats"`);
+    }
+    return;
+  }
+  const problem = cellsProblem(d.cells);
+  if (problem !== undefined) fail(`${d.id}: ${problem}`);
+}
+
 function validateQuery(d: Partial<WidgetDefinition>): void {
   const archetype = d.archetype as WidgetArchetype;
   if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
     fail(`${d.id}: archetype "${d.archetype}" requires a query`);
+  }
+  // Refused with its OWN reason rather than the queryless one, which would say
+  // this archetype takes no data -- the opposite of true. Its numbers come from
+  // `cells`, and an author who wrote `query` needs to be told where to move it.
+  if (CELL_ARCHETYPE_SET.has(archetype) && d.query !== undefined) {
+    fail(
+      `${d.id}: archetype "${d.archetype}" draws from cells, so it takes no top-level query`
+    );
   }
   const problem = querylessQueryProblem(archetype, d.query);
   if (problem !== undefined) fail(`${d.id}: ${problem}`);
@@ -844,6 +1055,7 @@ export function validateWidgetDefinition(
   validateComponent(d);
   validateActions(d);
   validateQuery(d);
+  validateCells(d);
   validateDefaultOrder(d);
   validateChrome(d);
 }

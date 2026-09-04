@@ -29,6 +29,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { resolveIconName } from "./archetypes/icon";
+import type { CellSlotLookup } from "./archetypes/types";
 import { resolveWidgetOutcome } from "./outcome";
 import { WidgetCard } from "./WidgetCard";
 
@@ -49,6 +50,14 @@ export interface WidgetRendererProps {
    * empty, and a widget that asked for nothing is neither.
    */
   slot: WidgetSlot | undefined;
+  /**
+   * How a `stats` card reaches each cell's answer.
+   *
+   * Optional, and absent for every archetype that asks one question: their
+   * answer arrives in `slot` above. A stats card's numbers are keyed per cell,
+   * so its own `slot` is permanently undefined and this is where its data is.
+   */
+  slotFor?: CellSlotLookup;
   /** When the batch this slot came from landed, for the freshness line. */
   updatedAt?: Date | null;
   /**
@@ -66,6 +75,7 @@ export interface WidgetRendererProps {
 export function WidgetRenderer({
   definition,
   slot,
+  slotFor,
   updatedAt = null,
   isFetching = false,
 }: WidgetRendererProps) {
@@ -75,7 +85,7 @@ export function WidgetRenderer({
     link: definition.link,
   };
 
-  const outcome = resolveWidgetOutcome(definition, slot);
+  const outcome = resolveWidgetOutcome(definition, slot, slotFor);
 
   // The escape hatch. A plugin component draws its own body, so the card
   // asserts nothing about its loading or empty states -- the component knows

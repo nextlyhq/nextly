@@ -232,6 +232,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginAdminDeclarativeWidget (type)",
   "PluginAdminPage (type)",
   "PluginAdminQuerylessWidget (type)",
+  "PluginAdminStatsWidget (type)",
   "PluginAdminWidget (type)",
   "PluginCategory (type)",
   "PluginCollectionService (type)",

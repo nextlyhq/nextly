@@ -98,6 +98,17 @@ export interface WidgetSource {
    * `WidgetDefinition` and `PluginAdminWidget`. One field name, one spelling.
    */
   requiredPermission?: string;
+  /**
+   * Whether this source's rows have a PUBLISH LIFECYCLE.
+   *
+   * 🔴 Declared rather than inferred from a field called "status". A collection
+   * with lifecycle disabled may declare an ordinary user field of that name and
+   * the schema permits it, so the two are indistinguishable in `fields` -- and a
+   * card built on the guess counts every row three times while its links filter
+   * something unrelated. The fact belongs to the source because only the thing
+   * building it knows which of the two it put there.
+   */
+  lifecycleStatus?: boolean;
   supports: readonly WidgetOp[];
   /** The only field names a query may reference. */
   fields: readonly WidgetSourceField[];
@@ -213,6 +224,24 @@ function validateSourceKind(s: Partial<WidgetSource>): void {
 }
 
 /**
+ * Confirms `lifecycleStatus`, when given, is actually a boolean.
+ *
+ * The consumer tests `=== true`, so a source registered with `"true"` from
+ * JavaScript or decoded JSON is read as NOT having a lifecycle -- and the card
+ * that fact exists to enable is silently never generated. A truthiness test
+ * would accept the string and be wrong in the other direction; the field is
+ * refused instead, where the mistake was made.
+ */
+function validateSourceLifecycle(s: Partial<WidgetSource>): void {
+  if (
+    s.lifecycleStatus !== undefined &&
+    typeof s.lifecycleStatus !== "boolean"
+  ) {
+    fail(`${s.id}: lifecycleStatus, when given, must be a boolean`);
+  }
+}
+
+/**
  * Confirms `supports` is a non-empty array of known ops. Empty `supports`
  * would register a source no query could ever validate against -- every
  * `validateWidgetQuery` call would fail at the op check, which is a startup
@@ -286,6 +315,7 @@ export function validateWidgetSource(
   validateSourceId(s);
   validateSourceLabel(s);
   validateSourceKind(s);
+  validateSourceLifecycle(s);
   validateSourceSupports(s);
   validateSourceFields(s);
   // AFTER the fields, because it is checked against them.

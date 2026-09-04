@@ -41,6 +41,45 @@ afterEach(() => {
 });
 
 describe("useWidgetQueries", () => {
+  it("files a `__proto__` widget id as DATA, not onto the prototype", async () => {
+    // 🔴 A contributed widget id is checked only for being usable text, so it
+    // may be `"__proto__"`. On a `{}` dictionary that key is not data: reading
+    // it returns `Object.prototype`, so `dict[id] ??= {}` never assigns and the
+    // cell key is written onto the prototype every object in the admin
+    // inherits. A declarative widget could corrupt property lookup across the
+    // whole app merely by receiving an answer.
+    const canary: Record<string, unknown> = {};
+    expect(canary.total).toBeUndefined();
+
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "count", total: 7 } }],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          {
+            widgetId: "__proto__",
+            cellKey: "total",
+            query: countQuery("collection:posts"),
+          },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.cellSlots["__proto__"]?.total).toBeDefined()
+    );
+
+    // The answer is reachable where it was filed, and NOWHERE else.
+    expect(result.current.cellSlots["__proto__"]?.total).toEqual({
+      ok: true,
+      result: { op: "count", total: 7 },
+    });
+    expect(canary.total).toBeUndefined();
+    expect(({} as Record<string, unknown>).total).toBeUndefined();
+  });
+
   it("sends N queries as ONE request", async () => {
     vi.mocked(protectedApi.post).mockResolvedValue({
       results: [

@@ -9,6 +9,7 @@
  *
  * @module components/features/widgets/edit/ArrangedColumns
  */
+import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
 import { cn } from "@admin/lib/utils";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
 
@@ -26,6 +27,7 @@ export interface ArrangedColumnsProps {
   visible: ArrangedWidget[];
   isEditing: boolean;
   slots: Record<string, WidgetSlot>;
+  cellSlots: CellSlots;
   requested: ReadonlySet<string>;
   updatedAt: Date | null;
   isFetching: boolean;
@@ -63,6 +65,7 @@ export function ArrangedColumns({
   visible,
   isEditing,
   slots,
+  cellSlots,
   requested,
   updatedAt,
   isFetching,
@@ -111,6 +114,12 @@ export function ArrangedColumns({
               count={rowsInColumn.length}
               isEditing={isEditing}
               slot={slots[row.widget.id]}
+              // Built HERE, where the whole record is, so the composite key
+              // format stays with the batch that writes it rather than being
+              // spelled again inside an archetype.
+              // This card's own answers, by cell key. Nested rather than a
+              // composite string, so no id can collide with another.
+              slotFor={key => cellSlots[row.widget.id]?.[key]}
               // Only a widget that actually ASKED can be waiting on an answer. A
               // card drawn entirely by a plugin component took no part in the
               // batch, and neither did one whose archetype nothing can draw, so a

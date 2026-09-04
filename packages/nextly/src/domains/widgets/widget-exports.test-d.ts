@@ -57,7 +57,7 @@ assertType<
 assertType<
   Exact<
     WidgetArchetype,
-    "metric" | "table" | "list" | "text" | "actions" | "custom"
+    "metric" | "stats" | "table" | "list" | "text" | "actions" | "custom"
   >
 >(true);
 

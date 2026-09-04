@@ -16,6 +16,7 @@ import type { ReactNode } from "react";
 import type {
   DashboardWidget,
   WidgetResult,
+  WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
 export type ArchetypeOutcome =
@@ -39,6 +40,8 @@ export interface DeclaredWidget {
   archetype?: string;
   title?: string;
   query?: { select?: string[]; op?: string };
+  /** What a `stats` card draws. Judged before any request, like `query`. */
+  cells?: ReadonlyArray<{ key: string; label: string }>;
 }
 
 /**
@@ -75,6 +78,31 @@ export type ArchetypeAccepts = (
 export type DeclaredBody = (definition: DashboardWidget) => ArchetypeOutcome;
 
 /**
+ * How a `cells` archetype reaches one cell's answer.
+ *
+ * A LOOKUP rather than the raw slot record, so the composite key format lives
+ * in exactly one place. An archetype handed the record would have to spell
+ * `${id}#${key}` itself, which is a second implementation of a question the
+ * batch already answers -- and one that fails by drawing a permanent loading
+ * state rather than by throwing.
+ */
+export type CellSlotLookup = (cellKey: string) => WidgetSlot | undefined;
+
+/**
+ * An archetype drawn from MANY query results, one per declared cell.
+ *
+ * Its own kind rather than a `body` that receives an array, because the two
+ * differ in what ABSENCE means. A data body is handed one result and is only
+ * called once it exists; a cells body has to render while some of its numbers
+ * are still in flight and others have failed, which is a card-level decision it
+ * is the only thing positioned to make.
+ */
+export type CellsBody = (
+  definition: DashboardWidget,
+  slotFor: CellSlotLookup
+) => ArchetypeOutcome;
+
+/**
  * An archetype core can draw: its precondition, and its body.
  *
  * The body is one of two kinds and the dispatch branches on which. A DATA
@@ -88,4 +116,6 @@ export interface ArchetypeRenderer {
   body?: ArchetypeBody;
   /** Drawn from the declaration alone, with no query behind it. */
   declared?: DeclaredBody;
+  /** Drawn from one result per declared cell. Mutually exclusive with both. */
+  cells?: CellsBody;
 }
