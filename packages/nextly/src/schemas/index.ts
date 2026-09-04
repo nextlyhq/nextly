@@ -261,7 +261,11 @@ export function getCoreSchema(
   }
 
   return {
-    tables: tables.map(drizzleTableToTableSpec),
+    // 🔴 An arrow, not a bare reference. `map` passes the ARRAY INDEX as the
+    // second argument, which this function now reads as a dialect -- so
+    // `tables.map(drizzleTableToTableSpec)` would hand table 0 the dialect `0`
+    // and silently drop every table's indexes but one.
+    tables: tables.map(table => drizzleTableToTableSpec(table, dialect)),
   };
 }
 

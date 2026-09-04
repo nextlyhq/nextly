@@ -41,6 +41,16 @@ same snapshot it judges rows against. A registry that cannot be enumerated is
 reported rather than silently contributing nothing, so the cards refuse instead
 of stating that no document has unpublished edits.
 
+Core-schema reconciliation now compares INDEXES, not columns alone. The core
+snapshot omitted them, and the diff skips a table whose index data is absent, so
+an index-only release produced no operations at all and `nextly migrate`
+reported the core schema as up to date: the index reached newly created
+databases and no existing one. Partial indexes stay out of the comparison, since
+the snapshot type has nowhere to record a predicate and claiming one
+unconditionally proposed the same index on every run.
+
 A count that could only establish a floor now renders as one in every archetype
 that draws it; `stats` cells previously formatted the total alone and presented
-a bounded number as exact.
+a bounded number as exact. A linked stats cell also names its count in the
+link's accessible name — an `aria-label` replaces the element's descendants, so
+a screen reader announced the destination with no number at all.

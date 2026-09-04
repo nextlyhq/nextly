@@ -451,6 +451,23 @@ export class VersionsRepository {
    * The snapshot is projected away. It is the largest column in the table and a
    * card that lists titles has no use for it.
    */
+  /**
+   * 🔴 Served by `nextly_versions_pending_edits_idx`, and by nothing else on
+   * this table. Every other index leads with `scope_kind`, which this query
+   * never constrains, so before that index existed SQLite answered the count
+   * with `SCAN nextly_versions USING INDEX sqlite_autoindex_nextly_versions_1`
+   * and the list with `SCAN nextly_versions` plus a temp B-tree, per page.
+   * Proving the count had seen every pending edit therefore meant reading every
+   * version ever captured: the caller's row budget bounded the rows it RECEIVED
+   * and nothing about the work the database did to find them.
+   *
+   * The index columns are this WHERE clause in order, then the cursor's own
+   * ordering. A single-collection install reads it in order and sorts nothing;
+   * with several collections the `IN` list is several ranges no engine here can
+   * merge, and the sort that follows is over working drafts alone rather than
+   * the whole table -- proportional to the number the card reports, not to the
+   * history behind it.
+   */
   async findPendingEditRows(input: {
     slugs: readonly string[];
     limit: number;

@@ -15,6 +15,31 @@
 import type { JSX } from "react";
 
 /**
+ * The words a floor is said in, for both readers.
+ *
+ * One constant rather than one per renderer: the visible `+` and the spoken
+ * phrase are two notations for the same claim, and a card whose two readers
+ * disagree about whether a number is whole is the defect this module exists to
+ * prevent, one level down.
+ */
+const FLOOR_SUFFIX = " or more";
+
+/**
+ * What assistive technology should HEAR for a count.
+ *
+ * 🔴 Exported because a rendered node is not always what gets announced. A
+ * stats cell that links wraps its number in an `aria-label`, and an
+ * `aria-label` REPLACES the element's descendants as its accessible name — so
+ * everything {@link CountValue} renders, the number included, was dropped from
+ * what a screen reader read out. Composing that name from this keeps one
+ * spoken form wherever a count is announced.
+ */
+export function countLabel(total: number, atLeast?: boolean): string {
+  const formatted = total.toLocaleString();
+  return atLeast === true ? `${formatted}${FLOOR_SUFFIX}` : formatted;
+}
+
+/**
  * `total`, with a trailing `+` when the source could only establish a floor.
  *
  * The marker is punctuation a screen reader may not voice, so the words are
@@ -35,7 +60,7 @@ export function CountValue({
       {atLeast === true ? (
         <>
           <span aria-hidden="true">+</span>
-          <span className="sr-only"> or more</span>
+          <span className="sr-only">{FLOOR_SUFFIX}</span>
         </>
       ) : null}
     </>
