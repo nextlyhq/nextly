@@ -2,7 +2,7 @@
 // code-owned collection (defined in nextly.config.ts) to UI-owned by
 // writing it to dynamic_collections and instructing the user to delete
 // the code block.
-// collection in code hand off schema editing to the visual builder
+// collection in code hand off schema editing to the Visual Schema Builder
 // without re-creating anything.
 
 import { createHash } from "node:crypto";

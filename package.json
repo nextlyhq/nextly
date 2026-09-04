@@ -27,6 +27,7 @@
     "check:storage-format-literals": "node scripts/check-storage-format-literals.cjs",
     "check:dev-concurrency": "node scripts/check-dev-concurrency.mjs",
     "check:comments": "node scripts/check-comment-convention.mjs",
+    "check:docs-claims": "node scripts/check-docs-claims.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "lint": "turbo run lint",
     "lint:design": "node scripts/lint-design.mjs",

@@ -1,6 +1,6 @@
 // Compares old vs new field definitions for the preview endpoint.
 // Pure function, no drizzle-kit dependency. Just JSON comparison.
-// Used by the visual builder's "Save" flow to show what changed before applying.
+// Used by the Visual Schema Builder's "Save" flow to show what changed before applying.
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 

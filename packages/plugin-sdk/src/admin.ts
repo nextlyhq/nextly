@@ -5,8 +5,9 @@
  * shell (which provides `@nextlyhq/admin` + React).
  *
  * @public Graduated in P9 — `plugin-form-builder` exercises the menu/pages/views
- *   registration. Dashboard widgets (`PluginAdminWidget`, D22) remain
- *   `@experimental` until M8. See `STABILITY.md`.
+ *   registration. Dashboard widgets (`PluginAdminWidget`, D22) render, but the
+ *   contribution shape is still settling, so they remain `@experimental`.
+ *   See `STABILITY.md`.
  */
 export {
   registerComponent,

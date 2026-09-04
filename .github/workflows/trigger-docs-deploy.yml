@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
     paths:
-      - 'docs/content/**'
+      # The docs live at docs/. There is no docs/content/ directory, so a filter
+      # naming one matches nothing and this workflow never fires.
+      - 'docs/**'
 
 # The job only curls an external deploy hook; it never uses the
 # GITHUB_TOKEN, so the token gets no permissions at all.

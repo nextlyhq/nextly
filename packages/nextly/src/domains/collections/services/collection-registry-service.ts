@@ -168,7 +168,7 @@ export class CollectionRegistryService extends BaseRegistryService<
    * current config — orphans left after a plugin or code collection was removed
    * (D14). They are RETAINED (never auto-dropped); `nextly prune` drops them
    * explicitly. Builder (`ui`) collections are excluded — they are managed via
-   * the Visual Builder, not the code config.
+   * the Visual Schema Builder, not the code config.
    */
   async findOrphanedCollections(
     currentSlugs: string[]
