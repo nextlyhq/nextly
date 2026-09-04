@@ -42,6 +42,19 @@ different document per language and a rule can answer differently for each. A
 row whose scope is neither a collection nor a single is dropped rather than
 admitted, since nothing can judge it.
 
+A localized document is authorized per LANGUAGE, so the rows reach that
+decision one per locale and are collapsed to one per document only afterwards.
+Collapsing first offered each document's newest locale alone: where that one was
+denied and an older one readable, the document vanished from a card its reader
+was entitled to see.
+
+Nothing sizes the read from configuration either. The row bound used to be the
+install's current locale count, which does not describe the data — working
+drafts written under a locale since removed are still rows — so it could fetch
+too few rows to find the documents asked for while every check said the answer
+was exact. The read is paged instead, and the only bound is how many documents
+the caller wants.
+
 That answer cannot be computed in SQL — the rule lives on the collection, the
 candidates live in the version table, and the data layer has no join — so an
 exact count means considering candidates in memory, which is bounded. Past that

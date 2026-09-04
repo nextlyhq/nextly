@@ -67,7 +67,11 @@ import { VERSIONS_SOURCE_ID } from "../widgets/system-source-ids";
 import { registerSystemSource } from "../widgets/system-sources";
 
 import { visiblePendingEdits } from "./pending-edit-visibility";
-import type { VersionMeta } from "./versions-repository";
+import {
+  documentKey,
+  newestPerDocument,
+  type VersionMeta,
+} from "./versions-repository";
 import type { VersionsService } from "./versions-service";
 
 export { VERSIONS_SOURCE_ID };
@@ -100,20 +104,25 @@ const DEFAULT_LIMIT = 5;
 const CANDIDATE_SCAN = 1000;
 
 /**
- * How many candidates a LIST considers before it needs the full scan.
+ * Rows read per round while gathering documents.
  *
- * A list wants a handful of visible rows, not every candidate, and on the
- * ordinary install — where no collection carries a stored row rule — the first
- * `limit` candidates are all visible and this is the only read. Scanning to
- * {@link CANDIDATE_SCAN} for a five-row card would make every dashboard load
- * pay the count's price for rows it discards.
- *
- * It is a budget rather than a cap: when filtering removes enough that the card
- * cannot be filled AND this budget was actually exhausted, the query escalates
- * to the full scan. So the short answer this could produce is retried rather
- * than returned, and only the two conditions together spend the larger read.
+ * Rows, not documents: a document contributes one row per locale it is drafted
+ * in, and rows a stored rule hides contribute none at all, so how many rows a
+ * page of documents costs is not knowable in advance. Rounds are what make that
+ * unnecessary — this only has to be large enough that the ordinary install,
+ * where nothing is filtered, finishes in one.
  */
-const LIST_CANDIDATES = 60;
+const ROW_PAGE = 100;
+
+/**
+ * How many rounds a gather runs before answering with what it has.
+ *
+ * The bound on an install whose pending edits are almost entirely unreadable to
+ * this caller. Reaching it returns FEWER documents than asked for, and the count
+ * refuses rather than publishing that as a total — so the failure direction is a
+ * thin card or an honest refusal, never a number that is quietly too small.
+ */
+const MAX_GATHER_ROUNDS = 20;
 
 /**
  * The fields this source publishes.
@@ -231,40 +240,58 @@ function describe(
   });
 }
 
-/** The visible candidates within `budget`, and how many were considered. */
-async function visibleWithin(
-  budget: number,
-  readableSlugs: readonly string[],
-  caller: ReadCaller
-): Promise<{ visible: VersionMeta[]; scanned: number }> {
-  const candidates = await service().recentPendingEdits({
-    readableSlugs,
-    limit: budget,
-  });
-  return {
-    visible: await visiblePendingEdits(candidates, caller),
-    scanned: candidates.length,
-  };
-}
-
 /**
- * Enough visible rows to fill a card of `limit`, escalating only when needed.
+ * Up to `wanted` DOCUMENTS the caller may see, newest first.
  *
- * The second read is spent on exactly one shape: the small budget was exhausted
- * AND too few of its candidates survived. A budget that was not exhausted has
- * already seen every candidate there is, so a short answer from it is the true
- * one and re-reading would return the same rows.
+ * 🔴 The order is the correctness property. Rows are read, then AUTHORIZED, and
+ * only then collapsed to one per document — because a localized Single is
+ * authorized per language while a document is one thing to publish across all of
+ * them. Collapsing first offers the visibility filter each document's newest
+ * locale alone, so a document whose newest pending locale is denied disappears
+ * even when an older locale is readable and the reader is entitled to it.
+ *
+ * `exhausted` says whether the table ran out rather than the rounds. A count may
+ * only be published when it did: otherwise the answer is a floor, and a metric
+ * that quietly under-reports is the failure this whole source was repaired for.
  */
-async function enoughToFill(
-  limit: number,
+async function gatherVisibleDocuments(
+  wanted: number,
   readableSlugs: readonly string[],
   caller: ReadCaller
-): Promise<VersionMeta[]> {
-  const first = await visibleWithin(LIST_CANDIDATES, readableSlugs, caller);
-  if (first.visible.length >= limit || first.scanned < LIST_CANDIDATES) {
-    return first.visible;
+): Promise<{ documents: VersionMeta[]; exhausted: boolean }> {
+  const documents: VersionMeta[] = [];
+  const seen = new Set<string>();
+  let offset = 0;
+
+  for (let round = 0; round < MAX_GATHER_ROUNDS; round++) {
+    const rows = await service().pendingEditRows({
+      readableSlugs,
+      limit: ROW_PAGE,
+      offset,
+    });
+    if (rows.length === 0) return { documents, exhausted: true };
+    offset += rows.length;
+
+    // Collapsed per ROUND against everything already kept, so a document split
+    // across a page boundary cannot appear twice.
+    for (const row of newestPerDocument(
+      await visiblePendingEdits(rows, caller),
+      Number.MAX_SAFE_INTEGER
+    )) {
+      const key = documentKey(row);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      documents.push(row);
+      if (documents.length >= wanted) {
+        return { documents, exhausted: false };
+      }
+    }
+
+    // A short page is the end of the table, not the end of this round.
+    if (rows.length < ROW_PAGE) return { documents, exhausted: true };
   }
-  return (await visibleWithin(CANDIDATE_SCAN, readableSlugs, caller)).visible;
+
+  return { documents, exhausted: false };
 }
 
 async function resolveVersions(
@@ -284,38 +311,41 @@ async function resolveVersions(
   ];
 
   if (query.op === "count") {
-    // Asked BEFORE materialising anything, and it is the one thing SQL can
-    // still answer here: how many documents are candidates at all, before row
-    // rules narrow them. Larger than the scan bound means no honest exact
-    // answer is available, so it refuses rather than reporting a floor -- and
-    // refusing costs one aggregate instead of a thousand-document fetch that
-    // would be discarded. Comparing the fetched LENGTH instead cannot tell
-    // "exactly at the bound" from "beyond it", and would refuse a set it could
-    // have answered exactly.
-    if ((await service().countPendingEdits(readableSlugs)) > CANDIDATE_SCAN) {
+    // Asked BEFORE gathering anything, and it is the one thing SQL can still
+    // answer here: how many documents are candidates at all, before row rules
+    // narrow them. Larger than the bound means no honest exact answer is
+    // available, so it refuses rather than reporting a floor -- and refusing
+    // costs one aggregate rather than a thousand-document walk that would be
+    // discarded.
+    const refuse = (): never => {
       throw NextlyError.internal({
         logContext: {
           reason: "pending-edits-scan-exhausted",
           scanned: CANDIDATE_SCAN,
         },
       });
+    };
+    if ((await service().countPendingEdits(readableSlugs)) > CANDIDATE_SCAN) {
+      refuse();
     }
-  }
 
-  if (query.op === "count") {
-    const { visible } = await visibleWithin(
+    const { documents, exhausted } = await gatherVisibleDocuments(
       CANDIDATE_SCAN,
       readableSlugs,
       caller
     );
-    return { op: "count", total: visible.length };
+    // 🔴 The candidate count passing is NOT enough on its own. It counts
+    // documents, while the walk reads rows, and rows a stored rule hides are
+    // read without yielding one -- so a caller who may see little can exhaust
+    // the rounds on a set the aggregate said was small. Publishing what the
+    // walk found there would be a floor wearing an exactness check.
+    if (!exhausted) refuse();
+    return { op: "count", total: documents.length };
   }
 
   const limit = query.limit ?? DEFAULT_LIMIT;
-  const rows = (await enoughToFill(limit, readableSlugs, caller)).slice(
-    0,
-    limit
-  );
+  const rows = (await gatherVisibleDocuments(limit, readableSlugs, caller))
+    .documents;
   const names = selectedNames(query);
   const fields = query.select?.length ? describe(names) : undefined;
 

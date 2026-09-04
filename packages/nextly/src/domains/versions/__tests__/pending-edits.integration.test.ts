@@ -16,7 +16,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
-import { VersionsRepository } from "../versions-repository";
+import { newestPerDocument, VersionsRepository } from "../versions-repository";
 
 let current: TestNextly | undefined;
 
@@ -117,12 +117,12 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
     );
 
     expect(await repo.countDocumentsWithPendingEdits(["posts"])).toBe(1);
-    const listed = await repo.findRecentPendingEdits({
+    const listed = await repo.findPendingEditRows({
       slugs: ["posts"],
       limit: 10,
-      maxPerDocument: 1,
+      offset: 0,
     });
-    expect(listed.map(r => r.scopeSlug)).toEqual(["posts"]);
+    expect(listed.map(row => row.scopeSlug)).toEqual(["posts"]);
   });
 
   it("answers ZERO and an empty list for a caller who may read nothing", async () => {
@@ -139,11 +139,7 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
 
     expect(await repo.countDocumentsWithPendingEdits([])).toBe(0);
     expect(
-      await repo.findRecentPendingEdits({
-        slugs: [],
-        limit: 10,
-        maxPerDocument: 1,
-      })
+      await repo.findPendingEditRows({ slugs: [], limit: 10, offset: 0 })
     ).toEqual([]);
   });
 
@@ -176,18 +172,26 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
       await app.adapter.insert(VERSIONS_TABLE, row);
     }
 
-    const rows = await repo.findRecentPendingEdits({
-      slugs: ["posts"],
-      limit: 2,
-      maxPerDocument: 2,
-    });
-    expect(rows.map(r => r.entryId)).toEqual(["translated", "other"]);
+    // The collapse is the CALLER's now, applied after it has authorized what it
+    // may show: a localized Single is authorized per language, so collapsing
+    // inside the read would offer only each document's newest locale and lose a
+    // readable older one. The repository returns rows; this is the same
+    // property, asserted where it now lives.
+    const rows = newestPerDocument(
+      await repo.findPendingEditRows({
+        slugs: ["posts"],
+        limit: 10,
+        offset: 0,
+      }),
+      2
+    );
+    expect(rows.map(row => row.entryId)).toEqual(["translated", "other"]);
     // The row kept is the document's LATEST instant, which is what makes the
     // list agree with the order it claims.
     expect(rows[0]?.locale).toBe("en");
   });
 
-  it("counts every document, past the row ceiling a scan used to carry", async () => {
+  it("returns every row asked for, past the ceiling a scan used to carry", async () => {
     // 🔴 The regression this file exists to hold. The row fetch used to take
     // `Math.min` against a ceiling declared beside it, and that ceiling did not
     // know what the caller had asked for: a request for a thousand documents
@@ -195,6 +199,12 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
     // under-reported while every feasibility check it had made said its answer
     // was exact. 501 is one past that old ceiling, which is the smallest input
     // that separates the two implementations.
+    //
+    // The bound is the caller's alone now, and the caller pages until it has the
+    // DOCUMENTS it wants -- so no number taken from configuration stands between
+    // the request and the rows. Drafts written under a locale since removed from
+    // the config are still rows, and a bound derived from the live locale count
+    // cannot see them.
     const app = await boot(dialect);
     const repo = new VersionsRepository(app.adapter);
 
@@ -205,15 +215,15 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
       );
     }
 
-    const rows = await repo.findRecentPendingEdits({
+    const rows = await repo.findPendingEditRows({
       slugs: ["posts"],
       limit: 1000,
-      maxPerDocument: 1,
+      offset: 0,
     });
     expect(rows).toHaveLength(501);
     // Asserted on IDENTITY too: a scan that returned 501 of the wrong rows, or
     // 501 with a duplicate, has the same length.
-    expect(new Set(rows.map(r => r.entryId)).size).toBe(501);
+    expect(new Set(rows.map(row => row.entryId)).size).toBe(501);
   });
 
   it("lists the most recently touched first, and never the snapshot", async () => {
@@ -237,14 +247,14 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
       })
     );
 
-    const rows = await repo.findRecentPendingEdits({
+    const rows = await repo.findPendingEditRows({
       slugs: ["posts"],
       limit: 10,
-      maxPerDocument: 1,
+      offset: 0,
     });
-    expect(rows.map(r => r.entryId)).toEqual(["new", "old"]);
+    expect(rows.map(row => row.entryId)).toEqual(["new", "old"]);
     // The snapshot is the document's unpublished content and the largest column
     // in the table; a card listing titles has no use for it.
-    expect(rows.every(r => !("snapshot" in r))).toBe(true);
+    expect(rows.every(row => !("snapshot" in row))).toBe(true);
   });
 });

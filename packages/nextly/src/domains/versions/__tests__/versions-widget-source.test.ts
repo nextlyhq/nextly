@@ -4,7 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const countPendingEdits = vi.fn();
-const recentPendingEdits = vi.fn();
+const pendingEditRows = vi.fn();
 const has = vi.fn();
 const readable = vi.fn();
 const registeredSlugs = vi.fn();
@@ -13,7 +13,7 @@ const visible = vi.fn();
 vi.mock("../../../di/container", () => ({
   container: {
     has: (name: string) => has(name) as boolean,
-    get: () => ({ countPendingEdits, recentPendingEdits }),
+    get: () => ({ countPendingEdits, pendingEditRows }),
   },
 }));
 // `readAccessCaller` is kept REAL and only the decision is replaced, so what
@@ -73,7 +73,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   has.mockReturnValue(true);
   countPendingEdits.mockResolvedValue(14);
-  recentPendingEdits.mockResolvedValue([row]);
+  pendingEditRows.mockResolvedValue([row]);
   readable.mockResolvedValue(new Set(["posts"]));
   registeredSlugs.mockResolvedValue(["posts", "secrets"]);
   visible.mockImplementation((rows: unknown) => Promise.resolve(rows));
@@ -106,7 +106,7 @@ describe("who the numbers are for", () => {
       caller
     );
 
-    expect(recentPendingEdits).toHaveBeenCalledWith(
+    expect(pendingEditRows).toHaveBeenCalledWith(
       expect.objectContaining({ readableSlugs: ["posts"] })
     );
   });
@@ -174,7 +174,7 @@ describe("who the numbers are for", () => {
     await expect(
       executeWidgetQuery({ source: VERSIONS_SOURCE_ID, op: "count" }, caller)
     ).rejects.toThrow();
-    expect(recentPendingEdits).not.toHaveBeenCalled();
+    expect(pendingEditRows).not.toHaveBeenCalled();
   });
 
   it("answers a COUNT that sits exactly ON the bound", async () => {
@@ -188,31 +188,59 @@ describe("who the numbers are for", () => {
     ).resolves.toMatchObject({ op: "count" });
   });
 
-  it("escalates to the full scan when the small budget cannot fill the card", async () => {
-    // A list takes a modest budget first, so the ordinary dashboard load does
-    // not pay the count's price for rows it discards. When row rules remove
-    // enough that the card cannot be filled AND that budget was exhausted, the
-    // short answer is retried rather than returned.
-    recentPendingEdits.mockResolvedValue(Array.from({ length: 60 }, () => row));
-    visible.mockResolvedValue([]);
+  it("authorizes each LOCALE row, then keeps the newest one that survives", async () => {
+    // 🔴 The ordering property, and the reason the collapse moved out of the
+    // read. A document is one thing to publish across every language it is
+    // drafted in, but a localized Single is authorized PER language -- so
+    // collapsing before the decision offers the filter each document's newest
+    // locale alone. Where that one is denied and an older one is readable, the
+    // document disappears from a card its reader is entitled to see.
+    const newer = { ...row, locale: "fr", updatedAt: new Date("2026-02-01") };
+    const older = { ...row, locale: "en", updatedAt: new Date("2026-01-01") };
+    pendingEditRows.mockResolvedValue([newer, older]);
+    // The newest locale is refused; the older one survives.
+    visible.mockResolvedValue([older]);
+
+    const result = await executeWidgetQuery(
+      { source: VERSIONS_SOURCE_ID, op: "list", limit: 5 },
+      caller
+    );
+
+    // BOTH locale rows must reach the decision -- handing it one is the defect.
+    expect(visible).toHaveBeenCalledWith([newer, older], caller);
+    const items = (result as { items: { locale: string }[] }).items;
+    expect(items).toHaveLength(1);
+    expect(items[0]?.locale).toBe("en");
+  });
+
+  it("reads another page when the first cannot fill the card", async () => {
+    // Rows, not documents, are what a page holds: a document contributes one
+    // row per locale and a row a rule hides contributes nothing, so a page can
+    // yield fewer documents than it has rows. Answering from one page would
+    // report the end of the feed rather than the end of that page.
+    pendingEditRows
+      .mockResolvedValueOnce(Array.from({ length: 100 }, () => row))
+      .mockResolvedValueOnce([row]);
+    visible.mockResolvedValueOnce([]).mockResolvedValueOnce([row]);
 
     await executeWidgetQuery(
       { source: VERSIONS_SOURCE_ID, op: "list", limit: 5 },
       caller
     );
 
-    expect(recentPendingEdits).toHaveBeenCalledTimes(2);
-    expect(recentPendingEdits).toHaveBeenLastCalledWith(
-      expect.objectContaining({ limit: 1000 })
+    expect(pendingEditRows).toHaveBeenCalledTimes(2);
+    // The second read continues where the first ended rather than repeating it.
+    expect(pendingEditRows).toHaveBeenLastCalledWith(
+      expect.objectContaining({ offset: 100 })
     );
   });
 
-  it("does NOT escalate when the small budget already saw every candidate", async () => {
-    // 🔴 The control that makes the test above mean something. A budget that
-    // was not exhausted has already seen every candidate there is, so a short
-    // answer from it is the true one -- escalating would re-read the same rows
-    // and make every under-filled card cost two scans forever.
-    recentPendingEdits.mockResolvedValue([row]);
+  it("stops at the end of the table rather than paging past it", async () => {
+    // 🔴 The control that makes the test above mean something. A SHORT page is
+    // the end of the rows, so a card that could not be filled from it is
+    // genuinely short -- paging on would re-ask an exhausted table on every
+    // dashboard load.
+    pendingEditRows.mockResolvedValue([row]);
     visible.mockResolvedValue([]);
 
     await executeWidgetQuery(
@@ -220,7 +248,7 @@ describe("who the numbers are for", () => {
       caller
     );
 
-    expect(recentPendingEdits).toHaveBeenCalledTimes(1);
+    expect(pendingEditRows).toHaveBeenCalledTimes(1);
   });
 
   it("asks the access layer ONCE per query", async () => {
@@ -294,6 +322,6 @@ describe("what it answers with", () => {
         caller
       )
     ).rejects.toThrow(/unavailable source or unsupported op/);
-    expect(recentPendingEdits).not.toHaveBeenCalled();
+    expect(pendingEditRows).not.toHaveBeenCalled();
   });
 });

@@ -39,30 +39,11 @@ export interface VersionListOptions {
   locale?: string;
 }
 
-/** Construction-time facts this service cannot derive from its database handle. */
-export interface VersionsServiceOptions {
-  /**
-   * How many working drafts one document can hold — the install's configured
-   * locale count, since a working draft is one row per document per locale.
-   *
-   * Read by the recent-edits list to bound the rows it must scan to find a full
-   * page of distinct DOCUMENTS. Defaults to 1, which is exactly right for an
-   * install with no localization configured and merely conservative otherwise:
-   * too low returns fewer documents than asked, never wrong ones.
-   */
-  maxWorkingDraftsPerDocument?: number;
-}
-
 export class VersionsService {
   private readonly repo: VersionsRepository;
-  private readonly maxWorkingDraftsPerDocument: number;
 
-  constructor(db: VersionsDbApi, options: VersionsServiceOptions = {}) {
+  constructor(db: VersionsDbApi) {
     this.repo = new VersionsRepository(db);
-    this.maxWorkingDraftsPerDocument = Math.max(
-      Math.trunc(options.maxWorkingDraftsPerDocument ?? 1) || 1,
-      1
-    );
   }
 
   /**
@@ -81,15 +62,26 @@ export class VersionsService {
     return this.repo.countDocumentsWithPendingEdits(readableSlugs);
   }
 
-  /** The documents most recently left with a pending edit, newest first. */
-  async recentPendingEdits(input: {
+  /**
+   * One page of pending-edit ROWS, newest first.
+   *
+   * 🔴 Rows rather than documents, and the caller collapses them itself — after
+   * it has decided which it may show. A working draft is one row per document
+   * per locale, and a localized Single is authorized per language, so collapsing
+   * before that decision offers the newest locale alone and loses a readable
+   * older one. This service used to take the install's locale count to size a
+   * single read; that number does not bound the data, because drafts written
+   * under a locale since removed from the configuration are still rows.
+   */
+  async pendingEditRows(input: {
     readableSlugs: readonly string[];
     limit: number;
+    offset: number;
   }): Promise<VersionMeta[]> {
-    return this.repo.findRecentPendingEdits({
+    return this.repo.findPendingEditRows({
       slugs: input.readableSlugs,
       limit: input.limit,
-      maxPerDocument: this.maxWorkingDraftsPerDocument,
+      offset: input.offset,
     });
   }
 

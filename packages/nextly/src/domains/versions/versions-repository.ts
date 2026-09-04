@@ -74,33 +74,19 @@ const VERSION_META_COLUMNS = [
 ] as const;
 
 /**
- * How many rows to read to be sure of finding `limit` distinct documents.
- *
- * 🔴 Derived from the caller's `limit` and NOTHING else. This used to take
- * `Math.min` against a second ceiling declared here, and the two bounds did not
- * know about each other: a caller asking for a thousand documents got five
- * hundred rows, so it received fewer documents than exist while every
- * feasibility check it had made said the answer was exact. A quiet floor, which
- * is the failure the caller's own bound exists to refuse.
- *
- * One bound, owned by the caller, is what makes that unrepresentable. The row
- * count follows from it, because a document holds at most `maxPerDocument`
- * working drafts -- one per locale -- so that many rows per document is enough
- * and no ceiling here can be right without knowing what the caller promised.
- */
-function scanBound(limit: number, maxPerDocument: number): number {
-  return limit * Math.max(maxPerDocument, 1);
-}
-
-/**
  * A document's identity across locales.
  *
  * NUL-joined rather than concatenated, so a slug ending in the separator cannot
  * spell the same key as a different slug and entry id pair -- the columns are
  * free strings and a delimiter that can occur inside one is a collision waiting
  * for the install that names a collection unusually.
+ *
+ * Exported because the collapse it keys now happens AFTER authorization, in the
+ * caller: a version row's identity belongs to this module, and the decision
+ * about which rows a reader may see belongs to the read path, so the two meet at
+ * the caller rather than one reimplementing the other.
  */
-function documentKey(row: VersionMeta): string {
+export function documentKey(row: VersionMeta): string {
   return [row.scopeKind, row.scopeSlug, row.entryId].join("\u0000");
 }
 
@@ -109,10 +95,17 @@ function documentKey(row: VersionMeta): string {
  *
  * Relies on the caller's `updatedAt DESC` ordering: the first row seen for a
  * document IS its latest instant, so keeping the first and dropping the rest
- * needs no comparison. Stops at `limit`, which is what makes the scan bound
- * above sufficient rather than merely generous.
+ * needs no comparison.
+ *
+ * 🔴 Run this AFTER authorization, never before. The key deliberately excludes
+ * `locale`, because a document is one thing to publish however many languages
+ * it is drafted in -- but a localized Single is authorized PER LANGUAGE, so
+ * collapsing first hands the visibility filter only the newest locale. Where
+ * that one is denied and an older one is readable, the document disappears from
+ * a card its reader is entitled to see, and no test that uses an unlocalized
+ * document can tell.
  */
-function newestPerDocument(
+export function newestPerDocument(
   rows: readonly VersionMeta[],
   limit: number
 ): VersionMeta[] {
@@ -375,46 +368,47 @@ export class VersionsRepository {
   }
 
   /**
-   * The DOCUMENTS most recently left with a pending edit, newest first.
+   * One PAGE of pending-edit rows, newest first — rows, not documents.
    *
-   * 🔴 Documents, not rows, and the difference is visible on the dashboard. A
-   * working draft is one row per document per LOCALE, so a page edited in three
-   * languages is three rows -- and limiting the query alone let one document
-   * take three of a five-row card while other recent work fell off the end. The
-   * count beside it is document-based, so the list also disagreed with the
-   * number it sits under, and because the card's `select` omits `locale` the
-   * extra rows rendered as indistinguishable duplicates rather than as anything
-   * a reader could explain.
+   * 🔴 It returns rows and collapses nothing, and that ordering is the point. A
+   * working draft is one row per document per LOCALE, and a document is one
+   * thing to publish however many languages it is drafted in — so the two views
+   * are both needed and the collapse has to happen AFTER the caller has
+   * authorized what it may see. Collapsing here handed the visibility filter
+   * only each document's newest locale, and a localized Single is authorized per
+   * language: where its newest pending locale is denied and an older one is
+   * readable, the document vanished from a card its reader was entitled to.
+   * {@link newestPerDocument} is exported for the caller to apply on the far
+   * side of that decision.
    *
-   * Over-fetch then collapse, because the data port has no GROUP BY and adding
-   * one for a single card would widen every adapter. The bound is exact rather
-   * than a guess: rows arrive newest-first, so a document's FIRST row is its
-   * latest instant, and every row preceding it belongs to a document at least as
-   * recent. At most `maxPerDocument` rows can come from any one of those, so the
-   * newest `limit` documents are all represented within
-   * `limit * maxPerDocument` rows — see {@link scanBound}, which is derived from
-   * `limit` alone so this cannot return fewer documents than the caller asked
-   * for while the caller believes it asked for few enough.
+   * 🔴 Paged rather than bounded by an arithmetic guess. The bound used to be
+   * `limit * maxPerDocument`, where `maxPerDocument` was the install's CURRENT
+   * locale count — which does not bound the data: working drafts written under a
+   * locale since removed from the configuration are still rows, so the read
+   * could return too few rows to yield `limit` documents while the caller's
+   * feasibility check said its answer was exact. A page and an offset make the
+   * caller's real bound — how many DOCUMENTS it wants — the only one, and it
+   * stops when it has them or when the rows run out.
    *
    * The snapshot is projected away. It is the largest column in the table and a
    * card that lists titles has no use for it.
    */
-  async findRecentPendingEdits(input: {
+  async findPendingEditRows(input: {
     slugs: readonly string[];
     limit: number;
-    maxPerDocument: number;
+    offset: number;
   }): Promise<VersionMeta[]> {
     if (input.slugs.length === 0 || input.limit <= 0) return [];
-    const rows = await this.db.select<VersionMeta>(TABLE, {
+    return this.db.select<VersionMeta>(TABLE, {
       columns: [...VERSION_META_COLUMNS],
       where: this.pendingEditWhere(input.slugs),
       // `nulls` is stated for the reason the module's other ordered read states
       // it: the default differs per dialect, and a limited list must not return
       // different rows per engine.
       orderBy: [{ column: "updatedAt", direction: "desc", nulls: "last" }],
-      limit: scanBound(input.limit, input.maxPerDocument),
+      limit: input.limit,
+      offset: input.offset,
     });
-    return newestPerDocument(rows, input.limit);
   }
 
   /**
