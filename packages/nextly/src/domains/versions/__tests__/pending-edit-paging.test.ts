@@ -43,8 +43,14 @@ describe("paged pending-edit reads", () => {
     });
 
     expect(selects).toHaveLength(1);
+    // Exact rather than "contains the id column", because the ABSENCE of a
+    // `nulls` placement is load-bearing too: the adapter spells one as a
+    // leading `updated_at IS NULL` sort key, which no index can supply, and
+    // `updated_at` is NOT NULL on all three dialects so it could never have
+    // separated any rows. Asking for it cost an index-ordered read and bought
+    // nothing.
     expect(selects[0]?.orderBy).toEqual([
-      { column: "updatedAt", direction: "desc", nulls: "last" },
+      { column: "updatedAt", direction: "desc" },
       { column: "id", direction: "desc" },
     ]);
   });

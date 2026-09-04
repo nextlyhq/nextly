@@ -87,6 +87,32 @@ export const nextlyVersionsSqlite = sqliteTable(
       table.entryId,
       table.createdAt
     ),
+    // The dashboard's pending-edit cards: every working draft in a set of
+    // collections, newest first.
+    //
+    // 🔴 Its columns are the WHERE clause of `findPendingEditRows`, in that
+    // order, because none of the indexes above can serve it — all three lead
+    // with `scope_kind`, which that query never constrains. Without this,
+    // SQLite answered both cards with `SCAN nextly_versions`: proving the walk
+    // had seen every pending edit meant reading every version ever captured,
+    // so the count's row budget bounded the rows it RECEIVED and nothing about
+    // the work the database did to find them.
+    //
+    // The three leading columns are constants for that query, `scope_slug`
+    // takes the readable-collection list, and the trailing pair is the cursor's
+    // own ordering. A single-collection install therefore reads it in order and
+    // sorts nothing; with several collections the `IN` list becomes several
+    // ranges that no index can merge, and the sort that follows is over
+    // working drafts alone rather than over the whole table -- proportional to
+    // the number the card reports, not to the history behind it.
+    index("nextly_versions_pending_edits_idx").on(
+      table.isAutosave,
+      table.status,
+      table.versionNo,
+      table.scopeSlug,
+      table.updatedAt,
+      table.id
+    ),
   ]
 );
 

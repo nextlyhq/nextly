@@ -12,6 +12,7 @@
  * @module components/features/widgets/archetypes/metric
  */
 
+import { CountValue } from "./count-value";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
 /**
@@ -58,18 +59,12 @@ export const metricBody: ArchetypeBody = (result, definition) => {
         // core ones reads as a different component, not as a peer.
         className="text-2xl font-bold leading-none tabular-nums tracking-tight text-foreground"
       >
-        {result.total.toLocaleString()}
-        {result.atLeast === true ? (
-          <>
-            {/* A floor, said in the number itself. The card cannot know the
-                whole figure -- the rows behind it are filtered by a rule the
-                database cannot apply -- and a bare number would claim it does.
-                Announced to assistive technology in words, since a trailing
-                "+" is punctuation a screen reader may not voice. */}
-            <span aria-hidden="true">+</span>
-            <span className="sr-only"> or more</span>
-          </>
-        ) : null}
+        {/* A floor is said in the number itself: the card cannot know the whole
+            figure -- the rows behind it are filtered by a rule the database
+            cannot apply -- and a bare number would claim it does. Drawn by the
+            shared renderer so a stats cell showing the same query cannot
+            disagree with this one about whether it is exact. */}
+        <CountValue total={result.total} atLeast={result.atLeast} />
       </p>
     ),
   };

@@ -9,9 +9,12 @@
  * @module components/features/widgets/archetypes/stats
  */
 
+import type { ReactNode } from "react";
+
 import { Link } from "@admin/components/ui/link";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
 
+import { CountValue } from "./count-value";
 import type { ArchetypeAccepts, CellsBody, CellSlotLookup } from "./types";
 
 /** A stats card is its cells, so a declaration without them draws nothing. */
@@ -33,13 +36,21 @@ export const statsAccepts: ArchetypeAccepts = definition => {
  * query's limit.
  */
 function cellValue(slot: WidgetSlot | undefined): {
-  text: string;
+  text: ReactNode;
   muted: boolean;
 } {
   if (!slot) return { text: "…", muted: true };
   if (!slot.ok) return { text: "—", muted: true };
   if (slot.result.op !== "count") return { text: "—", muted: true };
-  return { text: slot.result.total.toLocaleString(), muted: false };
+  // 🔴 Through the shared renderer, so a cell cannot present as exact a count
+  // its source reported as a floor. Formatting `total` alone here is what let
+  // one query render `2,000+` on a metric card and `2,000` in a stats cell.
+  return {
+    text: (
+      <CountValue total={slot.result.total} atLeast={slot.result.atLeast} />
+    ),
+    muted: false,
+  };
 }
 
 export const statsBody: CellsBody = (definition, slotFor: CellSlotLookup) => {

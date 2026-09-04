@@ -30,7 +30,7 @@ import { container } from "../../di/container";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import { readableDocumentIds } from "../../services/lib/readable-documents";
-import { registeredContentKinds } from "../../services/lib/registered-content-slugs";
+import { registeredContentSnapshot } from "../../services/lib/registered-content-slugs";
 
 import type { VersionMeta } from "./versions-repository";
 
@@ -59,7 +59,7 @@ interface ReadUnit {
  * verdict — a row exposed on a predicate never evaluated for it, which is the
  * same defect as passing no locale at all.
  */
-function configuredLocales(): Set<string> | null {
+function configuredLocales(): ReadonlySet<string> | null {
   try {
     if (!container.has("config")) return null;
     const localization =
@@ -90,7 +90,7 @@ function configuredLocales(): Set<string> | null {
 function subjectOf(
   row: VersionMeta,
   kinds: ReadonlyMap<string, "collection" | "single">,
-  locales: Set<string> | null
+  locales: ReadonlySet<string> | null
 ): Subject | null {
   const kind = kinds.get(row.scopeSlug);
   if (!kind || kind !== row.scopeKind) return null;
@@ -254,15 +254,44 @@ async function visibleSingleRows(
   return visible;
 }
 
+/**
+ * The install-wide facts every page of one walk must be judged against.
+ *
+ * 🔴 Resolved ONCE per query and carried, never re-read per page. Both halves
+ * turn a failure into an EMPTY answer on purpose — an unreachable registry
+ * contributes no slugs, an unreadable config no languages — and under a
+ * per-page read that safety became a defect: a transient failure on the seventh
+ * page dropped every row that page held, the pages either side of it kept
+ * theirs, and the walk finished and published the shortfall as a whole number.
+ * A snapshot cannot fail halfway; it is either the basis for the entire answer
+ * or the reason there is not one.
+ */
+export interface PendingEditScope {
+  kinds: ReadonlyMap<string, "collection" | "single">;
+  locales: ReadonlySet<string> | null;
+  /** True when the registry could not be enumerated, so `kinds` is a floor. */
+  degraded: boolean;
+}
+
+/** One resolution of the registry and the configured languages. */
+export async function resolvePendingEditScope(): Promise<PendingEditScope> {
+  const snapshot = await registeredContentSnapshot();
+  return {
+    kinds: snapshot.kinds,
+    locales: configuredLocales(),
+    degraded: snapshot.degraded,
+  };
+}
+
 /** `rows`, in their original order, keeping only what the caller may be told. */
 export async function visiblePendingEdits(
   rows: readonly VersionMeta[],
-  caller: ReadCaller
+  caller: ReadCaller,
+  scope: PendingEditScope
 ): Promise<VersionMeta[]> {
   if (rows.length === 0) return [];
 
-  const kinds = await registeredContentKinds();
-  const locales = configuredLocales();
+  const { kinds, locales } = scope;
 
   const subjects = new Map<VersionMeta, Subject>();
   for (const row of rows) {

@@ -7,6 +7,7 @@ const pendingEditRows = vi.fn();
 const has = vi.fn();
 const readable = vi.fn();
 const registeredSlugs = vi.fn();
+const scopeDegraded = vi.fn();
 const visible = vi.fn();
 
 vi.mock("../../../di/container", () => ({
@@ -26,9 +27,7 @@ vi.mock("../../../auth/entity-read-access", async importOriginal => ({
   readableEntities: (slugs: readonly string[], caller: unknown) =>
     readable(slugs, caller) as unknown,
 }));
-vi.mock("../../../services/lib/registered-content-slugs", () => ({
-  registeredContentSlugs: () => registeredSlugs() as unknown,
-}));
+
 // A PASS-THROUGH, so the assertions below stay about what this module decides:
 // which collections are in reach, and what it answers with. The document-level
 // filter it stands in for reaches the ordinary read path and a stored access
@@ -37,9 +36,24 @@ vi.mock("../../../services/lib/registered-content-slugs", () => ({
 // against a real database and a real owner-only rule. The final test in this
 // block is what keeps the substitution honest: it asserts the rows and the
 // caller actually reach this seam, so deleting the call is not a green.
-vi.mock("../pending-edit-visibility", () => ({
+//
+// Spread from the real module rather than written as a closed literal: a
+// literal silently drops every export it does not list, so a new one becomes
+// `undefined` at the call site and the failure names the mock rather than the
+// change that introduced it.
+vi.mock("../pending-edit-visibility", async importOriginal => ({
+  ...(await importOriginal<typeof import("../pending-edit-visibility")>()),
   visiblePendingEdits: (rows: unknown, caller: unknown) =>
     visible(rows, caller) as unknown,
+  resolvePendingEditScope: async () => ({
+    // The registry snapshot the source bounds the query with. Its keys ARE the
+    // candidate slugs, which is the property under test in the block below.
+    kinds: new Map(
+      ((await registeredSlugs()) as string[]).map(slug => [slug, "collection"])
+    ),
+    locales: null,
+    degraded: (scopeDegraded() as boolean) ?? false,
+  }),
 }));
 
 import { executeWidgetQuery } from "../../widgets/execute";
@@ -74,6 +88,7 @@ beforeEach(() => {
   pendingEditRows.mockResolvedValue([row]);
   readable.mockResolvedValue(new Set(["posts"]));
   registeredSlugs.mockResolvedValue(["posts", "secrets"]);
+  scopeDegraded.mockReturnValue(false);
   visible.mockImplementation((rows: unknown) => Promise.resolve(rows));
   clearSources();
   clearSystemResolvers();
@@ -177,6 +192,41 @@ describe("who the numbers are for", () => {
    * language. The count says `atLeast` now, so there is no quota to sit on and
    * no refusal to provoke.
    */
+
+  it("REFUSES when the registry could not be enumerated, rather than answering 0", async () => {
+    // 🔴 The registry answers an unreachable dependency with an empty set, which
+    // is the right fail-closed direction for an access decision and the wrong
+    // one for a number: no slug is in reach, so nothing is counted, and the card
+    // states as fact that nobody has unpublished work. A count is a positive
+    // claim about documents this never managed to look for. The grid draws a
+    // failed card per widget, so refusing costs the reader one card and not the
+    // dashboard.
+    scopeDegraded.mockReturnValue(true);
+
+    await expect(
+      executeWidgetQuery({ source: VERSIONS_SOURCE_ID, op: "count" }, caller)
+    ).rejects.toThrow();
+  });
+
+  it("answers 0 for an install that has genuinely registered nothing", async () => {
+    // The control that stops the refusal above swallowing a legitimate empty
+    // install: both produce an empty candidate set, and only one of them is a
+    // failure. Without this, mapping "no slugs" to a refusal would break every
+    // dashboard on a fresh install and read as the same fix.
+    registeredSlugs.mockResolvedValue([]);
+    readable.mockResolvedValue(new Set());
+
+    // Asserted as "answers at all", plus the empty candidate list it answers
+    // FROM. `total` is not the property here: the empty-slug short circuit
+    // lives in the repository, which this harness replaces, so a count taken
+    // from the stub would be measuring the stub.
+    await expect(
+      executeWidgetQuery({ source: VERSIONS_SOURCE_ID, op: "count" }, caller)
+    ).resolves.toMatchObject({ op: "count" });
+    expect(pendingEditRows).toHaveBeenCalledWith(
+      expect.objectContaining({ readableSlugs: [] })
+    );
+  });
 
   it("counts every visible document when the rows run out", async () => {
     // Exhaustion is the ROWS running out and nothing else. The count walks by
