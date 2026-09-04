@@ -797,40 +797,107 @@ function componentSource(
   const status = config.status ?? (config.draft === true ? "all" : "published");
 
   return async (ids: readonly string[]) => {
-    // One claim for the batch, because one read is what it costs. Charging per
-    // definition would refuse a page for an allowance it never spent; charging
-    // nothing would leave the one read on this path that grows with the page
-    // unbounded.
-    if (!budget.take()) return EMPTY_DEFINITIONS;
-    const wanted = [...ids];
-    const found = await cachedFind(
-      async () =>
-        await reader.find({
-          collection,
-          where: { id: { in: wanted } },
-          limit: wanted.length,
-          status,
-          overrideAccess: true,
-          disableErrors: true,
-          user: undefined,
-          req: undefined,
-          ...(locale ? { locale } : {}),
-        }),
-      {
-        tags: wanted.map(id => entryIdTag(collection, id)),
+    // Dropped before anything is built from them, not repaired. `entryIdTag`
+    // refuses a blank segment by THROWING — correctly, because a bare
+    // `nextly:components:id:` tag would over-invalidate — and a stored
+    // `componentId` of `"   "` is a nonempty string that `componentIdsIn`
+    // reports as a reference. Left in, one malformed instance takes the whole
+    // page down before a block boundary exists to contain it; left out, it is
+    // an id nobody supplied a definition for, which is exactly what it is.
+    const wanted = [...new Set(ids)].filter(id => id.trim().length > 0);
+    if (wanted.length === 0) return EMPTY_DEFINITIONS;
+
+    const found = new Map<string, BlockDocument>();
+    for (const chunk of chunked(wanted, COMPONENT_BATCH_SIZE)) {
+      // One claim per QUERY. A page embedding twenty components spends one
+      // read because that is what it costs; charging per definition would
+      // refuse a page for an allowance it never spent, and charging nothing
+      // would leave the read on this path that grows with the page unbounded.
+      if (!budget.take()) break;
+      const page = await readComponentChunk(chunk, {
+        reader,
+        collection,
+        status,
+        locale,
+        cacheScope: config.cacheScope,
+      });
+      for (const [id, document] of definitionsById(page.items, field)) {
+        found.set(id, document);
+      }
+    }
+    return found;
+  };
+}
+
+/**
+ * How many definitions one query may ask for.
+ *
+ * The smaller of two caps that are enforced elsewhere and silent when crossed.
+ * Nextly clamps a collection query to 500 rows (`PAGINATION_DEFAULTS.maxLimit`),
+ * so a larger `limit` returns a SUBSET and the components missing from it are
+ * reported as though nobody had published them. Next drops cache tags past
+ * `NEXT_CACHE_TAG_MAX_ITEMS`, 128 in the version this package builds against,
+ * so a component whose tag was dropped is never invalidated by its own publish
+ * and stays stale until some unrelated write busts the entry.
+ *
+ * 128 satisfies both. A page embedding more components than that costs one
+ * extra query per 128, which is the honest price of staying invalidatable.
+ */
+const COMPONENT_BATCH_SIZE = 128;
+
+/** Successive slices of at most `size`. */
+function chunked<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+}
+
+/** One batched, tagged, posture-carrying read of at most a full chunk. */
+async function readComponentChunk(
+  wanted: readonly string[],
+  args: {
+    reader: NextlyContentReader;
+    collection: string;
+    status: "published" | "draft" | "all";
+    locale: string | undefined;
+    cacheScope: string | undefined;
+  }
+): Promise<{ items: Record<string, unknown>[] }> {
+  const { reader, collection, status, locale, cacheScope } = args;
+  return await cachedFind(
+    async () =>
+      await reader.find({
+        collection,
+        where: { id: { in: [...wanted] } },
+        limit: wanted.length,
+        status,
+        overrideAccess: true,
+        disableErrors: true,
+        user: undefined,
+        req: undefined,
+        ...(locale ? { locale } : {}),
+      }),
+    {
+      tags: wanted.map(id => entryIdTag(collection, id)),
+      keyParts: [
+        "nextly-components",
+        collection,
+        status,
+        locale ?? "",
+        // The tenant discriminator, exactly as `resolveContent` keys its own
+        // read. Two deployments pointed at different databases ask for the
+        // same component ids under the same collection, status and locale —
+        // so without this the first to warm the entry serves its definitions
+        // to the other's pages.
+        cacheScope ?? "",
         // Sorted, so two pages embedding the same components in a different
         // order share one entry rather than filling two with one answer.
-        keyParts: [
-          "nextly-components",
-          collection,
-          status,
-          locale ?? "",
-          ...[...wanted].sort(),
-        ],
-      }
-    );
-    return definitionsById(found.items, field);
-  };
+        ...[...wanted].sort(),
+      ],
+    }
+  );
 }
 
 /** The rows a batched read returned, keyed by id, with the block field taken. */

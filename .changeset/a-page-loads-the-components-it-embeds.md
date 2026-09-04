@@ -39,3 +39,9 @@ can say where, or supply them directly.
 Publishing one component now rebuilds exactly the pages that embed it, rather
 than every page on the site. The read carries a tag naming that component alone,
 so a page that never used it is left alone.
+
+A site running several deployments against different databases no longer risks
+one of them serving another's components from a shared cache. A page embedding
+more components than a cache can track is now read in several queries, so every
+component still updates the pages that use it. And a component reference that
+is blank rather than missing no longer takes the whole page down.

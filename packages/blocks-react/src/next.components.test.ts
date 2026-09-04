@@ -185,6 +185,59 @@ describe("the definitions a route reads for its page", () => {
     expect(props.definitions?.has("hero")).toBe(true);
   });
 
+  it("keys the read by cache scope, so two tenants cannot share an entry", async () => {
+    // Two deployments pointed at different databases ask for the same ids
+    // under the same collection, status and locale. Without the discriminator
+    // the first to warm the entry serves ITS definitions to the other's pages.
+    await renderWith({ hero: definition() }, page(["hero"]), {
+      cacheScope: "tenant-a",
+    });
+    const a = cached.mock.calls[0]![0] as { keyParts: string[] };
+
+    await renderWith({ hero: definition() }, page(["hero"]), {
+      cacheScope: "tenant-b",
+    });
+    const b = cached.mock.calls[0]![0] as { keyParts: string[] };
+
+    expect(a.keyParts).toContain("tenant-a");
+    expect(b.keyParts).toContain("tenant-b");
+    expect(a.keyParts).not.toEqual(b.keyParts);
+  });
+
+  it("splits a page past the tag cap into queries that stay invalidatable", async () => {
+    // Next drops cache tags past 128 and Nextly clamps a query to 500 rows.
+    // Both are silent: the first leaves a component uninvalidatable by its own
+    // publish, the second returns a subset and reports the rest missing.
+    const ids = Array.from({ length: 200 }, (_, i) => `c${String(i)}`);
+    const store = Object.fromEntries(ids.map(id => [id, definition()]));
+
+    const { props, calls } = await renderWith(store, page(ids));
+
+    const reads = componentReads(calls);
+    expect(reads).toHaveLength(2);
+    expect(reads.every(read => (read.where?.id?.in as string[]).length <= 128));
+    for (const call of cached.mock.calls) {
+      expect((call[0] as { tags: string[] }).tags.length).toBeLessThanOrEqual(
+        128
+      );
+    }
+    expect(props.definitions?.size).toBe(200);
+  });
+
+  it("drops a blank component id instead of failing the page", async () => {
+    // `entryIdTag` refuses a blank segment by throwing, and `componentIdsIn`
+    // reports "   " as a reference because it is a nonempty string. Left in,
+    // one malformed instance takes the page down before a block boundary
+    // exists to contain it.
+    const { props } = await renderWith(
+      { hero: definition() },
+      page(["hero", "   "])
+    );
+
+    expect(props.definitions?.has("hero")).toBe(true);
+    expect(props.definitions?.has("   ")).toBe(false);
+  });
+
   it("asks for nothing when the page embeds no component", async () => {
     const { calls, props } = await renderWith(
       { hero: definition() },
