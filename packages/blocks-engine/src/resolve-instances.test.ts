@@ -882,6 +882,35 @@ describe("resolveComponentInstances what an instance carries", () => {
     ).toEqual(["s1"]);
   });
 
+  it("fits a composition whose slot content releases the room it needs", () => {
+    // Two nodes stored — the instance and the content it supplies — and two
+    // nodes composed. The supplied instance resolves to an empty component, so
+    // replacing it FREES the slot it occupied, and the definition's own two
+    // nodes fit exactly. Whether that room arrives before or after the
+    // definition's siblings are cloned is an ordering detail of this module,
+    // and a page must not be refused over it.
+    const outer = component([node("sib"), box("d1", [])], {
+      slots: { body: { label: "Body", nodeId: "d1", slot: "children" } },
+    });
+    const doc = page([
+      instance(
+        "i1",
+        "outer",
+        {},
+        { slots: { body: [instance("s1", "inner")] } }
+      ),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({ outer, inner: component([]) }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 2 } }
+    );
+
+    expect(result.unresolved).toEqual([]);
+    expect(flatten(result.document.nodes)).toHaveLength(2);
+  });
+
   it("composes the page's slot content ONCE, however deep it is placed", () => {
     // The page supplies content to a slot that `outer` forwards into a nested
     // component. Composing where it is placed means it passes through two
