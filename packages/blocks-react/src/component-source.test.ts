@@ -184,6 +184,152 @@ describe("the definitions a document reaches", () => {
     expect(found.has("gone")).toBe(false);
   });
 
+  it("fetches the component an OVERRIDE names, not the one stored", async () => {
+    // The case a raw walk cannot see. `outer` stores an instance of `default`
+    // and exposes its `componentId`; the page overrides it to `chosen`. A scan
+    // of stored props finds `default` and the resolver asks for `chosen`, so
+    // the page renders a component it was given as missing.
+    const { source, batches } = recording({
+      outer: {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "component",
+        nodes: [instance("n1", "default")],
+        exposed: [
+          {
+            id: "which",
+            label: "Which",
+            nodeId: "n1",
+            propPath: "componentId",
+            type: "text",
+          },
+        ],
+      } as unknown as BlockDocument,
+      default: component([]),
+      chosen: component([]),
+    });
+
+    const found = await definitionsFor(
+      {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "i1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "outer", overrides: { which: "chosen" } },
+          },
+        ],
+      },
+      source,
+      DEFAULT_LIMITS
+    );
+
+    expect(found.has("chosen")).toBe(true);
+    expect(batches.flat()).toContain("chosen");
+    // And the stored default is never asked for. Without this the test passes
+    // on a discovery that fetches BOTH — which resolves the page correctly and
+    // pays for a definition no render inlines, so the assertion that the
+    // override was FOLLOWED cannot be told from one that it was merely added.
+    expect(found.has("default")).toBe(false);
+    expect(batches.flat()).not.toContain("default");
+  });
+
+  it("keeps discovering on a page whose node cap is smaller than its component count", async () => {
+    // `maxNodes` bounds nodes in the composed OUTPUT; discovery counts
+    // definitions TRAVERSED. They are unrelated quantities, and tying one to
+    // the other stops the walk on a page that composes perfectly well: one
+    // node, one component, and one empty component inside it.
+    const { source } = recording({
+      a: component([instance("n1", "b")]),
+      b: component([]),
+    });
+
+    const found = await definitionsFor(page([instance("i1", "a")]), source, {
+      ...DEFAULT_LIMITS,
+      maxNodes: 1,
+    });
+
+    expect([...found.keys()]).toEqual(["a", "b"]);
+  });
+
+  it("never asks for a component the resolver will not reach", async () => {
+    // A condition-gated instance is dropped with its whole subtree before a
+    // reader sees it, so the resolver never asks for its component. A walk of
+    // the stored nodes reports it anyway — which is both a read nobody needs
+    // and, on a page with many of them, an allowance spent before the visible
+    // component is reached.
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "vip" }]] };
+    const { source, batches } = recording({
+      shown: component([]),
+      hidden: component([]),
+    });
+
+    const found = await definitionsFor(
+      page([
+        instance("i1", "shown"),
+        { ...instance("i2", "hidden"), visibility: gate },
+      ]),
+      source,
+      DEFAULT_LIMITS
+    );
+
+    expect(batches).toEqual([["shown"]]);
+    expect(found.has("hidden")).toBe(false);
+  });
+
+  it("keeps a definition answered under an id nobody asked for", async () => {
+    // A source answers with the id it read off the row, and an `afterRead`
+    // hook may rewrite that. Merging an answer filed under an unrequested key
+    // lets one component's document stand in for another's, and the reference
+    // that really named it is never fetched.
+    const batches: string[][] = [];
+    const source: ComponentSource = ids => {
+      batches.push([...ids]);
+      const found = new Map<string, BlockDocument>();
+      // Answers `outer` correctly, and smuggles a second entry under a key
+      // that was not requested.
+      if (ids.includes("outer")) {
+        found.set("outer", component([instance("n1", "inner")]));
+        found.set(
+          "inner",
+          component([{ id: "wrong", type: "core/text", version: 1, props: {} }])
+        );
+      }
+      return Promise.resolve(found);
+    };
+
+    const found = await definitionsFor(
+      page([instance("i1", "outer")]),
+      source,
+      DEFAULT_LIMITS
+    );
+
+    // `inner` is fetched by the round that actually asks for it, never taken
+    // from the answer that volunteered it.
+    expect(batches).toEqual([["outer"], ["inner"]]);
+    expect(found.has("inner")).toBe(false);
+  });
+
+  it("stops at the discovery allowance even when one round exceeds it", async () => {
+    // The allowance has to CLAMP the batch, not merely be checked before it.
+    // A single round can expose more ids than the cap — a page naming twelve
+    // hundred components does — so a check in front of an unbounded batch caps
+    // nothing at all.
+    const store: Record<string, BlockDocument> = {};
+    const roots: BlockNode[] = [];
+    for (let i = 0; i < 1200; i += 1) {
+      store[`c${String(i)}`] = component([]);
+      roots.push(instance(`i${String(i)}`, `c${String(i)}`));
+    }
+    const { source, batches } = recording(store);
+
+    const found = await definitionsFor(page(roots), source, DEFAULT_LIMITS);
+
+    expect(batches.flat().length).toBeLessThanOrEqual(1000);
+    expect(found.size).toBeLessThanOrEqual(1000);
+  });
+
   it("asks for nothing when the page holds no instance", async () => {
     const { source, batches } = recording({ hero: component([]) });
 

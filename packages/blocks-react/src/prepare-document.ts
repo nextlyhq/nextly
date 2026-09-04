@@ -429,6 +429,11 @@ export function isUnresolvedInstance(node: ResolvedBlockNode): boolean {
  * `missing` for a definition the caller had supplied. Asking here means there
  * is one answer, given at the moment the definition is actually wanted.
  *
+ * Published so the pass that FETCHES definitions can ask the resolver what it
+ * would reach through exactly this lookup. Discovery that built its own view
+ * of a definition would be predicting the pipeline rather than asking it, and
+ * repair is one of the three places the two used to disagree.
+ *
  * NOT memoized here, and that is deliberate rather than an omission. The
  * resolver reads the lookup once per component per resolution and holds the
  * answer for the run — it has to, because a lookup is a caller's object and a
@@ -436,7 +441,7 @@ export function isUnresolvedInstance(node: ResolvedBlockNode): boolean {
  * would be a second implementation of that guarantee, agreeing on the day it
  * is written; removing it was measured to change nothing.
  */
-function repairingLookup(
+export function repairingLookup(
   definitions: DefinitionsById,
   limits: DocumentLimits
 ): ComponentLookup {
