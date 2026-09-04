@@ -19,6 +19,7 @@ import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { MAX_QUERIES_PER_REQUEST } from "../domains/widgets/batch-limit";
 import { refreshCollectionSources } from "../domains/widgets/collection-sources";
+import { resolveExecutableSource } from "../domains/widgets/executable-source";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import {
   readWidgetQuery,
@@ -153,15 +154,25 @@ const GENERIC_SLOT_ERROR = "An unexpected error occurred.";
  * through that domain's REST route by any authenticated caller. So admitting
  * these sources tells a caller nothing a collection refusal was protecting.
  *
- * A `system:` source nothing answers is still refused, with the shared string,
- * by `resolveExecutableSource` -- so "registered but unanswerable" stays
- * indistinguishable from "does not exist".
+ * 🔴 A `system:` source nothing answers is refused HERE, by asking
+ * `resolveExecutableSource` -- the executor's own decision, called rather than
+ * restated, so the two cannot answer differently. Admitting on the kind alone
+ * was not enough: a resolver-less system source registered through the generic
+ * `registerSource` door reached field-level validation, and every message below
+ * this point is specific. A caller sending an undeclared `select` was told
+ * which field was undeclared ON that source, while an invented id got the
+ * generic sentence -- so the pair distinguished a registered system source from
+ * a nonexistent one, which is the enumeration oracle this gate exists to close.
  */
 async function assertSourceReadable(
   source: WidgetSource,
   mayRead: (slug: string) => Promise<boolean>
 ): Promise<void> {
-  if (source.kind === "system") return;
+  if (source.kind === "system") {
+    // Throws the same shared refusal for a system source with no resolver.
+    resolveExecutableSource(source.id);
+    return;
+  }
   if (source.kind !== "collection") {
     failUnavailableSourceOrOp(
       `source "${source.id}" has kind "${source.kind}", which is not executable yet; only collections and system sources are`
