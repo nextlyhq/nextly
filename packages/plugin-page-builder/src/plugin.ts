@@ -130,6 +130,25 @@ export interface PageBuilderOptions {
    */
   limits?: DocumentLimits;
   /**
+   * Where publishing a page looks for the components it embeds, when it warns
+   * that some are not live.
+   *
+   * Defaults to the component store this plugin contributes, which is where the
+   * renderer reads them from unless a route says otherwise. A route MAY say
+   * otherwise: `createBlocksPage` accepts `componentCollection` to name a
+   * different store and `resolveComponents` to supply definitions from
+   * somewhere that is not a collection at all. Neither is visible from here —
+   * the route is configured in the host's app, and this runs on the write path
+   * — so a host that redirected the renderer must redirect this too, or the
+   * notice judges the page against a store it does not render from and reports
+   * live components as missing.
+   *
+   * `false` turns the notice off, which is the honest setting for a host whose
+   * definitions come from a custom `resolveComponents` source: no collection
+   * can answer the question, so asking one produces a warning about nothing.
+   */
+  componentReadiness?: false | { collection?: string };
+  /**
    * Whether the editor shows its getting-started checklist. Default true.
    *
    * A site that teaches its authors the editor some other way turns it off
@@ -375,19 +394,26 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // is the same kind of thing — a property of the plugin being INSTALLED,
       // not of any one collection — and it reads the component store the same
       // plugin contributes.
-      registerComponentReadinessNotice({
-        ctx,
-        // The RESOLVED slug, for the reason the index slug is resolved: an
-        // integrator may rename the collection, and a hook holding the literal
-        // would ask about a table that does not exist and report every embedded
-        // component as unpublished.
-        componentCollection:
-          ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG,
-        // The SAME bounds the renderer draws under, asked per call. A notice
-        // derived under different ones names components inside a document the
-        // page never renders.
-        limits: () => opts.limits ?? DEFAULT_LIMITS,
-      });
+      // Skipped entirely when the host turned it off, rather than registered
+      // and made to decline per write: a hook that runs on every save to answer
+      // "not my business" is a cost with no product.
+      if (opts.componentReadiness !== false) {
+        registerComponentReadinessNotice({
+          ctx,
+          // The RESOLVED slug, for the reason the index slug is resolved: an
+          // integrator may rename the collection, and a hook holding the literal
+          // would ask about a table that does not exist and report every embedded
+          // component as unpublished.
+          componentCollection:
+            opts.componentReadiness?.collection ??
+            ctx.self.collections[COMPONENTS_SLUG] ??
+            COMPONENTS_SLUG,
+          // The SAME bounds the renderer draws under, asked per call. A notice
+          // derived under different ones names components inside a document the
+          // page never renders.
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+        });
+      }
     },
     contributes: {
       // The channel another plugin adds blocks through. Core carries no

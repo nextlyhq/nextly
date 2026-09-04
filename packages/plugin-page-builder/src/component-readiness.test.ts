@@ -13,7 +13,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { embeddedComponentIds, unpublishedAmong } from "./component-readiness";
+import { embeddedComponentIds } from "./component-readiness";
 
 const LIMITS: DocumentLimits = {
   maxDepth: 12,
@@ -131,32 +131,6 @@ describe("the components a document embeds", () => {
     const found = embeddedComponentIds(many, { ...LIMITS, maxNodes: 3 });
 
     expect(found.length).toBeLessThan(10);
-  });
-});
-
-describe("which embedded components are not live", () => {
-  it("reports the ids a published-scoped read did not return", async () => {
-    expect(unpublishedAmong(["hero", "footer"], new Set(["hero"]))).toEqual([
-      "footer",
-    ]);
-  });
-
-  it("reports nothing when every embedded component came back", async () => {
-    expect(
-      unpublishedAmong(["hero", "footer"], new Set(["hero", "footer"]))
-    ).toEqual([]);
-  });
-
-  it("keeps document order rather than read order", async () => {
-    // Two writes of one document otherwise produce two spellings of the same
-    // message, which reads to an author as two different problems.
-    expect(unpublishedAmong(["b", "a"], new Set())).toEqual(["b", "a"]);
-  });
-
-  it("treats an id the store never mentions as not live", async () => {
-    // Unpublished and deleted arrive identically here, and they leave the same
-    // hole on the page — so neither needs a second rule to tell them apart.
-    expect(unpublishedAmong(["ghost"], new Set(["hero"]))).toEqual(["ghost"]);
   });
 });
 

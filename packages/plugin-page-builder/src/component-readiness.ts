@@ -68,21 +68,3 @@ export function embeddedComponentIds(
   );
   return [...found];
 }
-
-/**
- * The embedded components a published-scoped read did NOT return.
- *
- * Absence is the whole signal. An id the store answers for under a published
- * scope is live; an id it does not is either unpublished or gone, and both
- * leave the same hole on the page — so both belong in the notice and neither
- * needs a second rule to tell them apart.
- *
- * Order follows the document rather than the read, so two writes of one
- * document produce one message rather than two spellings of it.
- */
-export function unpublishedAmong(
-  embedded: readonly string[],
-  publishedIds: ReadonlySet<string>
-): string[] {
-  return embedded.filter(id => !publishedIds.has(id));
-}

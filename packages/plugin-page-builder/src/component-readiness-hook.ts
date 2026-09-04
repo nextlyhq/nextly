@@ -38,12 +38,15 @@
  *
  * @module component-readiness-hook
  */
-import type { DocumentLimits } from "@nextlyhq/blocks-engine";
+import {
+  MAX_COMPOSED_DEPTH,
+  type DocumentLimits,
+} from "@nextlyhq/blocks-engine";
 import type { HookContext } from "nextly";
 import { recordAdvisoryNotice } from "nextly";
 
 import { blocksFieldsOf } from "./class-usage-blocks-fields";
-import { embeddedComponentIds, unpublishedAmong } from "./component-readiness";
+import { embeddedComponentIds } from "./component-readiness";
 import { requestContextFor, writeTargetOf } from "./write-target";
 
 /** The phases a document can become published in. */
@@ -51,6 +54,18 @@ const PUBLISHING_PHASES = ["afterCreate", "afterUpdate"] as const;
 
 /** The canonical code a consumer branches on. */
 export const COMPONENTS_NOT_PUBLISHED_CODE = "COMPONENTS_NOT_PUBLISHED";
+
+/**
+ * How many ids one readiness query may ask about.
+ *
+ * A collection query is CLAMPED to `PAGINATION_DEFAULTS.maxLimit` (500) and
+ * returns a subset silently, while a document may reference far more component
+ * instances than that — the default node cap is 5,000. Asking for all of them
+ * at once returns the first page, and every published component missing from it
+ * is then reported as unpublished: a false warning, produced by the read rather
+ * than by the data. Under the cap the answer is the whole answer.
+ */
+const READINESS_BATCH_SIZE = 128;
 
 /** The reads this notice makes on its own behalf. */
 export interface ReadinessDirectApi {
@@ -95,10 +110,14 @@ export function registerComponentReadinessNotice(args: {
   /** The bounds documents are read under, asked per call. */
   limits: () => DocumentLimits;
 }): void {
-  const handler = (context: HookContext<unknown>): Promise<void> =>
-    report(args, context);
   for (const phase of PUBLISHING_PHASES) {
-    args.ctx.hooks.on(phase, "*", handler);
+    // Closed over at REGISTRATION, because the context does not carry it. A
+    // `HookContext` names its `operation` ("create" / "update"), not the phase,
+    // so reading a phase off it yields nothing and every advisory would report
+    // the same lifecycle metadata whichever phase produced it.
+    args.ctx.hooks.on(phase, "*", (context: HookContext<unknown>) =>
+      report(args, context, phase)
+    );
   }
 }
 
@@ -114,10 +133,11 @@ export function registerComponentReadinessNotice(args: {
  */
 async function report(
   args: Parameters<typeof registerComponentReadinessNotice>[0],
-  context: HookContext<unknown>
+  context: HookContext<unknown>,
+  phase: string
 ): Promise<void> {
   try {
-    const notice = await composeNotice(args, context);
+    const notice = await composeNotice(args, context, phase);
     if (notice === null) return;
     recordAdvisoryNotice(notice);
   } catch {
@@ -130,7 +150,8 @@ async function report(
 /** The notice this write earns, or `null` when it earns none. */
 async function composeNotice(
   args: Parameters<typeof registerComponentReadinessNotice>[0],
-  context: HookContext<unknown>
+  context: HookContext<unknown>,
+  phase: string
 ): Promise<Parameters<typeof recordAdvisoryNotice>[0] | null> {
   const target = writeTargetOf<ReadinessDirectApi>(context, {
     // The component store itself is NOT excluded: a component embedding another
@@ -139,12 +160,12 @@ async function composeNotice(
     excluded: [],
   });
   if (target === null) return null;
-  if (!leavesDocumentPublished(context)) return null;
 
   const collection = await args.ctx.services.collections.getCollection(
     target.slug,
     requestContextFor(context)
   );
+  if (!leavesDocumentPublished(context, collection)) return null;
   // No early return for a collection without blocks fields: it would be a
   // second spelling of the check below, since a document with no such field
   // references no components. One question, one branch.
@@ -163,16 +184,16 @@ async function composeNotice(
     return null;
   }
 
-  const live = await publishedIds(
+  const missing = await missingAcrossGraph(
+    args,
     target.nextly,
-    args.componentCollection,
+    store,
     embedded
   );
-  const missing = unpublishedAmong(embedded, live);
   if (missing.length === 0) return null;
 
   return {
-    phase: phaseOf(context),
+    phase,
     collection: target.slug,
     code: COMPONENTS_NOT_PUBLISHED_CODE,
     message: describe(missing.length),
@@ -181,32 +202,41 @@ async function composeNotice(
 }
 
 /**
- * Which phase produced this notice.
+ * Whether this write leaves a document VISITORS can load, with this content.
  *
- * Read defensively rather than coerced: `type` arrives on a context this module
- * does not own, and stringifying whatever is there would put `[object Object]`
- * in a field a consumer branches on. The registration names the two phases, so
- * an unreadable one falls back to the phase that raised it in every ordinary
- * case rather than to something no consumer recognises.
- */
-function phaseOf(context: HookContext<unknown>): string {
-  const type = (context as unknown as Record<string, unknown>).type;
-  return typeof type === "string" && type.length > 0 ? type : "afterUpdate";
-}
-
-/**
- * Whether this write LEAVES the document published.
+ * Three conditions, and each rules out a different way of being wrong.
  *
- * The state the write leaves behind, not the transition into it. The admin
- * sends `status` on every save, so a rule reading a change would fire only on
- * the one save that flipped it — and an author who later drops an unpublished
- * component into an already-live page would be told nothing, which is the case
- * most worth catching.
+ * **The collection must own the lifecycle.** `status` is an ordinary field name
+ * a project may use for its own vocabulary, so the name answers nothing: a
+ * collection without the Draft/Published lifecycle whose rows say
+ * `status: "published"` has published nothing. Core draws exactly this
+ * distinction with `status === true` on the collection, and asking it here is
+ * what keeps one reading of the field rather than inventing a second.
+ *
+ * **The document must be published**, judged on the state the write LEAVES
+ * BEHIND rather than the transition into it. The admin sends `status` on every
+ * save, so a rule watching for a change fires only on the save that flipped it,
+ * and an author who later drops an unpublished component into an already-live
+ * page would be told nothing — the case most worth catching.
+ *
+ * **It must not be a working-draft save.** A pending draft on a published,
+ * drafts-enabled document leaves `status` at the live parent's value, so by its
+ * own fields it is indistinguishable from a real publish — while the live
+ * document a visitor loads did not change at all. Warning there would fire on
+ * ordinary drafting of a live page, which is most of an author's day, and a
+ * notice that cries wolf is one nobody reads by the time it is right.
  */
-function leavesDocumentPublished(context: HookContext<unknown>): boolean {
+function leavesDocumentPublished(
+  context: HookContext<unknown>,
+  collection: unknown
+): boolean {
+  if ((collection as { status?: unknown } | null)?.status !== true)
+    return false;
   const data = (context as unknown as Record<string, unknown>).data;
   if (typeof data !== "object" || data === null) return false;
-  return (data as { status?: unknown }).status === "published";
+  const document = data as { status?: unknown; _isWorkingDraft?: unknown };
+  if (document._isWorkingDraft === true) return false;
+  return document.status === "published";
 }
 
 /** Every component id the written document references, across its blocks fields. */
@@ -229,6 +259,98 @@ function embeddedIn(
 }
 
 /**
+ * Every component the page cannot show, following the graph the renderer does.
+ *
+ * The page's own instances are not the whole question. A published component may
+ * itself embed one that is not published, and the renderer inlines the outer
+ * definition and then meets the same hole one level down — so a check that
+ * stopped at the ids stored in the page would verify the outer component, find
+ * it live, and stay silent about a marker a visitor can see.
+ *
+ * Descends only through definitions that came back PUBLISHED, which is exactly
+ * how far the renderer gets: an unpublished component is never inlined, so what
+ * it references in turn is unreachable, and naming those would report
+ * components no visitor could encounter. Its own id is already in the answer.
+ *
+ * Bounded by the depth the engine composes to, and by a visited set. The set
+ * alone makes the walk finite over authored data that may contain a cycle; the
+ * depth bound keeps the question inside the tree the renderer would build.
+ */
+async function missingAcrossGraph(
+  args: Parameters<typeof registerComponentReadinessNotice>[0],
+  nextly: ReadinessDirectApi,
+  store: unknown,
+  rootIds: readonly string[]
+): Promise<string[]> {
+  const documentFields = blocksFieldsOf(store as never);
+  const missing: string[] = [];
+  const asked = new Set<string>();
+  let frontier = [...rootIds];
+
+  for (let depth = 0; depth < MAX_COMPOSED_DEPTH; depth++) {
+    if (frontier.length === 0) break;
+    for (const id of frontier) asked.add(id);
+
+    const round = await resolveRound(args, nextly, frontier, documentFields);
+    missing.push(...round.missing);
+    // The ONE visited guard. An id already asked about is never queued again,
+    // which is what makes the walk finite over a component graph that may
+    // legally contain a cycle; the depth bound is a second, independent limit
+    // rather than the thing keeping it terminating.
+    frontier = round.nested.filter(id => !asked.has(id));
+  }
+
+  return missing;
+}
+
+/**
+ * One level of the walk: which of these ids are not live, and what the live
+ * ones embed in turn.
+ *
+ * Split out because the round is a whole question on its own — a batch of ids
+ * in, a partition and a next frontier out — and reading it inside the loop
+ * meant holding the loop's bookkeeping in mind to see it.
+ */
+async function resolveRound(
+  args: Parameters<typeof registerComponentReadinessNotice>[0],
+  nextly: ReadinessDirectApi,
+  wanted: readonly string[],
+  documentFields: readonly { name: string }[]
+): Promise<{ missing: string[]; nested: string[] }> {
+  const rows = await publishedRows(nextly, args.componentCollection, wanted);
+  const missing: string[] = [];
+  const nested = new Set<string>();
+
+  for (const id of wanted) {
+    const row = rows.get(id);
+    if (row === undefined) {
+      missing.push(id);
+      continue;
+    }
+    for (const child of componentsWithin(row, documentFields, args.limits())) {
+      nested.add(child);
+    }
+  }
+
+  return { missing, nested: [...nested] };
+}
+
+/** The component ids one stored definition references. */
+function componentsWithin(
+  row: Record<string, unknown>,
+  fields: readonly { name: string }[],
+  limits: DocumentLimits
+): string[] {
+  const found = new Set<string>();
+  for (const field of fields) {
+    const nodes = (row[field.name] as { nodes?: unknown } | undefined)?.nodes;
+    if (!Array.isArray(nodes)) continue;
+    for (const id of embeddedComponentIds(nodes, limits)) found.add(id);
+  }
+  return [...found];
+}
+
+/**
  * Which of the wanted ids the store answers for under a PUBLISHED scope.
  *
  * `overrideAccess` because the question is about the document's lifecycle, not
@@ -237,25 +359,36 @@ function embeddedIn(
  * it by their permissions would answer "missing" for a component that is
  * perfectly live.
  */
-async function publishedIds(
+async function publishedRows(
   nextly: ReadinessDirectApi,
   collection: string,
   wanted: readonly string[]
-): Promise<Set<string>> {
-  const page = await nextly.find({
-    collection,
-    where: { id: { in: [...wanted] } },
-    limit: wanted.length,
-    status: "published",
-    overrideAccess: true,
-    depth: 0,
-  });
-  const live = new Set<string>();
-  for (const item of page.items) {
-    const id = (item as { id?: unknown } | null)?.id;
-    if (typeof id === "string") live.add(id);
+): Promise<Map<string, Record<string, unknown>>> {
+  const live = new Map<string, Record<string, unknown>>();
+  for (const chunk of chunked(wanted, READINESS_BATCH_SIZE)) {
+    const page = await nextly.find({
+      collection,
+      where: { id: { in: [...chunk] } },
+      limit: chunk.length,
+      status: "published",
+      overrideAccess: true,
+      depth: 0,
+    });
+    for (const item of page.items) {
+      const row = item as Record<string, unknown> | null;
+      const id = row?.id;
+      if (typeof id === "string" && row !== null) live.set(id, row);
+    }
   }
   return live;
+}
+
+/** Successive slices of at most `size`. */
+function chunked<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size)
+    out.push(items.slice(i, i + size));
+  return out;
 }
 
 /**

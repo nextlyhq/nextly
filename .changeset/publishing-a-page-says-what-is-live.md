@@ -45,6 +45,13 @@ extend with public states of its own. That also collapses two cases worth
 collapsing: an unpublished component and a deleted one leave the same hole, and
 the author's next move is the same for both.
 
+It follows the graph the renderer follows. A published component may itself
+embed one that is not published, and the renderer inlines the outer definition
+and meets the same hole one level down — so the check descends through published
+definitions to a fixed point rather than stopping at the ids stored in the page.
+It does not descend through an unpublished component, because the renderer never
+inlines one and what it references is unreachable.
+
 It stays silent where it cannot decide. A localized component store publishes
 per language on a companion row, so a published-scoped read answers for no
 language in particular and would report live components as missing; a notice
@@ -54,7 +61,27 @@ does not yet contain the write it was called for.
 
 The condition is the state the write LEAVES BEHIND rather than the transition
 into it, so dropping an unpublished component into an already-live page reports
-too — the case a publish-time-only rule would miss.
+too — the case a publish-time-only rule would miss. It requires the collection to
+own the Draft/Published lifecycle, because `status` is an ordinary field name a
+project may use for its own vocabulary and the name alone answers nothing. And it
+says nothing on a working-draft save: a pending draft keeps the live parent's
+`status`, so it is indistinguishable from a publish by its own fields while the
+document a visitor loads has not changed at all.
+
+To make that last one answerable, a write that stores a working draft now stamps
+`_isWorkingDraft` on the document its post-commit hooks receive, not only on the
+response. The read overlay already marked it; a hook could not ask.
+
+The lookup is chunked. A collection query is clamped to 500 rows and returns a
+subset silently, while a document may reference far more instances than that, so
+one unbounded query would report every published component past the first page
+as unpublished.
+
+A host that pointed the renderer at a different component store, or supplies
+definitions from a custom source, can point the notice at the same store or turn
+it off: the route is configured in the host's app and is not visible from the
+write path, so a redirected renderer would otherwise be judged against a store it
+does not read from.
 
 Warnings now carry a severity. A post-commit hook could already tell a caller
 that a side effect broke, by raising; there was no way to say something true
