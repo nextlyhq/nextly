@@ -622,18 +622,24 @@ function expandInstance(
   // definition that exactly fills the remaining room is refused for needing
   // one node more than the document will actually hold.
   run.budget += 1;
-  const supplied =
-    presupplied ?? suppliedSlots(instance, definition, run, scope, depth);
+  // Picked, NOT composed. The page's slot content is composed where it is
+  // PLACED, because a node the definition gates or an override hides discards
+  // it — and composing first records the components inside it as read and as
+  // unresolvable, for content no reader can receive. Nested content arrives
+  // already composed and says so.
+  const supplied = presupplied ?? suppliedSlots(instance, definition, run);
   const ctx: InlineContext = {
     run,
     scopeKey: instance.id,
     owner: owner ?? instance.id,
     domIds: new Map<string, string>(),
-    plans: planEdits(definition, instance, supplied),
+    plans: planEdits(definition, instance, supplied, presupplied !== undefined),
     scope: {
       depth: scope.depth + 1,
       onPath: new Set(scope.onPath).add(componentId),
     },
+    hostScope: scope,
+    hostDepth: depth,
   };
 
   const inlined = withRemappedIdReferences(
@@ -1036,26 +1042,29 @@ function noteReference(run: ResolveRun, componentId: string): void {
 }
 
 /**
- * The instance's own slot content, resolved in the scope it was AUTHORED in.
+ * The instance's own slot content, PICKED and not composed.
  *
- * Resolved before the definition is inlined and in the OUTER scope, because
- * this content belongs to the page rather than to the component: a component
- * nested in it is nested in the page, not one level further into the
- * composition, and re-identifying it would move page nodes to ids the editor
- * cannot address.
+ * The name says whose content this is, not what state it is in, so the state
+ * has to be said here: what comes back is stored nodes. `placedContent`
+ * composes them, and only once the node they are bound for has survived —
+ * content aimed at a gated or overridden-away target is discarded, and
+ * composing it first spends the page's budget on a tree nobody receives, mints
+ * ids for it, and records the components inside it as read and as
+ * unresolvable.
+ *
+ * Composed in the OUTER scope when it is composed, because this content
+ * belongs to the page rather than to the component: a component nested in it
+ * is nested in the page, not one level further into the composition, and
+ * re-identifying it would move page nodes to ids the editor cannot address.
  */
 function suppliedSlots(
   instance: ResolvedBlockNode,
   definition: ComponentDocument,
-  run: ResolveRun,
-  scope: ComposedScope,
-  depth: number
+  run: ResolveRun
 ): Record<string, ResolvedBlockNode[]> | undefined {
   const slots = instance.slots;
   if (!isPlainRecord(slots)) return undefined;
-  const wanted = exposedSlotContent(slots, definition, run);
-  if (wanted === undefined) return undefined;
-  return inlineHostSlots(wanted, run, scope, depth);
+  return exposedSlotContent(slots, definition, run);
 }
 
 /**
@@ -1138,19 +1147,38 @@ interface NodePlan {
   /** `false` drops the node; `true` serves it unconditionally; absent leaves it alone. */
   visible?: boolean;
   /** Instance content, keyed by the slot NAME on this node. */
-  slots?: Map<string, ResolvedBlockNode[]>;
+  slots?: Map<string, PlannedSlot>;
+}
+
+/**
+ * Content bound for one slot, and whether it has been composed yet.
+ *
+ * The flag exists because two different things arrive here. The PAGE's own
+ * slot content is stored and has to be composed in the host's scope — and is
+ * composed only if the node it is bound for survives, since a gated or
+ * overridden-away target discards it and composing it first records the
+ * components inside it as read and as unresolvable, for content no reader
+ * receives. A NESTED instance's content arrives already composed in its
+ * component's scope, and composing it again would re-mint every id in it.
+ */
+interface PlannedSlot {
+  nodes: ResolvedBlockNode[];
+  composed: boolean;
 }
 
 /** What each of the definition's nodes gets, keyed by its id in the definition. */
 function planEdits(
   definition: ComponentDocument,
   instance: ResolvedBlockNode,
-  supplied: Record<string, ResolvedBlockNode[]> | undefined
+  supplied: Record<string, ResolvedBlockNode[]> | undefined,
+  composed: boolean
 ): Map<string, NodePlan> {
   const plans = new Map<string, NodePlan>();
   const values = effectiveOverrides(definition, instance);
   if (values.size > 0) planExposed(definition.exposed, values, plans);
-  if (supplied !== undefined) planSlots(definition.slots, supplied, plans);
+  if (supplied !== undefined) {
+    planSlots(definition.slots, supplied, plans, composed);
+  }
   return plans;
 }
 
@@ -1253,7 +1281,8 @@ function visibilityDecision(value: OverrideValue): boolean | undefined {
 function planSlots(
   slots: unknown,
   supplied: Record<string, ResolvedBlockNode[]>,
-  plans: Map<string, NodePlan>
+  plans: Map<string, NodePlan>,
+  composed: boolean
 ): void {
   if (!isPlainRecord(slots)) return;
   const ids = boundedOwnKeys(slots, MAX_ENVELOPE_ENTRIES);
@@ -1263,9 +1292,9 @@ function planSlots(
     const target = slotTarget(ownEntry(slots, id));
     if (!Array.isArray(content) || target === undefined) continue;
     const plan = planFor(plans, target.nodeId);
-    const into = plan.slots ?? new Map<string, ResolvedBlockNode[]>();
+    const into = plan.slots ?? new Map<string, PlannedSlot>();
     plan.slots = into;
-    into.set(target.slot, content);
+    into.set(target.slot, { nodes: content, composed });
   }
 }
 
@@ -1327,6 +1356,15 @@ interface InlineContext {
   domIds: Map<string, string>;
   /** The scope INSIDE this component, for instances the definition itself holds. */
   scope: ComposedScope;
+  /**
+   * Where the HOST document's own slot content composes.
+   *
+   * The page's content stays the page's wherever the definition places it, so
+   * it is composed at the host's scope and depth rather than the component's —
+   * the same answer the eager pass gave, arrived at later.
+   */
+  hostScope: ComposedScope;
+  hostDepth: number;
 }
 
 /**
@@ -1448,11 +1486,15 @@ function cloneDefinitionNode(
  * Only the PLANNED content, never the definition's own children: those were
  * charged as they were cloned, and a hidden node is abandoned before its slots
  * are visited, so nothing was spent on them to return.
+ *
+ * What is given back is what the HOST SURVEY charged — the stored size of the
+ * content, which is what `nodes` holds until something places it. Refunding a
+ * composed size credited a number the survey never took, in either direction.
  */
 function refundPlannedSlots(plan: NodePlan, run: ResolveRun): void {
   if (plan.slots === undefined) return;
   for (const content of plan.slots.values()) {
-    run.budget += countNodes(content);
+    run.budget += countNodes(content.nodes);
   }
 }
 
@@ -1546,7 +1588,7 @@ function cloneSlots(
   if (readable && !copyStoredSlots(stored, next, ctx, depth, planned)) {
     return null;
   }
-  if (planned !== undefined) fillPlannedSlots(next, planned);
+  if (planned !== undefined) fillPlannedSlots(next, planned, ctx);
   return next;
 }
 
@@ -1556,7 +1598,7 @@ function copyStoredSlots(
   into: Record<string, ResolvedBlockNode[]>,
   ctx: InlineContext,
   depth: number,
-  planned: ReadonlyMap<string, ResolvedBlockNode[]> | undefined
+  planned: ReadonlyMap<string, PlannedSlot> | undefined
 ): boolean {
   // Same `unknown` view as `inlineHostSlots`, for the same reason: a stored
   // slot value that is not an array travels through untouched.
@@ -1565,7 +1607,7 @@ function copyStoredSlots(
   for (const name of Object.keys(source)) {
     const supplied = planned?.get(name);
     if (supplied !== undefined) {
-      defineEntry(target, name, supplied);
+      defineEntry(target, name, placedContent(supplied, ctx));
       continue;
     }
     const children = ownEntry(source, name);
@@ -1590,12 +1632,39 @@ function copyStoredSlots(
  */
 function fillPlannedSlots(
   into: Record<string, ResolvedBlockNode[]>,
-  planned: ReadonlyMap<string, ResolvedBlockNode[]>
+  planned: ReadonlyMap<string, PlannedSlot>,
+  ctx: InlineContext
 ): void {
   for (const [name, content] of planned) {
     if (Object.prototype.hasOwnProperty.call(into, name)) continue;
-    defineEntry(into, name, content);
+    defineEntry(into, name, placedContent(content, ctx));
   }
+}
+
+/**
+ * One planned slot's nodes, composed if this is the first time they are placed.
+ *
+ * The single place either kind of planned content becomes output, so the
+ * "compose the page's content, leave a nested component's alone" rule is
+ * stated once. Reached only from a node that survived, which is what makes
+ * discarded content cost nothing.
+ */
+function placedContent(
+  content: PlannedSlot,
+  ctx: InlineContext
+): ResolvedBlockNode[] {
+  if (content.composed) return content.nodes;
+  const composed = inlineForest(
+    content.nodes,
+    ctx.run,
+    ctx.hostScope,
+    ctx.hostDepth + 1
+  );
+  // Held, so a definition placing one slot's content into two of its own slots
+  // composes it once and mints one set of ids rather than two.
+  content.nodes = composed;
+  content.composed = true;
+  return composed;
 }
 
 /**
