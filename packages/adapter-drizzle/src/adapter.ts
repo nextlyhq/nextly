@@ -11,7 +11,7 @@
  * @packageDocumentation
  */
 
-import { getColumns } from "drizzle-orm";
+import { count, getColumns } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
 
 import { buildDrizzleOrderBy } from "./drizzle-order";
@@ -24,6 +24,7 @@ import type {
   SupportedDialect,
   SqlParam,
   WhereClause,
+  CountOptions,
   SelectOptions,
   InsertOptions,
   UpdateOptions,
@@ -1163,6 +1164,118 @@ export abstract class DrizzleAdapter {
    * });
    * ```
    */
+  /** The registered table object, or a refusal naming what is missing. */
+  private requireTableObject(table: string): unknown {
+    const tableObj = this.getTableObject(table);
+    if (tableObj) return tableObj;
+    throw this.createDatabaseError(
+      "query",
+      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
+      undefined
+    );
+  }
+
+  /**
+   * The columns a distinct count groups by, or `undefined` for a row count.
+   *
+   * 🔴 A `distinctOn` naming no column this table has resolves to no
+   * projection, and falling through to a row count there would answer a
+   * DIFFERENT question than the caller asked -- silently, and larger. Refused
+   * instead, where the mistake was made.
+   */
+  private countProjection(
+    tableObj: unknown,
+    table: string,
+    options: CountOptions | undefined
+  ): Record<string, unknown> | undefined {
+    const projection = this.buildColumnProjection(
+      tableObj,
+      options?.distinctOn
+    );
+    if (projection || !options?.distinctOn?.length) return projection;
+    throw this.createDatabaseError(
+      "query",
+      `None of the distinctOn columns exist on "${table}": ${options.distinctOn.join(", ")}`,
+      undefined
+    );
+  }
+
+  /**
+   * `COUNT(*)` over a `SELECT DISTINCT` subquery.
+   *
+   * Its own function because it is a genuinely different query from the plain
+   * count rather than a variation on one, and because building both inline made
+   * the public method a chain of decisions the complexity gate objected to
+   * before a reader would have.
+   */
+  private async countDistinctRows(
+    db: unknown,
+    tableObj: unknown,
+    projection: Record<string, unknown>,
+    where: unknown
+  ): Promise<number> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = db as any;
+    const inner = client.selectDistinct(projection).from(tableObj).$dynamic();
+    const distinctRows = where ? inner.where(where) : inner;
+    const [row] = await client
+      .select({ value: count() })
+      .from(distinctRows.as("nextly_distinct"));
+    return Number(row?.value ?? 0);
+  }
+
+  /** `COUNT(*)` over the table itself. */
+  private async countAllRows(
+    db: unknown,
+    tableObj: unknown,
+    where: unknown
+  ): Promise<number> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = db as any;
+    const base = client.select({ value: count() }).from(tableObj).$dynamic();
+    const [row] = await (where ? base.where(where) : base);
+    return Number(row?.value ?? 0);
+  }
+
+  /**
+   * How many rows match, or how many DISTINCT combinations of some columns do.
+   *
+   * The data layer had no count at all: collection totals go through
+   * `countEntries`, an access-controlled path built for collection tables, and
+   * nothing could count a system table. A caller wanting one selected the rows
+   * and measured the array, which transfers every row to learn a number and
+   * cannot be bounded without making the number wrong.
+   *
+   * 🔴 `distinctOn` compiles to `COUNT(*)` over a `SELECT DISTINCT` SUBQUERY,
+   * never to `COUNT(DISTINCT a, b)`. The inline form is not portable and fails
+   * in the direction that is hardest to notice -- MySQL accepts it, PostgreSQL
+   * needs a row constructor, and SQLite rejects it outright with "wrong number
+   * of arguments to function count()" -- so a query written against one engine
+   * is a syntax error on another. The subquery is the single form all three
+   * accept, and building it here rather than at each call site is what keeps
+   * the answer identical per dialect.
+   */
+  async count(
+    table: string,
+    options?: CountOptions,
+    executor?: unknown
+  ): Promise<number> {
+    const tableObj = this.requireTableObject(table);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const db = executor ?? this.getDrizzle<any>();
+      const where = options?.where
+        ? buildDrizzleWhere(tableObj as never, options.where)
+        : undefined;
+      const projection = this.countProjection(tableObj, table, options);
+      return projection
+        ? await this.countDistinctRows(db, tableObj, projection, where)
+        : await this.countAllRows(db, tableObj, where);
+    } catch (error) {
+      throw this.handleQueryError(error, "count", table);
+    }
+  }
+
   async selectOne<T = unknown>(
     table: string,
     options?: SelectOptions,

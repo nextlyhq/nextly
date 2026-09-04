@@ -38,6 +38,7 @@
  */
 
 import { registerReleasesWidgetSource } from "../../domains/releases/releases-widget-source";
+import { registerVersionsWidgetSource } from "../../domains/versions/versions-widget-source";
 import { setContributedWidgets } from "../../domains/widgets/canonical";
 import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
 import { clearWidgets, registerWidget } from "../../domains/widgets/registry";
@@ -77,4 +78,5 @@ export function resetWidgetRegistries(
   // import it — that inversion is what would make the widgets package depend on
   // most of the codebase in order to offer a card.
   registerReleasesWidgetSource();
+  registerVersionsWidgetSource();
 }

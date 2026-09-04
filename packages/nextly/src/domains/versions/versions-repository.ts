@@ -247,6 +247,93 @@ export class VersionsRepository {
   }
 
   /**
+   * The working-draft predicate WITHOUT a document scope.
+   *
+   * 🔴 The same three conditions `workingDraftWhere` applies, factored out so
+   * the per-document read and the cross-document reads cannot disagree about
+   * what a pending edit IS. Two spellings of "non-autosave, no version number,
+   * draft" would answer the same question differently the first time one of
+   * them changed, and the disagreement would show as a dashboard number that
+   * does not match the document it points at.
+   */
+  private pendingEditWhere(
+    slugs: readonly string[] | undefined
+  ): VersionsWhere {
+    const and: VersionsWhereCondition[] = [
+      { column: "isAutosave", op: "=", value: false },
+      { column: "versionNo", op: "IS NULL" },
+      { column: "status", op: "=", value: "draft" },
+    ];
+    // An explicitly EMPTY list means "no readable collections", which is not
+    // the same question as "no filter" -- answering it with every collection
+    // would be the widest possible wrong answer, and this read is bounded by
+    // what its caller may see.
+    if (slugs !== undefined) {
+      and.push({ column: "scopeSlug", op: "IN", value: [...new Set(slugs)] });
+    }
+    return { and };
+  }
+
+  /** The count capability, or a refusal naming why it is absent. */
+  private counter(): NonNullable<VersionsDbApi["count"]> {
+    const count = this.db.count?.bind(this.db);
+    if (!count) {
+      // The pooled adapter has it; a transaction context does not. A read path
+      // reaching here on a tx handle is a wiring mistake, not a caller's.
+      throw NextlyError.internal({
+        logContext: { reason: "versions-count-unsupported" },
+      });
+    }
+    return count;
+  }
+
+  /**
+   * How many DOCUMENTS hold a pending edit, within the given collections.
+   *
+   * 🔴 Documents, not rows. A working draft is one row per document per LOCALE,
+   * so a document edited in three languages is one thing to fix and three rows
+   * -- and "14 documents have unpublished changes" counted from rows says 42.
+   * The distinct combination is the document's identity, which is why the
+   * adapter's `distinctOn` exists rather than a row count here.
+   */
+  async countDocumentsWithPendingEdits(
+    slugs: readonly string[] | undefined
+  ): Promise<number> {
+    if (slugs?.length === 0) return 0;
+    return this.counter()(TABLE, {
+      where: this.pendingEditWhere(slugs),
+      distinctOn: ["scopeKind", "scopeSlug", "entryId"],
+    });
+  }
+
+  /**
+   * The documents most recently left with a pending edit, newest first.
+   *
+   * Reads the working drafts rather than every version row, and that is what
+   * makes the list honest without a de-duplication pass: a unique index keeps
+   * one working draft per document per locale, so a document saved fifty times
+   * appears once at its latest instant instead of crowding out the rest.
+   *
+   * The snapshot is projected away. It is the largest column in the table and a
+   * card that lists titles has no use for it.
+   */
+  async findRecentPendingEdits(input: {
+    slugs: readonly string[] | undefined;
+    limit: number;
+  }): Promise<VersionMeta[]> {
+    if (input.slugs?.length === 0) return [];
+    return this.db.select<VersionMeta>(TABLE, {
+      columns: [...VERSION_META_COLUMNS],
+      where: this.pendingEditWhere(input.slugs),
+      // `nulls` is stated for the reason the module's other ordered read states
+      // it: the default differs per dialect, and a limited list must not return
+      // different rows per engine.
+      orderBy: [{ column: "updatedAt", direction: "desc", nulls: "last" }],
+      limit: input.limit,
+    });
+  }
+
+  /**
    * Insert or update the coalesced working draft for a document in one locale.
    *
    * There is exactly one working draft per (document, locale): editing a

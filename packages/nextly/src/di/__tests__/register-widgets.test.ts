@@ -33,6 +33,7 @@ import {
   systemResolver,
 } from "../../domains/widgets/system-sources";
 import { RELEASES_SOURCE_ID } from "../../domains/releases/releases-widget-source";
+import { VERSIONS_SOURCE_ID } from "../../domains/versions/versions-widget-source";
 import { resetWidgetRegistries } from "../registrations/register-widgets";
 
 beforeEach(() => {
@@ -74,9 +75,11 @@ describe("resetWidgetRegistries", () => {
     // empty -- core publishes its own system source in this same function, so
     // an emptiness assertion would only have held while it published none.
     expect(getSource("plugin:stripe/revenue")).toBeUndefined();
-    expect(listSources().map(source => source.id)).toEqual([
-      RELEASES_SOURCE_ID,
-    ]);
+    expect(
+      listSources()
+        .map(source => source.id)
+        .sort()
+    ).toEqual([RELEASES_SOURCE_ID, VERSIONS_SOURCE_ID].sort());
     // The proof that the clear is what made room: the same id registers again
     // without the conflict `registerSource` raises for a duplicate.
     expect(() => seedSource("plugin:stripe/revenue")).not.toThrow();

@@ -56,6 +56,7 @@ export { WHERE_OPERATORS } from "./query";
 // CRUD Operation Types
 // ============================================================
 export type {
+  CountOptions,
   SelectOptions,
   InsertOptions,
   UpdateOptions,

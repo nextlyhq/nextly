@@ -101,4 +101,27 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     defaultOrder: 30,
     component: "core#TeamSummary",
   },
+  {
+    id: "core/pending-edits",
+    title: "Unpublished changes",
+    description: "Documents holding edits that are not live yet",
+    archetype: "metric",
+    defaultSize: "sm",
+    defaultOrder: 25,
+    query: { source: "system:versions", op: "count" },
+  },
+  {
+    id: "core/recently-edited",
+    title: "Recently edited",
+    description: "Where you left off, across every collection",
+    archetype: "list",
+    defaultSize: "md",
+    defaultOrder: 35,
+    query: {
+      source: "system:versions",
+      op: "list",
+      select: ["scopeSlug", "entryId", "updatedAt"],
+      limit: 5,
+    },
+  },
 ] as const;

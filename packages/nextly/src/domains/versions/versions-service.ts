@@ -46,6 +46,34 @@ export class VersionsService {
     this.repo = new VersionsRepository(db);
   }
 
+  /**
+   * How many documents hold a pending edit, within collections the caller reads.
+   *
+   * 🔴 The allowlist is REQUIRED, not optional, and `undefined` means "every
+   * collection" rather than "unfiltered by accident". This service has no
+   * authorization of its own -- unlike `ReleasesService`, none of its methods
+   * takes an actor -- so the bound has to arrive from the caller, and a
+   * parameter that could be forgotten would produce an install-wide number for
+   * a reader entitled to part of it. Naming it in the signature makes the
+   * decision visible at every call site.
+   */
+  async countPendingEdits(
+    readableSlugs: readonly string[] | undefined
+  ): Promise<number> {
+    return this.repo.countDocumentsWithPendingEdits(readableSlugs);
+  }
+
+  /** The documents most recently left with a pending edit, newest first. */
+  async recentPendingEdits(input: {
+    readableSlugs: readonly string[] | undefined;
+    limit: number;
+  }): Promise<VersionMeta[]> {
+    return this.repo.findRecentPendingEdits({
+      slugs: input.readableSlugs,
+      limit: input.limit,
+    });
+  }
+
   /** Version metadata for one document, newest-first. Never loads snapshots. */
   async list(
     ref: VersionRef,
