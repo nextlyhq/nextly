@@ -1530,7 +1530,16 @@ function composeSurvivingSlots(
     work.left -= 1;
     if (!isPlainRecord(node) || typeof node.id !== "string") continue;
     const plan = ctx.plans.get(node.id);
-    if (!survivesGating(node, plan)) continue;
+    if (!survivesGating(node, plan)) {
+      // Given back, exactly as the clone gives back the budget for a node that
+      // emits nothing. A definition whose leading nodes are all overridden away
+      // costs the composed document nothing, so charging this pass for them
+      // stopped it before a later slot target — and the content it did not
+      // reach was composed at placement, which is the ordering this pass exists
+      // to fix, arriving back as a refusal.
+      work.left += 1;
+      continue;
+    }
     composePlannedFor(plan, ctx);
     composeSlotsUnder(node, plan, ctx, depth, work);
   }
