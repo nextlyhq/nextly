@@ -12,6 +12,11 @@ import { digestLine, runChecks, splitRefAndPath } from "./check-docs-claims.mjs"
  * case is what distinguishes "the check fired" from "the check fires on
  * anything".
  */
+/**
+ * Returns the root AND the file list, because the checker reads git's index rather than the
+ * disk. A fixture directory is not a git repository, so the list is injected — and injecting it
+ * is also what keeps a stray file in the temp directory from changing a result.
+ */
 async function fixture(files) {
   const root = await mkdtemp(join(tmpdir(), "docs-claims-"));
   for (const [rel, body] of Object.entries(files)) {
@@ -19,7 +24,7 @@ async function fixture(files) {
     await mkdir(dirname(full), { recursive: true });
     await writeFile(full, body);
   }
-  return root;
+  return { root, files: Object.keys(files) };
 }
 
 const pkg = (extra = {}) =>
@@ -27,10 +32,11 @@ const pkg = (extra = {}) =>
 
 const REFS = new Set(["main", "feature/docs-refresh", "v1.2.3"]);
 
-async function checksFor(files, opts = {}) {
-  const root = await fixture(files);
+async function checksFor(spec, opts = {}) {
+  const { root, files } = await fixture(spec);
   const { findings } = await runChecks({
     repoRoot: root,
+    files,
     remoteRefs: REFS,
     hasLocalCommit: () => true,
     ...opts,
@@ -102,9 +108,10 @@ describe("forbidden-status-phrase", () => {
 
   it("does not fire on an allowlisted line", async () => {
     const exempt = "returns a coming soon placeholder";
-    const root = await fixture({ "docs/a.mdx": `${exempt}\n` });
+    const { root, files } = await fixture({ "docs/a.mdx": `${exempt}\n` });
     const { findings } = await runChecks({
       repoRoot: root,
+      files,
       remoteRefs: REFS,
       hasLocalCommit: () => true,
       allowlist: {
@@ -118,11 +125,12 @@ describe("forbidden-status-phrase", () => {
 
   it("still fires on a DIFFERENT claim in the same allowlisted file", async () => {
     const exempt = "returns a coming soon placeholder";
-    const root = await fixture({
+    const { root, files } = await fixture({
       "docs/a.mdx": `${exempt}\nPlugins are not ready for use yet.\n`,
     });
     const { findings } = await runChecks({
       repoRoot: root,
+      files,
       remoteRefs: REFS,
       hasLocalCommit: () => true,
       allowlist: {
@@ -184,11 +192,12 @@ describe("dead-branch-link", () => {
   });
 
   it("reports a pinned commit the clone does not hold as unverifiable, not dead", async () => {
-    const root = await fixture({
+    const { root, files } = await fixture({
       "docs/a.mdx": "https://github.com/nextlyhq/nextly/blob/deadbeef/missing.md\n",
     });
     const { findings, unverifiable } = await runChecks({
       repoRoot: root,
+      files,
       remoteRefs: REFS,
       hasLocalCommit: () => false,
     });
@@ -197,11 +206,12 @@ describe("dead-branch-link", () => {
   });
 
   it("accepts a pinned commit the clone does hold", async () => {
-    const root = await fixture({
+    const { root, files } = await fixture({
       "docs/a.mdx": "https://github.com/nextlyhq/nextly/blob/deadbeef/x.md\n",
     });
     const { findings, unverifiable } = await runChecks({
       repoRoot: root,
+      files,
       remoteRefs: REFS,
       hasLocalCommit: () => true,
     });
@@ -210,11 +220,12 @@ describe("dead-branch-link", () => {
   });
 
   it("reports unverifiable rather than failing when the remote is unreachable", async () => {
-    const root = await fixture({
+    const { root, files } = await fixture({
       "docs/a.mdx": "https://github.com/nextlyhq/nextly/blob/dev/x.ts\n",
     });
     const { findings, unverifiable } = await runChecks({
       repoRoot: root,
+      files,
       remoteRefs: null,
       hasLocalCommit: () => false,
     });
@@ -278,5 +289,47 @@ describe("root-readme-present", () => {
 
   it("does not fire when there are no published packages", async () => {
     expect(await checksFor({ "docs/a.mdx": "# a\n" })).not.toContain("root-readme-present");
+  });
+});
+
+describe("changeset scoping", () => {
+  it("does not fire the phrase check on a changeset quoting a claim it removed", async () => {
+    expect(
+      await checksFor({
+        ".changeset/x.md": 'The README said "Plugins are not ready for use yet". It no longer does.\n',
+      })
+    ).not.toContain("forbidden-status-phrase");
+  });
+
+  it("still fires the naming rule on a changeset, which becomes a CHANGELOG entry", async () => {
+    expect(
+      await checksFor({ ".changeset/x.md": "Reject a field through the visual builder.\n" })
+    ).toContain("naming-rule");
+  });
+});
+
+describe("enumeration comes from the injected file list, not the disk", () => {
+  it("ignores a file on disk that is not in the list", async () => {
+    const { root } = await fixture({ "docs/tracked.mdx": "# fine\n" });
+    await writeFile(join(root, "docs", "untracked.mdx"), "The Visual Builder is here.\n");
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files: ["docs/tracked.mdx"],
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+    });
+    expect(findings.map(f => f.check)).not.toContain("naming-rule");
+  });
+
+  it("reports it once the same file is in the list", async () => {
+    const { root } = await fixture({ "docs/tracked.mdx": "# fine\n" });
+    await writeFile(join(root, "docs", "untracked.mdx"), "The Visual Builder is here.\n");
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files: ["docs/tracked.mdx", "docs/untracked.mdx"],
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+    });
+    expect(findings.map(f => f.check)).toContain("naming-rule");
   });
 });
