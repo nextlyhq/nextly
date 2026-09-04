@@ -27,6 +27,23 @@ export const sendDigest = defineJob({
 });
 ```
 
+`defineJob` only builds the definition. Register it in your config, or nothing will run it:
+
+```ts
+import { defineConfig } from "nextly";
+
+import { sendDigest } from "./jobs/send-digest";
+
+export default defineConfig({
+  jobs: [sendDigest],
+});
+```
+
+<Callout type="warn">
+A job that is defined but not listed in `jobs` is absent from the registry. Rows queued for
+its slug sit there with no handler to pick them up.
+</Callout>
+
 ## Retries and backoff
 
 A failed job is retried with exponential backoff, starting at **1 second** and capped at

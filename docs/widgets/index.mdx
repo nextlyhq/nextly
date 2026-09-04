@@ -25,9 +25,13 @@ consistent no matter who contributed the widget:
 | `stats` | Several labelled, clickable numbers |
 | `table` | Rows and columns |
 | `list` | An ordered list of items |
-| `text` | Prose |
 | `actions` | Buttons for things to do |
 | `custom` | Your own component, when none of the above fit |
+
+A `text` archetype exists in the type union but core has **no renderer for it yet**. A text
+widget that also ships no component of its own draws a card reading "not rendered yet"
+instead of prose — visible rather than silently missing, but not what you wanted. Use
+`custom` with your own component for prose today.
 
 Sizes are `sm`, `md`, `lg`, `xl` and `full`; heights are `short` and `tall`.
 

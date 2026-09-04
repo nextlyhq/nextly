@@ -73,9 +73,28 @@ English. Without a chain, the default locale is used.
 
 ## Publishing one language at a time
 
-Each language carries its own draft and published state. Publishing the Spanish version
-does not publish the French one, and a language still being translated stays invisible
-while the others are live.
+Per-locale publishing needs **two** flags, not one. `localized` gives you translations;
+`status` gives you the draft/published lifecycle. Only with both does each language get its
+own state:
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const Posts = defineCollection({
+  slug: "posts",
+  localized: true,
+  status: true,
+  fields: [text({ name: "title" })],
+});
+```
+
+With both set, publishing the Spanish version does not publish the French one, and a language
+still being translated stays invisible while the others are live.
+
+<Callout type="warn">
+With `localized: true` alone you get translations and no lifecycle — there is nothing to
+publish per language, because the entity has no draft/published state at all.
+</Callout>
 
 <Callout type="warn">
 This is per-locale **publishing**, not per-locale scheduling. A

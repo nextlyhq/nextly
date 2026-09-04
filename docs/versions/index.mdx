@@ -3,8 +3,42 @@ title: Version History
 description: Every save is recorded, so you can see what changed, compare any two versions, and put an earlier one back.
 ---
 
-Every create and update records a version. Nothing is lost when someone overwrites a
-paragraph, and "who changed this, and when" has an answer.
+Version history is **opt-in per collection or single**. Turn it on and every create and
+update records a version, so nothing is lost when someone overwrites a paragraph and "who
+changed this, and when" has an answer.
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const Posts = defineCollection({
+  slug: "posts",
+  versions: true,
+  fields: [text({ name: "title" })],
+});
+```
+
+`status: true` also switches history on by itself: an entity with the draft/publish lifecycle
+captures history even when `versions` is omitted.
+
+Working drafts need **both** halves — drafts-enabled versioning *and* the lifecycle. Either
+one alone gives you history and edits that write the live row:
+
+| `versions` | `status` | History | Working drafts |
+|---|---|---|---|
+| omitted | `false` | No | No |
+| omitted | `true` | **Yes** | No |
+| `true` | `false` | Yes | **No** — the lifecycle is disabled |
+| `true` | `true` | Yes | **Yes** |
+| `{ drafts: false }` | either | Yes | No |
+
+One further gate: a collection with a reachable password field never gets working drafts,
+whatever the flags say. A snapshot strips passwords, so a draft could neither carry a password
+change nor preserve one made while it was open.
+
+<Callout type="warn">
+An entity with neither flag is unversioned and captures nothing — and turning versioning on
+later does not recover saves made before. Decide before you need it, not after.
+</Callout>
 
 ## Availability
 

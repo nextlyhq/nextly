@@ -33,8 +33,43 @@ live", that is not what a release does.
 | Create | An empty release with a name |
 | Add members | Each member names a document and an action, `publish` or `unpublish` |
 | Schedule | The release is given a time. Blocking problems are checked first |
-| Apply | At that time, every member's action is applied |
+| Apply | On a background-jobs pass after that time, every member's action is applied |
 | Cancel | An unapplied release can be cancelled |
+
+## Scheduling stores a time; a job runner applies it
+
+Scheduling records when a release is due. The work is done by a `releases:drain` sweep that
+runs as part of the [background jobs](/docs/jobs) pass, triggered by calling the jobs route
+from a cron job, a platform scheduler, or an operator.
+
+The scaffolded apps mount Nextly's handlers at `src/app/admin/api/[[...params]]/route.ts`, so
+the URL is:
+
+```
+POST /admin/api/jobs/run
+```
+
+<Callout type="warn">
+There is no general `/api` handler in a scaffolded app, so a scheduler pointed at
+`/api/jobs/run` gets a 404 and your releases never publish. If you mounted the handlers
+somewhere else, use that path instead.
+</Callout>
+
+<Callout type="warn">
+**With no scheduler configured, a release stays scheduled forever.** Its due time passes and
+nothing happens, because nothing ran the sweep. Set up an authenticated periodic call to
+`/api/jobs/run` before you rely on scheduling.
+</Callout>
+
+A pass is bounded: it claims at most 10 queued jobs, and it stops **starting** new ones after
+20 seconds. That 20 seconds is a budget for starting work, not a hard ceiling on the request —
+the check happens before each claim, so a handler already running is awaited to completion and
+the call can overrun. Size any serverless timeout for the slowest handler, not for 20 seconds.
+
+The sweep can also defer work past its deadline while still reporting success. So a release is
+applied on the first pass that actually **reaches and completes** it, which is not always the
+first pass after its due time. With a backlog, or several expensive releases due together,
+expect it a pass or two later. Treat the scheduled time as "not before", not as "at".
 
 ## Blocking reasons
 
