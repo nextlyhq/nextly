@@ -53,6 +53,7 @@ jobs:
             plugin-form-builder
             plugin-page-builder
             plugin-seo
+            plugin-sso
             plugin-sdk
             create-nextly-app
             eslint-config

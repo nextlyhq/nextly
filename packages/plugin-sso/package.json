@@ -1,0 +1,77 @@
+{
+  "name": "@nextlyhq/plugin-sso",
+  "version": "0.0.2-alpha.62",
+  "description": "First-party Single Sign-On plugin for Nextly: Google, Microsoft (Entra ID) and GitHub via OAuth 2.1 / OpenID Connect",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup src/index.ts --format esm --dts --watch",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "jose": "^6.2.2"
+  },
+  "peerDependencies": {
+    "nextly": "0.0.2-alpha.62"
+  },
+  "devDependencies": {
+    "@nextlyhq/eslint-config": "workspace:*",
+    "@nextlyhq/tsconfig": "workspace:*",
+    "@types/node": "^20.19.17",
+    "nextly": "workspace:*",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  },
+  "engines": {
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+  },
+  "keywords": [
+    "nextly",
+    "nextly-plugin",
+    "plugin",
+    "sso",
+    "oauth",
+    "oidc",
+    "openid-connect",
+    "authentication",
+    "cms",
+    "headless-cms",
+    "app-framework"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nextlyhq/nextly.git",
+    "directory": "packages/plugin-sso"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": true
+  },
+  "homepage": "https://nextlyhq.com",
+  "bugs": {
+    "url": "https://github.com/nextlyhq/nextly/issues"
+  },
+  "author": "Nextly <contact@nextlyhq.com> (https://nextlyhq.com)"
+}
