@@ -446,11 +446,11 @@ describe("ReleasesService refuses input the database would answer differently", 
   });
 
   it("refuses an order it does not recognise, rather than defaulting", async () => {
-    // 🔴 The failure this closes is quieter than a bad `state`. A typo in
-    // `state` reaches a WHERE clause and answers with an empty list -- wrong,
-    // but visibly so. A typo in `order` reaches a ternary and selects the
-    // DEFAULT end, so `"soonestt"` answers with real releases in the exact
-    // reverse of what was asked, and nothing in the result says so.
+    // 🔴 An unrecognised `order` fails more quietly than an unrecognised
+    // `state`. `state` reaches a WHERE clause, so a typo answers with an empty
+    // list -- wrong, but visibly so. `order` reaches a ternary, so `"soonestt"`
+    // selects the DEFAULT end and answers with real releases in the exact
+    // reverse of what was asked, with nothing in the result to say so.
     const { svc, repo } = service({ holds: ["read"] });
     await expect(
       svc.find(
