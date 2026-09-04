@@ -1572,7 +1572,138 @@ function composePlannedFor(
   ctx: InlineContext
 ): void {
   if (plan?.slots === undefined) return;
+  // Where this node's own refusals begin, so the retry below can tell which
+  // entries it is allowed to reconcile from ones an earlier node recorded.
+  const mark = ctx.run.unresolved.length;
   for (const content of plan.slots.values()) placedContent(content, ctx);
+  retryStarvedSlots(plan, ctx, mark);
+}
+
+/**
+ * Compose again anything a sibling slot has since made room for.
+ *
+ * Slots are composed in the order the definition declares them, and replacing
+ * an instance hands back the node it occupied — so a slot filled with content
+ * that GROWS can be refused for budget before a slot filled with content that
+ * SHRINKS has released anything. Whether a page fits then depends on the order
+ * its author happened to declare two independent slots in.
+ *
+ * The answer is to RETRY rather than to predict. An earlier attempt lent the
+ * budget the room the replacements were expected to free, counted from the
+ * stored content — and an instance that turns out to be missing, gated or
+ * over-deep never returns that credit, so repayment left debt and a child's
+ * refusal escalated into its owner's. Credit has to be earned before it is
+ * spent.
+ *
+ * Retrying costs nothing to state: a refused instance is left STANDING with
+ * its marker, so the composed content still holds it and `inlineForest` will
+ * expand it if it fits now. One extra pass, and only over slots that actually
+ * hold a starved instance.
+ */
+function retryStarvedSlots(
+  plan: NodePlan,
+  ctx: InlineContext,
+  mark: number
+): void {
+  if (plan.slots === undefined) return;
+  let retried = false;
+  for (const content of plan.slots.values()) {
+    if (!content.composed || !holdsStarvedInstance(content.nodes)) continue;
+    content.nodes = inlineForest(
+      content.nodes,
+      ctx.run,
+      ctx.hostScope,
+      ctx.hostDepth + 1
+    );
+    retried = true;
+  }
+  if (retried) reconcileRefusals(plan, ctx.run, mark);
+}
+
+/**
+ * Make the refusal list agree with what the retry actually produced.
+ *
+ * A retry rewrites the tree and cannot rewrite what was already recorded, so
+ * two things need fixing afterwards. An instance that fits on the second
+ * attempt left a `budget` entry behind claiming it failed — a publish check
+ * reading that reports a problem the page does not have. And one that fails
+ * again recorded a second entry saying what the first already said.
+ *
+ * Only this node's own segment is touched. Entries before `mark` belong to
+ * earlier work and are none of this pass's business, which is why the mark is
+ * taken rather than the whole list rebuilt.
+ */
+function reconcileRefusals(
+  plan: NodePlan,
+  run: ResolveRun,
+  mark: number
+): void {
+  const standing = new Set<string>();
+  for (const content of plan.slots?.values() ?? []) {
+    if (!content.composed) continue;
+    collectRefusedIds(content.nodes, standing);
+  }
+  const kept: UnresolvedInstance[] = [];
+  const seen = new Set<string>();
+  // Backwards, so the entry KEPT for an instance is the one the last attempt
+  // wrote — the retry's answer rather than the attempt it superseded.
+  for (let i = run.unresolved.length - 1; i >= mark; i -= 1) {
+    const entry = run.unresolved[i];
+    if (seen.has(entry.instanceId)) continue;
+    // A refusal for want of budget is the only kind a retry can settle: every
+    // other reason is a decision the second attempt reaches identically, so an
+    // instance refused for one is still standing afterwards and still in
+    // `standing`.
+    //
+    // Which means no test separates this from dropping every reason whose node
+    // has gone — removing the check leaves the suite green. It is kept because
+    // the two failures are not symmetric. A spurious entry reports a problem
+    // the page does not have, and someone reading the list can see the page is
+    // fine; a dropped one takes a real diagnostic away, and nothing is left to
+    // notice. If a retry ever does make a non-budget refusal disappear, this is
+    // the direction to fail in.
+    if (entry.reason === "budget" && !standing.has(entry.instanceId)) continue;
+    seen.add(entry.instanceId);
+    kept.push(entry);
+  }
+  run.unresolved.length = mark;
+  for (let i = kept.length - 1; i >= 0; i -= 1) run.unresolved.push(kept[i]);
+}
+
+/** The ids of every instance still standing with a marker in this forest. */
+function collectRefusedIds(
+  nodes: readonly ResolvedBlockNode[],
+  into: Set<string>
+): void {
+  walkForest(nodes, entry => {
+    const node = entry.node;
+    if (
+      isPlainRecord(node) &&
+      node.unresolvedComponent !== undefined &&
+      typeof node.id === "string"
+    ) {
+      into.add(node.id);
+    }
+    return "descend";
+  });
+}
+
+/** Whether this forest still holds an instance refused for want of budget. */
+function holdsStarvedInstance(nodes: readonly ResolvedBlockNode[]): boolean {
+  let found = false;
+  walkForest(nodes, entry => {
+    const node = entry.node;
+    if (
+      isPlainRecord(node) &&
+      node.type === COMPONENT_INSTANCE_TYPE &&
+      node.unresolvedComponent === "budget"
+    ) {
+      found = true;
+      return "stop";
+    }
+    return "descend";
+  });
+  return found;
 }
 
 /**
