@@ -19,7 +19,8 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 
 const SKIP_DIRS = new Set([
@@ -44,7 +45,40 @@ const FORBIDDEN_PHRASES = [
 /** The whole positioning failure traces to one overloaded word; this is what stops it recurring. */
 const BARE_VISUAL_BUILDER = /(?<!schema )(?<!page )\bvisual builder\b/gi;
 
-const REPO_LINK = /github\.com\/nextlyhq\/nextly\/(?:blob|tree|raw)\/([^/\s)]+)\//g;
+/**
+ * Captures everything after `blob|tree|raw`, because the ref is not one segment. A branch may
+ * contain slashes (`feature/docs-refresh`), and git accepts it: `git check-ref-format --branch
+ * feature/docs-refresh` exits 0. Splitting on the first slash would read the ref as `feature`
+ * and report a live branch as dead, which is the failure mode this whole check exists to avoid.
+ */
+const REPO_LINK = /github\.com\/nextlyhq\/nextly\/(?:blob|tree|raw)\/([^\s)\]"'`]+)/g;
+
+const HEX_REF = /^[0-9a-f]{7,40}$/i;
+
+/**
+ * Split a link's tail into the ref and the path under it.
+ *
+ * The ref boundary is not derivable from the string, so it is resolved against the refs the
+ * remote actually has: the longest leading run of segments that names a real ref wins. A ref
+ * shaped like a commit is handed back for object lookup instead.
+ */
+export function splitRefAndPath(tail, remoteRefs) {
+  const segments = tail.split("/").filter(Boolean);
+  if (segments.length === 0) return null;
+
+  if (remoteRefs) {
+    for (let take = Math.min(segments.length, 8); take >= 1; take--) {
+      const candidate = segments.slice(0, take).join("/");
+      if (remoteRefs.has(candidate)) {
+        return { ref: candidate, resolved: true };
+      }
+    }
+  }
+  // Nothing matched. A single segment shaped like a commit is a pinned link, judged separately;
+  // otherwise report the longest plausible ref rather than the first segment, so the message
+  // names what was actually looked for.
+  return { ref: segments[0], resolved: false };
+}
 
 function walk(dir, out = []) {
   let entries;
@@ -80,7 +114,12 @@ function proseFiles(repoRoot) {
     });
 }
 
-function publishedPackages(repoRoot) {
+/**
+ * A manifest that will not parse is reported rather than skipped. Skipping drops the package
+ * from every other check here, so a syntax error would quietly buy an exemption from all of
+ * them — the check would go green precisely because something was broken.
+ */
+function publishedPackages(repoRoot, findings) {
   const pkgDir = join(repoRoot, "packages");
   if (!existsSync(pkgDir)) return [];
   const out = [];
@@ -90,7 +129,13 @@ function publishedPackages(repoRoot) {
     let json;
     try {
       json = JSON.parse(readFileSync(manifest, "utf-8"));
-    } catch {
+    } catch (error) {
+      findings.push({
+        check: "unreadable-manifest",
+        file: relative(repoRoot, manifest),
+        line: null,
+        message: `cannot be parsed, so this package is invisible to every other check: ${error.message}`,
+      });
       continue;
     }
     if (json.private) continue;
@@ -100,32 +145,68 @@ function publishedPackages(repoRoot) {
 }
 
 /**
- * Resolve a git ref against the remote.
+ * Every ref the remote has, read in one call.
  *
  * `git ls-remote` rather than `rev-parse`, because CI clones shallow: a ref that exists is
  * absent from a depth-1 local clone, and a check that goes red on a correct tree teaches people
- * to ignore it. Returns null — not false — when the remote cannot be reached, so "I could not
- * tell" never masquerades as "it does not exist".
+ * to wave reds through. One call rather than one per link, because the longest-prefix match in
+ * `splitRefAndPath` needs the whole set to decide where a ref ends.
+ *
+ * Returns null — not an empty set — when the remote cannot be reached, so "I could not tell"
+ * never masquerades as "it does not exist".
  */
-function makeRefResolver(repoRoot) {
-  const cache = new Map();
-  return ref => {
-    if (/^[0-9a-f]{7,40}$/i.test(ref)) return true;
-    if (cache.has(ref)) return cache.get(ref);
-    let result;
-    try {
-      const out = execFileSync(
-        "git",
-        ["ls-remote", "--heads", "--tags", "origin", ref],
-        { cwd: repoRoot, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }
-      );
-      result = out.trim().length > 0;
-    } catch {
-      result = null;
+function listRemoteRefs(repoRoot) {
+  try {
+    const out = execFileSync("git", ["ls-remote", "--heads", "--tags", "origin"], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const refs = new Set();
+    for (const line of out.split("\n")) {
+      const name = line.split("\t")[1];
+      if (!name) continue;
+      refs.add(name.replace(/^refs\/(heads|tags)\//, "").replace(/\^\{\}$/, ""));
     }
-    cache.set(ref, result);
-    return result;
+    return refs.size > 0 ? refs : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a commit-shaped ref names an object this clone holds.
+ *
+ * A shallow clone genuinely cannot answer this, and `ls-remote` cannot be asked about an
+ * arbitrary sha. So a miss is reported as unverifiable rather than dead: the alternative,
+ * accepting every hex string, made pinned links a blind spot in the one check meant to cover
+ * them.
+ */
+function makeCommitProbe(repoRoot) {
+  const cache = new Map();
+  return sha => {
+    if (cache.has(sha)) return cache.get(sha);
+    let present;
+    try {
+      execFileSync("git", ["cat-file", "-e", `${sha}^{commit}`], {
+        cwd: repoRoot,
+        stdio: ["ignore", "ignore", "ignore"],
+      });
+      present = true;
+    } catch {
+      present = false;
+    }
+    cache.set(sha, present);
+    return present;
   };
+}
+
+/** Matches `digestOffences` in check-comment-convention.mjs so the two allowlists read alike. */
+export function digestLine(line) {
+  return createHash("sha256")
+    .update(line.trim().replace(/\s+/g, " "))
+    .digest("hex")
+    .slice(0, 16);
 }
 
 /** A page is reachable when its own directory's meta.json lists it. A directory with no
@@ -146,7 +227,16 @@ function metaReachability(repoRoot, findings) {
     let pages;
     try {
       pages = JSON.parse(readFileSync(metaPath, "utf-8")).pages ?? [];
-    } catch {
+    } catch (error) {
+      // Unreadable navigation metadata is a deploy failure waiting to happen: the docs site
+      // parses this file to build its sidebar. Skipping it would report success on a tree that
+      // cannot render.
+      findings.push({
+        check: "unreadable-meta",
+        file: relative(repoRoot, metaPath),
+        line: null,
+        message: `cannot be parsed, so the docs navigation cannot be built: ${error.message}`,
+      });
       continue;
     }
     const listed = new Set(pages.map(p => String(p).replace(/^\.\//, "")));
@@ -164,19 +254,54 @@ function metaReachability(repoRoot, findings) {
   }
 }
 
-export async function runChecks({ repoRoot, allowlist = {}, resolveRef }) {
+export async function runChecks({
+  repoRoot,
+  allowlist = {},
+  remoteRefs,
+  hasLocalCommit,
+}) {
   const findings = [];
   const unverifiable = [];
-  const resolve = resolveRef ?? makeRefResolver(repoRoot);
-  const allowed = check =>
-    new Set(Object.keys(allowlist[check] ?? {}).map(p => p.split("/").join(sep)));
+  const refs = remoteRefs === undefined ? listRemoteRefs(repoRoot) : remoteRefs;
+  const commitPresent = hasLocalCommit ?? makeCommitProbe(repoRoot);
+
+  /**
+   * An exemption covers ONE claim, not one file.
+   *
+   * Keying only by path would silence every line in an exempt file, so an accurate "coming soon"
+   * on one line would also let an inaccurate one elsewhere in the same file through — a
+   * file-wide bypass wearing the shape of a single exception. Digests are per-line and match
+   * `comment-convention-allowlist.json`.
+   */
+  const exemption = check => {
+    const forCheck = allowlist[check] ?? {};
+    const byPath = new Map();
+    for (const [path, entry] of Object.entries(forCheck)) {
+      byPath.set(path.split("/").join(sep), new Set(entry.digests ?? []));
+    }
+    return (relPath, line) => {
+      const digests = byPath.get(relPath);
+      return digests ? digests.has(digestLine(line)) : false;
+    };
+  };
 
   // --- readme-present + root-readme-lists-package ---
-  const packages = publishedPackages(repoRoot);
+  const packages = publishedPackages(repoRoot, findings);
   const rootReadmePath = join(repoRoot, "README.md");
   const rootReadme = existsSync(rootReadmePath)
     ? readFileSync(rootReadmePath, "utf-8")
     : null;
+
+  if (rootReadme === null && packages.length > 0) {
+    // Treating the root README as optional let the whole root-readme check disappear the moment
+    // the file did. This job is the guard for exactly that file.
+    findings.push({
+      check: "root-readme-present",
+      file: "README.md",
+      line: null,
+      message: `absent, but ${packages.length} package(s) are published and must be listed in it`,
+    });
+  }
 
   for (const pkg of packages) {
     if (!existsSync(join(pkg.dir, "README.md"))) {
@@ -198,9 +323,9 @@ export async function runChecks({ repoRoot, allowlist = {}, resolveRef }) {
   }
 
   // --- per-line prose checks ---
-  const phraseAllowed = allowed("forbidden-status-phrase");
-  const namingAllowed = allowed("naming-rule");
-  const linkAllowed = allowed("dead-branch-link");
+  const phraseExempt = exemption("forbidden-status-phrase");
+  const namingExempt = exemption("naming-rule");
+  const linkExempt = exemption("dead-branch-link");
 
   for (const file of proseFiles(repoRoot)) {
     const rel = relative(repoRoot, file);
@@ -219,7 +344,7 @@ export async function runChecks({ repoRoot, allowlist = {}, resolveRef }) {
 
       // Prose only. A "Coming soon" badge in admin UI or an API placeholder string is a
       // fact about the running product, not a claim about what the project ships.
-      if (isProse && !phraseAllowed.has(rel)) {
+      if (isProse && !phraseExempt(rel, line)) {
         for (const phrase of FORBIDDEN_PHRASES) {
           if (lower.includes(phrase)) {
             findings.push({
@@ -233,7 +358,7 @@ export async function runChecks({ repoRoot, allowlist = {}, resolveRef }) {
         }
       }
 
-      if (!namingAllowed.has(rel)) {
+      if (!namingExempt(rel, line)) {
         BARE_VISUAL_BUILDER.lastIndex = 0;
         if (BARE_VISUAL_BUILDER.test(line)) {
           findings.push({
@@ -245,22 +370,42 @@ export async function runChecks({ repoRoot, allowlist = {}, resolveRef }) {
         }
       }
 
-      if (!linkAllowed.has(rel)) {
+      if (!linkExempt(rel, line)) {
         REPO_LINK.lastIndex = 0;
         let match;
         while ((match = REPO_LINK.exec(line)) !== null) {
-          const ref = match[1];
-          const resolved = resolve(ref);
-          if (resolved === null) {
-            unverifiable.push({ check: "dead-branch-link", file: rel, line: i + 1, ref });
-          } else if (resolved === false) {
-            findings.push({
+          if (refs === null) {
+            unverifiable.push({
               check: "dead-branch-link",
               file: rel,
               line: i + 1,
-              message: `links to ref "${ref}", which does not resolve on origin`,
+              ref: match[1],
             });
+            continue;
           }
+          const split = splitRefAndPath(match[1], refs);
+          if (split === null || split.resolved) continue;
+
+          if (HEX_REF.test(split.ref)) {
+            // A pinned commit. `ls-remote` cannot be asked about an arbitrary sha, and a shallow
+            // clone may not hold the object, so a miss is unverifiable rather than dead.
+            if (!commitPresent(split.ref)) {
+              unverifiable.push({
+                check: "dead-branch-link",
+                file: rel,
+                line: i + 1,
+                ref: split.ref,
+              });
+            }
+            continue;
+          }
+
+          findings.push({
+            check: "dead-branch-link",
+            file: rel,
+            line: i + 1,
+            message: `links to ref "${split.ref}", which does not resolve on origin`,
+          });
         }
       }
     }

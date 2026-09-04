@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { runChecks } from "./check-docs-claims.mjs";
+import { digestLine, runChecks, splitRefAndPath } from "./check-docs-claims.mjs";
 
 /**
  * Each fixture exhibits exactly one defect, and every check is asserted twice:
@@ -25,9 +25,16 @@ async function fixture(files) {
 const pkg = (extra = {}) =>
   JSON.stringify({ name: "@nextlyhq/thing", version: "0.0.2-alpha.62", ...extra });
 
-async function checksFor(files) {
+const REFS = new Set(["main", "feature/docs-refresh", "v1.2.3"]);
+
+async function checksFor(files, opts = {}) {
   const root = await fixture(files);
-  const { findings } = await runChecks({ repoRoot: root, resolveRef: () => true });
+  const { findings } = await runChecks({
+    repoRoot: root,
+    remoteRefs: REFS,
+    hasLocalCommit: () => true,
+    ...opts,
+  });
   return findings.map(f => f.check);
 }
 
@@ -94,13 +101,39 @@ describe("forbidden-status-phrase", () => {
   });
 
   it("does not fire on an allowlisted line", async () => {
-    const root = await fixture({ "docs/a.mdx": "returns a coming soon placeholder\n" });
+    const exempt = "returns a coming soon placeholder";
+    const root = await fixture({ "docs/a.mdx": `${exempt}\n` });
     const { findings } = await runChecks({
       repoRoot: root,
-      resolveRef: () => true,
-      allowlist: { "forbidden-status-phrase": { "docs/a.mdx": "accurate here" } },
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+      allowlist: {
+        "forbidden-status-phrase": {
+          "docs/a.mdx": { count: 1, digests: [digestLine(exempt)] },
+        },
+      },
     });
     expect(findings.map(f => f.check)).not.toContain("forbidden-status-phrase");
+  });
+
+  it("still fires on a DIFFERENT claim in the same allowlisted file", async () => {
+    const exempt = "returns a coming soon placeholder";
+    const root = await fixture({
+      "docs/a.mdx": `${exempt}\nPlugins are not ready for use yet.\n`,
+    });
+    const { findings } = await runChecks({
+      repoRoot: root,
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+      allowlist: {
+        "forbidden-status-phrase": {
+          "docs/a.mdx": { count: 1, digests: [digestLine(exempt)] },
+        },
+      },
+    });
+    const hits = findings.filter(f => f.check === "forbidden-status-phrase");
+    expect(hits).toHaveLength(1);
+    expect(hits[0].line).toBe(2);
   });
 });
 
@@ -122,37 +155,78 @@ describe("naming-rule", () => {
 
 describe("dead-branch-link", () => {
   it("fires when a linked ref does not resolve", async () => {
-    const root = await fixture({
-      "docs/a.mdx": "https://github.com/nextlyhq/nextly/blob/dev/x.ts\n",
-    });
-    const { findings } = await runChecks({
-      repoRoot: root,
-      resolveRef: ref => ref === "main",
-    });
-    expect(findings.map(f => f.check)).toContain("dead-branch-link");
+    expect(
+      await checksFor({ "docs/a.mdx": "https://github.com/nextlyhq/nextly/blob/dev/x.ts\n" })
+    ).toContain("dead-branch-link");
   });
 
   it("does not fire for a ref that resolves", async () => {
-    const root = await fixture({
-      "docs/a.mdx": "https://github.com/nextlyhq/nextly/blob/main/x.ts\n",
-    });
-    const { findings } = await runChecks({
-      repoRoot: root,
-      resolveRef: ref => ref === "main",
-    });
-    expect(findings.map(f => f.check)).not.toContain("dead-branch-link");
+    expect(
+      await checksFor({ "docs/a.mdx": "https://github.com/nextlyhq/nextly/blob/main/x.ts\n" })
+    ).not.toContain("dead-branch-link");
   });
 
-  it("reports unverifiable rather than failing when refs cannot be resolved", async () => {
+  it("accepts a ref containing slashes, which git permits", async () => {
+    expect(
+      await checksFor({
+        "docs/a.mdx":
+          "https://github.com/nextlyhq/nextly/blob/feature/docs-refresh/docs/x.mdx\n",
+      })
+    ).not.toContain("dead-branch-link");
+  });
+
+  it("still fires on a dead multi-segment ref", async () => {
+    expect(
+      await checksFor({
+        "docs/a.mdx": "https://github.com/nextlyhq/nextly/blob/feature/gone/docs/x.mdx\n",
+      })
+    ).toContain("dead-branch-link");
+  });
+
+  it("reports a pinned commit the clone does not hold as unverifiable, not dead", async () => {
+    const root = await fixture({
+      "docs/a.mdx": "https://github.com/nextlyhq/nextly/blob/deadbeef/missing.md\n",
+    });
+    const { findings, unverifiable } = await runChecks({
+      repoRoot: root,
+      remoteRefs: REFS,
+      hasLocalCommit: () => false,
+    });
+    expect(findings.map(f => f.check)).not.toContain("dead-branch-link");
+    expect(unverifiable.some(u => u.ref === "deadbeef")).toBe(true);
+  });
+
+  it("accepts a pinned commit the clone does hold", async () => {
+    const root = await fixture({
+      "docs/a.mdx": "https://github.com/nextlyhq/nextly/blob/deadbeef/x.md\n",
+    });
+    const { findings, unverifiable } = await runChecks({
+      repoRoot: root,
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+    });
+    expect(findings.map(f => f.check)).not.toContain("dead-branch-link");
+    expect(unverifiable).toHaveLength(0);
+  });
+
+  it("reports unverifiable rather than failing when the remote is unreachable", async () => {
     const root = await fixture({
       "docs/a.mdx": "https://github.com/nextlyhq/nextly/blob/dev/x.ts\n",
     });
     const { findings, unverifiable } = await runChecks({
       repoRoot: root,
-      resolveRef: () => null,
+      remoteRefs: null,
+      hasLocalCommit: () => false,
     });
     expect(findings.map(f => f.check)).not.toContain("dead-branch-link");
     expect(unverifiable.length).toBeGreaterThan(0);
+  });
+
+  it("resolves the longest matching ref prefix, not the first segment", () => {
+    expect(splitRefAndPath("feature/docs-refresh/docs/x.mdx", REFS)).toEqual({
+      ref: "feature/docs-refresh",
+      resolved: true,
+    });
   });
 });
 
@@ -175,5 +249,34 @@ describe("meta-reachable", () => {
         "docs/orphan.mdx": "# o\n",
       })
     ).not.toContain("meta-reachable");
+  });
+});
+
+describe("unreadable metadata", () => {
+  it("fires on a meta.json that will not parse", async () => {
+    expect(
+      await checksFor({ "docs/meta.json": "{ not json", "docs/a.mdx": "# a\n" })
+    ).toContain("unreadable-meta");
+  });
+
+  it("fires on a package.json that will not parse", async () => {
+    expect(await checksFor({ "packages/thing/package.json": "{ nope" })).toContain(
+      "unreadable-manifest"
+    );
+  });
+});
+
+describe("root-readme-present", () => {
+  it("fires when published packages exist but the root README does not", async () => {
+    expect(
+      await checksFor({
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md": "# thing\n",
+      })
+    ).toContain("root-readme-present");
+  });
+
+  it("does not fire when there are no published packages", async () => {
+    expect(await checksFor({ "docs/a.mdx": "# a\n" })).not.toContain("root-readme-present");
   });
 });
