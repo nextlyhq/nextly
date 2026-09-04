@@ -30,6 +30,11 @@ import { ActivityLogService } from "../activity-log-service";
 import { someResources } from "../readable-resources";
 
 beforeEach(() => {
+  // 🔴 Call history does not reset itself between cases in one file. Without
+  // this, any assertion on how many times a collaborator was CALLED counts
+  // every earlier test's calls too -- and reads as a real defect in whichever
+  // case happens to assert first.
+  vi.clearAllMocks();
   scopeDegraded.mockReturnValue(false);
   registeredKinds.mockReturnValue(new Map());
   existingIds.mockResolvedValue(new Set<string>());
@@ -369,5 +374,155 @@ describe("a settings row under a slug a collection also owns", () => {
     const result = await drawFeed({ ...documentRow, entryId: "doc-1" });
 
     expect(result.activities).toEqual([]);
+  });
+});
+
+describe("a row naming a document nothing can currently decide", () => {
+  /**
+   * 🔴 A registry reload between the scope query and the visibility pass makes
+   * this ordinary: the collection is still in the SQL scope and already gone
+   * from `kinds`. Folding "cannot decide" into "install-level" returned the
+   * row's raw title and metadata with no document rule applied at all.
+   */
+  const statedRow = {
+    id: "d1",
+    action: "update",
+    collection: "vanished",
+    entryId: "e1",
+    entryTitle: "SECRET draft",
+    subjectKind: "collection",
+    createdAt: new Date(2026, 0, 1),
+  };
+
+  const drawFeed = async (row: Record<string, unknown>) => {
+    const { service, adapter } = makeService();
+    // The registry does not know this slug.
+    registeredKinds.mockReturnValue(new Map());
+    (adapter.select as ReturnType<typeof vi.fn>).mockResolvedValueOnce([row]);
+    return service.getRecentActivity({
+      limit: 5,
+      scope: someResources(["vanished"]),
+      caller: { user: { id: "u1", roles: ["editor"] } },
+    });
+  };
+
+  it("DROPS a row that states a document kind", async () => {
+    const result = await drawFeed(statedRow);
+
+    expect(result.activities).toEqual([]);
+  });
+
+  it("still keeps an install-level row under an unknown namespace", async () => {
+    // The control. Settings mutations are filed under namespaces that are in
+    // neither registry, and dropping those would remove credential rotations
+    // from the feed entirely -- so "unknown slug" alone must not mean "drop".
+    const { subjectKind: _k, ...unstated } = statedRow;
+
+    const result = await drawFeed({ ...unstated, subjectKind: "settings" });
+
+    expect(result.activities).toHaveLength(1);
+  });
+});
+
+describe("a refill that runs out of ROUNDS", () => {
+  it("does not report the feed as ended", async () => {
+    // 🔴 Reaching the round limit and reaching the end of the table produce the
+    // same short page, and they are opposite answers to "is there more?". Only
+    // one of them is a fact about the data; reporting it when the scan simply
+    // stopped tells the reader there is no further activity to see.
+    const { service, adapter } = makeService();
+    registeredKinds.mockReturnValue(
+      new Map<string, "collection" | "single">([["posts", "collection"]])
+    );
+    existingIds.mockImplementation((_s: string, ids: string[]) =>
+      Promise.resolve(new Set(ids))
+    );
+    // Every round returns a FULL page of rows no document rule admits, so the
+    // loop keeps going until the round cap stops it.
+    (adapter.select as ReturnType<typeof vi.fn>).mockResolvedValue(
+      Array.from({ length: 100 }, (_, i) => ({
+        id: `a${i}`,
+        collection: "posts",
+        entryId: `e${i}`,
+        entryTitle: "hidden",
+        subjectKind: "collection",
+        createdAt: new Date(2026, 0, 1, 0, 0, i),
+      }))
+    );
+
+    const result = await service.getRecentActivity({
+      limit: 5,
+      scope: someResources(["posts"]),
+      caller: { user: { id: "u1", roles: ["editor"] } },
+    });
+
+    expect(result.activities).toEqual([]);
+    expect(result.hasMore).toBe(true);
+  });
+
+  it("DOES report the end when the table actually runs out", async () => {
+    // The control: without it, `hasMore: true` unconditionally would satisfy
+    // the case above, and the feed would promise another page forever.
+    const { service, adapter } = makeService();
+    (adapter.select as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const result = await service.getRecentActivity({
+      limit: 5,
+      scope: someResources(["posts"]),
+      caller: { user: { id: "u1", roles: ["editor"] } },
+    });
+
+    expect(result.hasMore).toBe(false);
+  });
+});
+
+describe("existence probes for refused rows", () => {
+  it("issues them CONCURRENTLY, within a bound", async () => {
+    // 🔴 Each probe is a full collection read, and a page can hold refused rows
+    // across as many collection/language pairs as it has rows -- so awaiting
+    // them one after another put a hundred serial reads after an authorization
+    // pass that is already bounded, and ten refill rounds could make that a
+    // thousand for one dashboard request. Bounded, not unbounded: the first
+    // group is deliberately one, so a cold per-user permission cache is filled
+    // once rather than missed by everything in the fan-out.
+    const { service, adapter } = makeService();
+    const slugs = Array.from({ length: 8 }, (_, i) => `c${i}`);
+    registeredKinds.mockReturnValue(
+      new Map<string, "collection" | "single">(
+        slugs.map(s => [s, "collection"] as const)
+      )
+    );
+    (adapter.select as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      slugs.map((slug, i) => ({
+        id: `a${i}`,
+        collection: slug,
+        entryId: `e${i}`,
+        entryTitle: "hidden",
+        subjectKind: "collection",
+        createdAt: new Date(2026, 0, 1, 0, 0, i),
+      }))
+    );
+
+    let inFlight = 0;
+    let peak = 0;
+    existingIds.mockImplementation(async (_slug: string, ids: string[]) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      inFlight--;
+      return new Set(ids);
+    });
+
+    await service.getRecentActivity({
+      limit: 5,
+      scope: someResources(slugs),
+      caller: { user: { id: "u1", roles: ["editor"] } },
+    });
+
+    expect(existingIds.mock.calls.length).toBe(8);
+    // More than one at a time proves it is not serial; the bound proves it is
+    // not an unbounded fan-out.
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(8);
   });
 });

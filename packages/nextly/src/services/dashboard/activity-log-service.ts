@@ -16,6 +16,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
 import { type Column, type Table } from "drizzle-orm";
 
+import { authorizationGroups } from "../../auth/entity-read-access";
 import { toDbError } from "../../database/errors";
 // PR 4 migration: switched from ServiceError.fromDatabaseError to
 // NextlyError.fromDatabaseError. Public message stays generic per §13.8;
@@ -97,7 +98,7 @@ export interface LogActivityInput {
   /**
    * What this row is ABOUT: a collection document, a single, or an
    * install-level settings change. Omitted means "not stated", which the feed
-   * falls back to inferring from the registry — see `documentRefOf`.
+   * falls back to inferring from the registry — see `subjectOf`.
    */
   subjectKind?: ActivitySubjectKind | null;
   metadata?: Record<string, unknown>;
@@ -169,6 +170,21 @@ const ACTIVITY_PAGE_SIZE = 100;
  */
 const MAX_REFILL_ROUNDS = 10;
 
+/** `value` when it is a string, so a driver's `null` or number cannot pass. */
+function stringOr(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+/** The kind the ROW states, or undefined on a row written before the column. */
+function statedKindOf(
+  row: Record<string, unknown>
+): ActivitySubjectKind | undefined {
+  const stated = row.subjectKind;
+  return stated === "collection" || stated === "single" || stated === "settings"
+    ? stated
+    : undefined;
+}
+
 /**
  * Which read path can answer for a row, or `null` when none can.
  *
@@ -182,13 +198,16 @@ const MAX_REFILL_ROUNDS = 10;
  * read path that cannot answer about it.
  */
 function subjectKindOf(
-  stated: unknown,
+  stated: ActivitySubjectKind | undefined,
   kinds: ReadonlyMap<string, "collection" | "single">,
   slug: string
 ): "collection" | "single" | null {
-  if (stated === "settings") return null;
-  if (!kinds.has(slug)) return null;
-  if (stated === "collection" || stated === "single") return stated;
+  if (stated === "collection" || stated === "single") {
+    // A stated kind still has to be answerable: the registry is what supplies
+    // the read path, so a slug it no longer knows leaves the row undecidable
+    // rather than decided. The CALLER separates that from "not a document".
+    return kinds.has(slug) ? stated : null;
+  }
   return kinds.get(slug) ?? null;
 }
 
@@ -201,23 +220,40 @@ function subjectKindOf(
  * a content event from an install-level one. Guessing a kind instead would send
  * a settings row to a content read path that cannot answer about it.
  */
-function documentRefOf(
+function subjectOf(
   row: Record<string, unknown>,
   kinds: ReadonlyMap<string, "collection" | "single">
-): DocumentRef | null {
-  const slug = typeof row.collection === "string" ? row.collection : undefined;
-  const entryId = typeof row.entryId === "string" ? row.entryId : undefined;
-  if (!slug || !entryId) return null;
-  const kind = subjectKindOf(row.subjectKind, kinds, slug);
-  if (!kind) return null;
-  // 🔴 The language the write was made IN, so the read rule is evaluated for
-  // that translation. A localized field answers differently per language, so a
-  // row judged without one is judged against the default — and an edit made in
-  // a language the rule denies would still show its title. NULL on unlocalized
-  // documents and on rows written before the column existed; both mean "the
-  // default language", which is exactly what those rows always meant.
-  const locale = typeof row.locale === "string" ? row.locale : null;
-  return { kind, slug, entryId, locale };
+): ActivitySubject {
+  const slug = stringOr(row.collection);
+  const entryId = stringOr(row.entryId);
+  const stated = statedKindOf(row);
+
+  // No entry id, or a row that says it is a settings change: an install-level
+  // event with no document to authorize.
+  if (!slug || !entryId || stated === "settings") {
+    return { kind: "install-level" };
+  }
+
+  const kind = subjectKindOf(stated, kinds, slug);
+  if (!kind) {
+    // 🔴 UNDECIDABLE, and it must not collapse into "install-level". A row whose
+    // slug is in neither registry may be a settings namespace this build does
+    // not list — or a document whose collection has just gone, which a registry
+    // reload between the scope query and this pass makes ordinary. The two are
+    // told apart by what the ROW says: one that states a document kind IS a
+    // document, and a document nothing can decide is dropped. Folding it into
+    // "install-level" returns its raw title with no rule applied at all.
+    return stated ? { kind: "undecidable" } : { kind: "install-level" };
+  }
+
+  return {
+    kind: "document",
+    // 🔴 The language the write was made IN, so the read rule is evaluated for
+    // that translation. A localized field answers differently per language, so
+    // a row judged without one is judged against the default — and an edit made
+    // in a language the rule denies would still show its title.
+    ref: { kind, slug, entryId, locale: stringOr(row.locale) ?? null },
+  };
 }
 
 /** One existence probe's worth of refused rows: a collection, in a language. */
@@ -245,8 +281,11 @@ function probeUnits(
 ): ProbeUnit[] {
   const units = new Map<string, ProbeUnit>();
   for (const row of refused) {
-    const ref = documentRefOf(row, scope.kinds);
-    if (!ref || ref.kind !== "collection") continue;
+    const subject = subjectOf(row, scope.kinds);
+    if (subject.kind !== "document" || subject.ref.kind !== "collection") {
+      continue;
+    }
+    const ref = subject.ref;
     const locale = ref.locale ?? null;
     const key = `${ref.slug} ${locale ?? ""}`;
     const entry = { row, entryId: ref.entryId };
@@ -325,6 +364,34 @@ type ActivityFilter =
  * credential rotation exists to record.
  */
 export type ActivitySubjectKind = "collection" | "single" | "settings";
+
+/**
+ * A refill's rows, and whether the TABLE ended or the rounds did.
+ *
+ * `end` is the distinction `hasMore` rests on. Reaching `MAX_REFILL_ROUNDS`
+ * with a short page looks identical to running out of activity, and reporting
+ * the second when the first happened tells a reader there is nothing further
+ * to see because the scan hit its own work bound.
+ */
+interface RefilledActivity {
+  rows: Record<string, unknown>[];
+  end: boolean;
+}
+
+/**
+ * What a feed row is, once the registry has been consulted.
+ *
+ * 🔴 THREE states, because two of them were one and the collapse was a hole. An
+ * install-level event has no document to authorize and is kept on the strength
+ * of the caller's scope; a document is authorized through the read path; and a
+ * row that NAMES a document nothing can currently decide is neither — it is
+ * dropped. Returning `null` for both the first and the third handed every
+ * undecidable row's raw title and metadata straight to the reader.
+ */
+type ActivitySubject =
+  | { kind: "install-level" }
+  | { kind: "undecidable" }
+  | { kind: "document"; ref: DocumentRef };
 
 /** A position in the feed's `(createdAt desc, id desc)` order. */
 interface ActivityCursor {
@@ -594,8 +661,13 @@ export class ActivityLogService extends BaseService {
         caller
       );
       return {
-        activities: visible.slice(0, limit).map(this.mapRow),
-        hasMore: visible.length > limit,
+        activities: visible.rows.slice(0, limit).map(this.mapRow),
+        // 🔴 `end` as well as the count, because a page can come back short for
+        // two opposite reasons. The extra row is the ordinary signal; a refill
+        // that stopped at its round limit found fewer than that and has said
+        // nothing about what lies beyond it, so reporting `false` there tells
+        // the reader the feed has ended when only the scan did.
+        hasMore: visible.rows.length > limit || !visible.end,
       };
     } catch (error) {
       this.logger.error("Failed to query activity log", {
@@ -630,11 +702,12 @@ export class ActivityLogService extends BaseService {
     want: number,
     offset: number,
     caller?: ReadCaller
-  ): Promise<Record<string, unknown>[]> {
+  ): Promise<RefilledActivity> {
     // No caller means no document can be authorized, and this feed carries
     // entry titles -- so it answers nothing rather than everything the scope
-    // admits. Same fail-closed direction as an omitted scope.
-    if (!caller) return [];
+    // admits. Same fail-closed direction as an omitted scope. The table is not
+    // what ended, but there is nothing further to offer either.
+    if (!caller) return { rows: [], end: true };
 
     // 🔴 Resolved ONCE for the whole refill, not per page. The registry and the
     // locale config both answer an unreachable dependency with an empty result,
@@ -675,7 +748,7 @@ export class ActivityLogService extends BaseService {
     offset: number,
     caller: ReadCaller,
     scope: DocumentVisibilityScope
-  ): Promise<Record<string, unknown>[]> {
+  ): Promise<RefilledActivity> {
     const visible: Record<string, unknown>[] = [];
     let after: ActivityCursor | undefined;
 
@@ -705,19 +778,30 @@ export class ActivityLogService extends BaseService {
         limit: ACTIVITY_PAGE_SIZE,
         ...(after ? {} : { offset }),
       });
-      if (page.length === 0) break;
+      if (page.length === 0) return { rows: visible.slice(0, want), end: true };
       after = cursorOf(page[page.length - 1]) ?? after;
 
       visible.push(...(await this.authorizedRows(page, scope, caller)));
-      if (visible.length >= want) break;
+      // Enough rows found: the table has not ended, and the caller wants to
+      // know that so `hasMore` stays true.
+      if (visible.length >= want)
+        return { rows: visible.slice(0, want), end: false };
       // A short page is the end of the table, not the end of this round.
-      if (page.length < ACTIVITY_PAGE_SIZE) break;
+      if (page.length < ACTIVITY_PAGE_SIZE) {
+        return { rows: visible.slice(0, want), end: true };
+      }
       // A page whose last row cannot be read as a cursor would make the next
       // round repeat it forever; stop rather than loop on an unknown position.
-      if (!after) break;
+      // Not an END: rows remain, this simply cannot reach them.
+      if (!after) return { rows: visible.slice(0, want), end: false };
     }
 
-    return visible.slice(0, want);
+    // 🔴 The ROUNDS ran out, not the table. Reported as such, because the two
+    // are opposite answers to "is there more?" and only one of them is a fact
+    // about the data: a feed whose first thousand rows are unreadable would
+    // otherwise tell the reader there is no further activity, when the scan
+    // simply stopped working.
+    return { rows: visible.slice(0, want), end: false };
   }
 
   /**
@@ -743,13 +827,19 @@ export class ActivityLogService extends BaseService {
     scope: DocumentVisibilityScope,
     caller: ReadCaller
   ): Promise<Record<string, unknown>[]> {
+    const subjects = new Map(
+      page.map(row => [row, subjectOf(row, scope.kinds)] as const)
+    );
     const documentRows = page.filter(
-      row => documentRefOf(row, scope.kinds) !== null
+      row => subjects.get(row)?.kind === "document"
     );
     const readable = new Set(
       await visibleDocuments(
         documentRows,
-        row => documentRefOf(row, scope.kinds),
+        row => {
+          const subject = subjects.get(row);
+          return subject?.kind === "document" ? subject.ref : null;
+        },
         caller,
         scope
       )
@@ -759,7 +849,13 @@ export class ActivityLogService extends BaseService {
       scope
     );
     return page.flatMap(row => {
-      if (documentRefOf(row, scope.kinds) === null) return [row];
+      const subject = subjects.get(row);
+      // An install-level event has no document to authorize, and the caller's
+      // scope already admitted its namespace.
+      if (subject?.kind === "install-level") return [row];
+      // Nothing here can judge it, and admitting what cannot be judged is the
+      // inversion this pass exists to remove.
+      if (subject?.kind !== "document") return [];
       if (readable.has(row)) return [row];
       const kept = redacted.get(row);
       return kept ? [kept] : [];
@@ -794,26 +890,41 @@ export class ActivityLogService extends BaseService {
     const kept = new Map<Record<string, unknown>, Record<string, unknown>>();
     if (refused.length === 0) return kept;
 
-    for (const unit of probeUnits(refused, scope)) {
-      let existing: Set<string>;
-      try {
-        existing = await existingDocumentIds(
-          unit.slug,
-          unit.entries.map(entry => entry.entryId),
-          unit.locale
-        );
-      } catch {
+    // 🔴 BOUNDED CONCURRENCY, not a sequential loop. Each unit is a full
+    // collection read, and a page can hold refused rows across as many
+    // collection/language pairs as it has rows — so one page could issue a
+    // hundred serial reads AFTER the authorization pass that is already bounded,
+    // and ten refill rounds could make that a thousand for one dashboard
+    // request. `authorizationGroups` is the same bound the authorization pass
+    // uses, and its first group of one keeps a cold per-user permission cache
+    // filled once rather than missed by everything behind it.
+    const units = probeUnits(refused, scope);
+    const byKey = new Map(units.map((unit, index) => [String(index), unit]));
+    for (const group of authorizationGroups([...byKey.keys()])) {
+      const settled = await Promise.allSettled(
+        group.map(async key => {
+          const unit = byKey.get(key) as ProbeUnit;
+          const existing = await existingDocumentIds(
+            unit.slug,
+            unit.entries.map(entry => entry.entryId),
+            unit.locale
+          );
+          return { unit, existing };
+        })
+      );
+      for (const outcome of settled) {
         // A probe that could not answer has told us nothing, and nothing must
         // not read as "deleted" -- that would publish a refused row.
-        continue;
-      }
-      for (const entry of unit.entries) {
-        if (existing.has(entry.entryId)) continue;
-        kept.set(entry.row, {
-          ...entry.row,
-          entryTitle: null,
-          metadata: null,
-        });
+        if (outcome.status !== "fulfilled") continue;
+        const { unit, existing } = outcome.value;
+        for (const entry of unit.entries) {
+          if (existing.has(entry.entryId)) continue;
+          kept.set(entry.row, {
+            ...entry.row,
+            entryTitle: null,
+            metadata: null,
+          });
+        }
       }
     }
     return kept;
