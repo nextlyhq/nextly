@@ -25,6 +25,14 @@ export default defineConfig({
     globals: true,
     environment: "node",
     setupFiles: ["./src/__tests__/setup.ts"],
+    // Capped below the (cores - 1) default: the pre-push gate runs this suite
+    // alongside admin's on the same machine, and every worker competing for
+    // every core made route/service tests exceed their timeouts — flaking the
+    // local gate for reasons unrelated to the code under test. Fewer workers
+    // trades suite wall-time for per-test CPU, which is what the timeouts
+    // actually measure.
+    fileParallelism: true,
+    poolOptions: { forks: { maxForks: 3 } },
     // Why explicit exclude of integration tests: F18 runs unit and integration
     // suites separately. Unit run skips *.integration.test.ts so the suite
     // stays green without a database. Integration run uses
@@ -62,7 +70,13 @@ export default defineConfig({
         statements: 50,
       },
     },
-    testTimeout: 10000,
-    hookTimeout: 10000,
+    // 10s was tuned on a fast runner: the full suite runs its files in
+    // parallel workers, and route/service tests that boot the whole handler
+    // stack exceeded it on slower or busier machines while passing in
+    // isolation and on CI — flaking the local pre-push gate for reasons that
+    // have nothing to do with the code under test. 30s bounds a runaway, not
+    // a slow start.
+    testTimeout: 120000,
+    hookTimeout: 60000,
   },
 });
