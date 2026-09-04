@@ -312,6 +312,7 @@ export function resolveComponentInstances(
   const run: ResolveRun = {
     definitions,
     maxDepth: limits.maxDepth,
+    maxNodes: limits.maxNodes,
     maxComposedDepth: options.maxComposedDepth ?? MAX_COMPOSED_DEPTH,
     // What is LEFT under the cap, not the cap itself. `maxNodes` bounds a
     // document, and the composed tree IS the document every later pass walks —
@@ -347,6 +348,12 @@ export function resolveComponentInstances(
 interface ResolveRun {
   definitions: ComponentLookup;
   maxDepth: number;
+  /**
+   * The document cap, kept beside the remaining budget rather than derived
+   * from it. `budget` is what is LEFT, so a pass that needs to bound its own
+   * work by the cap — the slot prepass does — cannot recover the cap from it.
+   */
+  maxNodes: number;
   maxComposedDepth: number;
   /** Nodes this resolution may still produce, across every instance. */
   budget: number;
@@ -1510,16 +1517,37 @@ function cloneDefinitionNode(
 function composeSurvivingSlots(
   nodes: readonly ResolvedBlockNode[],
   ctx: InlineContext,
-  depth: number
+  depth: number,
+  work: WorkBudget
 ): void {
   if (depth > ctx.run.maxDepth) return;
   for (const node of nodes) {
+    // Charged before the entry is judged, the way the clone charges. A
+    // definition nothing validated can hold a million siblings, and the depth
+    // bound says nothing about breadth — so without this the pass walks all of
+    // them to prepare content the clone refuses a moment later for `budget`.
+    if (work.left <= 0) return;
+    work.left -= 1;
     if (!isPlainRecord(node) || typeof node.id !== "string") continue;
     const plan = ctx.plans.get(node.id);
     if (!survivesGating(node, plan)) continue;
     composePlannedFor(plan, ctx);
-    composeSlotsUnder(node, ctx, depth);
+    composeSlotsUnder(node, plan, ctx, depth, work);
   }
+}
+
+/**
+ * How many entries the slot prepass may still visit.
+ *
+ * Its own counter rather than the run's node budget, because they measure
+ * different things: the run's is what the composed DOCUMENT may still hold,
+ * and spending it here would refuse a page for nodes it never produced.
+ * Running out is safe — the content it did not reach is composed at placement
+ * as it was before, so the bound costs the ordering benefit for that content
+ * and never the content itself.
+ */
+interface WorkBudget {
+  left: number;
 }
 
 /** The content bound for one surviving node, composed where it will be placed. */
@@ -1531,11 +1559,22 @@ function composePlannedFor(
   for (const content of plan.slots.values()) placedContent(content, ctx);
 }
 
-/** The same question, asked of every child forest a surviving node holds. */
+/**
+ * The same question, asked of every child forest a surviving node still holds.
+ *
+ * A slot the instance FILLS is skipped, mirroring `copyStoredSlots`: the plan
+ * replaces those children wholesale, so the clone never reaches them and
+ * nothing bound for a node inside them is ever placed. Walking them anyway
+ * composed content for a target the page had already replaced, which put a
+ * component nobody can receive into `referenced` and its unresolvable
+ * instances into `unresolved`.
+ */
 function composeSlotsUnder(
   node: ResolvedBlockNode,
+  plan: NodePlan | undefined,
   ctx: InlineContext,
-  depth: number
+  depth: number,
+  work: WorkBudget
 ): void {
   const slots = node.slots;
   if (!isPlainRecord(slots)) return;
@@ -1543,9 +1582,15 @@ function composeSlotsUnder(
   // an array holds no nodes to reach.
   const stored = slots as Record<string, unknown>;
   for (const name of Object.keys(stored)) {
+    if (plan?.slots?.has(name) === true) continue;
     const children = ownEntry(stored, name);
     if (!Array.isArray(children)) continue;
-    composeSurvivingSlots(children as ResolvedBlockNode[], ctx, depth + 1);
+    composeSurvivingSlots(
+      children as ResolvedBlockNode[],
+      ctx,
+      depth + 1,
+      work
+    );
   }
 }
 
@@ -1562,7 +1607,7 @@ function composeOwnedSlots(
   owned: boolean
 ): void {
   if (!owned || supplied === undefined) return;
-  composeSurvivingSlots(definition.nodes, ctx, 1);
+  composeSurvivingSlots(definition.nodes, ctx, 1, { left: ctx.run.maxNodes });
 }
 
 /**

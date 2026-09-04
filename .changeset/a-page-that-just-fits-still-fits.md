@@ -32,3 +32,9 @@ component frees the space the reference itself occupied, and that space was
 only becoming available part-way through drawing — so an otherwise identical
 page could be accepted or refused depending on the order of the blocks around
 the region.
+
+Two more repairs at the same step. A component whose stored blocks are wider
+than the whole page allows is no longer walked in full before the page is
+refused for being too large. And content a page places into a region of a
+component is no longer loaded when the page has already replaced the region
+around it — the blocks it was going into were never going to be drawn.
