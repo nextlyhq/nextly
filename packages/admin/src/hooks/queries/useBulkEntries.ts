@@ -78,10 +78,15 @@ export interface BulkCallbackPayload<T> {
  * outcome — and because an author publishing ten pages at once was otherwise
  * told nothing that an author publishing one of them would have been told.
  */
-function toastBulkResult<T>(
-  payload: BulkCallbackPayload<T>,
-  warnings: readonly HookWarning[] | undefined
-): void {
+function toastBulkResult<T>(payload: BulkCallbackPayload<T>): void {
+  // Read OFF the payload rather than taken as a second argument. The payload is
+  // what a consumer's own callback receives, so deriving the toast from it
+  // keeps one answer to "which warnings does this operation report". Passing
+  // the response's array alongside made two, aliased today and free to diverge
+  // the moment `toCallbackPayload` filters or defaults anything — and the two
+  // that then disagreed would be the built-in feedback and the custom feedback
+  // meant to replace it.
+  const warnings = payload.warnings;
   if (payload.failed === 0) {
     toastMutationResult(payload.message, warnings);
     return;
@@ -191,7 +196,7 @@ export function useBulkDeleteEntries({
 
       const payload = toCallbackPayload(response);
 
-      if (showToast) toastBulkResult(payload, response.warnings);
+      if (showToast) toastBulkResult(payload);
 
       onComplete?.(payload);
       onSuccess?.(payload);
@@ -276,7 +281,7 @@ export function useBulkUpdateEntries({
 
       const payload = toCallbackPayload(response);
 
-      if (showToast) toastBulkResult(payload, response.warnings);
+      if (showToast) toastBulkResult(payload);
 
       onComplete?.(payload);
       onSuccess?.(payload);
