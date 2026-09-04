@@ -32,6 +32,11 @@ vi.mock("nextly/runtime", async importActual => {
         return await reader();
       }
     ),
+    // A scheduled release, so the bound is a number rather than the `false`
+    // an empty container answers. Whether the bound is COMPUTED correctly is
+    // `nextly`'s to test and is tested there; what belongs here is whether
+    // this read asks for one and applies what it gets.
+    releaseBoundedRevalidate: vi.fn(async () => 42),
   };
 });
 
@@ -306,6 +311,17 @@ describe("the definitions a route reads for its page", () => {
     const meta = await route.generateMetadata({ params: { slug: ["about"] } });
 
     expect(meta.title).toBe("Composed title");
+  });
+
+  it("bounds the read by the next scheduled release", async () => {
+    // Without a window the entry is created with `revalidate: false`, so at
+    // the release instant the page read refreshes around a nested lookup that
+    // stays a cache hit — and the page keeps drawing the pre-release component
+    // until some unrelated write busts its id tag.
+    await renderWith({ hero: definition() }, page(["hero"]));
+
+    const options = cached.mock.calls[0]![0] as { revalidate?: number | false };
+    expect(options.revalidate).toBe(42);
   });
 
   it("asks for nothing when the page embeds no component", async () => {

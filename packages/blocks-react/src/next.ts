@@ -39,6 +39,7 @@ import {
   entryIdTag,
   getNextly,
   nextlyTags,
+  releaseBoundedRevalidate,
   nextlySingleTags,
   slugToStaticParam,
 } from "nextly/runtime";
@@ -904,6 +905,18 @@ async function readComponentChunk(
   }
 ): Promise<{ items: Record<string, unknown>[] }> {
   const { reader, collection, status, locale, cacheScope } = args;
+  // How long this read may live, bounded by the next scheduled release —
+  // asked for the reason `release-cache-window` states about the two callers
+  // it already had: a release member names a scope, and a bound applied to
+  // some cached reads and not others leaves the unwired one serving its
+  // pre-release content. This is a third such read, so it is a third place
+  // that has to ask.
+  //
+  // Without it the entry is created with `revalidate: false`, so at the
+  // release instant the page read around it refreshes while this one stays a
+  // cache hit — and the page keeps drawing the pre-release component until
+  // some unrelated write happens to bust its id tag.
+  const revalidate = await releaseBoundedRevalidate(undefined);
   return await cachedFind(
     async () =>
       await reader.find({
@@ -934,6 +947,7 @@ async function readComponentChunk(
         // order share one entry rather than filling two with one answer.
         ...[...wanted].sort(),
       ],
+      revalidate,
     }
   );
 }

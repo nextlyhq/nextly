@@ -42,6 +42,7 @@ export {
   nextlySingleTags,
   entryIdTag,
   cachedFind,
+  releaseBoundedRevalidate,
   type NextCacheModule,
   type CachedFindOptions,
 } from "./runtime/cache";
