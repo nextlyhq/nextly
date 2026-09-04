@@ -68,3 +68,10 @@ could not be loaded. A stored page can no longer claim one of its own blocks is
 an unloadable component and have that believed. And a page now prepares only
 the components it actually uses, following one component's reference to
 another, instead of paying for the whole library on every render.
+
+Three last repairs at the same seam. A page that referenced several components
+it could not find could lose a component it COULD find, depending on the order
+the references happened to appear in. A component stored in a format this
+version does not understand is now reported rather than reshaped and drawn. And
+the renderer and the page reader now agree about what an unloadable component
+is, so the renderer no longer hides a block the reader returns.

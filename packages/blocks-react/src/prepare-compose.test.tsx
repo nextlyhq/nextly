@@ -267,17 +267,22 @@ describe("a definitions map that is not what it claims", () => {
     expect(stages!.prepared.nodes[0]!.props.value).toBe("Hi");
   });
 
-  it("reports a malformed definition as a missing component", () => {
+  it("reports a supplied but unreadable definition as malformed", () => {
     const definitions = new Map<string, BlockDocument>([
       ["hero", null as unknown as BlockDocument],
+      ["absent-control", component([node("d1", "x")])],
     ]);
 
-    const stages = prepareDocumentReadStages(page([instance("i1", "hero")]), {
-      resolver,
-      definitions,
-    });
+    const stages = prepareDocumentReadStages(
+      page([instance("i1", "hero"), instance("i2", "never-supplied")]),
+      { resolver, definitions }
+    );
 
-    expect(stages!.unresolvedInstances.map(e => e.reason)).toEqual(["missing"]);
+    // The two are different facts with different remedies: one asks somebody
+    // to publish a component, the other says the component data is corrupt.
+    expect(
+      stages!.unresolvedInstances.map(e => `${e.componentId}:${e.reason}`)
+    ).toEqual(["hero:malformed", "never-supplied:missing"]);
   });
 });
 
@@ -365,6 +370,70 @@ describe("what the pipeline trusts and what it repairs", () => {
     expect(untouched).toBe(0);
     // ...and one referencing a single component pays for that one, not fifty.
     expect(catalog.reads).toBeLessThanOrEqual(3);
+  });
+});
+
+describe("discovery, envelopes and one reading of a marker", () => {
+  it("finds a supplied component behind more absent ones", () => {
+    const definitions = new Map<string, BlockDocument>([
+      ["hero", component([node("d1", "Hi")])],
+    ]);
+    const doc = page([
+      instance("i1", "hero"),
+      instance("i2", "gone1"),
+      instance("i3", "gone2"),
+    ]);
+
+    const stages = prepareDocumentReadStages(doc, { resolver, definitions });
+
+    // Absent ids must not consume the discovery budget: three references and
+    // one supplied definition still has to reach that definition.
+    expect(stages!.unresolvedInstances.map(e => e.componentId)).toEqual([
+      "gone1",
+      "gone2",
+    ]);
+  });
+
+  it("refuses a definition stored in a format this build cannot read", () => {
+    const definitions = new Map<string, BlockDocument>([
+      [
+        "hero",
+        {
+          formatVersion: 99,
+          kind: "component",
+          nodes: [node("d1", "Hi")],
+        } as unknown as BlockDocument,
+      ],
+    ]);
+
+    const stages = prepareDocumentReadStages(page([instance("i1", "hero")]), {
+      resolver,
+      definitions,
+    });
+
+    // The host is refused outright for an unknown format; a definition whose
+    // nodes may not even be nodes must not be repaired and inlined instead.
+    expect(stages!.unresolvedInstances).toHaveLength(1);
+  });
+
+  it("does not draw a placeholder for a stored marker on a real block", async () => {
+    const stored = page([
+      {
+        id: "a",
+        type: "test/text",
+        version: 1,
+        props: { value: "Real" },
+        unresolvedComponent: "missing",
+      } as unknown as BlockNode,
+    ]);
+
+    const html = await renderToHtml(
+      <PageRenderer document={stored} blocks={resolver} />
+    );
+
+    // The pipeline keeps the node; the boundary must agree, or the renderer
+    // hides content the exported reader returns.
+    expect(html).toContain("Real");
   });
 });
 

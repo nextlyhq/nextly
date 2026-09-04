@@ -9,6 +9,11 @@ import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
 import type { BlockHostPolicy, PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
+// The SAME predicate the pipeline uses. Asking the question twice is how the
+// renderer came to hide a node the exported reader returns: the pipeline kept
+// a block carrying a stored `unresolvedComponent` key and this boundary drew a
+// placeholder over it, so one document had two readings.
+import { isUnresolvedInstance } from "./prepare-document";
 import {
   createsNoHostElement,
   describeThrown,
@@ -25,6 +30,20 @@ import { isUnconditional } from "./visibility";
  * single message would send an author looking in the wrong place for four of
  * them. Development only: the production placeholder renders nothing.
  */
+/**
+ * The wording for one reason, or nothing when the marker names none.
+ *
+ * Total over the reason type rather than an index expression, because the
+ * predicate that admits a node here asks only for the reserved instance TYPE:
+ * a marker carrying an unrecognised reason still reaches this, and indexing
+ * would hand React whatever a record answers for a key it does not have.
+ */
+function unresolvedDetail(
+  reason: ComponentUnresolvedReason | undefined
+): string | undefined {
+  return reason === undefined ? undefined : UNRESOLVED_DETAIL[reason];
+}
+
 const UNRESOLVED_DETAIL: Readonly<Record<ComponentUnresolvedReason, string>> = {
   missing: "No published component was found for this reference",
   cycle: "This component contains itself",
@@ -939,13 +958,13 @@ export function BlockBoundary({
   // no registered block: falling through would draw "no block is registered
   // for this type", which is true, tells an author nothing, and hides the one
   // fact they can act on — that a component they placed did not load.
-  if (node.unresolvedComponent !== undefined) {
+  if (isUnresolvedInstance(node)) {
     return (
       <BlockPlaceholder
         reason="unresolved-component"
         type={node.type}
         id={node.id}
-        detail={UNRESOLVED_DETAIL[node.unresolvedComponent]}
+        detail={unresolvedDetail(node.unresolvedComponent)}
       />
     );
   }

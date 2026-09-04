@@ -378,7 +378,7 @@ export function prepareDocumentReadStages(
  * any other type is stored data claiming to be a render-time fact, which is
  * exactly what this refuses.
  */
-function isUnresolvedInstance(node: ResolvedBlockNode): boolean {
+export function isUnresolvedInstance(node: ResolvedBlockNode): boolean {
   return (
     node.type === COMPONENT_INSTANCE_TYPE &&
     node.unresolvedComponent !== undefined
@@ -439,6 +439,11 @@ function repairedDefinitions(
   };
   const repaired = new Map<string, BlockDocument>();
   for (const id of wanted) {
+    // An id the caller never supplied is left OUT, so the resolver reports it
+    // as missing. Setting it with an empty value would put the key in the map,
+    // and presence is exactly what separates "nobody supplied one" from "one
+    // was supplied and cannot be read".
+    if (!definitions.has(id)) continue;
     const definition = definitions.get(id);
     // PASSED THROUGH unrepaired rather than omitted. The shape pass reads
     // `document.nodes` on its first line, so a `null` or a string here throws
@@ -447,22 +452,51 @@ function repairedDefinitions(
     // distinguish that from a definition supplied and unreadable. Handing the
     // value straight to the resolver lets it say which.
     //
-    // A record that merely LOOKS like a document is the sharper case: repair
-    // turns an absent `nodes` into an empty array, so the instance composes
-    // successfully to nothing and its whole region disappears with no marker.
-    //
-    // Passing through rather than omitting is currently unobservable — the
-    // resolver reports both an absent and an unreadable definition the same
-    // way — and is done anyway, because the reasons it reports distinguish
-    // them the moment it can, and omitting here would make that distinction
-    // unreachable from this layer for good.
-    if (!isPlainRecord(definition) || !Array.isArray(definition.nodes)) {
-      repaired.set(id, definition as BlockDocument);
+    // The KEY is kept and the VALUE replaced, because the two say different
+    // things: presence means somebody supplied a definition, and the
+    // unreadable value is what makes the resolver call it malformed rather
+    // than missing. Omitting the entry collapses those into one.
+    if (!isReadableEnvelope(definition)) {
+      repaired.set(id, UNREADABLE);
       continue;
     }
     repaired.set(id, sanitizeDocument(definition, shapeOnly));
   }
   return repaired;
+}
+
+/**
+ * What this build hands the resolver for a definition it cannot read.
+ *
+ * A value rather than an omission, because omitting collapses "supplied and
+ * unreadable" into "never supplied", and those have different remedies. The
+ * resolver refuses anything that is not a plain record, so this is the
+ * shortest thing it is guaranteed to refuse; the cast states plainly that a
+ * map of documents is deliberately carrying a non-document here.
+ */
+const UNREADABLE = undefined as unknown as BlockDocument;
+
+/**
+ * Whether a definition is a document THIS BUILD can read.
+ *
+ * The format version is the half nothing else checks. An unreadable envelope
+ * refuses the whole HOST document one function up, for the reason given
+ * there — nothing below it can be trusted to mean what it says — and a
+ * definition gets the same treatment rather than being repaired into shape,
+ * because repair would normalise nodes written to a schema this build has
+ * never seen.
+ *
+ * The KIND is deliberately not checked. The engine's resolver asks
+ * `isComponentDocument` and reports a page or a region filed under a
+ * component's id as malformed, so asking again would be a second answer to one
+ * question — and a second answer is the one that goes stale.
+ */
+function isReadableEnvelope(definition: unknown): definition is BlockDocument {
+  return (
+    isPlainRecord(definition) &&
+    definition.formatVersion === DOCUMENT_FORMAT_VERSION &&
+    Array.isArray(definition.nodes)
+  );
 }
 
 /**
@@ -485,13 +519,21 @@ function referencedIds(
 ): Set<string> {
   const wanted = new Set<string>();
   const pending = componentIdsIn(host.nodes, limits.maxNodes);
-  while (pending.length > 0 && wanted.size <= definitions.size) {
+  // No count bounds this loop, deliberately. Bounding it by the map's size
+  // counted ABSENT ids against the budget, so a page referencing more missing
+  // components than the map holds stopped before reaching a supplied one — and
+  // the last-in-first-out order decided which, so valid content disappeared
+  // according to where a reference happened to sit.
+  //
+  // It terminates on its own: every id pushed comes from expanding a
+  // definition, and a definition joins `wanted` before it is expanded, so each
+  // is expanded at most once and the work is the map's size times the cap.
+  while (pending.length > 0) {
     const id = pending.pop();
     if (id === undefined || wanted.has(id)) continue;
     wanted.add(id);
-    const definition = definitions.get(id);
-    if (!isPlainRecord(definition) || !Array.isArray(definition.nodes))
-      continue;
+    if (!isReadableEnvelope(definitions.get(id))) continue;
+    const definition = definitions.get(id) as BlockDocument;
     for (const nested of componentIdsIn(definition.nodes, limits.maxNodes)) {
       pending.push(nested);
     }
