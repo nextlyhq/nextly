@@ -17,6 +17,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Vercel Deploy Hook
+        env:
+          DEPLOY_HOOK: ${{ secrets.VERCEL_DOCS_DEPLOY_HOOK }}
         run: |
-          curl -X POST "${{ secrets.VERCEL_DOCS_DEPLOY_HOOK }}"
+          # Fail loudly on a missing secret rather than curling an empty URL.
+          # The publish path spent months not running because nothing said so;
+          # a skip here would recreate exactly that silence.
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "::error::VERCEL_DOCS_DEPLOY_HOOK is not set, so docs changes cannot reach nextlyhq.com. Add it to the repository secrets."
+            exit 1
+          fi
+
+          # --fail turns a non-2xx into a non-zero exit. Without it curl reports
+          # success for a 404 from the hook, and the echo below would claim a
+          # deploy that never started.
+          curl --fail --silent --show-error --retry 3 --retry-connrefused \
+            -X POST "$DEPLOY_HOOK"
           echo "Triggered Vercel deploy for docs update"

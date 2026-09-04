@@ -23,9 +23,28 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 
-const SKIP_DIRS = new Set([
-  "node_modules", ".git", "dist", ".next", ".turbo", ".changeset", "coverage",
-]);
+/**
+ * Files come from git's index, not from a directory walk.
+ *
+ * A walk reads whatever is on disk, and what is on disk differs per machine: `.internal-docs/`
+ * is gitignored and present in some checkouts, so the same commit reported 0 findings in a fresh
+ * worktree and 33 in a working clone. Extending an ignore list cannot close that — the next
+ * ignored directory reopens it. Tracked-ness is the property that actually distinguishes
+ * authored content from whatever a build or a local habit left behind, and it is the same
+ * choice `check-comment-convention.mjs` makes for the same reason.
+ */
+function trackedFiles(repoRoot) {
+  try {
+    const out = execFileSync("git", ["ls-files", "-z"], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    return out.split("\0").filter(Boolean);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Phrases that state a shipped thing is unavailable.
@@ -80,38 +99,17 @@ export function splitRefAndPath(tail, remoteRefs) {
   return { ref: segments[0], resolved: false };
 }
 
-function walk(dir, out = []) {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const entry of entries) {
-    if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue;
-      walk(join(dir, entry.name), out);
-    } else {
-      out.push(join(dir, entry.name));
-    }
-  }
-  return out;
-}
-
 /** Files whose prose is a claim about the product. CHANGELOGs are excluded everywhere: they are
  *  Changesets' historical record, and rewriting history to satisfy a lint is worse than the lint. */
-function proseFiles(repoRoot) {
-  return walk(repoRoot)
-    .filter(f => {
-      if (basename(f) === "CHANGELOG.md") return false;
-      const ext = extname(f);
-      const rel = relative(repoRoot, f);
-      if (ext === ".md" || ext === ".mdx") return true;
-      return (
-        (ext === ".ts" || ext === ".tsx" || ext === ".mjs") &&
-        rel.split(sep)[0] === "packages"
-      );
-    });
+function proseFiles(tracked) {
+  return tracked.filter(rel => {
+    if (basename(rel) === "CHANGELOG.md") return false;
+    const ext = extname(rel);
+    if (ext === ".md" || ext === ".mdx") return true;
+    return (
+      (ext === ".ts" || ext === ".tsx" || ext === ".mjs") && rel.split("/")[0] === "packages"
+    );
+  });
 }
 
 /**
@@ -211,15 +209,14 @@ export function digestLine(line) {
 
 /** A page is reachable when its own directory's meta.json lists it. A directory with no
  *  meta.json is auto-included by fumadocs, so nothing there can be orphaned. */
-function metaReachability(repoRoot, findings) {
-  const docsDir = join(repoRoot, "docs");
-  if (!existsSync(docsDir)) return;
+function metaReachability(repoRoot, tracked, findings) {
   const byDir = new Map();
-  for (const file of walk(docsDir)) {
-    if (extname(file) !== ".mdx") continue;
-    const dir = dirname(file);
+  for (const rel of tracked) {
+    if (extname(rel) !== ".mdx") continue;
+    if (rel.split("/")[0] !== "docs") continue;
+    const dir = dirname(join(repoRoot, rel));
     if (!byDir.has(dir)) byDir.set(dir, []);
-    byDir.get(dir).push(file);
+    byDir.get(dir).push(join(repoRoot, rel));
   }
   for (const [dir, files] of byDir) {
     const metaPath = join(dir, "meta.json");
@@ -259,9 +256,16 @@ export async function runChecks({
   allowlist = {},
   remoteRefs,
   hasLocalCommit,
+  files,
 }) {
   const findings = [];
   const unverifiable = [];
+  const tracked = files ?? trackedFiles(repoRoot);
+  if (tracked === null) {
+    throw new Error(
+      `cannot list tracked files in ${repoRoot}; this check reads git's index, not the filesystem`
+    );
+  }
   const refs = remoteRefs === undefined ? listRemoteRefs(repoRoot) : remoteRefs;
   const commitPresent = hasLocalCommit ?? makeCommitProbe(repoRoot);
 
@@ -327,24 +331,27 @@ export async function runChecks({
   const namingExempt = exemption("naming-rule");
   const linkExempt = exemption("dead-branch-link");
 
-  for (const file of proseFiles(repoRoot)) {
-    const rel = relative(repoRoot, file);
+  for (const rel of proseFiles(tracked)) {
     let text;
     try {
-      text = readFileSync(file, "utf-8");
+      text = readFileSync(join(repoRoot, rel), "utf-8");
     } catch {
       continue;
     }
     const lines = text.split("\n");
     const isProse = rel.endsWith(".md") || rel.endsWith(".mdx");
+    const isChangeset = rel.startsWith(".changeset/");
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const lower = line.toLowerCase();
 
-      // Prose only. A "Coming soon" badge in admin UI or an API placeholder string is a
-      // fact about the running product, not a claim about what the project ships.
-      if (isProse && !phraseExempt(rel, line)) {
+      // Prose only, and never a changeset. A "Coming soon" badge in admin UI or an API
+      // placeholder string is a fact about the running product, not a claim about what the
+      // project ships; and a changeset routinely QUOTES the false claim a change removed,
+      // which reads identically to making one. The naming rule still applies to changesets,
+      // because they become CHANGELOG entries and the product's name has one spelling.
+      if (isProse && !isChangeset && !phraseExempt(rel, line)) {
         for (const phrase of FORBIDDEN_PHRASES) {
           if (lower.includes(phrase)) {
             findings.push({
@@ -411,7 +418,7 @@ export async function runChecks({
     }
   }
 
-  metaReachability(repoRoot, findings);
+  metaReachability(repoRoot, tracked, findings);
 
   return { findings, unverifiable };
 }
