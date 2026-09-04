@@ -222,6 +222,9 @@ jobs:
       - name: Comment convention
         run: pnpm check:comments
 
+      - name: Docs and README claims
+        run: pnpm check:docs-claims
+
   ci:
     name: Lint / Typecheck / Test / Build
     needs: changes

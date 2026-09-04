@@ -1,0 +1,5 @@
+{
+  "forbidden-status-phrase": {
+    "docs/api-reference/rest-api.mdx": "Accurate. The image-size regeneration sub-routes genuinely return a placeholder: packages/nextly/src/routeHandler.ts returns { message: \"Batch regeneration coming soon\" } for regenerationStatus and regenerate. Remove this entry when those routes do the work."
+  }
+}
