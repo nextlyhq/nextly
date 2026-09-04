@@ -10,4 +10,5 @@ export type { NextCacheModule } from "./next-cache-revalidator";
 export { registerNextCacheRevalidator } from "./register";
 export { entryIdTag, nextlyTags, nextlySingleTags } from "./nextly-tags";
 export { cachedFind } from "./cached-find";
+export { releaseBoundedRevalidate } from "./release-cache-window";
 export type { CachedFindOptions } from "./cached-find";
