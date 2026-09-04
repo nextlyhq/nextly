@@ -116,6 +116,26 @@ export interface DocumentRef {
   locale: string | null;
 }
 
+/**
+ * Which end of the scheduled timeline a release listing is taken from.
+ *
+ * Named rather than a boolean, because both ends are real questions and neither
+ * is the negation of the other: `"latest"` serves "what happened recently",
+ * `"soonest"` serves "what ships next". A `soonestFirst: false` would read as
+ * the absence of a preference rather than as the other choice.
+ */
+export const RELEASE_LIST_ORDERS = ["soonest", "latest"] as const;
+
+/**
+ * Declared as a const array with the type DERIVED from it, the way this
+ * codebase spells every other closed vocabulary. A bare type union has no
+ * runtime form, so nothing can check a value against it -- and this particular
+ * field fails silently when unchecked: an unrecognised order does not throw and
+ * does not return nothing, it returns the OPPOSITE END of the schedule, which
+ * reads as a working query.
+ */
+export type ReleaseListOrder = (typeof RELEASE_LIST_ORDERS)[number];
+
 export interface ReleaseRow {
   id: string;
   title: string;
@@ -554,6 +574,7 @@ export class ReleasesRepository {
     scheduledAfter?: Date;
     scheduledBefore?: Date;
     limit?: number;
+    order?: ReleaseListOrder;
   }): Promise<ReleaseRow[]> {
     const conditions: VersionsWhereCondition[] = [];
     // An explicitly EMPTY id list means "none of them", which is not the same
@@ -584,21 +605,36 @@ export class ReleasesRepository {
         value: query.scheduledBefore,
       });
     }
+    // 🔴 The direction decides WHICH END of the window a `limit` keeps, so it
+    // belongs to the caller's question rather than to this method. Descending
+    // answers "what happened recently" and stays the default, so every existing
+    // caller is unchanged; ascending answers "what ships next", which under the
+    // descending order returns the FURTHEST-OUT releases while looking correct.
+    const direction = query.order === "soonest" ? "asc" : "desc";
     return this.db.select<ReleaseRow>(RELEASES, {
       where: conditions.length > 0 ? { and: conditions } : undefined,
       orderBy: [
-        // NULLS LAST, stated rather than defaulted. An unscheduled draft has a
-        // null instant, and the default differs per dialect — on PostgreSQL a
-        // descending order puts nulls first, so a limited "what ships next"
-        // query would return drafts and omit every scheduled release.
-        { column: "scheduledAt", direction: "desc", nulls: "last" },
-        { column: "createdAt", direction: "desc" },
+        // NULLS LAST in BOTH directions, stated rather than defaulted. An
+        // unscheduled draft has a null instant, and the default differs per
+        // dialect — on PostgreSQL a descending order puts nulls first, so a
+        // limited "what ships next" query would return drafts and omit every
+        // scheduled release. Ascending is no safer left implicit: PostgreSQL
+        // puts nulls last there while SQLite and MySQL put them first, so the
+        // same query would answer differently per dialect. A draft is not the
+        // next thing to ship under either direction.
+        { column: "scheduledAt", direction, nulls: "last" },
+        { column: "createdAt", direction },
         // `id` last, so the order is actually total. `createdAt` is not unique
         // and is stored coarsely enough for concurrent releases to tie —
         // especially on SQLite — and two drafts tie on a null `scheduledAt` as
         // well, so without this a limited page can return different rows across
         // query plans and dialects.
-        { column: "id", direction: "desc" },
+        //
+        // Both tiebreakers follow `direction` rather than staying descending,
+        // so a tie breaks toward the same end the primary key does: under
+        // "soonest" the earlier-created of two releases sharing an instant
+        // comes first, which is the one a reader means by "next".
+        { column: "id", direction },
       ],
       limit: query.limit,
     });

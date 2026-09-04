@@ -60,6 +60,10 @@ vi.mock("../auth/entity-read-access", async importOriginal => {
 
 import { requireAuthentication } from "../auth/middleware";
 import { clearSources, registerSource } from "../domains/widgets/sources";
+import {
+  clearSystemResolvers,
+  registerSystemSource,
+} from "../domains/widgets/system-sources";
 import { NextlyError } from "../errors/nextly-error";
 import { setNextlyLogger } from "../observability/logger";
 
@@ -108,6 +112,7 @@ beforeEach(() => {
   executeWidgetQuery.mockResolvedValue({ op: "count", total: 3 });
   canReadEntity.mockResolvedValue(true);
   clearSources();
+  clearSystemResolvers();
   logged.length = 0;
   setNextlyLogger(testLogger);
   containerGet.mockImplementation((name: string) => {
@@ -408,13 +413,20 @@ describe("POST /api/dashboard/query", () => {
     // ENDPOINT's gate, and a resolver would only be consulted past it.
     // `refreshCollectionSources` replaces sources by KIND, so this survives it.
     beforeEach(() => {
-      registerSource({
-        id: "system:releases",
-        label: "Releases",
-        kind: "system",
-        supports: ["count"],
-        fields: [{ name: "title", type: "string" }],
-      });
+      // Through `registerSystemSource`, because the gate now asks the executor
+      // whether anything ANSWERS this source rather than admitting on its kind.
+      // `executeWidgetQuery` is mocked here, so the resolver is never called --
+      // what is under test is the endpoint's gate.
+      registerSystemSource(
+        {
+          id: "system:releases",
+          label: "Releases",
+          kind: "system",
+          supports: ["count"],
+          fields: [{ name: "title", type: "string" }],
+        },
+        vi.fn()
+      );
     });
 
     it("reaches execution rather than being refused as an unexecutable kind", async () => {
@@ -444,6 +456,38 @@ describe("POST /api/dashboard/query", () => {
       );
 
       expect(canReadEntity).not.toHaveBeenCalled();
+    });
+
+    it("refuses a system source NOTHING ANSWERS before field validation", async () => {
+      // 🔴 The kind alone was not enough to admit on. A resolver-less system
+      // source -- registrable through the generic `registerSource` door, which
+      // checks only that the kind agrees with the namespace -- reached
+      // `validateReadWidgetQuery`, and every message from there down is
+      // specific. An undeclared `select` was answered "field ... on
+      // system:orphan", while an invented id got the generic sentence, so the
+      // pair told a caller which system sources exist.
+      registerSource({
+        id: "system:orphan",
+        label: "Orphan",
+        kind: "system",
+        supports: ["count"],
+        fields: [{ name: "title", type: "string" }],
+      });
+
+      const res = await postWidgetQuery(
+        makeReq({
+          queries: [
+            { source: "system:orphan", op: "count", select: ["nope"] },
+            { source: "system:not-registered", op: "count", select: ["nope"] },
+          ],
+        })
+      );
+
+      const [orphan, absent] = await slotsOf(res);
+      expect(orphan.ok).toBe(false);
+      expect(absent.ok).toBe(false);
+      expect(orphan.error).toBe(absent.error);
+      expect(executeWidgetQuery).not.toHaveBeenCalled();
     });
 
     it("still refuses a kind nothing executes", async () => {

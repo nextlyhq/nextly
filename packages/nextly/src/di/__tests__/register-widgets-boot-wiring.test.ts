@@ -83,7 +83,10 @@ describe("widget-registry reset at boot", () => {
     // can only be explained by the widget wiring having run and completed
     // before the later failure, not by `registerServices` having finished.
     expect(getSource("plugin:stripe/revenue")).toBeUndefined();
-    expect(listSources()).toHaveLength(0);
+    // Core's own system source is what boot itself writes, so the store is not
+    // empty afterwards -- the same reason the widget assertion below names ids
+    // rather than a count.
+    expect(listSources().map(source => source.id)).toEqual(["system:releases"]);
     // The previous boot's widget is gone; core's own cards are what boot
     // itself writes, so the store is not empty afterwards and asserting that
     // it was would only have held while core declared no widget.

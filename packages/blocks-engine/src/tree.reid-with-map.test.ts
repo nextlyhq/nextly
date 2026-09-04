@@ -158,3 +158,62 @@ describe("every internal reference round-trips", () => {
     expect(result.nodeIds.size).toBe(2);
   });
 });
+
+describe("reidSubtreeWithMap id references", () => {
+  it("points a copied reference at the copy's own target", () => {
+    const original: BlockNode = {
+      id: "root",
+      type: "core/box",
+      version: 1,
+      props: {},
+      slots: {
+        children: [
+          { id: "a", type: "core/text", version: 1, props: {}, cssId: "help" },
+          {
+            id: "b",
+            type: "core/text",
+            version: 1,
+            props: {},
+            attributes: { "aria-describedby": "help" },
+          },
+        ],
+      },
+    };
+
+    const { node } = reidSubtreeWithMap(original);
+    const children = node.slots!.children!;
+
+    // Without the second pass the copy still says "help", which resolves to
+    // the ORIGINAL node — so the duplicate loses its description to whichever
+    // element the browser finds first.
+    expect(children[1]!.attributes!["aria-describedby"]).toBe(
+      children[0]!.cssId
+    );
+    expect(children[1]!.attributes!["aria-describedby"]).not.toBe("help");
+  });
+});
+
+describe("reidSubtreeWithMap malformed attributes", () => {
+  it("survives a stored attributes: null beside a node with a DOM id", () => {
+    const original = {
+      id: "root",
+      type: "core/box",
+      version: 1,
+      props: {},
+      slots: {
+        children: [
+          { id: "a", type: "core/text", version: 1, props: {}, cssId: "x" },
+          {
+            id: "b",
+            type: "core/text",
+            version: 1,
+            props: {},
+            attributes: null,
+          },
+        ],
+      },
+    } as unknown as BlockNode;
+
+    expect(() => reidSubtreeWithMap(original)).not.toThrow();
+  });
+});
