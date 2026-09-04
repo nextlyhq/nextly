@@ -18,15 +18,22 @@ export const Posts = defineCollection({
 ```
 
 `status: true` also switches history on by itself: an entity with the draft/publish lifecycle
-captures history even when `versions` is omitted. It does **not** get working drafts, which
-need an explicit `versions: true` or `versions: { drafts: true }`.
+captures history even when `versions` is omitted.
 
-| Config | History | Working drafts |
-|---|---|---|
-| Neither `versions` nor `status` | No | No |
-| `status: true` alone | **Yes** | No |
-| `versions: true` | Yes | Yes |
-| `versions: { drafts: false }` | Yes | No |
+Working drafts need **both** halves — drafts-enabled versioning *and* the lifecycle. Either
+one alone gives you history and edits that write the live row:
+
+| `versions` | `status` | History | Working drafts |
+|---|---|---|---|
+| omitted | `false` | No | No |
+| omitted | `true` | **Yes** | No |
+| `true` | `false` | Yes | **No** — the lifecycle is disabled |
+| `true` | `true` | Yes | **Yes** |
+| `{ drafts: false }` | either | Yes | No |
+
+One further gate: a collection with a reachable password field never gets working drafts,
+whatever the flags say. A snapshot strips passwords, so a draft could neither carry a password
+change nor preserve one made while it was open.
 
 <Callout type="warn">
 An entity with neither flag is unversioned and captures nothing — and turning versioning on

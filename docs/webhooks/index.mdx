@@ -42,15 +42,25 @@ by **spaces**:
 webhook-signature: v1,<sigA> v1,<sigB>
 ```
 
-So: split the header on whitespace, then split each token on its comma, and accept the
-delivery if any token matches.
+So verification is: **check the timestamp is recent, then** split the header on whitespace,
+split each token on its comma, and accept if any token matches.
+
+The freshness check is not optional. Signing the timestamp proves it was not altered; it does
+not make the delivery expire. Nextly's own `verifySignature` rejects anything outside a
+**300-second (5 minute)** tolerance *before* it compares signatures, and a receiver that skips
+that step will accept a captured request forever.
 
 <Callout type="warn">
 Three ways to reject every authentic delivery, in the order people hit them: using the
 `whsec_...` string as the HMAC key instead of its decoded bytes; comparing against the whole
 header without stripping `v1,`; and splitting only on commas, which folds the next token into
-the first signature and breaks the moment you rotate a secret. Using a Standard Webhooks
-verifier library handles all three.
+the first signature and breaks the moment you rotate a secret.
+
+And one way to accept an inauthentic one: matching the HMAC but never checking the timestamp,
+which leaves you replayable indefinitely.
+
+A Standard Webhooks verifier library does all four correctly. Prefer one over hand-rolling
+this.
 </Callout>
 
 Three headers travel with each delivery:

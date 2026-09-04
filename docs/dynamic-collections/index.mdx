@@ -40,10 +40,14 @@ without recreating anything or losing content.
 - Its **runtime definition** lives in a database row. The generated migration, however,
   carries both the table DDL and a serialized copy of the field definition, so once you commit
   it the shape *is* in git and *is* reviewable in a pull request.
-- What stays database-only is a metadata-only edit that produces no migration — renaming a
-  label, changing help text. Those change the admin without leaving a reviewable artifact.
+- A metadata-only edit — renaming a label, changing help text — emits **no SQL migration**,
+  because nothing about the table changed. In development the builder also mirrors the entity
+  into a committable `ui-schema.json`, so such an edit usually still leaves something to
+  review. That mirror is best-effort and development-only: treat the absence of a migration as
+  the reliable signal, and the manifest as a convenience rather than a guarantee.
 - The trade is narrower than "no oversight": structural changes arrive as a committed
-  migration you can review, while presentational ones do not arrive at all.
+  migration you can review, and presentational ones usually arrive in the development
+  manifest.
 - It **does** generate a SQL migration file under your `migrationsDir`, and that file is
   what recreates the table and its registry row in another environment. **Commit it.**
   Deploying without it leaves the collection unreproducible outside the database it was
