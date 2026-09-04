@@ -15,6 +15,11 @@ export {
   BINDING_FORMAT_TYPES,
   DEFAULT_BINDING_SOURCE,
   COMPONENT_INSTANCE_TYPE,
+  // The component-definition contract, published so the stores and the admin
+  // DERIVE the vocabulary rather than restating it. A schema branch or a
+  // picker that listed these values itself would agree on the day it was
+  // written and accept a type this engine refuses the day one is added.
+  EXPOSED_PROPERTY_TYPES,
   STYLE_STATES,
   MAX_BREAKPOINTS_PER_AXIS,
   // Public for exactly the reason the per-axis cap is. A definition whose id is
@@ -37,7 +42,9 @@ export {
   isBindingSource,
   isBlockType,
   MAX_BLOCK_TYPE_LENGTH,
+  isComponentDocument,
   isComponentInstance,
+  isUnsetOverride,
 } from "./document";
 export type {
   BlockDocument,
@@ -50,7 +57,14 @@ export type {
   BreakpointDef,
   BreakpointId,
   BreakpointSet,
+  ComponentDocument,
   ComponentInstanceProps,
+  ExposedProperty,
+  ExposedPropertyType,
+  ExposedSlot,
+  OverrideUnset,
+  OverrideValue,
+  Variant,
   Condition,
   DocumentFormatVersion,
   DocumentKind,
@@ -66,8 +80,20 @@ export type {
 } from "./document";
 
 export {
+  // The cap on one collection of a component's envelope — its exposed
+  // properties, its slots, its variants, one variant's overrides. Published
+  // because a store or an admin form validating an envelope before it reaches
+  // the engine has to refuse at the same number: a form that accepted more
+  // than this would offer an author a definition the write path then rejects.
+  MAX_ENVELOPE_ENTRIES,
   MAX_DEPTH,
   MAX_NODES,
+  // The nesting cap the resolver enforces. Public alongside `MAX_DEPTH`
+  // because it bounds a different thing — how many levels of COMPOSITION a
+  // page may reach, not how deep one stored tree nests — and an editor that
+  // refuses to place an instance has to refuse at the same number the render
+  // does, or it offers a placement that then draws a placeholder.
+  MAX_COMPOSED_DEPTH,
   DEFAULT_MAX_DOCUMENT_BYTES,
   LIMIT_WARNING_RATIO,
   DEFAULT_SLOT,
@@ -90,10 +116,16 @@ export {
   removeNode,
   moveNode,
   reidSubtree,
+  reidSubtreeWithMap,
   duplicateNode,
   updateNode,
 } from "./tree";
-export type { NodeLocation, SlotDefaultSource, TreePosition } from "./tree";
+export type {
+  NodeLocation,
+  ReidentifiedSubtree,
+  SlotDefaultSource,
+  TreePosition,
+} from "./tree";
 
 // The node selection every reader of a stored document shares. Public because
 // the page-builder plugin's class-usage record has to stop exactly where the
@@ -108,6 +140,30 @@ export type {
 } from "./select-nodes";
 
 export { measureBytes, surveyDocument } from "./measure-bytes";
+// Resolving linked components. Here rather than beside the renderer because
+// four surfaces need a resolved tree and only one of them renders: the
+// same-document canvas, the class-usage index and SEO derivation all read one
+// without drawing anything. `componentIdsIn` is the other half of the seam —
+// what to FETCH, asked before anything can be resolved.
+export {
+  componentIdsIn,
+  resolveComponentInstances,
+  // Why an instance was left standing. Published because the surfaces that
+  // REPORT one are in other packages — the renderer draws a placeholder, the
+  // editor offers a remedy — and each remedy differs by reason. A consumer
+  // restating the list agrees on the day it is written and silently stops
+  // handling whichever reason is added next.
+  COMPONENT_UNRESOLVED_REASONS,
+} from "./resolve-instances";
+export type {
+  ComponentUnresolvedReason,
+  DefinitionsById,
+  ResolveComponentOptions,
+  ResolvedBlockNode,
+  ResolvedComposition,
+  ResolvedDocument,
+  UnresolvedInstance,
+} from "./resolve-instances";
 // The nesting rule and the types it answers in. Exported together: a caller
 // that can ask the question must be able to name the verdict it gets back, and
 // a refusal reason it cannot name is one it has to re-derive from the boolean.

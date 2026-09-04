@@ -82,6 +82,16 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     component: "core#SinglesQuickLinks",
   },
   {
+    id: "core/quick-create",
+    title: "Create",
+    description:
+      "One click to an empty entry form, for the collections this reader may create in.",
+    archetype: "custom",
+    defaultSize: "full",
+    defaultOrder: 15,
+    component: "core#QuickCreate",
+  },
+  {
     id: "core/team",
     title: "Team",
     description: "How many users and roles the project has.",

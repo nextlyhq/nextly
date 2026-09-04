@@ -21,6 +21,7 @@ import { useCreateEntry } from "@admin/hooks/queries/useCreateEntry";
 import { useDeleteEntry } from "@admin/hooks/queries/useDeleteEntry";
 import { useDiscardWorkingDraft } from "@admin/hooks/queries/useDiscardWorkingDraft";
 import { useUpdateEntry } from "@admin/hooks/queries/useUpdateEntry";
+import { collectionSingularLabel } from "@admin/lib/collection-label";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
 import type { EntryValue } from "@admin/types/collection";
@@ -338,10 +339,14 @@ export interface UseEntryFormReturn {
  */
 
 /**
- * Gets the singular label for a collection
+ * Gets the singular label for a collection.
+ *
+ * Delegates to the shared resolver rather than restating the fallback, so the
+ * heading of this form and the shortcut that opens it name the entity
+ * identically -- and keep doing so if the order ever changes.
  */
 function getSingularLabel(collection: EntryFormCollection): string {
-  return collection.labels?.singular || collection.label || collection.name;
+  return collectionSingularLabel(collection);
 }
 
 // ============================================================================

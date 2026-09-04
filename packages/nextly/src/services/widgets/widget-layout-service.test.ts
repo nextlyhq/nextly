@@ -63,7 +63,9 @@ class StubbedService extends WidgetLayoutService {
   }
 }
 
-const placements = [{ id: "p1", widgetId: "core/a", order: 0, hidden: false }];
+const placements = [
+  { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+];
 
 describe("a failed insert", () => {
   it("is a conflict when a row is there afterwards", async () => {

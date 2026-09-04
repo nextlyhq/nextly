@@ -1,0 +1,152 @@
+"use client";
+/**
+ * The dashboard's columns, and everything drawn inside them.
+ *
+ * Lifted out of `WidgetGrid` so that the grid reads as what it orchestrates --
+ * permissions, the arrangement, the batch, the drag context -- rather than as
+ * those plus a nested render. The tracks, the live region and the per-card
+ * wiring are one concern and they live together here.
+ *
+ * @module components/features/widgets/edit/ArrangedColumns
+ */
+import { cn } from "@admin/lib/utils";
+import type { WidgetSlot } from "@admin/types/dashboard/widgets";
+
+import type { DropSide } from "../layout-editor";
+import { COLUMN_TRACK_CLASSES } from "../sizes";
+
+import { ArrangedCell } from "./ArrangedCell";
+import type { ArrangedWidget } from "./useDashboardArrangement";
+import { WidgetColumn } from "./WidgetColumn";
+
+export interface ArrangedColumnsProps {
+  columns: ArrangedWidget[][];
+  columnCount: number;
+  /** The same cards as one sequence, which the per-card controls count from. */
+  visible: ArrangedWidget[];
+  isEditing: boolean;
+  slots: Record<string, WidgetSlot>;
+  requested: ReadonlySet<string>;
+  updatedAt: Date | null;
+  isFetching: boolean;
+  announcement: string;
+  /** Move one card one step within the column it is drawn in. */
+  onMove: (placementId: string, neighbourId: string, side: DropSide) => void;
+  onMoveColumn: (placementId: string, targetColumn: number) => void;
+  onToggleHidden: (placementId: string) => void;
+  onRemove: (placementId: string) => void;
+}
+
+function EmptyArrangement({
+  count,
+  isEditing,
+}: {
+  count: number;
+  isEditing: boolean;
+}) {
+  if (count > 0) return null;
+  return (
+    <p
+      data-testid="widget-grid-empty"
+      className="col-span-full rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground"
+    >
+      {isEditing
+        ? "Every card is put away. Add one back below, or reset to the default arrangement."
+        : "Your dashboard has no cards on it. Edit it to bring one back, or reset to the default arrangement."}
+    </p>
+  );
+}
+
+export function ArrangedColumns({
+  columns,
+  columnCount,
+  visible,
+  isEditing,
+  slots,
+  requested,
+  updatedAt,
+  isFetching,
+  announcement,
+  onMove,
+  onMoveColumn,
+  onToggleHidden,
+  onRemove,
+}: ArrangedColumnsProps) {
+  return (
+    <section
+      aria-label="Dashboard widgets"
+      // One track per column, each an independent vertical list. Nothing
+      // spans tracks, so a card's width never depends on its neighbours --
+      // which is the property the previous twelve-column grid lacked and
+      // the reason dragging one resized it.
+      className={cn("grid gap-6", COLUMN_TRACK_CLASSES[columnCount] ?? "")}
+    >
+      <span
+        role="status"
+        aria-live="polite"
+        className="sr-only"
+        data-testid="widget-grid-live"
+      >
+        {announcement}
+      </span>
+      <EmptyArrangement count={visible.length} isEditing={isEditing} />
+      {columns.map((rowsInColumn, columnIndex) => (
+        <WidgetColumn
+          key={columnIndex}
+          column={columnIndex}
+          columnCount={columnCount}
+          items={rowsInColumn.map(row => row.placementId)}
+          isEditing={isEditing}
+        >
+          {rowsInColumn.map((row, indexInColumn) => (
+            <ArrangedCell
+              key={row.placementId}
+              row={row}
+              // 🔴 The SAME list the click resolves against. Derived from the
+              // global sequence instead, the first card of column 2 gets an
+              // enabled Up whose neighbour is not in its column -- an enabled
+              // control that does nothing, which is the failure SC 2.5.7 is
+              // about rather than a cosmetic one.
+              index={indexInColumn}
+              count={rowsInColumn.length}
+              isEditing={isEditing}
+              slot={slots[row.widget.id]}
+              // Only a widget that actually ASKED can be waiting on an answer. A
+              // card drawn entirely by a plugin component took no part in the
+              // batch, and neither did one whose archetype nothing can draw, so a
+              // refetch says nothing about either.
+              updatedAt={requested.has(row.widget.id) ? updatedAt : null}
+              isFetching={requested.has(row.widget.id) ? isFetching : false}
+              // The arrangement hook announces, because it is the one that
+              // resolves the destination -- announcing here would name a
+              // position computed a second time, and the two would drift.
+              // 🔴 Resolved against THIS column, not the whole arrangement.
+              // The sequence is interleaved across columns, so the row before
+              // this one globally is usually in a different column, and moving
+              // toward it swaps two cards a reader cannot see move.
+              onMove={(delta: number) => {
+                const neighbour = rowsInColumn[indexInColumn + delta];
+                // The delta already says which way the reader asked to go, so
+                // it says which side of that neighbour the card lands on. Up
+                // is above it, down is below -- and below is the side that
+                // makes the bottom of a column reachable at all.
+                if (neighbour) {
+                  onMove(
+                    row.placementId,
+                    neighbour.placementId,
+                    delta < 0 ? "before" : "after"
+                  );
+                }
+              }}
+              columnCount={columnCount}
+              column={columnIndex}
+              onMoveColumn={onMoveColumn}
+              onToggleHidden={onToggleHidden}
+              onRemove={onRemove}
+            />
+          ))}
+        </WidgetColumn>
+      ))}
+    </section>
+  );
+}

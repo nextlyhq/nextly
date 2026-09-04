@@ -20,8 +20,7 @@
  * @module components/features/widgets/WidgetGrid
  */
 
-import { DndContext, closestCenter } from "@dnd-kit/core";
-import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
+import { DndContext, closestCorners } from "@dnd-kit/core";
 import { useCallback, useMemo, useRef } from "react";
 
 import {
@@ -33,7 +32,7 @@ import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermission
 
 import { registerCoreWidgetComponents } from "./core-components";
 import { AddWidgetPicker } from "./edit/AddWidgetPicker";
-import { ArrangedCell } from "./edit/ArrangedCell";
+import { ArrangedColumns } from "./edit/ArrangedColumns";
 import { DashboardEditChrome } from "./edit/DashboardEditChrome";
 import { useDashboardArrangement } from "./edit/useDashboardArrangement";
 import { resolveDashboardWidgets } from "./resolve-widgets";
@@ -117,25 +116,6 @@ function NothingToDraw({
  * body carries neither branch. Rendered inside the widgets section, so the
  * landmark and the live region stay where a reader left them.
  */
-function EmptyArrangement({
-  count,
-  isEditing,
-}: {
-  count: number;
-  isEditing: boolean;
-}) {
-  if (count > 0) return null;
-  return (
-    <p
-      data-testid="widget-grid-empty"
-      className="col-span-12 rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground"
-    >
-      {isEditing
-        ? "Every card is put away. Add one back below, or reset to the default arrangement."
-        : "Your dashboard has no cards on it. Edit it to bring one back, or reset to the default arrangement."}
-    </p>
-  );
-}
 
 export function WidgetGrid() {
   const branding = useBranding();
@@ -162,23 +142,32 @@ export function WidgetGrid() {
   // wrapper's identity never changes, so nothing downstream re-renders on it,
   // and by the time a reader can move a card the announcer is long since
   // assigned.
-  const announcer = useRef<(t: string, p: number, c: number) => void>(() => {});
-  const announceMove = useCallback(
-    (title: string, position: number, count: number) =>
-      announcer.current(title, position, count),
+  const announcer = useRef<
+    (t: string, col: number, cols: number, p: number, c: number) => void
+  >(() => {});
+  const announceColumn = useCallback(
+    (
+      title: string,
+      column: number,
+      columnCount: number,
+      position: number,
+      count: number
+    ) => announcer.current(title, column, columnCount, position, count),
     []
   );
 
   const layout = useDashboardLayout();
   const {
     visible,
+    columns,
+    columnCount,
     editor,
-    moveBy,
+    moveWithinColumn,
+    moveColumn,
     hasArrangement,
-    sortableItems,
     sensors,
     handleDragEnd,
-  } = useDashboardArrangement(declared, layout, announceMove);
+  } = useDashboardArrangement(declared, layout, announceColumn);
 
   const byId = useMemo(
     () => new Map(declared.map(widget => [widget.id, widget])),
@@ -190,12 +179,9 @@ export function WidgetGrid() {
   const { slots, isFetching, updatedAt, requested, counted, failed, settling } =
     useWidgetBatch(widgets);
 
-  const { announcement, announceMove: announceSettledMove } = useGridAnnouncer(
-    settling,
-    counted,
-    failed
-  );
-  announcer.current = announceSettledMove;
+  const { announcement, announceColumn: announceSettledColumn } =
+    useGridAnnouncer(settling, counted, failed);
+  announcer.current = announceSettledColumn;
 
   // Nothing DECLARED. Returned after the hooks above so the hook order is the
   // same on every render, whatever the branding says.
@@ -234,6 +220,8 @@ export function WidgetGrid() {
         // reader had no way out and every read went on logging the same decode
         // failure. The version is what says a row is there.
         canReset={(layout.layout?.version ?? 0) > 0}
+        columnCount={columnCount}
+        onColumnCount={editor.setColumnCount}
       />
 
       <DndContext
@@ -241,55 +229,28 @@ export function WidgetGrid() {
         // `closestCenter` rather than pointer-within: the cells are different
         // widths, so a small card dragged over a full-width one never contains
         // the pointer and the drop target reads as nothing.
-        collisionDetection={closestCenter}
+        // `closestCorners` rather than `closestCenter`: with several droppable
+        // containers the nearest CENTRE is often a tall card's centre rather
+        // than the column the pointer is actually over, so a drop near the top
+        // of one column resolves to its neighbour.
+        collisionDetection={closestCorners}
         onDragEnd={handleDragEnd}
       >
-        <SortableContext
-          items={sortableItems}
-          // The grid wraps, so cards move in two dimensions. The list strategy
-          // assumes a single column and animates neighbours the wrong way.
-          strategy={rectSortingStrategy}
-        >
-          <section
-            aria-label="Dashboard widgets"
-            className="grid grid-cols-12 gap-6"
-          >
-            <span
-              role="status"
-              aria-live="polite"
-              className="sr-only"
-              data-testid="widget-grid-live"
-            >
-              {announcement}
-            </span>
-            <EmptyArrangement
-              count={visible.length}
-              isEditing={editor.isEditing}
-            />
-            {visible.map((row, index) => (
-              <ArrangedCell
-                key={row.placementId}
-                row={row}
-                index={index}
-                count={visible.length}
-                isEditing={editor.isEditing}
-                slot={slots[row.widget.id]}
-                // Only a widget that actually ASKED can be waiting on an answer. A
-                // card drawn entirely by a plugin component took no part in the
-                // batch, and neither did one whose archetype nothing can draw, so a
-                // refetch says nothing about either.
-                updatedAt={requested.has(row.widget.id) ? updatedAt : null}
-                isFetching={requested.has(row.widget.id) ? isFetching : false}
-                // The arrangement hook announces, because it is the one that
-                // resolves the destination -- announcing here would name a
-                // position computed a second time, and the two would drift.
-                onMove={moveBy}
-                onToggleHidden={editor.toggleHidden}
-                onRemove={editor.remove}
-              />
-            ))}
-          </section>
-        </SortableContext>
+        <ArrangedColumns
+          columns={columns}
+          columnCount={columnCount}
+          visible={visible}
+          isEditing={editor.isEditing}
+          slots={slots}
+          requested={requested}
+          updatedAt={updatedAt}
+          isFetching={isFetching}
+          announcement={announcement}
+          onMove={moveWithinColumn}
+          onMoveColumn={moveColumn}
+          onToggleHidden={editor.toggleHidden}
+          onRemove={editor.remove}
+        />
       </DndContext>
 
       {editor.isEditing ? (

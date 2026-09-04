@@ -91,3 +91,23 @@ export function widgetSpanClass(size: string | undefined): string {
  * where the dashboard's size questions are answered from.
  */
 export { legacySizeToWidgetSize } from "nextly/config";
+
+/**
+ * The grid tracks for each supported column count.
+ *
+ * 🔴 Spelled out rather than built from a template string. Tailwind scans this
+ * file as TEXT, so `grid-cols-${n}` produces a class the build never emits and
+ * the dashboard renders as one column whatever the reader chose.
+ *
+ * Every count folds to ONE column on small screens and, above two, to two at
+ * the middle breakpoint. Folding rather than reflowing is what keeps a card's
+ * position derivable at every width: a column's contents stay together and in
+ * order, so a reader who arranged on a wide screen recognises the same
+ * dashboard on a narrow one.
+ */
+export const COLUMN_TRACK_CLASSES: Readonly<Record<number, string>> =
+  Object.freeze({
+    2: "grid-cols-1 md:grid-cols-2",
+    3: "grid-cols-1 md:grid-cols-2 lg:grid-cols-3",
+    4: "grid-cols-1 md:grid-cols-2 lg:grid-cols-4",
+  });

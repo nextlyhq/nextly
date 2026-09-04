@@ -10,9 +10,10 @@
  * @module components/features/widgets/edit/DashboardEditBar
  */
 
-import { Button } from "@nextlyhq/ui";
+import { Button, RadioGroup, RadioGroupItem } from "@nextlyhq/ui";
 
 import * as Icons from "@admin/components/icons";
+import { cn } from "@admin/lib/utils";
 
 export interface DashboardEditBarProps {
   isEditing: boolean;
@@ -20,6 +21,11 @@ export interface DashboardEditBarProps {
   isSaving: boolean;
   /** Whether the reader has an arrangement of their own to reset. */
   canReset: boolean;
+  /** How many columns the dashboard is currently drawn in. */
+  columnCount: number;
+  /** The counts a reader may choose between. */
+  columnChoices: readonly number[];
+  onColumnCount: (columnCount: number) => void;
   onBegin: () => void;
   onSave: () => void;
   onCancel: () => void;
@@ -31,6 +37,9 @@ export function DashboardEditBar({
   hasUnsavedChanges,
   isSaving,
   canReset,
+  columnCount,
+  columnChoices,
+  onColumnCount,
   onBegin,
   onSave,
   onCancel,
@@ -59,6 +68,57 @@ export function DashboardEditBar({
           because it discards an arrangement rather than an edit. Offered only
           when there IS one: a reader already on the default has nothing to
           reset, and a button that does nothing is worse than no button. */}
+      {/* 🔴 The REAL radio group, not buttons wearing `role="radio"`.
+          ARIA roles announce a widget; they do not implement one. Custom
+          buttons with those roles leave every choice a separate Tab stop and
+          the arrow keys inert, so a keyboard reader meets something that
+          claims to be a radio group and does not behave like one -- which is
+          worse than a plain set of buttons, because the announcement sets an
+          expectation the control then breaks.
+
+          Radix supplies roving focus, arrow-key selection and the checked
+          state; this only has to style it and say what it is for. The label is
+          a visible element rather than an `aria-label`, so the name of the
+          control is available to everyone rather than only to a screen reader
+          deciding what a cluster of digits means. */}
+      <div className="mr-auto flex items-center gap-2">
+        <span
+          id="dashboard-columns-label"
+          className="text-xs text-muted-foreground"
+        >
+          Columns
+        </span>
+        <RadioGroup
+          aria-labelledby="dashboard-columns-label"
+          value={String(columnCount)}
+          onValueChange={value => onColumnCount(Number(value))}
+          disabled={isSaving}
+          className="flex items-center gap-1"
+          data-testid="dashboard-column-picker"
+        >
+          {columnChoices.map(choice => (
+            <label
+              key={choice}
+              // The whole chip is the target, so the hit area matches what a
+              // reader sees rather than a small circle beside it.
+              className={cn(
+                "flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs",
+                choice === columnCount
+                  ? "border-primary bg-primary/10 text-foreground"
+                  : "border-border text-muted-foreground hover:bg-muted"
+              )}
+              data-testid={`dashboard-column-choice-${choice}`}
+            >
+              <RadioGroupItem
+                value={String(choice)}
+                aria-label={`${choice} columns`}
+              />
+              {choice}
+            </label>
+          ))}
+        </RadioGroup>
+      </div>
+
       {canReset ? (
         <Button
           type="button"
@@ -66,7 +126,7 @@ export function DashboardEditBar({
           size="sm"
           onClick={onReset}
           disabled={isSaving}
-          className="mr-auto text-muted-foreground"
+          className="text-muted-foreground"
           data-testid="dashboard-edit-reset"
         >
           Reset to default

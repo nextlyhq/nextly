@@ -8,6 +8,15 @@ import { defineConfig } from "tsup";
  * how chrome preferences are read and written. Both are arithmetic and set
  * membership, and neither imports anything at all.
  *
+ * `ops` is the vocabulary every edit is expressed in and the function that
+ * applies one. It belongs here because an op is a change to a DOCUMENT rather
+ * than a gesture in a React tree: a server action promoting a selection to a
+ * component, and an agent asked to insert a section, apply the same ops the
+ * canvas does. Published only from the root barrel, those callers had two
+ * options and both were wrong — pull a client boundary into a server module,
+ * or grow a second implementation that agrees with this one until the day it
+ * does not. It imports `@nextlyhq/blocks-engine` and nothing else.
+ *
  * Built SEPARATELY from the root entry because that entry carries a
  * `"use client"` banner. The banner is required there — the shell is a client
  * component and Rollup drops per-module directives — but it applies to
@@ -33,7 +42,12 @@ export default defineConfig({
   // `BuilderShellProps` as a TYPE, which is erased. Built by the client config
   // it would have inherited the shell's banner and turned every one of those
   // into a client reference.
-  entry: ["src/index.ts", "src/geometry.ts", "src/shell-state.ts"],
+  entry: [
+    "src/index.ts",
+    "src/geometry.ts",
+    "src/shell-state.ts",
+    "src/ops.ts",
+  ],
   format: ["esm"],
   dts: true,
   clean: false,

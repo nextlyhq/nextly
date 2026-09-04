@@ -66,6 +66,7 @@ function layout(
     order: number;
     hidden?: boolean;
     size?: string;
+    column?: number;
   }>,
   patch: Partial<DashboardLayoutResponse> = {}
 ): DashboardLayoutResponse {
@@ -220,8 +221,43 @@ describe("moving a card without a drag", () => {
     await user.click(screen.getAllByTestId("widget-move-down")[0]);
 
     // Through the grid's ONE region -- a move is not worth a second announcer.
+    //
+    // 🔴 The COLUMN is named as well as the position, and the position counts
+    // that column rather than the whole dashboard. A card dropped into an
+    // otherwise empty column was announced as "position 3 of 3" -- a place it
+    // does not hold, in a list whose length is not its column's -- because a
+    // column coordinate was being passed to a position formatter.
     expect(screen.getByTestId("widget-grid-live").textContent).toMatch(
-      /Widget core\/a moved to position 2 of 3/
+      /Widget core\/a moved to column 1 of 3, position 2 of 3/
+    );
+  });
+
+  it("counts only the cards the grid DRAWS", async () => {
+    // 🔴 A placement whose declaration this admin cannot resolve is skipped
+    // from the render and still sits in the arrangement, so a position read
+    // from the stored list describes a grid nobody is looking at. Here the
+    // reader sees two cards and the unrendered one sits between them: counted
+    // from storage, moving the first card down announces "position 3 of 3"
+    // while the screen plainly shows it second of two.
+    mockBranding = branding(["core/a", "core/b"]);
+    layoutResponse = layout([
+      { id: "p1", widgetId: "core/a", order: 0, column: 0 },
+      { id: "pX", widgetId: "plugin/absent", order: 10, column: 0 },
+      { id: "p2", widgetId: "core/b", order: 20, column: 0 },
+    ]);
+
+    renderGrid();
+    const user = await beginEditing();
+
+    // The control for the fixture itself: the unresolvable placement really is
+    // absent from the grid, so the case being tested is the case being set up.
+    expect(screen.queryByTestId("widget-cell-plugin/absent")).toBeNull();
+    expect(screen.getAllByTestId("widget-move-down")).toHaveLength(2);
+
+    await user.click(screen.getAllByTestId("widget-move-down")[0]);
+
+    expect(screen.getByTestId("widget-grid-live").textContent).toMatch(
+      /Widget core\/a moved to column 1 of 3, position 2 of 2/
     );
   });
 
@@ -801,5 +837,372 @@ describe("reset", () => {
 
     await waitFor(() => expect(api.delete).toHaveBeenCalledTimes(1));
     expect(api.put).not.toHaveBeenCalled();
+  });
+});
+
+describe("the dashboard draws columns", () => {
+  it("renders one column per the count the SERVER reported", async () => {
+    // 🔴 The count comes from the arrangement, not from a client default. A
+    // grid that picked its own would draw a dashboard the reader never made
+    // and then save that back on their next edit.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 4 }
+    );
+    renderGrid();
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-column-3")).toBeInTheDocument()
+    );
+  });
+
+  it("draws an EMPTY column, so a card can be moved back into it", async () => {
+    // 🔴 A column is a drop target only while it is rendered. Collapsing the
+    // empty ones would let a reader move the last card out of a column and
+    // never move one back.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 3 }
+    );
+    renderGrid();
+    // 🔴 Waited on the ARRANGEMENT, not on a column. Every column exists from
+    // the first paint, so waiting for one is satisfied before the stored
+    // layout has arrived — and the default arrangement drawn in the meantime
+    // has a card in every column, which is what a weaker wait asserts against.
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    // "Holds no card" rather than an empty DOM node: the column legitimately
+    // carries its own drop-target chrome while editing, and a node-level
+    // emptiness check would fail on that rather than on a card.
+    expect(
+      screen
+        .getByTestId("widget-column-2")
+        .querySelector("[data-testid^='widget-cell-']")
+    ).toBeNull();
+  });
+
+  it("KEEPS a card whose column is past the count", async () => {
+    // 🔴 The property that decides whether narrowing the dashboard destroys
+    // work: a card stored in column 3 must still be drawn when the reader has
+    // asked for two columns.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 3, order: 0 }],
+      { columnCount: 2 }
+    );
+    renderGrid();
+    // 🔴 Wait for the ARRANGEMENT first. Until the stored layout arrives the
+    // grid draws the declared defaults, which include core/a in a column that
+    // exists — so asserting core/a directly passes whether or not the
+    // out-of-range card was kept, and the test certifies nothing. core/b is
+    // absent only once the single-placement arrangement is the one on screen.
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    expect(screen.getByText("Widget core/a")).toBeInTheDocument();
+    // And it is drawn in the LAST column that exists, not left nowhere.
+    expect(
+      screen
+        .getByTestId("widget-column-1")
+        .querySelector("[data-testid^='widget-cell-']")
+    ).not.toBeNull();
+  });
+});
+
+describe("crossing columns without dragging", () => {
+  it("offers a CLICKABLE control for every column move a drag can make", async () => {
+    // 🔴 WCAG 2.2 SC 2.5.7: anything a drag achieves needs a single-pointer
+    // route, and the Understanding document states that a keyboard equivalent
+    // does not satisfy it on its own. Dragging a card into another column is
+    // new functionality, so these buttons are the conformance — without them
+    // the column layout regresses what this toolbar already established.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 3 }
+    );
+    renderGrid();
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    await beginEditing();
+    expect(screen.getByTestId("widget-move-right")).toBeEnabled();
+    // Left is refused in the first column: a control that looks available and
+    // does nothing is worse than one that says it cannot act.
+    expect(screen.getByTestId("widget-move-left")).toBeDisabled();
+  });
+
+  it("actually moves the card, rather than only enabling a button", async () => {
+    // 🔴 The control the assertion above needs. Rendering an enabled button
+    // satisfies "a single-pointer route exists" while clicking it does
+    // nothing — which is the shape of a conformance claim that is not true.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 3 }
+    );
+    renderGrid();
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    const user = await beginEditing();
+    expect(
+      screen
+        .getByTestId("widget-column-0")
+        .querySelector("[data-testid^='widget-cell-']")
+    ).not.toBeNull();
+    await user.click(screen.getByTestId("widget-move-right"));
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("widget-column-1")
+          .querySelector("[data-testid^='widget-cell-']")
+      ).not.toBeNull()
+    );
+  });
+
+  it("hides the sideways controls when there is only ONE column", async () => {
+    // A control that can never be enabled is noise in a toolbar a reader tabs
+    // through card by card.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 1 }
+    );
+    renderGrid();
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    await beginEditing();
+    expect(screen.queryByTestId("widget-move-right")).toBeNull();
+  });
+});
+
+describe("choosing how many columns", () => {
+  it("REDRAWS the dashboard at the count the reader picked", async () => {
+    // 🔴 The whole point of the control. A picker that stores a preference the
+    // grid does not read is a setting that appears to work and changes
+    // nothing — so this asserts the new column exists, not that a button
+    // became selected.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 2 }
+    );
+    renderGrid();
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    const user = await beginEditing();
+    expect(screen.queryByTestId("widget-column-3")).toBeNull();
+    await user.click(screen.getByTestId("dashboard-column-choice-4"));
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-column-3")).toBeInTheDocument()
+    );
+  });
+
+  it("lets the new count be SAVED", async () => {
+    // 🔴 Changing only the count touches no placement, so an unsaved-changes
+    // check that compares placements alone leaves Save disabled and the
+    // reader cannot keep the layout they are looking at.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 2 }
+    );
+    renderGrid();
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    const user = await beginEditing();
+    expect(screen.getByTestId("dashboard-edit-save")).toBeDisabled();
+    await user.click(screen.getByTestId("dashboard-column-choice-3"));
+    await waitFor(() =>
+      expect(screen.getByTestId("dashboard-edit-save")).toBeEnabled()
+    );
+  });
+
+  it("SENDS the count with the arrangement", async () => {
+    // A placement's `column` only means anything against a count, so saving
+    // one without the other leaves a row whose cards name columns it lacks.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 0, order: 0 }],
+      { columnCount: 2 }
+    );
+    renderGrid();
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    const user = await beginEditing();
+    await user.click(screen.getByTestId("dashboard-column-choice-4"));
+    await user.click(screen.getByTestId("dashboard-edit-save"));
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    expect(api.put.mock.calls[0][1]).toMatchObject({ columnCount: 4 });
+  });
+});
+
+describe("the per-card controls act on the column a reader sees", () => {
+  it("moves a card DOWN past its own column's neighbour, not the global one", async () => {
+    // 🔴 The arrangement is interleaved across columns, so the card after this
+    // one in the whole sequence usually sits in a different column. Resolved
+    // globally, Move down swapped two entries and the reader saw nothing move
+    // — an enabled control that is not the pointer equivalent of dragging.
+    layoutResponse = layout(
+      [
+        { id: "p1", widgetId: "core/a", column: 0, order: 0 },
+        { id: "p2", widgetId: "core/b", column: 1, order: 10 },
+        { id: "p3", widgetId: "core/c", column: 0, order: 20 },
+      ],
+      { columnCount: 2 }
+    );
+    renderGrid();
+    await waitFor(() =>
+      expect(screen.getAllByTestId("widget-card-body").length).toBe(3)
+    );
+    const user = await beginEditing();
+    const columnZero = () =>
+      Array.from(
+        screen
+          .getByTestId("widget-column-0")
+          .querySelectorAll("[data-testid^='widget-cell-']")
+      ).map(node => node.getAttribute("data-testid"));
+    expect(columnZero()).toEqual(["widget-cell-core/a", "widget-cell-core/c"]);
+    const [firstDown] = screen.getAllByTestId("widget-move-down");
+    await user.click(firstDown);
+    await waitFor(() =>
+      expect(columnZero()).toEqual(["widget-cell-core/c", "widget-cell-core/a"])
+    );
+  });
+
+  it("gives a POPULATED column a drop zone of its own", async () => {
+    // 🔴 A column's empty space belongs to no card, so a release there resolves
+    // to whichever card is geometrically nearest — and when the neighbouring
+    // column is longer that is a card in a DIFFERENT column, so releasing under
+    // a short column's last card moved it sideways. A zone of this column's own
+    // is what makes that space reachable.
+    layoutResponse = layout([
+      { id: "p1", widgetId: "core/a", order: 0, column: 0 },
+      { id: "p2", widgetId: "core/b", order: 10, column: 0 },
+      { id: "p3", widgetId: "core/c", order: 20, column: 1 },
+    ]);
+    renderGrid();
+    await beginEditing();
+
+    // Column 1 holds a card, so it is the case that had no target at all.
+    expect(
+      screen
+        .getByTestId("widget-column-1")
+        .querySelectorAll("[data-testid^='widget-cell-']")
+    ).toHaveLength(1);
+    expect(screen.getByTestId("widget-column-drop-1")).toBeInTheDocument();
+  });
+
+  it("puts that zone BELOW the cards rather than around them", async () => {
+    // 🔴 The property that stops it competing with a position. Wrapping the
+    // column would cover the cards too, so a release aimed between two of them
+    // could resolve to the container and lose the position the reader aimed at.
+    // Occupying only what the cards leave, it cannot be nearer than a card the
+    // pointer is actually over.
+    renderGrid();
+    await beginEditing();
+
+    const column = screen.getByTestId("widget-column-0");
+    const zone = screen.getByTestId("widget-column-drop-0");
+    expect(column.lastElementChild).toBe(zone);
+    // The control: the zone holds no card, which is what "below rather than
+    // around" means and what a wrapping droppable would fail.
+    expect(zone.querySelector("[data-testid^='widget-cell-']")).toBeNull();
+    expect(
+      column.querySelectorAll("[data-testid^='widget-cell-']").length
+    ).toBeGreaterThan(0);
+  });
+
+  it("shows no drop zone outside editing", async () => {
+    // Outside editing an empty column is absent space rather than a target, and
+    // a dashed rectangle under every column would be chrome for a gesture that
+    // is not on offer.
+    renderGrid();
+    await waitFor(() =>
+      expect(screen.getAllByTestId("widget-card-body").length).toBeGreaterThan(
+        0
+      )
+    );
+    expect(screen.queryByTestId("widget-column-drop-0")).toBeNull();
+  });
+
+  it("names each column, so crossing one is audible", async () => {
+    // The move announcement says which column a card landed in, but a reader
+    // BROWSING rather than rearranging never triggers it. The group name is
+    // where that same fact is available to them.
+    renderGrid();
+    await waitFor(() =>
+      expect(screen.getAllByTestId("widget-card-body").length).toBeGreaterThan(
+        0
+      )
+    );
+    expect(screen.getByTestId("widget-column-1")).toHaveAttribute(
+      "aria-label",
+      "Column 2 of 3"
+    );
+  });
+
+  it("offers Left from the column a card is DRAWN in, not its stored one", async () => {
+    // 🔴 A card stored past the count is folded into the last column for
+    // drawing. Computing from the stored value offered a Left that resolved
+    // outside the dashboard and a label naming a column the reader cannot see.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 3, order: 0 }],
+      { columnCount: 2 }
+    );
+    renderGrid();
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    const user = await beginEditing();
+    const left = screen.getByTestId("widget-move-left");
+    expect(left).toBeEnabled();
+    await user.click(left);
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("widget-column-0")
+          .querySelector("[data-testid^='widget-cell-']")
+      ).not.toBeNull()
+    );
+  });
+});
+
+describe("a control is offered only where it can act", () => {
+  it("DISABLES Up on the first card of every column, not just the first", async () => {
+    // 🔴 Derived from the global sequence, the first card of columns 2 and 3
+    // had an enabled Up whose neighbour does not exist in its own column — the
+    // click resolved against `rowsInColumn` and found nothing, so the control
+    // was enabled and inert. That is the SC 2.5.7 failure again, not a
+    // cosmetic one.
+    layoutResponse = layout(
+      [
+        { id: "p1", widgetId: "core/a", column: 0, order: 0 },
+        { id: "p2", widgetId: "core/b", column: 1, order: 10 },
+        { id: "p3", widgetId: "core/c", column: 2, order: 20 },
+      ],
+      { columnCount: 3 }
+    );
+    renderGrid();
+    await waitFor(() =>
+      expect(screen.getAllByTestId("widget-card-body").length).toBe(3)
+    );
+    await beginEditing();
+    // Every card is alone in its column, so no card may move up or down.
+    for (const up of screen.getAllByTestId("widget-move-up")) {
+      expect(up).toBeDisabled();
+    }
+    for (const down of screen.getAllByTestId("widget-move-down")) {
+      expect(down).toBeDisabled();
+    }
+  });
+});
+
+describe("what a move announces", () => {
+  it("counts the DESTINATION column, not the whole dashboard", async () => {
+    // 🔴 Read from the global sequence, a card dropped into an otherwise empty
+    // column announced a position and a total that describe nothing the reader
+    // can see — cards in other columns precede it, so the numbers came from a
+    // list it is not in.
+    layoutResponse = layout(
+      [
+        { id: "p1", widgetId: "core/a", column: 0, order: 0 },
+        { id: "p2", widgetId: "core/b", column: 0, order: 10 },
+        { id: "p3", widgetId: "core/c", column: 0, order: 20 },
+      ],
+      { columnCount: 3 }
+    );
+    renderGrid();
+    await waitFor(() =>
+      expect(screen.getAllByTestId("widget-card-body").length).toBe(3)
+    );
+    const user = await beginEditing();
+    // Move the first card into column 2, which holds nothing.
+    await user.click(screen.getAllByTestId("widget-move-right")[0]);
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-grid-live").textContent).toMatch(
+        /column 2 of 3, position 1 of 1/
+      )
+    );
   });
 });

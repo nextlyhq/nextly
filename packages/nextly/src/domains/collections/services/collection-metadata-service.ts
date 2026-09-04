@@ -496,6 +496,11 @@ export class CollectionMetadataService extends BaseService {
     sortBy?: "name" | "slug" | "createdAt" | "updatedAt";
     sortOrder?: "asc" | "desc";
     includeSchema?: boolean;
+    /**
+     * Restrict results to these slugs, applied as a query condition so the
+     * `total` this returns counts only rows the caller may see.
+     */
+    slugAllowlist?: string[];
   }): Promise<MetadataServiceResult> {
     try {
       // Include schema by default since the UI needs field counts

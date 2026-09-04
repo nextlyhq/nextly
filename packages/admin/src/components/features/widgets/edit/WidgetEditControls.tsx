@@ -41,8 +41,15 @@ export interface WidgetEditControlsProps {
   hidden: boolean;
   canMoveUp: boolean;
   canMoveDown: boolean;
+  /** Which column this card is in, 1-based, for what the labels announce. */
+  column: number;
+  columnCount: number;
+  canMoveLeft: boolean;
+  canMoveRight: boolean;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  onMoveLeft: () => void;
+  onMoveRight: () => void;
   onToggleHidden: () => void;
   onRemove: () => void;
 }
@@ -54,8 +61,14 @@ export function WidgetEditControls({
   hidden,
   canMoveUp,
   canMoveDown,
+  column,
+  columnCount,
+  canMoveLeft,
+  canMoveRight,
   onMoveUp,
   onMoveDown,
+  onMoveLeft,
+  onMoveRight,
   onToggleHidden,
   onRemove,
 }: WidgetEditControlsProps) {
@@ -102,6 +115,47 @@ export function WidgetEditControls({
       >
         <Icons.ChevronDown aria-hidden className="size-4" />
       </Button>
+
+      {/* 🔴 Crossing columns is reachable by CLICK, not only by dragging.
+          Dragging a card into another column is new functionality, and SC
+          2.5.7 asks for a single-pointer route to anything a drag achieves --
+          so these are the conformance rather than a convenience, exactly as
+          Move up / Move down are for ordering.
+
+          Rendered only where there is more than one column, because a control
+          that can never be enabled is noise in a toolbar a reader tabs
+          through. */}
+      {columnCount > 1 ? (
+        <>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            onClick={onMoveLeft}
+            disabled={!canMoveLeft}
+            // The column travels in the label for the same reason the position
+            // does: the grid does not say which column a card landed in, and a
+            // reader who just moved one needs to know.
+            aria-label={`Move ${title} to the previous column, currently column ${column} of ${columnCount}`}
+            data-testid="widget-move-left"
+          >
+            <Icons.ChevronLeft aria-hidden className="size-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            onClick={onMoveRight}
+            disabled={!canMoveRight}
+            aria-label={`Move ${title} to the next column, currently column ${column} of ${columnCount}`}
+            data-testid="widget-move-right"
+          >
+            <Icons.ChevronRight aria-hidden className="size-4" />
+          </Button>
+        </>
+      ) : null}
 
       <Button
         type="button"

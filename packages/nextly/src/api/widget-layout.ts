@@ -53,8 +53,14 @@ import {
   mergePreservingHidden,
   partitionPlacements,
   readPlacements,
+  statesColumn,
   visibilityToken,
+  type StoredLayout,
   type WidgetPlacement,
+  byPosition,
+  DEFAULT_COLUMN_COUNT,
+  readColumnCount,
+  type ColumnCount,
 } from "../domains/widgets/layout";
 import {
   holdsWidgetPermission,
@@ -154,6 +160,34 @@ function carriedPlacements(
     return partitionPlacements(storedPlacements, visibleIds).invisible;
   }
   return defaultRow(visibleIds).invisible;
+}
+
+/**
+ * The arrangement this caller was HANDED: their stored row, or the default.
+ *
+ * 🔴 One implementation, because the writer inherits from exactly what the
+ * reader was shown, and each half of that is load-bearing in a different
+ * direction.
+ *
+ * The DEFAULT half matters because a caller who has never saved was still
+ * handed an arrangement. A baseline reading only the stored row gives them
+ * nothing to inherit, so a client that round-trips the default set without its
+ * columns collapses the round-robin into a single column on its first save.
+ *
+ * The VISIBILITY half is a trust boundary. A baseline reading the row
+ * unfiltered lets a submitted placement inherit the column of one this caller
+ * may not know exists, which is an existence oracle over any id — and default
+ * placement ids are widget ids, so the probe space is guessable.
+ */
+function visibleArrangement(
+  stored: StoredLayout | undefined,
+  widgets: readonly CanonicalWidget[]
+): WidgetPlacement[] {
+  if (!stored) return visibleDefaults(widgets);
+  return partitionPlacements(
+    stored.placements,
+    new Set(widgets.map(widget => widget.id))
+  ).visible;
 }
 
 /**
@@ -283,12 +317,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   ]);
 
   const source: LayoutSource = stored.layout ? "own" : "default";
-  const placements = stored.layout
-    ? partitionPlacements(
-        stored.layout.placements,
-        new Set(widgets.map(widget => widget.id))
-      ).visible
-    : visibleDefaults(widgets);
+  const placements = visibleArrangement(stored.layout, widgets);
 
   // Widgets this caller may see and has not placed. A stored arrangement is a
   // full snapshot, so a widget registered AFTER the reader last saved has no
@@ -316,6 +345,12 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       available,
       version: stored.version,
       source,
+      // The reader's own column count, or the default when they have never
+      // arranged anything. Sent rather than left for the client to assume: the
+      // count decides which column each placement's coordinate refers to, so a
+      // client guessing it would draw a DIFFERENT arrangement from the stored
+      // one and then save that back.
+      columnCount: stored.layout?.columnCount ?? DEFAULT_COLUMN_COUNT,
       scope: visibilityToken(widgets.map(w => w.id)),
     },
     { headers: OPAQUE_CONFIG_HEADERS }
@@ -330,6 +365,27 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
  * an empty string, would be read as asserting the row does not exist and would
  * overwrite a real arrangement through the insert path.
  */
+
+/**
+ * Placements whose columns all fall inside `columnCount`.
+ *
+ * 🔴 Applied to the MERGED row, not to what the caller sent. A carried
+ * placement -- one this reader can no longer see, kept so it is not lost --
+ * holds the column it had when it was last visible, so bounding only the
+ * submission lets a hidden card smuggle a column past the count the row
+ * declares. The invariant is about the stored ROW, so it is enforced where the
+ * row is assembled.
+ */
+function boundColumns(
+  placements: readonly WidgetPlacement[],
+  columnCount: ColumnCount
+): WidgetPlacement[] {
+  const last = columnCount - 1;
+  return placements.map(placement =>
+    placement.column > last ? { ...placement, column: last } : placement
+  );
+}
+
 function readVersion(body: Record<string, unknown>): number {
   const { version } = body;
   if (!Number.isInteger(version) || (version as number) < 0) {
@@ -432,9 +488,20 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
       ],
     });
   }
-  const submitted = readPlacements(
-    (body as Record<string, unknown>).placements
+  const rawPlacements = (body as Record<string, unknown>).placements;
+  const submitted = readPlacements(rawPlacements);
+  // Which placements NAMED a column, asked through the reader's own predicate
+  // so the two cannot disagree about what counts as naming one. An id missing
+  // from this set stated nothing, which is not the same as stating zero.
+  const statedColumns = new Set(
+    (Array.isArray(rawPlacements) ? rawPlacements : [])
+      .filter(statesColumn)
+      .map(placement => (placement as { id?: unknown }).id)
+      .filter((id): id is string => typeof id === "string")
   );
+  // Read RAW, and resolved against the stored row further down. `undefined` is
+  // an omission rather than a value, and the two need different answers.
+  const sentColumnCount = (body as Record<string, unknown>).columnCount;
   const expectedVersion = readVersion(body as Record<string, unknown>);
   const submittedScope = readScope(body as Record<string, unknown>);
 
@@ -512,12 +579,54 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const stored = await service.getLayout(SCOPE_KIND, caller.userId);
   const carried = carriedPlacements(stored.layout?.placements, visibleIds);
 
-  const toStore = mergePreservingHidden(submitted, carried);
+  // 🔴 An OMITTED count inherits the stored one; only a row that does not exist
+  // yet falls back to the default. Every client written before columns sends no
+  // `columnCount`, and defaulting on their behalf saved a four-column row as a
+  // three-column one -- after which `boundColumns` folds every card in the
+  // fourth column into the third, permanently, during an edit that touched
+  // neither. A value that was actually SENT is still coerced, because the two
+  // tolerances have to agree: an unsupported count becoming the default while a
+  // column was only bounded downward stored `{ columnCount: 5, column: 4 }`, a
+  // three-column row holding a card in column 4 that every reader reinterprets.
+  const submittedColumnCount =
+    sentColumnCount === undefined
+      ? readColumnCount(stored.layout?.columnCount)
+      : readColumnCount(sentColumnCount);
+
+  // 🔴 A placement that stated no column KEEPS the one it was handed. A client
+  // written before columns omits the coordinate on every placement as well as
+  // the count, so a row whose count is preserved while its coordinates are not
+  // holds four columns with every card moved into the first — an arrangement
+  // destroyed by an edit that names neither.
+  //
+  // The baseline is what this caller was SHOWN, which is the stored row's
+  // visible half or the visible defaults. A placement nothing handed them has
+  // nothing to inherit and keeps the reader's fallback.
+  const storedColumns = new Map(
+    visibleArrangement(stored.layout, widgets).map(placement => [
+      placement.id,
+      placement.column,
+    ])
+  );
+  const positioned = submitted.map(placement =>
+    statedColumns.has(placement.id)
+      ? placement
+      : {
+          ...placement,
+          column: storedColumns.get(placement.id) ?? placement.column,
+        }
+  );
+
+  const toStore = boundColumns(
+    mergePreservingHidden(positioned, carried),
+    submittedColumnCount
+  );
   const version = await service.saveLayout(
     SCOPE_KIND,
     caller.userId,
     toStore,
-    expectedVersion
+    expectedVersion,
+    submittedColumnCount
   );
 
   // `respondMutation`, not `respondData`: this is a write, and every write in
@@ -529,12 +638,19 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // Echoing the raw array made this response a SECOND representation of the
   // same arrangement: a client trusting it to chain another edit without
   // re-reading would render `[10, 0]` where a reload gives `[0, 10]`.
-  const echoed = [...submitted].sort((a, b) => a.order - b.order);
+  const echoed = boundColumns(positioned, submittedColumnCount).sort(
+    byPosition
+  );
 
   return respondMutation(
     "Dashboard layout saved.",
     {
       placements: echoed,
+      // Echoed for the same reason the placements are: a client making a
+      // second edit without a round trip needs the count its coordinates mean
+      // something against, and this is the accepted one rather than the sent
+      // one.
+      columnCount: submittedColumnCount,
       version,
       source: "own" satisfies LayoutSource,
       // Echoed so a client can make a second edit without a round trip. It is

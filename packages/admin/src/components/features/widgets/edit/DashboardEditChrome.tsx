@@ -12,6 +12,8 @@
  * @module components/features/widgets/edit/DashboardEditChrome
  */
 
+import { COLUMN_COUNTS } from "nextly/config";
+
 import { DashboardEditBar } from "./DashboardEditBar";
 import type { LayoutEditor } from "./useLayoutEditor";
 
@@ -26,6 +28,8 @@ export interface DashboardEditChromeProps {
   hasArrangement: boolean;
   /** Whether this reader has an arrangement of their own to reset. */
   canReset: boolean;
+  columnCount: number;
+  onColumnCount: (columnCount: number) => void;
 }
 
 export function DashboardEditChrome({
@@ -33,6 +37,8 @@ export function DashboardEditChrome({
   writeError,
   hasArrangement,
   canReset,
+  columnCount,
+  onColumnCount,
 }: DashboardEditChromeProps) {
   return (
     <>
@@ -42,6 +48,9 @@ export function DashboardEditChrome({
           hasUnsavedChanges={editor.hasUnsavedChanges}
           isSaving={editor.isSaving}
           canReset={canReset}
+          columnCount={columnCount}
+          columnChoices={COLUMN_COUNTS}
+          onColumnCount={onColumnCount}
           onBegin={editor.begin}
           onSave={editor.save}
           onCancel={editor.cancel}
