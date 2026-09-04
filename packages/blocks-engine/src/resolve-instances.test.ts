@@ -831,6 +831,85 @@ describe("resolveComponentInstances what an instance carries", () => {
     expect(result.referenced).toEqual(["outer"]);
   });
 
+  it("does not resolve slot content aimed at a gated target", () => {
+    // The instance's own content, handed to a region the definition gates. The
+    // node it was placed in is dropped with its subtree, so the content reaches
+    // no reader — and resolving it first records the components inside it as
+    // read and as unresolvable, which is the same publish rejection and the
+    // same cache tag, arrived at from the page's side instead of the
+    // definition's.
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "vip" }]] };
+    const definition = component([box("d1", [node("fallback")], gate)], {
+      slots: { body: { label: "Body", nodeId: "d1", slot: "children" } },
+    });
+    const doc = page([
+      instance("i1", "hero", {}, { slots: { body: [instance("s1", "gone")] } }),
+    ]);
+
+    const result = resolveComponentInstances(doc, defs({ hero: definition }));
+
+    expect(result.unresolved).toEqual([]);
+    expect(result.referenced).toEqual(["hero"]);
+  });
+
+  it("still resolves slot content aimed at a target that survives", () => {
+    // The control. Without it the rule above passes on an implementation that
+    // drops instance slot content altogether, which is the whole feature.
+    const definition = component([box("d1", [node("fallback")])], {
+      slots: { body: { label: "Body", nodeId: "d1", slot: "children" } },
+    });
+    const doc = page([
+      instance(
+        "i1",
+        "hero",
+        {},
+        { slots: { body: [instance("s1", "inner")] } }
+      ),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({ hero: definition, inner: component([node("d9")]) })
+    );
+
+    expect(result.unresolved).toEqual([]);
+    expect(result.referenced).toEqual(["hero", "inner"]);
+    // Composed, and recorded as belonging to the page's own instance node —
+    // the content is the PAGE's, so `instanceOf` names `s1` rather than the
+    // component that received it.
+    expect(
+      result.document.nodes[0]!.slots!.children!.map(e => e.instanceOf)
+    ).toEqual(["s1"]);
+  });
+
+  it("composes the page's slot content ONCE, however deep it is placed", () => {
+    // The page supplies content to a slot that `outer` forwards into a nested
+    // component. Composing where it is placed means it passes through two
+    // expansions, and the second must leave it alone: content already composed
+    // still holds any instance that could not be resolved, so composing it
+    // again refuses that instance a second time and reports it twice.
+    const inner = component([box("d2", [node("fb")])], {
+      slots: { region: { label: "Region", nodeId: "d2", slot: "children" } },
+    });
+    const outer = component([instance("n1", "inner")], {
+      slots: { body: { label: "Body", nodeId: "n1", slot: "region" } },
+    });
+    const doc = page([
+      instance(
+        "i1",
+        "outer",
+        {},
+        { slots: { body: [instance("s1", "gone")] } }
+      ),
+    ]);
+
+    const result = resolveComponentInstances(doc, defs({ outer, inner }));
+
+    expect(result.unresolved).toEqual([
+      { instanceId: "s1", componentId: "gone", reason: "missing" },
+    ]);
+  });
+
   it("still composes an instance under an UNGATED container inside a definition", () => {
     // The control for the rule above, on the definition side.
     const doc = page([instance("i1", "outer")]);
