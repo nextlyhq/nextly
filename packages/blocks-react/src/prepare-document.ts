@@ -429,9 +429,12 @@ export function isUnresolvedInstance(node: ResolvedBlockNode): boolean {
  * `missing` for a definition the caller had supplied. Asking here means there
  * is one answer, given at the moment the definition is actually wanted.
  *
- * Memoized, so a component held by two instances is repaired once — and the
- * memo records a definition that could NOT be read as well, or an unreadable
- * one would be re-examined on every reference.
+ * NOT memoized here, and that is deliberate rather than an omission. The
+ * resolver reads the lookup once per component per resolution and holds the
+ * answer for the run — it has to, because a lookup is a caller's object and a
+ * resolution owes one answer about one component. A second cache on this side
+ * would be a second implementation of that guarantee, agreeing on the day it
+ * is written; removing it was measured to change nothing.
  */
 function repairingLookup(
   definitions: DefinitionsById,
@@ -442,7 +445,6 @@ function repairingLookup(
     maxDepth: limits.maxDepth + 1,
     maxNodes: limits.maxNodes + 1,
   };
-  const repaired = new Map<string, BlockDocument | undefined>();
   return {
     // Answered from the SUPPLIED map, never from whether `get` produced a
     // document. Presence is what separates "nobody supplied one" from "one was
@@ -451,18 +453,15 @@ function repairingLookup(
     // repair its stored data.
     has: id => definitions.has(id),
     get: id => {
-      if (repaired.has(id)) return repaired.get(id);
       const stored = definitions.get(id);
       // `undefined` for an envelope this build cannot read, rather than a
       // repaired shell. The shape pass reads `document.nodes` on its first
       // line, so a `null` or a string here throws before any block boundary
       // exists to contain it — and the resolver, which still sees the id in
       // `has`, reports it as unreadable rather than missing.
-      const value = isReadableEnvelope(stored)
+      return isReadableEnvelope(stored)
         ? sanitizeDocument(stored, shapeOnly)
         : undefined;
-      repaired.set(id, value);
-      return value;
     },
   };
 }

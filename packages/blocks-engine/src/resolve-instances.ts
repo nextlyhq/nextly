@@ -326,6 +326,10 @@ export function resolveComponentInstances(
     referenced: [],
     referencedSeen: new Set<string>(),
     unresolved: [],
+    definitionsRead: new Map<
+      string,
+      ComponentDocument | ComponentUnresolvedReason
+    >(),
   };
   const nodes = inlineForest(document.nodes, run, ROOT_SCOPE, 1);
   return {
@@ -368,6 +372,20 @@ interface ResolveRun {
   referenced: string[];
   referencedSeen: Set<string>;
   unresolved: UnresolvedInstance[];
+  /**
+   * What the lookup answered for each component this run has asked about.
+   *
+   * A resolution has to say ONE thing about one component. Asking per instance
+   * lets a lookup that is not pure contradict itself inside a page — the first
+   * instance draws the component and the second reports it unreadable — and
+   * the contract deliberately admits such a lookup, because the source that
+   * fetches is one.
+   *
+   * Only the id-dependent half is held. `cycle` and `composed-depth` are
+   * properties of WHERE the instance sits, so they are decided per call and
+   * never reach this.
+   */
+  definitionsRead: Map<string, ComponentDocument | ComponentUnresolvedReason>;
 }
 
 /** Where in the composition a forest sits: how deep, and through which components. */
@@ -501,6 +519,21 @@ function inlineNode(
   if (node.type === COMPONENT_INSTANCE_TYPE) {
     return expandInstance(node, run, scope, depth);
   }
+  // The same rule `expandInstance` applies to an instance's OWN gate, applied
+  // to the node holding one. Gating is inherited — `pruneHiddenNodes` drops a
+  // gated node together with its whole subtree — so an instance under one
+  // reaches no reader either way, and composing it is work nobody receives.
+  //
+  // Without this the two routes to one outcome report differently: the directly
+  // gated instance is left standing with nothing recorded, while the instance
+  // under a gated container is read, tagged and, when it cannot be composed,
+  // listed as unresolved. A publish check then refuses a page over a component
+  // no visitor can be served, and the tags a render invalidates on name it.
+  //
+  // Asked of the node ITSELF rather than tracked down the walk, because
+  // `inlineForest` descends one level per frame: a gated node returns here
+  // before its slots are visited, so nothing below it is ever reached.
+  if (isConditionGated(node)) return null;
   const slots = node.slots;
   if (!isPlainRecord(slots)) return null;
   const next = inlineHostSlots(slots, run, scope, depth);
@@ -572,14 +605,11 @@ function expandInstance(
   }
   noteReference(run, componentId);
 
-  const reason = refusalFor(componentId, run, scope);
-  if (reason !== undefined) {
-    return [refuse(run, instance, componentId, reason)];
+  const found = definitionFor(componentId, run, scope);
+  if (typeof found === "string") {
+    return [refuse(run, instance, componentId, found)];
   }
-
-  // Established by `refusalFor`, which is the only reader that can tell a
-  // missing definition from an unreadable one.
-  const definition = run.definitions.get(componentId) as ComponentDocument;
+  const definition = found;
 
   // Taken before ANY speculative work, `suppliedSlots` included. Resolving an
   // instance's slot content spends budget and mints ids, and a refusal below
@@ -923,20 +953,48 @@ function rollback(run: ResolveRun, mark: Savepoint): void {
   run.minted.length = mark.minted;
 }
 
-/** Why this instance cannot be inlined here, if it cannot. */
-function refusalFor(
+/**
+ * The definition to inline here, or why this instance cannot be.
+ *
+ * One value rather than a verdict the caller then re-reads, because the lookup
+ * is a caller's object and nothing in its contract makes it pure. Validating
+ * one `get` and expanding a second means the document that was checked is not
+ * the document that is used — and the source that FETCHES is the one least
+ * likely to answer twice the same way. Reasons are strings and definitions are
+ * records, so the two are told apart without an envelope per instance.
+ */
+function definitionFor(
   componentId: string,
   run: ResolveRun,
   scope: ComposedScope
-): ComponentUnresolvedReason | undefined {
+): ComponentDocument | ComponentUnresolvedReason {
   if (scope.onPath.has(componentId)) return "cycle";
   if (scope.depth >= run.maxComposedDepth) return "composed-depth";
+  const seen = run.definitionsRead.get(componentId);
+  if (seen !== undefined) return seen;
+  const answer = readDefinition(componentId, run);
+  run.definitionsRead.set(componentId, answer);
+  return answer;
+}
+
+/**
+ * What the lookup says about one component, asked once per run.
+ *
+ * Split from the scope checks above so that only the id-dependent half is
+ * remembered: a component refused for a cycle at one position is perfectly
+ * resolvable at another, and caching that refusal would withhold it there.
+ */
+function readDefinition(
+  componentId: string,
+  run: ResolveRun
+): ComponentDocument | ComponentUnresolvedReason {
   // ABSENT from the map is `missing` — nobody supplied one, and the remedy is
   // to publish or restore it. A value that IS supplied and cannot be read is a
   // document fault, so it takes `unreadable`: offering the publish remedy for
   // corrupt component data sends an author to the wrong screen, which is the
   // whole reason these reasons are a closed list rather than a message.
   if (!run.definitions.has(componentId)) return "missing";
+  // Read ONCE and carried out, so expansion never asks again.
   const definition = run.definitions.get(componentId);
   if (!isPlainRecord(definition) || !Array.isArray(definition.nodes)) {
     return "unreadable";
@@ -948,7 +1006,7 @@ function refusalFor(
   // and slots meaning nothing. The kind is what the engine already publishes
   // an answer for.
   if (!isComponentDocument(definition)) return "unreadable";
-  return undefined;
+  return definition;
 }
 
 /**
@@ -1337,6 +1395,26 @@ function cloneDefinitionNode(
   }
 
   const scoped = scopeNode(node, ctx, plan);
+
+  // The inherited-gate rule, on the definition side. `inlineNode` applies it to
+  // a host container; a definition's own gated box is dropped by the same pass
+  // with the same subtree, so descending here would report components no reader
+  // can receive — and the host rule would mean nothing for anything a component
+  // holds.
+  //
+  // Asked AFTER `scopeNode` rather than of the stored node, because an
+  // instance's `visibility` override is allowed to remove the gate: asking
+  // first would refuse to compose a region the instance explicitly turned on.
+  // `scopeNode` deletes the envelope for `plan.visible === true`, so by here
+  // the question has one answer.
+  //
+  // The node stands, gated, exactly as the host case leaves it standing — the
+  // pass that prunes it wants it there — and its planned slot content is given
+  // back, because nothing will place it.
+  if (isConditionGated(scoped)) {
+    if (plan !== undefined) refundPlannedSlots(plan, ctx.run);
+    return [scoped];
+  }
 
   // Cloned BEFORE the instance branch, not after it. A component-instance node
   // inside a definition carries slot content like any container, and skipping
