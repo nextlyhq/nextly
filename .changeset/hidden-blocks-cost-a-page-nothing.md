@@ -32,3 +32,7 @@ the page nothing, and the step that prepares the page's own content for the
 regions of that component was counting those hidden blocks against the page —
 so a component with several hidden blocks before a region could push an
 otherwise valid page over the limit.
+
+Blocks hidden by a visibility CONDITION still count, and they should: the block
+itself is still placed on the page until the condition is evaluated, so the
+page pays for it either way.

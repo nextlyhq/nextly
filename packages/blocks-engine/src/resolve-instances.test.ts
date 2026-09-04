@@ -970,6 +970,38 @@ describe("resolveComponentInstances what an instance carries", () => {
     expect(result.referenced).toEqual(["hero"]);
   });
 
+  it("keeps condition-gated nodes charged against the prepass cap", () => {
+    // A gate and an override both stop a node being served, and the clone
+    // treats them differently: it emits NOTHING for an override that hides,
+    // and gives the charge back — but it emits the node itself, still gated,
+    // for a condition, and keeps the charge. A prepass that refunds both reads
+    // an arbitrarily wide definition for free.
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "vip" }]] };
+    const definition = component(
+      [
+        node("g1", { visibility: gate }),
+        node("g2", { visibility: gate }),
+        node("g3", { visibility: gate }),
+        node("g4", { visibility: gate }),
+        node("sib"),
+        box("target", []),
+      ],
+      { slots: { tail: { label: "Tail", nodeId: "target", slot: "children" } } }
+    );
+    const doc = page([
+      instance("i1", "hero", {}, { slots: { tail: [instance("s1", "deep")] } }),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({ hero: definition, deep: component([]) }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 2 } }
+    );
+
+    expect(result.unresolved.map(e => e.reason)).toEqual(["budget"]);
+    expect(result.referenced).toEqual(["hero"]);
+  });
+
   it("crosses nodes an override removed to reach a later slot target", () => {
     // The clone gives back the charge for a node that emits nothing, so four
     // overridden-away roots cost the composed document nothing and the result
