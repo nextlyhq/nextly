@@ -22,6 +22,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@admin/components/ui";
 import type { BulkResponse, PerItemError } from "@admin/lib/api/response-types";
 import {
+  toastMutationResult,
+  warningText,
+  type HookWarning,
+} from "@admin/lib/mutation-warnings";
+import {
   entryApi,
   entryKeys,
   type UpdateEntryPayload,
@@ -50,6 +55,39 @@ export interface BulkCallbackPayload<T> {
 }
 
 /** Build the callback payload from a server `BulkResponse<T>`. */
+/**
+ * Say what a bulk write did, and separately what it has to report.
+ *
+ * ONE owner for both bulk hooks, so delete and update cannot drift into two
+ * ways of saying the same thing — the reason `toastMutationResult` exists for
+ * single-entry writes, and this defers to it whenever nothing failed.
+ *
+ * A per-item failure keeps the headline: those writes did NOT happen, and that
+ * is what the user has to decide about. The advisories still travel, because a
+ * bulk response that produced both and showed one of them misdescribes its own
+ * outcome — and because an author publishing ten pages at once was otherwise
+ * told nothing that an author publishing one of them would have been told.
+ */
+function toastBulkResult<T>(
+  payload: BulkCallbackPayload<T>,
+  warnings: readonly HookWarning[] | undefined
+): void {
+  if (payload.failed === 0) {
+    toastMutationResult(payload.message, warnings);
+    return;
+  }
+  // Plain text rather than the rich detail the single-entry presenter renders:
+  // this module is not a component file, and a joined sentence carries the same
+  // information without turning it into one.
+  // Through the SAME formatter the element path uses, so a failed row does not
+  // cost the surviving rows their identity: several identically-worded notices
+  // name no page at all.
+  const detail = (warnings ?? []).map(warningText).join(" ");
+  toast.warning(payload.message, {
+    ...(detail.length > 0 ? { description: detail } : {}),
+  });
+}
+
 function toCallbackPayload<T>(
   response: BulkResponse<T>
 ): BulkCallbackPayload<T> {
@@ -137,13 +175,7 @@ export function useBulkDeleteEntries({
 
       const payload = toCallbackPayload(response);
 
-      if (showToast) {
-        if (payload.failed > 0) {
-          toast.warning(payload.message);
-        } else {
-          toast.success(payload.message);
-        }
-      }
+      if (showToast) toastBulkResult(payload, response.warnings);
 
       onComplete?.(payload);
       onSuccess?.(payload);
@@ -228,13 +260,7 @@ export function useBulkUpdateEntries({
 
       const payload = toCallbackPayload(response);
 
-      if (showToast) {
-        if (payload.failed > 0) {
-          toast.warning(payload.message);
-        } else {
-          toast.success(payload.message);
-        }
-      }
+      if (showToast) toastBulkResult(payload, response.warnings);
 
       onComplete?.(payload);
       onSuccess?.(payload);

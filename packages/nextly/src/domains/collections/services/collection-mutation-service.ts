@@ -7491,6 +7491,17 @@ export class CollectionMutationService extends BaseService {
         string,
         unknown
       >;
+      // Stamped BEFORE the hooks run, not only on the response below.
+      //
+      // A draft edit leaves `status` at the live parent's value, so a document
+      // handed to `afterUpdate` is indistinguishable from a real publish by its
+      // own fields — and the two mean opposite things to anything that reports
+      // on what a VISITOR sees, because this write changed nothing they can
+      // load. The read overlay already stamps this flag for the same reason; a
+      // hook could not ask the question at all until now.
+      if (workingDraftDocument) {
+        responseSource._isWorkingDraft = true;
+      }
 
       // The tags this update invalidates: the id and current-slug tags, plus the
       // previous-slug tag when the slug changed (captured in the transaction), so

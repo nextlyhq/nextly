@@ -98,6 +98,21 @@ export async function definitionsFor(
   source: ComponentSource,
   limits: DocumentLimits
 ): Promise<DefinitionsById> {
+  return (await discover(document, source, limits)).found;
+}
+
+/**
+ * The discovery itself, keeping WHICH ids it managed to ask about.
+ *
+ * `definitionsFor` wants only the answers. A caller reporting what is missing
+ * needs to tell an id nothing answered for from an id nothing was ever asked
+ * about, and once the loop has returned that difference is invisible.
+ */
+async function discover(
+  document: BlockDocument,
+  source: ComponentSource,
+  limits: DocumentLimits
+): Promise<{ found: DefinitionsById; attempted: ReadonlySet<string> }> {
   const found = new Map<string, BlockDocument>();
   const attempted = new Set<string>();
   // The same first pass the pipeline runs, so the tree composed here is the
@@ -157,7 +172,46 @@ export async function definitionsFor(
     }
     wanted = stillMissing(sanitized, lookup, limits);
   }
-  return found;
+  return { found, attempted };
+}
+
+/**
+ * The components a document needs that a source could not supply.
+ *
+ * The same discovery the render performs, ending at the same place, with the
+ * REMAINDER reported instead of the definitions. That remainder is the honest
+ * definition of "this page has a hole": the resolver asked for these, nothing
+ * answered, and the renderer will draw a marker where each one sits.
+ *
+ * Exists so a caller outside the render — a publish-time check, a report — can
+ * ask the question without walking stored documents for component ids. Such a
+ * walk is not a cheaper version of this; it is a DIFFERENT question, and the
+ * ways it differs all point the same way. It reports a condition-gated
+ * instance, and one sitting in slot content the chosen definition discards,
+ * neither of which the resolver asks for. It follows the id stored on a node
+ * rather than the one an instance's overrides selected. And it sees nodes a
+ * repair pass dropped. Every one of those is a component a visitor never meets,
+ * named in a warning about a page that renders correctly.
+ */
+export async function unsuppliedComponentIds(
+  document: BlockDocument,
+  source: ComponentSource,
+  limits: DocumentLimits
+): Promise<string[]> {
+  const { found, attempted } = await discover(document, source, limits);
+  const outstanding = stillMissing(
+    sanitizeDocument(document, limits),
+    repairedOnce(found, limits),
+    limits
+  );
+  // Only what was actually ASKED FOR. Discovery stops at
+  // `MAX_DISCOVERED_COMPONENTS`, and a document past that cap leaves ids the
+  // resolver still wants that no source was ever given the chance to answer.
+  // Those are holes in the page, but nobody failed to publish them: naming them
+  // offers a remedy that cannot work, since publishing a component again does
+  // not make discovery reach it. Exhausting the cap is a different problem with
+  // a different fix.
+  return outstanding.filter(id => attempted.has(id));
 }
 
 /**

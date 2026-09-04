@@ -3,6 +3,7 @@ import {
   type DocumentLimits,
   type RemotePattern,
 } from "@nextlyhq/blocks-engine";
+import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 import {
   definePlugin,
   resolvedCollectionDraftSplit,
@@ -37,6 +38,7 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
+import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
@@ -110,6 +112,74 @@ function pagePreviewBreakpoints(
   };
 }
 
+/**
+ * Wire the publish-readiness notice, unless the host turned it off.
+ *
+ * Lifted out of `init` rather than left inline: initialisation is a list of
+ * registrations, and a branch resolving four settings inside it makes the list
+ * harder to read than the decision is. Off means NOT REGISTERED, rather than
+ * registered and declining per write — a hook that runs on every save to answer
+ * "not my business" is cost with no product.
+ */
+function registerReadinessNotice(
+  // Named structurally rather than by importing the plugin context type: only
+  // the capabilities used are declared, so a later edit reaching for a service
+  // this has no business with shows up as a type error here.
+  ctx: {
+    self: { collections: Record<string, string | undefined> };
+    hooks: unknown;
+    services: unknown;
+  },
+  opts: PageBuilderOptions
+): void {
+  const readiness = opts.componentReadiness;
+  if (readiness === false) return;
+  registerComponentReadinessNotice({
+    ctx: ctx as never,
+    // The RESOLVED slug, for the reason the index slug is resolved: an
+    // integrator may rename the collection, and a hook holding the literal
+    // would ask about a table that does not exist and report every embedded
+    // component as unpublished.
+    componentCollection:
+      readiness?.collection ??
+      ctx.self.collections[COMPONENTS_SLUG] ??
+      COMPONENTS_SLUG,
+    // Defaults to the field the RENDERER defaults to, so the check reads the
+    // document the page draws from rather than every blocks field the store
+    // happens to have.
+    componentField: readiness?.field ?? COMPONENT_DOCUMENT_FIELD,
+    // The SAME bounds the renderer draws under, asked per call. A notice
+    // derived under different ones names components inside a document the page
+    // never renders.
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+    ...optionalScope(readiness),
+  });
+}
+
+/**
+ * The two settings that are absent by default rather than defaulted.
+ *
+ * Spread as a unit so the registration above stays a list of resolved values.
+ * Both narrow what the notice speaks about, and both are unset for the ordinary
+ * install: a collection declares one blocks field, and every collection with
+ * one is content some route renders.
+ */
+function optionalScope(
+  readiness: Exclude<PageBuilderOptions["componentReadiness"], false>
+): {
+  pageField?: string;
+  renderedCollections?: readonly string[];
+} {
+  return {
+    ...(readiness?.pageField === undefined
+      ? {}
+      : { pageField: readiness.pageField }),
+    ...(readiness?.renderedCollections === undefined
+      ? {}
+      : { renderedCollections: readiness.renderedCollections }),
+  };
+}
+
 export interface PageBuilderOptions {
   /** Disable behavior while still applying schema. Default true. */
   enabled?: boolean;
@@ -128,6 +198,38 @@ export interface PageBuilderOptions {
    * Left unset, both use the engine defaults and agree by construction.
    */
   limits?: DocumentLimits;
+  /**
+   * Where publishing a page looks for the components it embeds, when it warns
+   * that some are not live.
+   *
+   * Defaults to the component store this plugin contributes, which is where the
+   * renderer reads them from unless a route says otherwise. A route MAY say
+   * otherwise: `createBlocksPage` accepts `componentCollection` to name a
+   * different store and `resolveComponents` to supply definitions from
+   * somewhere that is not a collection at all. Neither is visible from here —
+   * the route is configured in the host's app, and this runs on the write path
+   * — so a host that redirected the renderer must redirect this too, or the
+   * notice judges the page against a store it does not render from and reports
+   * live components as missing.
+   *
+   * `false` turns the notice off, which is the honest setting for a host whose
+   * definitions come from a custom `resolveComponents` source: no collection
+   * can answer the question, so asking one produces a warning about nothing.
+   */
+  componentReadiness?:
+    | false
+    | {
+        collection?: string;
+        field?: string;
+        pageField?: string;
+        /**
+         * The collections a route renders. Unset, every collection with a
+         * blocks field is examined; named, the notice stays quiet about
+         * content no route serves, since claiming components "will not appear
+         * for visitors" is a claim about a page that does not exist.
+         */
+        renderedCollections?: readonly string[];
+      };
   /**
    * Whether the editor shows its getting-started checklist. Default true.
    *
@@ -370,6 +472,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         // the page renders reads as unused.
         limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
+      registerReadinessNotice(ctx, opts);
     },
     contributes: {
       // The channel another plugin adds blocks through. Core carries no

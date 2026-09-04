@@ -16,7 +16,11 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { definitionsFor, type ComponentSource } from "./component-source";
+import {
+  definitionsFor,
+  unsuppliedComponentIds,
+  type ComponentSource,
+} from "./component-source";
 
 const instance = (id: string, componentId: string): BlockNode => ({
   id,
@@ -341,5 +345,54 @@ describe("the definitions a document reaches", () => {
 
     expect(batches).toEqual([]);
     expect(found.size).toBe(0);
+  });
+});
+
+describe("the components a source could not supply", () => {
+  it("names an instance nothing answered for", async () => {
+    const { source } = recording({});
+
+    const missing = await unsuppliedComponentIds(
+      page([instance("i1", "hero")]),
+      source,
+      DEFAULT_LIMITS
+    );
+
+    expect(missing).toEqual(["hero"]);
+  });
+
+  it("names nothing when every instance was supplied", async () => {
+    const { source } = recording({ hero: component([]) });
+
+    const missing = await unsuppliedComponentIds(
+      page([instance("i1", "hero")]),
+      source,
+      DEFAULT_LIMITS
+    );
+
+    expect(missing).toEqual([]);
+  });
+
+  it("does NOT name ids discovery never got to ask about", async () => {
+    // Past the discovery cap the loop stops querying, and the resolver still
+    // wants the remainder. Those are holes in the page — but nobody failed to
+    // publish them, and a caller told they are "not published" is offered a
+    // remedy that cannot work: publishing them again changes nothing, because
+    // they were never requested. Exhausting the cap is a different problem.
+    const roots = Array.from({ length: 1200 }, (_, i) => `c${String(i)}`);
+    const store = Object.fromEntries(roots.map(id => [id, component([])]));
+    const { source, batches } = recording(store);
+
+    const missing = await unsuppliedComponentIds(
+      page(roots.map((id, i) => instance(`i${String(i)}`, id))),
+      source,
+      DEFAULT_LIMITS
+    );
+
+    // Every id the source WAS asked for came back, so nothing is unsupplied —
+    // even though the resolver is still short of definitions.
+    const asked = new Set(batches.flat());
+    expect(asked.size).toBeLessThan(roots.length);
+    expect(missing).toEqual([]);
   });
 });

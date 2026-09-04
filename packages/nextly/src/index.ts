@@ -97,6 +97,15 @@ export {
   type RegisterSingleHooksResult,
 } from "./hooks/register-single-hooks";
 
+// The advisory channel a post-commit hook reports through. Exported because a
+// PLUGIN is the caller: raising is how a hook says a side effect broke, and a
+// plugin that learns something true about the state a write leaves behind has
+// no other way to tell the caller without dressing it as a failure.
+export {
+  recordAdvisoryNotice,
+  type HookWarning,
+} from "./hooks/side-effect-warnings";
+
 // ============================================================
 // INITIALIZATION API
 // ============================================================
