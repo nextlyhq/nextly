@@ -4,7 +4,7 @@
 //   -- Migration: <name>
 //   -- Collections: posts, comments      (Q6=A linkage to dynamic_collections.migration_status)
 //   -- Singles: header, footer
-//   -- Components: hero
+//   -- Field groups: hero
 //   -- UserExt: user_ext
 //   -- Generated at: <ISO timestamp>
 //   -- Dialect: PostgreSQL
@@ -26,6 +26,22 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { getDialectDisplayName } from "../../../cli/utils/adapter";
+
+/**
+ * The field-group header written into a generated migration, and the pattern that reads it
+ * back.
+ *
+ * Both live here because a writer and a reader that each spell the format themselves are two
+ * places to change and one place to forget — which is how this header came to be written as
+ * `-- Components:` long after the concept was renamed to a field group.
+ *
+ * The pattern accepts the legacy spellings deliberately. Migration files already generated
+ * carry `-- Component(s):` and stay on disk forever; a reader that knew only the current
+ * header would report those migrations as touching no field groups, silently.
+ */
+export const FIELD_GROUP_HEADER = "-- Field groups:";
+export const FIELD_GROUP_HEADER_PATTERN =
+  /^-- (?:Field groups?|Components?):\s*(.+)$/m;
 
 export interface FormatArgs {
   /** Slug-cased migration name (without timestamp prefix or extension). */
@@ -59,7 +75,7 @@ export function formatMigrationFile(args: FormatArgs): string {
     args.singles.length > 0 ? `-- Singles: ${args.singles.join(", ")}\n` : "";
   const componentLine =
     args.components.length > 0
-      ? `-- Components: ${args.components.join(", ")}\n`
+      ? `${FIELD_GROUP_HEADER} ${args.components.join(", ")}\n`
       : "";
   const userExtLine = args.hasUserExt ? "-- UserExt: user_ext\n" : "";
   // Each statement gets a trailing `;`. splitSqlStatements in migrate.ts

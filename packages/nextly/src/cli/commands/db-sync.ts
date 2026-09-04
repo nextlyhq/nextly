@@ -234,7 +234,7 @@ export async function runDbSync(
   const userFieldCount = configResult.config.users?.fields?.length ?? 0;
   logger.keyValue("Collections", collectionCount);
   logger.keyValue("Singles", singleCount);
-  logger.keyValue("Components", componentCount);
+  logger.keyValue("Field groups", componentCount);
   logger.keyValue("User Fields (code)", userFieldCount);
 
   // Step 3: Connect to database (needed for seeding even without collections)

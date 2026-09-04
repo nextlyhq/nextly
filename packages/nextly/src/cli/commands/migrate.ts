@@ -52,6 +52,7 @@ import {
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
+import { FIELD_GROUP_HEADER_PATTERN } from "../../domains/schema/migrate-create/format-file";
 import {
   EMPTY_SNAPSHOT,
   parseSnapshotFile,
@@ -800,7 +801,7 @@ function parseMigrationFile(
         .filter(s => s.length > 0)
     : [];
 
-  const componentsMatch = content.match(/^-- Components?:\s*(.+)$/m);
+  const componentsMatch = content.match(FIELD_GROUP_HEADER_PATTERN);
   const components = componentsMatch
     ? componentsMatch[1]
         .split(",")

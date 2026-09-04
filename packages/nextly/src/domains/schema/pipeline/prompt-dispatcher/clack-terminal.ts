@@ -90,12 +90,20 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       }
       // Build an actionable error message covering both renames and
       // F5/F6 events so users know what they would have been asked.
+      // Both samples name what was omitted. A list that shows three of ten with no
+      // ellipsis reads as complete, and this message exists to tell someone what they
+      // would have been asked to approve — so a silent truncation withholds exactly the
+      // inventory it was written to deliver. `browser.ts` already reports its remainder
+      // this way; this matches it.
+      const SAMPLE_SIZE = 3;
+      const remainder = (total: number) =>
+        total > SAMPLE_SIZE ? `, +${total - SAMPLE_SIZE} more` : "";
       const renameSample = candidates
-        .slice(0, 3)
+        .slice(0, SAMPLE_SIZE)
         .map(c => `${c.fromColumn} -> ${c.toColumn} on ${c.tableName}`)
         .join(", ");
       const eventSample = events
-        .slice(0, 3)
+        .slice(0, SAMPLE_SIZE)
         .map(e => {
           switch (e.kind) {
             case "type_change":
@@ -109,12 +117,24 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
           }
         })
         .join(", ");
+      // The destructive subset is called out separately: a reader who sees "54 more"
+      // still cannot tell whether drops are hiding in the tail, and a drop is the only
+      // kind of hidden item that loses data.
+      const hiddenDrops = events
+        .slice(SAMPLE_SIZE)
+        .filter(e => e.kind === "destructive_drop").length;
       const parts: string[] = [];
       if (candidates.length > 0) {
-        parts.push(`${candidates.length} rename candidate(s): ${renameSample}`);
+        parts.push(
+          `${candidates.length} rename candidate(s): ${renameSample}${remainder(candidates.length)}`
+        );
       }
       if (events.length > 0) {
-        parts.push(`${events.length} resolution event(s): ${eventSample}`);
+        const drops =
+          hiddenDrops > 0 ? ` (${hiddenDrops} of them column drops)` : "";
+        parts.push(
+          `${events.length} resolution event(s): ${eventSample}${remainder(events.length)}${drops}`
+        );
       }
       throw new TTYRequiredError(
         // Multi-line so log readers can scan rename vs event sections

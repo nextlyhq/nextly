@@ -176,7 +176,7 @@ export async function runGenerateTypes(
   const userFieldCount = configResult.config.users?.fields?.length ?? 0;
   logger.keyValue("Collections", collectionCount);
   logger.keyValue("Singles", singleCount);
-  logger.keyValue("Components", componentCount);
+  logger.keyValue("Field groups", componentCount);
   if (userFieldCount > 0) {
     logger.keyValue("User Fields", userFieldCount);
   }

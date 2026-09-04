@@ -76,6 +76,26 @@ writing two files:
 Commit both. From then on the normal loop applies: edit `nextly.config.ts`, run
 `nextly migrate:create`, and get a file containing only what changed.
 
+<Callout type="warn">
+**Do not keep using `db:sync` against a database that holds content.** It compares your
+config to the database, and when a column disappears and another appears on the same table
+it has to guess whether that is a rename. It guesses rename.
+
+On one real database, `db:sync` proposed **10 rename candidates**, including:
+
+```
+seo -> created_by          on dc_comparisons
+seo -> first_published_at  on dc_comparisons
+```
+
+Every pair was an embedded field-group column being read as an unrelated system column.
+Accepting them would have written content into `created_by` and `first_published_at`.
+`migrate:create` proposed **zero** renames on the same database, because it diffs against
+the recorded snapshot rather than guessing from shape.
+
+`db:sync` is for a development database you are willing to throw away.
+</Callout>
+
 ```bash
 # One time, on the existing database
 nextly migrate:baseline
@@ -289,6 +309,38 @@ Run it in your PR CI to catch mistakes before they reach production.
 | `DATABASE_URL`               | All commands | Target database. Required (except SQLite, which falls back to `file:./data/nextly.db`). |
 | `NEXTLY_APPLIED_BY`          | `migrate`  | Recorded in `nextly_migrations.applied_by`. Falls back to `GITHUB_ACTOR` -> `USER` -> hostname. |
 | `NEXTLY_ACCEPT_DATA_LOSS=1`  | `migrate`, `db:sync` | Acknowledge destructive changes (drops, type narrowings) without an interactive prompt. Required for CI runs of destructive migrations. |
+| `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1` | `migrate` | Allow a destructive change to Nextly's **own** core tables, which `migrate` otherwise refuses with `NEXTLY_CORE_DESTRUCTIVE_REFUSED`. Applies to every operation in the run — see below before setting it. |
+
+## When `migrate` refuses a destructive core change
+
+`nextly migrate` stops rather than run an operation that could lose data from Nextly's own
+tables, reporting `NEXTLY_CORE_DESTRUCTIVE_REFUSED`. The refusal **names every operation it
+refused** — the list you see is the whole list, not a sample — so you can judge them one at
+a time.
+
+| Operation | Verdict |
+|---|---|
+| A widening, e.g. `varchar(20)` → `varchar(255)` | **Safe.** Nothing that fits today stops fitting |
+| A narrowing, e.g. `varchar(255)` → `varchar(20)` | **Safe only if you have measured the longest stored value** and it fits |
+| A dropped column, or any other type change | **Stop.** Work out what happens to the existing values first |
+
+Two independent facts make a widening safe: the direction, and knowing what the column
+holds. A narrowing gives you the first only, so go and look:
+
+```sql
+SELECT max(length(your_column)) FROM your_table;
+```
+
+Then, and only then:
+
+```bash
+NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 nextly migrate
+```
+
+<Callout type="warn">
+The flag disables the refusal for **every** operation in that run, not just the one you
+judged safe. Read the whole list before setting it.
+</Callout>
 
 ## What you should never do
 
