@@ -323,6 +323,7 @@ export function resolveComponentInstances(
     taken: survey.ids,
     takenDomIds: survey.domIds,
     minted: [],
+    mintedDomIds: [],
     abort: undefined,
     referenced: [],
     referencedSeen: new Set<string>(),
@@ -366,6 +367,18 @@ interface ResolveRun {
    * back. Host ids are not in it: they were never this run's to release.
    */
   minted: string[];
+  /**
+   * The DOM ids this run claimed, in order, so a refused expansion can give
+   * them back.
+   *
+   * Its own list for the reason `minted` is one: `takenDomIds` is SEEDED with
+   * the host document's own ids, and those were never this run's to release.
+   * Without it an abandoned expansion left its claims standing, so the retry —
+   * or simply the next instance — found them occupied and suffixed an id that
+   * nothing else holds. An anchor, a `<label for>` or an id selector then
+   * addresses a name the page does not use.
+   */
+  mintedDomIds: string[];
   /**
    * Why the clone in progress gave up, set on the path that returns `null`.
    *
@@ -937,6 +950,7 @@ interface Savepoint {
   budget: number;
   unresolved: number;
   minted: number;
+  mintedDomIds: number;
 }
 
 /** Where the run stood before an instance was attempted. */
@@ -945,6 +959,7 @@ function savepoint(run: ResolveRun): Savepoint {
     budget: run.budget,
     unresolved: run.unresolved.length,
     minted: run.minted.length,
+    mintedDomIds: run.mintedDomIds.length,
   };
 }
 
@@ -971,6 +986,10 @@ function rollback(run: ResolveRun, mark: Savepoint): void {
     run.taken.delete(run.minted[i]);
   }
   run.minted.length = mark.minted;
+  for (let i = run.mintedDomIds.length - 1; i >= mark.mintedDomIds; i -= 1) {
+    run.takenDomIds.delete(run.mintedDomIds[i]);
+  }
+  run.mintedDomIds.length = mark.mintedDomIds;
 }
 
 /**
@@ -1576,6 +1595,180 @@ function composePlannedFor(
 }
 
 /**
+ * Compose again anything a sibling slot has since made room for.
+ *
+ * Slots are composed in the order the definition declares them, and replacing
+ * an instance hands back the node it occupied — so a slot filled with content
+ * that GROWS can be refused for budget before a slot filled with content that
+ * SHRINKS has released anything. Whether a page fits then depends on the order
+ * its author happened to declare two independent slots in.
+ *
+ * The answer is to RETRY rather than to predict. An earlier attempt lent the
+ * budget the room the replacements were expected to free, counted from the
+ * stored content — and an instance that turns out to be missing, gated or
+ * over-deep never returns that credit, so repayment left debt and a child's
+ * refusal escalated into its owner's. Credit has to be earned before it is
+ * spent.
+ *
+ * Retrying costs nothing to state: a refused instance is left STANDING with
+ * its marker, so the composed content still holds it and `inlineForest` will
+ * expand it if it fits now. One extra pass, and only over slots that actually
+ * hold a starved instance.
+ */
+function retryStarvedPlans(ctx: InlineContext, mark: number): void {
+  let retried = false;
+  for (const plan of ctx.plans.values()) {
+    for (const content of plan.slots?.values() ?? []) {
+      if (!content.composed) continue;
+      const next = retriedRoots(content.nodes, ctx);
+      if (next === content.nodes) continue;
+      content.nodes = next;
+      retried = true;
+    }
+  }
+  if (retried) reconcileRefusals(ctx, mark);
+}
+
+/**
+ * Make the refusal list agree with what the retry actually produced.
+ *
+ * A retry rewrites the tree and cannot rewrite what was already recorded, so
+ * two things need fixing afterwards. An instance that fits on the second
+ * attempt left a `budget` entry behind claiming it failed — a publish check
+ * reading that reports a problem the page does not have. And one that fails
+ * again recorded a second entry saying what the first already said.
+ *
+ * Only this node's own segment is touched. Entries before `mark` belong to
+ * earlier work and are none of this pass's business, which is why the mark is
+ * taken rather than the whole list rebuilt.
+ */
+function reconcileRefusals(ctx: InlineContext, mark: number): void {
+  const run = ctx.run;
+  const standing = new Set<string>();
+  for (const plan of ctx.plans.values()) {
+    for (const content of plan.slots?.values() ?? []) {
+      if (!content.composed) continue;
+      collectRefusedIds(content.nodes, standing);
+    }
+  }
+  // First-seen ORDER with the last-written VALUE. A retry appends, so keeping
+  // the appended position would move a retried instance to the end of a list
+  // whose usefulness is that it reads in document order — while keeping the
+  // first VALUE would report the attempt the retry superseded.
+  const { order, latest } = lastPerInstance(run.unresolved, mark);
+
+  run.unresolved.length = mark;
+  for (const id of order) {
+    const entry = latest.get(id);
+    if (entry === undefined) continue;
+    // A refusal for want of budget is the only kind a retry can settle: every
+    // other reason is a decision the second attempt reaches identically, so an
+    // instance refused for one is still standing afterwards and still in
+    // `standing`.
+    //
+    // Which means no test separates this from dropping every reason whose node
+    // has gone — removing the check leaves the suite green. It is kept because
+    // the two failures are not symmetric. A spurious entry reports a problem
+    // the page does not have, and someone reading the list can see the page is
+    // fine; a dropped one takes a real diagnostic away, and nothing is left to
+    // notice. If a retry ever does make a non-budget refusal disappear, this is
+    // the direction to fail in.
+    if (entry.reason === "budget" && !standing.has(id)) continue;
+    run.unresolved.push(entry);
+  }
+}
+
+/**
+ * One entry per instance from `mark` on: first-seen ORDER, last-written VALUE.
+ *
+ * A retry appends, so the appended position would move a retried instance to
+ * the end of a list whose usefulness is that it reads in document order —
+ * while the first value would report the attempt the retry superseded.
+ */
+function lastPerInstance(
+  entries: readonly UnresolvedInstance[],
+  mark: number
+): { order: string[]; latest: Map<string, UnresolvedInstance> } {
+  const order: string[] = [];
+  const latest = new Map<string, UnresolvedInstance>();
+  for (let i = mark; i < entries.length; i += 1) {
+    const entry = entries[i];
+    if (!latest.has(entry.instanceId)) order.push(entry.instanceId);
+    latest.set(entry.instanceId, entry);
+  }
+  return { order, latest };
+}
+
+/** The ids of every instance still standing with a marker in this forest. */
+function collectRefusedIds(
+  nodes: readonly ResolvedBlockNode[],
+  into: Set<string>
+): void {
+  walkForest(nodes, entry => {
+    const node = entry.node;
+    if (
+      isPlainRecord(node) &&
+      node.unresolvedComponent !== undefined &&
+      typeof node.id === "string"
+    ) {
+      into.add(node.id);
+    }
+    return "descend";
+  });
+}
+
+/**
+ * This slot's content with its ROOT starved instances expanded again.
+ *
+ * Roots only, and that bound is the whole care in this function. A starved
+ * instance sitting deeper was reached under some other instance's scope and
+ * owner — inside a component that has already expanded — and re-entering the
+ * composed forest from here would retry it as though the PAGE had held it: its
+ * output would record `instanceOf` for a scoped node the editor cannot select,
+ * and the reset path and depth could answer the cycle and nesting questions
+ * differently than the position it actually occupies.
+ *
+ * A root of this content is unambiguous: the page supplied it, so the host
+ * scope and depth ARE the ones it was reached under, and expanding it again is
+ * the same call with the same arguments. A deeper one is left standing, which
+ * is what it did before any retry existed.
+ *
+ * Returns the input array unchanged when nothing was retried, so a caller can
+ * tell by identity whether the refusal list needs reconciling.
+ */
+function retriedRoots(
+  nodes: readonly ResolvedBlockNode[],
+  ctx: InlineContext
+): ResolvedBlockNode[] {
+  let changed = false;
+  const out: ResolvedBlockNode[] = [];
+  for (const node of nodes) {
+    if (!isStarvedInstance(node)) {
+      out.push(node);
+      continue;
+    }
+    changed = true;
+    const produced = expandInstance(
+      node,
+      ctx.run,
+      ctx.hostScope,
+      ctx.hostDepth + 1
+    );
+    for (const entry of produced) out.push(entry);
+  }
+  return changed ? out : (nodes as ResolvedBlockNode[]);
+}
+
+/** Whether this node is an instance left standing for want of budget. */
+function isStarvedInstance(node: ResolvedBlockNode): boolean {
+  return (
+    isPlainRecord(node) &&
+    node.type === COMPONENT_INSTANCE_TYPE &&
+    node.unresolvedComponent === "budget"
+  );
+}
+
+/**
  * The same question, asked of every child forest a surviving node still holds.
  *
  * A slot the instance FILLS is skipped, mirroring `copyStoredSlots`: the plan
@@ -1623,7 +1816,15 @@ function composeOwnedSlots(
   owned: boolean
 ): void {
   if (!owned || supplied === undefined) return;
+  // Where this instance's refusals begin, so the retry knows which entries it
+  // may reconcile and which belong to work already finished.
+  const mark = ctx.run.unresolved.length;
   composeSurvivingSlots(definition.nodes, ctx, 1, { left: ctx.run.maxNodes });
+  // AFTER the whole prepass, never inside it. Slots exposed on DIFFERENT
+  // definition nodes release their room as the walk reaches them, so retrying
+  // one node's content the moment it is composed asks again before a later
+  // node has given anything back — and the declaration order still decides.
+  retryStarvedPlans(ctx, mark);
 }
 
 /**
@@ -1846,17 +2047,19 @@ function placedContent(
  * same suffix lands on the same node on every render.
  */
 function claimDomId(run: ResolveRun, base: string): string {
-  if (!run.takenDomIds.has(base)) {
-    run.takenDomIds.add(base);
-    return base;
-  }
+  if (!run.takenDomIds.has(base)) return heldDomId(run, base);
   // Terminates: the set is finite and the suffix strictly increases.
   for (let n = 2; ; n += 1) {
     const candidate = `${base}-${n}`;
-    if (run.takenDomIds.has(candidate)) continue;
-    run.takenDomIds.add(candidate);
-    return candidate;
+    if (!run.takenDomIds.has(candidate)) return heldDomId(run, candidate);
   }
+}
+
+/** Take a DOM id, recording it so a refused expansion can give it back. */
+function heldDomId(run: ResolveRun, id: string): string {
+  run.takenDomIds.add(id);
+  run.mintedDomIds.push(id);
+  return id;
 }
 
 /**

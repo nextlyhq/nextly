@@ -1050,6 +1050,181 @@ describe("resolveComponentInstances what an instance carries", () => {
     expect(result.referenced).toEqual(["hero", "empty"]);
   });
 
+  const twoSlotDefinition = () =>
+    component([box("t", [])], {
+      slots: {
+        grow: { label: "Grow", nodeId: "t", slot: "a" },
+        shrink: { label: "Shrink", nodeId: "t", slot: "b" },
+      },
+    });
+
+  const twoSlotPage = () =>
+    page([
+      instance(
+        "i1",
+        "hero",
+        {},
+        {
+          slots: {
+            grow: [instance("g", "big")],
+            shrink: [
+              instance("e1", "empty"),
+              instance("e2", "empty"),
+              instance("e3", "empty"),
+            ],
+          },
+        }
+      ),
+    ]);
+
+  it("retries a slot a sibling has since made room for", () => {
+    // The growing slot is declared first, so it is composed while the three
+    // empty components that will free its room have not been reached yet. It
+    // is refused, they compose, and the retry finds it fits after all — so the
+    // order two independent slots were declared in stops deciding whether the
+    // page renders.
+    const result = resolveComponentInstances(
+      twoSlotPage(),
+      defs({
+        hero: twoSlotDefinition(),
+        big: component([node("b1"), node("b2"), node("b3"), node("b4")]),
+        empty: component([]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 6 } }
+    );
+
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it("CONTROL: still refuses a page whose composed tree cannot fit", () => {
+    // Twice the definition, so no amount of retrying pays for it. Without this
+    // the rule above passes on an implementation that simply stops refusing.
+    const result = resolveComponentInstances(
+      twoSlotPage(),
+      defs({
+        hero: twoSlotDefinition(),
+        big: component([
+          node("b1"),
+          node("b2"),
+          node("b3"),
+          node("b4"),
+          node("b5"),
+          node("b6"),
+          node("b7"),
+          node("b8"),
+        ]),
+        empty: component([]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 6 } }
+    );
+
+    expect(result.unresolved.map(e => e.reason)).toEqual(["budget"]);
+  });
+
+  it("reports a starved instance ONCE when the retry fails too", () => {
+    // The retry re-walks the same content, so a second refusal records a
+    // second entry saying what the first already said. A publish check reading
+    // the list would count one problem twice.
+    const result = resolveComponentInstances(
+      twoSlotPage(),
+      defs({
+        hero: twoSlotDefinition(),
+        big: component([
+          node("b1"),
+          node("b2"),
+          node("b3"),
+          node("b4"),
+          node("b5"),
+          node("b6"),
+          node("b7"),
+          node("b8"),
+        ]),
+        empty: component([]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 6 } }
+    );
+
+    expect(result.unresolved).toHaveLength(1);
+  });
+
+  it("does not let one starved child take its owner down with it", () => {
+    // Slot content holding a growing instance and then a MISSING one. Each
+    // child fails for its own reason and neither reason is the owner's: a
+    // component that cannot fit and a component nobody published are both
+    // facts about the children, and promoting either into a refusal of the
+    // node that holds them costs a reader the whole component instead of the
+    // two blocks that could not be drawn.
+    const definition = component([box("t", [])], {
+      slots: { hole: { label: "Hole", nodeId: "t", slot: "a" } },
+    });
+    const doc = page([
+      instance(
+        "i1",
+        "hero",
+        {},
+        { slots: { hole: [instance("g", "big"), instance("m", "gone")] } }
+      ),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({
+        hero: definition,
+        big: component([node("b1"), node("b2"), node("b3")]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 3 } }
+    );
+
+    // The owner renders. Each child reports its own cause, and neither is
+    // promoted into a refusal of the component that holds them.
+    expect(result.unresolved).toEqual([
+      { instanceId: "g", componentId: "big", reason: "budget" },
+      { instanceId: "m", componentId: "gone", reason: "missing" },
+    ]);
+  });
+
+  it("retries across slots exposed on DIFFERENT definition nodes", () => {
+    // The two regions sit on two different nodes, so the walk reaches them one
+    // after the other. Retrying the first the moment it is composed asks again
+    // before the second has released anything, and the declaration order still
+    // decides — the retry has to wait for the whole prepass.
+    const definition = component([box("t1", []), box("t2", [])], {
+      slots: {
+        grow: { label: "Grow", nodeId: "t1", slot: "a" },
+        shrink: { label: "Shrink", nodeId: "t2", slot: "b" },
+      },
+    });
+    const doc = page([
+      instance(
+        "i1",
+        "hero",
+        {},
+        {
+          slots: {
+            grow: [instance("g", "big")],
+            shrink: [
+              instance("e1", "empty"),
+              instance("e2", "empty"),
+              instance("e3", "empty"),
+            ],
+          },
+        }
+      ),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({
+        hero: definition,
+        big: component([node("b1"), node("b2"), node("b3"), node("b4")]),
+        empty: component([]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 7 } }
+    );
+
+    expect(result.unresolved).toEqual([]);
+  });
+
   it("does not compose content bound for a default subtree the page replaced", () => {
     // Two exposed slots: one on a container, one on a node sitting inside that
     // container's DEFAULT children. Filling the outer slot replaces those
