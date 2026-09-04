@@ -235,7 +235,14 @@ async function composeNotice(
     phase,
     collection: target.slug,
     code: COMPONENTS_NOT_PUBLISHED_CODE,
-    message: describe(missing.size),
+    // Named for what was actually written. A component definition is kept in
+    // scope on purpose — the hole it leaves appears on every page embedding it
+    // — and telling its author "this page embeds…" points them at a document
+    // they were not editing.
+    message: describe(
+      missing.size,
+      target.slug === args.componentCollection ? "component" : "page"
+    ),
     entryId: target.documentId,
   };
 }
@@ -517,8 +524,11 @@ function chunked<T>(items: readonly T[], size: number): T[][] {
  * yet, and copy that promises an affordance nobody can reach is worse than copy
  * that promises nothing.
  */
-function describe(count: number): string {
-  return count === 1
-    ? "This page embeds 1 component that is not published, so it will not appear for visitors."
-    : `This page embeds ${String(count)} components that are not published, so they will not appear for visitors.`;
+function describe(count: number, subject: "page" | "component"): string {
+  const noun = count === 1 ? "1 component" : `${String(count)} components`;
+  const tail =
+    count === 1
+      ? "that is not published, so it will not appear for visitors."
+      : "that are not published, so they will not appear for visitors.";
+  return `This ${subject} embeds ${noun} ${tail}`;
 }

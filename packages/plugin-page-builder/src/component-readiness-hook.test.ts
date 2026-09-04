@@ -154,6 +154,12 @@ describe("the publish-readiness notice", () => {
     await h.handlers[0]!(ctx);
 
     expect(recorded).toHaveLength(1);
+    // The other half of the same question: a page write still says "page".
+    // Without this, hardcoding "component" everywhere would pass the assertion
+    // above while renaming every notice an author sees.
+    expect((recorded[0] as { message: string }).message).toContain(
+      "This page embeds"
+    );
     expect(recorded[0]).toMatchObject({
       code: COMPONENTS_NOT_PUBLISHED_CODE,
       collection: "pages",
@@ -843,5 +849,12 @@ describe("a write to the component store itself", () => {
     await handlers[0]!(write);
 
     expect(recorded).toHaveLength(1);
+    // Named for what was WRITTEN. A component definition is kept in scope on
+    // purpose — the hole it leaves shows on every page embedding it — and
+    // telling its author "this page embeds..." points them at a document they
+    // were not editing.
+    expect((recorded[0] as { message: string }).message).toContain(
+      "This component embeds"
+    );
   });
 });
