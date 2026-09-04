@@ -13,9 +13,9 @@
  */
 import {
   componentIdsIn,
-  MAX_COMPOSED_DEPTH,
   resolveComponentInstances,
   type BlockDocument,
+  type ComponentLookup,
   type DefinitionsById,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
@@ -78,14 +78,21 @@ export const COMPONENT_DOCUMENT_FIELD = "content";
  *
  * Composition here is the ENGINE's function over a sanitized document, not the
  * whole read pipeline — a pure walk of a document already bounded by
- * `maxNodes`. The renderer composes again for its own purposes; that is one
- * extra pass over a capped tree, and it buys exact agreement.
+ * `maxNodes`.
  *
- * Terminates because a component is asked for at most once. `attempted` is
- * separate from what was found: an id the store had no row for must stay out
- * of the returned map — its absence is what makes the pipeline report
- * `missing` rather than `unreadable` — while a component that is genuinely
- * gone must not be re-queried once per place it is referenced from.
+ * WHAT IT COSTS, stated honestly rather than optimistically. One composition
+ * per ROUND, and a round happens whenever a fetch revealed an id nobody had
+ * asked for — so a page whose components nest five deep composes about five
+ * times here before the renderer composes once more. Each definition is
+ * repaired once for the whole discovery rather than once per round, which is
+ * the part that would otherwise grow fastest: repair sanitizes a whole
+ * definition, and without the memo every round re-sanitized everything reached
+ * so far.
+ *
+ * `attempted` is separate from what was found: an id the store had no row for
+ * must stay out of the returned map — its absence is what makes the pipeline
+ * report `missing` rather than `unreadable` — while a component that is
+ * genuinely gone must not be re-queried once per place it is referenced from.
  */
 export async function definitionsFor(
   document: BlockDocument,
@@ -99,18 +106,36 @@ export async function definitionsFor(
   // repair-dropped node consume budget the resolver never spends.
   const sanitized = sanitizeDocument(document, limits);
 
+  // Repaired ONCE for the whole discovery, not once per round. The pipeline's
+  // lookup deliberately holds no memo — the resolver reads each definition
+  // once per composition, so a second cache there could never be observed —
+  // but discovery composes several times over a growing map, and without this
+  // every round re-sanitizes every definition reached so far. Sound because a
+  // definition's repaired form never changes: `found` only gains entries, and
+  // an entry's value is fixed once set.
+  const lookup = repairedOnce(found, limits);
+
   let wanted = componentIdsIn(sanitized.nodes, limits.maxNodes);
-  // One round per level of nesting at most, which is also the deepest the
-  // resolver will compose — past it every instance is refused `composed-depth`
-  // and names a definition no render can inline.
-  for (let round = 0; round <= MAX_COMPOSED_DEPTH; round += 1) {
+  // Until a FIXED POINT, not for a fixed number of rounds. Nesting depth is
+  // not the bound: fetching a definition changes the resolver's node-budget
+  // decisions, so a definition that composes to less than the instance it
+  // replaces frees room and can reveal further missing ids at the SAME depth.
+  // A page of sibling components can therefore need more rounds than anything
+  // in it is deep, and stopping at the composition cap would report published
+  // components as missing on a tree that fits.
+  //
+  // It terminates on its own: a round proceeds only when it has an id nobody
+  // has asked for yet, and every id it asks for enters `attempted`, which is
+  // never emptied. The cap below bounds WORK on a store that keeps offering
+  // new ids, not correctness.
+  while (attempted.size < limits.maxNodes) {
     const unread = [...new Set(wanted)].filter(id => !attempted.has(id));
     if (unread.length === 0) break;
     for (const id of unread) attempted.add(id);
     for (const [id, definition] of await source(unread)) {
       found.set(id, definition);
     }
-    wanted = stillMissing(sanitized, found, limits);
+    wanted = stillMissing(sanitized, lookup, limits);
   }
   return found;
 }
@@ -126,17 +151,43 @@ export async function definitionsFor(
  */
 function stillMissing(
   document: BlockDocument,
-  found: DefinitionsById,
+  lookup: ComponentLookup,
   limits: DocumentLimits
 ): string[] {
-  const composed = resolveComponentInstances(
-    document,
-    repairingLookup(found, limits),
-    { limits }
-  );
+  const composed = resolveComponentInstances(document, lookup, { limits });
   return composed.unresolved
     .filter(entry => entry.reason === "missing")
     .map(entry => entry.componentId);
+}
+
+/**
+ * The pipeline's own view of a definitions map, with each repair kept.
+ *
+ * The repair itself is not reimplemented — `repairingLookup` is asked, so
+ * discovery composes through exactly the view the renderer will. What is added
+ * is the memo, which the pipeline has no use for and discovery does: one
+ * composition reads a definition once, and discovery performs several.
+ *
+ * `has` is answered from the SUPPLIED map rather than from whether `get`
+ * produced something, for the reason the pipeline's own lookup answers it that
+ * way: presence separates a component nobody published from one published and
+ * unreadable, and the resolver reports those as different reasons.
+ */
+function repairedOnce(
+  found: DefinitionsById,
+  limits: DocumentLimits
+): ComponentLookup {
+  const base = repairingLookup(found, limits);
+  const repaired = new Map<string, BlockDocument | undefined>();
+  return {
+    has: id => found.has(id),
+    get: id => {
+      if (repaired.has(id)) return repaired.get(id);
+      const value = base.get(id);
+      repaired.set(id, value);
+      return value;
+    },
+  };
 }
 
 /** What one batched definition read needs to know about the route asking. */
