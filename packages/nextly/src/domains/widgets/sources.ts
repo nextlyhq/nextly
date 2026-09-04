@@ -98,6 +98,17 @@ export interface WidgetSource {
    * `WidgetDefinition` and `PluginAdminWidget`. One field name, one spelling.
    */
   requiredPermission?: string;
+  /**
+   * Whether this source's rows have a PUBLISH LIFECYCLE.
+   *
+   * 🔴 Declared rather than inferred from a field called "status". A collection
+   * with lifecycle disabled may declare an ordinary user field of that name and
+   * the schema permits it, so the two are indistinguishable in `fields` -- and a
+   * card built on the guess counts every row three times while its links filter
+   * something unrelated. The fact belongs to the source because only the thing
+   * building it knows which of the two it put there.
+   */
+  lifecycleStatus?: boolean;
   supports: readonly WidgetOp[];
   /** The only field names a query may reference. */
   fields: readonly WidgetSourceField[];

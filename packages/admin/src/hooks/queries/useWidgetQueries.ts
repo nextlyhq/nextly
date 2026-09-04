@@ -50,21 +50,14 @@ export interface WidgetQueryRequest {
   query: WidgetQuery;
 }
 
-/**
- * Where one request's answer is filed.
- *
- * A widget id cannot contain `#` -- the registry's id pattern is two
- * slug segments separated by `/` -- and cell keys are unique within a card, so
- * a composite key can never collide with another widget's plain one, nor with
- * a sibling cell's.
- */
-export function widgetSlotKey(widgetId: string, cellKey?: string): string {
-  return cellKey === undefined ? widgetId : `${widgetId}#${cellKey}`;
-}
+/** One card's cell answers, keyed by cell key. */
+export type CellSlots = Record<string, Record<string, WidgetSlot>>;
 
 export interface UseWidgetQueriesResult {
   /** Keyed by `widgetId`. A widget with no answer yet is simply absent. */
   slots: Record<string, WidgetSlot>;
+  /** Keyed by `widgetId`, then by cell key. Only `stats` cards appear here. */
+  cellSlots: CellSlots;
   isLoading: boolean;
   /**
    * Whether any request is in flight, INCLUDING a background refetch that is
@@ -87,6 +80,30 @@ export interface UseWidgetQueriesResult {
    * partition that answered a second ago.
    */
   updatedAt: Date | null;
+}
+
+/**
+ * Files one answer where its widget will look for it.
+ *
+ * 🔴 Two maps rather than one map with a composite key. A contributed widget id
+ * is checked only for being usable TEXT, not against the registry's slug
+ * pattern, so it may contain any character -- including whichever separator a
+ * composite key chose. `core/a` cell `b` and a contributed widget literally
+ * named `core/a#b` would then file into the same entry and one card would draw
+ * the other's number. Nesting removes the encoding, and with it the class of
+ * bug: there is no string to collide.
+ */
+function fileAnswer(
+  slots: Record<string, WidgetSlot>,
+  cellSlots: CellSlots,
+  entry: WidgetQueryRequest,
+  slot: WidgetSlot
+): void {
+  if (entry.cellKey === undefined) {
+    slots[entry.widgetId] = slot;
+    return;
+  }
+  (cellSlots[entry.widgetId] ??= {})[entry.cellKey] = slot;
 }
 
 /** What a widget is told when the batch came back shorter than it went out. */
@@ -362,6 +379,7 @@ export function useWidgetQueries(
   // every render, so a memo keyed on it would recompute every render anyway
   // while reading as though it did not. The walk is one pass over the widgets.
   const slots: Record<string, WidgetSlot> = {};
+  const cellSlots: CellSlots = {};
   partitions.forEach((partition, index) => {
     const answer = results[index];
     if (!answer) return;
@@ -373,9 +391,7 @@ export function useWidgetQueries(
         // disagreeing about the shape. Saying so per widget is what stops the
         // trailing cards spinning silently forever -- and what keeps one bad
         // entry from throwing out of the renderer and taking the page with it.
-        slots[widgetSlotKey(entry.widgetId, entry.cellKey)] = asSlot(
-          answer.data[position]
-        );
+        fileAnswer(slots, cellSlots, entry, asSlot(answer.data[position]));
       });
       return;
     }
@@ -388,10 +404,10 @@ export function useWidgetQueries(
     // reader was looking at.
     if (answer.isError) {
       partition.forEach(entry => {
-        slots[widgetSlotKey(entry.widgetId, entry.cellKey)] = {
+        fileAnswer(slots, cellSlots, entry, {
           ok: false,
           error: BATCH_FAILED_ERROR,
-        };
+        });
       });
     }
   });
@@ -400,6 +416,7 @@ export function useWidgetQueries(
 
   return {
     slots,
+    cellSlots,
     isLoading: results.some(answer => answer.isLoading),
     isFetching: results.some(answer => answer.isFetching),
     // The FIRST failure, which is enough for the grid: what a reader needs per

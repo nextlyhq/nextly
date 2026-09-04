@@ -110,6 +110,27 @@ describe("a stats card", () => {
     );
   });
 
+  it("draws a card whose id contains the separator a composite key would use", () => {
+    // 🔴 A contributed widget id is checked for being usable TEXT, not against
+    // the registry's slug pattern, so it may contain any character. Under a
+    // composite `${id}#${key}` slot key, this card's "b" cell and a widget
+    // literally named `core/a#b` file into the same entry and one draws the
+    // other's number. Nesting removes the encoding, so there is no string left
+    // to collide.
+    render(
+      <WidgetRenderer
+        definition={{
+          ...card,
+          id: "core/a#b",
+          cells: [{ key: "b", label: "B", query: card.cells![0].query }],
+        }}
+        slot={undefined}
+        slotFor={key => (key === "b" ? count(7) : undefined)}
+      />
+    );
+    expect(screen.getByText("7")).toBeInTheDocument();
+  });
+
   it("says so when a stats widget declares no cells", () => {
     render(
       <WidgetRenderer

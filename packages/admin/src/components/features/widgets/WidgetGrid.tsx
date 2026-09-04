@@ -176,8 +176,16 @@ export function WidgetGrid() {
 
   const widgets = useMemo(() => visible.map(row => row.widget), [visible]);
 
-  const { slots, isFetching, updatedAt, requested, counted, failed, settling } =
-    useWidgetBatch(widgets);
+  const {
+    slots,
+    cellSlots,
+    isFetching,
+    updatedAt,
+    requested,
+    counted,
+    failed,
+    settling,
+  } = useWidgetBatch(widgets);
 
   const { announcement, announceColumn: announceSettledColumn } =
     useGridAnnouncer(settling, counted, failed);
@@ -242,6 +250,7 @@ export function WidgetGrid() {
           visible={visible}
           isEditing={editor.isEditing}
           slots={slots}
+          cellSlots={cellSlots}
           requested={requested}
           updatedAt={updatedAt}
           isFetching={isFetching}

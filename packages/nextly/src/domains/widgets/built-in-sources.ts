@@ -274,6 +274,9 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
 
   return {
     id,
+    // The CAPABILITY, carried so a consumer never has to guess it from a
+    // field name it cannot tell apart from a user's own.
+    lifecycleStatus: collection.status === true,
     ...(titleField === undefined ? {} : { titleField }),
     // What a HUMAN calls this collection, which is what `label` means. The slug
     // is a storage identifier: a collection whose plural label is "Articles"

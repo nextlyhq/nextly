@@ -138,7 +138,14 @@ export interface WidgetStatCell {
   key: string;
   /** What the number is called, beneath it. */
   label: string;
-  query: WidgetQuery;
+  /**
+   * 🔴 A COUNT, narrowed in the type and checked at registration. The card
+   * draws one number per cell and refuses any other result shape, so a `list`
+   * here would pass validation, reach the source, succeed, and then render a
+   * muted dash forever -- a declaration mistake wearing the appearance of
+   * unavailable data, which is the one reading nobody investigates.
+   */
+  query: WidgetQuery & { op: "count" };
   /** Where this number navigates. A cell without one draws as plain text. */
   link?: { label: string; href: string };
 }
@@ -898,22 +905,45 @@ function validateDefaultOrder(d: Partial<WidgetDefinition>): void {
  * number that is blank, mislabelled or unclickable on every dashboard, arriving
  * per reader rather than at the point the mistake was made.
  */
-function statCellProblem(cell: unknown, at: string): string | undefined {
-  if (typeof cell !== "object" || cell === null)
-    return `${at} must be an object`;
-  const c = cell as Partial<WidgetStatCell>;
-  if (typeof c.key !== "string" || c.key.trim() === "") {
-    return `${at} requires a non-empty key`;
-  }
-  if (typeof c.label !== "string" || c.label.trim() === "") {
-    return `${at} requires a non-empty label`;
-  }
-  // A cell IS a query; without one there is no number to draw and the card
-  // would render a label over an empty space.
-  if (typeof c.query !== "object" || c.query === null) {
+/** Confirms one named part of a cell carries real, non-whitespace text. */
+function blankCellText(
+  value: unknown,
+  at: string,
+  field: string
+): string | undefined {
+  if (typeof value === "string" && value.trim() !== "") return undefined;
+  return `${at} requires a non-empty ${field}`;
+}
+
+/**
+ * Confirms a cell's query is a count.
+ *
+ * Its own check, and its own reason: a missing query means there is no number
+ * to draw at all, while a `list` one means the card asks for something it
+ * refuses on arrival -- a declaration mistake that renders as unavailable data.
+ */
+function cellQueryProblem(query: unknown, at: string): string | undefined {
+  if (typeof query !== "object" || query === null) {
     return `${at} requires a query object`;
   }
+  // Checked at RUNTIME as well as in the type, for the callers a type does not
+  // bind: a plugin compiled separately, JavaScript, and a cast.
+  if ((query as WidgetQuery).op !== "count") {
+    return `${at} must be a "count" query, because a stats cell draws one number`;
+  }
   return undefined;
+}
+
+function statCellProblem(cell: unknown, at: string): string | undefined {
+  if (typeof cell !== "object" || cell === null) {
+    return `${at} must be an object`;
+  }
+  const c = cell as Partial<WidgetStatCell>;
+  return (
+    blankCellText(c.key, at, "key") ??
+    blankCellText(c.label, at, "label") ??
+    cellQueryProblem(c.query, at)
+  );
 }
 
 /**

@@ -485,6 +485,26 @@ describe("a stats widget draws from cells, not from one query", () => {
     ).toThrow(/draws from cells, so it takes no top-level query/);
   });
 
+  it("refuses a cell whose query is not a count", () => {
+    // 🔴 The card draws ONE number per cell and refuses any other result shape.
+    // A `list` here passes the container check, reaches a source that supports
+    // it, succeeds, and then renders a muted dash forever -- a declaration
+    // mistake wearing the appearance of unavailable data, which is the one
+    // reading nobody investigates.
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [
+          {
+            key: "a",
+            label: "A",
+            query: { source: "collection:posts", op: "list" },
+          },
+        ],
+      })
+    ).toThrow(/must be a "count" query/);
+  });
+
   it("refuses two cells sharing a key", () => {
     // 🔴 The card keys each answer back by `key`, so a duplicate collapses two
     // cells into one answer: the same number drawn twice under two different

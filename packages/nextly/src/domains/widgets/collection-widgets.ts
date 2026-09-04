@@ -129,10 +129,14 @@ const HEALTH_STATES = [
  * the failure would be a link that lands on an unfiltered list showing a
  * different number than the card promised.
  */
+function healthWhere(status: string): Record<string, unknown> {
+  return { status: { equals: status } };
+}
+
 function healthHref(slug: string, status?: string): string {
   const path = `/admin/collections/${slug}`;
   if (status === undefined) return path;
-  const where = JSON.stringify({ status: { equals: status } });
+  const where = JSON.stringify(healthWhere(status));
   return `${path}?${new URLSearchParams({ where }).toString()}`;
 }
 
@@ -152,11 +156,13 @@ function healthHref(slug: string, status?: string): string {
  */
 function statsWidget(source: WidgetSource): WidgetDefinition | undefined {
   if (!source.supports.includes("count")) return undefined;
-  // ASKED of the source's declared fields rather than re-derived from the
-  // collection, the same way `recentEntries` asks about `updatedAt`. The source
-  // is what a query is validated against, so a card built on a field it does
-  // not declare would be refused per reader rather than skipped here.
-  if (!source.fields.some(field => field.name === "status")) return undefined;
+  // 🔴 The CAPABILITY, not a field called "status". A collection with lifecycle
+  // disabled may declare an ordinary user field of that name -- the schema
+  // permits it -- and the two are indistinguishable in `fields`. Reading the
+  // name would generate a lifecycle card for it whose `status` selector the
+  // query then ignores, so Total, Published and Draft would all report the
+  // same row count while the links filtered an unrelated user field.
+  if (source.lifecycleStatus !== true) return undefined;
   const id = widgetId(source, "stats");
   if (id === undefined) return undefined;
   const slug = source.id.slice("collection:".length);
@@ -177,10 +183,19 @@ function statsWidget(source: WidgetSource): WidgetDefinition | undefined {
       ...HEALTH_STATES.map(state => ({
         key: state.key,
         label: state.label,
+        // 🔴 The same PREDICATE the link carries, not the lifecycle selector.
+        // `status: "published"` is release-aware -- it reveals a document a due
+        // release will publish and hides one it will take down -- while the
+        // entry list the link opens filters the stored column. The two answer
+        // differently exactly while a release is due and not yet materialised,
+        // so the card would show a number the destination does not contain.
+        // Asking both sides the stored-column question is what makes the number
+        // checkable against the page it opens.
         query: {
           source: source.id,
           op: "count" as const,
-          status: state.status,
+          status: "all" as const,
+          where: healthWhere(state.status),
         },
         link: {
           label: `${state.label} ${source.label}`,
@@ -464,11 +479,32 @@ export function readableGeneratedWidgets(
  * against a name rather than against the thing being read is how the two come
  * apart.
  */
-export function generatedCollectionSlug(
-  widget: WidgetDefinition
-): string | undefined {
-  const source = widget.query?.source;
+function collectionOf(source: unknown): string | undefined {
   if (typeof source !== "string") return undefined;
   const prefix = "collection:";
   return source.startsWith(prefix) ? source.slice(prefix.length) : undefined;
+}
+
+export function generatedCollectionSlug(
+  widget: WidgetDefinition
+): string | undefined {
+  // 🔴 Read from the CELLS as well as the top-level query. A `stats` card has
+  // no `query` of its own, so deriving from that field alone answered
+  // `undefined` for every health card -- and `readableGeneratedWidgets`
+  // withholds a card whose subject it cannot identify, which is the correct
+  // refusal applied to a wrong answer. The cards were generated, registered,
+  // and then silently never published.
+  const sources = widget.query
+    ? [widget.query.source]
+    : (widget.cells ?? []).map(cell => cell.query.source);
+  if (sources.length === 0) return undefined;
+
+  const slugs = sources.map(collectionOf);
+  // Every cell must name the SAME collection. A card reading two of them cannot
+  // be gated by one permission, so it is refused rather than checked against
+  // whichever slug happened to come first -- the access decision and the rows
+  // would then be about different collections.
+  const [first] = slugs;
+  if (first === undefined) return undefined;
+  return slugs.every(slug => slug === first) ? first : undefined;
 }

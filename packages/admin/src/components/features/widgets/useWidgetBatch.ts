@@ -15,7 +15,7 @@ import { useMemo } from "react";
 
 import {
   useWidgetQueries,
-  widgetSlotKey,
+  type CellSlots,
   type WidgetQueryRequest,
 } from "@admin/hooks/queries/useWidgetQueries";
 import type {
@@ -23,10 +23,12 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import { coreDraws, resolveWidgetOutcome } from "./outcome";
+import { coreDraws, resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
 
 export interface WidgetBatch {
   slots: Record<string, WidgetSlot>;
+  /** A `stats` card's answers, by widget id then cell key. */
+  cellSlots: CellSlots;
   isFetching: boolean;
   updatedAt: Date | null;
   /** Whether this widget took part in the batch at all. */
@@ -80,6 +82,29 @@ function questionsFor(widget: DashboardWidget): WidgetQueryRequest[] {
   return widget.query ? [{ widgetId: widget.id, query: widget.query }] : [];
 }
 
+/**
+ * One widget's outcome, whichever kind of answer it is waiting for.
+ *
+ * 🔴 A `stats` card is LOADING while any cell it asked for is still absent,
+ * even though the card itself draws happily with the numbers it has. The two
+ * consumers want different things, and conflating them broke the announcement:
+ * partial rendering means the body returns `ready` on the first render, so the
+ * grid announced "1 widget updated" before a single number had arrived -- and
+ * the same sentence was then deduplicated when they actually did, so real
+ * completion was never announced at all.
+ */
+export function widgetOutcome(
+  widget: DashboardWidget,
+  slot: WidgetSlot | undefined,
+  answers: Record<string, WidgetSlot> | undefined
+): WidgetOutcome {
+  const cells = widget.cells ?? [];
+  if (cells.length > 0 && cells.some(cell => !answers?.[cell.key])) {
+    return { state: "loading" };
+  }
+  return resolveWidgetOutcome(widget, slot, key => answers?.[key]);
+}
+
 export function useWidgetBatch(widgets: DashboardWidget[]): WidgetBatch {
   // 🔴 Sorted by ID, not left in display order. `useWidgetQueries` puts the
   // request partitions into its TanStack query keys, so a key built from the
@@ -98,15 +123,19 @@ export function useWidgetBatch(widgets: DashboardWidget[]): WidgetBatch {
         // cells keep a stable order between renders. Sorting on the id left
         // siblings in whatever order `flatMap` produced, which is stable today
         // and is not a property the query key should rest on.
-        .sort((a, b) =>
-          widgetSlotKey(a.widgetId, a.cellKey).localeCompare(
-            widgetSlotKey(b.widgetId, b.cellKey)
-          )
+        // By widget id, then by cell key: the pair identifies a question, and
+        // a stable order keeps the query key describing WHAT is asked rather
+        // than the order the widgets happen to sit in.
+        .sort(
+          (a, b) =>
+            a.widgetId.localeCompare(b.widgetId) ||
+            (a.cellKey ?? "").localeCompare(b.cellKey ?? "")
         ),
     [widgets]
   );
 
-  const { slots, isFetching, updatedAt } = useWidgetQueries(requests);
+  const { slots, cellSlots, isFetching, updatedAt } =
+    useWidgetQueries(requests);
 
   // Which widgets are actually IN the batch, taken from the requests that were
   // sent rather than re-derived from `widget.query`.
@@ -138,18 +167,15 @@ export function useWidgetBatch(widgets: DashboardWidget[]): WidgetBatch {
         // queries ran.
         .filter(widget => widget.query ?? widget.cells?.length)
         .map(widget =>
-          resolveWidgetOutcome(
-            widget,
-            slots[widget.id],
-            key => slots[widgetSlotKey(widget.id, key)]
-          )
+          widgetOutcome(widget, slots[widget.id], cellSlots[widget.id])
         )
         .filter(outcome => outcome.state !== "self-drawn"),
-    [widgets, slots]
+    [widgets, slots, cellSlots]
   );
 
   return {
     slots,
+    cellSlots,
     isFetching,
     updatedAt,
     requested,

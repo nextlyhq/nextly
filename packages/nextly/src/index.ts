@@ -456,6 +456,7 @@ export {
   type PluginAdminWidget,
   type PluginAdminCustomWidget,
   type PluginAdminDataWidget,
+  type PluginAdminStatsWidget,
   type PluginAdminDeclarativeWidget,
   type PluginAdminQuerylessWidget,
   type DeclarativeWidgetArchetype,

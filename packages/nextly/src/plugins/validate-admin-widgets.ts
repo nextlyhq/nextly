@@ -25,6 +25,7 @@ import {
   defaultOrderProblem,
   legacySizeToWidgetSize,
   querylessQueryProblem,
+  CELL_ARCHETYPES,
   QUERYLESS_ARCHETYPES,
   widgetValueProblem,
   WIDGET_ARCHETYPES,
@@ -66,6 +67,7 @@ const DATA_ARCHETYPE_SET: ReadonlySet<string> = new Set(DATA_ARCHETYPES);
 const QUERYLESS_ARCHETYPE_SET: ReadonlySet<string> = new Set(
   QUERYLESS_ARCHETYPES
 );
+const CELL_ARCHETYPE_SET: ReadonlySet<string> = new Set(CELL_ARCHETYPES);
 
 /**
  * Why core cannot draw a QUERYLESS widget from its declaration, or `undefined`.
@@ -139,6 +141,13 @@ function describesDrawableBody(widget: Record<string, unknown>): boolean {
 
   if (QUERYLESS_ARCHETYPE_SET.has(archetype)) {
     return querylessProblem(widget) === undefined;
+  }
+
+  if (CELL_ARCHETYPE_SET.has(archetype)) {
+    // A stats card's body is its cells, so that is what makes it drawable --
+    // asking about `query` here would report every one of them undrawable and
+    // hand the card to a component fallback it did not ask for.
+    return Array.isArray(widget.cells) && widget.cells.length > 0;
   }
 
   if (DATA_ARCHETYPE_SET.has(archetype)) {
