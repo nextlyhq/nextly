@@ -108,6 +108,18 @@ export function registerComponentReadinessNotice(args: {
   /** The RESOLVED slug component definitions are stored under. */
   componentCollection: string;
   /**
+   * The field on a written PAGE holding the document the route renders, when a
+   * host renders one specific field.
+   *
+   * `createBlocksPage` names the page field it draws, and a collection may
+   * declare more than one blocks field. Left unset every blocks field on the
+   * written document is examined, which is right for the ordinary collection
+   * that has one and wrong for a host that renders a chosen field: an
+   * unpublished reference sitting in a field the route never reads would report
+   * a page as holed while it draws correctly.
+   */
+  pageField?: string;
+  /**
    * The field on a component row holding its document.
    *
    * Named rather than discovered, because the renderer names it: a route sets
@@ -177,7 +189,7 @@ async function composeNotice(
   if (!leavesDocumentPublished(context, collection)) return null;
   const documents = writtenDocuments(
     context,
-    blocksFieldsOf(collection as never)
+    renderedFields(blocksFieldsOf(collection as never), args.pageField)
   );
   if (documents.length === 0) return null;
 
@@ -252,13 +264,34 @@ function leavesDocumentPublished(
   context: HookContext<unknown>,
   collection: unknown
 ): boolean {
-  if ((collection as { status?: unknown } | null)?.status !== true)
-    return false;
+  const record = collection as {
+    status?: unknown;
+    localized?: unknown;
+  } | null;
+  if (record?.status !== true) return false;
+  if (record.localized === true) return false;
   const data = (context as unknown as Record<string, unknown>).data;
   if (typeof data !== "object" || data === null) return false;
   const document = data as { status?: unknown; _isWorkingDraft?: unknown };
   if (document._isWorkingDraft === true) return false;
   return document.status === "published";
+}
+
+/**
+ * The blocks fields whose content the route actually draws.
+ *
+ * A named field wins and is the only one read. An unknown name reads NOTHING
+ * rather than falling back to every field: a host that named a field this
+ * collection does not declare has misconfigured one of the two, and examining
+ * everything instead would answer a question nobody asked and report holes in
+ * fields the route never touches.
+ */
+function renderedFields(
+  fields: readonly { name: string }[],
+  pageField: string | undefined
+): readonly { name: string }[] {
+  if (pageField === undefined) return fields;
+  return fields.filter(field => field.name === pageField);
 }
 
 /**
@@ -277,19 +310,42 @@ function writtenDocuments(
     | undefined;
   const documents: BlockDocument[] = [];
   for (const field of fields) {
-    const stored = data?.[field.name];
-    if (isReadableDocument(stored)) documents.push(stored as BlockDocument);
+    const document = asDocument(data?.[field.name]);
+    if (document !== null) documents.push(document);
   }
   return documents;
 }
 
-/** Whether a stored value is shaped enough to compose. */
-function isReadableDocument(value: unknown): boolean {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    Array.isArray((value as { nodes?: unknown }).nodes)
-  );
+/**
+ * A stored block value as a document, or `null` when it is not one.
+ *
+ * Decodes a STRING first, and that is not defensiveness. A post-commit hook
+ * receives the value as the adapter persisted it: JSON columns come back as
+ * text on SQLite and on any adapter that stores them that way, and the write
+ * path parses them AFTER the hooks have run. An object-only test therefore
+ * finds no documents at all on those adapters, and the check reports nothing
+ * for every page — silently, because finding nothing to look at and finding
+ * nothing wrong are the same answer here.
+ *
+ * A string that does not parse is not a document, and neither is a parsed value
+ * without a node list.
+ */
+function asDocument(value: unknown): BlockDocument | null {
+  const decoded = typeof value === "string" ? parseJson(value) : value;
+  return typeof decoded === "object" &&
+    decoded !== null &&
+    Array.isArray((decoded as { nodes?: unknown }).nodes)
+    ? (decoded as BlockDocument)
+    : null;
+}
+
+/** `JSON.parse`, answering `null` rather than throwing on stored text. */
+function parseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -334,8 +390,13 @@ function storeSource(
         // pipeline's question, and it answers it with reasons a store cannot:
         // an id present with an unreadable value is a definition somebody
         // published and cannot be read, and that is not the same as absent.
-        if (typeof id === "string" && row) {
-          found.set(id, row[field] as BlockDocument);
+        // The definition is decoded the same way, and for the same reason: a
+        // row read back through the Direct API carries whatever the adapter
+        // stores, so a text column would reach the resolver as a string and be
+        // reported as a published-but-unreadable definition.
+        const definition = asDocument(row?.[field]);
+        if (typeof id === "string" && definition !== null) {
+          found.set(id, definition);
         }
       }
     }

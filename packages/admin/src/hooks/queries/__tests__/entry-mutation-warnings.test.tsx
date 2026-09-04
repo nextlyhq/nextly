@@ -15,15 +15,23 @@ import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { createSpy, updateSpy, deleteSpy, successSpy, warningSpy } = vi.hoisted(
-  () => ({
-    createSpy: vi.fn(),
-    updateSpy: vi.fn(),
-    deleteSpy: vi.fn(),
-    successSpy: vi.fn(),
-    warningSpy: vi.fn(),
-  })
-);
+const {
+  createSpy,
+  updateSpy,
+  deleteSpy,
+  bulkUpdateSpy,
+  successSpy,
+  warningSpy,
+  infoSpy,
+} = vi.hoisted(() => ({
+  createSpy: vi.fn(),
+  updateSpy: vi.fn(),
+  deleteSpy: vi.fn(),
+  bulkUpdateSpy: vi.fn(),
+  successSpy: vi.fn(),
+  warningSpy: vi.fn(),
+  infoSpy: vi.fn(),
+}));
 
 vi.mock("@admin/services/entryApi", async importOriginal => {
   const actual =
@@ -35,6 +43,7 @@ vi.mock("@admin/services/entryApi", async importOriginal => {
       create: createSpy,
       update: updateSpy,
       delete: deleteSpy,
+      updateByIDs: bulkUpdateSpy,
     },
   };
 });
@@ -44,11 +53,17 @@ vi.mock("@admin/hooks/useLocalization", () => ({
 }));
 
 vi.mock("@admin/components/ui", () => ({
-  toast: { success: successSpy, warning: warningSpy, error: vi.fn() },
+  toast: {
+    success: successSpy,
+    warning: warningSpy,
+    info: infoSpy,
+    error: vi.fn(),
+  },
 }));
 
 import { useCreateEntry } from "../useCreateEntry";
 import { useDeleteEntry } from "../useDeleteEntry";
+import { useBulkUpdateEntries } from "../useBulkEntries";
 import { useUpdateEntry } from "../useUpdateEntry";
 
 function makeWrapper(client: QueryClient) {
@@ -166,3 +181,73 @@ describe.each(HOOKS)(
     });
   }
 );
+
+describe("a BULK write", () => {
+  it("shows the warnings the server sent", async () => {
+    // The gap this file was written about, one layer over: `respondBulk` emits
+    // the same array, and the bulk hook toasted its own message and dropped it.
+    // An author publishing ten pages at once was told nothing that an author
+    // publishing one of them would have been told.
+    bulkUpdateSpy.mockResolvedValue({
+      message: "Updated 2 entries.",
+      items: [entry, { id: "e2", title: "Second" }],
+      errors: [],
+      warnings: [
+        {
+          severity: "notice",
+          phase: "afterUpdate",
+          collection: "posts",
+          code: "COMPONENTS_NOT_PUBLISHED",
+          message: "This page embeds 1 component that is not published.",
+        },
+      ],
+    });
+
+    const client = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    const { result } = renderHook(
+      () => useBulkUpdateEntries({ collectionSlug: "posts" }) as MutationLike,
+      { wrapper: makeWrapper(client) }
+    );
+
+    await result.current.mutateAsync({
+      ids: ["e1", "e2"],
+      data: { status: "published" },
+    });
+
+    await waitFor(() => {
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+    });
+    expect(infoSpy.mock.calls[0]?.[0]).toBe("Updated 2 entries.");
+  });
+
+  it("still reports a clean bulk write as a plain success", async () => {
+    // The control. Without it, a hook that showed the advisory presenter
+    // unconditionally would pass the case above while changing every ordinary
+    // bulk toast.
+    bulkUpdateSpy.mockResolvedValue({
+      message: "Updated 2 entries.",
+      items: [entry],
+      errors: [],
+    });
+
+    const client = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    const { result } = renderHook(
+      () => useBulkUpdateEntries({ collectionSlug: "posts" }) as MutationLike,
+      { wrapper: makeWrapper(client) }
+    );
+
+    await result.current.mutateAsync({
+      ids: ["e1"],
+      data: { status: "published" },
+    });
+
+    await waitFor(() => {
+      expect(successSpy).toHaveBeenCalledWith("Updated 2 entries.");
+    });
+    expect(infoSpy).not.toHaveBeenCalled();
+  });
+});

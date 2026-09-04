@@ -87,9 +87,29 @@ subset silently, while a document may reference far more instances than that, so
 one unbounded query would report every published component past the first page
 as unpublished.
 
+It reads what the adapter actually stored. JSON columns come back as text on
+SQLite and any adapter that stores them that way, and the write path parses them
+after these hooks run — so an object-only check found no documents at all there
+and reported nothing for every page, silently.
+
+It says nothing for a localized page collection, for the reason it says nothing
+for a localized component store: publication happens per language on a companion
+row whose status the write path deliberately does not merge into the document
+its hooks receive, so the main row answers for no language in particular.
+
+Bulk writes carry their warnings too. `respondBulk` already emitted them and the
+admin dropped them at the response type, so an author publishing ten pages at
+once was told nothing an author publishing one of them would have been told.
+Both bulk hooks now report through the same presenter single-entry writes use.
+
+A component the discovery cap stopped it from asking about is no longer named as
+unpublished. The page does have a hole there, but nobody failed to publish
+anything, and publishing the named component again cannot repair it.
+
 A host that pointed the renderer at a different component store, or supplies
 definitions from a custom source, can point the notice at the same store or turn
-it off: the route is configured in the host's app and is not visible from the
+it off, and can name the single page field a route renders where a collection
+declares several: the route is configured in the host's app and is not visible from the
 write path, so a redirected renderer would otherwise be judged against a store it
 does not read from.
 

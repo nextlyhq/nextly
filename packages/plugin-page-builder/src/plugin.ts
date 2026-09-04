@@ -112,6 +112,53 @@ function pagePreviewBreakpoints(
   };
 }
 
+/**
+ * Wire the publish-readiness notice, unless the host turned it off.
+ *
+ * Lifted out of `init` rather than left inline: the plugin's initialisation is
+ * a list of registrations, and a branch with three resolved arguments inside it
+ * makes the list harder to read than the decision is. Off means NOT REGISTERED,
+ * rather than registered and declining per write — a hook that runs on every
+ * save to answer "not my business" is cost with no product.
+ */
+function registerReadinessNotice(
+  // Named structurally rather than by importing the plugin context type: only
+  // the two capabilities used are declared, so a later edit reaching for a
+  // service this has no business with shows up as a type error here.
+  ctx: {
+    self: { collections: Record<string, string | undefined> };
+    hooks: unknown;
+    services: unknown;
+  },
+  opts: PageBuilderOptions
+): void {
+  if (opts.componentReadiness === false) return;
+  registerComponentReadinessNotice({
+    ctx: ctx as never,
+    // The RESOLVED slug, for the reason the index slug is resolved: an
+    // integrator may rename the collection, and a hook holding the literal
+    // would ask about a table that does not exist and report every embedded
+    // component as unpublished.
+    componentCollection:
+      opts.componentReadiness?.collection ??
+      ctx.self.collections[COMPONENTS_SLUG] ??
+      COMPONENTS_SLUG,
+    // Defaults to the field the RENDERER defaults to, so the check reads the
+    // document the page draws from rather than every blocks field the store
+    // happens to have.
+    componentField: opts.componentReadiness?.field ?? COMPONENT_DOCUMENT_FIELD,
+    // Unset by default: the ordinary collection declares one blocks field, and
+    // examining it is examining what the route draws.
+    ...(opts.componentReadiness?.pageField === undefined
+      ? {}
+      : { pageField: opts.componentReadiness.pageField }),
+    // The SAME bounds the renderer draws under, asked per call. A notice
+    // derived under different ones names components inside a document the page
+    // never renders.
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+  });
+}
+
 export interface PageBuilderOptions {
   /** Disable behavior while still applying schema. Default true. */
   enabled?: boolean;
@@ -148,7 +195,13 @@ export interface PageBuilderOptions {
    * definitions come from a custom `resolveComponents` source: no collection
    * can answer the question, so asking one produces a warning about nothing.
    */
-  componentReadiness?: false | { collection?: string; field?: string };
+  componentReadiness?:
+    | false
+    | {
+        collection?: string;
+        field?: string;
+        pageField?: string;
+      };
   /**
    * Whether the editor shows its getting-started checklist. Default true.
    *
@@ -391,35 +444,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         // the page renders reads as unused.
         limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
-      // The publish-readiness notice. Registered beside class-usage because it
-      // is the same kind of thing — a property of the plugin being INSTALLED,
-      // not of any one collection — and it reads the component store the same
-      // plugin contributes.
-      // Skipped entirely when the host turned it off, rather than registered
-      // and made to decline per write: a hook that runs on every save to answer
-      // "not my business" is a cost with no product.
-      if (opts.componentReadiness !== false) {
-        registerComponentReadinessNotice({
-          ctx,
-          // The RESOLVED slug, for the reason the index slug is resolved: an
-          // integrator may rename the collection, and a hook holding the literal
-          // would ask about a table that does not exist and report every embedded
-          // component as unpublished.
-          componentCollection:
-            opts.componentReadiness?.collection ??
-            ctx.self.collections[COMPONENTS_SLUG] ??
-            COMPONENTS_SLUG,
-          // Defaults to the field the RENDERER defaults to, so the check reads
-          // the document the page draws from rather than every blocks field the
-          // store happens to have.
-          componentField:
-            opts.componentReadiness?.field ?? COMPONENT_DOCUMENT_FIELD,
-          // The SAME bounds the renderer draws under, asked per call. A notice
-          // derived under different ones names components inside a document the
-          // page never renders.
-          limits: () => opts.limits ?? DEFAULT_LIMITS,
-        });
-      }
+      registerReadinessNotice(ctx, opts);
     },
     contributes: {
       // The channel another plugin adds blocks through. Core carries no

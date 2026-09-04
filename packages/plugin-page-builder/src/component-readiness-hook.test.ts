@@ -58,6 +58,8 @@ function harness(
     componentStoreLocalized?: boolean;
     /** Whether the written collection owns the Draft/Published lifecycle. */
     pageHasLifecycle?: boolean;
+    /** Whether the written collection is localized. */
+    pageLocalized?: boolean;
   } = {}
 ) {
   const handlers: ((ctx: unknown) => unknown)[] = [];
@@ -85,6 +87,7 @@ function harness(
               }
             : {
                 status: options.pageHasLifecycle !== false,
+                localized: options.pageLocalized === true,
                 fields: options.pageFields ?? [
                   { name: "content", type: "blocks" },
                 ],
@@ -596,5 +599,108 @@ describe("asking the resolver rather than walking stored nodes", () => {
     await handlers[0]!(write);
 
     expect(recorded).toEqual([]);
+  });
+});
+
+describe("what a post-commit hook actually receives", () => {
+  it("decodes a blocks field the adapter stored as TEXT", async () => {
+    // JSON columns come back as strings on SQLite and any adapter that stores
+    // them that way, and the write path parses them AFTER these hooks run. An
+    // object-only test therefore finds no documents at all on those adapters
+    // and reports nothing for every page — silently, because "nothing to look
+    // at" and "nothing wrong" are the same answer here.
+    const h = harness({ published: [] });
+    const ctx = writeContext({
+      data: {
+        id: "p1",
+        status: "published",
+        content: JSON.stringify(doc(["hero"])),
+      },
+    });
+    (ctx.req as Record<string, unknown>).nextly = h.nextly;
+
+    await h.handlers[0]!(ctx);
+
+    expect(recorded).toHaveLength(1);
+  });
+
+  it("treats a string that is not a document as no document", async () => {
+    const h = harness({ published: [] });
+    const ctx = writeContext({
+      data: { id: "p1", status: "published", content: "not json at all" },
+    });
+    (ctx.req as Record<string, unknown>).nextly = h.nextly;
+
+    await h.handlers[0]!(ctx);
+
+    expect(recorded).toEqual([]);
+  });
+
+  it("says nothing for a LOCALIZED page collection", async () => {
+    // A localized document publishes per language on a companion row, and
+    // `_status` is a companion-only column the write path deliberately does not
+    // merge into the document its hooks receive. The main row's `status`
+    // therefore answers for no language in particular — a page whose Spanish
+    // translation just went live still reads `draft` here. The same rule
+    // already skips the component store when IT is localized.
+    const h = harness({ published: [], pageLocalized: true });
+    const ctx = writeContext();
+    (ctx.req as Record<string, unknown>).nextly = h.nextly;
+
+    await h.handlers[0]!(ctx);
+
+    expect(recorded).toEqual([]);
+    expect(h.finds).toEqual([]);
+  });
+
+  it("reads only the PAGE field the route renders, when one is named", async () => {
+    const handlers: ((c: unknown) => unknown)[] = [];
+    const finds: Record<string, unknown>[] = [];
+    const ctx = {
+      hooks: {
+        on: (_t: string, _c: string, handler: (c: unknown) => unknown) => {
+          handlers.push(handler);
+        },
+      },
+      services: {
+        collections: {
+          getCollection: async () => ({
+            status: true,
+            localized: false,
+            fields: [
+              { name: "content", type: "blocks" },
+              { name: "sidebar", type: "blocks" },
+            ],
+          }),
+        },
+      },
+    };
+    registerComponentReadinessNotice({
+      ctx: ctx as never,
+      componentCollection: COMPONENTS,
+      componentField: "content",
+      pageField: "content",
+      limits: () => LIMITS,
+    });
+    const write = writeContext({
+      data: {
+        id: "p1",
+        status: "published",
+        // The rendered field is clean; the one the route never draws is not.
+        content: doc([]),
+        sidebar: doc(["never-published"]),
+      },
+    });
+    (write.req as Record<string, unknown>).nextly = {
+      find: async (args: Record<string, unknown>) => {
+        finds.push(args);
+        return { items: [] };
+      },
+    };
+
+    await handlers[0]!(write);
+
+    expect(recorded).toEqual([]);
+    expect(finds).toEqual([]);
   });
 });
