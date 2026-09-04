@@ -323,6 +323,7 @@ export function resolveComponentInstances(
     taken: survey.ids,
     takenDomIds: survey.domIds,
     minted: [],
+    mintedDomIds: [],
     abort: undefined,
     referenced: [],
     referencedSeen: new Set<string>(),
@@ -366,6 +367,18 @@ interface ResolveRun {
    * back. Host ids are not in it: they were never this run's to release.
    */
   minted: string[];
+  /**
+   * The DOM ids this run claimed, in order, so a refused expansion can give
+   * them back.
+   *
+   * Its own list for the reason `minted` is one: `takenDomIds` is SEEDED with
+   * the host document's own ids, and those were never this run's to release.
+   * Without it an abandoned expansion left its claims standing, so the retry —
+   * or simply the next instance — found them occupied and suffixed an id that
+   * nothing else holds. An anchor, a `<label for>` or an id selector then
+   * addresses a name the page does not use.
+   */
+  mintedDomIds: string[];
   /**
    * Why the clone in progress gave up, set on the path that returns `null`.
    *
@@ -937,6 +950,7 @@ interface Savepoint {
   budget: number;
   unresolved: number;
   minted: number;
+  mintedDomIds: number;
 }
 
 /** Where the run stood before an instance was attempted. */
@@ -945,6 +959,7 @@ function savepoint(run: ResolveRun): Savepoint {
     budget: run.budget,
     unresolved: run.unresolved.length,
     minted: run.minted.length,
+    mintedDomIds: run.mintedDomIds.length,
   };
 }
 
@@ -971,6 +986,10 @@ function rollback(run: ResolveRun, mark: Savepoint): void {
     run.taken.delete(run.minted[i]);
   }
   run.minted.length = mark.minted;
+  for (let i = run.mintedDomIds.length - 1; i >= mark.mintedDomIds; i -= 1) {
+    run.takenDomIds.delete(run.mintedDomIds[i]);
+  }
+  run.mintedDomIds.length = mark.mintedDomIds;
 }
 
 /**
@@ -1572,11 +1591,7 @@ function composePlannedFor(
   ctx: InlineContext
 ): void {
   if (plan?.slots === undefined) return;
-  // Where this node's own refusals begin, so the retry below can tell which
-  // entries it is allowed to reconcile from ones an earlier node recorded.
-  const mark = ctx.run.unresolved.length;
   for (const content of plan.slots.values()) placedContent(content, ctx);
-  retryStarvedSlots(plan, ctx, mark);
 }
 
 /**
@@ -1600,21 +1615,18 @@ function composePlannedFor(
  * expand it if it fits now. One extra pass, and only over slots that actually
  * hold a starved instance.
  */
-function retryStarvedSlots(
-  plan: NodePlan,
-  ctx: InlineContext,
-  mark: number
-): void {
-  if (plan.slots === undefined) return;
+function retryStarvedPlans(ctx: InlineContext, mark: number): void {
   let retried = false;
-  for (const content of plan.slots.values()) {
-    if (!content.composed) continue;
-    const next = retriedRoots(content.nodes, ctx);
-    if (next === content.nodes) continue;
-    content.nodes = next;
-    retried = true;
+  for (const plan of ctx.plans.values()) {
+    for (const content of plan.slots?.values() ?? []) {
+      if (!content.composed) continue;
+      const next = retriedRoots(content.nodes, ctx);
+      if (next === content.nodes) continue;
+      content.nodes = next;
+      retried = true;
+    }
   }
-  if (retried) reconcileRefusals(plan, ctx.run, mark);
+  if (retried) reconcileRefusals(ctx, mark);
 }
 
 /**
@@ -1630,15 +1642,14 @@ function retryStarvedSlots(
  * earlier work and are none of this pass's business, which is why the mark is
  * taken rather than the whole list rebuilt.
  */
-function reconcileRefusals(
-  plan: NodePlan,
-  run: ResolveRun,
-  mark: number
-): void {
+function reconcileRefusals(ctx: InlineContext, mark: number): void {
+  const run = ctx.run;
   const standing = new Set<string>();
-  for (const content of plan.slots?.values() ?? []) {
-    if (!content.composed) continue;
-    collectRefusedIds(content.nodes, standing);
+  for (const plan of ctx.plans.values()) {
+    for (const content of plan.slots?.values() ?? []) {
+      if (!content.composed) continue;
+      collectRefusedIds(content.nodes, standing);
+    }
   }
   // First-seen ORDER with the last-written VALUE. A retry appends, so keeping
   // the appended position would move a retried instance to the end of a list
@@ -1805,7 +1816,15 @@ function composeOwnedSlots(
   owned: boolean
 ): void {
   if (!owned || supplied === undefined) return;
+  // Where this instance's refusals begin, so the retry knows which entries it
+  // may reconcile and which belong to work already finished.
+  const mark = ctx.run.unresolved.length;
   composeSurvivingSlots(definition.nodes, ctx, 1, { left: ctx.run.maxNodes });
+  // AFTER the whole prepass, never inside it. Slots exposed on DIFFERENT
+  // definition nodes release their room as the walk reaches them, so retrying
+  // one node's content the moment it is composed asks again before a later
+  // node has given anything back — and the declaration order still decides.
+  retryStarvedPlans(ctx, mark);
 }
 
 /**
@@ -2028,17 +2047,19 @@ function placedContent(
  * same suffix lands on the same node on every render.
  */
 function claimDomId(run: ResolveRun, base: string): string {
-  if (!run.takenDomIds.has(base)) {
-    run.takenDomIds.add(base);
-    return base;
-  }
+  if (!run.takenDomIds.has(base)) return heldDomId(run, base);
   // Terminates: the set is finite and the suffix strictly increases.
   for (let n = 2; ; n += 1) {
     const candidate = `${base}-${n}`;
-    if (run.takenDomIds.has(candidate)) continue;
-    run.takenDomIds.add(candidate);
-    return candidate;
+    if (!run.takenDomIds.has(candidate)) return heldDomId(run, candidate);
   }
+}
+
+/** Take a DOM id, recording it so a refused expansion can give it back. */
+function heldDomId(run: ResolveRun, id: string): string {
+  run.takenDomIds.add(id);
+  run.mintedDomIds.push(id);
+  return id;
 }
 
 /**

@@ -1183,6 +1183,48 @@ describe("resolveComponentInstances what an instance carries", () => {
     ]);
   });
 
+  it("retries across slots exposed on DIFFERENT definition nodes", () => {
+    // The two regions sit on two different nodes, so the walk reaches them one
+    // after the other. Retrying the first the moment it is composed asks again
+    // before the second has released anything, and the declaration order still
+    // decides — the retry has to wait for the whole prepass.
+    const definition = component([box("t1", []), box("t2", [])], {
+      slots: {
+        grow: { label: "Grow", nodeId: "t1", slot: "a" },
+        shrink: { label: "Shrink", nodeId: "t2", slot: "b" },
+      },
+    });
+    const doc = page([
+      instance(
+        "i1",
+        "hero",
+        {},
+        {
+          slots: {
+            grow: [instance("g", "big")],
+            shrink: [
+              instance("e1", "empty"),
+              instance("e2", "empty"),
+              instance("e3", "empty"),
+            ],
+          },
+        }
+      ),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({
+        hero: definition,
+        big: component([node("b1"), node("b2"), node("b3"), node("b4")]),
+        empty: component([]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 7 } }
+    );
+
+    expect(result.unresolved).toEqual([]);
+  });
+
   it("does not compose content bound for a default subtree the page replaced", () => {
     // Two exposed slots: one on a container, one on a node sitting inside that
     // container's DEFAULT children. Filling the outer slot replaces those
