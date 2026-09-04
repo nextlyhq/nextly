@@ -120,7 +120,6 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
     const listed = await repo.findPendingEditRows({
       slugs: ["posts"],
       limit: 10,
-      offset: 0,
     });
     expect(listed.map(row => row.scopeSlug)).toEqual(["posts"]);
   });
@@ -138,9 +137,9 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
     );
 
     expect(await repo.countDocumentsWithPendingEdits([])).toBe(0);
-    expect(
-      await repo.findPendingEditRows({ slugs: [], limit: 10, offset: 0 })
-    ).toEqual([]);
+    expect(await repo.findPendingEditRows({ slugs: [], limit: 10 })).toEqual(
+      []
+    );
   });
 
   it("lists one row per DOCUMENT, so locales cannot crowd out other work", async () => {
@@ -181,7 +180,6 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
       await repo.findPendingEditRows({
         slugs: ["posts"],
         limit: 10,
-        offset: 0,
       }),
       2
     );
@@ -218,7 +216,6 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
     const rows = await repo.findPendingEditRows({
       slugs: ["posts"],
       limit: 1000,
-      offset: 0,
     });
     expect(rows).toHaveLength(501);
     // Asserted on IDENTITY too: a scan that returned 501 of the wrong rows, or
@@ -250,7 +247,6 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
     const rows = await repo.findPendingEditRows({
       slugs: ["posts"],
       limit: 10,
-      offset: 0,
     });
     expect(rows.map(row => row.entryId)).toEqual(["new", "old"]);
     // The snapshot is the document's unpublished content and the largest column

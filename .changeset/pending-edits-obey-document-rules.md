@@ -63,7 +63,14 @@ Single deleted and recreated leaves rows naming its predecessor — and the read
 probe goes through a path that auto-creates a missing Single, which would have
 made loading a dashboard perform a write.
 
-Paged reads order by a unique key as well as the instant. `updatedAt` alone is
+A row whose language is no longer configured, or whose scope kind no longer
+matches the registry, is dropped rather than guessed at: forwarding an
+unconfigured locale silently authorizes the default one, and a slug freed by a
+deleted collection and taken over by a Single would send an orphaned row to a
+read path that cannot answer about it.
+
+Paged reads use a cursor anchored to the last row read, and order by a unique key
+as well as the instant. `updatedAt` alone is
 not a total order, and paging one with OFFSET can return a row twice and skip
 another, losing a document that nothing downstream can notice is missing.
 

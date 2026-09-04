@@ -22,6 +22,7 @@ import type { VersionsDbApi } from "./db-api";
 import {
   VersionsRepository,
   type AutosaveWriteResult,
+  type PendingEditCursor,
   type VersionMeta,
   type VersionRef,
   type VersionRow,
@@ -76,12 +77,12 @@ export class VersionsService {
   async pendingEditRows(input: {
     readableSlugs: readonly string[];
     limit: number;
-    offset: number;
+    after?: PendingEditCursor;
   }): Promise<VersionMeta[]> {
     return this.repo.findPendingEditRows({
       slugs: input.readableSlugs,
       limit: input.limit,
-      offset: input.offset,
+      ...(input.after ? { after: input.after } : {}),
     });
   }
 

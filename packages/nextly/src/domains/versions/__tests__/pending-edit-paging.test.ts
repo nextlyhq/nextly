@@ -32,16 +32,13 @@ function stubDb() {
 describe("paged pending-edit reads", () => {
   it("orders by a UNIQUE key as well as the instant", async () => {
     // `updatedAt` alone is not total — SQLite stores whole seconds, so drafts
-    // saved together tie — and a database may order tied rows differently
-    // between two queries. Paging an unstable order loses a document silently:
-    // the caller de-duplicates the row it saw twice and never learns of the one
-    // it did not see.
+    // saved together tie — and a cursor over a non-unique key cannot say WHICH
+    // of the tied rows a page ended on.
     const { db, selects } = stubDb();
 
     await new VersionsRepository(db).findPendingEditRows({
       slugs: ["posts"],
       limit: 10,
-      offset: 20,
     });
 
     expect(selects).toHaveLength(1);
@@ -51,18 +48,51 @@ describe("paged pending-edit reads", () => {
     ]);
   });
 
-  it("passes the caller's window through untouched", async () => {
-    // The control: an ordering assertion says nothing if the window it orders
-    // is not the one the caller asked for.
+  it("pages by CURSOR, never by offset", async () => {
+    // 🔴 These rows are the most mutable in the system: a working draft's
+    // `updatedAt` advances every time somebody types. Under OFFSET a row
+    // updated between two pages moves ahead of the offset, so the next page
+    // repeats a row already read and SKIPS one that never was — and the skipped
+    // document is lost, because de-duplicating what arrived cannot reveal what
+    // did not. Anchoring to the last row read keeps the pages disjoint whatever
+    // moves behind them.
+    const { db, selects } = stubDb();
+    const cursor = { updatedAt: new Date("2026-01-01T00:00:00Z"), id: "v-9" };
+
+    await new VersionsRepository(db).findPendingEditRows({
+      slugs: ["posts"],
+      limit: 10,
+      after: cursor,
+    });
+
+    expect(selects[0]?.offset).toBeUndefined();
+    // Two branches, not a row constructor: `(a, b) < (x, y)` is not portable
+    // across the three dialects this has to run on.
+    expect(JSON.stringify(selects[0]?.where)).toContain('"or"');
+    expect(JSON.stringify(selects[0]?.where)).toContain('"v-9"');
+  });
+
+  it("asks WITHOUT a cursor clause for the first page", async () => {
+    // The control: a cursor assertion means nothing if the same clause is
+    // emitted when no cursor was given, which would drop the first page's rows.
     const { db, selects } = stubDb();
 
     await new VersionsRepository(db).findPendingEditRows({
       slugs: ["posts"],
       limit: 10,
-      offset: 20,
+    });
+
+    expect(JSON.stringify(selects[0]?.where)).not.toContain('"or"');
+  });
+
+  it("passes the caller's page size through untouched", async () => {
+    const { db, selects } = stubDb();
+
+    await new VersionsRepository(db).findPendingEditRows({
+      slugs: ["posts"],
+      limit: 10,
     });
 
     expect(selects[0]?.limit).toBe(10);
-    expect(selects[0]?.offset).toBe(20);
   });
 });

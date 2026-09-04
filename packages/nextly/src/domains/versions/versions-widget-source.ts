@@ -70,6 +70,7 @@ import { visiblePendingEdits } from "./pending-edit-visibility";
 import {
   documentKey,
   newestPerDocument,
+  type PendingEditCursor,
   type VersionMeta,
 } from "./versions-repository";
 import type { VersionsService } from "./versions-service";
@@ -259,44 +260,90 @@ function describe(
  * only be published when it did: otherwise the answer is a floor, and a metric
  * that quietly under-reports is the failure this whole source was repaired for.
  */
+/** What a walk has accumulated so far, across its rounds. */
+interface Gathered {
+  documents: VersionMeta[];
+  /** Documents already kept, so one split across a page cannot appear twice. */
+  seen: Set<string>;
+  /**
+   * Every document the walk has MET, visible or not. The candidate aggregate
+   * counts documents too, so meeting that many means every candidate has been
+   * decided — which is exhaustion, whether or not another page exists.
+   */
+  met: Set<string>;
+}
+
+/**
+ * Fold one page and its authorized rows into `gathered`; true when it is full.
+ *
+ * The collapse runs per round against what is already kept rather than over the
+ * whole walk at the end, so a document drafted in several languages across a
+ * page boundary is still counted once.
+ */
+function absorbPage(
+  gathered: Gathered,
+  rows: readonly VersionMeta[],
+  visible: readonly VersionMeta[],
+  wanted: number
+): boolean {
+  for (const row of rows) gathered.met.add(documentKey(row));
+  for (const row of newestPerDocument(visible, Number.MAX_SAFE_INTEGER)) {
+    const key = documentKey(row);
+    if (gathered.seen.has(key)) continue;
+    gathered.seen.add(key);
+    gathered.documents.push(row);
+    if (gathered.documents.length >= wanted) return true;
+  }
+  return false;
+}
+
 async function gatherVisibleDocuments(
   wanted: number,
   readableSlugs: readonly string[],
-  caller: ReadCaller
+  caller: ReadCaller,
+  candidateTotal?: number
 ): Promise<{ documents: VersionMeta[]; exhausted: boolean }> {
-  const documents: VersionMeta[] = [];
-  const seen = new Set<string>();
-  let offset = 0;
+  const gathered: Gathered = {
+    documents: [],
+    seen: new Set(),
+    met: new Set(),
+  };
+  let after: PendingEditCursor | undefined;
+  // 🔴 Three ways out, and only two of them are exhaustion. Rows running out and
+  // every candidate having been decided both mean nothing further exists; the
+  // ROUNDS running out means the walk stopped early, and a count published from
+  // that would be a floor. Tracked explicitly because collapsing the exits into
+  // one `break` loses exactly that distinction.
+  let exhausted = false;
 
   for (let round = 0; round < MAX_GATHER_ROUNDS; round++) {
     const rows = await service().pendingEditRows({
       readableSlugs,
       limit: ROW_PAGE,
-      offset,
+      ...(after ? { after } : {}),
     });
-    if (rows.length === 0) return { documents, exhausted: true };
-    offset += rows.length;
+    if (rows.length === 0) {
+      exhausted = true;
+      break;
+    }
+    // Anchored to the LAST row of this page, in the order it was read.
+    const last = rows[rows.length - 1];
+    after = { updatedAt: last.updatedAt, id: last.id };
 
-    // Collapsed per ROUND against everything already kept, so a document split
-    // across a page boundary cannot appear twice.
-    for (const row of newestPerDocument(
-      await visiblePendingEdits(rows, caller),
-      Number.MAX_SAFE_INTEGER
-    )) {
-      const key = documentKey(row);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      documents.push(row);
-      if (documents.length >= wanted) {
-        return { documents, exhausted: false };
-      }
+    const visible = await visiblePendingEdits(rows, caller);
+    if (absorbPage(gathered, rows, visible, wanted)) {
+      return { documents: gathered.documents, exhausted: false };
     }
 
-    // A short page is the end of the table, not the end of this round.
-    if (rows.length < ROW_PAGE) return { documents, exhausted: true };
+    const everyCandidateMet =
+      candidateTotal !== undefined && gathered.met.size >= candidateTotal;
+    if (everyCandidateMet || rows.length < ROW_PAGE) {
+      exhausted = true;
+      break;
+    }
   }
 
-  return { documents, exhausted: false };
+  return { documents: gathered.documents, exhausted };
 }
 
 async function resolveVersions(
@@ -330,9 +377,8 @@ async function resolveVersions(
         },
       });
     };
-    if ((await service().countPendingEdits(readableSlugs)) > CANDIDATE_SCAN) {
-      refuse();
-    }
+    const candidateTotal = await service().countPendingEdits(readableSlugs);
+    if (candidateTotal > CANDIDATE_SCAN) refuse();
 
     // 🔴 Asked to run to EXHAUSTION rather than to a document quota. Stopping
     // at a quota cannot tell "there are exactly this many" from "there are more
@@ -343,7 +389,8 @@ async function resolveVersions(
     const { documents, exhausted } = await gatherVisibleDocuments(
       Number.MAX_SAFE_INTEGER,
       readableSlugs,
-      caller
+      caller,
+      candidateTotal
     );
     // The candidate count passing is still not enough on its own. It counts
     // documents, while the walk reads rows, and rows a stored rule hides are

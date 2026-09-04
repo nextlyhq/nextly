@@ -173,12 +173,43 @@ describe("who the numbers are for", () => {
       ...row,
       entryId: `e${index}`,
     }));
-    // One full page, then the remainder, then the end of the table.
-    pendingEditRows
-      .mockResolvedValueOnce(many.slice(0, 100))
-      .mockResolvedValueOnce(many.slice(100))
-      .mockResolvedValue([]);
+    // Pages of exactly ROW_PAGE, as production reads them -- a mocked page
+    // larger than the real one would never reach the round boundary this test
+    // exists for.
+    let served = 0;
+    pendingEditRows.mockImplementation(() => {
+      const page = many.slice(served, served + 100);
+      served += page.length;
+      return Promise.resolve(page);
+    });
     visible.mockImplementation((rows: unknown) => Promise.resolve(rows));
+
+    await expect(
+      executeWidgetQuery({ source: VERSIONS_SOURCE_ID, op: "count" }, caller)
+    ).resolves.toEqual({ op: "count", total: 1000 });
+  });
+
+  it("ANSWERS when every candidate has been met, even at the last round", async () => {
+    // 🔴 The row-round boundary, which the document-quota fix did not reach.
+    // 1,000 readable documents drafted in six languages are 6,000 ROWS, and at
+    // the production page size that is exactly the permitted rounds — so the
+    // walk met every candidate on its final round and still fell out with
+    // `exhausted: false`, refusing an answer it held exactly. Meeting the
+    // candidate total IS exhaustion: there is nothing another page could add.
+    countPendingEdits.mockResolvedValue(1000);
+    const rows = Array.from({ length: 6000 }, (_, index) => ({
+      ...row,
+      entryId: `e${index % 1000}`,
+      locale: `l${Math.floor(index / 1000)}`,
+      id: `v${index}`,
+    }));
+    let served = 0;
+    pendingEditRows.mockImplementation(() => {
+      const page = rows.slice(served, served + 100);
+      served += page.length;
+      return Promise.resolve(page);
+    });
+    visible.mockImplementation((page: unknown) => Promise.resolve(page));
 
     await expect(
       executeWidgetQuery({ source: VERSIONS_SOURCE_ID, op: "count" }, caller)
@@ -241,9 +272,12 @@ describe("who the numbers are for", () => {
     );
 
     expect(pendingEditRows).toHaveBeenCalledTimes(2);
-    // The second read continues where the first ended rather than repeating it.
+    // The second read continues from the LAST ROW of the first rather than from
+    // a count of rows already seen, so a row that moved cannot shift the window.
     expect(pendingEditRows).toHaveBeenLastCalledWith(
-      expect.objectContaining({ offset: 100 })
+      expect.objectContaining({
+        after: { updatedAt: row.updatedAt, id: row.id },
+      })
     );
   });
 

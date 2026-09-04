@@ -121,6 +121,46 @@ export function newestPerDocument(
   return newest;
 }
 
+/**
+ * Where a page of pending edits left off.
+ *
+ * The ordering key in full, which is what a cursor has to be: `updatedAt` alone
+ * is not unique, so a cursor carrying only the instant cannot say WHICH of the
+ * rows sharing it was the last one read.
+ */
+export interface PendingEditCursor {
+  updatedAt: Date;
+  id: string;
+}
+
+/**
+ * Strictly after `cursor` in `updatedAt DESC, id DESC` order.
+ *
+ * 🔴 A cursor rather than an OFFSET, because the rows being paged are the most
+ * MUTABLE in the system: a working draft's `updatedAt` advances every time
+ * somebody types. Under OFFSET, a row updated between two pages moves ahead of
+ * the offset, so the next page repeats a row already seen and SKIPS one that was
+ * never read — and the skipped document is lost silently, since de-duplicating
+ * what arrived cannot reveal what did not. Anchoring to the last row read makes
+ * the pages disjoint whatever moves behind them.
+ *
+ * Spelled as the two-branch disjunction rather than a row constructor, because
+ * `(a, b) < (x, y)` is not portable across the three dialects this must run on.
+ */
+function olderThan(cursor: PendingEditCursor): VersionsWhere {
+  return {
+    or: [
+      { and: [{ column: "updatedAt", op: "<", value: cursor.updatedAt }] },
+      {
+        and: [
+          { column: "updatedAt", op: "=", value: cursor.updatedAt },
+          { column: "id", op: "<", value: cursor.id },
+        ],
+      },
+    ],
+  };
+}
+
 /** Identifies the document a version belongs to. */
 export interface VersionRef {
   scopeKind: VersionScopeKind;
@@ -381,14 +421,15 @@ export class VersionsRepository {
    * {@link newestPerDocument} is exported for the caller to apply on the far
    * side of that decision.
    *
-   * 🔴 Paged rather than bounded by an arithmetic guess. The bound used to be
-   * `limit * maxPerDocument`, where `maxPerDocument` was the install's CURRENT
-   * locale count — which does not bound the data: working drafts written under a
-   * locale since removed from the configuration are still rows, so the read
-   * could return too few rows to yield `limit` documents while the caller's
-   * feasibility check said its answer was exact. A page and an offset make the
-   * caller's real bound — how many DOCUMENTS it wants — the only one, and it
-   * stops when it has them or when the rows run out.
+   * 🔴 Paged by CURSOR rather than bounded by an arithmetic guess. The bound
+   * used to be `limit * maxPerDocument`, where `maxPerDocument` was the
+   * install's CURRENT locale count — which does not bound the data: working
+   * drafts written under a locale since removed from the configuration are still
+   * rows, so the read could return too few rows to yield `limit` documents while
+   * the caller's feasibility check said its answer was exact. Paging makes the
+   * caller's real bound — how many DOCUMENTS it wants — the only one; the cursor
+   * is what keeps the pages disjoint while the rows underneath them move. See
+   * {@link olderThan}.
    *
    * The snapshot is projected away. It is the largest column in the table and a
    * card that lists titles has no use for it.
@@ -396,12 +437,13 @@ export class VersionsRepository {
   async findPendingEditRows(input: {
     slugs: readonly string[];
     limit: number;
-    offset: number;
+    after?: PendingEditCursor;
   }): Promise<VersionMeta[]> {
     if (input.slugs.length === 0 || input.limit <= 0) return [];
+    const scope = this.pendingEditWhere(input.slugs);
     return this.db.select<VersionMeta>(TABLE, {
       columns: [...VERSION_META_COLUMNS],
-      where: this.pendingEditWhere(input.slugs),
+      where: input.after ? { and: [scope, olderThan(input.after)] } : scope,
       // `nulls` is stated for the reason the module's other ordered read states
       // it: the default differs per dialect, and a limited list must not return
       // different rows per engine.
@@ -417,7 +459,6 @@ export class VersionsRepository {
         { column: "id", direction: "desc" },
       ],
       limit: input.limit,
-      offset: input.offset,
     });
   }
 
