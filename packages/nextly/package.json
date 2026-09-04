@@ -1,7 +1,7 @@
 {
   "name": "nextly",
   "version": "0.0.2-alpha.62",
-  "description": "Nextly - Core functionality, database, services, and APIs",
+  "description": "Nextly is an open-source CMS and visual page builder for Next.js. Model content, build pages, localize, version and release from your own stack.",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.mjs",

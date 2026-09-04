@@ -38,7 +38,7 @@
 
 Nextly is an open-source content platform for Next.js.
 
-Developers define the content model in TypeScript, or build it in the admin with the Visual Schema Builder — either way it is the same data model. Your team then composes pages in the Visual Page Builder, translates them, keeps a version history, and schedules what goes live. It all runs inside your own Next.js app, on your own database. No SaaS, no proprietary cloud.
+Developers define the content model in TypeScript, or build it in the admin with the Visual Schema Builder; either way it is the same data model. Your team then composes pages in the Visual Page Builder, translates them, keeps a version history, and schedules what goes live. It all runs inside your own Next.js app, on your own database. No SaaS, no proprietary cloud.
 
 ## Why Nextly?
 
