@@ -24,26 +24,33 @@ import type { BlockResolver } from "./resolver";
 import { isUnconditional } from "./visibility";
 
 /**
- * What an author is told when a component did not load.
- *
- * Wording per cause, because the remedies are five different things and a
- * single message would send an author looking in the wrong place for four of
- * them. Development only: the production placeholder renders nothing.
- */
-/**
  * The wording for one reason, or nothing when the marker names none.
  *
- * Total over the reason type rather than an index expression, because the
- * predicate that admits a node here asks only for the reserved instance TYPE:
- * a marker carrying an unrecognised reason still reaches this, and indexing
- * would hand React whatever a record answers for a key it does not have.
+ * Asked of a `Map`, and that is the whole point of the indirection. The
+ * predicate that admits a node here reads the reserved instance TYPE, and the
+ * reason beside it is stored content nothing strips — so an unrecognised
+ * string arrives, and `constructor` or `__proto__` indexed on a record answer
+ * with an inherited member rather than with nothing. React refuses an object
+ * for a child, so the page dies inside the one component that exists to
+ * contain a failure. A `Map` holds only what was put in it.
  */
 function unresolvedDetail(
   reason: ComponentUnresolvedReason | undefined
 ): string | undefined {
-  return reason === undefined ? undefined : UNRESOLVED_DETAIL[reason];
+  return reason === undefined ? undefined : DETAIL_BY_REASON.get(reason);
 }
 
+/**
+ * What an author is told when a component did not load.
+ *
+ * Wording per cause, because the remedies are different things and a single
+ * message would send an author looking in the wrong place for most of them.
+ * Development only: the production placeholder renders nothing.
+ *
+ * A record rather than the `Map` it becomes, so the compiler still requires a
+ * wording for every reason the engine publishes — a `Map` literal would accept
+ * one that named five of them and go quiet about the sixth.
+ */
 const UNRESOLVED_DETAIL: Readonly<Record<ComponentUnresolvedReason, string>> = {
   missing: "No published component was found for this reference",
   cycle: "This component contains itself",
@@ -53,6 +60,11 @@ const UNRESOLVED_DETAIL: Readonly<Record<ComponentUnresolvedReason, string>> = {
   malformed: "This instance names no component",
   unreadable: "This component's stored data cannot be read",
 };
+
+/** Derived, so the two cannot name different sets of reasons. */
+const DETAIL_BY_REASON: ReadonlyMap<string, string> = new Map(
+  Object.entries(UNRESOLVED_DETAIL)
+);
 
 /** What a render needs to turn one node into output. */
 export interface BlockBoundaryProps {

@@ -57,8 +57,9 @@ the one in front of them.
 
 A component that arrived broken — empty, or not a document at all — brought
 down the whole page, including pages that never used it. Such an entry is now
-skipped and the reference it was for is reported as missing, like any other
-component that could not be found.
+skipped and the reference it was for is reported as unreadable: the component
+is there and its stored data is corrupt, which is a different thing to fix from
+a component nobody has published.
 
 Three more repairs at the same seam. A component that arrives as something
 other than a document — an empty object, or a page saved under a component's
