@@ -1042,13 +1042,20 @@ function noteReference(run: ResolveRun, componentId: string): void {
 }
 
 /**
- * The instance's own slot content, resolved in the scope it was AUTHORED in.
+ * The instance's own slot content, PICKED and not composed.
  *
- * Resolved before the definition is inlined and in the OUTER scope, because
- * this content belongs to the page rather than to the component: a component
- * nested in it is nested in the page, not one level further into the
- * composition, and re-identifying it would move page nodes to ids the editor
- * cannot address.
+ * The name says whose content this is, not what state it is in, so the state
+ * has to be said here: what comes back is stored nodes. `placedContent`
+ * composes them, and only once the node they are bound for has survived —
+ * content aimed at a gated or overridden-away target is discarded, and
+ * composing it first spends the page's budget on a tree nobody receives, mints
+ * ids for it, and records the components inside it as read and as
+ * unresolvable.
+ *
+ * Composed in the OUTER scope when it is composed, because this content
+ * belongs to the page rather than to the component: a component nested in it
+ * is nested in the page, not one level further into the composition, and
+ * re-identifying it would move page nodes to ids the editor cannot address.
  */
 function suppliedSlots(
   instance: ResolvedBlockNode,
@@ -1479,6 +1486,10 @@ function cloneDefinitionNode(
  * Only the PLANNED content, never the definition's own children: those were
  * charged as they were cloned, and a hidden node is abandoned before its slots
  * are visited, so nothing was spent on them to return.
+ *
+ * What is given back is what the HOST SURVEY charged — the stored size of the
+ * content, which is what `nodes` holds until something places it. Refunding a
+ * composed size credited a number the survey never took, in either direction.
  */
 function refundPlannedSlots(plan: NodePlan, run: ResolveRun): void {
   if (plan.slots === undefined) return;
