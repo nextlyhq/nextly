@@ -114,6 +114,8 @@ export const activityLog = pgTable(
     collection: varchar("collection", { length: 255 }).notNull(),
     entryId: text("entry_id"),
     entryTitle: text("entry_title"),
+    /** The language this mutation was made in; see `documentRefOf`. */
+    locale: text("locale"),
     metadata: text("metadata"), // JSON string for additional context
     createdAt: timestamp("created_at", { withTimezone: false })
       .defaultNow()

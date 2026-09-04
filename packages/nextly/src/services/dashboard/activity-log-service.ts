@@ -13,7 +13,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { SqlParam, WhereClause } from "@nextlyhq/adapter-drizzle/types";
+import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
 import { type Column, type Table } from "drizzle-orm";
 
 import { toDbError } from "../../database/errors";
@@ -30,6 +30,7 @@ import {
   type DocumentRef,
   type DocumentVisibilityScope,
 } from "../lib/document-visibility";
+import { existingDocumentIds } from "../lib/readable-documents";
 import type { Logger } from "../shared";
 
 import {
@@ -91,6 +92,8 @@ export interface LogActivityInput {
   collection: string;
   entryId?: string;
   entryTitle?: string;
+  /** The language this write was made in; NULL means the default one. */
+  locale?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -178,7 +181,51 @@ function documentRefOf(
   if (!slug || !entryId) return null;
   const kind = kinds.get(slug);
   if (!kind) return null;
-  return { kind, slug, entryId };
+  // 🔴 The language the write was made IN, so the read rule is evaluated for
+  // that translation. A localized field answers differently per language, so a
+  // row judged without one is judged against the default — and an edit made in
+  // a language the rule denies would still show its title. NULL on unlocalized
+  // documents and on rows written before the column existed; both mean "the
+  // default language", which is exactly what those rows always meant.
+  const locale = typeof row.locale === "string" ? row.locale : null;
+  return { kind, slug, entryId, locale };
+}
+
+/** One existence probe's worth of refused rows: a collection, in a language. */
+interface ProbeUnit {
+  slug: string;
+  locale: string | null;
+  entries: { row: Record<string, unknown>; entryId: string }[];
+}
+
+/**
+ * `refused` grouped into the units one existence probe can answer for.
+ *
+ * Per collection AND language, matching how the read path is asked: a localized
+ * document is a different row per translation, so one probe per slug would ask
+ * about whichever language the read defaulted to.
+ *
+ * Singles are excluded, and their absence is deliberate rather than an omission.
+ * A Single's document is REPLACED rather than removed, so
+ * `resolveSingleDocumentId` still answers and the read path can decide — there
+ * is no "gone" case here for a probe to find.
+ */
+function probeUnits(
+  refused: readonly Record<string, unknown>[],
+  scope: DocumentVisibilityScope
+): ProbeUnit[] {
+  const units = new Map<string, ProbeUnit>();
+  for (const row of refused) {
+    const ref = documentRefOf(row, scope.kinds);
+    if (!ref || ref.kind !== "collection") continue;
+    const locale = ref.locale ?? null;
+    const key = `${ref.slug} ${locale ?? ""}`;
+    const entry = { row, entryId: ref.entryId };
+    const unit = units.get(key);
+    if (unit) unit.entries.push(entry);
+    else units.set(key, { slug: ref.slug, locale, entries: [entry] });
+  }
+  return [...units.values()];
 }
 
 /**
@@ -215,29 +262,79 @@ interface ActivityWriteTables {
 }
 
 /**
- * One query filter, in both the spellings its two consumers need.
+ * One query filter, in the single spelling its only consumer needs.
  *
- * `adapter.select` resolves a name against the Drizzle table and therefore
- * wants the schema property; the count query writes SQL and wants the physical
- * column. They are carried together so a filter cannot be added in one
- * spelling and used in the other.
+ * `adapter.select` resolves a name against the Drizzle table, so the schema
+ * property is what a filter carries. It used to carry the physical column
+ * beside it for a hand-written count query; that query is gone, and with it the
+ * only reason this type knew two names for one thing.
  *
  * A discriminated union rather than `op: "=" | "IN"` paired with
- * `value: SqlParam | SqlParam[]`: those two fields varying independently let
- * `{ op: "=", value: ["a", "b"] }` type-check, a state `filterClause` cannot
- * handle. Tying `op` to `value`'s shape makes that state unrepresentable and
- * lets `filterClause` narrow on `op` without a cast.
+ * `value: string | string[]`: those two fields varying independently let
+ * `{ op: "=", value: ["a", "b"] }` type-check, which is a filter no consumer
+ * can honour. Tying `op` to `value`'s shape makes that state unrepresentable.
  */
 interface ActivityFilterBase {
   /** The Drizzle schema property, for `adapter.select`. */
   property: string;
-  /** The physical column, for the count query's SQL. */
-  column: string;
 }
 
 type ActivityFilter =
-  | (ActivityFilterBase & { op: "="; value: SqlParam })
-  | (ActivityFilterBase & { op: "IN"; value: SqlParam[] });
+  | (ActivityFilterBase & { op: "="; value: string })
+  | (ActivityFilterBase & { op: "IN"; value: string[] });
+
+/** A position in the feed's `(createdAt desc, id desc)` order. */
+interface ActivityCursor {
+  createdAt: Date;
+  id: string;
+}
+
+/** `row` as a cursor, or undefined when it cannot name a position exactly. */
+function cursorOf(
+  row: Record<string, unknown> | undefined
+): ActivityCursor | undefined {
+  if (!row) return undefined;
+  const { createdAt, id } = row;
+  if (typeof id !== "string") return undefined;
+  // Drivers disagree about whether a timestamp arrives decoded: the adapter's
+  // Drizzle path returns a Date, and a raw string is still a valid instant.
+  const at =
+    createdAt instanceof Date
+      ? createdAt
+      : typeof createdAt === "string"
+        ? new Date(createdAt)
+        : undefined;
+  if (!at || Number.isNaN(at.getTime())) return undefined;
+  return { createdAt: at, id };
+}
+
+/**
+ * Strictly after `cursor` in `createdAt DESC, id DESC` order.
+ *
+ * Spelled as the two-branch disjunction rather than a row constructor, because
+ * `(a, b) < (x, y)` is not portable across the three dialects this runs on.
+ */
+function olderThan(cursor: ActivityCursor): WhereClause {
+  return {
+    or: [
+      { and: [{ column: "createdAt", op: "<", value: cursor.createdAt }] },
+      {
+        and: [
+          { column: "createdAt", op: "=", value: cursor.createdAt },
+          { column: "id", op: "<", value: cursor.id },
+        ],
+      },
+    ],
+  };
+}
+
+/** `where`, narrowed to rows strictly after `cursor`. */
+function withCursor(
+  where: WhereClause | undefined,
+  cursor: ActivityCursor
+): WhereClause {
+  return where ? { and: [where, olderThan(cursor)] } : olderThan(cursor);
+}
 
 /**
  * Safely convert an unknown driver-returned value to a nullable string.
@@ -274,6 +371,7 @@ export class ActivityLogService extends BaseService {
       collection: input.collection,
       entryId: input.entryId ?? null,
       entryTitle: input.entryTitle ?? null,
+      locale: input.locale ?? null,
       metadata: input.metadata ? JSON.stringify(input.metadata) : null,
       createdAt,
     };
@@ -395,18 +493,14 @@ export class ActivityLogService extends BaseService {
     const caller = options?.caller;
 
     try {
-      // Each filter carries BOTH spellings because its two consumers disagree
-      // by nature: `adapter.select` resolves names against the Drizzle table,
-      // so it needs the schema property, while the count below writes SQL and
-      // needs the physical column. Deriving both from one entry is what stops
-      // them drifting apart — naming the column for the select silently
-      // dropped the ordering and made a filtered query fail outright.
+      // Named by Drizzle SCHEMA PROPERTY, which is what `adapter.select`
+      // resolves against the table. Naming the physical column here instead
+      // silently dropped the ordering and made a filtered query fail outright.
       const filters: ActivityFilter[] = [];
 
       if (options?.collection) {
         filters.push({
           property: "collection",
-          column: "collection",
           op: "=",
           value: options.collection,
         });
@@ -414,7 +508,6 @@ export class ActivityLogService extends BaseService {
       if (options?.userId) {
         filters.push({
           property: "userId",
-          column: "user_id",
           op: "=",
           value: options.userId,
         });
@@ -430,7 +523,6 @@ export class ActivityLogService extends BaseService {
         }
         filters.push({
           property: "collection",
-          column: "collection",
           op: "IN",
           value: [...scope.resources],
         });
@@ -506,26 +598,79 @@ export class ActivityLogService extends BaseService {
     // its neighbours keep theirs -- and the paging then reports a short feed as
     // though it were the whole answer.
     const scope = await resolveDocumentVisibilityScope();
+    if (scope.degraded) {
+      // 🔴 REFUSE rather than answer, and this direction is the whole point of
+      // the pass. `authorizedRows` reads a slug missing from `scope.kinds` as an
+      // install-level event and keeps it WITHOUT asking the read path — correct
+      // when the map is complete, because settings namespaces are neither a
+      // collection nor a single. When the registry could not be enumerated the
+      // same rule admits every document row unauthorized, so a transient
+      // dependency failure would turn the feed back into exactly the disclosure
+      // this service was repaired for, and turn it on silently.
+      //
+      // The empty-map case is not this one: an install that has registered
+      // nothing has no document rows to admit, and `degraded` is what tells the
+      // two apart.
+      throw NextlyError.internal({
+        logContext: { reason: "content-registry-unreachable" },
+      });
+    }
+    return this.refill(where, want, offset, caller, scope);
+  }
+
+  /**
+   * Read pages until `want` readable rows are found or the rounds run out.
+   *
+   * Separate from the checks that precede it so each reads as one decision: the
+   * caller and the scope decide WHETHER to answer, and this decides how much to
+   * read to do it.
+   */
+  private async refill(
+    where: WhereClause | undefined,
+    want: number,
+    offset: number,
+    caller: ReadCaller,
+    scope: DocumentVisibilityScope
+  ): Promise<Record<string, unknown>[]> {
     const visible: Record<string, unknown>[] = [];
-    let cursor = offset;
+    let after: ActivityCursor | undefined;
 
     // Bounded so an install whose recent activity is almost entirely
     // unreadable cannot walk the whole table for one card. Reaching it returns
     // a SHORT page, never a wrong one.
     for (let round = 0; round < MAX_REFILL_ROUNDS; round++) {
       const page = await this.adapter.select<Record<string, unknown>>(TABLE, {
-        where,
-        orderBy: [{ column: "createdAt", direction: "desc" }],
+        // 🔴 Rounds after the first are anchored to the LAST ROW READ, not to a
+        // running offset. `activity_log` grows while the feed is being built —
+        // every create, update and delete appends to it — and under OFFSET a row
+        // inserted between two rounds shifts every later position by one, so the
+        // next round repeats a row already seen and SKIPS one that was never
+        // read. The skipped row is lost silently: de-duplicating what arrived
+        // cannot reveal what did not, and the feed then reports the wrong
+        // `hasMore` about it too. The caller's own `offset` still positions the
+        // FIRST round, which is the only place it means what it says.
+        where: after ? withCursor(where, after) : where,
+        // Ending in a UNIQUE column is what lets that anchor name a position
+        // exactly. `createdAt` alone is not total -- MySQL stores these at
+        // second precision, so a burst of writes ties -- and a cursor over a
+        // non-unique key cannot say which of the tied rows a page ended on.
+        orderBy: [
+          { column: "createdAt", direction: "desc" },
+          { column: "id", direction: "desc" },
+        ],
         limit: ACTIVITY_PAGE_SIZE,
-        offset: cursor,
+        ...(after ? {} : { offset }),
       });
       if (page.length === 0) break;
-      cursor += page.length;
+      after = cursorOf(page[page.length - 1]) ?? after;
 
       visible.push(...(await this.authorizedRows(page, scope, caller)));
       if (visible.length >= want) break;
       // A short page is the end of the table, not the end of this round.
       if (page.length < ACTIVITY_PAGE_SIZE) break;
+      // A page whose last row cannot be read as a cursor would make the next
+      // round repeat it forever; stop rather than loop on an unknown position.
+      if (!after) break;
     }
 
     return visible.slice(0, want);
@@ -565,46 +710,69 @@ export class ActivityLogService extends BaseService {
         scope
       )
     );
-    return page.filter(
-      row => documentRefOf(row, scope.kinds) === null || readable.has(row)
+    const redacted = await this.historyOfRemovedDocuments(
+      documentRows.filter(row => !readable.has(row)),
+      scope
     );
+    return page.flatMap(row => {
+      if (documentRefOf(row, scope.kinds) === null) return [row];
+      if (readable.has(row)) return [row];
+      const kept = redacted.get(row);
+      return kept ? [kept] : [];
+    });
   }
 
   /**
-   * Render one filter as a parameterised SQL clause, pushing its value(s)
-   * onto `params` as it goes.
+   * The refused rows that describe documents which no longer EXIST, redacted.
    *
-   * Placeholder numbering derives from `params.length` at the moment each
-   * value is pushed, never from the filter's position in the array: an `IN`
-   * filter contributes several parameters, so a caller numbering from the
-   * filter index (`$${i + 1}`) -- correct only while every filter carried
-   * exactly one value -- would bind the wrong values for every filter that
-   * follows the first `IN`.
+   * 🔴 Without this, every deletion disappears from the feed. A collection
+   * delete removes the row and only then appends `entry.deleted`, so the
+   * document the event names can never be found again — and a filter that keeps
+   * only readable documents therefore drops the deletion, and all earlier
+   * history for that document, for everyone including a super admin. The most
+   * consequential events in the trail were the ones it silently lost.
+   *
+   * Refused and GONE are the same absence to a read that enforces access, so
+   * they are told apart by a privileged existence probe — asked only about rows
+   * already refused, and used only to decide whether anything remains to
+   * authorize.
+   *
+   * What survives is the event, not the document: the stored title and metadata
+   * are dropped, because the rule that would have decided who may read them died
+   * with the document and nothing can evaluate it now. A reader learns that
+   * something was deleted, by whom and when; they do not learn what it was
+   * called.
    */
-  private filterClause(filter: ActivityFilter, params: SqlParam[]): string {
-    const quoted =
-      this.dialect === "postgresql"
-        ? `"${filter.column}"`
-        : `\`${filter.column}\``;
+  private async historyOfRemovedDocuments(
+    refused: readonly Record<string, unknown>[],
+    scope: DocumentVisibilityScope
+  ): Promise<Map<Record<string, unknown>, Record<string, unknown>>> {
+    const kept = new Map<Record<string, unknown>, Record<string, unknown>>();
+    if (refused.length === 0) return kept;
 
-    // The discriminated union on `filter.op` narrows `filter.value` to
-    // `SqlParam[]` in this branch and `SqlParam` below without a cast --
-    // the type itself rules out an `IN` filter carrying a scalar or a `=`
-    // filter carrying an array.
-    if (filter.op === "IN") {
-      const placeholders = filter.value
-        .map(v => {
-          params.push(v);
-          return this.dialect === "postgresql" ? `$${params.length}` : "?";
-        })
-        .join(", ");
-      return `${quoted} IN (${placeholders})`;
+    for (const unit of probeUnits(refused, scope)) {
+      let existing: Set<string>;
+      try {
+        existing = await existingDocumentIds(
+          unit.slug,
+          unit.entries.map(entry => entry.entryId),
+          unit.locale
+        );
+      } catch {
+        // A probe that could not answer has told us nothing, and nothing must
+        // not read as "deleted" -- that would publish a refused row.
+        continue;
+      }
+      for (const entry of unit.entries) {
+        if (existing.has(entry.entryId)) continue;
+        kept.set(entry.row, {
+          ...entry.row,
+          entryTitle: null,
+          metadata: null,
+        });
+      }
     }
-
-    params.push(filter.value);
-    return this.dialect === "postgresql"
-      ? `${quoted} = $${params.length}`
-      : `${quoted} = ?`;
+    return kept;
   }
 
   private mapRow = (row: Record<string, unknown>): ActivityLogEntry => {

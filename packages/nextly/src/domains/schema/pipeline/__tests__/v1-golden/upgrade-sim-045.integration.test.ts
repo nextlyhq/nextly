@@ -309,6 +309,26 @@ const addsAuditLogErasureStamp = (stmt: string): boolean => {
   );
 };
 
+/**
+ * The activity log gains the LANGUAGE a mutation was made in.
+ *
+ * The feed authorizes each row's document as the caller, and a stored `custom`
+ * read rule is a predicate over the collection's own fields — which answer
+ * differently per translation. Without the column a row is judged against the
+ * default language, so an edit made in a language the rule denies could still
+ * show its title.
+ *
+ * Pinned to the table AND the column, and required to be the WHOLE statement,
+ * for the reason the erasure stamp above gives: a substring match would admit a
+ * destructive clause riding through beside the additive one.
+ */
+const addsActivityLocaleColumn = (stmt: string): boolean => {
+  const s = stmt.trim().replace(/;$/, "");
+  return /^ALTER TABLE [`"]?activity_log[`"]? ADD (COLUMN )?[`"]?locale[`"]?[^,]*$/i.test(
+    s
+  );
+};
+
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).
 const hasCreateTableFor = (stmts: string[], table: string): boolean =>
@@ -419,6 +439,7 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               addsWebhooksColumn(s) ||
               migratesActivityLogActor(s) ||
               addsAuditLogErasureStamp(s) ||
+              addsActivityLocaleColumn(s) ||
               addsPreviewGenerationColumn(s),
             `phantom diff: ${s}`
           ).toBe(true);
@@ -498,6 +519,7 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               addsWebhooksColumn(s) ||
               migratesActivityLogActor(s) ||
               addsAuditLogErasureStamp(s) ||
+              addsActivityLocaleColumn(s) ||
               addsPreviewGenerationColumn(s),
             `unexpected reconcile statement shape: ${s}`
           ).toBe(true);

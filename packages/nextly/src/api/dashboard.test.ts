@@ -58,6 +58,7 @@ vi.mock("../auth/entity-read-access", async importOriginal => ({
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { container } from "../di";
 import { SETTINGS_ACTIVITY_NAMESPACES } from "../domains/audit/settings-activity-namespaces";
+import type { ActivityLogResult } from "../services/dashboard/activity-log-service";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 
 import {
@@ -236,10 +237,17 @@ describe("getDashboardRecentEntries", () => {
 });
 
 describe("getDashboardActivity", () => {
-  it("emits respondData with cursor-shaped { activities, total, hasMore }", async () => {
-    const result = {
-      activities: [{ id: "a1", action: "create", collection: "posts" }],
-      total: 1,
+  it("emits respondData with cursor-shaped { activities, hasMore }", async () => {
+    // 🔴 The stub is typed as `ActivityLogResult` rather than left loose, and
+    // that is the part doing the work. Stubbing a free object let this test go
+    // on asserting a body containing `total` long after the service stopped
+    // producing one — green while pinning the OPPOSITE of the contract, and
+    // unable to notice a reintroduced count. Typed, a stray `total` fails
+    // `check-types` instead of passing silently.
+    const result: ActivityLogResult = {
+      activities: [
+        { id: "a1", action: "create", collection: "posts" },
+      ] as unknown as ActivityLogResult["activities"],
       hasMore: false,
     };
     serviceStub = {
@@ -253,6 +261,10 @@ describe("getDashboardActivity", () => {
     expect(res.status).toBe(200);
     const json = (await res.json()) as Record<string, unknown>;
     expect(json).not.toHaveProperty("data");
+    // Asserted as an absence of its own: `toEqual` against a `total`-free
+    // expectation would still pass if the handler added one back, since the
+    // stub no longer supplies it.
+    expect(json).not.toHaveProperty("total");
     expect(json).toEqual(result);
   });
 });
@@ -392,7 +404,10 @@ describe("dashboard activity scope", () => {
 
     const getRecentActivity = vi
       .fn()
-      .mockResolvedValue({ activities: [], total: 0, hasMore: false });
+      .mockResolvedValue({
+        activities: [],
+        hasMore: false,
+      } satisfies ActivityLogResult);
     serviceStub = { getRecentActivity };
 
     await getDashboardActivity(
@@ -413,7 +428,10 @@ describe("dashboard activity scope", () => {
 
     const getRecentActivity = vi
       .fn()
-      .mockResolvedValue({ activities: [], total: 0, hasMore: false });
+      .mockResolvedValue({
+        activities: [],
+        hasMore: false,
+      } satisfies ActivityLogResult);
     serviceStub = { getRecentActivity };
 
     await getDashboardActivity(
@@ -508,7 +526,10 @@ describe("dashboard read scope for an API-KEY caller", () => {
 
     const getRecentActivity = vi
       .fn()
-      .mockResolvedValue({ activities: [], total: 0, hasMore: false });
+      .mockResolvedValue({
+        activities: [],
+        hasMore: false,
+      } satisfies ActivityLogResult);
     serviceStub = { getRecentActivity };
 
     await getDashboardActivity(

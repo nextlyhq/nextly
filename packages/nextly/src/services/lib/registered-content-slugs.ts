@@ -28,40 +28,57 @@ interface RegistryRead {
   reachable: boolean;
 }
 
-/** The registered collection slugs, or none when the registry is unreachable. */
-async function collectionSlugs(): Promise<RegistryRead> {
+/**
+ * One registry's slugs, separating "there is no such registry" from "it could
+ * not answer".
+ *
+ * 🔴 Two failures that look identical and mean opposite things, and the split is
+ * why they are attempted separately. A registry that is NOT REGISTERED describes
+ * an install with none of that kind of content: contributing nothing is the
+ * COMPLETE answer, and a caller that refuses on a floor must not refuse here or
+ * it refuses forever. A registry that is registered and then THROWS has told us
+ * nothing about how much it holds, so its empty result is a floor — and a
+ * caller counting or authorizing against it would otherwise treat a transient
+ * dependency failure as "there is nothing here".
+ *
+ * Told apart by which operation failed, not by `container.has`: a container may
+ * answer `has` and `get` differently, and taking the presence check as the
+ * discriminator emptied the candidate set for every caller rather than only the
+ * one asking about degradation.
+ */
+async function registryRead<T>(
+  service: string,
+  enumerate: (registry: T) => Promise<Array<{ slug: string }>>
+): Promise<RegistryRead> {
+  let registry: T;
   try {
-    const collections = await container
-      .get<{
-        getAllCollections: () => Promise<Array<{ slug: string }>>;
-      }>("collectionRegistryService")
-      .getAllCollections();
-    return {
-      slugs: collections.map(collection => String(collection.slug)),
-      reachable: true,
-    };
+    registry = container.get<T>(service);
   } catch {
-    // Unreachable registry: contribute nothing rather than guess.
+    // Absent: this install registers no content of that kind, and that is a
+    // whole answer rather than a shortfall.
+    return { slugs: [], reachable: true };
+  }
+  try {
+    const entries = await enumerate(registry);
+    return { slugs: entries.map(entry => String(entry.slug)), reachable: true };
+  } catch {
+    // Present but unreadable: contribute nothing, and SAY that it is a floor.
     return { slugs: [], reachable: false };
   }
 }
 
+/** The registered collection slugs, or none when the registry is unreachable. */
+function collectionSlugs(): Promise<RegistryRead> {
+  return registryRead<{
+    getAllCollections: () => Promise<Array<{ slug: string }>>;
+  }>("collectionRegistryService", registry => registry.getAllCollections());
+}
+
 /** The registered single slugs, or none when the registry is unreachable. */
-async function singleSlugs(): Promise<RegistryRead> {
-  try {
-    const singles = await container
-      .get<{
-        getAllSingles: () => Promise<Array<{ slug: string }>>;
-      }>("singleRegistryService")
-      .getAllSingles();
-    return {
-      slugs: singles.map(single => String(single.slug)),
-      reachable: true,
-    };
-  } catch {
-    // As above.
-    return { slugs: [], reachable: false };
-  }
+function singleSlugs(): Promise<RegistryRead> {
+  return registryRead<{
+    getAllSingles: () => Promise<Array<{ slug: string }>>;
+  }>("singleRegistryService", registry => registry.getAllSingles());
 }
 
 /**

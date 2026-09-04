@@ -102,6 +102,8 @@ export const activityLog = mysqlTable(
     collection: varchar("collection", { length: 255 }).notNull(),
     entryId: varchar("entry_id", { length: 191 }),
     entryTitle: text("entry_title"),
+    /** The language this mutation was made in; see `documentRefOf`. */
+    locale: varchar("locale", { length: 32 }),
     metadata: text("metadata"), // JSON string for additional context
     createdAt: timestamp("created_at").defaultNow().notNull(),
     // `datetime`, not `timestamp`: a nullable MySQL TIMESTAMP is subject to

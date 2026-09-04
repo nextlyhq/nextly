@@ -57,3 +57,33 @@ authorizing every matching row, which is unbounded over a table that only
 grows. `hasMore` carries the pagination instead, observed by authorizing one
 row past the page. The hand-written `COUNT(*)` behind the old field is removed
 with it.
+
+The activity feed now records the LANGUAGE a write was made in and authorizes
+each row in it. A stored `custom` read rule is a predicate over a collection's
+own fields, and a localized field answers differently per translation, so a row
+judged without a locale is judged against the default one — and an edit made in
+a language the rule denies could still show its title. The locale is derived
+from the event resource that already carries it, so a write cannot report one
+language to a webhook subscriber and a different one to the trail. Rows written
+before the column, and writes with no language of their own, leave it NULL and
+are read as the default, which is what they already meant.
+
+Deleting a document no longer erases it from the feed. A collection delete
+removes the row before appending `entry.deleted`, so the document the event
+names can never be found again — and authorizing by readability alone dropped
+the deletion, and every earlier event for that document, for everyone including
+a super admin. Such a row is now kept without its stored title or metadata: the
+rule that decided who could read them died with the document, so a reader learns
+that something was deleted, by whom and when, but not what it was called. A
+document that still exists and was refused stays refused, and a probe that
+cannot answer drops the row rather than publishing it.
+
+The feed also refuses outright when the content registry cannot be enumerated.
+A slug missing from the registry is read as an install-level event and kept
+without asking the read path — correct when the map is whole, and the same rule
+admits every document row unauthorized when it is not.
+
+Refill rounds are anchored to the last row read rather than to a running offset,
+and ordered by a unique key as well as the instant: `activity_log` grows while a
+feed is being built, so under OFFSET a row inserted between rounds shifts every
+later position, repeating one row and silently skipping another.

@@ -28,6 +28,8 @@ import { computeChangedFields } from "../webhooks/envelope";
 
 /** What one mutation records, as the choke point already knows it. */
 export interface RecordMutationActivityInput {
+  /** The language this write was made in; see `RecordMutationEventArgs`. */
+  locale?: string | null;
   action: ActivityLogAction;
   /** Collection slug the entry belongs to. */
   collection: string;
@@ -202,6 +204,7 @@ export async function recordMutationActivity(
     userId: input.actor.id,
     action: input.action,
     collection: input.collection,
+    ...(input.locale === undefined ? {} : { locale: input.locale }),
     ...(input.entryId !== undefined ? { entryId: input.entryId } : {}),
     ...(() => {
       const heading = feedHeading(input.collection, input.data, input.entryId);
