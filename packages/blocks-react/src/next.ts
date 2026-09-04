@@ -482,7 +482,17 @@ async function derivePageSeo(
    * Open Graph tags, where every crawler and chat client that unfurls the link
    * then fetches it.
    */
-  remotePatterns: readonly RemotePatternInput[] | undefined
+  remotePatterns: readonly RemotePatternInput[] | undefined,
+  /**
+   * The components this page embeds, resolved by the caller.
+   *
+   * Handed in rather than fetched here, because this function is synchronous
+   * about content by design and the caller already owns a query budget. What
+   * matters is that it is the SAME set the render inlines: the preparation
+   * below is shared with the renderer precisely so the two describe one page,
+   * and definitions are the one input that can differ while every pass agrees.
+   */
+  definitions: DefinitionsById | undefined
 ): Promise<DerivedPageSeo> {
   const resolver = blocks ?? registeredBlocks();
   // Spread rather than assigned, so an unaddressable slug OMITS the key instead
@@ -500,6 +510,12 @@ async function derivePageSeo(
     resolver,
     limits,
     styleContext,
+    // Spread conditionally, matching the renderer: an absent map says the
+    // caller never fetched, an empty one says it fetched and found none, and
+    // the pipeline reports those differently.
+    ...(definitions === undefined || definitions.size === 0
+      ? {}
+      : { definitions }),
   });
   // Nothing readable means nothing to describe. The page renders a placeholder,
   // and metadata claiming a title it does not show would be worse than silence.
@@ -1307,19 +1323,35 @@ function blocksRouteConfig(
             const document = readDocument(entry, field, context);
             // Its own budget: metadata generation and the render are separate
             // invocations, so sharing one counter would let the page's reads
-            // starve the preview image, or the reverse.
+            // starve the preview image, or the reverse. Shared BETWEEN the two
+            // reads this invocation makes, because they are one page's cost.
+            const budget = createQueryBudget(
+              config.maxQueries ?? DEFAULT_MAX_QUERIES
+            );
+            // The same components the render will inline. Without them the
+            // preparation below replaces every instance with a placeholder, so
+            // a page whose heading or hero image comes from a component
+            // published a title and a preview picture that its own HTML
+            // contradicts — for exactly the pages components exist to build.
+            const definitions = await definitionsFor(
+              document,
+              componentSource(
+                config,
+                readerFor(config),
+                budget,
+                context.locale
+              ),
+              effectiveLimits(config)
+            );
             const derived = await derivePageSeo(
               document,
               blocks,
-              mediaResolver(
-                config,
-                readerFor(config),
-                createQueryBudget(config.maxQueries ?? DEFAULT_MAX_QUERIES)
-              ),
+              mediaResolver(config, readerFor(config), budget),
               context.slug,
               limits,
               styleContext,
-              config.hostPolicy?.remotePatterns
+              config.hostPolicy?.remotePatterns,
+              definitions
             );
             return metadata(entry, context, derived);
           },

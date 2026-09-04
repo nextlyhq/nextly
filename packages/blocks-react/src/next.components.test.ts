@@ -14,6 +14,8 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
+import { coreBlocks } from "./blocks";
+import { createBlockResolver } from "./resolver";
 import { describe, expect, it, vi } from "vitest";
 
 const cached = vi.fn();
@@ -273,6 +275,37 @@ describe("the definitions a route reads for its page", () => {
     // renderer is about to read the same document under.
     const read = componentReads(calls)[0]!;
     expect((read.where?.id?.in as string[]).length).toBe(2);
+  });
+
+  it("derives metadata from the SAME components the page renders", async () => {
+    // The heading a visitor sees comes from a component. Without the
+    // definitions, the metadata preparation replaces that instance with a
+    // placeholder and derives a title from a document the page does not show —
+    // for exactly the pages components exist to build.
+    const heading = {
+      id: "h",
+      type: "core/heading",
+      version: 1,
+      props: { text: "Composed title", level: 1 },
+    };
+    const r = reader({ hero: definition([heading]) }, page(["hero"]));
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: r.nextly,
+      blocks: createBlockResolver(coreBlocks),
+      // `metadata`, not `buildMetadata` — the latter is the route's own hook,
+      // which cannot see the document and would bypass the derivation entirely.
+      metadata: (
+        _entry: unknown,
+        _context: unknown,
+        derived: { title?: string }
+      ) => ({ title: derived.title ?? "NO TITLE" }),
+    } as Parameters<typeof createBlocksPage>[0]);
+
+    const meta = await route.generateMetadata({ params: { slug: ["about"] } });
+
+    expect(meta.title).toBe("Composed title");
   });
 
   it("asks for nothing when the page embeds no component", async () => {
