@@ -279,8 +279,9 @@ export type {
  *
  * @public `PluginAdminContributions`, `PluginAdminPage`, `PluginCollectionView`,
  *   `PluginMenuItem`, `ComponentPath` — exercised by `plugin-form-builder`.
- * @experimental `PluginAdminWidget` — dashboard-widget rendering is deferred to
- *   M8 (D22); the contract is reserved, not rendered.
+ * @experimental `PluginAdminWidget` — dashboard widgets render (D22); the
+ *   contribution shape is still settling, so it graduates once a first-party
+ *   plugin ships one.
  */
 export type {
   ComponentPath,

@@ -5,8 +5,13 @@ extensible foundation in the spirit of Gutenberg/Elementor. Drag-and-drop editin
 iframe canvas, per-block styling with responsive overrides, a data-driven Query Loop, and
 a server-first renderer that ships zero client JS by default.
 
-> **Status:** alpha. The block model, registries, and render pipeline are stable; the
-> editor interactions are evolving. MIT-licensed.
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0 — pin exact versions in production.
+> See the [plugin stability ladder](https://nextlyhq.com/docs/plugins/stability) for
+> which plugin surfaces are stable and which are experimental.
+
+> The block model, registries, and render pipeline are stable; the editor
+> interactions are still evolving. MIT-licensed.
 
 ## Install
 

@@ -4,7 +4,7 @@
 // Use as Title and Timestamps are absent from THIS tab, not from the product.
 // Both remain code-first collection options — `admin.useAsTitle` is what the
 // entry table picks its title column from, and `timestamps` defaults to true
-// in `defineCollection`. What the Visual Builder declines to offer is a control
+// in `defineCollection`. What the Visual Schema Builder declines to offer is a control
 // for them: a builder-made entity takes the defaults, and a reader who needs to
 // change either edits the collection config. The i18n switch is gated on
 // the app-level

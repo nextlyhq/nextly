@@ -36,26 +36,22 @@
 > [!IMPORTANT]
 > Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
 
-Nextly is a TypeScript-first, Next.js-native CMS and app framework. Define your content schema in code or build it visually in the admin UI, choose your database, and get a fully-typed REST and Direct API plus a customizable admin dashboard. No SaaS, no proprietary cloud. Your data, your stack.
+Nextly is an open-source content platform for Next.js.
 
-<!--
-HERO VISUAL PLACEHOLDER
-======================
-Swap the box below for a real screenshot, GIF, or short video of the admin
-panel before publishing. Recommended: 1600x900 PNG or MP4 < 5 MB.
--->
-
-<!-- <p align="center">
-  <img alt="Hero placeholder. Replace with admin screenshot or product GIF before launch." src="https://placehold.co/1600x900/0a0a0a/eaeaea?text=Hero+visual+goes+here.+Swap+before+launch&font=inter" width="800" />
-</p> -->
+Developers define the content model in TypeScript, or build it in the admin with the Visual Schema Builder — either way it is the same data model. Your team then composes pages in the Visual Page Builder, translates them, keeps a version history, and schedules what goes live. It all runs inside your own Next.js app, on your own database. No SaaS, no proprietary cloud.
 
 ## Why Nextly?
 
-- **Code-first or visual schema.** Define collections in TypeScript, or build them in the Schema Builder. Same data model either way.
+- **Model in code, or in the admin.** Define your content types (we call them collections) in TypeScript, or build them in the Visual Schema Builder. Same data model either way.
+- **Compose pages visually.** The Visual Page Builder gives your team a canvas of blocks your developers registered. Pages render on the server and ship no JavaScript unless a block needs it.
+- **Run in several languages.** The same site in multiple locales, with a fallback when a translation is missing, and each language published on its own schedule.
+- **Keep a version history.** Compare any two versions of a document and restore one. Restoring snapshots the current state first, so nothing is destroyed.
+- **Schedule what goes live.** Group entries into a release and publish or unpublish them together, at a time you choose.
+- **Control who can edit what.** Roles and permissions, down to individual fields.
+- **Connect it to the rest of your stack.** Webhooks with signing secrets and retries, background jobs, and dashboard widgets in the admin.
+- **Extend it.** A plugin SDK covering schema, services, routes, admin UI and permissions. The Visual Page Builder is itself a plugin, built on that same public API.
 - **Type-safe everywhere.** REST API, Direct API, and the admin UI are typed end-to-end.
-- **Pluggable databases.** PostgreSQL, MySQL, SQLite via official adapters.
-- **Pluggable storage.** Local disk by default; S3 (and R2, MinIO), Vercel Blob, or UploadThing for production.
-- **Granular access control.** Roles, permissions, and field-level access out of the box.
+- **Your database, your storage.** PostgreSQL, MySQL, or SQLite. Local disk by default; S3 (and R2, MinIO), Vercel Blob, or UploadThing for production.
 - **Self-hosted, MIT-licensed.** Your stack, your data, no vendor lock-in.
 
 ## Quickstart
@@ -118,6 +114,14 @@ Set `DATABASE_URL` (and `DB_DIALECT`) in your `.env`; Nextly picks the dialect a
 | **@nextlyhq/ui**      | Headless UI components shared across packages and plugins       |
 | **create-nextly-app** | CLI scaffold for new Nextly projects                            |
 
+### Page builder
+
+| Package                     | Description                                                       |
+| --------------------------- | ----------------------------------------------------------------- |
+| **@nextlyhq/builder**       | The Visual Page Builder editor: shell, canvas, and op store       |
+| **@nextlyhq/blocks-engine** | Block document model, tree operations, and validation. No runtime |
+| **@nextlyhq/blocks-react**  | React Server Component renderer for block documents               |
+
 ### Database adapters
 
 | Package                        | Description                                     |
@@ -134,13 +138,26 @@ Set `DATABASE_URL` (and `DB_DIALECT`) in your `.env`; Nextly picks the dialect a
 | **@nextlyhq/storage-vercel-blob** | Vercel Blob storage                    |
 | **@nextlyhq/storage-uploadthing** | UploadThing storage                    |
 
-### Plugins (coming soon, beta)
+### Plugins
 
-| Package                           | Description                                      |
-| --------------------------------- | ------------------------------------------------ |
-| **@nextlyhq/plugin-form-builder** | Drag-and-drop form builder _(coming soon, beta)_ |
+Nextly has a first-class plugin SDK. The Visual Page Builder is itself a plugin, built on the same public API you would use.
 
-> Public plugin support (stable APIs, plugin gallery, documentation guarantees) lands at the Nextly **beta** release. The package above is published for early exploration only. Surfaces and behaviour will change.
+| Package                           | Description                                                 |
+| --------------------------------- | ----------------------------------------------------------- |
+| **@nextlyhq/plugin-page-builder** | Visual Page Builder: blocks, canvas, server-first rendering |
+| **@nextlyhq/plugin-seo**          | SEO fields and a sitemap for your content                   |
+| **@nextlyhq/plugin-form-builder** | Visual form builder and submission capture                  |
+| **@nextlyhq/plugin-sdk**          | Build your own plugins: schema, services, routes, admin UI  |
+
+> Nextly is in alpha, and some plugin surfaces are still settling. The [stability ladder](https://nextlyhq.com/docs/plugins/stability) says which parts are stable today and which are experimental.
+
+### Tooling
+
+| Package                       | Description                                                        |
+| ----------------------------- | ------------------------------------------------------------------ |
+| **@nextlyhq/adapter-drizzle** | Shared Drizzle ORM adapter logic behind the database adapters      |
+| **@nextlyhq/admin-css**       | Scopes and compiles the admin CSS, for the admin build and plugins |
+| **@nextlyhq/eslint-plugin**   | ESLint rules keeping admin UI on the design-token system           |
 
 ## Requirements
 

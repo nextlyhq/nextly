@@ -1,6 +1,9 @@
 # @nextlyhq/plugin-seo
 
-> Nextly is in alpha. APIs may change before 1.0.
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0 — pin exact versions in production.
+> See the [plugin stability ladder](https://nextlyhq.com/docs/plugins/stability) for
+> which plugin surfaces are stable and which are experimental.
 
 First-party SEO plugin for Nextly. It is **opt-in** and **framework-agnostic** (zero `next` dependency), so it is safe in every deployment mode — an integrated site, a headless setup feeding a separate frontend, or an internal admin tool. You add it only to the collections that need SEO.
 
