@@ -153,16 +153,20 @@ describe("the definitions a route reads for its page", () => {
   });
 
   it("reads definitions at the posture the route serves", async () => {
-    // The SAME scope the entry read uses, not a second opinion. A page serving
-    // published content must not inline a draft component, and a route
-    // explicitly serving drafts must.
+    // The SAME scope the entry read uses, not a second opinion: a page serving
+    // published content must not inline a draft component.
     const served = await renderWith({ hero: definition() }, page(["hero"]));
     expect(componentReads(served.calls)[0]!.status).toBe("published");
 
+    // A route explicitly serving drafts must inline the draft, and it cannot do
+    // that through this batched read at any `status` — the overlay lives on the
+    // per-id path. Asserted where that read can be observed, under "a
+    // component's pending edits in draft mode" below; what belongs here is that
+    // the batched query is not the channel it takes.
     const draft = await renderWith({ hero: definition() }, page(["hero"]), {
       draft: true,
     });
-    expect(componentReads(draft.calls)[0]!.status).toBe("all");
+    expect(componentReads(draft.calls)).toEqual([]);
   });
 
   it("clears BOTH identity channels", async () => {
@@ -336,5 +340,217 @@ describe("the definitions a route reads for its page", () => {
 
     expect(componentReads(calls)).toEqual([]);
     expect(props.definitions).toBeUndefined();
+  });
+});
+
+/**
+ * What a draft-mode route hands its renderer when a component has pending edits.
+ *
+ * The store double below reproduces the ONE asymmetry this whole suite turns
+ * on, and it is a property of the service, not an invention: the working-draft
+ * overlay is applied in `collection-query-service.getEntry`, so `findByID` can
+ * surface a pending edit and `find` — the list path, which has no equivalent —
+ * cannot. A double whose `find` answered drafts would certify a batched read
+ * that cannot work against the real reader.
+ */
+function splitStoreReader(
+  published: Record<string, unknown>,
+  drafts: Record<string, unknown>,
+  content: BlockDocument
+) {
+  const calls: FindArgs[] = [];
+  const byId: { id: string; draft?: boolean }[] = [];
+  return {
+    calls,
+    byId,
+    nextly: {
+      find: vi.fn(async (args: FindArgs) => {
+        calls.push(args);
+        if (args.collection === "components") {
+          const wanted = args.where?.id?.in;
+          const ids = Array.isArray(wanted) ? (wanted as string[]) : [];
+          // PUBLISHED only, whatever `status` says. `status: "all"` widens which
+          // ROWS match; it does not reach a working draft, which lives in a
+          // snapshot the list path never consults.
+          return {
+            items: ids
+              .filter(id => Object.hasOwn(published, id))
+              .map(id => ({ id, content: published[id] })),
+            meta: {},
+          };
+        }
+        return { items: [{ id: "p1", slug: "about", content }], meta: {} };
+      }),
+      findByID: vi.fn(
+        async (args: { collection: string; id: string; draft?: boolean }) => {
+          if (args.collection !== "components") return null;
+          byId.push({ id: args.id, draft: args.draft });
+          const row =
+            args.draft === true && Object.hasOwn(drafts, args.id)
+              ? drafts[args.id]
+              : published[args.id];
+          return row === undefined ? null : { id: args.id, content: row };
+        }
+      ),
+      media: { findByID: vi.fn(async () => null) },
+    } as never,
+  };
+}
+
+const headingNode = (text: string) => ({
+  id: "h",
+  type: "core/heading",
+  version: 1,
+  props: { text, level: 1 },
+});
+
+describe("a component's pending edits in draft mode", () => {
+  it("previews the WORKING DRAFT, not the last published definition", async () => {
+    // The defect this row exists for: the editor iframe drew the last published
+    // component while the author was editing it, so the preview disagreed with
+    // the form beside it.
+    const r = splitStoreReader(
+      { hero: definition([headingNode("PUBLISHED")]) },
+      { hero: definition([headingNode("PENDING EDIT")]) },
+      page(["hero"])
+    );
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: r.nextly,
+      draft: true,
+    } as Parameters<typeof createBlocksPage>[0]);
+
+    const element = (await route.ContentPage({
+      params: { slug: ["about"] },
+    })) as ReactElement<{ definitions?: Map<string, BlockDocument> }>;
+
+    const hero = element.props.definitions?.get("hero");
+    expect(hero?.nodes[0]?.props).toMatchObject({ text: "PENDING EDIT" });
+  });
+
+  it("draws the pending edit into the page the visitor is shown", async () => {
+    // Asserted through the COMPOSED document rather than the definitions map,
+    // because the map is the fetch's own output: a read that returned the draft
+    // and a composition that dropped it would still satisfy the test above.
+    // `derived.title` is produced by composing the page with its definitions.
+    const r = splitStoreReader(
+      { hero: definition([headingNode("PUBLISHED")]) },
+      { hero: definition([headingNode("PENDING EDIT")]) },
+      page(["hero"])
+    );
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: r.nextly,
+      draft: true,
+      blocks: createBlockResolver(coreBlocks),
+      metadata: (
+        _entry: unknown,
+        _context: unknown,
+        derived: { title?: string }
+      ) => ({ title: derived.title ?? "NO TITLE" }),
+    } as Parameters<typeof createBlocksPage>[0]);
+
+    const meta = await route.generateMetadata({ params: { slug: ["about"] } });
+
+    expect(meta.title).toBe("PENDING EDIT");
+  });
+
+  it("does NOT cache the draft read", async () => {
+    // The rule `resolve-content` states for the draft entry read, which this
+    // read sits beside: a working draft changes on every save while cache tags
+    // are burst by writes to the LIVE row, so a cached draft shows an editor
+    // their previous save and calls it a preview. No key fixes that, which is
+    // why the answer is not to cache rather than to key more finely.
+    cached.mockClear();
+    const r = splitStoreReader(
+      { hero: definition() },
+      { hero: definition() },
+      page(["hero"])
+    );
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: r.nextly,
+      draft: true,
+    } as Parameters<typeof createBlocksPage>[0]);
+
+    await route.ContentPage({ params: { slug: ["about"] } });
+
+    expect(r.byId).toHaveLength(1);
+    expect(cached).not.toHaveBeenCalled();
+  });
+
+  it("keeps the published route on ONE batched query", async () => {
+    // The per-id read is the price of seeing a draft and is paid in the editor
+    // iframe only. Taken on the published path it would turn one query per page
+    // into one per component, on the path that serves every visitor.
+    const r = splitStoreReader(
+      { hero: definition(), footer: definition() },
+      {},
+      page(["hero", "footer"])
+    );
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: r.nextly,
+    } as Parameters<typeof createBlocksPage>[0]);
+
+    await route.ContentPage({ params: { slug: ["about"] } });
+
+    expect(componentReads(r.calls)).toHaveLength(1);
+    expect(r.byId).toEqual([]);
+  });
+
+  it("lets an EXPLICIT published status beat the draft widening", async () => {
+    // The order `resolveDraftOverlay` applies: a route that named `published`
+    // is asking for the live document, and overlaying a pending edit on top of
+    // it answers a question it did not ask. Without this the `draft: true`
+    // half of the gate would decide alone, and a route that had narrowed
+    // itself on purpose would quietly serve drafts.
+    const r = splitStoreReader(
+      { hero: definition([headingNode("PUBLISHED")]) },
+      { hero: definition([headingNode("PENDING EDIT")]) },
+      page(["hero"])
+    );
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: r.nextly,
+      draft: true,
+      status: "published",
+    } as Parameters<typeof createBlocksPage>[0]);
+
+    const element = (await route.ContentPage({
+      params: { slug: ["about"] },
+    })) as ReactElement<{ definitions?: Map<string, BlockDocument> }>;
+
+    expect(r.byId).toEqual([]);
+    expect(componentReads(r.calls)[0]!.status).toBe("published");
+    expect(
+      element.props.definitions?.get("hero")?.nodes[0]?.props
+    ).toMatchObject({ text: "PUBLISHED" });
+  });
+
+  it("asks for the draft explicitly rather than relying on a widened status", async () => {
+    // `status: "all"` widens which rows match; it does not reach the working
+    // draft. Without the opt-in the per-id read would return the published row
+    // and the page would be exactly as wrong, through a more expensive route.
+    const r = splitStoreReader(
+      { hero: definition() },
+      { hero: definition() },
+      page(["hero"])
+    );
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: r.nextly,
+      draft: true,
+    } as Parameters<typeof createBlocksPage>[0]);
+
+    await route.ContentPage({ params: { slug: ["about"] } });
+
+    expect(r.byId).toEqual([{ id: "hero", draft: true }]);
   });
 });

@@ -821,6 +821,18 @@ function componentSource(
   const collection = config.componentCollection ?? COMPONENT_TAG_COLLECTION;
   const field = config.componentField ?? COMPONENT_DOCUMENT_FIELD;
   const status = config.status ?? (config.draft === true ? "all" : "published");
+  // Whether this route may surface a component's PENDING edits.
+  //
+  // Both halves are load-bearing. `draft: true` is the route declaring itself
+  // the editor's, and only the literal is consulted because a per-path `draft`
+  // FUNCTION answers about one entry the visitor asked for and says nothing
+  // about the components inside it — which is also why a shareable preview
+  // link, whose gate is such a function, keeps reading published definitions
+  // (design 6.4, founder Q10). And an explicit `status` beats the widening, in
+  // the same order `resolveDraftOverlay` applies it: a route that asked for
+  // `published` is asking for the live document, so overlaying a draft on top
+  // of it would answer a question it did not ask.
+  const overlayDrafts = config.draft === true && status !== "published";
 
   return async (ids: readonly string[]) => {
     // Dropped before anything is built from them, not repaired. `entryIdTag`
@@ -834,6 +846,15 @@ function componentSource(
     if (wanted.length === 0) return EMPTY_DEFINITIONS;
 
     const found = new Map<string, BlockDocument>();
+    if (overlayDrafts) {
+      return await readDraftDefinitions(wanted, {
+        reader,
+        collection,
+        field,
+        locale,
+        budget,
+      });
+    }
     for (const chunk of chunked(wanted, COMPONENT_BATCH_SIZE)) {
       // One claim per QUERY. A page embedding twenty components spends one
       // read because that is what it costs; charging per definition would
@@ -891,6 +912,72 @@ function chunked<T>(items: readonly T[], size: number): T[][] {
     out.push(items.slice(i, i + size));
   }
   return out;
+}
+
+/**
+ * The definitions a DRAFT-mode route reads, one query per component.
+ *
+ * PER ID because that is the only shape the working draft is reachable in. The
+ * overlay is applied in `collection-query-service.getEntry`; the list path has
+ * no equivalent, so a batched `find` returns the LIVE row however wide its
+ * `status` — `status: "all"` widens which rows match and never reaches a
+ * pending edit. A route previewing an edit would then draw the last published
+ * component, and the form and the picture beside it would disagree about the
+ * document the author is looking at.
+ *
+ * UNCACHED, for the reason `resolve-content` gives for never caching a draft
+ * entry read: a working draft changes on every save while cache tags are burst
+ * by writes to the LIVE row, so a cached draft shows an editor their previous
+ * save and calls it a preview. That also means there is no tag or key to get
+ * right here — the staleness a key could not fix is the whole objection.
+ *
+ * The price is one query per component instead of one per page, and it is paid
+ * ONLY here. Draft mode is the editor iframe: one author, one request, no
+ * shared cache entry to protect. The published path serves every visitor and
+ * keeps its batch, which is what the `overlayDrafts` gate above is for.
+ *
+ * `draft: true` is an opt-in the service still gates on an update-capability
+ * probe, which `overrideAccess` satisfies — the same trust the batched read
+ * already carries, and the same identity channels cleared for the same reason.
+ */
+async function readDraftDefinitions(
+  wanted: readonly string[],
+  args: {
+    reader: NextlyContentReader;
+    collection: string;
+    field: string;
+    locale: string | undefined;
+    budget: QueryBudget;
+  }
+): Promise<Map<string, BlockDocument>> {
+  const { reader, collection, field, locale, budget } = args;
+  const found = new Map<string, BlockDocument>();
+  for (const id of wanted) {
+    // One claim per QUERY, exactly as the batched path charges. Here that is
+    // one per component, which is the honest price of this read rather than a
+    // penalty: a page whose components outrun the allowance stops fetching and
+    // the remainder resolve as missing, with a marker, instead of the route
+    // issuing unbounded reads.
+    if (!budget.take()) break;
+    const row = await reader.findByID({
+      collection,
+      id,
+      draft: true,
+      overrideAccess: true,
+      disableErrors: true,
+      user: undefined,
+      req: undefined,
+      ...(locale ? { locale } : {}),
+    });
+    if (row === null || row === undefined) continue;
+    // Through the SAME reader the batched path uses, so a row is judged
+    // readable by one rule. A second unwrapping here is how the two paths would
+    // come to disagree about which stored value counts as a definition.
+    for (const [foundId, document] of definitionsById([row], field)) {
+      found.set(foundId, document);
+    }
+  }
+  return found;
 }
 
 /** One batched, tagged, posture-carrying read of at most a full chunk. */
