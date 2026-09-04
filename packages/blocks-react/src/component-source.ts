@@ -74,6 +74,14 @@ export async function definitionsFor(
   limits: DocumentLimits
 ): Promise<DefinitionsById> {
   const found = new Map<string, BlockDocument>();
+  // Asked-for, which is NOT the same set as found. An id the store had no row
+  // for must stay out of `found` — its absence is what makes the pipeline
+  // report it `missing` rather than `unreadable` — but it has been looked for,
+  // and without remembering that, a component referenced from several
+  // definitions is re-queried at every level it appears at. Each retry spends
+  // a chunk and a budget claim, so enough repeats exhaust `maxQueries` before
+  // a later valid definition is reached and render THAT one missing too.
+  const attempted = new Set<string>();
   let wanted = componentIdsIn(document.nodes, limits.maxNodes);
 
   for (
@@ -85,8 +93,9 @@ export async function definitionsFor(
     // component two others hold is reached twice in one level, and asking for
     // it twice in one `IN` is a wider query and a longer cache key for one
     // answer.
-    const unread = [...new Set(wanted.filter(id => !found.has(id)))];
+    const unread = [...new Set(wanted.filter(id => !attempted.has(id)))];
     if (unread.length === 0) break;
+    for (const id of unread) attempted.add(id);
     const batch = await source(unread);
     // Recorded for every id ASKED FOR, not for every id answered. An id the
     // store had no row for has been looked for and not found, and remembering
@@ -120,7 +129,7 @@ function nestedIds(
     into.set(id, definition);
     if (!Array.isArray(definition?.nodes)) continue;
     for (const nested of componentIdsIn(definition.nodes, limits.maxNodes)) {
-      if (!into.has(nested)) next.push(nested);
+      next.push(nested);
     }
   }
   return next;

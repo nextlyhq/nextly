@@ -791,7 +791,16 @@ function componentSource(
   budget: QueryBudget,
   locale: string | undefined
 ): ComponentSource {
-  if (config.resolveComponents) return config.resolveComponents;
+  if (config.resolveComponents) {
+    const custom = config.resolveComponents;
+    // Charged like every other read on this path, for the reason
+    // `mediaResolver` charges a host's own resolver: a site's source is the
+    // one most likely to be database- or network-backed, and exempting it
+    // bounds the reader we wrote while leaving unbounded the one a site
+    // supplies. A nested chain asks it once per level, so an uncharged source
+    // is `MAX_COMPOSED_DEPTH` unbounded reads on a route that stated a limit.
+    return async ids => (budget.take() ? await custom(ids) : EMPTY_DEFINITIONS);
+  }
   const collection = config.componentCollection ?? COMPONENT_TAG_COLLECTION;
   const field = config.componentField ?? COMPONENT_DOCUMENT_FIELD;
   const status = config.status ?? (config.draft === true ? "all" : "published");
@@ -844,6 +853,19 @@ function componentSource(
  * extra query per 128, which is the honest price of staying invalidatable.
  */
 const COMPONENT_BATCH_SIZE = 128;
+
+/**
+ * The caps this route holds its documents to, resolved the way the pipeline
+ * resolves them.
+ *
+ * One answer, because two would be a disagreement about which nodes exist: the
+ * fetch decides what to load and the renderer decides what to draw, and a page
+ * whose instances sit past one cap but inside the other loses exactly the
+ * blocks between them.
+ */
+function effectiveLimits(config: BlocksPageConfig): DocumentLimits {
+  return config.limits ?? config.styleContext?.limits ?? DEFAULT_LIMITS;
+}
 
 /** Successive slices of at most `size`. */
 function chunked<T>(items: readonly T[], size: number): T[][] {
@@ -1377,7 +1399,13 @@ function blocksRouteConfig(
       const definitions = await definitionsFor(
         document,
         componentSource(config, readerFor(config), budget, context.locale),
-        limits ?? DEFAULT_LIMITS
+        // The SAME caps the pipeline will read this document under, resolved
+        // once. `prepareDocumentReadStages` falls back to the style context's
+        // when no limits are given directly, so passing the default here made
+        // a route that raised `maxNodes` through `styleContext` fetch for the
+        // first 5,000 nodes while the renderer kept — and tried to draw —
+        // every instance after them.
+        effectiveLimits(config)
       );
 
       return createElement(PageRenderer, {

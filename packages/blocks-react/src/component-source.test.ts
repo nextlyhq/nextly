@@ -162,6 +162,28 @@ describe("the definitions a document reaches", () => {
     expect(found.has("never-published")).toBe(false);
   });
 
+  it("asks once for an id the store has no row for, however often it recurs", async () => {
+    // A miss never enters the map — its absence is what makes the pipeline
+    // report it `missing` rather than `unreadable` — so the map cannot double
+    // as the record of what has been looked for. Without a separate one, a
+    // component several definitions reference is re-queried at every level,
+    // and each retry spends a chunk and a budget claim that a later valid
+    // definition then does not get.
+    const { source, batches } = recording({
+      a: component([instance("n1", "gone"), instance("n2", "b")]),
+      b: component([instance("n3", "gone")]),
+    });
+
+    const found = await definitionsFor(
+      page([instance("i1", "a")]),
+      source,
+      DEFAULT_LIMITS
+    );
+
+    expect(batches).toEqual([["a"], ["gone", "b"]]);
+    expect(found.has("gone")).toBe(false);
+  });
+
   it("asks for nothing when the page holds no instance", async () => {
     const { source, batches } = recording({ hero: component([]) });
 

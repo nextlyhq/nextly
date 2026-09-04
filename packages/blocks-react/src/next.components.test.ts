@@ -238,6 +238,43 @@ describe("the definitions a route reads for its page", () => {
     expect(props.definitions?.has("   ")).toBe(false);
   });
 
+  it("charges a host's own source to the same budget", async () => {
+    // A site's source is the one most likely to be database- or network-backed,
+    // so exempting it bounds the reader we wrote and leaves unbounded the one
+    // the site supplies — the wrong way round, and the reason `mediaResolver`
+    // charges a custom `resolveMedia` too.
+    const asked: string[][] = [];
+    await renderWith({}, page(["hero"]), {
+      maxQueries: 0,
+      resolveComponents: (ids: readonly string[]) => {
+        asked.push([...ids]);
+        return Promise.resolve(new Map());
+      },
+    });
+
+    expect(asked).toEqual([]);
+  });
+
+  it("fetches under the caps the renderer will draw under", async () => {
+    // `prepareDocumentReadStages` falls back to the style context's limits, so
+    // a route that raises `maxNodes` there and not directly would fetch for the
+    // first 5,000 nodes while the renderer kept every instance after them.
+    const ids = Array.from({ length: 3 }, (_, i) => `c${String(i)}`);
+    const store = Object.fromEntries(ids.map(id => [id, definition()]));
+
+    const { calls } = await renderWith(store, page(ids), {
+      styleContext: {
+        breakpoints: { viewport: [], container: [] },
+        limits: { maxDepth: 12, maxNodes: 2, maxBytes: 2_097_152 },
+      },
+    });
+
+    // Two nodes' worth of instances reached, because that is the cap the
+    // renderer is about to read the same document under.
+    const read = componentReads(calls)[0]!;
+    expect((read.where?.id?.in as string[]).length).toBe(2);
+  });
+
   it("asks for nothing when the page embeds no component", async () => {
     const { calls, props } = await renderWith(
       { hero: definition() },

@@ -45,3 +45,11 @@ one of them serving another's components from a shared cache. A page embedding
 more components than a cache can track is now read in several queries, so every
 component still updates the pages that use it. And a component reference that
 is blank rather than missing no longer takes the whole page down.
+
+Three more corrections at the same step. A site that raises its block limit
+through its style settings now loads components for the whole page rather than
+the first part of it. A site that supplies components itself is held to the same
+per-page read allowance as one that does not. And a component that cannot be
+found is looked for once rather than once per place it is referenced from,
+which stops a page spending its allowance on the same absent component and
+losing a later one that is really there.
