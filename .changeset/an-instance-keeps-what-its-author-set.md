@@ -73,3 +73,15 @@ component's copies. A block hidden by an instance no longer counts against the
 page's size limit, since it draws nothing. A component whose visibility setting
 was stored empty now takes the instance's per-screen hiding like any other. And
 copying a pattern no longer fails on a node whose attributes were stored empty.
+
+Two more relationships now travel with the copies. A link pointing at a spot
+inside its own component — the "#pricing" kind — moves with that spot, so it no
+longer sends a reader to somewhere on the page that does not exist; a link
+naming anything else is left exactly as written. And hiding a component only on
+some screen sizes now keeps its full setting, so a component hidden on tablet
+but restored on mobile appears on mobile again, instead of staying hidden all
+the way down.
+
+A component that arrives unreadable is also reported as broken data rather than
+as a component nobody has published, so an author is offered the remedy that
+can actually help.
