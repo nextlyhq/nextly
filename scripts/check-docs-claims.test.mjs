@@ -403,3 +403,68 @@ describe("internal-docs-link", () => {
     ).not.toContain("internal-docs-link");
   });
 });
+
+describe("readme-skeleton", () => {
+  const full = [
+    "# @nextlyhq/thing",
+    "",
+    "Nextly is in alpha. APIs may change before 1.0.",
+    "",
+    "## Install",
+    "",
+    "## Related packages",
+    "",
+    "## License",
+    "",
+  ].join("\n");
+
+  it("passes a README carrying all four sections", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md": full,
+      })
+    ).not.toContain("readme-skeleton");
+  });
+
+  it("fires once per missing section, naming which", async () => {
+    const { root, files } = await fixture({
+      "README.md": "# nextly\n\n@nextlyhq/thing\n",
+      "packages/thing/package.json": pkg(),
+      "packages/thing/README.md": "# @nextlyhq/thing\n\nDoes a thing.\n",
+    });
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files,
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+    });
+    const skeleton = findings.filter(f => f.check === "readme-skeleton");
+    expect(skeleton).toHaveLength(4);
+    expect(skeleton.map(f => f.message).join(" ")).toContain("alpha or stability note");
+    expect(skeleton.map(f => f.message).join(" ")).toContain("License section");
+  });
+
+  it("accepts the house synonyms rather than one spelling", async () => {
+    // `Quickstart` and `See also` are what several packages already use. A check that
+    // demanded a single heading would be a rename dressed up as a rule.
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md":
+          "# t\n\nexperimental\n\n## Quickstart\n\n## See also\n\n## Licence\n",
+      })
+    ).not.toContain("readme-skeleton");
+  });
+
+  it("does not check a private package", async () => {
+    expect(
+      await checksFor({
+        "packages/thing/package.json": pkg({ private: true }),
+        "packages/thing/README.md": "# t\n",
+      })
+    ).not.toContain("readme-skeleton");
+  });
+});

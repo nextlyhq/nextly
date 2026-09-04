@@ -94,4 +94,4 @@ for (const issue of issues) {
 
 ## License
 
-[MIT](https://github.com/nextlyhq/nextly/blob/main/LICENSE.md)
+[MIT](../../LICENSE.md)

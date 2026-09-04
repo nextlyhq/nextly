@@ -244,3 +244,14 @@ Two steps require a real terminal (not a headless CI sandbox): applying the plug
 table (drizzle push needs a TTY) and the `@nextlyhq/plugin-sdk` default/CJS export used by
 the dev auto-seed. Everything else — build, type-check, unit tests — runs anywhere. See
 the `e2e/` suite for the browser interaction tests (run against a live playground).
+
+## Related packages
+
+- [`@nextlyhq/blocks-engine`](../blocks-engine) — the stored document model
+- [`@nextlyhq/blocks-react`](../blocks-react) — the renderer for public pages
+- [`@nextlyhq/builder`](../builder) — the editor shell and canvas
+- [`@nextlyhq/plugin-sdk`](../plugin-sdk) — the SDK this plugin is built on
+
+## License
+
+[MIT](../../LICENSE.md)

@@ -304,6 +304,57 @@ function internalLinks(repoRoot, tracked, findings) {
   }
 }
 
+/**
+ * Every published README carries the same four load-bearing sections.
+ *
+ * These are long-form by decision, which means the same facts are restated in twenty files —
+ * and a restated fact is one that can go stale in nineteen of them. The four checked here are
+ * the ones whose absence is visible on npm and whose presence cannot be inferred: what state
+ * the package is in, how to install it, what it relates to, and its licence. Depth below them
+ * stays a human judgement and is not checked.
+ *
+ * Headings are matched loosely because the house style is not uniform — `Install`,
+ * `Installation`, `Quickstart` and `Usage` all answer the same question, and `See also` is
+ * `Related packages` under another name. Enforcing one spelling would be a rename, not a check.
+ */
+const README_SECTIONS = [
+  { key: "status", label: "an alpha or stability note", test: /in alpha|@?experimental/i },
+  {
+    key: "install",
+    label: "an Install, Installation, Quickstart or Usage section",
+    test: /^##\s+(install|installation|quick\s*start|usage)/im,
+  },
+  {
+    key: "related",
+    label: "a Related packages or See also section",
+    test: /^##\s+(related packages|see also)/im,
+  },
+  { key: "license", label: "a License section", test: /^##\s+licen[sc]e/im },
+];
+
+function readmeSkeleton(repoRoot, packages, findings) {
+  for (const pkg of packages) {
+    const readme = join(pkg.dir, "README.md");
+    if (!existsSync(readme)) continue; // readme-present already reports this
+    let text;
+    try {
+      text = readFileSync(readme, "utf-8");
+    } catch {
+      continue;
+    }
+    for (const section of README_SECTIONS) {
+      if (!section.test.test(text)) {
+        findings.push({
+          check: "readme-skeleton",
+          file: relative(repoRoot, readme),
+          line: null,
+          message: `${pkg.name} is published but its README has no ${section.label}`,
+        });
+      }
+    }
+  }
+}
+
 export async function runChecks({
   repoRoot,
   allowlist = {},
@@ -471,6 +522,7 @@ export async function runChecks({
     }
   }
 
+  readmeSkeleton(repoRoot, packages, findings);
   internalLinks(repoRoot, tracked, findings);
   metaReachability(repoRoot, tracked, findings);
 

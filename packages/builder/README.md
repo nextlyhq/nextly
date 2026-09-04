@@ -3,7 +3,18 @@
 The visual page-builder editor: the shell, the canvas, and the op store that
 everything in it either produces or reads.
 
-**The editor is landing in slices, and every export is `@experimental`.** What
+<p align="center">
+  <a href="https://www.npmjs.com/package/@nextlyhq/builder"><img alt="npm" src="https://img.shields.io/npm/v/@nextlyhq%2Fbuilder?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" /></a>
+</p>
+
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
+> **Every export of this package is additionally `@experimental`** and carries no
+> compatibility guarantee even within alpha.
+
+The editor is landing in slices. What
 ships today is the editor SHELL — the rail, the switched left panel, the canvas
 slot, the inspector and the bars around them — the frame geometry that maps
 between the canvas frame and the host page, the op store that every edit is
@@ -333,3 +344,23 @@ than bundled per package.
 React 19, matching the renderer it draws with. `@nextlyhq/blocks-react` requires
 `react: ^19.0.0`, and it is a dependency here rather than a peer, so a React 18
 host would hit an unsatisfiable peer one level down.
+
+## Install
+
+```bash
+pnpm add @nextlyhq/builder
+```
+
+You are unlikely to install this directly. It arrives with
+[`@nextlyhq/plugin-page-builder`](../plugin-page-builder), which is what an app adds
+to get a page builder.
+
+## Related packages
+
+- [`@nextlyhq/plugin-page-builder`](../plugin-page-builder) — the plugin that mounts this editor
+- [`@nextlyhq/blocks-engine`](../blocks-engine) — the document model every edit produces
+- [`@nextlyhq/blocks-react`](../blocks-react) — the renderer the canvas draws through
+
+## License
+
+[MIT](../../LICENSE.md)
