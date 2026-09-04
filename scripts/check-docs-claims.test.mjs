@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { digestLine, runChecks, splitRefAndPath } from "./check-docs-claims.mjs";
+import {
+  digestLine,
+  renderedProse,
+  runChecks,
+  splitRefAndPath,
+} from "./check-docs-claims.mjs";
 
 /**
  * Each fixture exhibits exactly one defect, and every check is asserted twice:
@@ -401,5 +406,203 @@ describe("internal-docs-link", () => {
         "docs/b.mdx": "# b\n",
       })
     ).not.toContain("internal-docs-link");
+  });
+});
+
+describe("readme-skeleton", () => {
+  const full = [
+    "# @nextlyhq/thing",
+    "",
+    "Nextly is in alpha. APIs may change before 1.0.",
+    "",
+    "## Install",
+    "",
+    "## Related packages",
+    "",
+    "## License",
+    "",
+  ].join("\n");
+
+  it("passes a README carrying all four sections", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md": full,
+      })
+    ).not.toContain("readme-skeleton");
+  });
+
+  it("fires once per missing section, naming which", async () => {
+    const { root, files } = await fixture({
+      "README.md": "# nextly\n\n@nextlyhq/thing\n",
+      "packages/thing/package.json": pkg(),
+      "packages/thing/README.md": "# @nextlyhq/thing\n\nDoes a thing.\n",
+    });
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files,
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+    });
+    const skeleton = findings.filter(f => f.check === "readme-skeleton");
+    expect(skeleton).toHaveLength(4);
+    expect(skeleton.map(f => f.message).join(" ")).toContain("alpha or stability note");
+    expect(skeleton.map(f => f.message).join(" ")).toContain("License section");
+  });
+
+  it("accepts the house synonyms rather than one spelling", async () => {
+    // `Quickstart` and `See also` are what several packages already use. A check that
+    // demanded a single heading would be a rename dressed up as a rule.
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md":
+          "# t\n\nexperimental\n\n## Quickstart\n\n## See also\n\n## Licence\n",
+      })
+    ).not.toContain("readme-skeleton");
+  });
+
+  it("does not check a private package", async () => {
+    expect(
+      await checksFor({
+        "packages/thing/package.json": pkg({ private: true }),
+        "packages/thing/README.md": "# t\n",
+      })
+    ).not.toContain("readme-skeleton");
+  });
+});
+
+describe("readme-skeleton reads only what npm renders", () => {
+  const fenced = [
+    "# @nextlyhq/thing",
+    "",
+    "Does a thing.",
+    "",
+    "Here is the shape every README should have:",
+    "",
+    "````md",
+    "Nextly is in alpha.",
+    "## Install",
+    "## Related packages",
+    "## License",
+    "````",
+    "",
+  ].join("\n");
+
+  it("does not accept sections that exist only inside a code fence", async () => {
+    // Otherwise a README that merely SHOWS the skeleton passes as though it had one.
+    const checks = await checksFor({
+      "README.md": "# nextly\n\n@nextlyhq/thing\n",
+      "packages/thing/package.json": pkg(),
+      "packages/thing/README.md": fenced,
+    });
+    expect(checks).toContain("readme-skeleton");
+  });
+
+  it("does not accept sections that exist only inside an HTML comment", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md":
+          "# t\n\n<!--\nNextly is in alpha.\n## Install\n## Related packages\n## License\n-->\n",
+      })
+    ).toContain("readme-skeleton");
+  });
+
+  it("accepts a Stability section carrying the state, not just the phrase", async () => {
+    // `## Stability` / `Alpha.` is what blocks-engine used before this work, and it is
+    // a correct statement. Demanding the literal words would be demanding boilerplate.
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md":
+          "# t\n\n## Stability\n\nAlpha.\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).not.toContain("readme-skeleton");
+  });
+
+  it("strips fences and comments but keeps the surrounding prose", () => {
+    const out = renderedProse("before\n\n```\n## Install\n```\n\n<!-- ## License -->\n\nafter\n");
+    expect(out).toContain("before");
+    expect(out).toContain("after");
+    expect(out).not.toContain("## Install");
+    expect(out).not.toContain("## License");
+  });
+
+  it("treats an unclosed fence as code through to the end of the file", () => {
+    // Markdown does. Stopping at paired fences would leave the tail in prose, so a
+    // truncated example could satisfy the sections this is looking for.
+    const out = renderedProse("intro\n\n```md\nNextly is in alpha.\n## Install\n");
+    expect(out).toContain("intro");
+    expect(out).not.toContain("## Install");
+    expect(out).not.toContain("in alpha");
+  });
+
+  it("does not accept sections that exist only inside an unclosed fence", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md":
+          "# t\n\n```md\nNextly is in alpha.\n## Install\n## Related packages\n## License\n",
+      })
+    ).toContain("readme-skeleton");
+  });
+
+  it("rejects an empty Status section, which answers nothing", async () => {
+    const checks = await checksFor({
+      "README.md": "# nextly\n\n@nextlyhq/thing\n",
+      "packages/thing/package.json": pkg(),
+      "packages/thing/README.md":
+        "# t\n\n## Status\n\n## Install\n\n## Related packages\n\n## License\n",
+    });
+    expect(checks).toContain("readme-skeleton");
+  });
+
+  it("accepts a Status section once it carries a value", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md":
+          "# t\n\n## Status\n\nBeta.\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).not.toContain("readme-skeleton");
+  });
+});
+
+describe("a fence marker inside a comment is not a fence", () => {
+  it("does not let a commented-out fence swallow the rest of the file", () => {
+    // Running the fence rules before comment removal made `<!--\n```\n-->` eat
+    // everything after it, reporting real sections as missing on a correct README.
+    const out = renderedProse("# t\n\n<!--\n```\n-->\n\n## Status\n\nAlpha.\n\n## License\n");
+    expect(out).toContain("## Status");
+    expect(out).toContain("## License");
+  });
+
+  it("passes a README whose comment contains a stray fence marker", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md":
+          "# t\n\n<!--\n```\n-->\n\n## Status\n\nAlpha.\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).not.toContain("readme-skeleton");
+  });
+
+  it("still strips a real unclosed fence that is not inside a comment", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md":
+          "# t\n\n```md\n## Status\n\nAlpha.\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).toContain("readme-skeleton");
   });
 });

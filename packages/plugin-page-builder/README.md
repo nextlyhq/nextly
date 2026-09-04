@@ -10,14 +10,20 @@ a server-first renderer that ships zero client JS by default.
 > See the [plugin stability ladder](https://nextlyhq.com/docs/plugins/stability) for
 > which plugin surfaces are stable and which are experimental.
 
-> The block model, registries, and render pipeline are stable; the editor
-> interactions are still evolving. MIT-licensed.
+The block model, registries, and render pipeline are stable; the editor interactions
+are still evolving.
 
 ## Install
 
 ```bash
-pnpm add @nextlyhq/plugin-page-builder
+pnpm add @nextlyhq/plugin-page-builder @nextlyhq/builder @nextlyhq/plugin-sdk react-hook-form
 ```
+
+Those three are **peer dependencies** that a scaffolded Nextly app does not already
+have, so install them explicitly rather than relying on your package manager to
+auto-install peers. The plugin's other peers — `@nextlyhq/admin`, `@nextlyhq/ui`,
+`@tanstack/react-query`, `lucide-react`, `nextly`, `next`, `react`, `react-dom` — come
+with the scaffold.
 
 Peers (provided by a Nextly app): `nextly`, `@nextlyhq/admin`, `@nextlyhq/ui`,
 `@nextlyhq/plugin-sdk`, `react`, `react-dom`, `next`, `@tanstack/react-query`,
@@ -244,3 +250,14 @@ Two steps require a real terminal (not a headless CI sandbox): applying the plug
 table (drizzle push needs a TTY) and the `@nextlyhq/plugin-sdk` default/CJS export used by
 the dev auto-seed. Everything else — build, type-check, unit tests — runs anywhere. See
 the `e2e/` suite for the browser interaction tests (run against a live playground).
+
+## Related packages
+
+- [`@nextlyhq/blocks-engine`](../blocks-engine) — the stored document model
+- [`@nextlyhq/blocks-react`](../blocks-react) — the renderer for public pages
+- [`@nextlyhq/builder`](../builder) — the editor shell and canvas
+- [`@nextlyhq/plugin-sdk`](../plugin-sdk) — the SDK this plugin is built on
+
+## License
+
+[MIT](../../LICENSE.md)

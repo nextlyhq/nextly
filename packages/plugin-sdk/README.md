@@ -2,14 +2,21 @@
 
 The author-facing SDK for building [Nextly](https://nextlyhq.com) plugins.
 
-> **⚠️ Alpha (`0.x`) — pin your versions.**
->
-> The plugin API surface listed in [`STABILITY.md`](./STABILITY.md) is now **stable
-> (`@public`) and semver-protected** (D40): once Nextly reaches `1.0`, breaking it
-> requires a major version bump. Everything still marked `@experimental` carries **no**
-> compatibility guarantee and may change in any release. While we are pre-`1.0`, **pin
-> your `nextly` / `@nextlyhq/plugin-sdk` versions** and read the release notes before
-> upgrading.
+<p align="center">
+  <a href="https://www.npmjs.com/package/@nextlyhq/plugin-sdk"><img alt="npm" src="https://img.shields.io/npm/v/@nextlyhq%2Fplugin-sdk?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" /></a>
+</p>
+
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
+> See the [stability ladder](https://nextlyhq.com/docs/plugins/stability) for which
+> plugin surfaces are settled and which are still moving.
+
+The surface listed in [`STABILITY.md`](./STABILITY.md) is `@public` and
+semver-protected: once Nextly reaches `1.0`, breaking it requires a major version
+bump. Anything still marked `@experimental` carries no such guarantee and may change
+in any release.
 
 ## What this package is
 
@@ -157,6 +164,13 @@ npm create nextly-app -- --template plugin
 
 which generates the package anatomy plus an embedded `dev/` playground (a minimal
 Nextly app on SQLite with hot-reload) for iterating on your plugin locally.
+
+## Related packages
+
+- [`@nextlyhq/plugin-page-builder`](../plugin-page-builder) — a first-party plugin built on this SDK
+- [`@nextlyhq/plugin-seo`](../plugin-seo) and [`@nextlyhq/plugin-form-builder`](../plugin-form-builder) — the other two
+- [`@nextlyhq/ui`](../ui) — components for admin UI a plugin contributes
+- [`@nextlyhq/admin-css`](../admin-css) — compiles a plugin's `admin.styles`
 
 ## License
 

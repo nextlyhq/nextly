@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const readableDocumentIds = vi.fn();
 const singleDocumentReadable = vi.fn();
 const resolveSingleDocumentId = vi.fn();
-const contentKinds = vi.fn();
+const contentSnapshot = vi.fn();
 const configValue = vi.fn();
 
 // The registry decides whether a row's own scope kind is still the live one, and
@@ -20,7 +20,7 @@ const configValue = vi.fn();
 // Both are container-backed, so a harness that omits them leaves every row
 // undecidable and the whole file green-on-nothing.
 vi.mock("../../../services/lib/registered-content-slugs", () => ({
-  registeredContentKinds: () => contentKinds() as unknown,
+  registeredContentSnapshot: () => contentSnapshot() as unknown,
 }));
 vi.mock("../../../di/container", () => ({
   container: {
@@ -40,9 +40,22 @@ vi.mock("../../singles/services/single-document-access", () => ({
     resolveSingleDocumentId(...args) as unknown,
 }));
 
-import { visiblePendingEdits } from "../pending-edit-visibility";
+import {
+  resolvePendingEditScope,
+  visiblePendingEdits,
+  type PendingEditScope,
+} from "../pending-edit-visibility";
 
 const caller = { user: { id: "user-1", roles: ["editor"] } };
+
+/**
+ * The install-wide facts, resolved the way the source resolves them.
+ *
+ * Taken from `resolvePendingEditScope` rather than hand-built, so these cases
+ * exercise the object the product actually passes down. A literal written here
+ * would go on agreeing with itself after the resolver's shape changed.
+ */
+const scopeNow = (): Promise<PendingEditScope> => resolvePendingEditScope();
 
 function row(patch: {
   entryId: string;
@@ -74,12 +87,13 @@ beforeEach(() => {
   );
   singleDocumentReadable.mockResolvedValue(true);
   resolveSingleDocumentId.mockResolvedValue("single-live");
-  contentKinds.mockResolvedValue(
-    new Map([
+  contentSnapshot.mockResolvedValue({
+    kinds: new Map([
       ["posts", "collection"],
       ["site-settings", "single"],
-    ])
-  );
+    ]),
+    degraded: false,
+  });
   configValue.mockReturnValue({
     localization: {
       locales: [
@@ -104,7 +118,8 @@ describe("collection rows", () => {
         row({ entryId: "e1", locale: "en" }),
         row({ entryId: "e1", locale: "de" }),
       ],
-      caller
+      caller,
+      await scopeNow()
     );
 
     expect(readableDocumentIds).toHaveBeenCalledTimes(2);
@@ -132,7 +147,8 @@ describe("collection rows", () => {
         row({ entryId: "e1", locale: "de" }),
         row({ entryId: "e1", locale: "en" }),
       ],
-      caller
+      caller,
+      await scopeNow()
     );
 
     expect(visible.map(r => r.locale)).toEqual(["en"]);
@@ -159,7 +175,8 @@ describe("collection rows", () => {
       Array.from({ length: 8 }, (_, index) =>
         row({ entryId: `e${index}`, locale: `l${index}` })
       ),
-      caller
+      caller,
+      await scopeNow()
     );
 
     // More than one at a time proves it is not serial; the bound proves it is
@@ -176,7 +193,8 @@ describe("collection rows", () => {
         row({ entryId: "e1", locale: "en" }),
         row({ entryId: "e2", locale: "en" }),
       ],
-      caller
+      caller,
+      await scopeNow()
     );
 
     expect(readableDocumentIds).toHaveBeenCalledTimes(1);
@@ -199,7 +217,8 @@ describe("rows nothing can decide", () => {
     // exists to prevent, wearing a different hat.
     const visible = await visiblePendingEdits(
       [row({ entryId: "e1", locale: "fr" })],
-      caller
+      caller,
+      await scopeNow()
     );
 
     expect(visible).toEqual([]);
@@ -213,7 +232,8 @@ describe("rows nothing can decide", () => {
         row({ entryId: "e1", locale: "fr" }),
         row({ entryId: "e1", locale: "en" }),
       ],
-      caller
+      caller,
+      await scopeNow()
     );
 
     expect(visible.map(r => r.locale)).toEqual(["en"]);
@@ -232,7 +252,8 @@ describe("rows nothing can decide", () => {
           scopeSlug: "site-settings",
         }),
       ],
-      caller
+      caller,
+      await scopeNow()
     );
 
     expect(visible).toEqual([]);
@@ -243,7 +264,8 @@ describe("rows nothing can decide", () => {
   it("drops a row whose slug is in neither registry", async () => {
     const visible = await visiblePendingEdits(
       [row({ entryId: "e1", scopeSlug: "deleted-collection" })],
-      caller
+      caller,
+      await scopeNow()
     );
 
     expect(visible).toEqual([]);
@@ -260,7 +282,11 @@ describe("single rows", () => {
     // a missing Single -- so probing first makes loading a dashboard perform a
     // write. The id is resolved from the backing row instead, which is what
     // `resolveSingleDocumentId` exists for.
-    await visiblePendingEdits([single("single-live")], caller);
+    await visiblePendingEdits(
+      [single("single-live")],
+      caller,
+      await scopeNow()
+    );
 
     expect(resolveSingleDocumentId).toHaveBeenCalledWith("site-settings");
     expect(singleDocumentReadable).toHaveBeenCalled();
@@ -272,7 +298,8 @@ describe("single rows", () => {
     // replacement's verdict exposes the predecessor's entry id and edit time.
     const visible = await visiblePendingEdits(
       [single("single-deleted")],
-      caller
+      caller,
+      await scopeNow()
     );
 
     expect(visible).toEqual([]);
@@ -282,9 +309,48 @@ describe("single rows", () => {
   it("drops every row when the Single has never been materialized", async () => {
     resolveSingleDocumentId.mockResolvedValue(null);
 
-    const visible = await visiblePendingEdits([single("single-live")], caller);
+    const visible = await visiblePendingEdits(
+      [single("single-live")],
+      caller,
+      await scopeNow()
+    );
 
     expect(visible).toEqual([]);
     expect(singleDocumentReadable).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolving the scope", () => {
+  it("reads the registry ONCE, however many pages are judged against it", async () => {
+    // 🔴 The registry and the locale config both answer an unreachable
+    // dependency with an EMPTY result, on purpose. Re-read per page, that
+    // safety inverts: a transient failure on one page drops every row that
+    // page holds while its neighbours keep theirs, and the walk goes on to
+    // publish the shortfall as a whole number. One resolution cannot fail
+    // halfway.
+    const scope = await scopeNow();
+    const rows = Array.from({ length: 3 }, (_, index) =>
+      row({ entryId: `e${index}`, locale: "en" })
+    );
+
+    for (const one of rows) await visiblePendingEdits([one], caller, scope);
+
+    expect(contentSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries the registry's own report that it could not be enumerated", async () => {
+    contentSnapshot.mockResolvedValue({ kinds: new Map(), degraded: true });
+
+    expect((await scopeNow()).degraded).toBe(true);
+  });
+
+  it("is NOT degraded when an install has simply registered nothing", async () => {
+    // The control that keeps `degraded` meaning what it says. An empty
+    // registry and an unreachable one produce the same empty map, and folding
+    // them together would either fail every empty install or excuse the case
+    // this flag exists to report.
+    contentSnapshot.mockResolvedValue({ kinds: new Map(), degraded: false });
+
+    expect((await scopeNow()).degraded).toBe(false);
   });
 });
