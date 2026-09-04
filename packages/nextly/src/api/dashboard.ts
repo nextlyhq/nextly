@@ -217,10 +217,17 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
     : 5;
 
   const service = await getActivityLogService();
-  const scope = await resolveReadableResources(await readCaller(auth));
-  const result = await service.getRecentActivity({ limit, scope });
+  // The caller WHOLE, and resolved ONCE. Both consumers read it: the scope
+  // decides which collections are in reach, and the feed then authorizes each
+  // row's DOCUMENT as this caller -- a stored owner-only or custom read rule
+  // makes those two different sets, and a feed given only the scope reports one
+  // author's entry titles to another.
+  const caller = await readCaller(auth);
+  const scope = await resolveReadableResources(caller);
+  const result = await service.getRecentActivity({ limit, scope, caller });
 
-  // Cursor-shaped read: keep `hasMore` adjacent to `activities` and `total`.
+  // Cursor-shaped read: `hasMore` sits beside `activities`, with no `total` --
+  // see `ActivityLogResult` for why a count is not published here.
   // Spread into a fresh literal so the response-shape generic accepts the
   // named `ActivityLogResult` interface (no implicit index signature).
   return respondData({ ...result }, { headers: PRIVATE_NO_STORE_HEADERS });

@@ -43,7 +43,6 @@ interface ActivityLogEntry {
 
 interface ActivityLogApiResponse {
   activities: ActivityLogEntry[];
-  total: number;
   hasMore: boolean;
 }
 
@@ -116,7 +115,6 @@ export function useRecentActivity(limit = 10) {
       );
       return {
         activities: raw.activities.map(mapEntry),
-        total: raw.total,
         hasMore: raw.hasMore,
       };
     },

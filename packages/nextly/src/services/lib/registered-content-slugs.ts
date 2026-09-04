@@ -87,7 +87,11 @@ export async function registeredContentSlugs(): Promise<string[]> {
  * needs this to tell a live subject from an orphaned one.
  *
  * A name in NEITHER registry is absent rather than defaulted: guessing a kind
- * for it would send a row to a read path that cannot answer about it.
+ * for it would send a row to a read path that cannot answer about it. The
+ * activity log makes that concrete — it files settings mutations under
+ * namespaces that are neither a collection nor a single, and its scope column
+ * is free text, so a map that defaulted them would hand a settings row to a
+ * content read path with nothing to say about it.
  *
  * Collections are written last, so a slug claimed by both resolves to the
  * collection. The registries do not permit that overlap; stating the precedence

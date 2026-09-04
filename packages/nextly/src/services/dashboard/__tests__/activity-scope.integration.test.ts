@@ -1,6 +1,6 @@
 /**
  * The activity feed's permission scope must exclude BOTH sides of a read: the
- * rows a caller may not see, and the total that counts them.
+ * rows a caller may not see.
  *
  * `activity-scope.test.ts` covers this against a mocked adapter, which proves
  * the arguments `getRecentActivity` builds but never executes the SQL
@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 describe("activity feed scope (sqlite integration)", () => {
-  it("excludes an unscoped collection from both the activities list and the total", async () => {
+  it("excludes an unscoped collection from the activities list", async () => {
     current = await createTestNextly({ dialect: "sqlite" });
 
     // The write path decides identity by checking whether the account still
@@ -55,16 +55,21 @@ describe("activity feed scope (sqlite integration)", () => {
 
     const result = await activityLog.getRecentActivity({
       scope: someResources(["posts"]),
+      // Required now: the feed authorizes each row's DOCUMENT as this caller,
+      // and answers empty without one. These rows name no entry, so the scope
+      // is the whole decision for them.
+      caller: { user: { id: actorId, roles: [] } },
     });
 
     expect(result.activities.map(a => a.entryTitle)).toEqual(["Visible Post"]);
     expect(result.activities.some(a => a.entryTitle === "Hidden Page")).toBe(
       false
     );
-    // `total` is what exercises countActivities' own IN-clause SQL end to
-    // end. A placeholder/params mismatch there would leave `activities`
-    // correct (a different code path, `adapter.select`) and only this number
-    // silently wrong -- exactly the failure mode I-1 describes.
-    expect(result.total).toBe(1);
+    // There is no `total` to assert any more. It was a `COUNT(*)` over the
+    // rows the COLLECTION scope admitted, so it counted edits to documents the
+    // reader may not open, and it cannot be narrowed without authorizing every
+    // matching row -- unbounded over an audit table. The count and the
+    // hand-written SQL behind it were removed rather than corrected.
+    expect(result.hasMore).toBe(false);
   });
 });

@@ -13,7 +13,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
+import type { SqlParam, WhereClause } from "@nextlyhq/adapter-drizzle/types";
 import { type Column, type Table } from "drizzle-orm";
 
 import { toDbError } from "../../database/errors";
@@ -24,9 +24,15 @@ import { toDbError } from "../../database/errors";
 import { insertErasureAware } from "../../domains/audit/erasure-aware-insert";
 import { NextlyError } from "../../errors";
 import { BaseService } from "../base-service";
+import { visibleDocuments, type DocumentRef } from "../lib/readable-documents";
+import { registeredContentKinds } from "../lib/registered-content-slugs";
 import type { Logger } from "../shared";
 
-import { someResources, type ReadableResources } from "./readable-resources";
+import {
+  someResources,
+  type ReadableResources,
+  type ReadCaller,
+} from "./readable-resources";
 
 /** The three mutation actions tracked in the activity log. */
 export type ActivityLogAction = "create" | "update" | "delete";
@@ -84,10 +90,23 @@ export interface LogActivityInput {
   metadata?: Record<string, unknown>;
 }
 
-/** Paginated activity log response. */
+/**
+ * A page of activity, and whether more of it exists.
+ *
+ * 🔴 There is deliberately no `total`. It used to be a `COUNT(*)` over the rows
+ * a caller's COLLECTION scope admitted, which counted edits to documents the
+ * caller may not read — the same disclosure the rows themselves carried, in a
+ * number. It cannot simply be narrowed either: a document rule can be an
+ * arbitrary function, so an authorized total means authorizing every matching
+ * row, which is unbounded over an audit table that grows forever.
+ *
+ * Publishing a number that cannot be made correct is worse than publishing
+ * none, so `hasMore` carries the pagination instead — the cursor-shaped answer
+ * this endpoint was already moving toward, and the one that does not put an
+ * unbounded aggregate on a growing table in front of every dashboard load.
+ */
 export interface ActivityLogResult {
   activities: ActivityLogEntry[];
-  total: number;
   hasMore: boolean;
 }
 
@@ -103,9 +122,60 @@ export interface ActivityLogQueryOptions {
    * scope it must get nothing rather than everything.
    */
   scope?: ReadableResources;
+  /**
+   * WHO is reading, so each row's document can be authorized.
+   *
+   * 🔴 Required in practice for the same reason `scope` is, and omitted the
+   * same way: no caller means no document can be authorized, so a feed asked
+   * without one answers empty rather than answering about everything the scope
+   * admits. The scope decides which collections are in reach; only the caller
+   * decides which of their documents are, and a stored `owner-only` or `custom`
+   * read rule makes those different sets.
+   */
+  caller?: ReadCaller;
 }
 
 const TABLE = "activity_log";
+
+/**
+ * Rows read per refill round.
+ *
+ * Larger than a dashboard page on purpose: a card asks for five, and reading
+ * five at a time would spend a round trip per unreadable row. Small enough that
+ * a round is a cheap read on a table that only grows.
+ */
+const ACTIVITY_PAGE_SIZE = 100;
+
+/**
+ * How many rounds a page will refill before answering short.
+ *
+ * The bound on an install whose recent activity is almost entirely unreadable
+ * to this caller. Reaching it returns FEWER rows than asked for, never rows the
+ * caller may not see, so the failure direction is a thin feed rather than a
+ * disclosure.
+ */
+const MAX_REFILL_ROUNDS = 10;
+
+/**
+ * The document an activity row is about, or `null` when it is about no document.
+ *
+ * The row's `collection` is a FREE STRING whose namespace is deliberately wider
+ * than the registries — settings mutations are filed under names that are
+ * neither a collection nor a single — so the registry lookup is what separates
+ * a content event from an install-level one. Guessing a kind instead would send
+ * a settings row to a content read path that cannot answer about it.
+ */
+function documentRefOf(
+  row: Record<string, unknown>,
+  kinds: ReadonlyMap<string, "collection" | "single">
+): DocumentRef | null {
+  const slug = typeof row.collection === "string" ? row.collection : undefined;
+  const entryId = typeof row.entryId === "string" ? row.entryId : undefined;
+  if (!slug || !entryId) return null;
+  const kind = kinds.get(slug);
+  if (!kind) return null;
+  return { kind, slug, entryId };
+}
 
 /**
  * The Drizzle surface an activity write needs.
@@ -318,6 +388,7 @@ export class ActivityLogService extends BaseService {
     // exposes entry titles across every collection, so a caller that forgets
     // to pass one gets nothing rather than everything.
     const scope = options?.scope ?? someResources([]);
+    const caller = options?.caller;
 
     try {
       // Each filter carries BOTH spellings because its two consumers disagree
@@ -351,7 +422,7 @@ export class ActivityLogService extends BaseService {
         // dialects, and the short-circuit must happen BEFORE the query is
         // built rather than let the driver reject it.
         if (scope.resources.size === 0) {
-          return { activities: [], total: 0, hasMore: false };
+          return { activities: [], hasMore: false };
         }
         filters.push({
           property: "collection",
@@ -372,19 +443,20 @@ export class ActivityLogService extends BaseService {
             }
           : undefined;
 
-      const rows = await this.adapter.select<Record<string, unknown>>(TABLE, {
+      // One past the page, so `hasMore` is an observation rather than a guess:
+      // the extra row is fetched, AUTHORIZED, and then dropped. Counting
+      // candidates instead would promise another page that document rules may
+      // empty.
+      const visible = await this.visibleActivity(
         where,
-        orderBy: [{ column: "createdAt", direction: "desc" }],
-        limit: limit + 1,
+        limit + 1,
         offset,
-      });
-
-      const hasMore = rows.length > limit;
-      const entries = (hasMore ? rows.slice(0, limit) : rows).map(this.mapRow);
-
-      const total = await this.countActivities(filters);
-
-      return { activities: entries, total, hasMore };
+        caller
+      );
+      return {
+        activities: visible.slice(0, limit).map(this.mapRow),
+        hasMore: visible.length > limit,
+      };
     } catch (error) {
       this.logger.error("Failed to query activity log", {
         error: error instanceof Error ? error.message : String(error),
@@ -399,36 +471,92 @@ export class ActivityLogService extends BaseService {
     }
   }
 
-  private async countActivities(filters: ActivityFilter[]): Promise<number> {
-    try {
-      let sql = `SELECT COUNT(*) as count FROM ${TABLE}`;
-      const params: SqlParam[] = [];
+  /**
+   * Up to `want` activity rows the caller may actually be told about.
+   *
+   * 🔴 Authorization happens AFTER the read and cannot be pushed into it. A
+   * stored read rule is a constraint over the COLLECTION's own fields, and
+   * `activity_log` carries none of them — only a free-text collection name, an
+   * entry id and a denormalised title — so there is no predicate to add here.
+   * Filtering afterwards is what makes the page short, which is why it refills.
+   *
+   * Refilling rather than filtering one page: a page whose rows are mostly
+   * unreadable would otherwise answer with two rows and `hasMore: false`, and
+   * the reader would take that as the end of the feed rather than as the end of
+   * what this page happened to contain.
+   */
+  private async visibleActivity(
+    where: WhereClause | undefined,
+    want: number,
+    offset: number,
+    caller?: ReadCaller
+  ): Promise<Record<string, unknown>[]> {
+    // No caller means no document can be authorized, and this feed carries
+    // entry titles -- so it answers nothing rather than everything the scope
+    // admits. Same fail-closed direction as an omitted scope.
+    if (!caller) return [];
 
-      if (filters.length > 0) {
-        // Placeholder numbering derives from `params.length` as each value is
-        // pushed, not from the filter's own index: an `IN` filter contributes
-        // several parameters, so `$${i + 1}` -- correct only while every
-        // filter carried exactly one value -- would bind the wrong values
-        // for every filter after the first `IN`.
-        const clauses = filters.map(f => this.filterClause(f, params));
-        sql += ` WHERE ${clauses.join(" AND ")}`;
-      }
+    const kinds = await registeredContentKinds();
+    const visible: Record<string, unknown>[] = [];
+    let cursor = offset;
 
-      const result = await this.adapter.executeQuery<{
-        count: number | string;
-      }>(sql, params);
-
-      return Number(result[0]?.count ?? 0);
-    } catch (error) {
-      // Matches the sibling catch in `getRecentActivity`: a placeholder/params
-      // mismatch or a dialect failure here would otherwise surface as a silent
-      // 0 with nothing in the logs to explain it -- the `total` field would be
-      // wrong and nothing would say why.
-      this.logger.error("Failed to count activities", {
-        error: error instanceof Error ? error.message : String(error),
+    // Bounded so an install whose recent activity is almost entirely
+    // unreadable cannot walk the whole table for one card. Reaching it returns
+    // a SHORT page, never a wrong one.
+    for (let round = 0; round < MAX_REFILL_ROUNDS; round++) {
+      const page = await this.adapter.select<Record<string, unknown>>(TABLE, {
+        where,
+        orderBy: [{ column: "createdAt", direction: "desc" }],
+        limit: ACTIVITY_PAGE_SIZE,
+        offset: cursor,
       });
-      return 0;
+      if (page.length === 0) break;
+      cursor += page.length;
+
+      visible.push(...(await this.authorizedRows(page, kinds, caller)));
+      if (visible.length >= want) break;
+      // A short page is the end of the table, not the end of this round.
+      if (page.length < ACTIVITY_PAGE_SIZE) break;
     }
+
+    return visible.slice(0, want);
+  }
+
+  /**
+   * The rows of `page` whose subject this caller may read.
+   *
+   * Three kinds of row, and only one of them names a document:
+   *
+   * - A row with NO entry id is an install-level event -- a settings mutation
+   *   filed under a namespace that is neither a collection nor a single. There
+   *   is no document to authorize, and the caller's scope already admitted the
+   *   namespace, so it is kept. Dropping these would remove SMTP-credential
+   *   rotations and their kin from the feed entirely.
+   * - A row naming a slug in NEITHER registry is the same case wearing an entry
+   *   id, and is kept for the same reason: the scope admitted the namespace and
+   *   there is no content read path that could answer about it. It is not a way
+   *   in -- the scope is built from the registries plus those namespaces, so a
+   *   slug outside both never reaches this method.
+   * - A row naming a registered collection or single is authorized as the
+   *   document it names, by the same decision the pending-edit cards use.
+   */
+  private async authorizedRows(
+    page: readonly Record<string, unknown>[],
+    kinds: ReadonlyMap<string, "collection" | "single">,
+    caller: ReadCaller
+  ): Promise<Record<string, unknown>[]> {
+    const documentRows = page.filter(row => documentRefOf(row, kinds) !== null);
+    const readable = new Set(
+      await visibleDocuments(
+        documentRows,
+        // Non-null by construction: the filter above kept only rows this resolves.
+        row => documentRefOf(row, kinds) as DocumentRef,
+        caller
+      )
+    );
+    return page.filter(
+      row => documentRefOf(row, kinds) === null || readable.has(row)
+    );
   }
 
   /**
