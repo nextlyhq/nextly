@@ -15,7 +15,10 @@
  * repair was to route the numbers through the access-enforced path rather than
  * to reproduce the rule. This module is that repair, made reusable — the
  * pending-edit cards and the activity feed are two surfaces of it, and any later
- * system source keyed by collection and document id is a third.
+ * system source keyed by collection and document id is a third. Those surfaces
+ * reach it through {@link ./document-visibility}, which decides WHICH documents
+ * a batch of rows names; this module answers the narrower question it is built
+ * from — which ids of ONE collection, in ONE language, survive its read rules.
  *
  * The rule is never re-implemented here. A stored rule can be `owner-only` or a
  * `custom` function, and both return a query constraint expressed over the
@@ -38,24 +41,6 @@ import type { ReadCaller } from "../dashboard/readable-resources";
  * driver refuses. Matches the chunk the versions repository already deletes in.
  */
 const ID_CHUNK_SIZE = 500;
-
-/** What a row keyed by content has to name for its document to be authorized. */
-export interface DocumentRef {
-  /**
-   * Which registry owns the slug. A Single is read through its own service, so
-   * a row that mislabels one as a collection is not merely slower — it asks a
-   * question about a table that does not hold the document.
-   */
-  kind: "collection" | "single";
-  slug: string;
-  entryId: string;
-  /**
-   * Which translation, for a localized Single. A localized Single is a different
-   * document per language and a rule can answer differently for each, so the
-   * verdict is per locale rather than per slug.
-   */
-  locale?: string | null;
-}
 
 /** `ids` split into statement-sized runs. */
 function chunked(ids: readonly string[]): string[][] {
@@ -120,120 +105,4 @@ export async function readableDocumentIds(
     }
   }
   return readable;
-}
-
-/** Items grouped by the slug their document belongs to, order preserved. */
-function bySlug<T>(
-  items: readonly T[],
-  ref: (item: T) => DocumentRef
-): Map<string, T[]> {
-  const grouped = new Map<string, T[]>();
-  for (const item of items) {
-    const slug = ref(item).slug;
-    const existing = grouped.get(slug);
-    if (existing) existing.push(item);
-    else grouped.set(slug, [item]);
-  }
-  return grouped;
-}
-
-/** The collection items whose documents survive that collection's read rules. */
-async function visibleCollectionItems<T>(
-  items: readonly T[],
-  ref: (item: T) => DocumentRef,
-  caller: ReadCaller
-): Promise<Set<T>> {
-  const visible = new Set<T>();
-  for (const [slug, slugItems] of bySlug(items, ref)) {
-    const readable = await readableDocumentIds(
-      slug,
-      slugItems.map(item => ref(item).entryId),
-      caller
-    );
-    for (const item of slugItems) {
-      if (readable.has(ref(item).entryId)) visible.add(item);
-    }
-  }
-  return visible;
-}
-
-/**
- * The single items whose document this caller may read, asked once per language.
- *
- * `routeAuthorized: false` states the truth: the surface asking this authorized
- * a dashboard read, not a read of this Single, so the coarse gate has not run
- * for that operation and must not be skipped. Claiming otherwise would hand a
- * caller holding no read grant the existence and edit time of the document.
- */
-async function visibleSingleItems<T>(
-  items: readonly T[],
-  ref: (item: T) => DocumentRef,
-  caller: ReadCaller
-): Promise<Set<T>> {
-  const visible = new Set<T>();
-  if (items.length === 0) return visible;
-
-  // 🔴 Imported HERE rather than at the top of the module, because the static
-  // edge is a cycle: the Singles read path imports the versions domain, which
-  // is one of this module's callers. Rollup already reports that shape
-  // elsewhere in this package as producing a circular chunk dependency and a
-  // broken execution order, and the failure would land at boot rather than
-  // here. Deferring it also means a caller whose rows are all collections never
-  // loads the Singles query service at all.
-  const { singleDocumentReadable } = await import(
-    "../../domains/singles/services/single-document-access"
-  );
-
-  const verdicts = new Map<string, Promise<boolean>>();
-  for (const item of items) {
-    const { slug, locale } = ref(item);
-    const key = `${slug} ${locale ?? ""}`;
-    let verdict = verdicts.get(key);
-    if (!verdict) {
-      verdict = singleDocumentReadable(slug, {
-        user: caller.user,
-        ...(caller.authenticatedScope
-          ? { actor: caller.authenticatedScope }
-          : {}),
-        routeAuthorized: false,
-        ...(locale === null || locale === undefined ? {} : { locale }),
-      });
-      verdicts.set(key, verdict);
-    }
-    if (await verdict) visible.add(item);
-  }
-  return visible;
-}
-
-/**
- * `items`, in their original order, keeping only those whose document the
- * caller may be told about.
- *
- * The two kinds are decided by different paths because they are different
- * questions: a collection document is one row among many and is asked for by
- * id, while a Single is one document per language read through its own service.
- * A caller that collapsed them would ask about a table that does not hold the
- * document and read the refusal as a denial.
- */
-export async function visibleDocuments<T>(
-  items: readonly T[],
-  ref: (item: T) => DocumentRef,
-  caller: ReadCaller
-): Promise<T[]> {
-  if (items.length === 0) return [];
-
-  const [collections, singles] = await Promise.all([
-    visibleCollectionItems(
-      items.filter(item => ref(item).kind === "collection"),
-      ref,
-      caller
-    ),
-    visibleSingleItems(
-      items.filter(item => ref(item).kind === "single"),
-      ref,
-      caller
-    ),
-  ]);
-
-  return items.filter(item => collections.has(item) || singles.has(item));
 }

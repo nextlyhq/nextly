@@ -1,356 +1,89 @@
 /**
- * How pending-edit rows are handed to the read path for a verdict.
+ * What a version row is translated INTO before anyone decides about it.
  *
- * The verdict itself belongs to the collection and Singles read paths and is
- * driven against a real database elsewhere. What this file pins is the SHAPE of
- * the question — which rows are asked about, grouped how, and which are never
- * asked about at all — because that is where this module can be wrong while
- * every access rule underneath it is right.
+ * The decision itself moved to `services/lib/document-visibility`, where the
+ * activity feed asks the same question, and is driven there against a real
+ * database. What is left here is the translation, and it is worth its own file
+ * for one reason: `VersionScopeKind` is WIDER than the two kinds a content read
+ * path can answer for, so this is the seam where a row that nothing can judge
+ * has to be recognised rather than coerced.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-const readableDocumentIds = vi.fn();
-const singleDocumentReadable = vi.fn();
-const resolveSingleDocumentId = vi.fn();
-const contentSnapshot = vi.fn();
-const configValue = vi.fn();
+const visibleDocuments = vi.fn();
 
-// The registry decides whether a row's own scope kind is still the live one, and
-// the localization config decides whether its language can still be read in.
-// Both are container-backed, so a harness that omits them leaves every row
-// undecidable and the whole file green-on-nothing.
-vi.mock("../../../services/lib/registered-content-slugs", () => ({
-  registeredContentSnapshot: () => contentSnapshot() as unknown,
-}));
-vi.mock("../../../di/container", () => ({
-  container: {
-    has: () => true,
-    get: () => configValue() as unknown,
-  },
+vi.mock("../../../services/lib/document-visibility", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../services/lib/document-visibility")
+  >()),
+  visibleDocuments: (...args: unknown[]) =>
+    visibleDocuments(...args) as unknown,
 }));
 
-vi.mock("../../../services/lib/readable-documents", () => ({
-  readableDocumentIds: (...args: unknown[]) =>
-    readableDocumentIds(...args) as unknown,
-}));
-vi.mock("../../singles/services/single-document-access", () => ({
-  singleDocumentReadable: (...args: unknown[]) =>
-    singleDocumentReadable(...args) as unknown,
-  resolveSingleDocumentId: (...args: unknown[]) =>
-    resolveSingleDocumentId(...args) as unknown,
-}));
-
+import type { DocumentRef } from "../../../services/lib/document-visibility";
 import {
-  resolvePendingEditScope,
   visiblePendingEdits,
   type PendingEditScope,
 } from "../pending-edit-visibility";
 
 const caller = { user: { id: "user-1", roles: ["editor"] } };
+const scope = {
+  kinds: new Map<string, "collection" | "single">(),
+  locales: null,
+  degraded: false,
+} satisfies PendingEditScope;
 
-/**
- * The install-wide facts, resolved the way the source resolves them.
- *
- * Taken from `resolvePendingEditScope` rather than hand-built, so these cases
- * exercise the object the product actually passes down. A literal written here
- * would go on agreeing with itself after the resolver's shape changed.
- */
-const scopeNow = (): Promise<PendingEditScope> => resolvePendingEditScope();
-
-function row(patch: {
-  entryId: string;
-  locale?: string | null;
-  scopeKind?: string;
-  scopeSlug?: string;
-}) {
+function row(patch: { scopeKind: string; locale?: string | null }) {
   return {
-    id: `v-${patch.entryId}-${patch.locale ?? "none"}`,
-    scopeKind: patch.scopeKind ?? "collection",
-    scopeSlug: patch.scopeSlug ?? "posts",
-    entryId: patch.entryId,
+    id: "v1",
+    scopeKind: patch.scopeKind,
+    scopeSlug: "posts",
+    entryId: "e1",
     locale: patch.locale ?? null,
-    updatedAt: new Date("2026-01-01T00:00:00Z"),
-    versionNo: null,
-    status: "draft",
-    isAutosave: false,
-    label: null,
-    sourceVersionNo: null,
-    createdBy: null,
-    createdAt: new Date("2020-01-01T00:00:00Z"),
   } as unknown as Parameters<typeof visiblePendingEdits>[0][number];
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  readableDocumentIds.mockImplementation((_slug, ids: string[]) =>
-    Promise.resolve(new Set(ids))
-  );
-  singleDocumentReadable.mockResolvedValue(true);
-  resolveSingleDocumentId.mockResolvedValue("single-live");
-  contentSnapshot.mockResolvedValue({
-    kinds: new Map([
-      ["posts", "collection"],
-      ["site-settings", "single"],
-    ]),
-    degraded: false,
-  });
-  configValue.mockReturnValue({
-    localization: {
-      locales: [
-        { code: "en" },
-        { code: "de" },
-        ...Array.from({ length: 8 }, (_, index) => ({ code: `l${index}` })),
-      ],
-    },
-  });
-});
+/** The ref the translation produced for `input`, as the decision would see it. */
+async function refFor(
+  input: ReturnType<typeof row>
+): Promise<DocumentRef | null> {
+  visibleDocuments.mockResolvedValue([]);
+  await visiblePendingEdits([input], caller, scope);
+  const [, ref] = visibleDocuments.mock.calls[0] as [
+    unknown,
+    (item: unknown) => DocumentRef | null,
+  ];
+  return ref(input);
+}
 
-describe("collection rows", () => {
-  it("asks about each LOCALE separately, carrying the locale into the read", async () => {
-    // 🔴 A stored read rule is a predicate over the collection's own fields, and
-    // a localized field answers differently per language --
-    // `localized-target-predicate.integration.test.ts` pins one row readable in
-    // `en` and denied in `de`. Asking once per slug judges whichever
-    // translation the read defaults to and marks every other language visible
-    // on the strength of it.
-    await visiblePendingEdits(
-      [
-        row({ entryId: "e1", locale: "en" }),
-        row({ entryId: "e1", locale: "de" }),
-      ],
-      caller,
-      await scopeNow()
-    );
-
-    expect(readableDocumentIds).toHaveBeenCalledTimes(2);
-    expect(readableDocumentIds).toHaveBeenCalledWith(
-      "posts",
-      ["e1"],
-      caller,
-      "en"
-    );
-    expect(readableDocumentIds).toHaveBeenCalledWith(
-      "posts",
-      ["e1"],
-      caller,
-      "de"
-    );
-  });
-
-  it("keeps the language the read allowed and drops the one it refused", async () => {
-    readableDocumentIds.mockImplementation((_slug, ids: string[], _c, locale) =>
-      Promise.resolve(locale === "en" ? new Set(ids) : new Set())
-    );
-
-    const visible = await visiblePendingEdits(
-      [
-        row({ entryId: "e1", locale: "de" }),
-        row({ entryId: "e1", locale: "en" }),
-      ],
-      caller,
-      await scopeNow()
-    );
-
-    expect(visible.map(r => r.locale)).toEqual(["en"]);
-  });
-
-  it("issues reads CONCURRENTLY, within a bound", async () => {
-    // 🔴 Each unit enters the full collection read path, so awaiting them one
-    // after another turns a page spanning many collections or languages into
-    // that many sequential round trips -- enough to time a dashboard out while
-    // the connection pool sits idle. Bounded, not unbounded: the first group is
-    // deliberately one, so a cold per-user permission cache is filled once
-    // rather than missed by everything in the fan-out.
-    let inFlight = 0;
-    let peak = 0;
-    readableDocumentIds.mockImplementation(async (_slug, ids: string[]) => {
-      inFlight++;
-      peak = Math.max(peak, inFlight);
-      await new Promise(resolve => setTimeout(resolve, 0));
-      inFlight--;
-      return new Set(ids);
+describe("translating a version row", () => {
+  it("names the document a collection row belongs to, language included", async () => {
+    expect(
+      await refFor(row({ scopeKind: "collection", locale: "de" }))
+    ).toEqual({
+      kind: "collection",
+      slug: "posts",
+      entryId: "e1",
+      locale: "de",
     });
-
-    await visiblePendingEdits(
-      Array.from({ length: 8 }, (_, index) =>
-        row({ entryId: `e${index}`, locale: `l${index}` })
-      ),
-      caller,
-      await scopeNow()
-    );
-
-    // More than one at a time proves it is not serial; the bound proves it is
-    // not an unbounded fan-out.
-    expect(peak).toBeGreaterThan(1);
-    expect(peak).toBeLessThanOrEqual(8);
   });
 
-  it("asks ONCE for rows that share a slug and language", async () => {
-    // The control on the grouping: per-locale must not become per-row, which
-    // would put one read per document in front of every dashboard load.
-    await visiblePendingEdits(
-      [
-        row({ entryId: "e1", locale: "en" }),
-        row({ entryId: "e2", locale: "en" }),
-      ],
-      caller,
-      await scopeNow()
-    );
-
-    expect(readableDocumentIds).toHaveBeenCalledTimes(1);
-    expect(readableDocumentIds).toHaveBeenCalledWith(
-      "posts",
-      ["e1", "e2"],
-      caller,
-      "en"
-    );
-  });
-});
-
-describe("rows nothing can decide", () => {
-  it("drops a row whose language is no longer configured", async () => {
-    // 🔴 Forwarding an unconfigured locale does NOT authorize it:
-    // `resolveRequestedLocale` substitutes the configured DEFAULT for any code
-    // it does not recognise. A draft written under a language later removed
-    // would be judged by the default language's verdict — a row exposed on a
-    // predicate never evaluated for it, which is the defect the per-locale fix
-    // exists to prevent, wearing a different hat.
-    const visible = await visiblePendingEdits(
-      [row({ entryId: "e1", locale: "fr" })],
-      caller,
-      await scopeNow()
-    );
-
-    expect(visible).toEqual([]);
-    expect(readableDocumentIds).not.toHaveBeenCalled();
+  it("names a single row the same way", async () => {
+    expect(await refFor(row({ scopeKind: "single" }))).toEqual({
+      kind: "single",
+      slug: "posts",
+      entryId: "e1",
+      locale: null,
+    });
   });
 
-  it("keeps a configured language beside a removed one", async () => {
-    // The control: dropping unconfigured locales must not drop everything.
-    const visible = await visiblePendingEdits(
-      [
-        row({ entryId: "e1", locale: "fr" }),
-        row({ entryId: "e1", locale: "en" }),
-      ],
-      caller,
-      await scopeNow()
-    );
-
-    expect(visible.map(r => r.locale)).toEqual(["en"]);
-  });
-
-  it("drops a row whose scope kind no longer matches the registry", async () => {
-    // Deleting a collection leaves its history behind, and a Single may later
-    // take the freed slug. Probing the COLLECTION read path for a slug that now
-    // belongs to a Single asks about a table that is not there — it throws and
-    // breaks both cards rather than dropping one orphaned row.
-    const visible = await visiblePendingEdits(
-      [
-        row({
-          entryId: "e1",
-          scopeKind: "collection",
-          scopeSlug: "site-settings",
-        }),
-      ],
-      caller,
-      await scopeNow()
-    );
-
-    expect(visible).toEqual([]);
-    expect(readableDocumentIds).not.toHaveBeenCalled();
-    expect(singleDocumentReadable).not.toHaveBeenCalled();
-  });
-
-  it("drops a row whose slug is in neither registry", async () => {
-    const visible = await visiblePendingEdits(
-      [row({ entryId: "e1", scopeSlug: "deleted-collection" })],
-      caller,
-      await scopeNow()
-    );
-
-    expect(visible).toEqual([]);
-    expect(readableDocumentIds).not.toHaveBeenCalled();
-  });
-});
-
-describe("single rows", () => {
-  const single = (entryId: string, locale?: string | null) =>
-    row({ entryId, locale, scopeKind: "single", scopeSlug: "site-settings" });
-
-  it("resolves the live document id WITHOUT materializing the Single", async () => {
-    // 🔴 The read probe goes through `SingleEntryService.get`, which AUTO-CREATES
-    // a missing Single -- so probing first makes loading a dashboard perform a
-    // write. The id is resolved from the backing row instead, which is what
-    // `resolveSingleDocumentId` exists for.
-    await visiblePendingEdits(
-      [single("single-live")],
-      caller,
-      await scopeNow()
-    );
-
-    expect(resolveSingleDocumentId).toHaveBeenCalledWith("site-settings");
-    expect(singleDocumentReadable).toHaveBeenCalled();
-  });
-
-  it("drops a row belonging to a PREDECESSOR document, without probing at all", async () => {
-    // A version row outlives the document it describes: a Single deleted and
-    // recreated leaves rows naming the old id. Judging those by the
-    // replacement's verdict exposes the predecessor's entry id and edit time.
-    const visible = await visiblePendingEdits(
-      [single("single-deleted")],
-      caller,
-      await scopeNow()
-    );
-
-    expect(visible).toEqual([]);
-    expect(singleDocumentReadable).not.toHaveBeenCalled();
-  });
-
-  it("drops every row when the Single has never been materialized", async () => {
-    resolveSingleDocumentId.mockResolvedValue(null);
-
-    const visible = await visiblePendingEdits(
-      [single("single-live")],
-      caller,
-      await scopeNow()
-    );
-
-    expect(visible).toEqual([]);
-    expect(singleDocumentReadable).not.toHaveBeenCalled();
-  });
-});
-
-describe("resolving the scope", () => {
-  it("reads the registry ONCE, however many pages are judged against it", async () => {
-    // 🔴 The registry and the locale config both answer an unreachable
-    // dependency with an EMPTY result, on purpose. Re-read per page, that
-    // safety inverts: a transient failure on one page drops every row that
-    // page holds while its neighbours keep theirs, and the walk goes on to
-    // publish the shortfall as a whole number. One resolution cannot fail
-    // halfway.
-    const scope = await scopeNow();
-    const rows = Array.from({ length: 3 }, (_, index) =>
-      row({ entryId: `e${index}`, locale: "en" })
-    );
-
-    for (const one of rows) await visiblePendingEdits([one], caller, scope);
-
-    expect(contentSnapshot).toHaveBeenCalledTimes(1);
-  });
-
-  it("carries the registry's own report that it could not be enumerated", async () => {
-    contentSnapshot.mockResolvedValue({ kinds: new Map(), degraded: true });
-
-    expect((await scopeNow()).degraded).toBe(true);
-  });
-
-  it("is NOT degraded when an install has simply registered nothing", async () => {
-    // The control that keeps `degraded` meaning what it says. An empty
-    // registry and an unreachable one produce the same empty map, and folding
-    // them together would either fail every empty install or excuse the case
-    // this flag exists to report.
-    contentSnapshot.mockResolvedValue({ kinds: new Map(), degraded: false });
-
-    expect((await scopeNow()).degraded).toBe(false);
+  it("refuses to name a PAGE row, which no content read path can answer for", async () => {
+    // 🔴 `VersionScopeKind` also admits `page`, which the page builder captures
+    // versions under. There is no collection or single read path holding that
+    // document, so coercing it to either sends the row to a service that cannot
+    // answer about it — and a service that answers "no such document" reads as
+    // a denial, which is the inversion this pass exists to remove. `null` is
+    // the honest translation, and the decision drops it.
+    expect(await refFor(row({ scopeKind: "page" }))).toBeNull();
   });
 });

@@ -10,278 +10,47 @@
  * counted one author's documents for another and listed their entry ids and the
  * instants they were edited.
  *
+ * The decision itself belongs to {@link visibleDocuments}, which the activity
+ * feed asks the same question of. This module is the TRANSLATION from a version
+ * row to the document it names, and nothing more — so the two surfaces cannot
+ * come to different conclusions about who may see a document.
+ *
+ * That split is not tidiness. Both surfaces once carried their own copy, and
+ * the copies did not stay equal: per-locale grouping, the registry-kind check,
+ * the stale-locale drop, bounded concurrency and resolving a Single's live id
+ * before probing it were each present on one side and absent from the other,
+ * every one of them a defect on the side that lacked it.
+ *
  * Version rows OUTLIVE the things they describe — that is what history is — so a
  * row reaching here may name a document, a language or an entity that no longer
  * exists, or a slug some other entity has since taken over. Each of those is
- * UNDECIDABLE rather than deniable, and every one is dropped: nothing here can
- * judge them, and admitting what cannot be judged is the inversion this pass
- * exists to remove.
- *
- * Every decision that IS made is delegated. A stored rule can be owner-only or
- * an arbitrary function, and evaluating either is the read path's job — this
- * asks that path about a known set of documents rather than reproducing what it
- * would say.
+ * UNDECIDABLE rather than deniable, and `visibleDocuments` drops every one:
+ * nothing can judge them, and admitting what cannot be judged is the inversion
+ * this pass exists to remove.
  *
  * @module domains/versions/pending-edit-visibility
  */
 
-import { authorizationGroups } from "../../auth/entity-read-access";
-import { container } from "../../di/container";
-import type { NextlyServiceConfig } from "../../di/register";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
-import { readableDocumentIds } from "../../services/lib/readable-documents";
-import { registeredContentSnapshot } from "../../services/lib/registered-content-slugs";
+import {
+  resolveDocumentVisibilityScope,
+  visibleDocuments,
+  type DocumentVisibilityScope,
+} from "../../services/lib/document-visibility";
 
 import type { VersionMeta } from "./versions-repository";
 
-/** What a row must resolve to before any access question can be asked about it. */
-interface Subject {
-  kind: "collection" | "single";
-  slug: string;
-  entryId: string;
-  locale: string | null;
-}
-
-/** One read's worth of rows: a slug, in a language, and what it answers for. */
-interface ReadUnit {
-  subject: Subject;
-  rows: VersionMeta[];
-}
-
 /**
- * The languages a read can actually be performed in, or `null` when the install
- * configures none.
+ * The install-wide facts one query's pages are all judged against.
  *
- * 🔴 Needed because forwarding an unconfigured locale does NOT authorize it:
- * `resolveRequestedLocale` substitutes the configured DEFAULT for any code it
- * does not recognise. A working draft written under a language later removed
- * from the configuration would therefore be judged by the default language's
- * verdict — a row exposed on a predicate never evaluated for it, which is the
- * same defect as passing no locale at all.
+ * Re-exported under this domain's own name rather than making callers reach
+ * into the shared module: the versions source resolves it once per query and
+ * threads it down, and the name says what it scopes.
  */
-function configuredLocales(): ReadonlySet<string> | null {
-  try {
-    if (!container.has("config")) return null;
-    const localization =
-      container.get<NextlyServiceConfig>("config").localization;
-    if (!localization) return null;
-    return new Set(localization.locales.map(locale => locale.code));
-  } catch {
-    // A container that cannot answer leaves every localized row undecidable,
-    // which `subjectOf` turns into "dropped" rather than "allowed".
-    return null;
-  }
-}
-
-/**
- * The document a row names, or `null` when nothing here can decide it.
- *
- * Three ways a row is undecidable, each of which has cost a real defect:
- *
- * - Its scope kind disagrees with the registry. Deleting a collection leaves its
- *   history behind, and a Single may later take the freed slug — so a
- *   `collection` row can survive under a name that now belongs to a Single.
- *   Probing the collection read path for it asks about a table that is not
- *   there, which throws and breaks both cards rather than dropping one row.
- * - Its slug is in neither registry, so there is no read path to ask at all.
- * - Its language is no longer configured, so a read cannot be performed IN that
- *   language and would silently answer about the default one instead.
- */
-function subjectOf(
-  row: VersionMeta,
-  kinds: ReadonlyMap<string, "collection" | "single">,
-  locales: ReadonlySet<string> | null
-): Subject | null {
-  const kind = kinds.get(row.scopeSlug);
-  if (!kind || kind !== row.scopeKind) return null;
-  if (row.locale !== null && !locales?.has(row.locale)) return null;
-  return {
-    kind,
-    slug: row.scopeSlug,
-    entryId: row.entryId,
-    locale: row.locale,
-  };
-}
-
-/** Rows grouped into the units one read can answer for: a slug in a language. */
-function readUnits(
-  rows: readonly VersionMeta[],
-  subjects: ReadonlyMap<VersionMeta, Subject>,
-  kind: "collection" | "single"
-): Map<string, ReadUnit> {
-  const units = new Map<string, ReadUnit>();
-  for (const row of rows) {
-    const subject = subjects.get(row);
-    if (!subject || subject.kind !== kind) continue;
-    const key = `${subject.slug} ${subject.locale ?? ""}`;
-    const existing = units.get(key);
-    if (existing) existing.rows.push(row);
-    else units.set(key, { subject, rows: [row] });
-  }
-  return units;
-}
-
-/**
- * Collection rows whose documents survive that collection's read rules.
- *
- * 🔴 Grouped by slug AND language, because a stored rule is a predicate over the
- * collection's own fields and a localized field answers differently per
- * language — `localized-target-predicate.integration.test.ts` pins one row
- * readable in `en` and denied in `de`. One verdict per slug would mark every
- * other language visible on the strength of whichever the read defaulted to.
- *
- * Run with BOUNDED CONCURRENCY rather than one after another. Each unit enters
- * the full collection read path, so a page spanning many collections or
- * languages became that many sequential round trips — enough to time a dashboard
- * out while the connection pool sat idle. `authorizationGroups` is the bound the
- * entity-level decisions already use, and its first group of one is what lets a
- * cold per-user permission cache be filled once rather than missed by everything
- * in the fan-out.
- */
-async function visibleCollectionRows(
-  units: ReadonlyMap<string, ReadUnit>,
-  caller: ReadCaller
-): Promise<Set<VersionMeta>> {
-  const visible = new Set<VersionMeta>();
-
-  for (const group of authorizationGroups([...units.keys()])) {
-    const settled = await Promise.allSettled(
-      group.map(async key => {
-        const unit = units.get(key) as ReadUnit;
-        const readable = await readableDocumentIds(
-          unit.subject.slug,
-          unit.rows.map(row => row.entryId),
-          caller,
-          unit.subject.locale
-        );
-        return { unit, readable };
-      })
-    );
-    for (const outcome of settled) {
-      // A rejected read has told us nothing, and "nothing" must not read as
-      // "visible" -- the fail-closed direction `readableEntities` also takes.
-      if (outcome.status !== "fulfilled") continue;
-      const { unit, readable } = outcome.value;
-      for (const row of unit.rows) {
-        if (readable.has(row.entryId)) visible.add(row);
-      }
-    }
-  }
-  return visible;
-}
-
-/**
- * Single rows whose document this caller may read, asked once per language.
- *
- * The live document's id is resolved FIRST, and without materializing anything.
- * A version row outlives the document it describes, so a Single deleted and
- * recreated leaves rows naming its predecessor — and the probe reads through
- * `SingleEntryService`, which auto-creates a missing Single, so asking it first
- * would make loading a dashboard perform a write.
- *
- * `routeAuthorized: false` states the truth: the surface asking this authorized
- * a widget, not a read of this Single, so the coarse gate has not run for that
- * operation and must not be skipped.
- */
-async function visibleSingleRows(
-  units: ReadonlyMap<string, ReadUnit>,
-  caller: ReadCaller
-): Promise<Set<VersionMeta>> {
-  const visible = new Set<VersionMeta>();
-  if (units.size === 0) return visible;
-
-  // 🔴 Imported HERE rather than at the top of the module, because the static
-  // edge is a cycle: the Singles read path imports this domain, so a top-level
-  // import back into it closes the loop. Rollup already reports that shape
-  // elsewhere in this package as producing a broken execution order, and the
-  // failure would land at boot rather than here.
-  const { singleDocumentReadable, resolveSingleDocumentId } = await import(
-    "../singles/services/single-document-access"
-  );
-
-  const liveIds = new Map<string, Promise<string | null>>();
-  const liveIdOf = (slug: string): Promise<string | null> => {
-    let pending = liveIds.get(slug);
-    if (!pending) {
-      pending = resolveSingleDocumentId(slug);
-      liveIds.set(slug, pending);
-    }
-    return pending;
-  };
-
-  /**
-   * One unit's rows that name the LIVE document, or none.
-   *
-   * 🔴 The probe is skipped entirely when nothing here names it — the Single is
-   * unmaterialized, or every row is a predecessor's. It reads through a path
-   * that AUTO-CREATES a missing Single, so asking about one that is not there
-   * turns a dashboard read into a write; and asking about a live document on
-   * behalf of rows that do not name it spends a read whose verdict cannot admit
-   * any of them.
-   */
-  const liveRowsOf = async (unit: ReadUnit): Promise<VersionMeta[]> => {
-    const liveId = await liveIdOf(unit.subject.slug);
-    if (liveId === null) return [];
-    return unit.rows.filter(row => row.entryId === liveId);
-  };
-
-  for (const group of authorizationGroups([...units.keys()])) {
-    const settled = await Promise.allSettled(
-      group.map(async key => {
-        const unit = units.get(key) as ReadUnit;
-        const live = await liveRowsOf(unit);
-        if (live.length === 0) return [];
-        const allowed = await singleDocumentReadable(unit.subject.slug, {
-          user: caller.user,
-          ...(caller.authenticatedScope
-            ? { actor: caller.authenticatedScope }
-            : {}),
-          routeAuthorized: false,
-          ...(unit.subject.locale === null
-            ? {}
-            : { locale: unit.subject.locale }),
-        });
-        return allowed ? live : [];
-      })
-    );
-    for (const outcome of settled) {
-      // A rejected read has told us nothing, and "nothing" must not read as
-      // "visible" -- the fail-closed direction `readableEntities` also takes.
-      if (outcome.status !== "fulfilled") continue;
-      for (const row of outcome.value) visible.add(row);
-    }
-  }
-  return visible;
-}
-
-/**
- * The install-wide facts every page of one walk must be judged against.
- *
- * 🔴 Resolved ONCE per query and carried, never re-read per page. Both halves
- * turn a failure into an EMPTY answer on purpose — an unreachable registry
- * contributes no slugs, an unreadable config no languages — and under a
- * per-page read that safety became a defect: a transient failure on the seventh
- * page dropped every row that page held, the pages either side of it kept
- * theirs, and the walk finished and published the shortfall as a whole number.
- * A snapshot cannot fail halfway; it is either the basis for the entire answer
- * or the reason there is not one.
- */
-export interface PendingEditScope {
-  kinds: ReadonlyMap<string, "collection" | "single">;
-  locales: ReadonlySet<string> | null;
-  /** True when the registry could not be enumerated, so `kinds` is a floor. */
-  degraded: boolean;
-}
+export type PendingEditScope = DocumentVisibilityScope;
 
 /** One resolution of the registry and the configured languages. */
-export async function resolvePendingEditScope(): Promise<PendingEditScope> {
-  const snapshot = await registeredContentSnapshot();
-  return {
-    kinds: snapshot.kinds,
-    locales: configuredLocales(),
-    degraded: snapshot.degraded,
-  };
-}
+export const resolvePendingEditScope = resolveDocumentVisibilityScope;
 
 /** `rows`, in their original order, keeping only what the caller may be told. */
 export async function visiblePendingEdits(
@@ -289,21 +58,27 @@ export async function visiblePendingEdits(
   caller: ReadCaller,
   scope: PendingEditScope
 ): Promise<VersionMeta[]> {
-  if (rows.length === 0) return [];
-
-  const { kinds, locales } = scope;
-
-  const subjects = new Map<VersionMeta, Subject>();
-  for (const row of rows) {
-    const subject = subjectOf(row, kinds, locales);
-    if (subject) subjects.set(row, subject);
-  }
-  if (subjects.size === 0) return [];
-
-  const [collections, singles] = await Promise.all([
-    visibleCollectionRows(readUnits(rows, subjects, "collection"), caller),
-    visibleSingleRows(readUnits(rows, subjects, "single"), caller),
-  ]);
-
-  return rows.filter(row => collections.has(row) || singles.has(row));
+  return visibleDocuments(
+    rows,
+    // The whole translation: a version row already records the kind, the slug,
+    // the document and the language it was drafted in. Whether those still name
+    // anything readable is `visibleDocuments`'s question, not this one's.
+    //
+    // 🔴 `VersionScopeKind` is wider than the two kinds a content read path can
+    // answer for -- it also admits `page`, which the page builder captures
+    // versions under. Such a row resolves to `null` and is DROPPED, because
+    // there is no collection or single read path to ask about it; coercing it
+    // to either would send it to a service that does not hold the document.
+    row =>
+      row.scopeKind === "collection" || row.scopeKind === "single"
+        ? {
+            kind: row.scopeKind,
+            slug: row.scopeSlug,
+            entryId: row.entryId,
+            locale: row.locale,
+          }
+        : null,
+    caller,
+    scope
+  );
 }

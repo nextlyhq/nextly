@@ -24,8 +24,12 @@ import { toDbError } from "../../database/errors";
 import { insertErasureAware } from "../../domains/audit/erasure-aware-insert";
 import { NextlyError } from "../../errors";
 import { BaseService } from "../base-service";
-import { visibleDocuments, type DocumentRef } from "../lib/readable-documents";
-import { registeredContentKinds } from "../lib/registered-content-slugs";
+import {
+  resolveDocumentVisibilityScope,
+  visibleDocuments,
+  type DocumentRef,
+  type DocumentVisibilityScope,
+} from "../lib/document-visibility";
 import type { Logger } from "../shared";
 
 import {
@@ -496,7 +500,12 @@ export class ActivityLogService extends BaseService {
     // admits. Same fail-closed direction as an omitted scope.
     if (!caller) return [];
 
-    const kinds = await registeredContentKinds();
+    // 🔴 Resolved ONCE for the whole refill, not per page. The registry and the
+    // locale config both answer an unreachable dependency with an empty result,
+    // so a read per page lets a transient failure drop one page's rows while
+    // its neighbours keep theirs -- and the paging then reports a short feed as
+    // though it were the whole answer.
+    const scope = await resolveDocumentVisibilityScope();
     const visible: Record<string, unknown>[] = [];
     let cursor = offset;
 
@@ -513,7 +522,7 @@ export class ActivityLogService extends BaseService {
       if (page.length === 0) break;
       cursor += page.length;
 
-      visible.push(...(await this.authorizedRows(page, kinds, caller)));
+      visible.push(...(await this.authorizedRows(page, scope, caller)));
       if (visible.length >= want) break;
       // A short page is the end of the table, not the end of this round.
       if (page.length < ACTIVITY_PAGE_SIZE) break;
@@ -542,20 +551,22 @@ export class ActivityLogService extends BaseService {
    */
   private async authorizedRows(
     page: readonly Record<string, unknown>[],
-    kinds: ReadonlyMap<string, "collection" | "single">,
+    scope: DocumentVisibilityScope,
     caller: ReadCaller
   ): Promise<Record<string, unknown>[]> {
-    const documentRows = page.filter(row => documentRefOf(row, kinds) !== null);
+    const documentRows = page.filter(
+      row => documentRefOf(row, scope.kinds) !== null
+    );
     const readable = new Set(
       await visibleDocuments(
         documentRows,
-        // Non-null by construction: the filter above kept only rows this resolves.
-        row => documentRefOf(row, kinds) as DocumentRef,
-        caller
+        row => documentRefOf(row, scope.kinds),
+        caller,
+        scope
       )
     );
     return page.filter(
-      row => documentRefOf(row, kinds) === null || readable.has(row)
+      row => documentRefOf(row, scope.kinds) === null || readable.has(row)
     );
   }
 
