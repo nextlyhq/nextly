@@ -45,12 +45,22 @@ extend with public states of its own. That also collapses two cases worth
 collapsing: an unpublished component and a deleted one leave the same hole, and
 the author's next move is the same for both.
 
-It follows the graph the renderer follows. A published component may itself
-embed one that is not published, and the renderer inlines the outer definition
-and meets the same hole one level down — so the check descends through published
-definitions to a fixed point rather than stopping at the ids stored in the page.
-It does not descend through an unpublished component, because the renderer never
-inlines one and what it references is unreachable.
+It asks the renderer's own discovery rather than walking stored documents. That
+is not an optimisation, it is the difference between two questions: reachability
+is decided after an instance's overrides have chosen a component, under the
+composition cap, over the tree the repair pass retained. A walk answers before
+all three, so it names components a visitor never meets — a condition-gated
+instance, slot content the chosen definition discards, an id an override
+replaced — and misses ones it does. `unsuppliedComponentIds` is exported from
+`@nextlyhq/blocks-react` so a caller outside the render can ask the question
+without building a second traversal, which is what this now uses.
+
+That also settles nesting for free: a published component embedding an
+unpublished one is a hole the renderer meets one level down, and the discovery
+already runs to a fixed point.
+
+It reads one component field, the one the renderer reads, rather than every
+blocks field a store happens to carry.
 
 It stays silent where it cannot decide. A localized component store publishes
 per language on a companion row, so a published-scoped read answers for no

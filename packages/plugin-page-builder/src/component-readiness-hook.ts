@@ -38,15 +38,15 @@
  *
  * @module component-readiness-hook
  */
+import type { BlockDocument, DocumentLimits } from "@nextlyhq/blocks-engine";
 import {
-  MAX_COMPOSED_DEPTH,
-  type DocumentLimits,
-} from "@nextlyhq/blocks-engine";
+  unsuppliedComponentIds,
+  type ComponentSource,
+} from "@nextlyhq/blocks-react";
 import type { HookContext } from "nextly";
 import { recordAdvisoryNotice } from "nextly";
 
 import { blocksFieldsOf } from "./class-usage-blocks-fields";
-import { embeddedComponentIds } from "./component-readiness";
 import { requestContextFor, writeTargetOf } from "./write-target";
 
 /** The phases a document can become published in. */
@@ -107,6 +107,15 @@ export function registerComponentReadinessNotice(args: {
   ctx: ReadinessPluginContext;
   /** The RESOLVED slug component definitions are stored under. */
   componentCollection: string;
+  /**
+   * The field on a component row holding its document.
+   *
+   * Named rather than discovered, because the renderer names it: a route sets
+   * `componentField` and reads exactly that one. Traversing every blocks field
+   * on the store instead would count a reference in a field nothing renders,
+   * and report a page as holed when it draws correctly.
+   */
+  componentField: string;
   /** The bounds documents are read under, asked per call. */
   limits: () => DocumentLimits;
 }): void {
@@ -166,15 +175,11 @@ async function composeNotice(
     requestContextFor(context)
   );
   if (!leavesDocumentPublished(context, collection)) return null;
-  // No early return for a collection without blocks fields: it would be a
-  // second spelling of the check below, since a document with no such field
-  // references no components. One question, one branch.
-  const embedded = embeddedIn(
+  const documents = writtenDocuments(
     context,
-    blocksFieldsOf(collection as never),
-    args.limits()
+    blocksFieldsOf(collection as never)
   );
-  if (embedded.length === 0) return null;
+  if (documents.length === 0) return null;
 
   const store = await args.ctx.services.collections.getCollection(
     args.componentCollection,
@@ -184,19 +189,36 @@ async function composeNotice(
     return null;
   }
 
-  const missing = await missingAcrossGraph(
-    args,
+  // ASKED of the render's own discovery rather than derived from a walk of the
+  // stored nodes. The two are different questions, and the resolver's docblock
+  // says which one is right: reachability is decided after an instance's
+  // overrides have chosen a component, under the composition cap, over the tree
+  // the repair pass retained. A walk answers before all three, so it names
+  // components a visitor never meets — a gated instance, slot content the
+  // chosen definition discards, an id an override replaced — and misses ones it
+  // does.
+  const source = storeSource(
     target.nextly,
-    store,
-    embedded
+    args.componentCollection,
+    args.componentField
   );
-  if (missing.length === 0) return null;
+  const missing = new Set<string>();
+  for (const document of documents) {
+    for (const id of await unsuppliedComponentIds(
+      document,
+      source,
+      args.limits()
+    )) {
+      missing.add(id);
+    }
+  }
+  if (missing.size === 0) return null;
 
   return {
     phase,
     collection: target.slug,
     code: COMPONENTS_NOT_PUBLISHED_CODE,
-    message: describe(missing.length),
+    message: describe(missing.size),
     entryId: target.documentId,
   };
 }
@@ -239,155 +261,94 @@ function leavesDocumentPublished(
   return document.status === "published";
 }
 
-/** Every component id the written document references, across its blocks fields. */
-function embeddedIn(
+/**
+ * The block documents this write stored, one per blocks field.
+ *
+ * Handed over whole rather than reduced to ids here: what a document needs is
+ * the resolver's question, and answering it early is the parallel traversal
+ * this deliberately does not have.
+ */
+function writtenDocuments(
   context: HookContext<unknown>,
-  fields: readonly { name: string }[],
-  limits: DocumentLimits
-): string[] {
+  fields: readonly { name: string }[]
+): BlockDocument[] {
   const data = (context as unknown as Record<string, unknown>).data as
     | Record<string, unknown>
     | undefined;
-  const found = new Set<string>();
+  const documents: BlockDocument[] = [];
   for (const field of fields) {
-    const nodes = (data?.[field.name] as { nodes?: unknown } | undefined)
-      ?.nodes;
-    if (!Array.isArray(nodes)) continue;
-    for (const id of embeddedComponentIds(nodes, limits)) found.add(id);
+    const stored = data?.[field.name];
+    if (isReadableDocument(stored)) documents.push(stored as BlockDocument);
   }
-  return [...found];
+  return documents;
+}
+
+/** Whether a stored value is shaped enough to compose. */
+function isReadableDocument(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Array.isArray((value as { nodes?: unknown }).nodes)
+  );
 }
 
 /**
- * Every component the page cannot show, following the graph the renderer does.
+ * The store, shaped as the source the render's discovery asks.
  *
- * The page's own instances are not the whole question. A published component may
- * itself embed one that is not published, and the renderer inlines the outer
- * definition and then meets the same hole one level down — so a check that
- * stopped at the ids stored in the page would verify the outer component, find
- * it live, and stay silent about a marker a visitor can see.
+ * One field, named the way the renderer names it, because that is the document
+ * the renderer reads: a store with a second blocks field would otherwise have
+ * references in a field nothing renders counted against the page.
  *
- * Descends only through definitions that came back PUBLISHED, which is exactly
- * how far the renderer gets: an unpublished component is never inlined, so what
- * it references in turn is unreachable, and naming those would report
- * components no visitor could encounter. Its own id is already in the answer.
- *
- * Bounded by the depth the engine composes to, and by a visited set. The set
- * alone makes the walk finite over authored data that may contain a cycle; the
- * depth bound keeps the question inside the tree the renderer would build.
- */
-async function missingAcrossGraph(
-  args: Parameters<typeof registerComponentReadinessNotice>[0],
-  nextly: ReadinessDirectApi,
-  store: unknown,
-  rootIds: readonly string[]
-): Promise<string[]> {
-  const documentFields = blocksFieldsOf(store as never);
-  const missing: string[] = [];
-  const asked = new Set<string>();
-  let frontier = [...rootIds];
-
-  for (let depth = 0; depth < MAX_COMPOSED_DEPTH; depth++) {
-    if (frontier.length === 0) break;
-    for (const id of frontier) asked.add(id);
-
-    const round = await resolveRound(args, nextly, frontier, documentFields);
-    missing.push(...round.missing);
-    // The ONE visited guard. An id already asked about is never queued again,
-    // which is what makes the walk finite over a component graph that may
-    // legally contain a cycle; the depth bound is a second, independent limit
-    // rather than the thing keeping it terminating.
-    frontier = round.nested.filter(id => !asked.has(id));
-  }
-
-  return missing;
-}
-
-/**
- * One level of the walk: which of these ids are not live, and what the live
- * ones embed in turn.
- *
- * Split out because the round is a whole question on its own — a batch of ids
- * in, a partition and a next frontier out — and reading it inside the loop
- * meant holding the loop's bookkeeping in mind to see it.
- */
-async function resolveRound(
-  args: Parameters<typeof registerComponentReadinessNotice>[0],
-  nextly: ReadinessDirectApi,
-  wanted: readonly string[],
-  documentFields: readonly { name: string }[]
-): Promise<{ missing: string[]; nested: string[] }> {
-  const rows = await publishedRows(nextly, args.componentCollection, wanted);
-  const missing: string[] = [];
-  const nested = new Set<string>();
-
-  for (const id of wanted) {
-    const row = rows.get(id);
-    if (row === undefined) {
-      missing.push(id);
-      continue;
-    }
-    for (const child of componentsWithin(row, documentFields, args.limits())) {
-      nested.add(child);
-    }
-  }
-
-  return { missing, nested: [...nested] };
-}
-
-/** The component ids one stored definition references. */
-function componentsWithin(
-  row: Record<string, unknown>,
-  fields: readonly { name: string }[],
-  limits: DocumentLimits
-): string[] {
-  const found = new Set<string>();
-  for (const field of fields) {
-    const nodes = (row[field.name] as { nodes?: unknown } | undefined)?.nodes;
-    if (!Array.isArray(nodes)) continue;
-    for (const id of embeddedComponentIds(nodes, limits)) found.add(id);
-  }
-  return [...found];
-}
-
-/**
- * Which of the wanted ids the store answers for under a PUBLISHED scope.
+ * Chunked because a collection query is CLAMPED to `PAGINATION_DEFAULTS.maxLimit`
+ * (500) and returns a subset silently, while a document may reference far more
+ * instances than that. One unbounded query answers for the first page only, and
+ * every published component missing from it reads as unpublished — a warning
+ * manufactured by the read rather than by the data.
  *
  * `overrideAccess` because the question is about the document's lifecycle, not
  * about what this caller may read: an author who cannot read a component still
- * needs to be told the page they just published has a hole in it, and judging
- * it by their permissions would answer "missing" for a component that is
- * perfectly live.
+ * needs to know their page has a hole, and judging it by their permissions
+ * answers "missing" for one that is perfectly live.
  */
-async function publishedRows(
+function storeSource(
   nextly: ReadinessDirectApi,
   collection: string,
-  wanted: readonly string[]
-): Promise<Map<string, Record<string, unknown>>> {
-  const live = new Map<string, Record<string, unknown>>();
-  for (const chunk of chunked(wanted, READINESS_BATCH_SIZE)) {
-    const page = await nextly.find({
-      collection,
-      where: { id: { in: [...chunk] } },
-      limit: chunk.length,
-      status: "published",
-      overrideAccess: true,
-      depth: 0,
-    });
-    for (const item of page.items) {
-      const row = item as Record<string, unknown> | null;
-      const id = row?.id;
-      if (typeof id === "string" && row !== null) live.set(id, row);
+  field: string
+): ComponentSource {
+  return async (ids: readonly string[]) => {
+    const found = new Map<string, BlockDocument>();
+    for (const chunk of chunked(ids, READINESS_BATCH_SIZE)) {
+      const page = await nextly.find({
+        collection,
+        where: { id: { in: [...chunk] } },
+        limit: chunk.length,
+        status: "published",
+        overrideAccess: true,
+        depth: 0,
+      });
+      for (const item of page.items) {
+        const row = item as Record<string, unknown> | null;
+        const id = row?.id;
+        // Handed over WHOLE and unjudged, exactly as the renderer's own source
+        // hands it over. Whether the stored value is a readable document is the
+        // pipeline's question, and it answers it with reasons a store cannot:
+        // an id present with an unreadable value is a definition somebody
+        // published and cannot be read, and that is not the same as absent.
+        if (typeof id === "string" && row) {
+          found.set(id, row[field] as BlockDocument);
+        }
+      }
     }
-  }
-  return live;
+    return found;
+  };
 }
 
 /** Successive slices of at most `size`. */
 function chunked<T>(items: readonly T[], size: number): T[][] {
   const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size)
+  for (let i = 0; i < items.length; i += size) {
     out.push(items.slice(i, i + size));
+  }
   return out;
 }
 

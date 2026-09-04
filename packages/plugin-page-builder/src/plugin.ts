@@ -3,6 +3,7 @@ import {
   type DocumentLimits,
   type RemotePattern,
 } from "@nextlyhq/blocks-engine";
+import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 import {
   definePlugin,
   resolvedCollectionDraftSplit,
@@ -147,7 +148,7 @@ export interface PageBuilderOptions {
    * definitions come from a custom `resolveComponents` source: no collection
    * can answer the question, so asking one produces a warning about nothing.
    */
-  componentReadiness?: false | { collection?: string };
+  componentReadiness?: false | { collection?: string; field?: string };
   /**
    * Whether the editor shows its getting-started checklist. Default true.
    *
@@ -408,6 +409,11 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
             opts.componentReadiness?.collection ??
             ctx.self.collections[COMPONENTS_SLUG] ??
             COMPONENTS_SLUG,
+          // Defaults to the field the RENDERER defaults to, so the check reads
+          // the document the page draws from rather than every blocks field the
+          // store happens to have.
+          componentField:
+            opts.componentReadiness?.field ?? COMPONENT_DOCUMENT_FIELD,
           // The SAME bounds the renderer draws under, asked per call. A notice
           // derived under different ones names components inside a document the
           // page never renders.

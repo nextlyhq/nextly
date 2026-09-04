@@ -327,3 +327,13 @@ export {
   PREVIEW_CONTAINER_STYLE,
   previewContainerStyle,
 } from "./preview-container";
+
+// The render's own discovery, for a caller outside the render that needs the
+// same answer. Exported because a publish-time check walking stored documents
+// for component ids asks a DIFFERENT question — it reports gated instances,
+// discarded slot content and pre-override ids the renderer never requests.
+export {
+  unsuppliedComponentIds,
+  COMPONENT_DOCUMENT_FIELD,
+  type ComponentSource,
+} from "./component-source";

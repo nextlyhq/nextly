@@ -161,6 +161,37 @@ export async function definitionsFor(
 }
 
 /**
+ * The components a document needs that a source could not supply.
+ *
+ * The same discovery the render performs, ending at the same place, with the
+ * REMAINDER reported instead of the definitions. That remainder is the honest
+ * definition of "this page has a hole": the resolver asked for these, nothing
+ * answered, and the renderer will draw a marker where each one sits.
+ *
+ * Exists so a caller outside the render — a publish-time check, a report — can
+ * ask the question without walking stored documents for component ids. Such a
+ * walk is not a cheaper version of this; it is a DIFFERENT question, and the
+ * ways it differs all point the same way. It reports a condition-gated
+ * instance, and one sitting in slot content the chosen definition discards,
+ * neither of which the resolver asks for. It follows the id stored on a node
+ * rather than the one an instance's overrides selected. And it sees nodes a
+ * repair pass dropped. Every one of those is a component a visitor never meets,
+ * named in a warning about a page that renders correctly.
+ */
+export async function unsuppliedComponentIds(
+  document: BlockDocument,
+  source: ComponentSource,
+  limits: DocumentLimits
+): Promise<string[]> {
+  const found = await definitionsFor(document, source, limits);
+  return stillMissing(
+    sanitizeDocument(document, limits),
+    repairedOnce(found, limits),
+    limits
+  );
+}
+
+/**
  * The components a composition asked for and did not get.
  *
  * `missing` and nothing else. The other refusals are decisions rather than

@@ -5,7 +5,10 @@
  * product: the write has already committed when this runs, so a notice that is
  * not recorded is indistinguishable from the behaviour before it existed.
  */
-import { COMPONENT_INSTANCE_TYPE } from "@nextlyhq/blocks-engine";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
+} from "@nextlyhq/blocks-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const recorded: unknown[] = [];
@@ -29,7 +32,7 @@ const COMPONENTS = "nx_pb_components";
 const LIMITS = { maxDepth: 12, maxNodes: 5000, maxBytes: 2_097_152 };
 
 const doc = (componentIds: string[]) => ({
-  formatVersion: 1,
+  formatVersion: DOCUMENT_FORMAT_VERSION,
   kind: "page",
   nodes: componentIds.map((componentId, i) => ({
     id: `i${String(i)}`,
@@ -92,6 +95,7 @@ function harness(
   registerComponentReadinessNotice({
     ctx: ctx as never,
     componentCollection: COMPONENTS,
+    componentField: "content",
     limits: () => LIMITS,
   });
   const nextly = {
@@ -103,7 +107,23 @@ function harness(
       return {
         items: wanted
           .filter(id => live.has(id))
-          .map(id => ({ id, content: doc(options.nested?.[id] ?? []) })),
+          // `kind: "component"`, because that is what the resolver will accept
+          // as a definition. A page-kind document here is read as unreadable
+          // rather than as a component, so every nesting assertion would pass
+          // by finding a hole that the shape, not the data, produced.
+          .map(id => ({
+            id,
+            content: {
+              formatVersion: DOCUMENT_FORMAT_VERSION,
+              kind: "component",
+              nodes: (options.nested?.[id] ?? []).map((componentId, i) => ({
+                id: `n${id}${String(i)}`,
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId },
+              })),
+            },
+          })),
       };
     },
   };
@@ -448,6 +468,7 @@ describe("the store the notice judges a page against", () => {
     registerComponentReadinessNotice({
       ctx: ctx as never,
       componentCollection: OTHER,
+      componentField: "content",
       limits: () => LIMITS,
     });
     const write = writeContext();
@@ -461,5 +482,119 @@ describe("the store the notice judges a page against", () => {
     await handlers[0]!(write);
 
     expect(asked).toEqual([OTHER]);
+  });
+});
+
+describe("asking the resolver rather than walking stored nodes", () => {
+  it("does NOT report a condition-gated instance", async () => {
+    // The discriminating case for the whole approach. A gated instance is a
+    // node the walk reports and the resolver never asks for, so a check built
+    // on a walk warns about a component no visitor encounters — and this is
+    // the exact disagreement the renderer's own discovery was written to
+    // delete. Reported here, it would be a warning about a page that renders
+    // correctly.
+    const h = harness({ published: [] });
+    const ctx = writeContext({
+      data: {
+        id: "p1",
+        status: "published",
+        content: {
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "page",
+          nodes: [
+            {
+              id: "g",
+              type: COMPONENT_INSTANCE_TYPE,
+              version: 1,
+              props: { componentId: "hero" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            },
+          ],
+        },
+      },
+    });
+    (ctx.req as Record<string, unknown>).nextly = h.nextly;
+
+    await h.handlers[0]!(ctx);
+
+    expect(recorded).toEqual([]);
+    // The stronger half: the store was never even ASKED about it. A walk-based
+    // check would have queried for `hero` and then reported it, so an empty
+    // query log is what separates asking the resolver from asking a traversal.
+    expect(h.finds).toEqual([]);
+  });
+
+  it("reads only the component field the renderer reads", async () => {
+    // A store may carry more than one blocks field. The renderer reads exactly
+    // one — `componentField`, defaulting to `content` — so counting references
+    // in a field it never loads reports a page as holed while it draws fine.
+    const handlers: ((c: unknown) => unknown)[] = [];
+    const ctx = {
+      hooks: {
+        on: (_t: string, _c: string, handler: (c: unknown) => unknown) => {
+          handlers.push(handler);
+        },
+      },
+      services: {
+        collections: {
+          getCollection: async () => ({
+            status: true,
+            localized: false,
+            fields: [
+              { name: "content", type: "blocks" },
+              { name: "notes", type: "blocks" },
+            ],
+          }),
+        },
+      },
+    };
+    registerComponentReadinessNotice({
+      ctx: ctx as never,
+      componentCollection: COMPONENTS,
+      componentField: "content",
+      limits: () => LIMITS,
+    });
+    const write = writeContext({
+      data: { id: "p1", status: "published", content: doc(["hero"]) },
+    });
+    (write.req as Record<string, unknown>).nextly = {
+      find: async () => ({
+        // `hero` is live, and its document sits in the field the renderer
+        // reads. A check taking `notes` instead sees no document and calls a
+        // published component missing.
+        items: [
+          {
+            id: "hero",
+            content: {
+              formatVersion: DOCUMENT_FORMAT_VERSION,
+              kind: "component",
+              nodes: [],
+            },
+            // Deliberately DIFFERENT from `content`: this field references a
+            // component nothing published. The two fields therefore give
+            // opposite answers, which is what lets this test tell which one
+            // was read — with the same document in both, reading either passes.
+            notes: {
+              formatVersion: DOCUMENT_FORMAT_VERSION,
+              kind: "component",
+              nodes: [
+                {
+                  id: "x",
+                  type: COMPONENT_INSTANCE_TYPE,
+                  version: 1,
+                  props: { componentId: "never-published" },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    };
+
+    await handlers[0]!(write);
+
+    expect(recorded).toEqual([]);
   });
 });
