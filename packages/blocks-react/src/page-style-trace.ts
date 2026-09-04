@@ -21,6 +21,7 @@
 import type {
   BlockDocument,
   BlockNode,
+  DefinitionsById,
   DocumentLimits,
   RemotePatternInput,
   SiteSheetInput,
@@ -55,6 +56,16 @@ export interface PageStyleTraceInput {
   readonly blocks?: BlockResolver;
   /** The host's fetch policy, so a refused `url(...)` is refused here too. */
   readonly remotePatterns?: readonly RemotePatternInput[];
+  /**
+   * The component definitions the page renders with.
+   *
+   * Forwarded for exactly the reason `limits` is, one entry below: they change
+   * what EXISTS. A trace run without them marks every instance unresolved and
+   * drops it, so the provenance an editor shows describes a tree the page is
+   * not rendering — and the disagreement is silent, because a trace of a
+   * smaller tree is a perfectly well formed trace.
+   */
+  readonly definitions?: DefinitionsById;
   /**
    * The caps the renderer prepares and compiles under.
    *
@@ -222,6 +233,7 @@ export function pageStyleTrace(
     resolver,
     ...(input.limits === undefined ? {} : { limits: input.limits }),
     styleContext: context,
+    definitions: input.definitions,
   });
   // An unreadable ENVELOPE, which is a real answer: nothing can be compiled from
   // a document this format does not recognise.

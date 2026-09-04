@@ -370,6 +370,26 @@ export function prepareDocumentReadStages(
  * component that exists to contain a failure. Inlining an unrepaired
  * definition into a repaired host reintroduces that a level down.
  *
+ * Repaired against HEADROOM rather than against the caps themselves, and that
+ * is the whole subtlety. The repair pass TRUNCATES what it finds past a limit
+ * — silently, because for a stored page truncation is the answer — while the
+ * resolver REFUSES an oversized definition and says which instance and why.
+ * Repairing at the caps would let the truncation happen first, so a page would
+ * publish a component missing part of itself with nothing in
+ * `unresolvedInstances` to report it: the silent truncation the resolver was
+ * built to replace, reintroduced one layer up.
+ *
+ * One node and one level of headroom is all it takes. Anything the resolver
+ * would accept passes through untouched; anything it would refuse survives
+ * repair intact and reaches the refusal that names it.
+ *
+ * The DEPTH headroom is currently unobservable and is here anyway. It matters
+ * exactly when the resolver refuses an over-deep definition rather than
+ * returning an empty branch for it — while it truncates, repairing at the cap
+ * and repairing above it produce the same tree, so no test can separate them.
+ * Splitting the rule to match what is observable today would leave the gap
+ * open on the day the refusal arrives, and that gap is silent content loss.
+ *
  * Returns the SAME map when every definition was already sound, so the
  * ordinary page allocates nothing — `sanitizeDocument` returns its input when
  * it repaired nothing, which is what makes the comparison meaningful.
@@ -380,10 +400,15 @@ function repairedDefinitions(
 ): DefinitionsById {
   if (definitions === undefined || definitions.size === 0)
     return EMPTY_DEFINITIONS;
+  const shapeOnly: DocumentLimits = {
+    ...limits,
+    maxDepth: limits.maxDepth + 1,
+    maxNodes: limits.maxNodes + 1,
+  };
   let changed = false;
   const repaired = new Map<string, BlockDocument>();
   for (const [id, definition] of definitions) {
-    const sound = sanitizeDocument(definition, limits);
+    const sound = sanitizeDocument(definition, shapeOnly);
     if (sound !== definition) changed = true;
     repaired.set(id, sound);
   }

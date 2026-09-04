@@ -46,3 +46,11 @@ A component that could not be loaded now says so where it sits, instead of
 reading as an unrecognised block. A stored stylesheet is no longer reused once
 composition has added blocks it was never compiled for, which would have left
 every one of them unstyled on a page that looked fine.
+
+Two limits behaved wrongly at the edges. A component larger than the page's
+size limit was quietly trimmed to fit before anything could object, so the page
+published part of a component with nothing to say the rest was missing; the
+limit is now enforced where it can be reported. And the editor's style
+explanations were computed without the components the page draws, so what an
+author was told about where a value came from described a different page from
+the one in front of them.

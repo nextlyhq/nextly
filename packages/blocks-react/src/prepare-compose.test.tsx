@@ -212,6 +212,45 @@ describe("where composition sits in the order", () => {
   });
 });
 
+describe("composition and the limits around it", () => {
+  it("lets the resolver refuse a definition past the node cap", () => {
+    const stages = prepareDocumentReadStages(page([instance("i1", "hero")]), {
+      resolver,
+      limits: { maxDepth: 12, maxNodes: 2, maxBytes: 2_097_152 },
+      definitions: defs({
+        hero: component([node("a", "1"), node("b", "2"), node("c", "3")]),
+      }),
+    });
+
+    // Repair must not be the thing that enforces the limit: truncating the
+    // definition first publishes a component missing part of itself with
+    // nothing in `unresolvedInstances` to say so.
+    expect(stages!.unresolvedInstances.map(e => e.reason)).toEqual(["budget"]);
+  });
+
+  it("traces the styles of a component the page renders", async () => {
+    const { pageStyleTrace } = await import("./page-style-trace");
+    const traceInput = {
+      document: page([instance("i1", "hero")]),
+      styleContext: context,
+      site: undefined,
+      blocks: resolver,
+    };
+    const definitions = defs({ hero: component([node("d1", "Hi")]) });
+
+    const composed = pageStyleTrace({ ...traceInput, definitions });
+    const without = pageStyleTrace(traceInput);
+
+    // The trace must describe the tree that RENDERS. Without the definitions
+    // it marks the instance unresolved and drops it, so an editor's style
+    // provenance describes a page that is not the one in front of the author.
+    expect(composed?.nodes.map(n => n.props.value)).toEqual(["Hi"]);
+    // The control: the same call is genuinely empty without them, so the
+    // assertion above is about forwarding rather than about the trace working.
+    expect(without?.nodes).toEqual([]);
+  });
+});
+
 describe("an instance nothing could resolve", () => {
   // `rendersOwnMarkup` returning false for one is NOT asserted here. The
   // engine refuses to register the reserved instance name
