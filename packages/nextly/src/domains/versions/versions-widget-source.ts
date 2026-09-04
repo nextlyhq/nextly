@@ -6,30 +6,53 @@
  * hands the caller through and adds nothing. `VersionsService` has no
  * authorization at all — none of its methods takes an actor — so a resolver
  * that simply called it would answer an install-wide number to a reader
- * entitled to part of it. The bound is `readableSlugAllowlist`, the same
- * resolution the collections listing uses, so a caller sees pending edits in
- * exactly the collections they may read.
+ * entitled to part of it.
  *
- * `undefined` from that helper means "no filter" (a super admin), `[]` means
- * "no readable collections" and must answer zero rather than everything. The
- * repository keeps those three answers distinct; reading `[]` as "no filter" is
- * one `?.length` away and hands every document to a caller granted none.
+ * The bound is `readableEntities`, asked once per registered entity, and NOT a
+ * filter over the caller's permission slugs. The two look equivalent and are
+ * not, in both directions:
+ *
+ * - An API key is judged on its OWN stamped scope. Resolving the owner's
+ *   role-derived slugs instead hands a narrowly scoped key everything its
+ *   minter can read — and a key minted by a super admin every document in the
+ *   install, since the bypass belongs to the session path alone.
+ * - A collection whose code-defined `access.read` REFUSES this caller still has
+ *   the permission row a slug filter admits it on, and one authorized purely in
+ *   code has no row to find at all.
+ *
+ * That is the same call `/api/dashboard/stats` and the widget layout endpoint
+ * make, so this card describes the collections whose documents the caller could
+ * actually open — which is the only definition of "in reach" that cannot drift
+ * from what a row read would answer.
+ *
+ * The result is an ENUMERATED set, never "no filter". A super admin gets every
+ * registered entity rather than an unbounded read, so a version row naming a
+ * collection that is no longer registered belongs to nobody — the same
+ * deliberate consequence `resolveReadableResources` documents. It is what lets
+ * the service take a required `readonly string[]`, with `[]` meaning exactly
+ * nothing, instead of the three-way `undefined | [] | list` whose collapse hands
+ * every document to a caller granted none.
  *
  * @module domains/versions/versions-widget-source
  */
 
+import {
+  readAccessCaller,
+  readableEntities,
+} from "../../auth/entity-read-access";
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
-import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
+import { registeredContentSlugs } from "../../services/lib/registered-content-slugs";
 import type { WidgetQuery } from "../widgets/query";
 import type { WidgetResult } from "../widgets/result";
 import { failUnavailableSourceOrOp } from "../widgets/sources";
+import { VERSIONS_SOURCE_ID } from "../widgets/system-source-ids";
 import { registerSystemSource } from "../widgets/system-sources";
 
 import type { VersionsService } from "./versions-service";
 
-export const VERSIONS_SOURCE_ID = "system:versions";
+export { VERSIONS_SOURCE_ID };
 
 /** How many rows the list card draws when the query names no limit. */
 const DEFAULT_LIMIT = 5;
@@ -110,6 +133,46 @@ function projected(
   return Object.fromEntries(names.map(name => [name, full[name]]));
 }
 
+/**
+ * The fields to answer with, in the order the query asked for them.
+ *
+ * 🔴 Order comes from `select`, not from `VERSION_FIELDS`. The table archetype
+ * draws its columns straight off `WidgetResult.fields`, so rebuilding the list
+ * in declaration order renders `select: ["updatedAt", "scopeSlug"]` as
+ * Collection then Edited — the reverse of what its author wrote, with nothing
+ * anywhere reporting a disagreement. The collection path derives it this way
+ * for the same reason.
+ *
+ * Unknown names are dropped rather than refused, because the source's field list
+ * is the allowlist every query is checked against and a name outside it has no
+ * value to answer with. Duplicates are collapsed first: `["title", "title"]` is
+ * a legal selection whose projection is one value, so emitting two descriptors
+ * would have a table draw two columns for it.
+ */
+function selectedNames(query: WidgetQuery): string[] {
+  if (!query.select?.length) return VERSION_FIELDS.map(field => field.name);
+  return [
+    ...new Set(
+      query.select.filter(name =>
+        VERSION_FIELDS.some(field => field.name === name)
+      )
+    ),
+  ];
+}
+
+/** Each selected name paired with the label this source publishes for it. */
+function describe(
+  names: readonly string[]
+): { name: string; label?: string }[] {
+  const labels = new Map(
+    VERSION_FIELDS.map(field => [field.name, field.label])
+  );
+  return names.map(name => {
+    const label = labels.get(name);
+    return { name, ...(label !== undefined && { label }) };
+  });
+}
+
 async function resolveVersions(
   query: WidgetQuery,
   caller: ReadCaller
@@ -119,7 +182,12 @@ async function resolveVersions(
   // Resolved ONCE per query and passed down, rather than each read asking
   // again: the two ops answer about the same set, and two resolutions of one
   // caller's permissions are two chances to disagree.
-  const readableSlugs = await readableSlugAllowlist(caller.user.id);
+  const readableSlugs = [
+    ...(await readableEntities(
+      await registeredContentSlugs(),
+      readAccessCaller(caller)
+    )),
+  ];
 
   if (query.op === "count") {
     return {
@@ -132,15 +200,8 @@ async function resolveVersions(
     readableSlugs,
     limit: query.limit ?? DEFAULT_LIMIT,
   });
-  const names = query.select?.length
-    ? query.select.filter(name => VERSION_FIELDS.some(f => f.name === name))
-    : VERSION_FIELDS.map(f => f.name);
-  const fields = query.select?.length
-    ? VERSION_FIELDS.filter(f => names.includes(f.name)).map(f => ({
-        name: f.name,
-        label: f.label,
-      }))
-    : undefined;
+  const names = selectedNames(query);
+  const fields = query.select?.length ? describe(names) : undefined;
 
   return {
     op: "list",

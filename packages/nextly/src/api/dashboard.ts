@@ -31,6 +31,7 @@ import {
   type ReadableResources,
   type ReadCaller,
 } from "../services/dashboard/readable-resources";
+import { registeredContentSlugs } from "../services/lib/registered-content-slugs";
 
 import { readAccessCaller, readCaller } from "./authenticated-read";
 import { respondData } from "./response-shapes";
@@ -54,9 +55,11 @@ async function getActivityLogService(): Promise<ActivityLogService> {
 /**
  * Every name the dashboard can describe, offered for a read decision.
  *
- * Three sources, and the third is the one that is easy to miss. The two content
- * registries give the collections and singles, so the set being authorized is
- * the set that would be counted. But the scope also bounds `/activity` and
+ * Three sources, and the third is the one that is easy to miss.
+ * {@link registeredContentSlugs} gives the collections and singles, so the set
+ * being authorized is the set that would be counted -- it is shared with the
+ * `system:versions` widget source, which bounds its cross-document read by the
+ * same candidates. But the scope also bounds `/activity` and
  * `recentChanges24h`, which filter `activity_log.collection` -- and that column
  * is a FREE STRING whose namespace is deliberately wider than the registries.
  * `recordSettingsActivity` files settings mutations under names that are
@@ -74,35 +77,9 @@ async function getActivityLogService(): Promise<ActivityLogService> {
  * `getRegisteredCollections` filters the registry list BY this scope, and
  * `filterByResource` can only ever narrow it -- a name that is not in the
  * registry cannot be added to it by appearing in the scope.
- *
- * A registry that cannot be reached contributes NOTHING rather than an
- * unbounded list -- an empty scope admits nothing, which is visible and
- * reportable; the alternative is a dashboard that widens when the container is
- * degraded.
  */
 async function registeredEntitySlugs(): Promise<string[]> {
-  const slugs: string[] = [...SETTINGS_ACTIVITY_NAMESPACES];
-  try {
-    const collections = await container
-      .get<{
-        getAllCollections: () => Promise<Array<{ slug: string }>>;
-      }>("collectionRegistryService")
-      .getAllCollections();
-    for (const collection of collections) slugs.push(String(collection.slug));
-  } catch {
-    // Unreachable registry: contribute nothing rather than guess.
-  }
-  try {
-    const singles = await container
-      .get<{
-        getAllSingles: () => Promise<Array<{ slug: string }>>;
-      }>("singleRegistryService")
-      .getAllSingles();
-    for (const single of singles) slugs.push(String(single.slug));
-  } catch {
-    // As above.
-  }
-  return slugs;
+  return [...SETTINGS_ACTIVITY_NAMESPACES, ...(await registeredContentSlugs())];
 }
 
 /**

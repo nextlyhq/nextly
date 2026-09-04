@@ -140,6 +140,27 @@ describe("resetWidgetRegistries", () => {
     expect(listWidgets()).toHaveLength(CORE_WIDGETS.length);
   });
 
+  it("leaves no core card querying a source nothing serves", () => {
+    // 🔴 A definition naming an unregistered source is a legal definition: it
+    // is refused at QUERY time, and only for the reader unlucky enough to hold
+    // the card. So renaming a source is silent on both sides -- the source and
+    // its own tests keep passing, and the card keeps naming what used to serve
+    // it. Sharing one declaration is what makes that impossible; this is what
+    // makes it CHECKED, since a future card could still spell the id by hand.
+    resetWidgetRegistries();
+
+    const queried = CORE_WIDGETS.filter(widget => widget.query).map(
+      widget => widget.query?.source
+    );
+    // The population, asserted before the verdict: with no querying card at all
+    // the loop below is vacuously satisfied, which is the shape of a check
+    // reporting on nothing.
+    expect(queried.length).toBeGreaterThan(0);
+    for (const source of queried) {
+      expect(getSource(String(source))).toBeDefined();
+    }
+  });
+
   it("still refuses a genuine duplicate WITHIN one boot", () => {
     // The negative control for both cases above. Clearing between boots must
     // not turn into clearing between registrations: two plugins claiming one

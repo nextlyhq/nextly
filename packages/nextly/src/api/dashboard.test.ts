@@ -20,11 +20,14 @@ vi.mock("../init", () => ({
   getCachedNextly: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../di", () => ({
-  container: {
-    get: vi.fn(),
-  },
-}));
+const { containerGet } = vi.hoisted(() => ({ containerGet: vi.fn() }));
+// BOTH specifiers, because they are two module records: the handlers reach the
+// container through the barrel and `registered-content-slugs` through the
+// narrow module, so mocking one leaves the other reading the real container --
+// which answers nothing here and takes the registry read's `catch` branch,
+// reporting an empty candidate list as though the install had no collections.
+vi.mock("../di", () => ({ container: { get: containerGet } }));
+vi.mock("../di/container", () => ({ container: { get: containerGet } }));
 
 vi.mock("../services/lib/permissions", () => ({
   // `readCaller` (via `authenticated-read.ts`) resolves this to build the
@@ -41,7 +44,16 @@ vi.mock("../services/lib/permissions", () => ({
 const { readableEntities } = vi.hoisted(() => ({
   readableEntities: vi.fn(),
 }));
-vi.mock("../auth/entity-read-access", () => ({ readableEntities }));
+// Spread from the real module rather than replaced by a literal: this module
+// also publishes `readAccessCaller`, which the handlers use to derive the
+// identity a decision is taken under. A closed literal supplies only what it
+// names, so that conversion would arrive as `undefined` and every handler would
+// answer 500 -- a failure about the mock's shape wearing the costume of a
+// defect in the code under test.
+vi.mock("../auth/entity-read-access", async importOriginal => ({
+  ...(await importOriginal<typeof import("../auth/entity-read-access")>()),
+  readableEntities,
+}));
 
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { container } from "../di";
@@ -100,23 +112,21 @@ function decidingCaller(): Record<string, unknown> {
 beforeEach(() => {
   vi.clearAllMocks();
   serviceStub = {};
-  (container.get as ReturnType<typeof vi.fn>).mockImplementation(
-    (name: string) => {
-      if (name === "collectionRegistryService") {
-        return {
-          getAllCollections: vi
-            .fn()
-            .mockResolvedValue([{ slug: "posts" }, { slug: "pages" }]),
-        };
-      }
-      if (name === "singleRegistryService") {
-        return {
-          getAllSingles: vi.fn().mockResolvedValue([{ slug: "site-settings" }]),
-        };
-      }
-      return serviceStub;
+  containerGet.mockImplementation((name: string) => {
+    if (name === "collectionRegistryService") {
+      return {
+        getAllCollections: vi
+          .fn()
+          .mockResolvedValue([{ slug: "posts" }, { slug: "pages" }]),
+      };
     }
-  );
+    if (name === "singleRegistryService") {
+      return {
+        getAllSingles: vi.fn().mockResolvedValue([{ slug: "site-settings" }]),
+      };
+    }
+    return serviceStub;
+  });
   // Admits everything by default, so a test that cares about the scope states
   // its own verdict and the rest are unaffected by it.
   readableEntities.mockImplementation(

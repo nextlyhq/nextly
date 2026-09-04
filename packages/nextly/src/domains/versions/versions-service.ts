@@ -39,38 +39,57 @@ export interface VersionListOptions {
   locale?: string;
 }
 
+/** Construction-time facts this service cannot derive from its database handle. */
+export interface VersionsServiceOptions {
+  /**
+   * How many working drafts one document can hold — the install's configured
+   * locale count, since a working draft is one row per document per locale.
+   *
+   * Read by the recent-edits list to bound the rows it must scan to find a full
+   * page of distinct DOCUMENTS. Defaults to 1, which is exactly right for an
+   * install with no localization configured and merely conservative otherwise:
+   * too low returns fewer documents than asked, never wrong ones.
+   */
+  maxWorkingDraftsPerDocument?: number;
+}
+
 export class VersionsService {
   private readonly repo: VersionsRepository;
+  private readonly maxWorkingDraftsPerDocument: number;
 
-  constructor(db: VersionsDbApi) {
+  constructor(db: VersionsDbApi, options: VersionsServiceOptions = {}) {
     this.repo = new VersionsRepository(db);
+    this.maxWorkingDraftsPerDocument = Math.max(
+      Math.trunc(options.maxWorkingDraftsPerDocument ?? 1) || 1,
+      1
+    );
   }
 
   /**
    * How many documents hold a pending edit, within collections the caller reads.
    *
-   * 🔴 The allowlist is REQUIRED, not optional, and `undefined` means "every
-   * collection" rather than "unfiltered by accident". This service has no
-   * authorization of its own -- unlike `ReleasesService`, none of its methods
-   * takes an actor -- so the bound has to arrive from the caller, and a
-   * parameter that could be forgotten would produce an install-wide number for
-   * a reader entitled to part of it. Naming it in the signature makes the
-   * decision visible at every call site.
+   * 🔴 The allowlist is REQUIRED and ENUMERATED — `[]` means exactly nothing,
+   * and there is no value meaning "no filter". This service has no authorization
+   * of its own (unlike `ReleasesService`, none of its methods takes an actor) so
+   * the bound has to arrive from the caller, and an optional parameter would
+   * produce an install-wide number for a reader entitled to part of it the first
+   * time somebody forgot it. The one caller resolves the list through
+   * `readableEntities`, which answers every registered entity for a super admin
+   * rather than a bypass, so nothing here needs a wider case.
    */
-  async countPendingEdits(
-    readableSlugs: readonly string[] | undefined
-  ): Promise<number> {
+  async countPendingEdits(readableSlugs: readonly string[]): Promise<number> {
     return this.repo.countDocumentsWithPendingEdits(readableSlugs);
   }
 
   /** The documents most recently left with a pending edit, newest first. */
   async recentPendingEdits(input: {
-    readableSlugs: readonly string[] | undefined;
+    readableSlugs: readonly string[];
     limit: number;
   }): Promise<VersionMeta[]> {
     return this.repo.findRecentPendingEdits({
       slugs: input.readableSlugs,
       limit: input.limit,
+      maxPerDocument: this.maxWorkingDraftsPerDocument,
     });
   }
 

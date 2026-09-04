@@ -137,4 +137,26 @@ describe.each(getConfiguredTestDialects())("adapter.count (%s)", dialect => {
       app.adapter.count(VERSIONS_TABLE, { distinctOn: ["not_a_column"] })
     ).rejects.toThrow(/distinctOn/);
   });
+
+  it("refuses a distinctOn where only SOME columns resolve", async () => {
+    // 🔴 The worse of the two, and the one a partial projection admits. A valid
+    // column beside a misspelled one counts distinct over a NARROWER key than
+    // was asked for, which groups more rows together and UNDERCOUNTS -- a
+    // plausible number rather than a visible fault. Here the accepted subset
+    // would answer 1 while the requested key answers 2.
+    const app = await boot(dialect);
+
+    for (const row of [
+      versionRow({ entryId: "e1", locale: "en" }),
+      versionRow({ entryId: "e2", locale: "en" }),
+    ]) {
+      await app.adapter.insert(VERSIONS_TABLE, row);
+    }
+
+    await expect(
+      app.adapter.count(VERSIONS_TABLE, {
+        distinctOn: ["scopeSlug", "entryIdd"],
+      })
+    ).rejects.toThrow(/entryIdd/);
+  });
 });

@@ -6,7 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const countPendingEdits = vi.fn();
 const recentPendingEdits = vi.fn();
 const has = vi.fn();
-const allowlist = vi.fn();
+const readable = vi.fn();
+const registeredSlugs = vi.fn();
 
 vi.mock("../../../di/container", () => ({
   container: {
@@ -14,8 +15,19 @@ vi.mock("../../../di/container", () => ({
     get: () => ({ countPendingEdits, recentPendingEdits }),
   },
 }));
-vi.mock("../../../services/lib/readable-slug-allowlist", () => ({
-  readableSlugAllowlist: (id: string | undefined) => allowlist(id) as unknown,
+// `readAccessCaller` is kept REAL and only the decision is replaced, so what
+// these tests assert is the caller shape the source actually derives —
+// substituting the conversion too would let the source pass anything and still
+// satisfy an expectation written from the same wrong idea.
+vi.mock("../../../auth/entity-read-access", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../auth/entity-read-access")
+  >()),
+  readableEntities: (slugs: readonly string[], caller: unknown) =>
+    readable(slugs, caller) as unknown,
+}));
+vi.mock("../../../services/lib/registered-content-slugs", () => ({
+  registeredContentSlugs: () => registeredSlugs() as unknown,
 }));
 
 import { executeWidgetQuery } from "../../widgets/execute";
@@ -49,14 +61,15 @@ beforeEach(() => {
   has.mockReturnValue(true);
   countPendingEdits.mockResolvedValue(14);
   recentPendingEdits.mockResolvedValue([row]);
-  allowlist.mockResolvedValue(["posts"]);
+  readable.mockResolvedValue(new Set(["posts"]));
+  registeredSlugs.mockResolvedValue(["posts", "secrets"]);
   clearSources();
   clearSystemResolvers();
   registerVersionsWidgetSource();
 });
 
 describe("who the numbers are for", () => {
-  it("bounds the COUNT to the collections this caller may read", async () => {
+  it("bounds the COUNT to the entities this caller may read", async () => {
     // 🔴 The access decision lives here, unlike `system:releases`, because
     // `VersionsService` has no authorization of its own -- none of its methods
     // takes an actor. A resolver that simply called it would answer an
@@ -66,7 +79,10 @@ describe("who the numbers are for", () => {
       caller
     );
 
-    expect(allowlist).toHaveBeenCalledWith("user-1");
+    expect(readable).toHaveBeenCalledWith(
+      ["posts", "secrets"],
+      expect.objectContaining({ userId: "user-1" })
+    );
     expect(countPendingEdits).toHaveBeenCalledWith(["posts"]);
   });
 
@@ -81,11 +97,35 @@ describe("who the numbers are for", () => {
     );
   });
 
-  it("passes an EMPTY allowlist through, rather than reading it as no filter", async () => {
-    // 🔴 The three answers stay distinct. `[]` means "no readable collections"
-    // and must reach the repository as `[]`; reading it as "no filter" is one
-    // `?.length` away and hands every document to a caller granted none.
-    allowlist.mockResolvedValue([]);
+  it("judges an API KEY on its OWN stamped scope, not its owner's roles", async () => {
+    // 🔴 The separating case. Resolving the OWNER's role-derived slugs hands a
+    // narrowly scoped key everything its minter can read -- and a key minted by
+    // a super admin the whole install, since that bypass belongs to the session
+    // path. The whole caller has to reach the decision, not just an id.
+    await executeWidgetQuery(
+      { source: VERSIONS_SOURCE_ID, op: "count" },
+      {
+        user: { id: "owner-1", roles: ["super-admin"] },
+        authenticatedScope: {
+          actorType: "apiKey" as const,
+          permissions: ["read-posts"],
+        },
+      }
+    );
+
+    expect(readable).toHaveBeenCalledWith(["posts", "secrets"], {
+      userId: "owner-1",
+      authMethod: "api-key",
+      permissions: ["read-posts"],
+      roles: ["super-admin"],
+    });
+  });
+
+  it("answers a caller who may read nothing with an EMPTY list, not everything", async () => {
+    // 🔴 There is no value meaning "no filter" any more: the answer is always
+    // enumerated, so nothing readable arrives as `[]` and the service reads it
+    // as exactly nothing.
+    readable.mockResolvedValue(new Set());
     await executeWidgetQuery(
       { source: VERSIONS_SOURCE_ID, op: "count" },
       caller
@@ -94,27 +134,14 @@ describe("who the numbers are for", () => {
     expect(countPendingEdits).toHaveBeenCalledWith([]);
   });
 
-  it("passes undefined through for a caller with no filter at all", async () => {
-    // The control: a super admin resolves to `undefined`, which must NOT become
-    // `[]` on the way -- that would answer zero for the one caller who may see
-    // everything.
-    allowlist.mockResolvedValue(undefined);
-    await executeWidgetQuery(
-      { source: VERSIONS_SOURCE_ID, op: "count" },
-      caller
-    );
-
-    expect(countPendingEdits).toHaveBeenCalledWith(undefined);
-  });
-
-  it("resolves the allowlist ONCE per query", async () => {
+  it("asks the access layer ONCE per query", async () => {
     // Two resolutions of one caller's permissions are two chances to disagree,
-    // and each is a database read.
+    // and each is a round of database reads.
     await executeWidgetQuery(
       { source: VERSIONS_SOURCE_ID, op: "list" },
       caller
     );
-    expect(allowlist).toHaveBeenCalledTimes(1);
+    expect(readable).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -134,6 +161,41 @@ describe("what it answers with", () => {
       "scopeSlug",
       "updatedAt",
     ]);
+  });
+
+  it("describes the fields in the order the QUERY asked for them", async () => {
+    // 🔴 The table archetype draws its columns straight off this array, so
+    // rebuilding it in declaration order renders the reverse of what the
+    // widget's author wrote -- with nothing anywhere reporting a disagreement.
+    const result = await executeWidgetQuery(
+      {
+        source: VERSIONS_SOURCE_ID,
+        op: "list",
+        select: ["updatedAt", "scopeSlug"],
+      },
+      caller
+    );
+
+    expect(
+      (result as { fields: { name: string }[] }).fields.map(f => f.name)
+    ).toEqual(["updatedAt", "scopeSlug"]);
+  });
+
+  it("collapses a repeated selection into one column", async () => {
+    // A legal selection whose projection is one value; two descriptors would
+    // have a table draw two columns for it.
+    const result = await executeWidgetQuery(
+      {
+        source: VERSIONS_SOURCE_ID,
+        op: "list",
+        select: ["scopeSlug", "scopeSlug"],
+      },
+      caller
+    );
+
+    expect(
+      (result as { fields: { name: string }[] }).fields.map(f => f.name)
+    ).toEqual(["scopeSlug"]);
   });
 
   it("refuses a field it cannot honour, rather than dropping it", async () => {

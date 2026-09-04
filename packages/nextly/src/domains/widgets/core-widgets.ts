@@ -32,6 +32,7 @@
  */
 
 import type { WidgetDefinition } from "./definition";
+import { VERSIONS_SOURCE_ID } from "./system-source-ids";
 
 /**
  * The prefix core's dashboard components resolve under.
@@ -108,17 +109,18 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     archetype: "metric",
     defaultSize: "sm",
     defaultOrder: 25,
-    query: { source: "system:versions", op: "count" },
+    query: { source: VERSIONS_SOURCE_ID, op: "count" },
   },
   {
     id: "core/recently-edited",
     title: "Recently edited",
-    description: "Where you left off, across every collection",
+    description:
+      "The documents most recently left with unpublished edits, newest first.",
     archetype: "list",
     defaultSize: "md",
     defaultOrder: 35,
     query: {
-      source: "system:versions",
+      source: VERSIONS_SOURCE_ID,
       op: "list",
       select: ["scopeSlug", "entryId", "updatedAt"],
       limit: 5,

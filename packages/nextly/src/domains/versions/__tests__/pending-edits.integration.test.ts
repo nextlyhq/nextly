@@ -81,7 +81,7 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
       await app.adapter.insert(VERSIONS_TABLE, row);
     }
 
-    expect(await repo.countDocumentsWithPendingEdits(undefined)).toBe(2);
+    expect(await repo.countDocumentsWithPendingEdits(["posts"])).toBe(2);
   });
 
   it("ignores autosaves, which are not pending edits", async () => {
@@ -100,7 +100,7 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
       draft({ entryId: "e2", locale: null, isAutosave: true })
     );
 
-    expect(await repo.countDocumentsWithPendingEdits(undefined)).toBe(1);
+    expect(await repo.countDocumentsWithPendingEdits(["posts"])).toBe(1);
   });
 
   it("counts and lists only the collections the caller may read", async () => {
@@ -120,13 +120,16 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
     const listed = await repo.findRecentPendingEdits({
       slugs: ["posts"],
       limit: 10,
+      maxPerDocument: 1,
     });
     expect(listed.map(r => r.scopeSlug)).toEqual(["posts"]);
   });
 
   it("answers ZERO and an empty list for a caller who may read nothing", async () => {
-    // 🔴 `[]` is not "no filter". Reading it that way hands every document to a
-    // caller granted none, which is the widest possible wrong answer.
+    // 🔴 `[]` means exactly nothing, and it is the only empty answer the
+    // allowlist has — there is no value meaning "no filter". Reading it as
+    // unfiltered hands every document to a caller granted none, which is the
+    // widest possible wrong answer.
     const app = await boot(dialect);
     const repo = new VersionsRepository(app.adapter);
     await app.adapter.insert(
@@ -135,9 +138,53 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
     );
 
     expect(await repo.countDocumentsWithPendingEdits([])).toBe(0);
-    expect(await repo.findRecentPendingEdits({ slugs: [], limit: 10 })).toEqual(
-      []
-    );
+    expect(
+      await repo.findRecentPendingEdits({
+        slugs: [],
+        limit: 10,
+        maxPerDocument: 1,
+      })
+    ).toEqual([]);
+  });
+
+  it("lists one row per DOCUMENT, so locales cannot crowd out other work", async () => {
+    // 🔴 The separating case for the collapse. A document translated into two
+    // languages is two rows, so limiting the query alone gives one document both
+    // slots and the second document never appears -- while the count beside it,
+    // being document-based, says two. The card's `select` omits `locale`, so
+    // those two rows render as the same line twice.
+    const app = await boot(dialect);
+    const repo = new VersionsRepository(app.adapter);
+
+    for (const row of [
+      draft({
+        entryId: "translated",
+        locale: "en",
+        updatedAt: new Date("2026-06-03T00:00:00Z"),
+      }),
+      draft({
+        entryId: "translated",
+        locale: "fr",
+        updatedAt: new Date("2026-06-02T00:00:00Z"),
+      }),
+      draft({
+        entryId: "other",
+        locale: "en",
+        updatedAt: new Date("2026-06-01T00:00:00Z"),
+      }),
+    ]) {
+      await app.adapter.insert(VERSIONS_TABLE, row);
+    }
+
+    const rows = await repo.findRecentPendingEdits({
+      slugs: ["posts"],
+      limit: 2,
+      maxPerDocument: 2,
+    });
+    expect(rows.map(r => r.entryId)).toEqual(["translated", "other"]);
+    // The row kept is the document's LATEST instant, which is what makes the
+    // list agree with the order it claims.
+    expect(rows[0]?.locale).toBe("en");
   });
 
   it("lists the most recently touched first, and never the snapshot", async () => {
@@ -162,8 +209,9 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
     );
 
     const rows = await repo.findRecentPendingEdits({
-      slugs: undefined,
+      slugs: ["posts"],
       limit: 10,
+      maxPerDocument: 1,
     });
     expect(rows.map(r => r.entryId)).toEqual(["new", "old"]);
     // The snapshot is the document's unpublished content and the largest column

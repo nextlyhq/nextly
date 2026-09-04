@@ -49,9 +49,14 @@ The access decision lives in the resolver, which is the difference from
 caller through and adds nothing; `VersionsService` has no authorization at all,
 and none of its methods takes an actor. A resolver that simply called it would
 answer an install-wide number to a reader entitled to part of it, so the reads
-are bounded by the same permission resolution the collections listing uses --
-where an empty allowlist means no readable collections and answers zero, rather
-than being read as no filter.
+are bounded by asking the access layer per registered entity -- the same
+decision the dashboard's own endpoints take. That is not the same as filtering
+the caller's permission slugs, in either direction: an API key is judged on its
+OWN stamped scope rather than on the roles of whoever minted it, and a
+collection authorized or refused purely in code is decided by its rule rather
+than by a permission row. The answer is always enumerated, so a caller who may
+read nothing gets exactly nothing rather than a value that could be read as no
+filter at all.
 
 The card publishes the document's identity and its instant, never the snapshot:
 that column is the unpublished content itself.
