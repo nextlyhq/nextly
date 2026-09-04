@@ -970,6 +970,86 @@ describe("resolveComponentInstances what an instance carries", () => {
     expect(result.referenced).toEqual(["hero"]);
   });
 
+  it("keeps condition-gated nodes charged against the prepass cap", () => {
+    // A gate and an override both stop a node being served, and the clone
+    // treats them differently: it emits NOTHING for an override that hides,
+    // and gives the charge back — but it emits the node itself, still gated,
+    // for a condition, and keeps the charge. A prepass that refunds both reads
+    // an arbitrarily wide definition for free.
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "vip" }]] };
+    const definition = component(
+      [
+        node("g1", { visibility: gate }),
+        node("g2", { visibility: gate }),
+        node("g3", { visibility: gate }),
+        node("g4", { visibility: gate }),
+        node("sib"),
+        box("target", []),
+      ],
+      { slots: { tail: { label: "Tail", nodeId: "target", slot: "children" } } }
+    );
+    const doc = page([
+      instance("i1", "hero", {}, { slots: { tail: [instance("s1", "deep")] } }),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({ hero: definition, deep: component([]) }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 2 } }
+    );
+
+    expect(result.unresolved.map(e => e.reason)).toEqual(["budget"]);
+    expect(result.referenced).toEqual(["hero"]);
+  });
+
+  it("crosses nodes an override removed to reach a later slot target", () => {
+    // The clone gives back the charge for a node that emits nothing, so four
+    // overridden-away roots cost the composed document nothing and the result
+    // fits. A prepass counter that charges them anyway stops before the slot
+    // target, the content is composed at placement instead, and the ordering
+    // this pass exists to fix comes back — as a refusal.
+    const definition = component(
+      [
+        node("h1"),
+        node("h2"),
+        node("h3"),
+        node("h4"),
+        node("sib"),
+        box("target", []),
+      ],
+      {
+        exposed: ["h1", "h2", "h3", "h4"].map((nodeId, index) => ({
+          id: `x${String(index + 1)}`,
+          label: `Show ${nodeId}`,
+          nodeId,
+          // Carried because the published type requires it of every exposure;
+          // a `visibility` one decides whether the node is served at all, so
+          // `applyExposure` answers before it reads a path.
+          propPath: "hidden",
+          type: "visibility" as const,
+        })),
+        slots: { tail: { label: "Tail", nodeId: "target", slot: "children" } },
+      }
+    );
+    const doc = page([
+      instance(
+        "i1",
+        "hero",
+        { overrides: { x1: false, x2: false, x3: false, x4: false } },
+        { slots: { tail: [instance("s1", "empty")] } }
+      ),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({ hero: definition, empty: component([]) }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 2 } }
+    );
+
+    expect(result.unresolved).toEqual([]);
+    expect(result.referenced).toEqual(["hero", "empty"]);
+  });
+
   it("does not compose content bound for a default subtree the page replaced", () => {
     // Two exposed slots: one on a container, one on a node sitting inside that
     // container's DEFAULT children. Filling the outer slot replaces those

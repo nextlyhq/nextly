@@ -1530,7 +1530,23 @@ function composeSurvivingSlots(
     work.left -= 1;
     if (!isPlainRecord(node) || typeof node.id !== "string") continue;
     const plan = ctx.plans.get(node.id);
-    if (!survivesGating(node, plan)) continue;
+    if (!survivesGating(node, plan)) {
+      // Refunded for the OVERRIDE only, because that is the one the clone
+      // refunds. The two ways a node stops being served end differently there:
+      // an override that hides emits nothing and the charge comes back, while
+      // a condition-gated node is emitted STANDING — the pass that prunes it
+      // wants it there — and its charge stays spent.
+      //
+      // Mirroring the wrong one is not a rounding error in either direction.
+      // Refunding neither stops this pass before a slot target in a definition
+      // whose leading nodes are all overridden away, and the content it did
+      // not reach is composed at placement — the ordering this pass exists to
+      // fix, arriving back as a refusal. Refunding both lets an arbitrarily
+      // wide gated definition be read for free, which is the breadth bound
+      // gone.
+      if (plan?.visible === false) work.left += 1;
+      continue;
+    }
     composePlannedFor(plan, ctx);
     composeSlotsUnder(node, plan, ctx, depth, work);
   }
