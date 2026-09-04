@@ -251,6 +251,36 @@ describe("composition and the limits around it", () => {
   });
 });
 
+describe("a definitions map that is not what it claims", () => {
+  it("survives a malformed entry in the definitions map", () => {
+    const definitions = new Map<string, BlockDocument>([
+      ["broken", null as unknown as BlockDocument],
+      ["hero", component([node("d1", "Hi")])],
+    ]);
+
+    const stages = prepareDocumentReadStages(page([instance("i1", "hero")]), {
+      resolver,
+      definitions,
+    });
+
+    // An entry nothing on this page even references must not cost the page.
+    expect(stages!.prepared.nodes[0]!.props.value).toBe("Hi");
+  });
+
+  it("reports a malformed definition as a missing component", () => {
+    const definitions = new Map<string, BlockDocument>([
+      ["hero", null as unknown as BlockDocument],
+    ]);
+
+    const stages = prepareDocumentReadStages(page([instance("i1", "hero")]), {
+      resolver,
+      definitions,
+    });
+
+    expect(stages!.unresolvedInstances.map(e => e.reason)).toEqual(["missing"]);
+  });
+});
+
 describe("an instance nothing could resolve", () => {
   // `rendersOwnMarkup` returning false for one is NOT asserted here. The
   // engine refuses to register the reserved instance name

@@ -49,6 +49,7 @@
 import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
+  isPlainRecord,
   migrateDocument,
   resolveComponentInstances,
 } from "@nextlyhq/blocks-engine";
@@ -408,6 +409,16 @@ function repairedDefinitions(
   let changed = false;
   const repaired = new Map<string, BlockDocument>();
   for (const [id, definition] of definitions) {
+    // OMITTED rather than repaired, and the omission is the repair. The shape
+    // pass reads `document.nodes` on its first line, so a `null` or a string
+    // in this map throws before any block boundary exists to contain it — and
+    // this loop walks every entry, so one bad definition would cost a page
+    // that never referenced it. Left out, the resolver reports the reference
+    // as `missing`, which is what it is.
+    if (!isPlainRecord(definition)) {
+      changed = true;
+      continue;
+    }
     const sound = sanitizeDocument(definition, shapeOnly);
     if (sound !== definition) changed = true;
     repaired.set(id, sound);
