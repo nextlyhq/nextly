@@ -40,6 +40,7 @@ export {
   registerNextCacheRevalidator,
   nextlyTags,
   nextlySingleTags,
+  entryIdTag,
   cachedFind,
   type NextCacheModule,
   type CachedFindOptions,
