@@ -40,6 +40,10 @@ function repository() {
     liveAuthors: vi.fn(async (ids: string[]) => new Set(ids)),
     scheduleRelease: vi.fn(async () => true),
     cancelRelease: vi.fn(async () => true),
+    // The `containing` listing's own read. Present so a test can drive that
+    // branch to completion rather than dying on a missing collaborator, which
+    // would fail for a reason unrelated to the property under test.
+    findDueMembersFor: vi.fn(async () => new Map<string, unknown[]>()),
   };
 }
 
@@ -438,6 +442,72 @@ describe("ReleasesService refuses input the database would answer differently", 
       svc.schedule("r1", new Date(), "x".repeat(65), ADMIN)
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(repo.scheduleRelease).not.toHaveBeenCalled();
+  });
+
+  it("refuses `order` alongside `containing`, rather than ignoring it", async () => {
+    // 🔴 `containing` routes to a different query whose soonest-first order is
+    // its CONTRACT: `resolveReleaseEffect` reads the last row as the final
+    // state, so applying a caller's order there hands the winner's place to the
+    // loser. Accepting the field and dropping it would answer a different
+    // question than the one asked, with rows that look right.
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(
+      svc.find(
+        {
+          containing: {
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: "e1",
+            locale: null,
+          },
+          order: "latest",
+          // Through `unknown`, because the type REFUSES the direct cast -- the
+          // compiler saying the two shapes do not overlap is the type-level
+          // exclusion working, and this test exists for the callers a type
+          // cannot bind: JavaScript, and a cast exactly like this one.
+        } as unknown as Parameters<typeof svc.find>[0],
+        ADMIN
+      )
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.findDueMembersFor).not.toHaveBeenCalled();
+    expect(repo.findReleases).not.toHaveBeenCalled();
+  });
+
+  it("forwards `order` to the repository when nothing narrows by document", async () => {
+    // 🔴 The other half of the guard above, and it had NO coverage: refusing
+    // every query carrying `order` broke nothing, because the widget resolver's
+    // test mocks `find` and the ordering integration test calls the repository
+    // directly. Nothing exercised this routing.
+    //
+    // Asserting the forwarded query rather than the rows is right at THIS seam:
+    // the service's job here is to route, and what the ordering actually does to
+    // real rows is covered against a database in
+    // `releases-repository.integration.test.ts`.
+    const { svc, repo } = service({ holds: ["read"] });
+    await svc.find({ order: "soonest", limit: 3 }, ADMIN);
+    expect(repo.findReleases).toHaveBeenCalledWith(
+      expect.objectContaining({ order: "soonest", limit: 3 })
+    );
+  });
+
+  it("still answers `containing` on its own", async () => {
+    // The control. A guard keyed on `containing` alone would satisfy the case
+    // above and break every document-releases banner.
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(
+      svc.find(
+        {
+          containing: {
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: "e1",
+            locale: null,
+          },
+        },
+        ADMIN
+      )
+    ).resolves.toEqual([]);
+    expect(repo.findDueMembersFor).toHaveBeenCalled();
   });
 
   it("refuses a negative limit, which SQLite reads as NO limit", async () => {
