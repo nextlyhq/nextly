@@ -25,8 +25,6 @@ import {
 } from "../../../plugins/test-nextly";
 import { someResources } from "../readable-resources";
 
-import type { ActivityLogService } from "../activity-log-service";
-
 let current: TestNextly | undefined;
 
 afterEach(async () => {
@@ -131,8 +129,11 @@ describe.each(getConfiguredTestDialects())(
         })
       );
 
-      const activity =
-        current.getService<ActivityLogService>("activityLogService");
+      // No explicit type argument: `getService` is keyed on `ServiceMap`, which
+      // already maps this name to `ActivityLogService`. Naming the type again
+      // does not narrow anything -- it supplies a type where a KEY is expected,
+      // and the resulting `unknown` cascades into every use below.
+      const activity = current.getService("activityLogService");
       const feed = await activity.getRecentActivity({
         scope: someResources(["docs"]),
         caller: { user: { id: OWNER, roles: [] } },
