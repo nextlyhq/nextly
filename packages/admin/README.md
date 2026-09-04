@@ -121,7 +121,7 @@ After running `pnpm dev`, visit [http://localhost:3000/admin/setup](http://local
 - [**Admin overview**](https://nextlyhq.com/docs/admin)
 - [**Customization**](https://nextlyhq.com/docs/admin/customization): theme, branding, custom field UIs
 - [**Branding**](https://nextlyhq.com/docs/admin/branding): logos, colors, and identity
-- [**Visual Schema Builder**](https://nextlyhq.com/docs/admin/builder)
+- [**Visual Schema Builder**](https://nextlyhq.com/docs/schema-builder)
 
 ## Related packages
 

@@ -333,3 +333,38 @@ describe("enumeration comes from the injected file list, not the disk", () => {
     expect(findings.map(f => f.check)).toContain("naming-rule");
   });
 });
+
+describe("meta.json is consulted only when tracked", () => {
+  it("does not invent an orphan from a meta.json the clone will not have", async () => {
+    // The file exists in this working tree but not in the index. A clone therefore has no
+    // meta.json for this directory, fumadocs auto-includes its pages, and nothing is orphaned.
+    // Reading the disk here would report a finding that cannot happen on the site.
+    const { root } = await fixture({
+      "docs/meta.json": JSON.stringify({ pages: ["index"] }),
+      "docs/index.mdx": "# i\n",
+      "docs/orphan.mdx": "# o\n",
+    });
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files: ["docs/index.mdx", "docs/orphan.mdx"],
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+    });
+    expect(findings.map(f => f.check)).not.toContain("meta-reachable");
+  });
+
+  it("still catches the orphan once meta.json is tracked", async () => {
+    const { root, files } = await fixture({
+      "docs/meta.json": JSON.stringify({ pages: ["index"] }),
+      "docs/index.mdx": "# i\n",
+      "docs/orphan.mdx": "# o\n",
+    });
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files,
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+    });
+    expect(findings.map(f => f.check)).toContain("meta-reachable");
+  });
+});

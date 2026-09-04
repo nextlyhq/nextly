@@ -2,18 +2,22 @@
   "title": "Documentation",
   "pages": [
     "index",
-    "---Start Here---",
+    "---Start here---",
     "getting-started",
-    "---Build---",
+    "---Model---",
     "configuration",
-    "admin",
-    "---Infrastructure---",
+    "schema-builder",
     "database",
-    "guides",
-    "---Reference---",
     "api-reference",
+    "---Operate---",
+    "preview",
+    "guides",
+    "---Extend---",
     "plugins",
-    "templates",
-    "telemetry"
+    "webhooks",
+    "admin",
+    "telemetry",
+    "---Reference---",
+    "templates"
   ]
 }

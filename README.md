@@ -184,7 +184,7 @@ See the [database support docs](https://nextlyhq.com/docs/database/support) for 
 - [**Installation**](https://nextlyhq.com/docs/getting-started/installation): get started in minutes
 - [**Quick start**](https://nextlyhq.com/docs/getting-started/quick-start): build a blog in 5 minutes
 - [**Configuration**](https://nextlyhq.com/docs/configuration): collections, singles, fields, hooks
-- [**Visual Schema Builder**](https://nextlyhq.com/docs/admin/builder): define schema in the admin UI
+- [**Visual Schema Builder**](https://nextlyhq.com/docs/schema-builder): define schema in the admin UI
 - [**Authentication & permissions**](https://nextlyhq.com/docs/guides/authentication): RBAC, API keys, JWT
 - [**REST API**](https://nextlyhq.com/docs/api-reference/rest-api) and [**Direct API**](https://nextlyhq.com/docs/api-reference/direct-api)
 - [**Database**](https://nextlyhq.com/docs/database): Postgres, MySQL, SQLite adapters
