@@ -797,3 +797,51 @@ describe("what the notice is allowed to claim", () => {
     expect(recorded).toEqual([]);
   });
 });
+
+describe("a write to the component store itself", () => {
+  it("reads the COMPONENT field, not the route's page field", async () => {
+    // A component definition is not a page, and the page field does not
+    // describe it. A host whose pages render `layout` while definitions live in
+    // `content` would have every component write filtered to a field the store
+    // does not declare — nothing examined, and a component embedding an
+    // unpublished sibling publishing in silence, on the one path this hook
+    // keeps in scope precisely because that hole appears on every page
+    // embedding it.
+    const handlers: ((c: unknown) => unknown)[] = [];
+    const ctx = {
+      hooks: {
+        on: (_t: string, _c: string, h: (c: unknown) => unknown) => {
+          handlers.push(h);
+        },
+      },
+      services: {
+        collections: {
+          getCollection: async () => ({
+            status: true,
+            localized: false,
+            fields: [{ name: "content", type: "blocks" }],
+          }),
+        },
+      },
+    };
+    registerComponentReadinessNotice({
+      ctx: ctx as never,
+      componentCollection: COMPONENTS,
+      componentField: "content",
+      // The route renders a DIFFERENT field on its pages.
+      pageField: "layout",
+      limits: () => LIMITS,
+    });
+    const write = writeContext({
+      collection: COMPONENTS,
+      data: { id: "outer", status: "published", content: doc(["inner"]) },
+    });
+    (write.req as Record<string, unknown>).nextly = {
+      find: async () => ({ items: [] }),
+    };
+
+    await handlers[0]!(write);
+
+    expect(recorded).toHaveLength(1);
+  });
+});

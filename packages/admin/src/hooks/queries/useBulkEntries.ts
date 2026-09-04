@@ -23,6 +23,7 @@ import { toast } from "@admin/components/ui";
 import type { BulkResponse, PerItemError } from "@admin/lib/api/response-types";
 import {
   toastMutationResult,
+  warningText,
   type HookWarning,
 } from "@admin/lib/mutation-warnings";
 import {
@@ -78,7 +79,10 @@ function toastBulkResult<T>(
   // Plain text rather than the rich detail the single-entry presenter renders:
   // this module is not a component file, and a joined sentence carries the same
   // information without turning it into one.
-  const detail = (warnings ?? []).map(warning => warning.message).join(" ");
+  // Through the SAME formatter the element path uses, so a failed row does not
+  // cost the surviving rows their identity: several identically-worded notices
+  // name no page at all.
+  const detail = (warnings ?? []).map(warningText).join(" ");
   toast.warning(payload.message, {
     ...(detail.length > 0 ? { description: detail } : {}),
   });

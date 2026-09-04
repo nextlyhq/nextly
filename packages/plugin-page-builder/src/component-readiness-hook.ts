@@ -271,9 +271,32 @@ async function subjectOf(
 
   const documents = writtenDocuments(
     context,
-    renderedFields(blocksFieldsOf(collection as never), args.pageField)
+    renderedFields(
+      blocksFieldsOf(collection as never),
+      fieldFor(args, target.slug)
+    )
   );
   return documents.length === 0 ? null : { target, documents };
+}
+
+/**
+ * Which field holds the document this write is about.
+ *
+ * A write to the COMPONENT STORE is not a page, and the page field does not
+ * describe it: a host whose pages render `layout` while definitions live in
+ * `content` would have every component write filtered to a field the store does
+ * not declare, so nothing would be examined and a component embedding an
+ * unpublished sibling would publish silently — on the one path this hook keeps
+ * in scope precisely because the hole it leaves appears on every page that
+ * embeds it.
+ */
+function fieldFor(
+  args: Parameters<typeof registerComponentReadinessNotice>[0],
+  slug: string
+): string | undefined {
+  return slug === args.componentCollection
+    ? args.componentField
+    : args.pageField;
 }
 
 /**

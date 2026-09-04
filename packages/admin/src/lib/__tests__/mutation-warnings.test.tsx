@@ -24,7 +24,11 @@ vi.mock("@admin/components/ui", () => ({
   },
 }));
 
-import { toastMutationResult, type HookWarning } from "../mutation-warnings";
+import {
+  toastMutationResult,
+  warningText,
+  type HookWarning,
+} from "../mutation-warnings";
 
 function warning(overrides: Partial<HookWarning> = {}): HookWarning {
   return {
@@ -257,5 +261,49 @@ describe("telling several notices apart", () => {
     const { container } = render(options.description);
 
     expect(container.textContent).not.toContain("()");
+  });
+});
+
+describe("naming the row on every path, not just the list", () => {
+  it("names the row when there is only ONE warning", () => {
+    // The single-warning branch renders inline instead of as a list, and it
+    // rendered the message alone. So the case where identification matters
+    // most — one page among many needing attention — was the one case that
+    // did not get it. The multi-warning test could not see this.
+    toastMutationResult("Entry updated successfully", [
+      notice({ entryId: "page-a" }),
+    ]);
+
+    const options = infoSpy.mock.calls[0]?.[1] as {
+      description: React.ReactElement;
+    };
+    render(options.description);
+
+    expect(screen.getByText(/page-a/)).toBeInTheDocument();
+  });
+
+  it("names the row beside a real failure too", () => {
+    // The failure headline path renders the same detail, and an advisory that
+    // rides along there is no less in need of an address.
+    toastMutationResult("Entry updated successfully", [
+      notice({ entryId: "page-a" }),
+      warning({ entryId: "page-b" }),
+    ]);
+
+    const options = warningSpy.mock.calls[0]?.[1] as {
+      description: React.ReactElement;
+    };
+    render(options.description);
+
+    expect(screen.getByText(/page-a/)).toBeInTheDocument();
+    expect(screen.getByText(/page-b/)).toBeInTheDocument();
+  });
+
+  it("gives the same line as plain text", () => {
+    // The bulk failure toast can only carry a string, so it uses the text form.
+    // Kept beside the element form because two spellings of one warning is how
+    // one path keeps its identity while another loses it.
+    expect(warningText(notice({ entryId: "page-a" }))).toContain("page-a");
+    expect(warningText(notice())).not.toContain("(");
   });
 });
