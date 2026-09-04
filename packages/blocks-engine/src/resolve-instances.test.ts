@@ -1148,11 +1148,12 @@ describe("resolveComponentInstances what an instance carries", () => {
   });
 
   it("does not let one starved child take its owner down with it", () => {
-    // The case that made me withdraw the previous attempt at this. Slot content
-    // holding a growing instance and then a MISSING one: the earlier fix lent
-    // room for both, the missing one never repaid, and the debt aborted the
-    // whole outer component — so the page lost a component that had been
-    // rendering with two precise markers.
+    // Slot content holding a growing instance and then a MISSING one. Each
+    // child fails for its own reason and neither reason is the owner's: a
+    // component that cannot fit and a component nobody published are both
+    // facts about the children, and promoting either into a refusal of the
+    // node that holds them costs a reader the whole component instead of the
+    // two blocks that could not be drawn.
     const definition = component([box("t", [])], {
       slots: { hole: { label: "Hole", nodeId: "t", slot: "a" } },
     });

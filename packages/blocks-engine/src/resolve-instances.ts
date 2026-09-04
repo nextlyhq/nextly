@@ -1608,13 +1608,10 @@ function retryStarvedSlots(
   if (plan.slots === undefined) return;
   let retried = false;
   for (const content of plan.slots.values()) {
-    if (!content.composed || !holdsStarvedInstance(content.nodes)) continue;
-    content.nodes = inlineForest(
-      content.nodes,
-      ctx.run,
-      ctx.hostScope,
-      ctx.hostDepth + 1
-    );
+    if (!content.composed) continue;
+    const next = retriedRoots(content.nodes, ctx);
+    if (next === content.nodes) continue;
+    content.nodes = next;
     retried = true;
   }
   if (retried) reconcileRefusals(plan, ctx.run, mark);
@@ -1643,13 +1640,16 @@ function reconcileRefusals(
     if (!content.composed) continue;
     collectRefusedIds(content.nodes, standing);
   }
-  const kept: UnresolvedInstance[] = [];
-  const seen = new Set<string>();
-  // Backwards, so the entry KEPT for an instance is the one the last attempt
-  // wrote — the retry's answer rather than the attempt it superseded.
-  for (let i = run.unresolved.length - 1; i >= mark; i -= 1) {
-    const entry = run.unresolved[i];
-    if (seen.has(entry.instanceId)) continue;
+  // First-seen ORDER with the last-written VALUE. A retry appends, so keeping
+  // the appended position would move a retried instance to the end of a list
+  // whose usefulness is that it reads in document order — while keeping the
+  // first VALUE would report the attempt the retry superseded.
+  const { order, latest } = lastPerInstance(run.unresolved, mark);
+
+  run.unresolved.length = mark;
+  for (const id of order) {
+    const entry = latest.get(id);
+    if (entry === undefined) continue;
     // A refusal for want of budget is the only kind a retry can settle: every
     // other reason is a decision the second attempt reaches identically, so an
     // instance refused for one is still standing afterwards and still in
@@ -1662,12 +1662,30 @@ function reconcileRefusals(
     // fine; a dropped one takes a real diagnostic away, and nothing is left to
     // notice. If a retry ever does make a non-budget refusal disappear, this is
     // the direction to fail in.
-    if (entry.reason === "budget" && !standing.has(entry.instanceId)) continue;
-    seen.add(entry.instanceId);
-    kept.push(entry);
+    if (entry.reason === "budget" && !standing.has(id)) continue;
+    run.unresolved.push(entry);
   }
-  run.unresolved.length = mark;
-  for (let i = kept.length - 1; i >= 0; i -= 1) run.unresolved.push(kept[i]);
+}
+
+/**
+ * One entry per instance from `mark` on: first-seen ORDER, last-written VALUE.
+ *
+ * A retry appends, so the appended position would move a retried instance to
+ * the end of a list whose usefulness is that it reads in document order —
+ * while the first value would report the attempt the retry superseded.
+ */
+function lastPerInstance(
+  entries: readonly UnresolvedInstance[],
+  mark: number
+): { order: string[]; latest: Map<string, UnresolvedInstance> } {
+  const order: string[] = [];
+  const latest = new Map<string, UnresolvedInstance>();
+  for (let i = mark; i < entries.length; i += 1) {
+    const entry = entries[i];
+    if (!latest.has(entry.instanceId)) order.push(entry.instanceId);
+    latest.set(entry.instanceId, entry);
+  }
+  return { order, latest };
 }
 
 /** The ids of every instance still standing with a marker in this forest. */
@@ -1688,22 +1706,55 @@ function collectRefusedIds(
   });
 }
 
-/** Whether this forest still holds an instance refused for want of budget. */
-function holdsStarvedInstance(nodes: readonly ResolvedBlockNode[]): boolean {
-  let found = false;
-  walkForest(nodes, entry => {
-    const node = entry.node;
-    if (
-      isPlainRecord(node) &&
-      node.type === COMPONENT_INSTANCE_TYPE &&
-      node.unresolvedComponent === "budget"
-    ) {
-      found = true;
-      return "stop";
+/**
+ * This slot's content with its ROOT starved instances expanded again.
+ *
+ * Roots only, and that bound is the whole care in this function. A starved
+ * instance sitting deeper was reached under some other instance's scope and
+ * owner — inside a component that has already expanded — and re-entering the
+ * composed forest from here would retry it as though the PAGE had held it: its
+ * output would record `instanceOf` for a scoped node the editor cannot select,
+ * and the reset path and depth could answer the cycle and nesting questions
+ * differently than the position it actually occupies.
+ *
+ * A root of this content is unambiguous: the page supplied it, so the host
+ * scope and depth ARE the ones it was reached under, and expanding it again is
+ * the same call with the same arguments. A deeper one is left standing, which
+ * is what it did before any retry existed.
+ *
+ * Returns the input array unchanged when nothing was retried, so a caller can
+ * tell by identity whether the refusal list needs reconciling.
+ */
+function retriedRoots(
+  nodes: readonly ResolvedBlockNode[],
+  ctx: InlineContext
+): ResolvedBlockNode[] {
+  let changed = false;
+  const out: ResolvedBlockNode[] = [];
+  for (const node of nodes) {
+    if (!isStarvedInstance(node)) {
+      out.push(node);
+      continue;
     }
-    return "descend";
-  });
-  return found;
+    changed = true;
+    const produced = expandInstance(
+      node,
+      ctx.run,
+      ctx.hostScope,
+      ctx.hostDepth + 1
+    );
+    for (const entry of produced) out.push(entry);
+  }
+  return changed ? out : (nodes as ResolvedBlockNode[]);
+}
+
+/** Whether this node is an instance left standing for want of budget. */
+function isStarvedInstance(node: ResolvedBlockNode): boolean {
+  return (
+    isPlainRecord(node) &&
+    node.type === COMPONENT_INSTANCE_TYPE &&
+    node.unresolvedComponent === "budget"
+  );
 }
 
 /**
