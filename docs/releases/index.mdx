@@ -1,0 +1,64 @@
+---
+title: Content Releases
+description: Group documents into a release and publish or unpublish them together, at a time you choose.
+---
+
+A release is a set of documents that go live at the same instant. A product launch touching
+a landing page, three blog posts and a pricing single becomes one thing you schedule, rather
+than five things someone has to publish in the right order at 9am.
+
+Each member of a release is set to either **publish** or **unpublish**, so the same release
+can put new pages live and retire old ones in the same moment.
+
+## Availability
+
+| | |
+|---|---|
+| Built in | No plugin required |
+| Admin | A **Releases** section with a calendar view, and an "Add to release" action on documents |
+| Permission | Scheduling requires publish access. A key scoped only to publishing releases can schedule without holding a general read grant |
+
+## What it is not
+
+<Callout type="warn">
+This is **scheduled publishing**, not an approval workflow. There are no review stages,
+transitions or assignees. If you need "editor submits, manager approves, then it goes
+live", that is not what a release does.
+</Callout>
+
+## The shape of a release
+
+| Step | What happens |
+|---|---|
+| Create | An empty release with a name |
+| Add members | Each member names a document and an action, `publish` or `unpublish` |
+| Schedule | The release is given a time. Blocking problems are checked first |
+| Apply | At that time, every member's action is applied |
+| Cancel | An unapplied release can be cancelled |
+
+## Blocking reasons
+
+Before a release can be scheduled, it is checked for problems that would make it fail
+half-way — a member pointing at a document that no longer exists, for example. Those are
+reported as **blocking reasons** so they can be fixed while there is still time, rather
+than surfacing as a partial publish at 9am.
+
+An empty release has no blockers; there is nothing to go wrong.
+
+## One release covers every language
+
+A member is the whole document. Adding a post to a release schedules that post in every
+language it has.
+
+<Callout type="warn">
+Per-locale scheduling is **not** supported: adding a member that names a single locale is
+refused, and the admin only offers the action from a document's default locale. Each
+language does have its own published state — see [Localization](/docs/localization) — but
+that is publishing, not scheduling.
+</Callout>
+
+## Related
+
+- [Localization](/docs/localization) — per-language publishing
+- [Draft and published status](/docs/guides/draft-published-status)
+- [Versions](/docs/versions) — what a publish changed

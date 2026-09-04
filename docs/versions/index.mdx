@@ -1,0 +1,73 @@
+---
+title: Version History
+description: Every save is recorded, so you can see what changed, compare any two versions, and put an earlier one back.
+---
+
+Every create and update records a version. Nothing is lost when someone overwrites a
+paragraph, and "who changed this, and when" has an answer.
+
+## Availability
+
+| | |
+|---|---|
+| Built in | No plugin required |
+| Admin | A **Versions** panel on the edit screen |
+| Permission | Reading history requires read access to the document; restoring requires update access |
+
+## How a version is recorded
+
+A version is written **inside the same database transaction as the content change**, using
+the caller's transaction handle. So a version and the content it describes commit together
+or not at all — there is no window where a document is saved and its history is not.
+
+The stored snapshot has the same shape the read path returns, which is what makes a
+restored version equal to a normal read rather than an approximation of one.
+
+## Comparing two versions
+
+The diff compares two snapshots **against the current field definitions**, not against the
+schema as it was. That matters in practice: a field deleted since a snapshot was taken is
+reported as no longer part of the document, rather than silently reappearing in the
+comparison.
+
+The comparison understands the shapes your content actually uses, including rich text and
+block documents, so a diff of a page shows which blocks moved rather than one opaque
+change.
+
+Secret fields are masked in diffs. A password field's history never shows its values.
+
+## Restoring
+
+Restore writes **through the same update path a human edit uses**. Validation runs, hooks
+run, component and relationship writes happen, events fire and the outbox is written —
+exactly as if a person had made the change.
+
+Two consequences worth knowing:
+
+1. **Restoring destroys nothing.** Because a restore is an ordinary update, the state you
+   are restoring over is itself captured as a version first. You can undo an undo.
+2. **A restore cannot resurrect a field the schema no longer has.** The payload is filtered
+   by the current schema, so restoring an old snapshot into a changed collection puts back
+   what still exists and reports the rest.
+
+System columns — creation timestamps, the creating user — are never carried back by a
+restore, so history cannot be used to forge them.
+
+## Working drafts
+
+A working draft holds edits in progress separately from the published document, so someone
+can work on a change over several days without it going live and without blocking anyone
+else from seeing the current published version.
+
+## Retention
+
+History grows. Retention policies trim old versions on a schedule so the table does not
+grow without limit. Published versions are governed separately from drafts, because the
+two have different value: a superseded draft is usually noise, and a previously published
+version is usually evidence.
+
+## Related
+
+- [Draft and published status](/docs/guides/draft-published-status)
+- [Content releases](/docs/releases)
+- [Audit log](/docs/audit-log) — who did what, across the system
