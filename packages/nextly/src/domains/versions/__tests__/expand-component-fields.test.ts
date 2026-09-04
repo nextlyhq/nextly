@@ -227,6 +227,26 @@ describe("stripPasswordsThroughComponents", () => {
     expect(rows[1]).not.toMatchObject({ secret: "b" });
   });
 
+  it("strips a password inside a migrated fieldGroup reference", () => {
+    // The separating case for the dual-vocabulary reads: a definition whose
+    // type token and reference key are both migrated spellings. A slug walk
+    // reading only the legacy keys finds nothing here, and the plaintext
+    // rides into the version snapshot.
+    const fields = [
+      f({ name: "auth", type: "fieldGroup", fieldGroup: "auth" }),
+    ];
+    const map = new Map<string, FieldConfig[]>([
+      ["auth", [f({ name: "secret", type: "password" })]],
+    ]);
+
+    const entry: Record<string, unknown> = {
+      auth: { secret: "plaintext" },
+    };
+    stripPasswordsThroughComponents(entry, fields, map, strip);
+
+    expect(entry.auth).not.toMatchObject({ secret: "plaintext" });
+  });
+
   it("leaves non-password values alone at every depth", () => {
     // Negative control: a strip-everything walker would satisfy the tests
     // above while destroying the recovery point it exists to preserve.

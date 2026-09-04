@@ -32,11 +32,14 @@
  * ```
  */
 
+import {
+  extractFieldGroupReferences,
+  isFieldGroupType,
+} from "../../domains/field-groups/storage/field-group-field-type";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../field-groups/config/validate-field-group";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
 import {
   sanitizeConfig,
@@ -78,21 +81,20 @@ function collectComponentRefs(
   fields: {
     type?: string;
     component?: string;
+    fieldGroup?: string;
     components?: string[];
+    fieldGroups?: string[];
     fields?: unknown[];
   }[],
   refs: string[]
 ): void {
   for (const field of fields) {
-    if (field.type === STORAGE_FORMAT.fieldType) {
-      if (typeof field.component === "string") {
-        refs.push(field.component);
-      }
-      if (Array.isArray(field.components)) {
-        for (const slug of field.components) {
-          if (typeof slug === "string") {
-            refs.push(slug);
-          }
+    if (isFieldGroupType(field.type)) {
+      const { single, many } = extractFieldGroupReferences(field);
+      if (single) refs.push(single);
+      if (many) {
+        for (const slug of many) {
+          refs.push(slug);
         }
       }
     }
@@ -102,7 +104,9 @@ function collectComponentRefs(
         field.fields as {
           type?: string;
           component?: string;
+          fieldGroup?: string;
           components?: string[];
+          fieldGroups?: string[];
           fields?: unknown[];
         }[],
         refs
@@ -123,13 +127,20 @@ function collectComponentRefs(
 function validateComponentNesting(
   components: { slug: string; fields: unknown[] }[]
 ): void {
-  // Build adjacency list: component slug -> slugs it references
-  const graph = new Map<string, string[]>();
+  // All slugs are collected FIRST. Components may be defined in any order,
+  // and an edge filtered against a partially built set is dropped for good —
+  // the later re-filter only re-filtered the survivors, so a group declared
+  // before the group it references lost its edge and the cycle went unseen.
   const slugSet = new Set<string>();
+  for (const comp of components) {
+    slugSet.add(comp.slug.toLowerCase());
+  }
 
+  // Build adjacency list: component slug -> slugs it references, keeping only
+  // refs to known component slugs.
+  const graph = new Map<string, string[]>();
   for (const comp of components) {
     const slug = comp.slug.toLowerCase();
-    slugSet.add(slug);
     const refs: string[] = [];
     collectComponentRefs(
       comp.fields as {
@@ -140,19 +151,9 @@ function validateComponentNesting(
       }[],
       refs
     );
-    // Only include refs to known component slugs
     graph.set(
       slug,
       refs.filter(r => slugSet.has(r.toLowerCase())).map(r => r.toLowerCase())
-    );
-  }
-
-  // Re-filter refs now that we have all slugs (needed because
-  // components may be defined in any order)
-  for (const [slug, refs] of graph) {
-    graph.set(
-      slug,
-      refs.filter(r => slugSet.has(r))
     );
   }
 

@@ -514,7 +514,10 @@ describe("what the ANONYMOUS preview path is wired to", () => {
     ];
 
     for (const relative of anonymous) {
-      const source = readFileSync(new URL(relative, import.meta.url), "utf8");
+      const source = readFileSync(
+        fileURLToPath(new URL(relative, import.meta.url)),
+        "utf8"
+      );
       // A control first: reading the wrong path returns "" and would let every
       // assertion below pass by having examined nothing.
       expect(source.length).toBeGreaterThan(0);
@@ -541,7 +544,10 @@ describe("who decides which envelope means absent", () => {
     ];
 
     for (const relative of loaders) {
-      const source = readFileSync(new URL(relative, import.meta.url), "utf8");
+      const source = readFileSync(
+        fileURLToPath(new URL(relative, import.meta.url)),
+        "utf8"
+      );
       // Control: a mistyped path reads as "" and would let this pass having
       // examined nothing.
       expect(source.length).toBeGreaterThan(0);
@@ -897,7 +903,7 @@ describe("the authenticated boundary on the explaining form", () => {
     )
       .split("\n")
       .filter(Boolean)
-      .map(p => p.slice(fileURLToPath(root).length))
+      .map(p => p.slice(fileURLToPath(root).length).replace(/^[\/]+/, ""))
       .filter(p => !p.includes("__tests__") && !p.endsWith(".test.ts"))
       .sort();
 
@@ -942,7 +948,7 @@ describe("the authenticated boundary on the explaining form", () => {
     const readModule = (rel: string): { at: string; source: string } | null => {
       for (const at of [rel, rel.replace(/\.ts$/, "/index.ts")]) {
         try {
-          return { at, source: readFileSync(new URL(at, root), "utf8") };
+          return { at, source: readFileSync(fileURLToPath(new URL(at, root)), "utf8") };
         } catch {
           continue;
         }

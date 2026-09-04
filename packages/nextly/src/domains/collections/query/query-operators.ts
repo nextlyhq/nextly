@@ -34,7 +34,10 @@ import type {
   WhereOperator,
 } from "@nextlyhq/adapter-drizzle/types";
 
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import {
+  extractFieldGroupReferences,
+  isFieldGroupType,
+} from "../../field-groups/storage/field-group-field-type";
 import { isFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 
 import type { GeoFilter } from "./geo-utils";
@@ -546,9 +549,11 @@ export interface ExtractComponentFiltersResult {
  */
 interface ComponentFieldDefinition {
   name: string;
-  type: typeof STORAGE_FORMAT.fieldType;
+  type: string;
   component?: string;
+  fieldGroup?: string;
   components?: string[];
+  fieldGroups?: string[];
 }
 
 /**
@@ -558,19 +563,17 @@ function isComponentFieldDef(field: {
   name: string;
   type: string;
 }): field is ComponentFieldDefinition {
-  return field.type === STORAGE_FORMAT.fieldType;
+  return isFieldGroupType(field.type);
 }
 
 /**
  * Build a map of field names to component field definitions.
  */
 function buildComponentFieldMap(
-  fields: Array<{
-    name: string;
-    type: string;
-    component?: string;
-    components?: string[];
-  }>
+  // The shared definition names all four reference keys. A narrower inline
+  // shape here rejects a caller's migrated object literal at the excess-
+  // property check, before extraction can read its references at all.
+  fields: ComponentFieldDefinition[]
 ): Map<string, ComponentFieldDefinition> {
   const map = new Map<string, ComponentFieldDefinition>();
 
@@ -627,12 +630,9 @@ function buildComponentFieldMap(
  */
 export function extractComponentFieldConditions(
   where: WhereFilter | undefined,
-  fields: Array<{
-    name: string;
-    type: string;
-    component?: string;
-    components?: string[];
-  }>
+  // Same shared definition: a migrated `{ type: "fieldGroup", fieldGroup }`
+  // literal must type-check against the input, not be rejected as excess.
+  fields: ComponentFieldDefinition[]
 ): ExtractComponentFiltersResult {
   if (!where) {
     return { componentFilters: [], cleanedWhere: undefined };
@@ -699,10 +699,11 @@ export function extractComponentFieldConditions(
       const componentField = componentFieldMap.get(fieldName);
 
       if (componentField) {
-        // This is a component field condition — extract it
-        const componentSlugs = componentField.component
-          ? [componentField.component]
-          : componentField.components || [];
+        // This is a component field condition — extract it. The slugs come from
+        // the shared reader so a definition referencing its field group through
+        // either key spelling resolves to the same filter targets.
+        const { single, many } = extractFieldGroupReferences(componentField);
+        const componentSlugs = single ? [single] : (many ?? []);
 
         // Check if it's a field condition with operators
         if (isFieldCondition(value)) {

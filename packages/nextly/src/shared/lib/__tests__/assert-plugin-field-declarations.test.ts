@@ -156,4 +156,20 @@ describe("plugin field declarations at boot", () => {
       })
     ).toEqual([]);
   });
+
+  it("accepts the migrated field-group spelling on stored definitions", () => {
+    // The storage migration rewrites `type: "component"` to
+    // `type: "fieldGroup"` in stored definitions; refusing the migrated token
+    // here would stop the application booting on a migrated database.
+    expect(
+      issuesOf({
+        collections: [
+          {
+            slug: "posts",
+            fields: [{ name: "seo", type: "fieldGroup", component: "seo" }],
+          },
+        ],
+      })
+    ).toEqual([]);
+  });
 });

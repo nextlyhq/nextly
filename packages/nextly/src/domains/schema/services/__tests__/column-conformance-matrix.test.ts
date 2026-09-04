@@ -232,6 +232,14 @@ const CASES: Record<DynamicFieldType, FieldCase[]> = {
       field: { type: "component", options: { target: "hero" } },
     },
   ],
+  // The migrated spelling of "component" — measured like it, because "no
+  // column" must remain the answer under either token.
+  fieldGroup: [
+    {
+      label: "plain",
+      field: { type: "fieldGroup", fieldGroup: "hero" },
+    },
+  ],
   chips: [{ label: "plain", field: { type: "chips" } }],
 };
 
@@ -713,7 +721,7 @@ describe("column conformance: the generators against the descriptor", () => {
   it("measured every field type through both generators on every dialect", () => {
     const types = Object.keys(CASES).length;
     const variations = Object.values(CASES).reduce((n, c) => n + c.length, 0);
-    expect(types, "every DynamicFieldType has a row").toBe(18);
+    expect(types, "every DynamicFieldType has a row").toBe(19);
     // A Record satisfied by `newType: []` type-checks and measures nothing, and the aggregate below
     // would stay comfortably over its floor while the new type entered uncovered.
     expect(

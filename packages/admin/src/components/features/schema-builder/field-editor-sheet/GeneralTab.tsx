@@ -11,6 +11,7 @@
 // editor props to the unified BuilderField onChange contract. Adapters
 // were added in PR 2 alongside the page-level mount of FieldEditorSheet.
 import { Input, Label, Switch, Textarea } from "@nextlyhq/ui";
+import { isFieldGroupFieldType } from "nextly/field-group-type";
 
 import { toSnakeName } from "@admin/lib/builder";
 
@@ -47,6 +48,16 @@ const TYPES_WITH_TYPE_SPECIFIC_EDITOR = new Set([
   "group",
   "component",
 ]);
+
+/**
+ * Whether the field gets its type-specific options editor. Field-group fields
+ * qualify under either spelling of the stored token — asked through the shared
+ * predicate rather than listing the migrated spelling, so the gate cannot
+ * strand a migrated definition on the general tab with no way to edit it.
+ */
+function hasTypeSpecificEditor(type: string): boolean {
+  return TYPES_WITH_TYPE_SPECIFIC_EDITOR.has(type) || isFieldGroupFieldType(type);
+}
 
 export function GeneralTab({ field, readOnly = false, onChange }: Props) {
   const isSystem = field.isSystem === true;
@@ -179,7 +190,7 @@ export function GeneralTab({ field, readOnly = false, onChange }: Props) {
         }}
       />
 
-      {TYPES_WITH_TYPE_SPECIFIC_EDITOR.has(field.type) && (
+      {hasTypeSpecificEditor(field.type) && (
         <div className="border-t border-border pt-3 space-y-2">
           <div className="text-xs uppercase tracking-wider text-muted-foreground">
             {field.type} options

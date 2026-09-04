@@ -885,6 +885,15 @@ export {
 // Component field type (also exported from ./collections/fields via barrel export)
 export type { FieldGroupFieldConfig } from "./collections/fields/types/component";
 
+// The field-group storage vocabulary: which type tokens and reference keys a
+// stored definition may carry. Renderers that dispatch on a field's type — the
+// admin entry form among them — ask the predicate rather than compare either
+// literal, so a migrated definition renders as what it is.
+export {
+  extractFieldGroupReferences,
+  isFieldGroupType,
+} from "./domains/field-groups/storage/field-group-field-type";
+
 // Declares an entry field whose type a plugin contributed. `FieldConfig` is a
 // closed union whose arms carry each built-in type's own errors, so it cannot
 // admit a contributed type without losing them; the brand opens the authoring

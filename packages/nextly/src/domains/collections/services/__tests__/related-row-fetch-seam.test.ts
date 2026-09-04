@@ -12,11 +12,13 @@
  * the other six today. This is the check that fails when someone adds one.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-const SOURCE = new URL("../collection-relationship-service.ts", import.meta.url)
-  .pathname;
+const SOURCE = fileURLToPath(
+  new URL("../collection-relationship-service.ts", import.meta.url)
+);
 
 /**
  * The queries allowed to read rows directly, each for a stated reason. A new

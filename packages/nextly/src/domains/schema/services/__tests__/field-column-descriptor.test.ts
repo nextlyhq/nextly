@@ -7,6 +7,7 @@ import {
   registerFieldType,
 } from "../../field-types/field-type-registry";
 import {
+  fieldProducesColumn,
   getColumnDescriptor,
   isTextStorageKind,
   type ColumnKind,
@@ -454,6 +455,25 @@ describe("getColumnDescriptor — the code-first readings are preserved", () => 
       expect(
         getColumnDescriptor(declared, "mysql", "codeFirst")?.dialectType
       ).toBe(expected);
+    }
+  );
+});
+
+describe("getColumnDescriptor & fieldProducesColumn — field groups and components", () => {
+  it.each(["component", "fieldGroup"] as const)(
+    "fieldProducesColumn returns false for type %s",
+    fieldType => {
+      expect(fieldProducesColumn({ type: fieldType })).toBe(false);
+    }
+  );
+
+  it.each(["component", "fieldGroup"] as const)(
+    "getColumnDescriptor returns null for type %s across dialects",
+    fieldType => {
+      const f = { name: "seo", type: fieldType } as unknown as FieldDefinition;
+      expect(getColumnDescriptor(f, "postgresql", "collection")).toBeNull();
+      expect(getColumnDescriptor(f, "mysql", "collection")).toBeNull();
+      expect(getColumnDescriptor(f, "sqlite", "collection")).toBeNull();
     }
   );
 });

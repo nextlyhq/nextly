@@ -44,6 +44,7 @@ import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collectio
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
+import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { currentFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 
 import { renderFieldMember } from "./field-nullability";
@@ -1223,20 +1224,26 @@ ${properties}
   ): string {
     const componentField = field as {
       component?: string;
+      fieldGroup?: string;
       components?: string[];
+      fieldGroups?: string[];
       repeatable?: boolean;
     };
 
-    const { component, components, repeatable } = componentField;
+    // Through the shared extractor: a migrated definition names its slugs
+    // under fieldGroup / fieldGroups, and missing them emitted `unknown` —
+    // dropping the static contract for every migrated field-group field.
+    const { single, many } = extractFieldGroupReferences(componentField);
+    const { repeatable } = componentField;
 
     let baseType: string;
 
-    if (component) {
+    if (single !== undefined) {
       // Single component mode
-      baseType = this.toComponentInterfaceName(component);
-    } else if (components && components.length > 0) {
+      baseType = this.toComponentInterfaceName(single);
+    } else if (many !== undefined && many.length > 0) {
       // Multi-component mode (dynamic zone) - create union type
-      const componentTypes = components.map(slug =>
+      const componentTypes = many.map(slug =>
         this.toComponentInterfaceName(slug)
       );
       baseType = componentTypes.join(" | ");
@@ -1247,7 +1254,7 @@ ${properties}
 
     // Wrap in array if repeatable
     if (repeatable) {
-      if (components && components.length > 1) {
+      if (many !== undefined && many.length > 1) {
         // Multi-component array needs parentheses
         return `(${baseType})[]`;
       }

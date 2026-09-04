@@ -557,3 +557,68 @@ describe("rehydrateSnapshotDates", () => {
     expect(value.when instanceof Date).toBe(true);
   });
 });
+
+describe("the migrated fieldGroup spellings reach the capture walks", () => {
+  // A definition the storage migration rewrote carries its reference keys
+  // under the fieldGroup spellings. A capture walk that reads only the legacy
+  // keys leaves the value untagged — pruned against the wrong schema at
+  // restore — and drops its slugs from the schema map. The marker itself is
+  // always written in the CURRENT wire spelling, whatever the definition says.
+
+  it("tagComponentTypes tags a migrated single reference", () => {
+    const tagged = tagComponentTypes({ seo: { metaTitle: "Hi" } }, [
+      { name: "seo", type: "fieldGroup", fieldGroup: "seo" },
+    ] as FieldConfig[]);
+    expect(tagged.seo).toEqual({ metaTitle: "Hi", _componentType: "seo" });
+  });
+
+  it("tagComponentTypes walks a migrated zone row by its own type", () => {
+    // The zone whitelist is what admits the row's `_fieldGroupType` to the
+    // nested walk; a whitelist read from the legacy key alone would be
+    // undefined here and the row — and its nested component — left untagged.
+    const tagged = tagComponentTypes(
+      { layout: [{ _fieldGroupType: "hero", inner: { deep: "value" } }] },
+      [
+        { name: "layout", type: "fieldGroup", fieldGroups: ["hero"] },
+      ] as FieldConfig[],
+      slug =>
+        slug === "hero"
+          ? ([
+              { name: "inner", type: "component", component: "deep" },
+            ] as FieldConfig[])
+          : undefined
+    );
+    expect(tagged.layout).toEqual([
+      {
+        _fieldGroupType: "hero",
+        inner: { deep: "value", _componentType: "deep" },
+      },
+    ]);
+  });
+
+  it("resolveComponentFieldMap collects a migrated definition's slugs", async () => {
+    const map = await resolveComponentFieldMap(
+      [
+        { name: "seo", type: "fieldGroup", fieldGroup: "seo" },
+        { name: "layout", type: "fieldGroup", fieldGroups: ["hero", "cta"] },
+      ] as FieldConfig[],
+      async () => [{ name: "t", type: "text" }] as FieldConfig[]
+    );
+    expect([...map.keys()].sort()).toEqual(["cta", "hero", "seo"]);
+  });
+
+  it("rehydrateSnapshotDates follows a migrated single reference", () => {
+    const value: Record<string, unknown> = {
+      seo: { when: "2026-02-02T00:00:00.000Z" },
+    };
+    rehydrateSnapshotDates(
+      value,
+      [{ name: "seo", type: "fieldGroup", fieldGroup: "seo" }] as FieldConfig[],
+      new Map([
+        ["seo", { fields: [{ name: "when", type: "date" }] as FieldConfig[] }],
+      ]) as never
+    );
+    const seo = value.seo as Record<string, unknown>;
+    expect(seo.when instanceof Date).toBe(true);
+  });
+});

@@ -15,6 +15,7 @@
 
 import { z } from "zod";
 
+import { isFieldGroupType } from "../../domains/field-groups/storage/field-group-field-type";
 import { reservedSystemFieldNames } from "../../lib/system-columns";
 import {
   isPluginOptionContainer,
@@ -47,6 +48,7 @@ export const UI_FIELD_TYPES = [
   "repeater",
   "group",
   "component",
+  "fieldGroup",
   "json",
   "chips",
 ] as const;
@@ -202,7 +204,16 @@ export type FieldNode = {
   initCollapsed?: boolean;
   rowLabelField?: string;
   component?: string;
+  /**
+   * The migrated spelling of `component`, on fields rewritten by the storage
+   * migration. Declared so the parser KEEPS the key — an undeclared key is
+   * stripped before any refinement runs, and the exactly-one-reference check
+   * below would then reject a valid migrated manifest.
+   */
+  fieldGroup?: string;
   components?: string[];
+  /** The migrated spelling of `components`, kept for the same reason. */
+  fieldGroups?: string[];
   repeatable?: boolean;
   fields?: FieldNode[];
 };
@@ -289,7 +300,11 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       initCollapsed: z.boolean().optional(),
       rowLabelField: z.string().optional(),
       component: z.string().optional(),
+      // Declared rather than stripped: the refinement below judges migrated
+      // references, and a key the object shape omits never reaches it.
+      fieldGroup: z.string().optional(),
       components: z.array(z.string()).optional(),
+      fieldGroups: z.array(z.string()).optional(),
       repeatable: z.boolean().optional(),
       // Nested fields for inline container types (repeater/group).
       fields: z.array(uiSchemaFieldSchema).optional(),
@@ -337,44 +352,64 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
           path: ["fields"],
         });
       }
-      // A component field references a component schema by slug: either a
-      // single `component`, or a `components[]` whitelist for a polymorphic
-      // slot. Exactly one form must be present, and every referenced slug
-      // must be a real slug — a blank or malformed reference points at no
-      // loadable component, so runtime writes to it would be silently dropped.
-      if (f.type === STORAGE_FORMAT.fieldType) {
-        const hasSingle = f.component !== undefined;
-        const hasMulti = f.components !== undefined;
-        if (hasSingle === hasMulti) {
+      // A component / field-group field references a schema by slug: either a
+      // single `component` / `fieldGroup`, or a `components[]` / `fieldGroups[]` whitelist
+      // for a polymorphic slot. Exactly one KEY must be declared, and every referenced slug
+      // must be a real slug — a blank or malformed reference points at no loadable
+      // definition, so runtime writes to it would be silently dropped. The keys are
+      // counted BEFORE any value is read: coalescing the two spellings of one shape
+      // first would silently prefer the legacy value and accept an ambiguous field
+      // the code-first validator rejects.
+      if (isFieldGroupType(f.type)) {
+        // Both spellings are declared on the object above, so they survive
+        // parsing and are readable off the node without a cast.
+        const singleKeys = ["component", "fieldGroup"] as const;
+        const multiKeys = ["components", "fieldGroups"] as const;
+        const declaredSingle = singleKeys.filter(k => f[k] !== undefined);
+        const declaredMulti = multiKeys.filter(k => f[k] !== undefined);
+        const declaredCount = declaredSingle.length + declaredMulti.length;
+
+        if (declaredCount > 1) {
+          const found = [...declaredSingle, ...declaredMulti]
+            .map(k => `'${k}'`)
+            .join(", ");
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `component fields must declare exactly one reference key (found ${found})`,
+            path: [[...declaredSingle, ...declaredMulti][1]],
+          });
+        } else if (declaredCount === 0) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message:
               "component fields require either a `component` slug or a `components[]` list, but not both",
-            path: [
-              hasSingle
-                ? STORAGE_FORMAT.refKeys.many
-                : STORAGE_FORMAT.refKeys.single,
-            ],
+            path: ["component"],
           });
-        } else if (hasSingle) {
-          if (typeof f.component !== "string" || !SLUG_RE.test(f.component)) {
+        } else if (declaredSingle.length > 0) {
+          const key = declaredSingle[0];
+          const singleRef = f[key];
+          if (typeof singleRef !== "string" || !SLUG_RE.test(singleRef)) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               message: "component must be a valid component slug",
-              path: [STORAGE_FORMAT.refKeys.single],
+              path: [key],
             });
           }
-        } else if (
-          !Array.isArray(f.components) ||
-          f.components.length === 0 ||
-          !f.components.every(s => typeof s === "string" && SLUG_RE.test(s))
-        ) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message:
-              "components must be a non-empty list of valid component slugs",
-            path: [STORAGE_FORMAT.refKeys.many],
-          });
+        } else {
+          const key = declaredMulti[0];
+          const multiRef = f[key];
+          if (
+            !Array.isArray(multiRef) ||
+            multiRef.length === 0 ||
+            !multiRef.every(s => typeof s === "string" && SLUG_RE.test(s))
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "components must be a non-empty list of valid component slugs",
+              path: [key],
+            });
+          }
         }
       }
       if (RESERVED_FIELD_NAMES.has(f.name)) {

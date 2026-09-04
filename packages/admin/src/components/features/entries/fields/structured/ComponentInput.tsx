@@ -29,7 +29,10 @@ import {
   SelectValue,
 } from "@nextlyhq/ui";
 import type { FieldConfig } from "nextly/config";
-import { readFieldGroupType } from "nextly/field-group-type";
+import {
+  extractFieldGroupReferences,
+  readFieldGroupType,
+} from "nextly/field-group-type";
 import { useCallback, useMemo, useState } from "react";
 import {
   useFieldArray,
@@ -83,13 +86,24 @@ export interface ComponentSchema {
  */
 export interface EnrichedComponentFieldConfig {
   name: string;
-  type: "component";
+  // Both storage spellings: the one on disk today and the one the storage
+  // migration moves to. A definition arriving under the migrated token must
+  // still render as a component field, not an unknown type.
+  type: "component" | "fieldGroup";
   label?: string;
 
   /** Single component mode: component slug */
   component?: string;
+  /**
+   * The migrated spelling of `component`, on definitions rewritten by the
+   * storage migration. Read through `extractFieldGroupReferences`, which
+   * resolves either spelling.
+   */
+  fieldGroup?: string;
   /** Multi-component mode: array of component slugs */
   components?: string[];
+  /** The migrated spelling of `components`. Read through the same extractor. */
+  fieldGroups?: string[];
 
   /** Whether this field is repeatable (array of instances) */
   repeatable?: boolean;
@@ -159,9 +173,12 @@ export interface ComponentInputProps<
 
 /**
  * Determines if the component field is in multi-component (dynamic zone) mode.
+ * Reference keys resolve through the shared extractor, so either spelling —
+ * `components` today, `fieldGroups` after the storage migration — is seen.
  */
 function isMultiComponentMode(field: EnrichedComponentFieldConfig): boolean {
-  return Array.isArray(field.components) && field.components.length > 0;
+  const { many } = extractFieldGroupReferences(field);
+  return many !== undefined && many.length > 0;
 }
 
 /**
@@ -170,7 +187,7 @@ function isMultiComponentMode(field: EnrichedComponentFieldConfig): boolean {
 function getSingleComponentSlug(
   field: EnrichedComponentFieldConfig
 ): string | undefined {
-  return field.component;
+  return extractFieldGroupReferences(field).single;
 }
 
 /**
@@ -179,7 +196,7 @@ function getSingleComponentSlug(
 function getAvailableComponentSlugs(
   field: EnrichedComponentFieldConfig
 ): string[] {
-  return field.components || [];
+  return extractFieldGroupReferences(field).many ?? [];
 }
 
 interface ComponentSubFieldListProps {
@@ -239,10 +256,11 @@ interface SingleComponentNonRepeatableProps {
 
 function getSingleComponentLabel(field: EnrichedComponentFieldConfig): string {
   if (field.label) return field.label;
-  const schemaLabel = field.component
-    ? field.componentSchemas?.[field.component]?.label
+  const { single } = extractFieldGroupReferences(field);
+  const schemaLabel = single
+    ? field.componentSchemas?.[single]?.label
     : undefined;
-  return schemaLabel || field.component || "Field Group";
+  return schemaLabel || single || "Field Group";
 }
 
 function SingleComponentSidebar({

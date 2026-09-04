@@ -115,10 +115,18 @@ export function requireSnapshotBody(body: unknown): Record<string, unknown> {
  */
 function declaresComponentReference(fields: FieldConfig[]): boolean {
   for (const field of fields) {
+    // Either spelling declares a reference: a migrated definition whose keys
+    // went unread would skip the registry-unavailable guard entirely.
     if (typeof (field as { component?: unknown }).component === "string") {
       return true;
     }
+    if (typeof (field as { fieldGroup?: unknown }).fieldGroup === "string") {
+      return true;
+    }
     if (Array.isArray((field as { components?: unknown }).components)) {
+      return true;
+    }
+    if (Array.isArray((field as { fieldGroups?: unknown }).fieldGroups)) {
       return true;
     }
     const children = (field as { fields?: unknown }).fields;

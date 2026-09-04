@@ -33,6 +33,10 @@ import {
   pluginEmptyColumnDefault,
   storageTypeToken,
 } from "../../../shared/lib/plugin-storage";
+import {
+  fieldGroupSlugList,
+  isFieldGroupType,
+} from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { generateSQL } from "../../schema/pipeline/sql-templates/index";
 import {
@@ -114,12 +118,21 @@ export class DynamicCollectionSchemaService {
    * so changing between them is not a modification of anything: it is a removal from one storage
    * and an addition to the other. Read as a modification instead, it produced an ALTER COLUMN
    * against a name the table never had.
+   *
+   * Column production is the same kind of move: a plain type edited into a field group keeps its
+   * name but leaves the parent row, so the old column must be dropped, and the reverse must ADD
+   * one. Comparing only junction usage judged neither transition a storage-class change — the
+   * plain type's column stayed behind as a ghost the next sync then offered to remove, and the
+   * reverse was treated as a modification of a column that did not exist.
    */
   private storageClassChanged(
     previous: FieldDefinition,
     next: FieldDefinition
   ): boolean {
-    return usesJunctionTable(previous) !== usesJunctionTable(next);
+    return (
+      fieldProducesColumn(previous) !== fieldProducesColumn(next) ||
+      usesJunctionTable(previous) !== usesJunctionTable(next)
+    );
   }
 
   /**
@@ -427,17 +440,10 @@ export class DynamicCollectionSchemaService {
 
     const columns = mainFields
       .map(f => {
-        // Skip junction-backed fields: their links live in a junction table, not on this row.
-        // Asked through the shared predicate so this and the descriptor cannot disagree about
-        // which fields those are — an `upload` is not one of them, whatever option it carries.
-        if (usesJunctionTable(f)) {
-          return null;
-        }
-
-        // Component fields store their data in a separate comp_{slug} table and
+        // Component and field-group fields store their data in separate tables and
         // are stripped from the parent row on write, so they get no parent
         // column (a NOT NULL one would break every insert).
-        if (f.type === STORAGE_FORMAT.fieldType) {
+        if (!fieldProducesColumn(f)) {
           return null;
         }
 
@@ -778,6 +784,26 @@ ${allColumnDefs.join(",\n")}
        * the drop is then emitted only where the dialect can guard it itself.
        */
       indexNames?: ReadonlySet<string>;
+      /**
+       * Physical table name per referenced field-group slug, resolved from the
+       * REGISTRY by the caller. A field group's data table is whatever the
+       * registry says it is — the storage migration renames comp_ tables to
+       * fg_, and a slug may carry a historical custom name — so deriving the
+       * name from the slug here would target a table that does not exist.
+       */
+      fieldGroupTableNames?: ReadonlyMap<string, string>;
+      /**
+       * A field-group association rename the caller detected from the FULL
+       * field lists. Detection here sees only the lists it was handed, and a
+       * caller that splits localized fields out of those lists would
+       * otherwise hide a renamed localized field group from this generator —
+       * the association migration is the caller's to hand over, detected on
+       * its behalf from everything the save contains.
+       */
+      associationRename?: {
+        from: FieldDefinition;
+        to: FieldDefinition;
+      };
     }
   ): string {
     // The added columns become SQL here too, so the same refusal applies.
@@ -848,8 +874,8 @@ ${allColumnDefs.join(",\n")}
     // alternative (data destruction). Track as a follow-up; admin UI
     // ideally splits combined edits into two saves.
     const rename = this.detectFieldRename(oldFields, newFields);
-    const renamedFromName = rename?.from.name ?? null;
-    const renamedToName = rename?.to.name ?? null;
+    let renamedFromName = rename?.from.name ?? null;
+    let renamedToName = rename?.to.name ?? null;
     if (rename) {
       const fromCol = toSnakeCase(rename.from.name);
       const toCol = toSnakeCase(rename.to.name);
@@ -864,6 +890,39 @@ ${allColumnDefs.join(",\n")}
         statements.push(
           `ALTER TABLE ${this.quoteIdentifier(tableName)} RENAME COLUMN ${this.quoteIdentifier(fromCol)} TO ${this.quoteIdentifier(toCol)};`
         );
+      }
+    } else {
+      // Rename detection returned null — possibly because the pair produces no
+      // parent column (a field-group rename). Before falling through to the
+      // add/drop loops, migrate the ASSOCIATION: a field group's instances are
+      // keyed by the field name in its own table, so a rename that emitted no
+      // DDL would leave every existing row keyed by the old field name and
+      // reads would return no nested data. Only an unambiguous single
+      // removed/added pair whose referenced slugs are identical is migrated —
+      // anything else is a genuine remove+add of different field groups and
+      // stays with the loops.
+      // The caller's pair wins: it was detected from the save's full field
+      // lists, which these arguments may be a filtered subset of.
+      const groupRename =
+        options?.associationRename ??
+        this.detectFieldGroupAssociationRename(oldFields, newFields);
+      if (groupRename) {
+        renamedFromName = groupRename.from.name;
+        renamedToName = groupRename.to.name;
+        for (const slug of fieldGroupSlugList(groupRename.to)) {
+          // The registry resolves the physical table: comp_ today, fg_ or a
+          // historical custom name once the storage migration has run, so the
+          // name is passed in per slug rather than derived here. A slug with
+          // no resolved name has no record and no table — nothing to migrate.
+          const groupTable = options?.fieldGroupTableNames?.get(slug);
+          if (groupTable === undefined) continue;
+          statements.push(
+            `UPDATE ${this.quoteIdentifier(groupTable)}\n` +
+              `SET ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.to.name}'\n` +
+              `WHERE ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.from.name}'\n` +
+              `  AND ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentTable)} = '${tableName}';`
+          );
+        }
       }
     }
 
@@ -882,9 +941,9 @@ ${allColumnDefs.join(",\n")}
           continue;
         }
 
-        // Component fields store their data in a separate comp_{slug} table, so
+        // Component and field-group fields store their data in a separate table, so
         // adding one must not ADD COLUMN on the parent table.
-        if (field.type === STORAGE_FORMAT.fieldType) {
+        if (!fieldProducesColumn(field)) {
           continue;
         }
 
@@ -1420,6 +1479,83 @@ ${allColumnDefs.join(",\n")}
   }
 
   /**
+   * The field-group rename {@link detectFieldRename} cannot see.
+   *
+   * That detector requires both sides to produce a parent column, so a renamed
+   * field-group field returns null there and the add/drop loops skip both
+   * sides — emitting no migration at all. But a field group's instances are
+   * keyed by the FIELD NAME in the group's own table, so the rename is real:
+   * it migrates `_parent_field` instead of renaming a column.
+   *
+   * Only the field-group fields among the renamed candidates participate: a
+   * rename saved alongside other edits — adding a text field, dropping
+   * another — is still a rename for THIS field, and those other fields keep
+   * their own add/drop paths. Pairing needs the same slugs under the same
+   * cardinality, so this is a pure rename and not a remove-one-group-add-
+   * another edit in disguise.
+   *
+   * More than one renamed field group in a single save cannot be paired
+   * reliably — a wrong old-to-new mapping migrates the wrong rows — and is
+   * refused outright rather than silently orphaning data: the author renames
+   * one field group at a time.
+   */
+  detectFieldGroupAssociationRename(
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): { from: FieldDefinition; to: FieldDefinition } | null {
+    const oldNames = new Set(oldFields.map(f => f.name));
+    const newNames = new Set(newFields.map(f => f.name));
+
+    const oldOnly = oldFields.filter(
+      f => !newNames.has(f.name) && isFieldGroupType(f.type)
+    );
+    const newOnly = newFields.filter(
+      f => !oldNames.has(f.name) && isFieldGroupType(f.type)
+    );
+    if (oldOnly.length === 0 || newOnly.length === 0) return null;
+
+    if (oldOnly.length > 1 || newOnly.length > 1) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "fields",
+            code: "FIELD_GROUP_RENAME_AMBIGUOUS",
+            message:
+              `This save renames ${oldOnly.length} field groups at once ` +
+              `(removed: ${oldOnly.map(f => `"${f.name}"`).join(", ")}; ` +
+              `added: ${newOnly.map(f => `"${f.name}"`).join(", ")}). ` +
+              `Each rename moves the group's existing rows to the new field ` +
+              `name, and with more than one in flight the pairing cannot be ` +
+              `known reliably. Rename one field group per save.`,
+          },
+        ],
+        logContext: {
+          removed: oldOnly.map(f => f.name),
+          added: newOnly.map(f => f.name),
+        },
+      });
+    }
+
+    const from = oldOnly[0];
+    const to = newOnly[0];
+    if (from.repeatable !== to.repeatable) return null;
+
+    const fromSlugs = fieldGroupSlugList(from);
+    const toSlugs = fieldGroupSlugList(to);
+    // Compared as SETS, not positionally: a rename in the same save that only
+    // reorders an unchanged zone whitelist is still a pure rename, and judging
+    // it by order would orphan every row keyed by the old field name.
+    if (
+      fromSlugs.length !== toSlugs.length ||
+      fromSlugs.some(slug => !toSlugs.includes(slug))
+    ) {
+      return null;
+    }
+
+    return { from, to };
+  }
+
+  /**
    * Are two field definitions compatible enough that renaming one to
    * the other preserves data semantics?
    *
@@ -1434,23 +1570,31 @@ ${allColumnDefs.join(",\n")}
     b: FieldDefinition
   ): boolean {
     if (a.type !== b.type) return false;
-    // manyToMany relations don't get columns — they get junction tables.
-    // Renaming one is a different operation (rename junction table). We
-    // do NOT auto-rename here because the junction-table flow has its
-    // own naming conventions; safer to bail out and require explicit
-    // handling. The caller's add/drop loop will do drop-junction +
-    // add-junction (data loss for the join) — admin UI ideally warns
-    // before this kind of edit.
-    if (usesJunctionTable(a)) {
+    // A field that occupies no parent column has nothing to rename: emitting
+    // RENAME COLUMN here targets a name the table never had, and every
+    // supported dialect rejects the save. Renaming a field group is a change
+    // of the association key on its own data table — a separate operation
+    // this generator does not attempt; the add/drop loops below handle the
+    // schema side. This covers the junction case too: a many-to-many's links
+    // live in its junction table, which produces no parent column either.
+    if (!fieldProducesColumn(a) || !fieldProducesColumn(b)) {
       return false;
     }
     if (a.type === "relationship") {
-      return (
-        a.options?.target === b.options?.target &&
-        a.options?.relationType === b.options?.relationType
-      );
+      return this.sameRelationTarget(a, b);
     }
     return true;
+  }
+
+  /**
+   * Whether two relationship definitions point at the same target under the
+   * same relation kind — the only relations a rename preserves.
+   */
+  private sameRelationTarget(a: FieldDefinition, b: FieldDefinition): boolean {
+    return (
+      a.options?.target === b.options?.target &&
+      a.options?.relationType === b.options?.relationType
+    );
   }
 
   /**

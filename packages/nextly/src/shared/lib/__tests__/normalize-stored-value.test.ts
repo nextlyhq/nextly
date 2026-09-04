@@ -49,6 +49,19 @@ describe("normalizeStoredValue", () => {
     expect(normalizeStoredValue(field, [row])).toEqual(row);
   });
 
+  it("unwraps a non-repeatable field group the same way — either spelling", () => {
+    // Both type tokens: unwrapping only the legacy one leaves the migrated
+    // definition's array in place, and a nested diff would then read the
+    // array — not the instance — as the value object.
+    const row = { id: "c1", _fieldGroupType: "seo" };
+    expect(normalizeStoredValue({ type: "fieldGroup" }, [row])).toEqual(row);
+    expect(normalizeStoredValue({ type: "component" }, [row])).toEqual(row);
+    // Repeatable stays a list under both.
+    expect(
+      normalizeStoredValue({ type: "fieldGroup", repeatable: true }, [row])
+    ).toEqual([row]);
+  });
+
   it("normalizes an absent many-valued field to an empty array", () => {
     // So an optional list omitted in one version and saved as [] in another
     // compare equal instead of null-vs-array.

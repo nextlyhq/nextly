@@ -20,6 +20,9 @@
  * @since 1.0.0
  */
 
+import { MIGRATION_TARGET } from "../domains/field-groups/migration/target";
+import { STORAGE_FORMAT } from "../schemas/storage-format";
+
 import { pluginFieldOptionIssues } from "./lib/plugin-field-options";
 import { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS } from "./sql-reserved";
 
@@ -121,6 +124,10 @@ export const VALID_FIELD_TYPES = [
   "chips",
   // Component type
   "component",
+  // The migrated spelling of "component": stored definitions rewritten by the
+  // storage migration carry it, and a token this list omits falls through the
+  // shared validator's deferred branch with the reference checks never run.
+  "fieldGroup",
 ] as const;
 
 /** Set form of {@link VALID_FIELD_TYPES} for O(1) membership checks. */
@@ -615,79 +622,156 @@ export function validateRelationshipTargetShared(
 // ============================================================
 
 /**
+ * The reference keys a component field may declare, from the two storage
+ * catalogs and one pinned historical spelling per shape.
+ *
+ * `"component"` / `"components"` are pinned literals, not derived from the
+ * catalog: the day `STORAGE_FORMAT.refKeys` flips to the migration targets, a
+ * list built from the two catalogs collapses to duplicate copies of the
+ * migrated keys — `declared()` would then count every migrated reference
+ * twice and reject it as a conflict, while the historical spellings vanished
+ * from validation entirely. Deduplicated, because the pairs are the same
+ * string today and again after the flip.
+ */
+const uniqueKeys = (keys: readonly string[]): string[] =>
+  keys.filter((key, i, all) => all.indexOf(key) === i);
+
+const COMPONENT_REF_SINGLE_KEYS = uniqueKeys([
+  "component",
+  STORAGE_FORMAT.refKeys.single,
+  MIGRATION_TARGET.refKeys.single,
+]);
+
+const COMPONENT_REF_MULTI_KEYS = uniqueKeys([
+  "components",
+  STORAGE_FORMAT.refKeys.many,
+  MIGRATION_TARGET.refKeys.many,
+]);
+
+/**
  * Validate a component-typed field's reference shape.
  *
- * A component field must specify exactly one of:
- * - `component: string` — single component slug
- * - `components: string[]` — dynamic-zone list of component slugs
+ * A component field must specify exactly one reference key, under either
+ * spelling:
+ * - single: `component` / `fieldGroup` — one component slug
+ * - multi: `components` / `fieldGroups` — dynamic-zone list of component slugs
  *
- * Pushes errors for missing, conflicting, invalid-type, or empty refs.
+ * The shapes are judged once across all four keys rather than once per key —
+ * a per-key copy is how the migrated spellings reached production
+ * unvalidated, since a definition carrying only the migrated keys passed
+ * every legacy check without one ever looking at it.
+ *
+ * Pushes errors for missing, conflicting, invalid-type, or empty refs,
+ * reported against the key that was declared.
  */
 export function validateComponentFieldRefShared(
   field: Record<string, unknown>,
   path: string,
   errors: BaseValidationError[]
 ): void {
-  const singleComp = field.component;
-  const multiComp = field.components;
+  const declared = (keys: readonly string[]): string[] =>
+    keys.filter(key => field[key] !== undefined && field[key] !== null);
 
-  if (!singleComp && !multiComp) {
+  const declaredSingle = declared(COMPONENT_REF_SINGLE_KEYS);
+  const declaredMulti = declared(COMPONENT_REF_MULTI_KEYS);
+
+  if (declaredSingle.length === 0 && declaredMulti.length === 0) {
     errors.push({
       path,
       message:
-        "Component field must specify either 'component' (single) or 'components' (multi/dynamic zone)",
+        "Component field must specify either 'component' or 'fieldGroup' (single), or 'components' or 'fieldGroups' (multi/dynamic zone)",
       code: "COMPONENT_REF_REQUIRED",
     });
     return;
   }
 
-  if (singleComp && multiComp) {
+  if (declaredSingle.length + declaredMulti.length > 1) {
+    const found = [...declaredSingle, ...declaredMulti]
+      .map(key => `'${key}'`)
+      .join(", ");
     errors.push({
       path,
       message:
-        "Component field cannot specify both 'component' and 'components'. Use 'component' for single component or 'components' for dynamic zone",
+        `Component field cannot specify more than one reference key (found ${found}). ` +
+        "Use 'component' or 'fieldGroup' for single component, or 'components' or 'fieldGroups' for dynamic zone",
       code: "COMPONENT_REF_CONFLICT",
     });
     return;
   }
 
-  if (singleComp !== undefined && singleComp !== null) {
-    if (typeof singleComp !== "string") {
+  if (declaredSingle.length > 0) {
+    const key = declaredSingle[0];
+    const value = field[key];
+    // Judged trimmed, matching the extractor: a blank reference resolves to
+    // nothing downstream, so accepting it here would boot a component field
+    // with no reference at all.
+    if (typeof value !== "string" || value.trim().length === 0) {
       errors.push({
-        path: `${path}.component`,
-        message: "'component' must be a string (component slug)",
+        path: `${path}.${key}`,
+        message: `'${key}' must be a string (component slug)`,
         code: "COMPONENT_REF_INVALID",
       });
     }
     return;
   }
 
-  // multiComp branch
-  if (!Array.isArray(multiComp)) {
+  const key = declaredMulti[0];
+  const list = field[key];
+
+  if (!Array.isArray(list)) {
     errors.push({
-      path: `${path}.components`,
-      message: "'components' must be an array of component slugs",
+      path: `${path}.${key}`,
+      message: `'${key}' must be an array of component slugs`,
       code: "COMPONENT_REF_INVALID",
     });
     return;
   }
 
-  if (multiComp.length === 0) {
+  if (list.length === 0) {
     errors.push({
-      path: `${path}.components`,
-      message: "'components' array must have at least one component slug",
+      path: `${path}.${key}`,
+      message: `'${key}' array must have at least one component slug`,
       code: "COMPONENT_REF_EMPTY",
     });
     return;
   }
 
-  multiComp.forEach((slug: unknown, index: number) => {
-    if (typeof slug !== "string") {
+  list.forEach((slug: unknown, index: number) => {
+    // Trimmed like the singular check: a blank entry resolves to nothing.
+    if (typeof slug !== "string" || slug.trim().length === 0) {
       errors.push({
-        path: `${path}.components[${index}]`,
+        path: `${path}.${key}[${index}]`,
         message: "Each component slug must be a string",
         code: "COMPONENT_REF_INVALID",
       });
     }
   });
+}
+
+/**
+ * Validate a container field's inline `fields` list - the body the repeater
+ * and group cases share across every domain validator.
+ *
+ * The container's own label and error code are parameters because the three
+ * domains name the same missing-children failure differently; the children
+ * themselves validate through the caller's field walker, which owns the
+ * domain-specific rules.
+ */
+export function validateContainerFieldsShared(
+  field: Record<string, unknown>,
+  path: string,
+  errors: BaseValidationError[],
+  container: { label: string; code: string },
+  validateChildren: (fields: unknown[], basePath: string) => void
+): void {
+  const childFields = field.fields;
+  if (!childFields) {
+    errors.push({
+      path: `${path}.fields`,
+      message: `${container.label} must have a 'fields' array`,
+      code: container.code,
+    });
+  } else if (Array.isArray(childFields)) {
+    validateChildren(childFields, `${path}.fields`);
+  }
 }

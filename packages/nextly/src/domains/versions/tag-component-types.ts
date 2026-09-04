@@ -21,6 +21,7 @@ import { NextlyError } from "../../errors";
 import type { AddressableField } from "../../shared/addressable-fields";
 import { addressableFields } from "../../shared/addressable-fields";
 import { storageTypeToken } from "../../shared/lib/plugin-storage";
+import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 import {
   clearFieldGroupType,
   readFieldGroupType,
@@ -42,17 +43,17 @@ export type ComponentFieldResolver = (
 
 /** The component slug a field names, when it names exactly one. */
 function singleComponentSlug(field: AddressableField): string | undefined {
-  // Only the single-component shape. A dynamic zone declares `components` and
+  // Only the single-component shape. A dynamic zone declares a list and
   // already stores a type per row, chosen by the editor rather than implied.
-  const slug = (field as { component?: unknown }).component;
-  return typeof slug === "string" ? slug : undefined;
+  // Through the shared extractor: a migrated definition names the slug under
+  // `fieldGroup`, which this key never held — an untagged value would be
+  // pruned against the wrong schema at restore.
+  return extractFieldGroupReferences(field).single;
 }
 
 /** The component slugs a dynamic zone allows, when the field is one. */
 function dynamicZoneSlugs(field: AddressableField): string[] | undefined {
-  const many = (field as { components?: unknown }).components;
-  if (!Array.isArray(many)) return undefined;
-  return many.filter((slug): slug is string => typeof slug === "string");
+  return extractFieldGroupReferences(field).many;
 }
 
 /**
@@ -489,9 +490,10 @@ export function rehydrateSnapshotDates(
       continue;
     }
 
-    const single = (field as { component?: unknown }).component;
-    const many = (field as { components?: unknown }).components;
-    if (typeof single !== "string" && !Array.isArray(many)) continue;
+    // Both reference spellings: a migrated definition's dates would
+    // otherwise stay ISO strings inside a live Date-shaped read.
+    const { single, many } = extractFieldGroupReferences(field);
+    if (single === undefined && many === undefined) continue;
 
     const compValue = value[name];
     const instances = Array.isArray(compValue)
@@ -503,7 +505,7 @@ export function rehydrateSnapshotDates(
       if (instance === null || typeof instance !== "object") continue;
       const rec = instance as Record<string, unknown>;
       const tagged = readFieldGroupType(rec);
-      const slug = tagged ?? (typeof single === "string" ? single : undefined);
+      const slug = tagged ?? single;
       const compFields = slug ? componentSchemas?.get(slug)?.fields : undefined;
       if (compFields) {
         rehydrateSnapshotDates(rec, compFields, componentSchemas);
@@ -533,13 +535,11 @@ export function rehydrateSnapshotDates(
  */
 function componentSlugsOn(field: object): string[] {
   const found: string[] = [];
-  const one = (field as { component?: unknown }).component;
-  if (typeof one === "string") found.push(one);
-
-  const many = (field as { components?: unknown }).components;
-  if (Array.isArray(many)) {
-    for (const slug of many) if (typeof slug === "string") found.push(slug);
-  }
+  // Through the shared extractor: a password-strip walk that misses a
+  // migrated definition's slugs leaves the plaintext inside the snapshot.
+  const { single, many } = extractFieldGroupReferences(field);
+  if (single !== undefined) found.push(single);
+  if (many !== undefined) found.push(...many);
   return found;
 }
 
@@ -795,16 +795,11 @@ export function expandComponentFields(
   };
 
   return fields.map(field => {
-    const one = (field as { component?: unknown }).component;
-    if (typeof one === "string") return expandUnder([one], "group", field);
+    const { single, many } = extractFieldGroupReferences(field);
+    if (single !== undefined) return expandUnder([single], "group", field);
 
-    const many = (field as { components?: unknown }).components;
-    if (Array.isArray(many)) {
-      return expandUnder(
-        many.filter((s): s is string => typeof s === "string"),
-        "repeater",
-        field
-      );
+    if (many !== undefined) {
+      return expandUnder(many, "repeater", field);
     }
 
     const children = (field as { fields?: unknown }).fields;

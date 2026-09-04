@@ -54,6 +54,10 @@ export type FieldType =
   | "json"
   // Component types
   | "component"
+  // The migrated spelling of "component" — stored definitions rewritten by
+  // the storage migration carry it (see domains/field-groups/storage/
+  // field-group-field-type).
+  | "fieldGroup"
   // Array-like types
   | "chips";
 

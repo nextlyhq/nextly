@@ -38,6 +38,7 @@ import {
 } from "../../../lib/system-columns";
 import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { isFieldGroupType } from "../../field-groups/storage/field-group-field-type";
 import { getFieldType } from "../field-types/field-type-registry";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
@@ -164,9 +165,9 @@ export function fieldProducesColumn(field: {
   options?: unknown;
 }): boolean {
   if (typeof field.type !== "string") return true;
-  // Component values live in their own comp_{slug} tables and are stripped from the parent row on
-  // write, so the parent needs no column.
-  if (field.type === "component") return false;
+  // Field-group and component values live in their own dedicated tables (fg_{slug} or
+  // comp_{slug}) and are stripped from the parent row on write, so the parent needs no column.
+  if (isFieldGroupType(field.type)) return false;
   // A many-to-many relationship stores its links in a dedicated junction table, not on the parent
   // row. Every other relationship shape does get a column.
   if (usesJunctionTable(field)) return false;

@@ -23,9 +23,14 @@ describe("FIELD_TYPE_CATALOG", () => {
   it("describes every canonical field type exactly once", () => {
     const catalogKeys = FIELD_TYPE_CATALOG.map(entry => entry.type);
     // Same set, no duplicates: a type missing here is invisible to every
-    // picker, and a duplicate would render twice.
+    // picker, and a duplicate would render twice. fieldGroup is absent by
+    // design — it is the migrated spelling of component, not a second field
+    // kind, so the picker keeps one entry and new fields keep writing the
+    // storage spelling.
     expect(new Set(catalogKeys).size).toBe(catalogKeys.length);
-    expect([...catalogKeys].sort()).toEqual([...ALL_FIELD_TYPES].sort());
+    expect([...catalogKeys].sort()).toEqual(
+      ALL_FIELD_TYPES.filter(type => type !== "fieldGroup").sort()
+    );
   });
 
   it("gives every entry a non-empty label, hint, and icon name", () => {
@@ -136,9 +141,13 @@ describe("BLOCK_FIELD_TYPE_CATALOG", () => {
   it("is the canonical catalog minus password and component", () => {
     const types = BLOCK_FIELD_TYPE_CATALOG.map(entry => entry.type);
     expect(new Set(types).size).toBe(types.length);
+    // fieldGroup is excluded beside component: it is the same field kind's
+    // migrated spelling, and a block prop can no more be a field group than
+    // it can be a component.
     expect([...types].sort()).toEqual(
       ALL_FIELD_TYPES.filter(
-        type => type !== "password" && type !== "component"
+        type =>
+          type !== "password" && type !== "component" && type !== "fieldGroup"
       ).sort()
     );
   });
@@ -162,6 +171,7 @@ describe("BLOCK_FIELD_TYPE_CATALOG", () => {
     expect(isBlockFieldType("richText")).toBe(true);
     expect(isBlockFieldType("password")).toBe(false);
     expect(isBlockFieldType("component")).toBe(false);
+    expect(isBlockFieldType("fieldGroup")).toBe(false);
     expect(isBlockFieldType("url")).toBe(false);
     expect(isBlockFieldType("nope")).toBe(false);
   });
