@@ -312,6 +312,7 @@ export function resolveComponentInstances(
   const run: ResolveRun = {
     definitions,
     maxDepth: limits.maxDepth,
+    maxNodes: limits.maxNodes,
     maxComposedDepth: options.maxComposedDepth ?? MAX_COMPOSED_DEPTH,
     // What is LEFT under the cap, not the cap itself. `maxNodes` bounds a
     // document, and the composed tree IS the document every later pass walks —
@@ -347,6 +348,12 @@ export function resolveComponentInstances(
 interface ResolveRun {
   definitions: ComponentLookup;
   maxDepth: number;
+  /**
+   * The document cap, kept beside the remaining budget rather than derived
+   * from it. `budget` is what is LEFT, so a pass that needs to bound its own
+   * work by the cap — the slot prepass does — cannot recover the cap from it.
+   */
+  maxNodes: number;
   maxComposedDepth: number;
   /** Nodes this resolution may still produce, across every instance. */
   budget: number;
@@ -627,13 +634,16 @@ function expandInstance(
   // it — and composing first records the components inside it as read and as
   // unresolvable, for content no reader can receive. Nested content arrives
   // already composed and says so.
-  const supplied = presupplied ?? suppliedSlots(instance, definition, run);
+  const owned = presupplied === undefined;
+  const supplied = owned
+    ? suppliedSlots(instance, definition, run)
+    : presupplied;
   const ctx: InlineContext = {
     run,
     scopeKey: instance.id,
     owner: owner ?? instance.id,
     domIds: new Map<string, string>(),
-    plans: planEdits(definition, instance, supplied, presupplied !== undefined),
+    plans: planEdits(definition, instance, supplied, !owned),
     scope: {
       depth: scope.depth + 1,
       onPath: new Set(scope.onPath).add(componentId),
@@ -642,6 +652,10 @@ function expandInstance(
     hostDepth: depth,
   };
 
+  // Before the clone rather than during it, so the room this content releases
+  // is available to the whole definition instead of only to the nodes after
+  // the slot. Nested content arrives composed already and needs no pass.
+  composeOwnedSlots(definition, ctx, supplied, owned);
   const inlined = withRemappedIdReferences(
     cloneDefinitionForest(definition.nodes, ctx, 1),
     ctx
@@ -1449,7 +1463,7 @@ function cloneDefinitionNode(
   // The node stands, gated, exactly as the host case leaves it standing — the
   // pass that prunes it wants it there — and its planned slot content is given
   // back, because nothing will place it.
-  if (isConditionGated(scoped)) {
+  if (!survivesGating(node, plan)) {
     if (plan !== undefined) refundPlannedSlots(plan, ctx.run);
     return [scoped];
   }
@@ -1478,6 +1492,144 @@ function cloneDefinitionNode(
     );
   }
   return [scoped];
+}
+
+/**
+ * Compose the page's slot content for every target the clone will reach.
+ *
+ * Deferring composition to the moment content is PLACED is what stops a gated
+ * or hidden target from paying for a tree nobody receives — but placement
+ * happens partway through cloning the definition, and replacing an instance
+ * RELEASES budget. So a page whose composed tree fits exactly was refused for
+ * `budget` when a sibling cloned before the slot target spent the room the
+ * content was about to give back, and whether it fit depended on where the
+ * author happened to put the slot in the definition.
+ *
+ * Composing the surviving targets' content up front restores that order
+ * without restoring the waste: survivorship is decided by `survivesGating`,
+ * which is the same question the clone asks, so discarded content is still
+ * never composed. `placedContent` marks what it composes, so the clone reuses
+ * this work rather than repeating it.
+ *
+ * Bounded by the definition's own depth, mirroring the clone. A definition
+ * deeper than the cap stops here and the clone refuses it a moment later.
+ */
+function composeSurvivingSlots(
+  nodes: readonly ResolvedBlockNode[],
+  ctx: InlineContext,
+  depth: number,
+  work: WorkBudget
+): void {
+  if (depth > ctx.run.maxDepth) return;
+  for (const node of nodes) {
+    // Charged before the entry is judged, the way the clone charges. A
+    // definition nothing validated can hold a million siblings, and the depth
+    // bound says nothing about breadth — so without this the pass walks all of
+    // them to prepare content the clone refuses a moment later for `budget`.
+    if (work.left <= 0) return;
+    work.left -= 1;
+    if (!isPlainRecord(node) || typeof node.id !== "string") continue;
+    const plan = ctx.plans.get(node.id);
+    if (!survivesGating(node, plan)) continue;
+    composePlannedFor(plan, ctx);
+    composeSlotsUnder(node, plan, ctx, depth, work);
+  }
+}
+
+/**
+ * How many entries the slot prepass may still visit.
+ *
+ * Its own counter rather than the run's node budget, because they measure
+ * different things: the run's is what the composed DOCUMENT may still hold,
+ * and spending it here would refuse a page for nodes it never produced.
+ * Running out is safe — the content it did not reach is composed at placement
+ * as it was before, so the bound costs the ordering benefit for that content
+ * and never the content itself.
+ */
+interface WorkBudget {
+  left: number;
+}
+
+/** The content bound for one surviving node, composed where it will be placed. */
+function composePlannedFor(
+  plan: NodePlan | undefined,
+  ctx: InlineContext
+): void {
+  if (plan?.slots === undefined) return;
+  for (const content of plan.slots.values()) placedContent(content, ctx);
+}
+
+/**
+ * The same question, asked of every child forest a surviving node still holds.
+ *
+ * A slot the instance FILLS is skipped, mirroring `copyStoredSlots`: the plan
+ * replaces those children wholesale, so the clone never reaches them and
+ * nothing bound for a node inside them is ever placed. Walking them anyway
+ * composed content for a target the page had already replaced, which put a
+ * component nobody can receive into `referenced` and its unresolvable
+ * instances into `unresolved`.
+ */
+function composeSlotsUnder(
+  node: ResolvedBlockNode,
+  plan: NodePlan | undefined,
+  ctx: InlineContext,
+  depth: number,
+  work: WorkBudget
+): void {
+  const slots = node.slots;
+  if (!isPlainRecord(slots)) return;
+  // The same `unknown` view the clone takes: a stored slot value that is not
+  // an array holds no nodes to reach.
+  const stored = slots as Record<string, unknown>;
+  for (const name of Object.keys(stored)) {
+    if (plan?.slots?.has(name) === true) continue;
+    const children = ownEntry(stored, name);
+    if (!Array.isArray(children)) continue;
+    composeSurvivingSlots(
+      children as ResolvedBlockNode[],
+      ctx,
+      depth + 1,
+      work
+    );
+  }
+}
+
+/**
+ * Compose this instance's OWN slot content before the definition is cloned.
+ *
+ * Nested content arrives composed in its component's scope and needs no pass;
+ * an instance supplying nothing has no plan to walk for.
+ */
+function composeOwnedSlots(
+  definition: ComponentDocument,
+  ctx: InlineContext,
+  supplied: Record<string, ResolvedBlockNode[]> | undefined,
+  owned: boolean
+): void {
+  if (!owned || supplied === undefined) return;
+  composeSurvivingSlots(definition.nodes, ctx, 1, { left: ctx.run.maxNodes });
+}
+
+/**
+ * Whether this definition node and everything under it reaches a reader.
+ *
+ * ONE predicate, because two passes ask it about the same node and a
+ * disagreement between them is silent: the pass that composes the page's slot
+ * content would prepare a region the clone then drops, or withhold one the
+ * clone then serves and leave it empty.
+ *
+ * An override that SHOWS the node answers the gate for it — `scopeNode`
+ * removes the envelope for `plan.visible === true`, so asking
+ * `isConditionGated` of the scoped copy gives the same answer this does of the
+ * stored one.
+ */
+function survivesGating(
+  node: ResolvedBlockNode,
+  plan: NodePlan | undefined
+): boolean {
+  if (plan?.visible === false) return false;
+  if (plan?.visible === true) return true;
+  return !isConditionGated(node);
 }
 
 /**
