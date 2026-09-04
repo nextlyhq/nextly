@@ -184,6 +184,51 @@ describe("the definitions a document reaches", () => {
     expect(found.has("gone")).toBe(false);
   });
 
+  it("fetches the component an OVERRIDE names, not the one stored", async () => {
+    // The case a raw walk cannot see. `outer` stores an instance of `default`
+    // and exposes its `componentId`; the page overrides it to `chosen`. A scan
+    // of stored props finds `default` and the resolver asks for `chosen`, so
+    // the page renders a component it was given as missing.
+    const { source, batches } = recording({
+      outer: {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "component",
+        nodes: [instance("n1", "default")],
+        exposed: [
+          {
+            id: "which",
+            label: "Which",
+            nodeId: "n1",
+            propPath: "componentId",
+            type: "text",
+          },
+        ],
+      } as unknown as BlockDocument,
+      default: component([]),
+      chosen: component([]),
+    });
+
+    const found = await definitionsFor(
+      {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "i1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "outer", overrides: { which: "chosen" } },
+          },
+        ],
+      },
+      source,
+      DEFAULT_LIMITS
+    );
+
+    expect(found.has("chosen")).toBe(true);
+    expect(batches.flat()).toContain("chosen");
+  });
+
   it("asks for nothing when the page holds no instance", async () => {
     const { source, batches } = recording({ hero: component([]) });
 

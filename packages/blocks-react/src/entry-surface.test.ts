@@ -312,11 +312,20 @@ const SOURCE_MODULES: ReadonlyArray<{
     // is precisely how the renderer came to hide a node the exported reader
     // returns. A consumer never holds a resolved node without also holding the
     // stages that explain it, so there is nothing here to offer.
+    //
+    // `repairingLookup` is the view of the definitions map this pipeline
+    // composes through. It crosses to the pass that FETCHES definitions, which
+    // asks the resolver what it would reach and must ask through the same
+    // lookup — repair drops malformed nodes, so a fetch that built its own
+    // view would predict a different tree than the one that renders. Exported
+    // to delete that second view, not to offer one: a consumer holding a
+    // definitions map wants `prepareDocumentForRead`, which builds this itself.
     internal: [
       "isUnresolvedInstance",
       "prepareDocumentReadStages",
       "pruneKnownPlaceholders",
       "readingViewOf",
+      "repairingLookup",
     ],
   },
   {

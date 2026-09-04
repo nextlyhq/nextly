@@ -14,12 +14,15 @@
 import {
   componentIdsIn,
   MAX_COMPOSED_DEPTH,
+  resolveComponentInstances,
   type BlockDocument,
   type DefinitionsById,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 
 import type { QueryBudget } from "./context";
+import { repairingLookup } from "./prepare-document";
+import { sanitizeDocument } from "./sanitize";
 
 /**
  * Reads the definitions for a set of ids, at one posture.
@@ -52,21 +55,37 @@ export const COMPONENT_TAG_COLLECTION = "components";
 export const COMPONENT_DOCUMENT_FIELD = "content";
 
 /**
- * Every definition this document can reach, read level by level.
+ * Every definition this document reaches, discovered by ASKING the resolver.
  *
- * NOT one read, and the design's "one batched read" cannot be taken literally:
- * the transitive set is not knowable from the stored page. A page names the
- * components it holds directly; which components THOSE hold is a fact about
- * their stored documents, so it cannot be discovered without reading them. The
- * loop is therefore one batched read per level of nesting.
+ * The obvious implementation walks the stored document for `componentId`
+ * props and follows each definition the same way. It is wrong, and it was
+ * wrong here in three separate ways, because a raw walk PREDICTS reachability
+ * and the resolver DECIDES it:
  *
- * Bounded by {@link MAX_COMPOSED_DEPTH}, the same cap the resolver refuses at.
- * Reading past it would fetch definitions no render can inline — the resolver
- * answers `composed-depth` before it asks for them — so the bound is not a
- * safety margin, it is the set the page can actually use.
+ * - an instance's override may name a different component than the one its
+ *   definition stored, so the walk fetches the default and the resolver asks
+ *   for the override;
+ * - shape repair drops malformed nodes before resolution, so a walk over the
+ *   stored tree spends its node budget on entries the resolver never sees and
+ *   can stop before an instance that does survive;
+ * - anything added later that changes which instances are expanded — a new
+ *   override kind, a variant, a gate — silently reopens the same gap.
  *
- * Ids already seen are never re-read: a component held by three others is one
- * entry, and a cycle terminates because the second visit finds it in the map.
+ * So this does not walk. It composes with what it has, reads back the
+ * instances the resolver reported as `missing`, fetches exactly those, and
+ * composes again. Reachability is therefore whatever the pass that performs it
+ * says it is, and a future change to that pass cannot leave discovery behind.
+ *
+ * Composition here is the ENGINE's function over a sanitized document, not the
+ * whole read pipeline — a pure walk of a document already bounded by
+ * `maxNodes`. The renderer composes again for its own purposes; that is one
+ * extra pass over a capped tree, and it buys exact agreement.
+ *
+ * Terminates because a component is asked for at most once. `attempted` is
+ * separate from what was found: an id the store had no row for must stay out
+ * of the returned map — its absence is what makes the pipeline report
+ * `missing` rather than `unreadable` — while a component that is genuinely
+ * gone must not be re-queried once per place it is referenced from.
  */
 export async function definitionsFor(
   document: BlockDocument,
@@ -74,65 +93,50 @@ export async function definitionsFor(
   limits: DocumentLimits
 ): Promise<DefinitionsById> {
   const found = new Map<string, BlockDocument>();
-  // Asked-for, which is NOT the same set as found. An id the store had no row
-  // for must stay out of `found` — its absence is what makes the pipeline
-  // report it `missing` rather than `unreadable` — but it has been looked for,
-  // and without remembering that, a component referenced from several
-  // definitions is re-queried at every level it appears at. Each retry spends
-  // a chunk and a budget claim, so enough repeats exhaust `maxQueries` before
-  // a later valid definition is reached and render THAT one missing too.
   const attempted = new Set<string>();
-  let wanted = componentIdsIn(document.nodes, limits.maxNodes);
+  // The same first pass the pipeline runs, so the tree composed here is the
+  // tree it will compose. Discovering over the STORED document instead let a
+  // repair-dropped node consume budget the resolver never spends.
+  const sanitized = sanitizeDocument(document, limits);
 
-  for (
-    let level = 0;
-    level < MAX_COMPOSED_DEPTH && wanted.length > 0;
-    level++
-  ) {
-    // Deduplicated as the batch is built, not as ids are collected. A
-    // component two others hold is reached twice in one level, and asking for
-    // it twice in one `IN` is a wider query and a longer cache key for one
-    // answer.
-    const unread = [...new Set(wanted.filter(id => !attempted.has(id)))];
+  let wanted = componentIdsIn(sanitized.nodes, limits.maxNodes);
+  // One round per level of nesting at most, which is also the deepest the
+  // resolver will compose — past it every instance is refused `composed-depth`
+  // and names a definition no render can inline.
+  for (let round = 0; round <= MAX_COMPOSED_DEPTH; round += 1) {
+    const unread = [...new Set(wanted)].filter(id => !attempted.has(id));
     if (unread.length === 0) break;
     for (const id of unread) attempted.add(id);
-    const batch = await source(unread);
-    // Recorded for every id ASKED FOR, not for every id answered. An id the
-    // store had no row for has been looked for and not found, and remembering
-    // that is what stops the next level asking again — while leaving it out of
-    // `found` keeps it absent for the pipeline, which is how a reference
-    // nobody published reads as missing rather than as unreadable.
-    wanted = nestedIds(unread, batch, found, limits);
+    for (const [id, definition] of await source(unread)) {
+      found.set(id, definition);
+    }
+    wanted = stillMissing(sanitized, found, limits);
   }
   return found;
 }
 
 /**
- * Merge one level's answers, and collect what they reference in turn.
+ * The components a composition asked for and did not get.
  *
- * The ids a definition holds are read from the document the store returned,
- * unvalidated: nothing here decides whether that value is a usable component,
- * because the pipeline already draws that line and drawing it twice is how the
- * two come to disagree. A value with no readable `nodes` simply references
- * nothing.
+ * `missing` and nothing else. The other refusals are decisions rather than
+ * gaps — a cycle, a depth, a budget, a definition supplied and unreadable —
+ * and fetching in response to any of them would ask for a component the
+ * resolver already holds or has already refused on grounds a second read
+ * cannot change.
  */
-function nestedIds(
-  asked: readonly string[],
-  batch: DefinitionsById,
-  into: Map<string, BlockDocument>,
+function stillMissing(
+  document: BlockDocument,
+  found: DefinitionsById,
   limits: DocumentLimits
 ): string[] {
-  const next: string[] = [];
-  for (const id of asked) {
-    if (!batch.has(id)) continue;
-    const definition = batch.get(id) as BlockDocument;
-    into.set(id, definition);
-    if (!Array.isArray(definition?.nodes)) continue;
-    for (const nested of componentIdsIn(definition.nodes, limits.maxNodes)) {
-      next.push(nested);
-    }
-  }
-  return next;
+  const composed = resolveComponentInstances(
+    document,
+    repairingLookup(found, limits),
+    { limits }
+  );
+  return composed.unresolved
+    .filter(entry => entry.reason === "missing")
+    .map(entry => entry.componentId);
 }
 
 /** What one batched definition read needs to know about the route asking. */
