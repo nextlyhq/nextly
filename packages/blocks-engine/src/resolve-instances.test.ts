@@ -882,6 +882,40 @@ describe("resolveComponentInstances what an instance carries", () => {
     ).toEqual(["s1"]);
   });
 
+  it("fits a composition whose slot content releases the room it needs", () => {
+    // Two nodes stored — the instance and the content it supplies — and two
+    // nodes composed. The supplied instance resolves to an empty component, so
+    // replacing it FREES the slot it occupied, and the definition's own two
+    // nodes fit exactly. Whether that room arrives before or after the
+    // definition's siblings are cloned is an ordering detail of this module,
+    // and a page must not be refused over it.
+    const outer = component([node("sib"), box("d1", [])], {
+      slots: { body: { label: "Body", nodeId: "d1", slot: "children" } },
+    });
+    const doc = page([
+      instance(
+        "i1",
+        "outer",
+        {},
+        { slots: { body: [instance("s1", "inner")] } }
+      ),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({ outer, inner: component([]) }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 2 } }
+    );
+
+    expect(result.unresolved).toEqual([]);
+    expect(flatten(result.document.nodes)).toHaveLength(2);
+    // An empty component contributes nothing either way, so the node count
+    // alone cannot tell composition from DISCARDING the supplied content —
+    // which is the plausible wrong implementation, and the one that costs a
+    // page its content. Only a record of having read `inner` separates them.
+    expect(result.referenced).toEqual(["outer", "inner"]);
+  });
+
   it("composes the page's slot content ONCE, however deep it is placed", () => {
     // The page supplies content to a slot that `outer` forwards into a nested
     // component. Composing where it is placed means it passes through two
@@ -908,6 +942,66 @@ describe("resolveComponentInstances what an instance carries", () => {
     expect(result.unresolved).toEqual([
       { instanceId: "s1", componentId: "gone", reason: "missing" },
     ]);
+  });
+
+  it("stops the slot prepass at the cap the clone will refuse at", () => {
+    // A definition wider than the page's whole node allowance, with the slot
+    // target last. The depth bound says nothing about BREADTH, so without a
+    // work bound the prepass walks every sibling — hundreds of thousands of
+    // them in a definition nothing validated — to prepare content the clone
+    // refuses a moment later for `budget`.
+    const definition = component(
+      [node("a"), node("b"), node("c"), node("d"), box("target", [])],
+      { slots: { tail: { label: "Tail", nodeId: "target", slot: "children" } } }
+    );
+    const doc = page([
+      instance("i1", "hero", {}, { slots: { tail: [instance("s1", "deep")] } }),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({ hero: definition, deep: component([]) }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 4 } }
+    );
+
+    // The instance is refused either way — the definition cannot fit. What is
+    // asserted is that `deep` was never READ to find that out.
+    expect(result.unresolved.map(e => e.reason)).toEqual(["budget"]);
+    expect(result.referenced).toEqual(["hero"]);
+  });
+
+  it("does not compose content bound for a default subtree the page replaced", () => {
+    // Two exposed slots: one on a container, one on a node sitting inside that
+    // container's DEFAULT children. Filling the outer slot replaces those
+    // children wholesale, so the inner target is never placed — and the clone
+    // knows that, because it stops copying a stored slot the plan replaces.
+    const definition = component(
+      [box("outer-box", [box("inner-box", [node("fb")])])],
+      {
+        slots: {
+          shell: { label: "Shell", nodeId: "outer-box", slot: "children" },
+          buried: { label: "Buried", nodeId: "inner-box", slot: "children" },
+        },
+      }
+    );
+    const doc = page([
+      instance(
+        "i1",
+        "hero",
+        {},
+        {
+          slots: {
+            shell: [node("mine")],
+            buried: [instance("s1", "gone")],
+          },
+        }
+      ),
+    ]);
+
+    const result = resolveComponentInstances(doc, defs({ hero: definition }));
+
+    expect(result.unresolved).toEqual([]);
+    expect(result.referenced).toEqual(["hero"]);
   });
 
   it("still composes an instance under an UNGATED container inside a definition", () => {
