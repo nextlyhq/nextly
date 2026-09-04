@@ -51,6 +51,7 @@ import {
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
+  type NodeVisibility,
   type OverrideValue,
 } from "./document";
 import { walkForest } from "./forest-walk";
@@ -613,33 +614,77 @@ function withInstanceDevices(
   const hidden = boundedOwnKeys(devices, MAX_ENVELOPE_ENTRIES);
   if (hidden === null || hidden.length === 0) return roots;
 
-  return roots.map(root => {
-    const own = root.visibility;
-    // An UNREADABLE envelope is left exactly as it is. `isConditionGated`
-    // reads a string or an array as gated — an author wrote a restriction it
-    // cannot parse — and rebuilding it as a plain object carrying only
-    // `devices` produces an envelope that same predicate calls unconditional.
-    // The node would then be served, which is the failure this whole function
-    // exists to prevent, reintroduced by the repair.
-    if (own !== undefined && !isPlainRecord(own)) return root;
-    const merged: Record<string, unknown> = isPlainRecord(own?.devices)
-      ? { ...own.devices }
-      : {};
-    let changed = false;
-    for (const id of hidden) {
-      if (ownEntry(devices, id) !== false) continue;
-      defineEntry(merged, id, false);
-      changed = true;
-    }
-    if (!changed) return root;
-    return {
-      ...root,
-      visibility: {
-        ...(own ?? {}),
-        devices: merged as Record<string, boolean>,
-      },
-    };
-  });
+  return roots.map(root => rootHiddenOn(root, devices, hidden));
+}
+
+/**
+ * One definition root, carrying whatever the instance hides.
+ *
+ * The envelope is sorted into three cases, and they are three because
+ * `isConditionGated` reads them as three:
+ *
+ * - **absent or `null`** — ungated to that predicate, so the flags merge into
+ *   a fresh envelope. Refusing `null` here would silently drop the hiding an
+ *   author asked for.
+ * - **a plain record** — ungated or not on its own terms, and the flags merge
+ *   into a copy of it.
+ * - **anything else**, a string or an array — read as GATED, because an author
+ *   wrote a restriction nothing can parse. Left exactly as it is. Rebuilding
+ *   it as a record carrying only `devices` produces an envelope that same
+ *   predicate calls unconditional, and the node is then served — the failure
+ *   this whole function exists to prevent, reintroduced by the repair.
+ */
+function rootHiddenOn(
+  root: ResolvedBlockNode,
+  devices: Record<string, unknown>,
+  hidden: readonly string[]
+): ResolvedBlockNode {
+  const own = root.visibility;
+  const merged = mergeableDevices(own);
+  if (merged === null) return root;
+  if (!hideEach(merged, devices, hidden)) return root;
+  return {
+    ...root,
+    visibility: {
+      ...(own ?? {}),
+      devices: merged as Record<string, boolean>,
+    },
+  };
+}
+
+/**
+ * The device map to merge into, or `null` when the envelope must not be
+ * touched at all.
+ *
+ * `null` is the third case above: an envelope `isConditionGated` reads as
+ * gated, which this must leave exactly as it found.
+ */
+function mergeableDevices(
+  own: NodeVisibility | null | undefined
+): Record<string, unknown> | null {
+  if (own !== undefined && own !== null && !isPlainRecord(own)) return null;
+  return isPlainRecord(own?.devices) ? { ...own.devices } : {};
+}
+
+/**
+ * Write the instance's hiding into the map, reporting whether anything moved.
+ *
+ * Only `false` travels. The instance may hide what the definition shows; it
+ * may not show what the definition hid, because that decision belongs to the
+ * author of the component's own content.
+ */
+function hideEach(
+  merged: Record<string, unknown>,
+  devices: Record<string, unknown>,
+  hidden: readonly string[]
+): boolean {
+  let changed = false;
+  for (const id of hidden) {
+    if (ownEntry(devices, id) !== false) continue;
+    defineEntry(merged, id, false);
+    changed = true;
+  }
+  return changed;
 }
 
 /**
@@ -660,6 +705,14 @@ function withRemappedIdReferences(
   if (roots === null || ctx.domIds.size === 0) return roots;
   const rewrite = (nodes: ResolvedBlockNode[]): ResolvedBlockNode[] =>
     nodes.map(node => {
+      // DEFINITION-owned nodes only, and the walk stops at anything else. An
+      // unmarked node is slot content the page supplied, so its references
+      // address the page's own ids — rewriting them against this definition's
+      // map redirects a working relationship at a node the author never
+      // named. Its descendants are page content too, and any component nested
+      // among them was rewritten by its own expansion with its own map, so
+      // descending would rewrite those a second time.
+      if (node.instanceOf === undefined) return node;
       const attributes = isPlainRecord(node.attributes)
         ? remapIdReferences(node.attributes, ctx.domIds)
         : node.attributes;
@@ -1111,6 +1164,11 @@ function cloneDefinitionForest(
       depth
     );
     if (produced === null) return null;
+    // Charged on the way in and given back when nothing came out. A node an
+    // override hides emits no markup, so charging for it refuses an expansion
+    // whose result would have fitted — the cap is on the composed DOCUMENT,
+    // not on how many nodes were considered.
+    if (produced.length === 0) ctx.run.budget += 1;
     for (const child of produced) out.push(child);
   }
   return out;

@@ -1094,6 +1094,85 @@ describe("resolveComponentInstances defensive reads and references", () => {
   });
 });
 
+describe("resolveComponentInstances ownership and cost", () => {
+  it("leaves a host slot child's reference pointing at the host", () => {
+    const doc = page([
+      node("h", { cssId: "shared" }),
+      instance(
+        "i1",
+        "hero",
+        {},
+        {
+          slots: {
+            body: [
+              node("mine", { attributes: { "aria-describedby": "shared" } }),
+            ],
+          },
+        }
+      ),
+    ]);
+    const definitions = defs({
+      hero: component([box("c1", []), node("d2", { cssId: "shared" })], {
+        slots: { body: { label: "B", nodeId: "c1", slot: "children" } },
+      }),
+    });
+
+    const flat = flatten(
+      resolveComponentInstances(doc, definitions).document.nodes
+    );
+    const mine = flat.find(e => e.id === "mine")!;
+
+    // Host content is the page's own. Rewriting it against the DEFINITION's
+    // map redirects a working reference at a node the host never named.
+    expect(mine.attributes!["aria-describedby"]).toBe("shared");
+  });
+
+  it("does not charge the budget for a node an override hides", () => {
+    const doc = page([
+      node("keep"),
+      instance("i1", "hero", { overrides: { gone: false } }),
+    ]);
+    const definitions = defs({
+      hero: component([node("d1"), node("d2")], {
+        exposed: [
+          {
+            id: "gone",
+            label: "G",
+            nodeId: "d1",
+            propPath: "x",
+            type: "visibility",
+          },
+        ],
+      }),
+    });
+
+    const result = resolveComponentInstances(doc, definitions, {
+      limits: { ...DEFAULT_LIMITS, maxNodes: 2 },
+    });
+
+    // The composed document holds the host node and one definition node.
+    expect(result.unresolved).toEqual([]);
+    expect(flatten(result.document.nodes)).toHaveLength(2);
+  });
+
+  it("merges devices onto a root whose visibility is stored null", () => {
+    const doc = page([
+      stored(instance("i1", "hero"), {
+        visibility: { devices: { mobile: false } },
+      }),
+    ]);
+    const definitions = defs({
+      hero: component([stored(node("d1"), { visibility: null })]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    // `isConditionGated` reads null exactly like an absent envelope, so the
+    // merge must too — refusing it silently drops the author's hiding.
+    expect(nodes[0]!.visibility?.devices?.mobile).toBe(false);
+  });
+});
+
 describe("componentIdsIn", () => {
   it("lists each referenced id once, in first-reached order", () => {
     const nodes = [

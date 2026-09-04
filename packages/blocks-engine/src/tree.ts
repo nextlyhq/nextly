@@ -1082,9 +1082,13 @@ export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
   // the original's id, so the copy loses its accessible name — the same gap
   // composition has, closed the same way.
   const [linked] = mapForest([rebuilt ?? node], copy =>
-    copy.attributes === undefined
-      ? copy
-      : { ...copy, attributes: remapIdReferences(copy.attributes, domIds) }
+    // `isPlainRecord`, not `!== undefined`. A persisted `attributes: null` is
+    // content the first pass deliberately carries through untouched, and
+    // handing it to the remapper enumerates null and throws — a rebuild that
+    // destroys a node because of a field on a different one.
+    isPlainRecord(copy.attributes)
+      ? { ...copy, attributes: remapIdReferences(copy.attributes, domIds) }
+      : copy
   );
   return { node: linked ?? rebuilt ?? node, nodeIds, domIds };
 }

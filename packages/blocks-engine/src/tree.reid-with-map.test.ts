@@ -192,3 +192,28 @@ describe("reidSubtreeWithMap id references", () => {
     expect(children[1]!.attributes!["aria-describedby"]).not.toBe("help");
   });
 });
+
+describe("reidSubtreeWithMap malformed attributes", () => {
+  it("survives a stored attributes: null beside a node with a DOM id", () => {
+    const original = {
+      id: "root",
+      type: "core/box",
+      version: 1,
+      props: {},
+      slots: {
+        children: [
+          { id: "a", type: "core/text", version: 1, props: {}, cssId: "x" },
+          {
+            id: "b",
+            type: "core/text",
+            version: 1,
+            props: {},
+            attributes: null,
+          },
+        ],
+      },
+    } as unknown as BlockNode;
+
+    expect(() => reidSubtreeWithMap(original)).not.toThrow();
+  });
+});

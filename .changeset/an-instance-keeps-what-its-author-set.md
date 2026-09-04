@@ -66,3 +66,10 @@ unrestricted, which would have published content that was meant to be withheld.
 And content left behind under a slot a component no longer offers was still
 counted against the page's size limit even though it is discarded, so a page
 could be refused a component that would have fitted.
+
+Four smaller repairs found the same way. Content a page places inside a
+component kept its own id references, instead of having them redirected at the
+component's copies. A block hidden by an instance no longer counts against the
+page's size limit, since it draws nothing. A component whose visibility setting
+was stored empty now takes the instance's per-screen hiding like any other. And
+copying a pattern no longer fails on a node whose attributes were stored empty.
