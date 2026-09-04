@@ -304,6 +304,94 @@ function internalLinks(repoRoot, tracked, findings) {
   }
 }
 
+/**
+ * Every published README carries the same four load-bearing sections.
+ *
+ * These are long-form by decision, which means the same facts are restated in twenty files —
+ * and a restated fact is one that can go stale in nineteen of them. The four checked here are
+ * the ones whose absence is visible on npm and whose presence cannot be inferred: what state
+ * the package is in, how to install it, what it relates to, and its licence. Depth below them
+ * stays a human judgement and is not checked.
+ *
+ * Headings are matched loosely because the house style is not uniform — `Install`,
+ * `Installation`, `Quickstart` and `Usage` all answer the same question, and `See also` is
+ * `Related packages` under another name. Enforcing one spelling would be a rename, not a check.
+ */
+const README_SECTIONS = [
+  {
+    key: "status",
+    label: "an alpha or stability note, or a Status/Stability section",
+    // Either a note in prose OR a section carrying one. Matching only the phrase
+    // "in alpha" rejected `## Stability` / "Alpha." — a correct statement several
+    // packages already used — and would go on to reject an accurate "Beta" or
+    // "Stable" note later, which turns the check into a demand for boilerplate.
+    // The section alternative requires a NON-EMPTY body: an empty `## Status` answers
+    // nothing, and accepting the heading alone would let the check be satisfied by a
+    // section that exists rather than by a state that is stated.
+    test: /in alpha|@?experimental|^##[ \t]+(status|stability)[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*(?!#)\S/im,
+  },
+  {
+    key: "install",
+    label: "an Install, Installation, Quickstart or Usage section",
+    test: /^##\s+(install|installation|quick\s*start|usage)/im,
+  },
+  {
+    key: "related",
+    label: "a Related packages or See also section",
+    test: /^##\s+(related packages|see also)/im,
+  },
+  { key: "license", label: "a License section", test: /^##\s+licen[sc]e/im },
+];
+
+/**
+ * Drop what npm will not render as prose before looking for these sections.
+ *
+ * A fenced example showing a README skeleton, or a commented-out block, contains the
+ * very headings this checks for — so testing the raw source would pass a package
+ * whose only `## Install` is inside a code sample. The check would then be satisfied
+ * by the appearance of the thing rather than the thing.
+ */
+export function renderedProse(markdown) {
+  return (
+    markdown
+      // Comments first. A fence marker inside a comment is not a fence, and running
+      // the fence rules first let `<!--\n```\n-->` swallow the rest of the file —
+      // reporting real sections after it as missing, which is a red on a correct
+      // README and the worst direction for this check to fail in.
+      .replace(/<!--[\s\S]*?-->/g, "")
+      // Then paired fences, then an unpaired one. An opening fence with no closing
+      // fence renders as code all the way to the end of the file, so stopping at
+      // paired blocks would leave that tail in `prose` and let a truncated example
+      // satisfy the very sections this is checking for.
+      .replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1[^\n]*$/gm, "")
+      .replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*$/m, "")
+  );
+}
+
+function readmeSkeleton(repoRoot, packages, findings) {
+  for (const pkg of packages) {
+    const readme = join(pkg.dir, "README.md");
+    if (!existsSync(readme)) continue; // readme-present already reports this
+    let text;
+    try {
+      text = readFileSync(readme, "utf-8");
+    } catch {
+      continue;
+    }
+    const prose = renderedProse(text);
+    for (const section of README_SECTIONS) {
+      if (!section.test.test(prose)) {
+        findings.push({
+          check: "readme-skeleton",
+          file: relative(repoRoot, readme),
+          line: null,
+          message: `${pkg.name} is published but its README has no ${section.label}`,
+        });
+      }
+    }
+  }
+}
+
 export async function runChecks({
   repoRoot,
   allowlist = {},
@@ -471,6 +559,7 @@ export async function runChecks({
     }
   }
 
+  readmeSkeleton(repoRoot, packages, findings);
   internalLinks(repoRoot, tracked, findings);
   metaReachability(repoRoot, tracked, findings);
 

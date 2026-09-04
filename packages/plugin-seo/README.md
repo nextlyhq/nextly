@@ -194,6 +194,11 @@ Then reference `https://example.com/sitemap.xml` from `robots.txt` or submit it 
 
 > **Cache or rate-limit the public route.** It is unauthenticated and regenerates the document per request (up to the 50,000-URL / 50 MB caps), and on the `/admin/api` mount Nextly's built-in rate limiter is skipped. Put it behind an edge/CDN cache (sitemaps are crawled infrequently) or a rate limiter at your proxy — or disable it with `sitemap: false` if you don't need it.
 
+## Related packages
+
+- [`nextly`](../nextly) — `buildMetadata` from `nextly/runtime` turns these fields into tags
+- [`@nextlyhq/plugin-sdk`](../plugin-sdk) — the SDK this plugin is built on
+
 ## License
 
 MIT © Nextly

@@ -2,6 +2,15 @@
 
 ESLint rules that keep admin UI on Nextly's design-token system.
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/@nextlyhq/eslint-plugin"><img alt="npm" src="https://img.shields.io/npm/v/@nextlyhq%2Feslint-plugin?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" /></a>
+</p>
+
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
+
 Nextly's admin is themeable: colours, spacing and radius come from tokens, and
 every surface that consumes them follows a retheme and flips between light and
 dark for free. A surface that reaches past the tokens does not. These rules catch
@@ -140,3 +149,13 @@ the marker is per-line.
 The full token contract — what each token means, the two CSS entry points, and
 how plugin styles inherit the admin's light/dark scope — is in the
 [plugin UI authoring guide](https://nextlyhq.com/docs/plugins).
+
+## Related packages
+
+- [`@nextlyhq/ui`](../ui) — the components these rules keep on-token
+- [`@nextlyhq/admin-css`](../admin-css) — scopes and compiles the admin stylesheet
+- [`@nextlyhq/admin`](../admin) — the admin these tokens theme
+
+## License
+
+[MIT](../../LICENSE.md)
