@@ -8,9 +8,14 @@
  * that simply called it would answer an install-wide number to a reader
  * entitled to part of it.
  *
- * The bound is `readableEntities`, asked once per registered entity, and NOT a
- * filter over the caller's permission slugs. The two look equivalent and are
- * not, in both directions:
+ * Authorization here has TWO axes, and each is load-bearing. The first decides
+ * which collections are in reach; the second decides which of their documents
+ * are, and stopping at the first is what made this card disclose one author's
+ * work to another.
+ *
+ * **Which collections.** `readableEntities`, asked once per registered entity,
+ * and NOT a filter over the caller's permission slugs. The two look equivalent
+ * and are not, in both directions:
  *
  * - An API key is judged on its OWN stamped scope. Resolving the owner's
  *   role-derived slugs instead hands a narrowly scoped key everything its
@@ -33,6 +38,17 @@
  * nothing, instead of the three-way `undefined | [] | list` whose collapse hands
  * every document to a caller granted none.
  *
+ * **Which documents.** `readableEntities` is coarse BY CONTRACT — it says
+ * whether an entity is in reach at all, and leaves the per-row rules of the
+ * query that follows to decide what comes back. A collection carrying a stored
+ * `owner-only` or `custom` read rule therefore admits every editor at that
+ * check while the ordinary read path narrows to a subset, and a version query
+ * filtered by collection name alone counted and listed the documents in
+ * between: other authors' entry ids, their languages, and when they last
+ * touched them. `visiblePendingEdits` closes it by asking the ordinary read
+ * path which of the candidate documents survive, rather than reproducing a rule
+ * that may be an arbitrary function.
+ *
  * @module domains/versions/versions-widget-source
  */
 
@@ -50,12 +66,32 @@ import { failUnavailableSourceOrOp } from "../widgets/sources";
 import { VERSIONS_SOURCE_ID } from "../widgets/system-source-ids";
 import { registerSystemSource } from "../widgets/system-sources";
 
+import { visiblePendingEdits } from "./pending-edit-visibility";
 import type { VersionsService } from "./versions-service";
 
 export { VERSIONS_SOURCE_ID };
 
 /** How many rows the list card draws when the query names no limit. */
 const DEFAULT_LIMIT = 5;
+
+/**
+ * How many pending-edit DOCUMENTS one query may consider before answering.
+ *
+ * 🔴 The bound exists because the answer cannot be computed in SQL. A stored
+ * read rule narrows which of a collection's rows a caller may see, that rule
+ * lives on the collection rather than on the version row, and the data port has
+ * no join — so the only way to answer honestly is to take the candidates and
+ * ask the ordinary read path about them. That is bounded work, and this is the
+ * bound.
+ *
+ * Reaching it means something different for each op, so each says so itself:
+ * the LIST needs only enough survivors to fill a handful of slots and is
+ * unaffected, while the COUNT would silently report a floor — and a metric that
+ * quietly under-reports is the failure this whole change is repairing, so it
+ * refuses instead. A thousand documents carrying unpublished edits is already
+ * an extreme state for an editorial install.
+ */
+const CANDIDATE_SCAN = 1000;
 
 /**
  * The fields this source publishes.
@@ -190,16 +226,37 @@ async function resolveVersions(
   ];
 
   if (query.op === "count") {
-    return {
-      op: "count",
-      total: await service().countPendingEdits(readableSlugs),
-    };
+    // Asked BEFORE materialising anything, and it is the one thing SQL can
+    // still answer here: how many documents are candidates at all, before row
+    // rules narrow them. Larger than the scan bound means no honest exact
+    // answer is available, so it refuses rather than reporting a floor -- and
+    // refusing costs one aggregate instead of a thousand-document fetch that
+    // would be discarded. Comparing the fetched LENGTH instead cannot tell
+    // "exactly at the bound" from "beyond it", and would refuse a set it could
+    // have answered exactly.
+    if ((await service().countPendingEdits(readableSlugs)) > CANDIDATE_SCAN) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "pending-edits-scan-exhausted",
+          scanned: CANDIDATE_SCAN,
+        },
+      });
+    }
   }
 
-  const rows = await service().recentPendingEdits({
-    readableSlugs,
-    limit: query.limit ?? DEFAULT_LIMIT,
-  });
+  const visible = await visiblePendingEdits(
+    await service().recentPendingEdits({
+      readableSlugs,
+      limit: CANDIDATE_SCAN,
+    }),
+    caller
+  );
+
+  if (query.op === "count") {
+    return { op: "count", total: visible.length };
+  }
+
+  const rows = visible.slice(0, query.limit ?? DEFAULT_LIMIT);
   const names = selectedNames(query);
   const fields = query.select?.length ? describe(names) : undefined;
 

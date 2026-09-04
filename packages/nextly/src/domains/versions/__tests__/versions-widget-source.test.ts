@@ -8,6 +8,7 @@ const recentPendingEdits = vi.fn();
 const has = vi.fn();
 const readable = vi.fn();
 const registeredSlugs = vi.fn();
+const visible = vi.fn();
 
 vi.mock("../../../di/container", () => ({
   container: {
@@ -28,6 +29,18 @@ vi.mock("../../../auth/entity-read-access", async importOriginal => ({
 }));
 vi.mock("../../../services/lib/registered-content-slugs", () => ({
   registeredContentSlugs: () => registeredSlugs() as unknown,
+}));
+// A PASS-THROUGH, so the assertions below stay about what this module decides:
+// which collections are in reach, and what it answers with. The document-level
+// filter it stands in for reaches the ordinary read path and a stored access
+// rule, neither of which exists in a unit harness --
+// `pending-edits-document-rules.integration.test.ts` drives the real one
+// against a real database and a real owner-only rule. The final test in this
+// block is what keeps the substitution honest: it asserts the rows and the
+// caller actually reach this seam, so deleting the call is not a green.
+vi.mock("../pending-edit-visibility", () => ({
+  visiblePendingEdits: (rows: unknown, caller: unknown) =>
+    visible(rows, caller) as unknown,
 }));
 
 import { executeWidgetQuery } from "../../widgets/execute";
@@ -63,6 +76,7 @@ beforeEach(() => {
   recentPendingEdits.mockResolvedValue([row]);
   readable.mockResolvedValue(new Set(["posts"]));
   registeredSlugs.mockResolvedValue(["posts", "secrets"]);
+  visible.mockImplementation((rows: unknown) => Promise.resolve(rows));
   clearSources();
   clearSystemResolvers();
   registerVersionsWidgetSource();
@@ -132,6 +146,46 @@ describe("who the numbers are for", () => {
     );
 
     expect(countPendingEdits).toHaveBeenCalledWith([]);
+  });
+
+  it("hands every candidate row, and the caller, to the document filter", async () => {
+    // 🔴 Entity access is one axis short: a stored owner-only or custom read
+    // rule narrows which of a collection's documents come back, and a version
+    // read filtered by collection name alone reported another author's entry
+    // ids and edit times. The caller has to reach that decision too -- an id
+    // cannot be judged against a rule written about a key's own scope.
+    await executeWidgetQuery(
+      { source: VERSIONS_SOURCE_ID, op: "list" },
+      caller
+    );
+
+    expect(visible).toHaveBeenCalledWith([row], caller);
+  });
+
+  it("refuses a COUNT it cannot answer exactly, rather than reporting a floor", async () => {
+    // 🔴 Row rules cannot be applied in SQL -- the rule lives on the collection,
+    // the candidates live in the version table, and the port has no join -- so
+    // an exact count means materialising candidates, which is bounded work. Past
+    // the bound the honest answers are "refuse" or "report a number that is
+    // quietly too small", and a metric that under-reports is the defect this
+    // module was repaired for.
+    countPendingEdits.mockResolvedValue(1001);
+
+    await expect(
+      executeWidgetQuery({ source: VERSIONS_SOURCE_ID, op: "count" }, caller)
+    ).rejects.toThrow();
+    expect(recentPendingEdits).not.toHaveBeenCalled();
+  });
+
+  it("answers a COUNT that sits exactly ON the bound", async () => {
+    // The boundary control. Comparing the FETCHED length instead of the total
+    // cannot tell "exactly at the bound" from "beyond it", and would refuse a
+    // set it could have answered.
+    countPendingEdits.mockResolvedValue(1000);
+
+    await expect(
+      executeWidgetQuery({ source: VERSIONS_SOURCE_ID, op: "count" }, caller)
+    ).resolves.toMatchObject({ op: "count" });
   });
 
   it("asks the access layer ONCE per query", async () => {
