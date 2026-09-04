@@ -188,6 +188,41 @@ describe("who the numbers are for", () => {
     ).resolves.toMatchObject({ op: "count" });
   });
 
+  it("escalates to the full scan when the small budget cannot fill the card", async () => {
+    // A list takes a modest budget first, so the ordinary dashboard load does
+    // not pay the count's price for rows it discards. When row rules remove
+    // enough that the card cannot be filled AND that budget was exhausted, the
+    // short answer is retried rather than returned.
+    recentPendingEdits.mockResolvedValue(Array.from({ length: 60 }, () => row));
+    visible.mockResolvedValue([]);
+
+    await executeWidgetQuery(
+      { source: VERSIONS_SOURCE_ID, op: "list", limit: 5 },
+      caller
+    );
+
+    expect(recentPendingEdits).toHaveBeenCalledTimes(2);
+    expect(recentPendingEdits).toHaveBeenLastCalledWith(
+      expect.objectContaining({ limit: 1000 })
+    );
+  });
+
+  it("does NOT escalate when the small budget already saw every candidate", async () => {
+    // 🔴 The control that makes the test above mean something. A budget that
+    // was not exhausted has already seen every candidate there is, so a short
+    // answer from it is the true one -- escalating would re-read the same rows
+    // and make every under-filled card cost two scans forever.
+    recentPendingEdits.mockResolvedValue([row]);
+    visible.mockResolvedValue([]);
+
+    await executeWidgetQuery(
+      { source: VERSIONS_SOURCE_ID, op: "list", limit: 5 },
+      caller
+    );
+
+    expect(recentPendingEdits).toHaveBeenCalledTimes(1);
+  });
+
   it("asks the access layer ONCE per query", async () => {
     // Two resolutions of one caller's permissions are two chances to disagree,
     // and each is a round of database reads.

@@ -67,6 +67,7 @@ import { VERSIONS_SOURCE_ID } from "../widgets/system-source-ids";
 import { registerSystemSource } from "../widgets/system-sources";
 
 import { visiblePendingEdits } from "./pending-edit-visibility";
+import type { VersionMeta } from "./versions-repository";
 import type { VersionsService } from "./versions-service";
 
 export { VERSIONS_SOURCE_ID };
@@ -84,14 +85,35 @@ const DEFAULT_LIMIT = 5;
  * ask the ordinary read path about them. That is bounded work, and this is the
  * bound.
  *
- * Reaching it means something different for each op, so each says so itself:
- * the LIST needs only enough survivors to fill a handful of slots and is
- * unaffected, while the COUNT would silently report a floor — and a metric that
- * quietly under-reports is the failure this whole change is repairing, so it
- * refuses instead. A thousand documents carrying unpublished edits is already
- * an extreme state for an editorial install.
+ * The COUNT is what it really bounds: past it, an exact answer is not available
+ * and the card refuses rather than reporting a floor — a metric that quietly
+ * under-reports is the failure this whole change is repairing. A LIST rarely
+ * comes near it, taking {@link LIST_CANDIDATES} first and escalating only when
+ * that cannot fill the card.
+ *
+ * 🔴 It is the ONE bound, and the repository derives its row fetch from it
+ * rather than declaring a second. Two independent ceilings is what produced the
+ * defect this constant exists to prevent: a caller asking for a thousand
+ * documents received five hundred, so it under-reported while every check it
+ * had made said the answer was exact.
  */
 const CANDIDATE_SCAN = 1000;
+
+/**
+ * How many candidates a LIST considers before it needs the full scan.
+ *
+ * A list wants a handful of visible rows, not every candidate, and on the
+ * ordinary install — where no collection carries a stored row rule — the first
+ * `limit` candidates are all visible and this is the only read. Scanning to
+ * {@link CANDIDATE_SCAN} for a five-row card would make every dashboard load
+ * pay the count's price for rows it discards.
+ *
+ * It is a budget rather than a cap: when filtering removes enough that the card
+ * cannot be filled AND this budget was actually exhausted, the query escalates
+ * to the full scan. So the short answer this could produce is retried rather
+ * than returned, and only the two conditions together spend the larger read.
+ */
+const LIST_CANDIDATES = 60;
 
 /**
  * The fields this source publishes.
@@ -209,6 +231,42 @@ function describe(
   });
 }
 
+/** The visible candidates within `budget`, and how many were considered. */
+async function visibleWithin(
+  budget: number,
+  readableSlugs: readonly string[],
+  caller: ReadCaller
+): Promise<{ visible: VersionMeta[]; scanned: number }> {
+  const candidates = await service().recentPendingEdits({
+    readableSlugs,
+    limit: budget,
+  });
+  return {
+    visible: await visiblePendingEdits(candidates, caller),
+    scanned: candidates.length,
+  };
+}
+
+/**
+ * Enough visible rows to fill a card of `limit`, escalating only when needed.
+ *
+ * The second read is spent on exactly one shape: the small budget was exhausted
+ * AND too few of its candidates survived. A budget that was not exhausted has
+ * already seen every candidate there is, so a short answer from it is the true
+ * one and re-reading would return the same rows.
+ */
+async function enoughToFill(
+  limit: number,
+  readableSlugs: readonly string[],
+  caller: ReadCaller
+): Promise<VersionMeta[]> {
+  const first = await visibleWithin(LIST_CANDIDATES, readableSlugs, caller);
+  if (first.visible.length >= limit || first.scanned < LIST_CANDIDATES) {
+    return first.visible;
+  }
+  return (await visibleWithin(CANDIDATE_SCAN, readableSlugs, caller)).visible;
+}
+
 async function resolveVersions(
   query: WidgetQuery,
   caller: ReadCaller
@@ -244,19 +302,20 @@ async function resolveVersions(
     }
   }
 
-  const visible = await visiblePendingEdits(
-    await service().recentPendingEdits({
-      readableSlugs,
-      limit: CANDIDATE_SCAN,
-    }),
-    caller
-  );
-
   if (query.op === "count") {
+    const { visible } = await visibleWithin(
+      CANDIDATE_SCAN,
+      readableSlugs,
+      caller
+    );
     return { op: "count", total: visible.length };
   }
 
-  const rows = visible.slice(0, query.limit ?? DEFAULT_LIMIT);
+  const limit = query.limit ?? DEFAULT_LIMIT;
+  const rows = (await enoughToFill(limit, readableSlugs, caller)).slice(
+    0,
+    limit
+  );
   const names = selectedNames(query);
   const fields = query.select?.length ? describe(names) : undefined;
 

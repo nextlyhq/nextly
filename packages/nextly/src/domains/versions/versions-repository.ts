@@ -74,20 +74,22 @@ const VERSION_META_COLUMNS = [
 ] as const;
 
 /**
- * The largest number of rows a recent-edits scan will read.
+ * How many rows to read to be sure of finding `limit` distinct documents.
  *
- * A ceiling on the over-fetch, not on the answer. It only binds when
- * `limit * maxPerDocument` exceeds it -- a 5-row card needs it past 100
- * configured locales -- and when it does the card returns FEWER documents rather
- * than wrong ones. Worth having because `maxPerDocument` is the configured
- * locale count, and rows written under a locale later removed from the config
- * are not bounded by it.
+ * 🔴 Derived from the caller's `limit` and NOTHING else. This used to take
+ * `Math.min` against a second ceiling declared here, and the two bounds did not
+ * know about each other: a caller asking for a thousand documents got five
+ * hundred rows, so it received fewer documents than exist while every
+ * feasibility check it had made said the answer was exact. A quiet floor, which
+ * is the failure the caller's own bound exists to refuse.
+ *
+ * One bound, owned by the caller, is what makes that unrepresentable. The row
+ * count follows from it, because a document holds at most `maxPerDocument`
+ * working drafts -- one per locale -- so that many rows per document is enough
+ * and no ceiling here can be right without knowing what the caller promised.
  */
-const MAX_PENDING_EDIT_SCAN = 500;
-
-/** How many rows to read to be sure of finding `limit` distinct documents. */
 function scanBound(limit: number, maxPerDocument: number): number {
-  return Math.min(limit * Math.max(maxPerDocument, 1), MAX_PENDING_EDIT_SCAN);
+  return limit * Math.max(maxPerDocument, 1);
 }
 
 /**
@@ -390,8 +392,9 @@ export class VersionsRepository {
    * latest instant, and every row preceding it belongs to a document at least as
    * recent. At most `maxPerDocument` rows can come from any one of those, so the
    * newest `limit` documents are all represented within
-   * `limit * maxPerDocument` rows. See {@link scanBound} for the cap and what it
-   * costs.
+   * `limit * maxPerDocument` rows — see {@link scanBound}, which is derived from
+   * `limit` alone so this cannot return fewer documents than the caller asked
+   * for while the caller believes it asked for few enough.
    *
    * The snapshot is projected away. It is the largest column in the table and a
    * card that lists titles has no use for it.

@@ -187,6 +187,35 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
     expect(rows[0]?.locale).toBe("en");
   });
 
+  it("counts every document, past the row ceiling a scan used to carry", async () => {
+    // 🔴 The regression this file exists to hold. The row fetch used to take
+    // `Math.min` against a ceiling declared beside it, and that ceiling did not
+    // know what the caller had asked for: a request for a thousand documents
+    // read five hundred rows and returned five hundred documents, so the caller
+    // under-reported while every feasibility check it had made said its answer
+    // was exact. 501 is one past that old ceiling, which is the smallest input
+    // that separates the two implementations.
+    const app = await boot(dialect);
+    const repo = new VersionsRepository(app.adapter);
+
+    for (let index = 0; index < 501; index++) {
+      await app.adapter.insert(
+        VERSIONS_TABLE,
+        draft({ entryId: `e${index}`, locale: null })
+      );
+    }
+
+    const rows = await repo.findRecentPendingEdits({
+      slugs: ["posts"],
+      limit: 1000,
+      maxPerDocument: 1,
+    });
+    expect(rows).toHaveLength(501);
+    // Asserted on IDENTITY too: a scan that returned 501 of the wrong rows, or
+    // 501 with a duplicate, has the same length.
+    expect(new Set(rows.map(r => r.entryId)).size).toBe(501);
+  });
+
   it("lists the most recently touched first, and never the snapshot", async () => {
     const app = await boot(dialect);
     const repo = new VersionsRepository(app.adapter);
