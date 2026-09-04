@@ -858,3 +858,94 @@ describe("a write to the component store itself", () => {
     );
   });
 });
+
+describe("reading definitions the way the renderer reads them", () => {
+  it("finds a nested component only an EXPANDED read reveals", async () => {
+    // Asserted on the OUTCOME, not on the request. "`depth` is absent from the
+    // arguments" restates what the code says about itself: it holds just as
+    // well if the service default were zero anyway, or if `afterRead` ran
+    // before expansion, and neither of those is the behaviour being protected.
+    //
+    // So the store below answers DIFFERENTLY for the two reads, modelling what
+    // the collection service documents: an unstated depth expands to the
+    // default before `afterRead` runs, and a hook whose blocks output depends
+    // on an expanded relationship can only emit the nested instance then. The
+    // readiness result therefore changes with the depth, and the assertion is
+    // about a component a visitor would or would not meet.
+    //
+    // What this cannot do is prove the SERVICE behaves that way — the double
+    // replaces it, so the modelled behaviour is the documented contract rather
+    // than a measurement of it. Only an integration test against a real adapter
+    // could close that, and this is the strongest statement available at the
+    // level the hook lives.
+    const finds: Record<string, unknown>[] = [];
+    const handlers: ((c: unknown) => unknown)[] = [];
+    const ctx = {
+      hooks: {
+        on: (_t: string, _c: string, h: (c: unknown) => unknown) => {
+          handlers.push(h);
+        },
+      },
+      services: {
+        collections: {
+          getCollection: async () => ({
+            status: true,
+            localized: false,
+            fields: [{ name: "content", type: "blocks" }],
+          }),
+        },
+      },
+    };
+    registerComponentReadinessNotice({
+      ctx: ctx as never,
+      componentCollection: COMPONENTS,
+      componentField: "content",
+      limits: () => LIMITS,
+    });
+    const write = writeContext();
+    (write.req as Record<string, unknown>).nextly = {
+      find: async (args: Record<string, unknown>) => {
+        finds.push(args);
+        const wanted =
+          ((args.where as { id?: { in?: string[] } })?.id?.in as string[]) ??
+          [];
+        if (!wanted.includes("hero")) return { items: [] };
+        // `hero` is published either way. What differs is whether its own
+        // document mentions the nested component — which a hook can only
+        // produce from an expanded relationship.
+        const expanded = args.depth !== 0;
+        return {
+          items: [
+            {
+              id: "hero",
+              content: {
+                formatVersion: DOCUMENT_FORMAT_VERSION,
+                kind: "component",
+                nodes: expanded
+                  ? [
+                      {
+                        id: "n",
+                        type: COMPONENT_INSTANCE_TYPE,
+                        version: 1,
+                        props: { componentId: "nested-unpublished" },
+                      },
+                    ]
+                  : [],
+              },
+            },
+          ],
+        };
+      },
+    };
+
+    await handlers[0]!(write);
+
+    // The nested component is not published, so the expanded read finds a hole
+    // the bare read cannot see. Forcing `depth: 0` makes this silent.
+    expect(recorded).toHaveLength(1);
+    expect((recorded[0] as { message: string }).message).toContain(
+      "1 component"
+    );
+    expect(finds.every(find => !("depth" in find))).toBe(true);
+  });
+});
