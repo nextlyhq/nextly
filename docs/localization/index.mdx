@@ -1,0 +1,90 @@
+---
+title: Localization
+description: Run the same site in several languages, with a fallback when a translation is missing, and publish each language separately.
+---
+
+Localization lets one document exist in several languages. An editor switches language at
+the top of the edit screen and writes the Spanish version of the same post, without
+creating a second post.
+
+## Availability
+
+| | |
+|---|---|
+| Built in | No plugin required |
+| Admin | Language switcher on edit screens, plus a translations overview |
+| Permission | The same access as editing the document |
+
+## Turn it on
+
+Declare your languages once, in `nextly.config.ts`:
+
+```ts
+import { defineConfig } from "nextly";
+
+export default defineConfig({
+  localization: {
+    locales: [
+      "en",
+      { code: "es", label: "Español" },
+      { code: "ar", label: "العربية", rtl: true },
+      { code: "fr", label: "Français", fallbackLocale: "en" },
+    ],
+    defaultLocale: "en",
+    fallback: true,
+  },
+});
+```
+
+A locale is either a bare code or an object. The object form carries:
+
+| Key | Meaning |
+|---|---|
+| `code` | The locale code, e.g. `es` |
+| `label` | What the admin shows in the language switcher |
+| `rtl` | Renders that language right-to-left |
+| `fallbackLocale` | Which language (or ordered list) to fall back to |
+
+## Choose what gets translated
+
+Mark a whole collection localized, then opt individual fields out:
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const Posts = defineCollection({
+  slug: "posts",
+  localized: true,
+  fields: [
+    text({ name: "title" }),
+    // Not worth translating: the same value in every language.
+    text({ name: "externalId", localized: false }),
+  ],
+});
+```
+
+Fields inherit the collection's setting, so the common case is one flag.
+
+## Fallback chains
+
+`fallback: true` means a missing translation falls back rather than rendering empty. A
+locale can name its own chain — `fallbackLocale: ["es", "en"]` tries Spanish, then
+English. Without a chain, the default locale is used.
+
+## Publishing one language at a time
+
+Each language carries its own draft and published state. Publishing the Spanish version
+does not publish the French one, and a language still being translated stays invisible
+while the others are live.
+
+<Callout type="warn">
+This is per-locale **publishing**, not per-locale scheduling. A
+[content release](/docs/releases) schedules the whole document across every language;
+it cannot schedule one language on its own.
+</Callout>
+
+## Related
+
+- [Draft and published status](/docs/guides/draft-published-status)
+- [Content releases](/docs/releases) — publishing a set of documents together
+- [Versions](/docs/versions) — history per document

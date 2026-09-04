@@ -1,0 +1,76 @@
+---
+title: Webhooks
+description: Tell another system when your content changes, with signed payloads and retries you can inspect.
+---
+
+A webhook is an HTTP call Nextly makes when something happens to your content — a post is
+published, a page is deleted — so another system can react without polling.
+
+## Availability
+
+| | |
+|---|---|
+| Built in | No plugin required |
+| Admin | A **Webhooks** section for endpoints, secrets and delivery history |
+| Permission | Managing endpoints is governed by `create-webhooks`, `update-webhooks` and `delete-webhooks` grants |
+
+## Endpoints
+
+An endpoint is a URL plus a filter describing which events it wants. Registering everything
+to one URL works, but filtering per endpoint means a receiver is not woken for events it
+will ignore.
+
+## Signing
+
+Every delivery is signed so the receiver can prove it came from you and was not modified.
+
+```
+signedContent = "<id>.<timestamp>.<rawBody>"
+signature     = base64(HMAC_SHA256(secret, signedContent))
+```
+
+Three headers travel with each delivery:
+
+| Header | Holds |
+|---|---|
+| `webhook-id` | The delivery's id, and part of the signed content |
+| `webhook-timestamp` | When it was signed, also part of the signed content |
+| `webhook-signature` | The signature itself |
+
+Because the timestamp is signed, a captured payload cannot be replayed later under its
+original signature.
+
+Verify against the **raw body**, before any JSON parsing. Re-serializing first changes the
+bytes and the signature will not match — the usual reason a correct implementation appears
+to fail.
+
+## Delivery, retries and the outbox
+
+An event is written to a durable **outbox** in the same transaction as the content change,
+and delivered from there. So a webhook cannot be lost because the process died between
+saving a document and making the HTTP call, and it cannot fire for a change that was
+rolled back.
+
+Delivery is then retried on a schedule:
+
+| | |
+|---|---|
+| Attempts | 6 by default |
+| First retry | 30 seconds |
+| Longest delay | 1 hour |
+
+A `2xx` response counts as delivered. A `429` or any `5xx` is retried. Other `4xx`
+responses are not retried, because a receiver rejecting the request as malformed will
+reject it again.
+
+## Delivery history
+
+Deliveries are recorded so you can see what was sent, what came back and how many attempts
+it took. That history is trimmed on a schedule — see
+[retention](/docs/webhooks/retention).
+
+## Related
+
+- [Retention](/docs/webhooks/retention) — how long delivery history is kept
+- [Background jobs](/docs/jobs) — work that runs outside the request
+- [ISR caching](/docs/guides/isr-caching) — updating your own pages on a change

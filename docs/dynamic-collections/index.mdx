@@ -1,0 +1,51 @@
+---
+title: Dynamic Collections
+description: What the Visual Schema Builder creates, and how it coexists with collections defined in code.
+---
+
+A collection defined in `nextly.config.ts` exists because you wrote it. A collection built
+in the [Visual Schema Builder](/docs/schema-builder) exists because someone created it in
+the admin, and its definition lives in the database. The second kind is a **dynamic
+collection**.
+
+Both produce the same thing downstream: real database tables, the same REST and Direct API,
+the same admin screens, the same access control. The difference is where the definition is
+stored and who can change it.
+
+## Availability
+
+| | |
+|---|---|
+| Built in | Created through the Visual Schema Builder at `/admin/builder/collections` |
+| Permission | Creating and editing schema is an admin capability, separate from editing content |
+
+## Which to use
+
+| Use code-first when | Use the Schema Builder when |
+|---|---|
+| The shape is part of your application's logic | The shape is part of the site's content |
+| You want it reviewed in a pull request | You want a non-developer to add a field without a deploy |
+| It ships with your repository | It differs between environments, or is created by a client |
+
+The two coexist. A project can define `posts` in code and let an editor add a `testimonials`
+collection in the admin, and nothing about either changes because the other exists.
+
+## Moving between them
+
+A collection can be handed from code to the builder, so schema editing moves to the admin
+without recreating anything or losing content.
+
+## What differs from a code-first collection
+
+- Its definition is a **database row**, not a file, so it is not in your git history. Treat
+  the database as the source of truth for these.
+- Because it is not in the repository, it is not reviewed. That is the trade being made:
+  speed for the editor, less oversight for you.
+- It is created and migrated through the builder rather than through generated migration
+  files.
+
+## Related
+
+- [Visual Schema Builder](/docs/schema-builder) — the interface that creates these
+- [Collections](/docs/configuration/collections) — the code-first equivalent
+- [Production migrations](/docs/guides/production-migrations)

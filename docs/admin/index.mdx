@@ -24,7 +24,7 @@ The top-level sections (in order) are:
 | Section | Route | What it contains |
 |---|---|---|
 | Dashboard | `/admin` | Landing page after login |
-| Builder | `/admin/builder/collections` | Schema management for Collections / Singles / Components — the [Visual Schema Builder](/docs/admin/builder) |
+| Builder | `/admin/builder/collections` | Schema management for Collections / Singles / Components — the [Visual Schema Builder](/docs/schema-builder) |
 | Collections | `/admin/collections/[slug]` | Per-collection content surface; the icon appears in the sidebar once at least one collection exists and lands on the most-recently-created collection |
 | Singles | `/admin/singles/[slug]` | Per-single content surface; same dynamic visibility rule as Collections |
 | Media Library | `/admin/media` | Upload, browse, and edit files referenced by `upload` fields |
@@ -48,7 +48,7 @@ A central media library at `/admin/media` supports drag-and-drop uploads, thumbn
 
 ### Visual Schema Builder
 
-The Visual Schema Builder lets you create and edit Collections, Singles, and Field Groups without writing TypeScript. It generates the same artifacts the code-first approach produces. See [Visual Schema Builder](/docs/admin/builder) for the full reference.
+The Visual Schema Builder lets you create and edit Collections, Singles, and Field Groups without writing TypeScript. It generates the same artifacts the code-first approach produces. See [Visual Schema Builder](/docs/schema-builder) for the full reference.
 
 ### Users, Roles, and Custom Fields
 
@@ -96,7 +96,7 @@ A plugin can register sidebar entries via its `admin.placement` setting. Until a
 
 ## Next steps
 
-- [Visual Schema Builder](/docs/admin/builder) — design content types without writing code
+- [Visual Schema Builder](/docs/schema-builder) — design content types without writing code
 - [Customization](/docs/admin/customization) — sidebar config, navigation permissions, plugin overrides
 - [Branding](/docs/admin/branding) — logo, favicon, color scheme, Builder visibility
 - [Collections](/docs/configuration/collections) — code-first collection definitions

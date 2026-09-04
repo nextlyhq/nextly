@@ -333,3 +333,73 @@ describe("enumeration comes from the injected file list, not the disk", () => {
     expect(findings.map(f => f.check)).toContain("naming-rule");
   });
 });
+
+describe("meta.json is consulted only when tracked", () => {
+  it("does not invent an orphan from a meta.json the clone will not have", async () => {
+    // The file exists in this working tree but not in the index. A clone therefore has no
+    // meta.json for this directory, fumadocs auto-includes its pages, and nothing is orphaned.
+    // Reading the disk here would report a finding that cannot happen on the site.
+    const { root } = await fixture({
+      "docs/meta.json": JSON.stringify({ pages: ["index"] }),
+      "docs/index.mdx": "# i\n",
+      "docs/orphan.mdx": "# o\n",
+    });
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files: ["docs/index.mdx", "docs/orphan.mdx"],
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+    });
+    expect(findings.map(f => f.check)).not.toContain("meta-reachable");
+  });
+
+  it("still catches the orphan once meta.json is tracked", async () => {
+    const { root, files } = await fixture({
+      "docs/meta.json": JSON.stringify({ pages: ["index"] }),
+      "docs/index.mdx": "# i\n",
+      "docs/orphan.mdx": "# o\n",
+    });
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files,
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+    });
+    expect(findings.map(f => f.check)).toContain("meta-reachable");
+  });
+});
+
+describe("internal-docs-link", () => {
+  it("fires on a link to a docs page that does not exist", async () => {
+    expect(
+      await checksFor({ "docs/a.mdx": "See [gone](/docs/nope) for more.\n" })
+    ).toContain("internal-docs-link");
+  });
+
+  it("does not fire when the target exists as a file", async () => {
+    expect(
+      await checksFor({
+        "docs/a.mdx": "See [b](/docs/b) for more.\n",
+        "docs/b.mdx": "# b\n",
+      })
+    ).not.toContain("internal-docs-link");
+  });
+
+  it("resolves a directory target through its index page", async () => {
+    expect(
+      await checksFor({
+        "docs/a.mdx": "See [preview](/docs/preview) for more.\n",
+        "docs/preview/index.mdx": "# preview\n",
+      })
+    ).not.toContain("internal-docs-link");
+  });
+
+  it("ignores the anchor when resolving", async () => {
+    expect(
+      await checksFor({
+        "docs/a.mdx": "See [b](/docs/b#a-heading) for more.\n",
+        "docs/b.mdx": "# b\n",
+      })
+    ).not.toContain("internal-docs-link");
+  });
+});
