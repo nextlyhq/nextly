@@ -814,6 +814,37 @@ describe("resolveComponentInstances what an instance carries", () => {
     expect(result.document).toBe(doc);
   });
 
+  it("leaves an instance standing under a gated ancestor INSIDE a definition", () => {
+    // Gating is inherited the same way wherever the container sits. A
+    // definition's own gated box is dropped with its subtree by the same pass,
+    // so an instance inside it reaches no reader — and the host walk's rule
+    // means nothing if the definition walk descends anyway.
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "vip" }]] };
+    const doc = page([instance("i1", "outer")]);
+    const definitions = defs({
+      outer: component([box("d1", [instance("d2", "gone")], gate)]),
+    });
+
+    const result = resolveComponentInstances(doc, definitions);
+
+    expect(result.unresolved).toEqual([]);
+    expect(result.referenced).toEqual(["outer"]);
+  });
+
+  it("still composes an instance under an UNGATED container inside a definition", () => {
+    // The control for the rule above, on the definition side.
+    const doc = page([instance("i1", "outer")]);
+    const definitions = defs({
+      outer: component([box("d1", [instance("d2", "inner")])]),
+      inner: component([node("d3")]),
+    });
+
+    const result = resolveComponentInstances(doc, definitions);
+
+    expect(result.unresolved).toEqual([]);
+    expect(result.referenced).toEqual(["outer", "inner"]);
+  });
+
   it("still composes an instance under an ancestor that is NOT gated", () => {
     // The control. Without it the rule above passes on an implementation that
     // refuses to descend into any container at all, which costs every page
@@ -1404,6 +1435,29 @@ describe("how a resolution reaches a definition", () => {
 
     expect(result.unresolved).toEqual([]);
     expect(flatten(result.document.nodes)).toHaveLength(1);
+  });
+
+  it("gives two instances of one component the SAME answer", () => {
+    // Reading once per instance rather than once per run lets a stateful
+    // lookup contradict itself inside one page: the first instance draws the
+    // component and the second reports it unreadable. Whatever a lookup
+    // answers, a resolution has to answer one thing about one component.
+    const definition = component([node("d1")]);
+    let reads = 0;
+
+    const result = resolveComponentInstances(
+      page([instance("i1", "hero"), instance("i2", "hero")]),
+      {
+        has: () => true,
+        get: () => {
+          reads += 1;
+          return reads === 1 ? definition : undefined;
+        },
+      }
+    );
+
+    expect(result.unresolved).toEqual([]);
+    expect(flatten(result.document.nodes)).toHaveLength(2);
   });
 
   it("takes `has` as the answer even when `get` produces nothing", () => {

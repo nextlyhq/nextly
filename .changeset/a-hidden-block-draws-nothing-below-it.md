@@ -40,3 +40,11 @@ component rather than to publish one that already exists.
 
 A page with an unrecognised note about a component that failed to load no
 longer takes the whole page down with it.
+
+The rule holds one level down as well: a hidden block inside a reusable
+component no longer draws the components under it either.
+
+Two places on a page that use the same component now always agree about it.
+Where a site supplies components itself, one that answered differently the
+second time it was asked could draw in one place and report itself broken in
+the other.

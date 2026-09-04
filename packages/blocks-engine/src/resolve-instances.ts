@@ -326,6 +326,10 @@ export function resolveComponentInstances(
     referenced: [],
     referencedSeen: new Set<string>(),
     unresolved: [],
+    definitionsRead: new Map<
+      string,
+      ComponentDocument | ComponentUnresolvedReason
+    >(),
   };
   const nodes = inlineForest(document.nodes, run, ROOT_SCOPE, 1);
   return {
@@ -368,6 +372,20 @@ interface ResolveRun {
   referenced: string[];
   referencedSeen: Set<string>;
   unresolved: UnresolvedInstance[];
+  /**
+   * What the lookup answered for each component this run has asked about.
+   *
+   * A resolution has to say ONE thing about one component. Asking per instance
+   * lets a lookup that is not pure contradict itself inside a page — the first
+   * instance draws the component and the second reports it unreadable — and
+   * the contract deliberately admits such a lookup, because the source that
+   * fetches is one.
+   *
+   * Only the id-dependent half is held. `cycle` and `composed-depth` are
+   * properties of WHERE the instance sits, so they are decided per call and
+   * never reach this.
+   */
+  definitionsRead: Map<string, ComponentDocument | ComponentUnresolvedReason>;
 }
 
 /** Where in the composition a forest sits: how deep, and through which components. */
@@ -952,6 +970,24 @@ function definitionFor(
 ): ComponentDocument | ComponentUnresolvedReason {
   if (scope.onPath.has(componentId)) return "cycle";
   if (scope.depth >= run.maxComposedDepth) return "composed-depth";
+  const seen = run.definitionsRead.get(componentId);
+  if (seen !== undefined) return seen;
+  const answer = readDefinition(componentId, run);
+  run.definitionsRead.set(componentId, answer);
+  return answer;
+}
+
+/**
+ * What the lookup says about one component, asked once per run.
+ *
+ * Split from the scope checks above so that only the id-dependent half is
+ * remembered: a component refused for a cycle at one position is perfectly
+ * resolvable at another, and caching that refusal would withhold it there.
+ */
+function readDefinition(
+  componentId: string,
+  run: ResolveRun
+): ComponentDocument | ComponentUnresolvedReason {
   // ABSENT from the map is `missing` — nobody supplied one, and the remedy is
   // to publish or restore it. A value that IS supplied and cannot be read is a
   // document fault, so it takes `unreadable`: offering the publish remedy for
@@ -1359,6 +1395,26 @@ function cloneDefinitionNode(
   }
 
   const scoped = scopeNode(node, ctx, plan);
+
+  // The inherited-gate rule, on the definition side. `inlineNode` applies it to
+  // a host container; a definition's own gated box is dropped by the same pass
+  // with the same subtree, so descending here would report components no reader
+  // can receive — and the host rule would mean nothing for anything a component
+  // holds.
+  //
+  // Asked AFTER `scopeNode` rather than of the stored node, because an
+  // instance's `visibility` override is allowed to remove the gate: asking
+  // first would refuse to compose a region the instance explicitly turned on.
+  // `scopeNode` deletes the envelope for `plan.visible === true`, so by here
+  // the question has one answer.
+  //
+  // The node stands, gated, exactly as the host case leaves it standing — the
+  // pass that prunes it wants it there — and its planned slot content is given
+  // back, because nothing will place it.
+  if (isConditionGated(scoped)) {
+    if (plan !== undefined) refundPlannedSlots(plan, ctx.run);
+    return [scoped];
+  }
 
   // Cloned BEFORE the instance branch, not after it. A component-instance node
   // inside a definition carries slot content like any container, and skipping
