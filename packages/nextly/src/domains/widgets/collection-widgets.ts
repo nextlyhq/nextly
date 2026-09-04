@@ -63,7 +63,7 @@ const TABLE_ROWS = 5;
  */
 function widgetId(
   source: WidgetSource,
-  kind: "count" | "recent" | "table"
+  kind: "count" | "recent" | "table" | "stats"
 ): string | undefined {
   // 🔴 An underscore is legal in a collection slug (`SLUG_PATTERN` permits it)
   // and illegal in a widget id, so `customer_notes` produced an id the registry
@@ -103,6 +103,91 @@ function countWidget(source: WidgetSource): WidgetDefinition | undefined {
     archetype: "metric",
     defaultSize: "sm",
     query: { source: source.id, op: "count", status: "all" },
+  };
+}
+
+/**
+ * The lifecycle states a health card counts, and what each one is called.
+ *
+ * 🔴 One entry produces BOTH the cell's query and the cell's link, because the
+ * card's promise is that the number and the page behind it are the same
+ * question. Built separately they agree on the day they are written: a card
+ * reading "14 drafts" that opens a list of everything is not visibly broken --
+ * the reader sees a list, counts nothing, and carries on believing the number.
+ */
+const HEALTH_STATES = [
+  { key: "published", label: "Published", status: "published" },
+  { key: "draft", label: "Draft", status: "draft" },
+] as const;
+
+/**
+ * Where a cell's number navigates: the collection's list, filtered the same way.
+ *
+ * `?where=` is the entry list's OWN url filter, already read by
+ * `buildEntryWhereFilter`, rather than a parameter invented for this card. A
+ * second filtering vocabulary would have to be kept in step with the first, and
+ * the failure would be a link that lands on an unfiltered list showing a
+ * different number than the card promised.
+ */
+function healthHref(slug: string, status?: string): string {
+  const path = `/admin/collections/${slug}`;
+  if (status === undefined) return path;
+  const where = JSON.stringify({ status: { equals: status } });
+  return `${path}?${new URLSearchParams({ where }).toString()}`;
+}
+
+/**
+ * The health card for a source: how its entries are split by lifecycle state.
+ *
+ * Generated only for a collection that DECLARES a status, and the refusal
+ * matters: without one there is a single number to draw, which is the `metric`
+ * card this source already has. A one-cell health card would be that card again
+ * under a second name, and a reader placing both would see the same figure
+ * twice and reasonably assume they measured different things.
+ *
+ * The total is first and unfiltered, so the parts have something to be parts
+ * OF -- "12 published, 3 draft" invites the reader to add them up and hope that
+ * is everything, which is true today and stops being true the moment a third
+ * state exists.
+ */
+function statsWidget(source: WidgetSource): WidgetDefinition | undefined {
+  if (!source.supports.includes("count")) return undefined;
+  // ASKED of the source's declared fields rather than re-derived from the
+  // collection, the same way `recentEntries` asks about `updatedAt`. The source
+  // is what a query is validated against, so a card built on a field it does
+  // not declare would be refused per reader rather than skipped here.
+  if (!source.fields.some(field => field.name === "status")) return undefined;
+  const id = widgetId(source, "stats");
+  if (id === undefined) return undefined;
+  const slug = source.id.slice("collection:".length);
+
+  return {
+    id,
+    title: `${source.label} health`,
+    description: `How ${source.label} splits across its lifecycle states`,
+    archetype: "stats",
+    defaultSize: "md",
+    cells: [
+      {
+        key: "total",
+        label: "Total",
+        query: { source: source.id, op: "count", status: "all" },
+        link: { label: `All ${source.label}`, href: healthHref(slug) },
+      },
+      ...HEALTH_STATES.map(state => ({
+        key: state.key,
+        label: state.label,
+        query: {
+          source: source.id,
+          op: "count" as const,
+          status: state.status,
+        },
+        link: {
+          label: `${state.label} ${source.label}`,
+          href: healthHref(slug, state.status),
+        },
+      })),
+    ],
   };
 }
 
@@ -267,6 +352,7 @@ export function collectionWidgets(
     if (source.kind !== "collection") continue;
     for (const widget of [
       countWidget(source),
+      statsWidget(source),
       recentWidget(source),
       tableWidget(source),
     ]) {

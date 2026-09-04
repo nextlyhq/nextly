@@ -432,3 +432,94 @@ describe("a declared permission", () => {
     expect(widgetValueProblem({})).toBeUndefined();
   });
 });
+
+describe("a stats widget draws from cells, not from one query", () => {
+  const statsBase = {
+    id: "core/content-health",
+    title: "Content health",
+    archetype: "stats" as const,
+    defaultSize: "md" as const,
+  };
+  const cell = (key: string) => ({
+    key,
+    label: key,
+    query: { source: "collection:posts", op: "count" as const },
+  });
+
+  it("accepts a well-formed stats widget", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...statsBase, cells: [cell("a")] })
+    ).not.toThrow();
+  });
+
+  it("refuses a stats widget with no cells", () => {
+    // Every other archetype's "requires its body" rule, for the field that IS
+    // this one's body: a stats card without cells is a title over blank space.
+    expect(() => validateWidgetDefinition(statsBase)).toThrow(
+      /requires a non-empty cells/
+    );
+    expect(() => validateWidgetDefinition({ ...statsBase, cells: [] })).toThrow(
+      /requires a non-empty cells/
+    );
+  });
+
+  it("refuses cells on any OTHER archetype", () => {
+    // The direction that would otherwise pass silently: a `metric` carrying
+    // cells is an author who meant `stats`, and nothing would draw them.
+    expect(() =>
+      validateWidgetDefinition({ ...valid, cells: [cell("a")] })
+    ).toThrow(/only valid for archetype "stats"/);
+  });
+
+  it("refuses a top-level query on a stats widget, naming where it belongs", () => {
+    // 🔴 Refused with its OWN reason rather than the queryless one. `stats` is
+    // not queryless -- it takes MORE queries than any other archetype -- so a
+    // message saying it takes no data would send the author to delete the very
+    // thing the card is made of.
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [cell("a")],
+        query: { source: "collection:posts", op: "count" as const },
+      })
+    ).toThrow(/draws from cells, so it takes no top-level query/);
+  });
+
+  it("refuses two cells sharing a key", () => {
+    // 🔴 The card keys each answer back by `key`, so a duplicate collapses two
+    // cells into one answer: the same number drawn twice under two different
+    // labels, which no reader can detect.
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [cell("a"), cell("a")],
+      })
+    ).toThrow(/declare the key "a" more than once/);
+  });
+
+  it("refuses more cells than one batch can afford", () => {
+    // Each cell is its own query, so an unbounded card would consume the whole
+    // request budget and darken every other widget on the dashboard.
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: Array.from({ length: 9 }, (_, i) => cell(`c${i}`)),
+      })
+    ).toThrow(/at most 8 cells/);
+  });
+
+  it("refuses a cell missing its label or its query", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [{ key: "a", label: "  ", query: { source: "x", op: "count" } }],
+      })
+    ).toThrow(/requires a non-empty label/);
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [{ key: "a", label: "A" }],
+      })
+    ).toThrow(/requires a query object/);
+  });
+});

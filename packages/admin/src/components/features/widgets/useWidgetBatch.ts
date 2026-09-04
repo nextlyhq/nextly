@@ -15,6 +15,7 @@ import { useMemo } from "react";
 
 import {
   useWidgetQueries,
+  widgetSlotKey,
   type WidgetQueryRequest,
 } from "@admin/hooks/queries/useWidgetQueries";
 import type {
@@ -52,8 +53,31 @@ export interface WidgetBatch {
  * widget makes the read just as wasted as no renderer at all.
  */
 function worthAsking(widget: DashboardWidget): boolean {
-  if (!widget.query) return false;
+  // A `stats` card asks through its CELLS, so it has no top-level query and the
+  // original test declared every one of them not worth asking -- which is the
+  // shape that would have shipped a card whose numbers never load.
+  if (!widget.query && !widget.cells?.length) return false;
   return widget.archetype === "custom" || coreDraws(widget);
+}
+
+/**
+ * The questions one widget contributes to the batch: one, or one per cell.
+ *
+ * 🔴 Flattened into the SAME array every other widget goes into, rather than a
+ * second request of its own. The endpoint takes an array and answers
+ * positionally, so six numbers cost six entries in one round trip -- and a card
+ * that fetched separately would also be paging past `MAX_QUERIES_PER_REQUEST`
+ * on its own, outside the partitioning that keeps the batch legal.
+ */
+function questionsFor(widget: DashboardWidget): WidgetQueryRequest[] {
+  if (widget.cells?.length) {
+    return widget.cells.map(cell => ({
+      widgetId: widget.id,
+      cellKey: cell.key,
+      query: cell.query,
+    }));
+  }
+  return widget.query ? [{ widgetId: widget.id, query: widget.query }] : [];
 }
 
 export function useWidgetBatch(widgets: DashboardWidget[]): WidgetBatch {
@@ -69,8 +93,16 @@ export function useWidgetBatch(widgets: DashboardWidget[]): WidgetBatch {
     () =>
       widgets
         .filter(worthAsking)
-        .map(widget => ({ widgetId: widget.id, query: widget.query! }))
-        .sort((a, b) => a.widgetId.localeCompare(b.widgetId)),
+        .flatMap(questionsFor)
+        // Sorted by the SLOT key rather than by widget id alone, so a card's
+        // cells keep a stable order between renders. Sorting on the id left
+        // siblings in whatever order `flatMap` produced, which is stable today
+        // and is not a property the query key should rest on.
+        .sort((a, b) =>
+          widgetSlotKey(a.widgetId, a.cellKey).localeCompare(
+            widgetSlotKey(b.widgetId, b.cellKey)
+          )
+        ),
     [widgets]
   );
 
@@ -101,8 +133,17 @@ export function useWidgetBatch(widgets: DashboardWidget[]): WidgetBatch {
   const outcomes = useMemo(
     () =>
       widgets
-        .filter(widget => widget.query)
-        .map(widget => resolveWidgetOutcome(widget, slots[widget.id]))
+        // A `stats` card is one CARD in the announcement, however many numbers
+        // it draws: the reader is told how many cards updated, not how many
+        // queries ran.
+        .filter(widget => widget.query ?? widget.cells?.length)
+        .map(widget =>
+          resolveWidgetOutcome(
+            widget,
+            slots[widget.id],
+            key => slots[widgetSlotKey(widget.id, key)]
+          )
+        )
         .filter(outcome => outcome.state !== "self-drawn"),
     [widgets, slots]
   );

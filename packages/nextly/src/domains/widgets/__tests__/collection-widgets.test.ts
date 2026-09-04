@@ -38,6 +38,66 @@ describe("what a collection gets", () => {
     ]);
   });
 
+  it("adds a health card ONLY for a collection that declares a status", () => {
+    // 🔴 The refusal is the point. Without a status there is one number to
+    // draw, which is the `metric` card this source already has -- a reader
+    // placing both would see the same figure twice under two names and
+    // reasonably assume they measured different things.
+    const without = collectionWidgets([source({})]).map(w => w.archetype);
+    expect(without).not.toContain("stats");
+
+    const withStatus = collectionWidgets([
+      source({
+        fields: [
+          { name: "id", type: "string" },
+          { name: "title", type: "string" },
+          { name: "updatedAt", type: "date" },
+          { name: "status", type: "string" },
+        ],
+      }),
+    ]);
+    const stats = withStatus.find(w => w.archetype === "stats");
+    expect(stats?.id).toBe("collection/posts-stats");
+    expect(stats?.cells?.map(c => c.key)).toEqual([
+      "total",
+      "published",
+      "draft",
+    ]);
+  });
+
+  it("makes each cell's LINK ask the same question as its number", () => {
+    // 🔴 The card's whole promise is that a number and the page behind it are
+    // one question. A cell counting drafts whose link opens an unfiltered list
+    // is not visibly broken: the reader sees a list, counts nothing, and keeps
+    // believing the number. So the link is decoded and put back through the
+    // entry list's OWN filter builder, and the result must be the filter the
+    // cell's query asked for.
+    const [stats] = collectionWidgets([
+      source({
+        fields: [
+          { name: "id", type: "string" },
+          { name: "status", type: "string" },
+          { name: "title", type: "string" },
+          { name: "updatedAt", type: "date" },
+        ],
+      }),
+    ]).filter(w => w.archetype === "stats");
+
+    for (const cell of stats?.cells ?? []) {
+      const url = new URL(cell.link!.href, "https://example.test");
+      expect(url.pathname).toBe("/admin/collections/posts");
+      const where = url.searchParams.get("where");
+      if (cell.query.status === "all") {
+        // The total is deliberately unfiltered: it is what the parts are OF.
+        expect(where).toBeNull();
+        continue;
+      }
+      expect(JSON.parse(where!)).toEqual({
+        status: { equals: cell.query.status },
+      });
+    }
+  });
+
   it("carries NO requiredPermission, because the SERVER gates it", () => {
     // 🔴 It used to carry the source's permission, and that was wrong in the
     // direction that loses cards. The client checks `requiredPermission` against

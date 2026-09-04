@@ -9,6 +9,7 @@
  *
  * @module components/features/widgets/edit/ArrangedColumns
  */
+import { widgetSlotKey } from "@admin/hooks/queries/useWidgetQueries";
 import { cn } from "@admin/lib/utils";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
 
@@ -111,6 +112,10 @@ export function ArrangedColumns({
               count={rowsInColumn.length}
               isEditing={isEditing}
               slot={slots[row.widget.id]}
+              // Built HERE, where the whole record is, so the composite key
+              // format stays with the batch that writes it rather than being
+              // spelled again inside an archetype.
+              slotFor={key => slots[widgetSlotKey(row.widget.id, key)]}
               // Only a widget that actually ASKED can be waiting on an answer. A
               // card drawn entirely by a plugin component took no part in the
               // batch, and neither did one whose archetype nothing can draw, so a

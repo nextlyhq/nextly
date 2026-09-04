@@ -34,8 +34,14 @@ import type {
 import { actionsBody } from "./archetypes/actions";
 import { listAccepts, listBody } from "./archetypes/list";
 import { metricAccepts, metricBody } from "./archetypes/metric";
+import { statsAccepts, statsBody } from "./archetypes/stats";
 import { tableAccepts, tableBody } from "./archetypes/table";
-import type { ArchetypeRenderer, DeclaredWidget } from "./archetypes/types";
+import type {
+  ArchetypeOutcome,
+  ArchetypeRenderer,
+  CellSlotLookup,
+  DeclaredWidget,
+} from "./archetypes/types";
 
 /**
  * The archetypes core draws from a query result.
@@ -49,6 +55,7 @@ const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeRenderer>> = {
   list: { accepts: listAccepts, body: listBody },
   table: { accepts: tableAccepts, body: tableBody },
   actions: { declared: actionsBody },
+  stats: { accepts: statsAccepts, cells: statsBody },
 };
 
 /**
@@ -131,9 +138,51 @@ export type WidgetOutcome =
   | { state: "failed"; message: string }
   | { state: "ready"; node: ReactNode };
 
+/**
+ * An archetype's own answer, as the grid's outcome.
+ *
+ * Stated once rather than at each of the three places a body is run. The
+ * mapping is the same for every kind of body, and repeating the ternary made
+ * the dispatch read as three decisions where there is one.
+ */
+function asOutcome(drawn: ArchetypeOutcome): WidgetOutcome {
+  return drawn.ok
+    ? { state: "ready", node: drawn.node }
+    : { state: "failed", message: drawn.message };
+}
+
+/**
+ * The bodies that need no slot, drawn before any slot logic is reached.
+ *
+ * Both kinds are here because they share the reason: no slot is ever coming
+ * for either. A `declared` archetype asks nothing, and a `cells` archetype's
+ * answers are keyed PER CELL, so the widget's own slot is permanently absent --
+ * reading that below as "in flight" would leave the card loading forever.
+ */
+function slotlessOutcome(
+  renderer: ArchetypeRenderer,
+  definition: DashboardWidget,
+  slotFor: CellSlotLookup | undefined
+): WidgetOutcome | undefined {
+  if (renderer.cells) {
+    return asOutcome(renderer.cells(definition, slotFor ?? (() => undefined)));
+  }
+  if (renderer.declared) return asOutcome(renderer.declared(definition));
+  return undefined;
+}
+
 export function resolveWidgetOutcome(
   definition: DashboardWidget,
-  slot: WidgetSlot | undefined
+  slot: WidgetSlot | undefined,
+  /**
+   * How a `stats` card reaches each cell's answer.
+   *
+   * A third parameter rather than a widened second one, so every existing
+   * caller and every single-question archetype is untouched. Absent for a
+   * stats card means no answers have been keyed back yet, which is the same
+   * "in flight" its cells already render.
+   */
+  slotFor?: CellSlotLookup
 ): WidgetOutcome {
   // The escape hatch. A plugin component owns its own body and its own states.
   if (definition.archetype === "custom") return { state: "self-drawn" };
@@ -163,12 +212,8 @@ export function resolveWidgetOutcome(
   // "drawn from a query and declaring none" is right for every data archetype
   // and would have been permanently wrong for these two: the first body
   // registered for one would have failed on every render.
-  if (renderer.declared) {
-    const drawn = renderer.declared(definition);
-    return drawn.ok
-      ? { state: "ready", node: drawn.node }
-      : { state: "failed", message: drawn.message };
-  }
+  const slotless = slotlessOutcome(renderer, definition, slotFor);
+  if (slotless) return slotless;
 
   if (!renderer.body) {
     // A renderer with neither kind of body is a table entry nobody finished.
@@ -196,8 +241,5 @@ export function resolveWidgetOutcome(
 
   if (!slot.ok) return { state: "failed", message: slot.error };
 
-  const drawn = renderer.body(slot.result, definition);
-  return drawn.ok
-    ? { state: "ready", node: drawn.node }
-    : { state: "failed", message: drawn.message };
+  return asOutcome(renderer.body(slot.result, definition));
 }

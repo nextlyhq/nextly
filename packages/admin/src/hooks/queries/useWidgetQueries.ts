@@ -40,7 +40,26 @@ import type {
 /** One widget's request: the id to key the answer back to, and what to ask. */
 export interface WidgetQueryRequest {
   widgetId: string;
+  /**
+   * Which of the widget's cells this answer belongs to, for a `stats` card.
+   *
+   * Absent for every archetype that asks ONE question, so their slot key stays
+   * the bare widget id and every existing reader is untouched.
+   */
+  cellKey?: string;
   query: WidgetQuery;
+}
+
+/**
+ * Where one request's answer is filed.
+ *
+ * A widget id cannot contain `#` -- the registry's id pattern is two
+ * slug segments separated by `/` -- and cell keys are unique within a card, so
+ * a composite key can never collide with another widget's plain one, nor with
+ * a sibling cell's.
+ */
+export function widgetSlotKey(widgetId: string, cellKey?: string): string {
+  return cellKey === undefined ? widgetId : `${widgetId}#${cellKey}`;
 }
 
 export interface UseWidgetQueriesResult {
@@ -354,7 +373,9 @@ export function useWidgetQueries(
         // disagreeing about the shape. Saying so per widget is what stops the
         // trailing cards spinning silently forever -- and what keeps one bad
         // entry from throwing out of the renderer and taking the page with it.
-        slots[entry.widgetId] = asSlot(answer.data[position]);
+        slots[widgetSlotKey(entry.widgetId, entry.cellKey)] = asSlot(
+          answer.data[position]
+        );
       });
       return;
     }
@@ -367,7 +388,10 @@ export function useWidgetQueries(
     // reader was looking at.
     if (answer.isError) {
       partition.forEach(entry => {
-        slots[entry.widgetId] = { ok: false, error: BATCH_FAILED_ERROR };
+        slots[widgetSlotKey(entry.widgetId, entry.cellKey)] = {
+          ok: false,
+          error: BATCH_FAILED_ERROR,
+        };
       });
     }
   });

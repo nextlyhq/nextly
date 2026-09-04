@@ -27,6 +27,7 @@ import type {
   WidgetHeight,
   WidgetQuery,
   WidgetSize,
+  WidgetStatCell,
   WidgetChrome,
 } from "nextly/config";
 
@@ -97,6 +98,13 @@ export interface DashboardWidget {
   height?: WidgetHeight;
   /** Present for the data archetypes; absent for `text`, `actions`, `custom`. */
   query?: WidgetQuery;
+  /**
+   * Present for `stats`: one entry per number the card draws.
+   *
+   * Each carries its own query, so the card's numbers are ordinary
+   * access-controlled reads rather than one composite answer.
+   */
+  cells?: WidgetStatCell[];
   /** Present for `custom`; the path `PluginSlot` resolves. */
   component?: string;
   /**
