@@ -36,6 +36,16 @@ interface RequestDiagnostics {
   /** Post-commit hook failures, projected to the caller as warnings. */
   hookFailures: SideEffectHookFailure[];
   /**
+   * Advisories a write produced that are not failures.
+   *
+   * Held already projected, unlike `hookFailures`. A failure is reduced on the
+   * way out because a `NextlyError` carries private diagnostics that must not
+   * cross a public boundary; an advisory is composed by its producer with only
+   * what it intends to disclose, so there is nothing to strip and a second
+   * projection step would only be somewhere for the two to disagree.
+   */
+  notices: HookWarning[];
+  /**
    * Typed errors whose private detail the public envelope drops.
    *
    * `errorToServiceResult` deliberately strips `cause` and `logContext` on the
@@ -67,7 +77,19 @@ const collectorStack = new AsyncLocalStorage<RequestDiagnostics[]>();
  * full error stays on the collector for the logger.
  */
 export interface HookWarning {
-  /** The lifecycle phase whose handler failed. */
+  /**
+   * Whether this reports something that went WRONG, or something the caller
+   * should merely know.
+   *
+   * Both travel in one array because they are one question to a consumer --
+   * "what else should I say about this write" -- and two arrays would make
+   * every response builder and every client handle a second optional key to
+   * say the same thing. Stated rather than defaulted: a producer that forgets
+   * to say which it is would otherwise be silently filed as a failure, and the
+   * admin renders failures with language an advisory must not borrow.
+   */
+  severity: "failure" | "notice";
+  /** The lifecycle phase whose handler failed, or produced the advisory. */
   phase: string;
   /**
    * The registry key the handler was registered against.
@@ -94,6 +116,7 @@ export interface HookWarning {
 /** Reduce a failure to what may cross a public boundary. */
 export function toHookWarning(failure: SideEffectHookFailure): HookWarning {
   return {
+    severity: "failure",
     phase: failure.phase,
     collection: failure.collection,
     code: failure.error.code,
@@ -113,6 +136,34 @@ export function recordSideEffectWarning(failure: SideEffectHookFailure): void {
   const stack = collectorStack.getStore();
   if (!stack) return;
   for (const scope of stack) scope.hookFailures.push(failure);
+}
+
+/**
+ * Record an advisory a write produced, against every collector now active.
+ *
+ * For the thing a post-commit hook learns that is TRUE rather than broken: the
+ * row saved exactly as asked, and there is something about the state it leaves
+ * behind that the caller would want to know. Raising instead is how a hook
+ * reports a failure, and the registry files it as one -- so an advisory raised
+ * would reach the caller wearing a failure's code and the admin's failure
+ * language, describing a write that did not fail.
+ *
+ * A no-op when nothing is collecting, which is the case for internal work with
+ * no caller to report to. Recorded into EVERY active collector for the reason
+ * failures are: an operation nested inside a request must reach the response
+ * the client is actually waiting on.
+ *
+ * The caller composes the whole message. Nothing here strips anything, so a
+ * producer must not put an identifier in it that the caller could not already
+ * see -- the same rule `toHookWarning` enforces for failures by construction.
+ */
+export function recordAdvisoryNotice(
+  notice: Omit<HookWarning, "severity">
+): void {
+  const stack = collectorStack.getStore();
+  if (!stack) return;
+  const entry: HookWarning = { ...notice, severity: "notice" };
+  for (const scope of stack) scope.notices.push(entry);
 }
 
 /**
@@ -147,11 +198,19 @@ export function currentFlattenedErrors(): NextlyError[] {
  */
 export async function withSideEffectWarnings<T>(
   operation: () => Promise<T>
-): Promise<{ result: T; failures: SideEffectHookFailure[] }> {
-  const scope: RequestDiagnostics = { hookFailures: [], flattenedErrors: [] };
+): Promise<{
+  result: T;
+  failures: SideEffectHookFailure[];
+  notices: HookWarning[];
+}> {
+  const scope: RequestDiagnostics = {
+    hookFailures: [],
+    flattenedErrors: [],
+    notices: [],
+  };
   const stack = [...(collectorStack.getStore() ?? []), scope];
   const result = await collectorStack.run(stack, operation);
-  return { result, failures: scope.hookFailures };
+  return { result, failures: scope.hookFailures, notices: scope.notices };
 }
 
 /**
@@ -164,7 +223,12 @@ export async function withSideEffectWarnings<T>(
 export function currentSideEffectWarnings(): HookWarning[] {
   const stack = collectorStack.getStore();
   const innermost = stack?.[stack.length - 1];
-  return (innermost?.hookFailures ?? []).map(toHookWarning);
+  // Failures first, so a response that carries both leads with the thing that
+  // went wrong rather than with an advisory about what to do next.
+  return [
+    ...(innermost?.hookFailures ?? []).map(toHookWarning),
+    ...(innermost?.notices ?? []),
+  ];
 }
 
 /**
@@ -179,10 +243,9 @@ export function currentSideEffectWarnings(): HookWarning[] {
 export async function collectingWarnings<T>(
   operation: () => Promise<T>
 ): Promise<{ result: T; warnings?: HookWarning[] }> {
-  const { result, failures } = await withSideEffectWarnings(operation);
-  return failures.length > 0
-    ? { result, warnings: failures.map(toHookWarning) }
-    : { result };
+  const { result, failures, notices } = await withSideEffectWarnings(operation);
+  const warnings = [...failures.map(toHookWarning), ...notices];
+  return warnings.length > 0 ? { result, warnings } : { result };
 }
 
 /**

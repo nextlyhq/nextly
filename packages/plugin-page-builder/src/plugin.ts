@@ -37,6 +37,7 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
+import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
@@ -368,6 +369,23 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         // different ones records a different document than the page serves:
         // raised bounds leave classes on the extra nodes unindexed, so a class
         // the page renders reads as unused.
+        limits: () => opts.limits ?? DEFAULT_LIMITS,
+      });
+      // The publish-readiness notice. Registered beside class-usage because it
+      // is the same kind of thing — a property of the plugin being INSTALLED,
+      // not of any one collection — and it reads the component store the same
+      // plugin contributes.
+      registerComponentReadinessNotice({
+        ctx,
+        // The RESOLVED slug, for the reason the index slug is resolved: an
+        // integrator may rename the collection, and a hook holding the literal
+        // would ask about a table that does not exist and report every embedded
+        // component as unpublished.
+        componentCollection:
+          ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG,
+        // The SAME bounds the renderer draws under, asked per call. A notice
+        // derived under different ones names components inside a document the
+        // page never renders.
         limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
     },
