@@ -62,12 +62,19 @@ import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { getNextly } from "nextly";
+import type { NextlyContentReader } from "nextly/runtime";
 
 import nextlyConfig from "../../../nextly.config";
 
+type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
+
 const instance = () => getNextly({ config: nextlyConfig });
 
-const reader = {
+// Annotated rather than inferred: without a contextual type these `args`
+// parameters are implicitly `any`, which fails `next build` under strict mode.
+const reader: NextlyContentReader & {
+  media: Pick<NextlyInstance["media"], "findByID">;
+} = {
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
   // Images that store a media id resolve through this. Omit it and those images

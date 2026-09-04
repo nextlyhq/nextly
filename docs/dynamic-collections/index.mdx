@@ -37,12 +37,14 @@ without recreating anything or losing content.
 
 ## What differs from a code-first collection
 
-- Its definition is a **database row**, not a file, so it is not in your git history. Treat
-  the database as the source of truth for these.
+- Its **definition** is a database row rather than a file, so the shape itself is not in your
+  git history even though the migration that creates the table is.
 - Because it is not in the repository, it is not reviewed. That is the trade being made:
   speed for the editor, less oversight for you.
-- It is created and migrated through the builder rather than through generated migration
-  files.
+- It **does** generate a SQL migration file under your `migrationsDir`, and that file is
+  what recreates the table and its registry row in another environment. **Commit it.**
+  Deploying without it leaves the collection unreproducible outside the database it was
+  created in.
 
 ## Related
 

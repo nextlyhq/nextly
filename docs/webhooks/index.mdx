@@ -24,10 +24,25 @@ will ignore.
 
 Every delivery is signed so the receiver can prove it came from you and was not modified.
 
+Nextly follows [Standard Webhooks](https://www.standardwebhooks.com/). A secret is shown to
+you as `whsec_` followed by base64 key material, and **the key is the decoded bytes, not the
+string you were shown**:
+
 ```
+key           = base64_decode(secret without its "whsec_" prefix)
 signedContent = "<id>.<timestamp>.<rawBody>"
-signature     = base64(HMAC_SHA256(secret, signedContent))
+signature     = base64(HMAC_SHA256(key, signedContent))
 ```
+
+The `webhook-signature` header carries it as a versioned token, `v1,<signature>`, so split on
+the comma before comparing.
+
+<Callout type="warn">
+Using the `whsec_...` string directly as the HMAC key, or comparing against the whole header
+without stripping `v1,`, makes every authentic delivery fail verification. Those are the two
+usual causes of "the signature never matches". Any Standard Webhooks verifier library handles
+both for you.
+</Callout>
 
 Three headers travel with each delivery:
 

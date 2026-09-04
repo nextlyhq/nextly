@@ -18,10 +18,17 @@ and which fields changed.
 
 | Field | Meaning |
 |---|---|
-| Actor | The user or API key responsible, or the system for unattended work |
+| Actor | The signed-in user responsible |
 | Action | What happened — a create, an update, a delete |
 | Target | The collection and document |
 | Changed fields | Which fields differed, computed from the write itself |
+
+<Callout type="warn">
+**Only writes by a signed-in user are recorded.** A mutation made through an API key, or by
+internal or system context such as a seed or a migration, produces no activity entry. If you
+rely on this log for compliance, that gap is the thing to know: the absence of an entry does
+not mean nothing happened.
+</Callout>
 
 Recording the changed field list — rather than the whole document — keeps the log useful
 without turning it into a second copy of your content. [Version

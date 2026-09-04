@@ -33,8 +33,21 @@ live", that is not what a release does.
 | Create | An empty release with a name |
 | Add members | Each member names a document and an action, `publish` or `unpublish` |
 | Schedule | The release is given a time. Blocking problems are checked first |
-| Apply | At that time, every member's action is applied |
+| Apply | On the first background-jobs pass **after** that time, every member's action is applied |
 | Cancel | An unapplied release can be cancelled |
+
+## Scheduling stores a time; a job runner applies it
+
+Scheduling records when a release is due. The work is done by a `releases:drain` sweep that
+runs as part of the [background jobs](/docs/jobs) pass, which is triggered by calling
+`/api/jobs/run` — from a cron job, a platform scheduler, or an operator.
+
+<Callout type="warn">
+**With no scheduler configured, a release stays scheduled forever.** Its due time passes and
+nothing happens, because nothing ran the sweep. Set up an authenticated periodic call to
+`/api/jobs/run` before you rely on scheduling, and expect application on the first successful
+pass after the due time rather than exactly at it.
+</Callout>
 
 ## Blocking reasons
 

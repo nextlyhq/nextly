@@ -3,8 +3,25 @@ title: Version History
 description: Every save is recorded, so you can see what changed, compare any two versions, and put an earlier one back.
 ---
 
-Every create and update records a version. Nothing is lost when someone overwrites a
-paragraph, and "who changed this, and when" has an answer.
+Version history is **opt-in per collection or single**. Turn it on and every create and
+update records a version, so nothing is lost when someone overwrites a paragraph and "who
+changed this, and when" has an answer.
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const Posts = defineCollection({
+  slug: "posts",
+  versions: true,
+  fields: [text({ name: "title" })],
+});
+```
+
+<Callout type="warn">
+Without `versions`, an entity is unversioned and captures nothing. There is no cost to
+leaving it off, and no history if you do — a save cannot be recovered after the fact by
+turning it on later. Decide before you need it.
+</Callout>
 
 ## Availability
 
