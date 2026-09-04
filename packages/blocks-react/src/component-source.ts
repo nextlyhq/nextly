@@ -39,6 +39,12 @@ export type ComponentSource = (
   ids: readonly string[]
 ) => Promise<DefinitionsById>;
 
+/** Shared, so a route whose budget is spent allocates no map at all. */
+export const EMPTY_DEFINITIONS: DefinitionsById = new Map<
+  string,
+  BlockDocument
+>();
+
 /** What component definitions are stored under when a host names nothing. */
 export const COMPONENT_TAG_COLLECTION = "components";
 
