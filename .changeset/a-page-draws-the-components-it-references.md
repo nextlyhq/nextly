@@ -59,3 +59,12 @@ A component that arrived broken — empty, or not a document at all — brought
 down the whole page, including pages that never used it. Such an entry is now
 skipped and the reference it was for is reported as missing, like any other
 component that could not be found.
+
+Three more repairs at the same seam. A component that arrives as something
+other than a document — an empty object, or a page saved under a component's
+name — used to compose to nothing at all, so its whole region vanished from the
+page with nothing to say why; it is now reported like any other component that
+could not be loaded. A stored page can no longer claim one of its own blocks is
+an unloadable component and have that believed. And a page now prepares only
+the components it actually uses, following one component's reference to
+another, instead of paying for the whole library on every render.

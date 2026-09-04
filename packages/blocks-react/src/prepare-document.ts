@@ -47,6 +47,8 @@
  * @module prepare-document
  */
 import {
+  COMPONENT_INSTANCE_TYPE,
+  componentIdsIn,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   isPlainRecord,
@@ -126,7 +128,7 @@ export function rendersOwnMarkup(
   // asked FIRST, because the reserved instance type has no registered block
   // and would otherwise fall through to the unknown-block answer, which is
   // true and tells an author nothing they can act on.
-  if (node.unresolvedComponent !== undefined) return false;
+  if (isUnresolvedInstance(node)) return false;
   if (node.migrationFailed === true) return false;
   const definition = resolver.get(node.type);
   if (definition === undefined) return false;
@@ -312,7 +314,7 @@ export function prepareDocumentReadStages(
   const sanitized = sanitizeDocument(document, limits);
   const composed = resolveComponentInstances(
     sanitized,
-    repairedDefinitions(args.definitions, limits),
+    repairedDefinitions(sanitized, args.definitions, limits),
     { limits }
   );
   const { doc, rewritten } = migrateDocument(
@@ -360,6 +362,30 @@ export function prepareDocumentReadStages(
 }
 
 /**
+ * Whether a node is an instance THIS RUN could not compose.
+ *
+ * The marker is a render-time fact and nothing removes it from stored content:
+ * node validation does not reject unknown keys, so a hand-edited, imported or
+ * legacy document can carry `unresolvedComponent` on an ordinary block. Read
+ * as a resolver marker, that would replace real content with a placeholder —
+ * and where it is the page's only node, the reading view answers `null` and
+ * the page is withheld entirely.
+ *
+ * The TYPE is what carries the discrimination, and checking the reason
+ * against the engine's list as well was measured to add none: a node wearing
+ * the reserved name is an instance whatever string sits beside it, and no
+ * block may register that name, so the two answers never differ. A marker on
+ * any other type is stored data claiming to be a render-time fact, which is
+ * exactly what this refuses.
+ */
+function isUnresolvedInstance(node: ResolvedBlockNode): boolean {
+  return (
+    node.type === COMPONENT_INSTANCE_TYPE &&
+    node.unresolvedComponent !== undefined
+  );
+}
+
+/**
  * The definitions, shape-repaired against the same caps the host was.
  *
  * Not defensive tidiness. The resolver asks only that a definition node be a
@@ -396,34 +422,81 @@ export function prepareDocumentReadStages(
  * it repaired nothing, which is what makes the comparison meaningful.
  */
 function repairedDefinitions(
+  host: BlockDocument,
   definitions: DefinitionsById | undefined,
   limits: DocumentLimits
 ): DefinitionsById {
   if (definitions === undefined || definitions.size === 0)
     return EMPTY_DEFINITIONS;
+
+  const wanted = referencedIds(host, definitions, limits);
+  if (wanted.size === 0) return EMPTY_DEFINITIONS;
+
   const shapeOnly: DocumentLimits = {
     ...limits,
     maxDepth: limits.maxDepth + 1,
     maxNodes: limits.maxNodes + 1,
   };
-  let changed = false;
   const repaired = new Map<string, BlockDocument>();
-  for (const [id, definition] of definitions) {
-    // OMITTED rather than repaired, and the omission is the repair. The shape
-    // pass reads `document.nodes` on its first line, so a `null` or a string
-    // in this map throws before any block boundary exists to contain it — and
-    // this loop walks every entry, so one bad definition would cost a page
-    // that never referenced it. Left out, the resolver reports the reference
-    // as `missing`, which is what it is.
-    if (!isPlainRecord(definition)) {
-      changed = true;
+  for (const id of wanted) {
+    const definition = definitions.get(id);
+    // PASSED THROUGH unrepaired rather than omitted. The shape pass reads
+    // `document.nodes` on its first line, so a `null` or a string here throws
+    // before any block boundary exists to contain it — but omitting it makes
+    // the reference read as one nobody supplied, and the resolver's reasons
+    // distinguish that from a definition supplied and unreadable. Handing the
+    // value straight to the resolver lets it say which.
+    //
+    // A record that merely LOOKS like a document is the sharper case: repair
+    // turns an absent `nodes` into an empty array, so the instance composes
+    // successfully to nothing and its whole region disappears with no marker.
+    //
+    // Passing through rather than omitting is currently unobservable — the
+    // resolver reports both an absent and an unreadable definition the same
+    // way — and is done anyway, because the reasons it reports distinguish
+    // them the moment it can, and omitting here would make that distinction
+    // unreachable from this layer for good.
+    if (!isPlainRecord(definition) || !Array.isArray(definition.nodes)) {
+      repaired.set(id, definition as BlockDocument);
       continue;
     }
-    const sound = sanitizeDocument(definition, shapeOnly);
-    if (sound !== definition) changed = true;
-    repaired.set(id, sound);
+    repaired.set(id, sanitizeDocument(definition, shapeOnly));
   }
-  return changed ? repaired : definitions;
+  return repaired;
+}
+
+/**
+ * The definitions this document can actually reach, transitively.
+ *
+ * Repairing the whole map was work proportional to the site's entire component
+ * catalog on every render, paid even by a page that references nothing — and an
+ * unbounded catalog multiplies the per-definition node cap into unbounded
+ * request work. Only what the page reaches is repaired.
+ *
+ * Transitive because a component may hold another, and the closure is taken
+ * over the SUPPLIED map: nothing here fetches, so a definition the caller did
+ * not hand over is simply not reached and its reference resolves as missing.
+ * Bounded by the map's own size, since no id outside it can enter the set.
+ */
+function referencedIds(
+  host: BlockDocument,
+  definitions: DefinitionsById,
+  limits: DocumentLimits
+): Set<string> {
+  const wanted = new Set<string>();
+  const pending = componentIdsIn(host.nodes, limits.maxNodes);
+  while (pending.length > 0 && wanted.size <= definitions.size) {
+    const id = pending.pop();
+    if (id === undefined || wanted.has(id)) continue;
+    wanted.add(id);
+    const definition = definitions.get(id);
+    if (!isPlainRecord(definition) || !Array.isArray(definition.nodes))
+      continue;
+    for (const nested of componentIdsIn(definition.nodes, limits.maxNodes)) {
+      pending.push(nested);
+    }
+  }
+  return wanted;
 }
 
 /** Shared so a page with no components allocates no map at all. */

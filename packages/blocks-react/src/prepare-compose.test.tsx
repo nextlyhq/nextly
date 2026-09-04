@@ -281,6 +281,93 @@ describe("a definitions map that is not what it claims", () => {
   });
 });
 
+describe("what the pipeline trusts and what it repairs", () => {
+  it("does not report an empty record as a composed component", () => {
+    const definitions = new Map<string, BlockDocument>([
+      ["hero", {} as unknown as BlockDocument],
+    ]);
+
+    const stages = prepareDocumentReadStages(page([instance("i1", "hero")]), {
+      resolver,
+      definitions,
+    });
+
+    // Repair turns a missing `nodes` into `[]`, so the instance composes
+    // "successfully" to nothing and the whole region disappears with no marker
+    // saying anything went wrong.
+    expect(stages!.unresolvedInstances).toHaveLength(1);
+  });
+
+  it("follows a reference a component makes to another component", () => {
+    const definitions = new Map<string, BlockDocument>([
+      ["outer", component([instance("o1", "inner")])],
+      ["inner", component([node("d1", "Nested")])],
+      ["unused", component([node("d2", "Never")])],
+    ]);
+
+    const stages = prepareDocumentReadStages(page([instance("i1", "outer")]), {
+      resolver,
+      definitions,
+    });
+
+    // Repairing only what the PAGE names would leave `inner` unrepaired and
+    // therefore unreachable, so the outer component would compose to an
+    // unresolved reference rather than to its content.
+    expect(stages!.prepared.nodes[0]!.props.value).toBe("Nested");
+    expect(stages!.unresolvedInstances).toEqual([]);
+    expect(stages!.referencedComponents).toEqual(["outer", "inner"]);
+  });
+
+  it("does not trust an unresolved marker that came from storage", () => {
+    const stored = page([
+      {
+        id: "a",
+        type: "test/text",
+        version: 1,
+        props: { value: "Real" },
+        unresolvedComponent: "missing",
+      } as unknown as BlockNode,
+    ]);
+
+    const stages = prepareDocumentReadStages(stored, { resolver });
+
+    // The marker is a render-time fact. A hand-edited, legacy or corrupt
+    // document carrying the key must not replace real content with a
+    // placeholder — nothing validates unknown node keys away.
+    expect(stages!.prepared.nodes).toHaveLength(1);
+  });
+
+  it("repairs only the definitions the page reaches", () => {
+    class CountingMap extends Map<string, BlockDocument> {
+      reads = 0;
+      override get(key: string): BlockDocument | undefined {
+        this.reads += 1;
+        return super.get(key);
+      }
+    }
+    const catalog = new CountingMap();
+    for (let i = 0; i < 50; i += 1) {
+      catalog.set(`c${i}`, component([node(`n${i}`, "x")]));
+    }
+
+    prepareDocumentReadStages(page([node("a", "Plain")]), {
+      resolver,
+      definitions: catalog,
+    });
+    const untouched = catalog.reads;
+
+    prepareDocumentReadStages(page([instance("i1", "c7")]), {
+      resolver,
+      definitions: catalog,
+    });
+
+    // A page referencing nothing must not pay for the catalog...
+    expect(untouched).toBe(0);
+    // ...and one referencing a single component pays for that one, not fifty.
+    expect(catalog.reads).toBeLessThanOrEqual(3);
+  });
+});
+
 describe("an instance nothing could resolve", () => {
   // `rendersOwnMarkup` returning false for one is NOT asserted here. The
   // engine refuses to register the reserved instance name
