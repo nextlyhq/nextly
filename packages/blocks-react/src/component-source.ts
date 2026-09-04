@@ -12,7 +12,6 @@
  * @module component-source
  */
 import {
-  componentIdsIn,
   resolveComponentInstances,
   type BlockDocument,
   type ComponentLookup,
@@ -115,7 +114,14 @@ export async function definitionsFor(
   // an entry's value is fixed once set.
   const lookup = repairedOnce(found, limits);
 
-  let wanted = componentIdsIn(sanitized.nodes, limits.maxNodes);
+  // The FIRST round asks the resolver too, over a lookup holding nothing, so
+  // every instance it can reach reports `missing` and names itself. Seeding
+  // this from a walk of the stored nodes left one parallel traversal in place
+  // — the one this function exists to delete — and it disagreed in the usual
+  // direction: a condition-gated instance, or one in slot content the chosen
+  // definition discards, is an id the walk reports and the resolver never
+  // asks for.
+  let wanted = stillMissing(sanitized, lookup, limits);
   // Until a FIXED POINT, not for a fixed number of rounds. Nesting depth is
   // not the bound: fetching a definition changes the resolver's node-budget
   // decisions, so a definition that composes to less than the instance it
@@ -131,11 +137,23 @@ export async function definitionsFor(
   // this bounds definitions TRAVERSED — and tying them stopped discovery on a
   // one-node page holding one component that holds one more.
   while (attempted.size < MAX_DISCOVERED_COMPONENTS) {
-    const unread = [...new Set(wanted)].filter(id => !attempted.has(id));
+    // Clamped to what is LEFT of the allowance, not merely checked against it.
+    // A round can expose more ids than the cap in one go — a page naming a
+    // thousand components does — and a check before an unbounded batch caps
+    // nothing.
+    const unread = [...new Set(wanted)]
+      .filter(id => !attempted.has(id))
+      .slice(0, MAX_DISCOVERED_COMPONENTS - attempted.size);
     if (unread.length === 0) break;
+    const asked = new Set(unread);
     for (const id of unread) attempted.add(id);
     for (const [id, definition] of await source(unread)) {
-      found.set(id, definition);
+      // Only what was ASKED for. A source answers with the id it read off the
+      // row, and an `afterRead` hook may rewrite that — so an answer filed
+      // under a key nobody requested would let one component's document stand
+      // in for another's, and the reference that really named it would never
+      // be fetched.
+      if (asked.has(id)) found.set(id, definition);
     }
     wanted = stillMissing(sanitized, lookup, limits);
   }
