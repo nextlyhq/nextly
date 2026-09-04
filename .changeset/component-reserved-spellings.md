@@ -23,7 +23,7 @@
 ---
 
 Reject a field named `id`, `createdAt` or `updatedAt` in a Field Group (component), through both
-the visual builder and `defineFieldGroup`. A component keeps its values in a table of its own
+the Visual Schema Builder and `defineFieldGroup`. A component keeps its values in a table of its own
 carrying those columns, so such a field is emitted into the same `CREATE TABLE` as the injected one
 and the database refuses the statement. The name is now refused where it is chosen, with a message
 saying which system column it collides with.

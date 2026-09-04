@@ -1,0 +1,51 @@
+---
+title: Dashboard Widgets
+description: Put the numbers your team actually checks on the admin dashboard.
+---
+
+The admin dashboard is built from widgets. Each one declares what it wants to know, and the
+system runs that query on its behalf, scoped to the permissions of whoever is looking.
+
+## Availability
+
+| | |
+|---|---|
+| Built in | The widget system, the built-in sources and admin rendering all ship |
+| Plugin-contributed widgets | **Experimental.** They render, but the contribution shape is still settling — see the [stability ladder](/docs/plugins/stability) |
+| Permission | A widget's query runs scoped to the viewer, so two people can see the same dashboard and different numbers |
+
+## Archetypes
+
+A widget declares an archetype rather than drawing itself, so dashboards stay visually
+consistent no matter who contributed the widget:
+
+| Archetype | Shows |
+|---|---|
+| `metric` | One number |
+| `stats` | Several labelled, clickable numbers |
+| `table` | Rows and columns |
+| `list` | An ordered list of items |
+| `text` | Prose |
+| `actions` | Buttons for things to do |
+| `custom` | Your own component, when none of the above fit |
+
+Sizes are `sm`, `md`, `lg`, `xl` and `full`; heights are `short` and `tall`.
+
+## Declared, not fetched
+
+A widget does not run its own database query. It **declares** one, and the system executes
+it. That is what makes permission scoping reliable rather than something each widget author
+has to remember: a widget cannot read what its viewer could not have read directly.
+
+It also means most widgets need no data-fetching code at all.
+
+<Callout type="warn">
+Contributing a widget from a plugin works today, but `PluginAdminWidget` is marked
+`@experimental` and its shape may change before it settles. Building on it is reasonable;
+depending on it in something you cannot easily update is not.
+</Callout>
+
+## Related
+
+- [Plugin admin UI](/docs/plugins/admin-ui) — contributing admin surfaces
+- [Plugin stability](/docs/plugins/stability) — what is settled and what is not
