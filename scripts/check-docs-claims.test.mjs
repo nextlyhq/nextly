@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { digestLine, runChecks, splitRefAndPath } from "./check-docs-claims.mjs";
+import {
+  digestLine,
+  renderedProse,
+  runChecks,
+  splitRefAndPath,
+} from "./check-docs-claims.mjs";
 
 /**
  * Each fixture exhibits exactly one defect, and every check is asserted twice:
@@ -466,5 +471,65 @@ describe("readme-skeleton", () => {
         "packages/thing/README.md": "# t\n",
       })
     ).not.toContain("readme-skeleton");
+  });
+});
+
+describe("readme-skeleton reads only what npm renders", () => {
+  const fenced = [
+    "# @nextlyhq/thing",
+    "",
+    "Does a thing.",
+    "",
+    "Here is the shape every README should have:",
+    "",
+    "````md",
+    "Nextly is in alpha.",
+    "## Install",
+    "## Related packages",
+    "## License",
+    "````",
+    "",
+  ].join("\n");
+
+  it("does not accept sections that exist only inside a code fence", async () => {
+    // Otherwise a README that merely SHOWS the skeleton passes as though it had one.
+    const checks = await checksFor({
+      "README.md": "# nextly\n\n@nextlyhq/thing\n",
+      "packages/thing/package.json": pkg(),
+      "packages/thing/README.md": fenced,
+    });
+    expect(checks).toContain("readme-skeleton");
+  });
+
+  it("does not accept sections that exist only inside an HTML comment", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md":
+          "# t\n\n<!--\nNextly is in alpha.\n## Install\n## Related packages\n## License\n-->\n",
+      })
+    ).toContain("readme-skeleton");
+  });
+
+  it("accepts a Stability section carrying the state, not just the phrase", async () => {
+    // `## Stability` / `Alpha.` is what blocks-engine used before this work, and it is
+    // a correct statement. Demanding the literal words would be demanding boilerplate.
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md":
+          "# t\n\n## Stability\n\nAlpha.\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).not.toContain("readme-skeleton");
+  });
+
+  it("strips fences and comments but keeps the surrounding prose", () => {
+    const out = renderedProse("before\n\n```\n## Install\n```\n\n<!-- ## License -->\n\nafter\n");
+    expect(out).toContain("before");
+    expect(out).toContain("after");
+    expect(out).not.toContain("## Install");
+    expect(out).not.toContain("## License");
   });
 });

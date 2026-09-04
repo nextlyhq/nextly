@@ -10,8 +10,8 @@ a server-first renderer that ships zero client JS by default.
 > See the [plugin stability ladder](https://nextlyhq.com/docs/plugins/stability) for
 > which plugin surfaces are stable and which are experimental.
 
-> The block model, registries, and render pipeline are stable; the editor
-> interactions are still evolving. MIT-licensed.
+The block model, registries, and render pipeline are stable; the editor interactions
+are still evolving.
 
 ## Install
 

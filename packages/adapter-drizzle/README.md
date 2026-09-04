@@ -11,7 +11,7 @@ Internal Drizzle ORM utilities for Nextly's database adapters.
 > [!IMPORTANT]
 > Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
 
-> This package is part of Nextly's internals. It is installed automatically as a dependency of [`nextly`](../nextly). Choose [`@nextlyhq/adapter-postgres`](../adapter-postgres), [`@nextlyhq/adapter-mysql`](../adapter-mysql), or [`@nextlyhq/adapter-sqlite`](../adapter-sqlite) for your project.
+This package is part of Nextly's internals. It is installed automatically as a dependency of [`nextly`](../nextly). Choose [`@nextlyhq/adapter-postgres`](../adapter-postgres), [`@nextlyhq/adapter-mysql`](../adapter-mysql), or [`@nextlyhq/adapter-sqlite`](../adapter-sqlite) for your project.
 
 ## Install
 

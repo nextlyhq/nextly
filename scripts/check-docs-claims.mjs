@@ -318,7 +318,15 @@ function internalLinks(repoRoot, tracked, findings) {
  * `Related packages` under another name. Enforcing one spelling would be a rename, not a check.
  */
 const README_SECTIONS = [
-  { key: "status", label: "an alpha or stability note", test: /in alpha|@?experimental/i },
+  {
+    key: "status",
+    label: "an alpha or stability note, or a Status/Stability section",
+    // Either a note in prose OR a section carrying one. Matching only the phrase
+    // "in alpha" rejected `## Stability` / "Alpha." — a correct statement several
+    // packages already used — and would go on to reject an accurate "Beta" or
+    // "Stable" note later, which turns the check into a demand for boilerplate.
+    test: /in alpha|@?experimental|^##\s+(status|stability)/im,
+  },
   {
     key: "install",
     label: "an Install, Installation, Quickstart or Usage section",
@@ -332,6 +340,20 @@ const README_SECTIONS = [
   { key: "license", label: "a License section", test: /^##\s+licen[sc]e/im },
 ];
 
+/**
+ * Drop what npm will not render as prose before looking for these sections.
+ *
+ * A fenced example showing a README skeleton, or a commented-out block, contains the
+ * very headings this checks for — so testing the raw source would pass a package
+ * whose only `## Install` is inside a code sample. The check would then be satisfied
+ * by the appearance of the thing rather than the thing.
+ */
+export function renderedProse(markdown) {
+  return markdown
+    .replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1[^\n]*$/gm, "")
+    .replace(/<!--[\s\S]*?-->/g, "");
+}
+
 function readmeSkeleton(repoRoot, packages, findings) {
   for (const pkg of packages) {
     const readme = join(pkg.dir, "README.md");
@@ -342,8 +364,9 @@ function readmeSkeleton(repoRoot, packages, findings) {
     } catch {
       continue;
     }
+    const prose = renderedProse(text);
     for (const section of README_SECTIONS) {
-      if (!section.test.test(text)) {
+      if (!section.test.test(prose)) {
         findings.push({
           check: "readme-skeleton",
           file: relative(repoRoot, readme),
