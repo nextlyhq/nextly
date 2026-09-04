@@ -521,6 +521,71 @@ const MUST_AGREE: Array<{
       component: "p#X",
     },
   },
+  {
+    // 🔴 The registry refuses a non-count cell; the contributions channel
+    // checked only that `cells` was a non-empty array, so this reached the
+    // batch and rendered a permanent muted dash -- a declaration mistake
+    // wearing the look of unavailable data.
+    case: "a stats cell whose query is not a count",
+    expect: /must be a "count" query/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "stats",
+      defaultSize: "sm",
+      cells: [
+        {
+          key: "a",
+          label: "A",
+          query: { source: "collection:posts", op: "list" },
+        },
+      ],
+    },
+  },
+  {
+    // Two cells under one key collapse into a single answer: the same number
+    // drawn twice under two labels, which no reader can detect.
+    case: "stats cells sharing a key",
+    expect: /more than once/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "stats",
+      defaultSize: "sm",
+      cells: [
+        {
+          key: "a",
+          label: "A",
+          query: { source: "collection:posts", op: "count" },
+        },
+        {
+          key: "a",
+          label: "B",
+          query: { source: "collection:posts", op: "count" },
+        },
+      ],
+    },
+  },
+  {
+    // Two bodies described at once. The batch prefers cells, so the top-level
+    // query is never asked and nothing is ever filed under the widget's own id.
+    case: "a stats widget carrying a top-level query",
+    expect: /draws from cells, so it takes no top-level query/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "stats",
+      defaultSize: "sm",
+      query: { source: "collection:posts", op: "count" },
+      cells: [
+        {
+          key: "a",
+          label: "A",
+          query: { source: "collection:posts", op: "count" },
+        },
+      ],
+    },
+  },
 ];
 
 describe("the registry and contributions channels agree except where declared", () => {

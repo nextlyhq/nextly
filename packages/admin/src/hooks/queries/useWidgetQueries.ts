@@ -83,6 +83,25 @@ export interface UseWidgetQueriesResult {
 }
 
 /**
+ * A dictionary with NO prototype, for keys this code does not control.
+ *
+ * 🔴 A contributed widget id is checked only for being usable text, so `id` may
+ * be `"__proto__"` -- and on a `{}` dictionary that key is not data. Reading it
+ * returns `Object.prototype`, so `dict[id] ??= {}` never assigns and the cell
+ * key is written onto the prototype every object in the admin inherits;
+ * assigning it directly replaces the dictionary's own prototype instead of
+ * storing an entry. Either way one widget's answer becomes visible to
+ * unrelated code, from nothing more than receiving a response. `constructor`
+ * and `toString` misbehave for the same reason without the global damage.
+ *
+ * A null prototype makes every key data. `Object.keys`, `in` and index reads all
+ * behave as they already did for ordinary ids, so nothing downstream changes.
+ */
+function emptyRecord<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+/**
  * Files one answer where its widget will look for it.
  *
  * 🔴 Two maps rather than one map with a composite key. A contributed widget id
@@ -103,7 +122,7 @@ function fileAnswer(
     slots[entry.widgetId] = slot;
     return;
   }
-  (cellSlots[entry.widgetId] ??= {})[entry.cellKey] = slot;
+  (cellSlots[entry.widgetId] ??= emptyRecord())[entry.cellKey] = slot;
 }
 
 /** What a widget is told when the batch came back shorter than it went out. */
@@ -378,8 +397,9 @@ export function useWidgetQueries(
   // Not memoized, and deliberately: `useQueries` builds a fresh result array on
   // every render, so a memo keyed on it would recompute every render anyway
   // while reading as though it did not. The walk is one pass over the widgets.
-  const slots: Record<string, WidgetSlot> = {};
-  const cellSlots: CellSlots = {};
+  // Both dictionaries are keyed by caller-supplied ids; see `emptyRecord`.
+  const slots: Record<string, WidgetSlot> = emptyRecord();
+  const cellSlots: CellSlots = emptyRecord();
   partitions.forEach((partition, index) => {
     const answer = results[index];
     if (!answer) return;

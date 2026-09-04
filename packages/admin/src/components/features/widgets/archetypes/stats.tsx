@@ -44,6 +44,30 @@ function cellValue(slot: WidgetSlot | undefined): {
 
 export const statsBody: CellsBody = (definition, slotFor: CellSlotLookup) => {
   const cells = definition.cells ?? [];
+
+  // 🔴 Every cell settled and every one refused is a FAILED card, not a
+  // successful one drawn as dashes. Partial success is the reason this body
+  // renders what it has -- but when there is nothing to show, reporting `ok`
+  // makes the grid count the card as updated, stamp it with a fresh time
+  // (the HTTP batch did succeed) and announce success, while the reader sees a
+  // row of dashes and no error anywhere. The distinguishing case is ALL cells
+  // failing; one survivor is still a card worth drawing.
+  const answered = cells.map(cell => slotFor(cell.key));
+  const settled = answered.filter(slot => slot !== undefined);
+  if (
+    cells.length > 0 &&
+    settled.length === cells.length &&
+    settled.every(slot => !slot?.ok)
+  ) {
+    return {
+      ok: false,
+      message:
+        settled[0]?.ok === false
+          ? settled[0].error
+          : `"${definition.title}" could not read any of its numbers.`,
+    };
+  }
+
   if (cells.length === 0) {
     return {
       ok: false,

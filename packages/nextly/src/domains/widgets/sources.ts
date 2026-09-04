@@ -224,6 +224,24 @@ function validateSourceKind(s: Partial<WidgetSource>): void {
 }
 
 /**
+ * Confirms `lifecycleStatus`, when given, is actually a boolean.
+ *
+ * The consumer tests `=== true`, so a source registered with `"true"` from
+ * JavaScript or decoded JSON is read as NOT having a lifecycle -- and the card
+ * that fact exists to enable is silently never generated. A truthiness test
+ * would accept the string and be wrong in the other direction; the field is
+ * refused instead, where the mistake was made.
+ */
+function validateSourceLifecycle(s: Partial<WidgetSource>): void {
+  if (
+    s.lifecycleStatus !== undefined &&
+    typeof s.lifecycleStatus !== "boolean"
+  ) {
+    fail(`${s.id}: lifecycleStatus, when given, must be a boolean`);
+  }
+}
+
+/**
  * Confirms `supports` is a non-empty array of known ops. Empty `supports`
  * would register a source no query could ever validate against -- every
  * `validateWidgetQuery` call would fail at the op check, which is a startup
@@ -297,6 +315,7 @@ export function validateWidgetSource(
   validateSourceId(s);
   validateSourceLabel(s);
   validateSourceKind(s);
+  validateSourceLifecycle(s);
   validateSourceSupports(s);
   validateSourceFields(s);
   // AFTER the fields, because it is checked against them.

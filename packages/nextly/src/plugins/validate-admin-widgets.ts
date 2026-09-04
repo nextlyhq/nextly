@@ -26,6 +26,7 @@ import {
   legacySizeToWidgetSize,
   querylessQueryProblem,
   CELL_ARCHETYPES,
+  cellsProblem,
   QUERYLESS_ARCHETYPES,
   widgetValueProblem,
   WIDGET_ARCHETYPES,
@@ -144,10 +145,15 @@ function describesDrawableBody(widget: Record<string, unknown>): boolean {
   }
 
   if (CELL_ARCHETYPE_SET.has(archetype)) {
-    // A stats card's body is its cells, so that is what makes it drawable --
-    // asking about `query` here would report every one of them undrawable and
-    // hand the card to a component fallback it did not ask for.
-    return Array.isArray(widget.cells) && widget.cells.length > 0;
+    // 🔴 Through the REGISTRY's own cell rule, not a similar one written here.
+    // Checking only that the array was non-empty published contributions the
+    // registry refuses -- a `list` query, a missing query, two cells under one
+    // key -- which then render as silent dashes or one answer drawn twice.
+    // A stats card also takes no top-level query, the same pair
+    // `validateWidgetDefinition` refuses, so a contribution carrying both
+    // describes two bodies and is not drawable as either.
+    if (widget.query !== undefined) return false;
+    return cellsProblem(widget.cells) === undefined;
   }
 
   if (DATA_ARCHETYPE_SET.has(archetype)) {

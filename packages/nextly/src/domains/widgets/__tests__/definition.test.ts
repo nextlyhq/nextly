@@ -517,6 +517,35 @@ describe("a stats widget draws from cells, not from one query", () => {
     ).toThrow(/declare the key "a" more than once/);
   });
 
+  it("refuses a cell link that cannot be followed", () => {
+    // 🔴 The admin hands `href` to `Link`, whose external-destination check
+    // calls `href.startsWith` -- so a blank or non-string href makes activating
+    // the number throw instead of navigating, in the one card whose whole point
+    // is navigating.
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [{ ...cell("a"), link: { label: "Go", href: "" } }],
+      })
+    ).toThrow(/link requires a non-empty href/);
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [{ ...cell("a"), link: { label: "  ", href: "/admin" } }],
+      })
+    ).toThrow(/link requires a non-empty label/);
+  });
+
+  it("accepts a cell with a usable link", () => {
+    // The control: a check that refused every link would satisfy both cases.
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [{ ...cell("a"), link: { label: "Go", href: "/admin" } }],
+      })
+    ).not.toThrow();
+  });
+
   it("refuses more cells than one batch can afford", () => {
     // Each cell is its own query, so an unbounded card would consume the whole
     // request budget and darken every other widget on the dashboard.

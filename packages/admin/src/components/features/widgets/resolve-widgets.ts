@@ -346,7 +346,13 @@ function mergeCollision(
     link: preferRegistered(registration.link, contribution.link),
     component: preferRegistered(registration.component, contribution.component),
     actions: preferRegistered(registration.actions, contribution.actions),
-    cells: preferRegistered(registration.cells, contribution.cells),
+    // 🔴 NOT `preferRegistered`. The archetype comes from the registration, so
+    // a contributed stats card colliding with a registered metric would hand
+    // its cells to a widget drawn from one query -- and the batch prefers cells
+    // over that query, so no answer is ever filed under the widget's own id and
+    // the card loads forever. Cells travel only with the archetype that draws
+    // them.
+    cells: registration.archetype === "stats" ? registration.cells : undefined,
     // Both channels can state these, and the registry wins where it does --
     // the rule `defaultSize` already follows above. Rebuilt field by field
     // here, so a field added to the contract and not to THIS list is dropped

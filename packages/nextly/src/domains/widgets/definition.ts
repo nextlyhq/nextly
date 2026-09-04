@@ -934,7 +934,29 @@ function cellQueryProblem(query: unknown, at: string): string | undefined {
   return undefined;
 }
 
-function statCellProblem(cell: unknown, at: string): string | undefined {
+/**
+ * Confirms a cell's optional link, when it has one, can actually be followed.
+ *
+ * A blank or non-string `href` reaches the admin's `Link`, whose
+ * external-destination check calls `href.startsWith` -- so activating the number
+ * throws instead of navigating, and the card that exists to navigate is the one
+ * place that breaks. Refused here, where the mistake was made.
+ */
+function cellLinkProblem(
+  link: WidgetStatCell["link"],
+  at: string
+): string | undefined {
+  if (link === undefined) return undefined;
+  if (typeof link !== "object" || link === null) {
+    return `${at} link, when given, must be an object`;
+  }
+  return (
+    blankCellText(link.label, `${at} link`, "label") ??
+    blankCellText(link.href, `${at} link`, "href")
+  );
+}
+
+export function statCellProblem(cell: unknown, at: string): string | undefined {
   if (typeof cell !== "object" || cell === null) {
     return `${at} must be an object`;
   }
@@ -942,8 +964,40 @@ function statCellProblem(cell: unknown, at: string): string | undefined {
   return (
     blankCellText(c.key, at, "key") ??
     blankCellText(c.label, at, "label") ??
-    cellQueryProblem(c.query, at)
+    cellQueryProblem(c.query, at) ??
+    cellLinkProblem(c.link, at)
   );
+}
+
+/**
+ * Everything wrong with a `cells` list, or `undefined`.
+ *
+ * 🔴 Exported so the CONTRIBUTIONS channel asks the same question rather than a
+ * similar one. `validateWidgetDefinition` refuses a malformed cell and the
+ * plugin path checked only that the array was non-empty, so a contribution
+ * carrying a `list` query, a missing query or two cells under one key was
+ * published -- the exact values the registry refuses, arriving by the other
+ * door and rendering as silent dashes or one answer drawn twice.
+ */
+export function cellsProblem(
+  cells: unknown,
+  max: number = MAX_STAT_CELLS
+): string | undefined {
+  if (!Array.isArray(cells) || cells.length === 0) {
+    return 'archetype "stats" requires a non-empty cells array';
+  }
+  if (cells.length > max) {
+    return `a stats card may declare at most ${max} cells, got ${cells.length}`;
+  }
+  const seen = new Set<string>();
+  for (const [index, cell] of cells.entries()) {
+    const problem = statCellProblem(cell, `cells[${index}]`);
+    if (problem !== undefined) return problem;
+    const key = (cell as WidgetStatCell).key;
+    if (seen.has(key)) return `cells declare the key "${key}" more than once`;
+    seen.add(key);
+  }
+  return undefined;
 }
 
 /**
@@ -955,31 +1009,14 @@ function statCellProblem(cell: unknown, at: string): string | undefined {
  * labels -- which is not wrong-looking in any way a reader could detect.
  */
 function validateCells(d: Partial<WidgetDefinition>): void {
-  const standing = d.archetype;
-  if (standing !== "stats") {
+  if (d.archetype !== "stats") {
     if (d.cells !== undefined) {
       fail(`${d.id}: cells are only valid for archetype "stats"`);
     }
     return;
   }
-  if (!Array.isArray(d.cells) || d.cells.length === 0) {
-    fail(`${d.id}: archetype "stats" requires a non-empty cells array`);
-  }
-  if (d.cells.length > MAX_STAT_CELLS) {
-    fail(
-      `${d.id}: a stats card may declare at most ${MAX_STAT_CELLS} cells, got ${d.cells.length}`
-    );
-  }
-  const seen = new Set<string>();
-  d.cells.forEach((cell, index) => {
-    const problem = statCellProblem(cell, `cells[${index}]`);
-    if (problem !== undefined) fail(`${d.id}: ${problem}`);
-    const key = cell.key;
-    if (seen.has(key)) {
-      fail(`${d.id}: cells declare the key "${key}" more than once`);
-    }
-    seen.add(key);
-  });
+  const problem = cellsProblem(d.cells);
+  if (problem !== undefined) fail(`${d.id}: ${problem}`);
 }
 
 function validateQuery(d: Partial<WidgetDefinition>): void {

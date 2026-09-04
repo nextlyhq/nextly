@@ -131,6 +131,30 @@ describe("a stats card", () => {
     expect(screen.getByText("7")).toBeInTheDocument();
   });
 
+  it("FAILS when every cell failed, rather than drawing a row of dashes", () => {
+    // 🔴 The distinguishing case the partial-failure test above cannot reach,
+    // because it keeps one cell succeeding. With nothing to show, reporting
+    // success makes the grid count the card as updated, stamp a fresh time --
+    // the HTTP batch did succeed -- and announce success, while the reader sees
+    // dashes and no error anywhere.
+    render(
+      <WidgetRenderer
+        definition={card}
+        slot={undefined}
+        slotFor={() => ({ ok: false, error: "you may not read posts" })}
+      />
+    );
+    expect(screen.getByText(/you may not read posts/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("widget-stats")).not.toBeInTheDocument();
+  });
+
+  it("still DRAWS when one cell survives", () => {
+    // The control. A rule keyed on "any cell failed" would satisfy the case
+    // above and throw away a card the reader can still use.
+    renderWith({ total: count(1204), draft: { ok: false, error: "nope" } });
+    expect(screen.getByText("1,204")).toBeInTheDocument();
+  });
+
   it("says so when a stats widget declares no cells", () => {
     render(
       <WidgetRenderer
