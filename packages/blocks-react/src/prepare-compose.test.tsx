@@ -267,7 +267,7 @@ describe("a definitions map that is not what it claims", () => {
     expect(stages!.prepared.nodes[0]!.props.value).toBe("Hi");
   });
 
-  it("reports a supplied but unreadable definition as malformed", () => {
+  it("reports a supplied but unreadable definition as unreadable", () => {
     const definitions = new Map<string, BlockDocument>([
       ["hero", null as unknown as BlockDocument],
       ["absent-control", component([node("d1", "x")])],
@@ -282,7 +282,7 @@ describe("a definitions map that is not what it claims", () => {
     // to publish a component, the other says the component data is corrupt.
     expect(
       stages!.unresolvedInstances.map(e => `${e.componentId}:${e.reason}`)
-    ).toEqual(["hero:malformed", "never-supplied:missing"]);
+    ).toEqual(["hero:unreadable", "never-supplied:missing"]);
   });
 });
 
@@ -512,5 +512,123 @@ describe("a stored stylesheet after composition", () => {
 
     expect(read.referencedComponents).toEqual(["hero", "gone"]);
     expect(read.unresolvedInstances.map(e => e.reason)).toEqual(["missing"]);
+  });
+});
+
+/**
+ * Preparing a definition and deciding to read one are ONE question.
+ *
+ * The pass that repairs definitions has to know which ones the render will
+ * reach, and reachability is decided by the resolver — after overrides, under
+ * its own composition cap, over the tree its own shape pass retained. A second
+ * traversal answering that question separately answers it differently, and
+ * every disagreement costs the page content it was supplied.
+ */
+describe("which definitions a render prepares", () => {
+  /** A definition envelope with exposed properties. */
+  const exposing = (nodes: unknown[], exposed: unknown[]): BlockDocument =>
+    ({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes,
+      exposed,
+    }) as unknown as BlockDocument;
+
+  /** An instance node carrying overrides. */
+  const overriding = (
+    id: string,
+    componentId: string,
+    overrides: Record<string, unknown>
+  ): BlockNode => ({
+    id,
+    type: COMPONENT_INSTANCE_TYPE,
+    version: 1,
+    props: { componentId, overrides },
+  });
+
+  it("composes a nested component the instance's override selected", () => {
+    const stages = stagesOf(
+      page([overriding("i1", "outer", { which: "chosen" })]),
+      defs({
+        outer: exposing(
+          [instance("n1", "default")],
+          [{ id: "which", nodeId: "n1", propPath: "componentId" }]
+        ),
+        default: component([node("d1", "Default")]),
+        chosen: component([node("d2", "Chosen")]),
+      })
+    );
+
+    expect(stages!.unresolvedInstances).toEqual([]);
+    expect(stages!.prepared.nodes.map(n => n.props.value)).toEqual(["Chosen"]);
+  });
+
+  it("composes a nested instance the definition's shape pass retained", () => {
+    // The host's cap admits four nodes. The definition stores four entries
+    // nothing can read and then an instance: a scan of the STORED nodes
+    // spends its budget on the four and never reaches the fifth, while the
+    // shape pass drops all four and hands the resolver the instance.
+    const limits = { maxDepth: 12, maxNodes: 4, maxBytes: 2_097_152 };
+    const stages = prepareDocumentReadStages(page([instance("i1", "outer")]), {
+      resolver,
+      limits,
+      definitions: defs({
+        outer: component([null, null, null, null, instance("n1", "inner")]),
+        inner: component([node("d1", "Inner")]),
+      }),
+    });
+
+    expect(stages!.unresolvedInstances).toEqual([]);
+    expect(stages!.prepared.nodes.map(n => n.props.value)).toEqual(["Inner"]);
+  });
+
+  it("reads no definition deeper than the composition cap can compose", () => {
+    // A chain of ten. The resolver refuses past `MAX_COMPOSED_DEPTH`, so the
+    // definitions below that line cannot change one pixel of this page — and
+    // repairing them is per-render work an author can grow without bound by
+    // publishing a longer chain.
+    class Counting extends Map<string, BlockDocument> {
+      readonly reads: string[] = [];
+      override get(id: string): BlockDocument | undefined {
+        this.reads.push(id);
+        return super.get(id);
+      }
+    }
+    const chain = new Counting();
+    for (let i = 0; i < 10; i += 1) {
+      chain.set(
+        `c${String(i)}`,
+        i === 9
+          ? component([node("leaf", "End")])
+          : component([instance(`n${String(i)}`, `c${String(i + 1)}`)])
+      );
+    }
+
+    const stages = stagesOf(page([instance("i1", "c0")]), chain);
+
+    expect(stages!.unresolvedInstances.map(e => e.reason)).toEqual([
+      "composed-depth",
+    ]);
+    expect(chain.reads).toEqual(["c0", "c1", "c2", "c3", "c4"]);
+  });
+});
+
+describe("what an unresolved instance tells whoever is debugging it", () => {
+  it("names the DEFINITION as the fault when the instance is sound", () => {
+    // Both faults are document faults no author action fixes, but they are
+    // faults in two different documents: one sends whoever is debugging to
+    // this page, the other to the component it correctly names.
+    const stages = stagesOf(
+      page([
+        instance("i1", "hero"),
+        { id: "i2", type: COMPONENT_INSTANCE_TYPE, version: 1, props: {} },
+      ]),
+      defs({ hero: page([node("d1", "A page, not a component")]) })
+    );
+
+    expect(stages!.unresolvedInstances).toEqual([
+      { instanceId: "i1", componentId: "hero", reason: "unreadable" },
+      { instanceId: "i2", componentId: "", reason: "malformed" },
+    ]);
   });
 });

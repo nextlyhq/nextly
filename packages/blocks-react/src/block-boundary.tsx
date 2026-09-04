@@ -51,6 +51,7 @@ const UNRESOLVED_DETAIL: Readonly<Record<ComponentUnresolvedReason, string>> = {
   "node-depth": "This component's own content is nested too deeply",
   budget: "This page is already at its node limit",
   malformed: "This instance names no component",
+  unreadable: "This component's stored data cannot be read",
 };
 
 /** What a render needs to turn one node into output. */

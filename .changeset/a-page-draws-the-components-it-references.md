@@ -75,3 +75,13 @@ the references happened to appear in. A component stored in a format this
 version does not understand is now reported rather than reshaped and drawn. And
 the renderer and the page reader now agree about what an unloadable component
 is, so the renderer no longer hides a block the reader returns.
+
+One walk instead of two. Preparing a component and deciding to read one were
+separate passes over the page, and they could disagree — so a component chosen
+by an instance's override, one that survived a definition's own repair, or one
+sitting past a truncated scan was reported as missing even though it had been
+supplied. There is now a single answer, given where the component is actually
+wanted, which also means a page follows a chain of components only as far as it
+can draw it rather than preparing every component the chain names. And a
+component whose stored data cannot be read is now reported as a fault in that
+component, so the message points at it instead of at the page holding it.

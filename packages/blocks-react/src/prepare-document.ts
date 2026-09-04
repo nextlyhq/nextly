@@ -48,7 +48,6 @@
  */
 import {
   COMPONENT_INSTANCE_TYPE,
-  componentIdsIn,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   isPlainRecord,
@@ -57,6 +56,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type {
   BlockDocument,
+  ComponentLookup,
   DefinitionsById,
   DocumentLimits,
   MigratedNode,
@@ -314,7 +314,9 @@ export function prepareDocumentReadStages(
   const sanitized = sanitizeDocument(document, limits);
   const composed = resolveComponentInstances(
     sanitized,
-    repairedDefinitions(sanitized, args.definitions, limits),
+    args.definitions === undefined || args.definitions.size === 0
+      ? EMPTY_DEFINITIONS
+      : repairingLookup(args.definitions, limits),
     { limits }
   );
   const { doc, rewritten } = migrateDocument(
@@ -386,15 +388,15 @@ export function isUnresolvedInstance(node: ResolvedBlockNode): boolean {
 }
 
 /**
- * The definitions, shape-repaired against the same caps the host was.
+ * The definitions, shape-repaired ON DEMAND against the same caps the host was.
  *
- * Not defensive tidiness. The resolver asks only that a definition node be a
- * record with a string id, while the repair pass additionally requires a
- * string type and a whole version and DROPS a node failing either — and the
- * reason it does is one this renderer has already paid for: a node whose
- * `type` is an object reaches the unknown-block placeholder, which writes that
- * value into a data attribute and into text, and React throws inside the one
- * component that exists to contain a failure. Inlining an unrepaired
+ * Repair is not defensive tidiness. The resolver asks only that a definition
+ * node be a record with a string id, while the repair pass additionally
+ * requires a string type and a whole version and DROPS a node failing either —
+ * and the reason it does is one this renderer has already paid for: a node
+ * whose `type` is an object reaches the unknown-block placeholder, which writes
+ * that value into a data attribute and into text, and React throws inside the
+ * one component that exists to contain a failure. Inlining an unrepaired
  * definition into a repaired host reintroduces that a level down.
  *
  * Repaired against HEADROOM rather than against the caps themselves, and that
@@ -417,64 +419,53 @@ export function isUnresolvedInstance(node: ResolvedBlockNode): boolean {
  * Splitting the rule to match what is observable today would leave the gap
  * open on the day the refusal arrives, and that gap is silent content loss.
  *
- * Returns the SAME map when every definition was already sound, so the
- * ordinary page allocates nothing — `sanitizeDocument` returns its input when
- * it repaired nothing, which is what makes the comparison meaningful.
+ * ON DEMAND rather than over a set computed up front, and that is not an
+ * optimisation. Repairing ahead of the resolver means predicting which
+ * definitions it will read, and it is the resolver that decides: an instance's
+ * overrides may name a different component than the definition stored, its
+ * composition cap stops the chain long before the catalog does, and the nodes
+ * it walks are the ones repair itself retained. A separate traversal answering
+ * that question disagreed on all three, and each disagreement handed the page
+ * `missing` for a definition the caller had supplied. Asking here means there
+ * is one answer, given at the moment the definition is actually wanted.
+ *
+ * Memoized, so a component held by two instances is repaired once — and the
+ * memo records a definition that could NOT be read as well, or an unreadable
+ * one would be re-examined on every reference.
  */
-function repairedDefinitions(
-  host: BlockDocument,
-  definitions: DefinitionsById | undefined,
+function repairingLookup(
+  definitions: DefinitionsById,
   limits: DocumentLimits
-): DefinitionsById {
-  if (definitions === undefined || definitions.size === 0)
-    return EMPTY_DEFINITIONS;
-
-  const wanted = referencedIds(host, definitions, limits);
-  if (wanted.size === 0) return EMPTY_DEFINITIONS;
-
+): ComponentLookup {
   const shapeOnly: DocumentLimits = {
     ...limits,
     maxDepth: limits.maxDepth + 1,
     maxNodes: limits.maxNodes + 1,
   };
-  const repaired = new Map<string, BlockDocument>();
-  for (const id of wanted) {
-    // An id the caller never supplied is left OUT, so the resolver reports it
-    // as missing. Setting it with an empty value would put the key in the map,
-    // and presence is exactly what separates "nobody supplied one" from "one
-    // was supplied and cannot be read".
-    if (!definitions.has(id)) continue;
-    const definition = definitions.get(id);
-    // PASSED THROUGH unrepaired rather than omitted. The shape pass reads
-    // `document.nodes` on its first line, so a `null` or a string here throws
-    // before any block boundary exists to contain it — but omitting it makes
-    // the reference read as one nobody supplied, and the resolver's reasons
-    // distinguish that from a definition supplied and unreadable. Handing the
-    // value straight to the resolver lets it say which.
-    //
-    // The KEY is kept and the VALUE replaced, because the two say different
-    // things: presence means somebody supplied a definition, and the
-    // unreadable value is what makes the resolver call it malformed rather
-    // than missing. Omitting the entry collapses those into one.
-    if (!isReadableEnvelope(definition)) {
-      repaired.set(id, UNREADABLE);
-      continue;
-    }
-    repaired.set(id, sanitizeDocument(definition, shapeOnly));
-  }
-  return repaired;
+  const repaired = new Map<string, BlockDocument | undefined>();
+  return {
+    // Answered from the SUPPLIED map, never from whether `get` produced a
+    // document. Presence is what separates "nobody supplied one" from "one was
+    // supplied and cannot be read", and the resolver reports those as
+    // different reasons with different remedies — publish the component, or
+    // repair its stored data.
+    has: id => definitions.has(id),
+    get: id => {
+      if (repaired.has(id)) return repaired.get(id);
+      const stored = definitions.get(id);
+      // `undefined` for an envelope this build cannot read, rather than a
+      // repaired shell. The shape pass reads `document.nodes` on its first
+      // line, so a `null` or a string here throws before any block boundary
+      // exists to contain it — and the resolver, which still sees the id in
+      // `has`, reports it as unreadable rather than missing.
+      const value = isReadableEnvelope(stored)
+        ? sanitizeDocument(stored, shapeOnly)
+        : undefined;
+      repaired.set(id, value);
+      return value;
+    },
+  };
 }
-
-/**
- * What this build hands the resolver for a definition it cannot read.
- *
- * A value rather than an omission, because omitting collapses "supplied and
- * unreadable" into "never supplied", and those have different remedies. The
- * resolver refuses anything that is not a plain record, so this is the
- * shortest thing it is guaranteed to refuse; the cast states plainly that a
- * map of documents is deliberately carrying a non-document here.
- */
-const UNREADABLE = undefined as unknown as BlockDocument;
 
 /**
  * Whether a definition is a document THIS BUILD can read.
@@ -488,8 +479,8 @@ const UNREADABLE = undefined as unknown as BlockDocument;
  *
  * The KIND is deliberately not checked. The engine's resolver asks
  * `isComponentDocument` and reports a page or a region filed under a
- * component's id as malformed, so asking again would be a second answer to one
- * question — and a second answer is the one that goes stale.
+ * component's id as unreadable, so asking again would be a second answer to
+ * one question — and a second answer is the one that goes stale.
  */
 function isReadableEnvelope(definition: unknown): definition is BlockDocument {
   return (
@@ -497,48 +488,6 @@ function isReadableEnvelope(definition: unknown): definition is BlockDocument {
     definition.formatVersion === DOCUMENT_FORMAT_VERSION &&
     Array.isArray(definition.nodes)
   );
-}
-
-/**
- * The definitions this document can actually reach, transitively.
- *
- * Repairing the whole map was work proportional to the site's entire component
- * catalog on every render, paid even by a page that references nothing — and an
- * unbounded catalog multiplies the per-definition node cap into unbounded
- * request work. Only what the page reaches is repaired.
- *
- * Transitive because a component may hold another, and the closure is taken
- * over the SUPPLIED map: nothing here fetches, so a definition the caller did
- * not hand over is simply not reached and its reference resolves as missing.
- * Bounded by the map's own size, since no id outside it can enter the set.
- */
-function referencedIds(
-  host: BlockDocument,
-  definitions: DefinitionsById,
-  limits: DocumentLimits
-): Set<string> {
-  const wanted = new Set<string>();
-  const pending = componentIdsIn(host.nodes, limits.maxNodes);
-  // No count bounds this loop, deliberately. Bounding it by the map's size
-  // counted ABSENT ids against the budget, so a page referencing more missing
-  // components than the map holds stopped before reaching a supplied one — and
-  // the last-in-first-out order decided which, so valid content disappeared
-  // according to where a reference happened to sit.
-  //
-  // It terminates on its own: every id pushed comes from expanding a
-  // definition, and a definition joins `wanted` before it is expanded, so each
-  // is expanded at most once and the work is the map's size times the cap.
-  while (pending.length > 0) {
-    const id = pending.pop();
-    if (id === undefined || wanted.has(id)) continue;
-    wanted.add(id);
-    if (!isReadableEnvelope(definitions.get(id))) continue;
-    const definition = definitions.get(id) as BlockDocument;
-    for (const nested of componentIdsIn(definition.nodes, limits.maxNodes)) {
-      pending.push(nested);
-    }
-  }
-  return wanted;
 }
 
 /** Shared so a page with no components allocates no map at all. */
