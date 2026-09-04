@@ -134,6 +134,22 @@ export interface PendingEditCursor {
 }
 
 /**
+ * How a paged pending-edit read is ordered, and why the choice is the CALLER's.
+ *
+ * - `recency` — newest first, which is what a "recently edited" card means.
+ * - `identity` — by row id, which means nothing to a reader and is STABLE.
+ *
+ * 🔴 A count pages by identity, and that is a correctness decision rather than a
+ * preference. `updatedAt` advances every time somebody types, so a draft not yet
+ * read can move AHEAD of a recency cursor and be excluded from every later page
+ * — not a race window but a guaranteed miss for the rest of the walk, which
+ * makes a total silently too small. A working-draft update rewrites `snapshot`,
+ * `createdBy` and `updatedAt` and never the id, so an identity cursor cannot be
+ * outrun by the rows it is enumerating.
+ */
+export type PendingEditOrder = "recency" | "identity";
+
+/**
  * Strictly after `cursor` in `updatedAt DESC, id DESC` order.
  *
  * 🔴 A cursor rather than an OFFSET, because the rows being paged are the most
@@ -147,7 +163,13 @@ export interface PendingEditCursor {
  * Spelled as the two-branch disjunction rather than a row constructor, because
  * `(a, b) < (x, y)` is not portable across the three dialects this must run on.
  */
-function olderThan(cursor: PendingEditCursor): VersionsWhere {
+function olderThan(
+  cursor: PendingEditCursor,
+  order: PendingEditOrder
+): VersionsWhere {
+  if (order === "identity") {
+    return { and: [{ column: "id", op: "<", value: cursor.id }] };
+  }
   return {
     or: [
       { and: [{ column: "updatedAt", op: "<", value: cursor.updatedAt }] },
@@ -159,6 +181,17 @@ function olderThan(cursor: PendingEditCursor): VersionsWhere {
       },
     ],
   };
+}
+
+/** The ordering clause for `order`, unique in both cases so a cursor is exact. */
+function orderClause(
+  order: PendingEditOrder
+): { column: string; direction: "desc"; nulls?: "last" }[] {
+  if (order === "identity") return [{ column: "id", direction: "desc" }];
+  return [
+    { column: "updatedAt", direction: "desc", nulls: "last" },
+    { column: "id", direction: "desc" },
+  ];
 }
 
 /** Identifies the document a version belongs to. */
@@ -375,38 +408,6 @@ export class VersionsRepository {
     };
   }
 
-  /** The count capability, or a refusal naming why it is absent. */
-  private counter(): NonNullable<VersionsDbApi["count"]> {
-    const count = this.db.count?.bind(this.db);
-    if (!count) {
-      // The pooled adapter has it; a transaction context does not. A read path
-      // reaching here on a tx handle is a wiring mistake, not a caller's.
-      throw NextlyError.internal({
-        logContext: { reason: "versions-count-unsupported" },
-      });
-    }
-    return count;
-  }
-
-  /**
-   * How many DOCUMENTS hold a pending edit, within the given collections.
-   *
-   * 🔴 Documents, not rows. A working draft is one row per document per LOCALE,
-   * so a document edited in three languages is one thing to fix and three rows
-   * -- and "14 documents have unpublished changes" counted from rows says 42.
-   * The distinct combination is the document's identity, which is why the
-   * adapter's `distinctOn` exists rather than a row count here.
-   */
-  async countDocumentsWithPendingEdits(
-    slugs: readonly string[]
-  ): Promise<number> {
-    if (slugs.length === 0) return 0;
-    return this.counter()(TABLE, {
-      where: this.pendingEditWhere(slugs),
-      distinctOn: ["scopeKind", "scopeSlug", "entryId"],
-    });
-  }
-
   /**
    * One PAGE of pending-edit rows, newest first — rows, not documents.
    *
@@ -437,27 +438,23 @@ export class VersionsRepository {
   async findPendingEditRows(input: {
     slugs: readonly string[];
     limit: number;
+    order: PendingEditOrder;
     after?: PendingEditCursor;
   }): Promise<VersionMeta[]> {
     if (input.slugs.length === 0 || input.limit <= 0) return [];
     const scope = this.pendingEditWhere(input.slugs);
     return this.db.select<VersionMeta>(TABLE, {
       columns: [...VERSION_META_COLUMNS],
-      where: input.after ? { and: [scope, olderThan(input.after)] } : scope,
-      // `nulls` is stated for the reason the module's other ordered read states
-      // it: the default differs per dialect, and a limited list must not return
-      // different rows per engine.
-      // 🔴 `id` breaks the ties, and it is what makes OFFSET paging sound. An
-      // order on `updatedAt` alone is not TOTAL -- SQLite stores whole seconds,
-      // so working drafts saved in the same second tie -- and a database may
-      // order tied rows differently between two queries. Paging an unstable
-      // order returns one row twice and SKIPS another, and the skipped document
-      // is simply lost: a caller de-duplicating what it received cannot notice
-      // the one it never saw.
-      orderBy: [
-        { column: "updatedAt", direction: "desc", nulls: "last" },
-        { column: "id", direction: "desc" },
-      ],
+      where: input.after
+        ? { and: [scope, olderThan(input.after, input.order)] }
+        : scope,
+      // Both orderings end in a UNIQUE column, which is what lets a cursor name
+      // a position exactly: `updatedAt` alone is not total -- SQLite stores
+      // whole seconds, so drafts saved together tie -- and a cursor over a
+      // non-unique key cannot say which of the tied rows a page ended on.
+      // `nulls` is stated because the default differs per dialect, and a limited
+      // list must not return different rows per engine.
+      orderBy: orderClause(input.order),
       limit: input.limit,
     });
   }

@@ -23,6 +23,7 @@ import {
   VersionsRepository,
   type AutosaveWriteResult,
   type PendingEditCursor,
+  type PendingEditOrder,
   type VersionMeta,
   type VersionRef,
   type VersionRow,
@@ -48,22 +49,6 @@ export class VersionsService {
   }
 
   /**
-   * How many documents hold a pending edit, within collections the caller reads.
-   *
-   * 🔴 The allowlist is REQUIRED and ENUMERATED — `[]` means exactly nothing,
-   * and there is no value meaning "no filter". This service has no authorization
-   * of its own (unlike `ReleasesService`, none of its methods takes an actor) so
-   * the bound has to arrive from the caller, and an optional parameter would
-   * produce an install-wide number for a reader entitled to part of it the first
-   * time somebody forgot it. The one caller resolves the list through
-   * `readableEntities`, which answers every registered entity for a super admin
-   * rather than a bypass, so nothing here needs a wider case.
-   */
-  async countPendingEdits(readableSlugs: readonly string[]): Promise<number> {
-    return this.repo.countDocumentsWithPendingEdits(readableSlugs);
-  }
-
-  /**
    * One page of pending-edit ROWS, newest first.
    *
    * 🔴 Rows rather than documents, and the caller collapses them itself — after
@@ -77,11 +62,13 @@ export class VersionsService {
   async pendingEditRows(input: {
     readableSlugs: readonly string[];
     limit: number;
+    order: PendingEditOrder;
     after?: PendingEditCursor;
   }): Promise<VersionMeta[]> {
     return this.repo.findPendingEditRows({
       slugs: input.readableSlugs,
       limit: input.limit,
+      order: input.order,
       ...(input.after ? { after: input.after } : {}),
     });
   }

@@ -1,10 +1,16 @@
 /**
- * Counting and listing pending edits across collections, against a real database.
+ * Reading pending edits across collections, against a real database.
  *
- * The distinctness is the whole claim and only a database can settle it: a
- * working draft is one row per document per LOCALE, so "14 documents have
- * unpublished changes" counted from rows says 42 for an install translating
- * into three languages.
+ * The SQL distinct-count tests that stood here are gone with the code they
+ * described. Counting documents in the database could not survive
+ * authorization: a stored read rule lives on the collection rather than on the
+ * version row, so the number it produced included documents the caller may not
+ * open, and using it even as a BOUND made one caller's card depend on data they
+ * cannot see. The count is a walk over authorized rows now, covered where that
+ * walk lives.
+ *
+ * What a database still has to settle is here: which rows a scope admits, and
+ * that a document drafted in several languages is one document.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -65,44 +71,6 @@ function draft(patch: {
 }
 
 describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
-  it("counts DOCUMENTS, not the rows their locales create", async () => {
-    // 🔴 The distinguishing case. One document translated into two languages is
-    // one thing an editor must publish; counting rows reports two, and the
-    // number a dashboard shows would grow with the install's locale count
-    // rather than with its unpublished work.
-    const app = await boot(dialect);
-    const repo = new VersionsRepository(app.adapter);
-
-    for (const row of [
-      draft({ entryId: "e1", locale: "en" }),
-      draft({ entryId: "e1", locale: "fr" }),
-      draft({ entryId: "e2", locale: "en" }),
-    ]) {
-      await app.adapter.insert(VERSIONS_TABLE, row);
-    }
-
-    expect(await repo.countDocumentsWithPendingEdits(["posts"])).toBe(2);
-  });
-
-  it("ignores autosaves, which are not pending edits", async () => {
-    // An autosave is the editor's in-flight buffer, not a change awaiting
-    // publication. Counting it tells a reader to publish something nobody
-    // decided to keep.
-    const app = await boot(dialect);
-    const repo = new VersionsRepository(app.adapter);
-
-    await app.adapter.insert(
-      VERSIONS_TABLE,
-      draft({ entryId: "e1", locale: null })
-    );
-    await app.adapter.insert(
-      VERSIONS_TABLE,
-      draft({ entryId: "e2", locale: null, isAutosave: true })
-    );
-
-    expect(await repo.countDocumentsWithPendingEdits(["posts"])).toBe(1);
-  });
-
   it("counts and lists only the collections the caller may read", async () => {
     const app = await boot(dialect);
     const repo = new VersionsRepository(app.adapter);
@@ -116,9 +84,9 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
       draft({ entryId: "e2", locale: null, scopeSlug: "secrets" })
     );
 
-    expect(await repo.countDocumentsWithPendingEdits(["posts"])).toBe(1);
     const listed = await repo.findPendingEditRows({
       slugs: ["posts"],
+      order: "recency" as const,
       limit: 10,
     });
     expect(listed.map(row => row.scopeSlug)).toEqual(["posts"]);
@@ -136,10 +104,13 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
       draft({ entryId: "e1", locale: null })
     );
 
-    expect(await repo.countDocumentsWithPendingEdits([])).toBe(0);
-    expect(await repo.findPendingEditRows({ slugs: [], limit: 10 })).toEqual(
-      []
-    );
+    expect(
+      await repo.findPendingEditRows({
+        slugs: [],
+        limit: 10,
+        order: "recency" as const,
+      })
+    ).toEqual([]);
   });
 
   it("lists one row per DOCUMENT, so locales cannot crowd out other work", async () => {
@@ -179,6 +150,7 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
     const rows = newestPerDocument(
       await repo.findPendingEditRows({
         slugs: ["posts"],
+        order: "recency" as const,
         limit: 10,
       }),
       2
@@ -215,6 +187,7 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
 
     const rows = await repo.findPendingEditRows({
       slugs: ["posts"],
+      order: "recency" as const,
       limit: 1000,
     });
     expect(rows).toHaveLength(501);
@@ -246,6 +219,7 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
 
     const rows = await repo.findPendingEditRows({
       slugs: ["posts"],
+      order: "recency" as const,
       limit: 10,
     });
     expect(rows.map(row => row.entryId)).toEqual(["new", "old"]);

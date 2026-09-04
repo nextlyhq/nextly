@@ -38,6 +38,7 @@ describe("paged pending-edit reads", () => {
 
     await new VersionsRepository(db).findPendingEditRows({
       slugs: ["posts"],
+      order: "recency" as const,
       limit: 10,
     });
 
@@ -61,6 +62,7 @@ describe("paged pending-edit reads", () => {
 
     await new VersionsRepository(db).findPendingEditRows({
       slugs: ["posts"],
+      order: "recency" as const,
       limit: 10,
       after: cursor,
     });
@@ -79,6 +81,7 @@ describe("paged pending-edit reads", () => {
 
     await new VersionsRepository(db).findPendingEditRows({
       slugs: ["posts"],
+      order: "recency" as const,
       limit: 10,
     });
 
@@ -90,6 +93,7 @@ describe("paged pending-edit reads", () => {
 
     await new VersionsRepository(db).findPendingEditRows({
       slugs: ["posts"],
+      order: "recency" as const,
       limit: 10,
     });
 

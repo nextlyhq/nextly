@@ -3,7 +3,6 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const countPendingEdits = vi.fn();
 const pendingEditRows = vi.fn();
 const has = vi.fn();
 const readable = vi.fn();
@@ -13,7 +12,7 @@ const visible = vi.fn();
 vi.mock("../../../di/container", () => ({
   container: {
     has: (name: string) => has(name) as boolean,
-    get: () => ({ countPendingEdits, pendingEditRows }),
+    get: () => ({ pendingEditRows }),
   },
 }));
 // `readAccessCaller` is kept REAL and only the decision is replaced, so what
@@ -72,7 +71,6 @@ const row = {
 beforeEach(() => {
   vi.clearAllMocks();
   has.mockReturnValue(true);
-  countPendingEdits.mockResolvedValue(14);
   pendingEditRows.mockResolvedValue([row]);
   readable.mockResolvedValue(new Set(["posts"]));
   registeredSlugs.mockResolvedValue(["posts", "secrets"]);
@@ -97,7 +95,9 @@ describe("who the numbers are for", () => {
       ["posts", "secrets"],
       expect.objectContaining({ userId: "user-1" })
     );
-    expect(countPendingEdits).toHaveBeenCalledWith(["posts"]);
+    expect(pendingEditRows).toHaveBeenCalledWith(
+      expect.objectContaining({ readableSlugs: ["posts"] })
+    );
   });
 
   it("bounds the LIST the same way", async () => {
@@ -145,7 +145,9 @@ describe("who the numbers are for", () => {
       caller
     );
 
-    expect(countPendingEdits).toHaveBeenCalledWith([]);
+    expect(pendingEditRows).toHaveBeenCalledWith(
+      expect.objectContaining({ readableSlugs: [] })
+    );
   });
 
   it("hands every candidate row, and the caller, to the document filter", async () => {
@@ -162,50 +164,33 @@ describe("who the numbers are for", () => {
     expect(visible).toHaveBeenCalledWith([row], caller);
   });
 
-  it("ANSWERS a count of exactly the bound, rather than refusing at it", async () => {
-    // 🔴 The boundary the bound documents as answerable. Stopping the walk at a
-    // document quota cannot tell "exactly this many" from "more than this
-    // many", so a set of exactly CANDIDATE_SCAN readable documents came back
-    // unexhausted and was refused -- at the one size the aggregate admits. The
-    // walk runs to exhaustion now; the aggregate is what bounds it.
-    countPendingEdits.mockResolvedValue(1000);
-    const many = Array.from({ length: 1000 }, (_, index) => ({
+  /*
+   * Three tests stood here, and the behaviour they described is GONE.
+   *
+   * They required an exact count at a document quota, an exact count once every
+   * candidate had been met, and a refusal past the bound. All three belonged to
+   * a design that promised an exact number over a set the database cannot
+   * filter — and every mechanism that tried to keep that promise past a bound
+   * produced a wrong answer instead: a quota could not tell "exactly this many"
+   * from "more than this many", and a shortcut on documents already met
+   * conflated SEEING a document with DECIDING it, since authorization is per
+   * language. The count says `atLeast` now, so there is no quota to sit on and
+   * no refusal to provoke.
+   */
+
+  it("counts every visible document when the rows run out", async () => {
+    // Exhaustion is the ROWS running out and nothing else. The count walks by
+    // identity, which is stable: a working-draft update rewrites the snapshot
+    // and the instant, never the id, so the enumeration cannot be outrun by the
+    // rows it is enumerating.
+    const many = Array.from({ length: 250 }, (_, index) => ({
       ...row,
       entryId: `e${index}`,
-    }));
-    // Pages of exactly ROW_PAGE, as production reads them -- a mocked page
-    // larger than the real one would never reach the round boundary this test
-    // exists for.
-    let served = 0;
-    pendingEditRows.mockImplementation(() => {
-      const page = many.slice(served, served + 100);
-      served += page.length;
-      return Promise.resolve(page);
-    });
-    visible.mockImplementation((rows: unknown) => Promise.resolve(rows));
-
-    await expect(
-      executeWidgetQuery({ source: VERSIONS_SOURCE_ID, op: "count" }, caller)
-    ).resolves.toEqual({ op: "count", total: 1000 });
-  });
-
-  it("ANSWERS when every candidate has been met, even at the last round", async () => {
-    // 🔴 The row-round boundary, which the document-quota fix did not reach.
-    // 1,000 readable documents drafted in six languages are 6,000 ROWS, and at
-    // the production page size that is exactly the permitted rounds — so the
-    // walk met every candidate on its final round and still fell out with
-    // `exhausted: false`, refusing an answer it held exactly. Meeting the
-    // candidate total IS exhaustion: there is nothing another page could add.
-    countPendingEdits.mockResolvedValue(1000);
-    const rows = Array.from({ length: 6000 }, (_, index) => ({
-      ...row,
-      entryId: `e${index % 1000}`,
-      locale: `l${Math.floor(index / 1000)}`,
       id: `v${index}`,
     }));
     let served = 0;
-    pendingEditRows.mockImplementation(() => {
-      const page = rows.slice(served, served + 100);
+    pendingEditRows.mockImplementation(({ limit }: { limit: number }) => {
+      const page = many.slice(served, served + limit);
       served += page.length;
       return Promise.resolve(page);
     });
@@ -213,22 +198,56 @@ describe("who the numbers are for", () => {
 
     await expect(
       executeWidgetQuery({ source: VERSIONS_SOURCE_ID, op: "count" }, caller)
-    ).resolves.toEqual({ op: "count", total: 1000 });
+    ).resolves.toEqual({ op: "count", total: 250 });
   });
 
-  it("refuses a COUNT it cannot answer exactly, rather than reporting a floor", async () => {
-    // 🔴 Row rules cannot be applied in SQL -- the rule lives on the collection,
-    // the candidates live in the version table, and the port has no join -- so
-    // an exact count means materialising candidates, which is bounded work. Past
-    // the bound the honest answers are "refuse" or "report a number that is
-    // quietly too small", and a metric that under-reports is the defect this
-    // module was repaired for.
-    countPendingEdits.mockResolvedValue(1001);
+  it("counts by IDENTITY, not by recency", async () => {
+    // 🔴 A count enumerates; it does not rank. `updatedAt` advances every time
+    // somebody types, so a draft not yet read can move AHEAD of a recency cursor
+    // and be excluded from every later page — a guaranteed miss for the rest of
+    // the walk, which makes the total silently too small.
+    await executeWidgetQuery(
+      { source: VERSIONS_SOURCE_ID, op: "count" },
+      caller
+    );
 
-    await expect(
-      executeWidgetQuery({ source: VERSIONS_SOURCE_ID, op: "count" }, caller)
-    ).rejects.toThrow();
-    expect(pendingEditRows).not.toHaveBeenCalled();
+    expect(pendingEditRows).toHaveBeenCalledWith(
+      expect.objectContaining({ order: "identity" })
+    );
+  });
+
+  it("says AT LEAST when the row budget binds, rather than refusing", async () => {
+    let issued = 0;
+    pendingEditRows.mockImplementation(({ limit }: { limit: number }) =>
+      Promise.resolve(
+        Array.from({ length: limit }, () => ({
+          ...row,
+          entryId: `e${issued++}`,
+          id: `v${issued}`,
+        }))
+      )
+    );
+    visible.mockImplementation((page: unknown) => Promise.resolve(page));
+
+    const result = await executeWidgetQuery(
+      { source: VERSIONS_SOURCE_ID, op: "count" },
+      caller
+    );
+
+    expect(result).toMatchObject({ op: "count", atLeast: true });
+    // The floor is what the walk actually saw.
+    expect((result as { total: number }).total).toBe(2000);
+  });
+
+  it("does not mark a whole count as a floor", async () => {
+    // The control: `atLeast` must be absent when the rows ran out, or every
+    // card renders `N+` forever and the flag stops meaning anything.
+    const result = await executeWidgetQuery(
+      { source: VERSIONS_SOURCE_ID, op: "count" },
+      caller
+    );
+
+    expect(result).not.toHaveProperty("atLeast");
   });
 
   it("authorizes each LOCALE row, then keeps the newest one that survives", async () => {

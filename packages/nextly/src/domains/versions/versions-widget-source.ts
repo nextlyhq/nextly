@@ -71,6 +71,7 @@ import {
   documentKey,
   newestPerDocument,
   type PendingEditCursor,
+  type PendingEditOrder,
   type VersionMeta,
 } from "./versions-repository";
 import type { VersionsService } from "./versions-service";
@@ -81,54 +82,42 @@ export { VERSIONS_SOURCE_ID };
 const DEFAULT_LIMIT = 5;
 
 /**
- * How many pending-edit DOCUMENTS one query may consider before answering.
+ * How many ROWS a count may read before it answers with a floor.
  *
- * 🔴 The bound exists because the answer cannot be computed in SQL. A stored
- * read rule narrows which of a collection's rows a caller may see, that rule
- * lives on the collection rather than on the version row, and the data port has
- * no join — so the only way to answer honestly is to take the candidates and
- * ask the ordinary read path about them. That is bounded work, and this is the
- * bound.
+ * 🔴 Rows, not documents, and bounded on the CALLER's own work. The bound used
+ * to be a pre-authorization count of candidate documents, which made one
+ * caller's card depend on data they cannot see: a collection accumulating other
+ * people's drafts past the threshold broke every owner's dashboard, and whether
+ * a caller received a number or a failure disclosed which side of it that unseen
+ * population sat on.
  *
- * The COUNT is what it really bounds: past it, an exact answer is not available
- * and the card refuses rather than reporting a floor — a metric that quietly
- * under-reports is the failure this whole change is repairing. A LIST rarely
- * comes near it, taking {@link LIST_CANDIDATES} first and escalating only when
- * that cannot fill the card.
- *
- * 🔴 It is the ONE bound, and the repository derives its row fetch from it
- * rather than declaring a second. Two independent ceilings is what produced the
- * defect this constant exists to prevent: a caller asking for a thousand
- * documents received five hundred, so it under-reported while every check it
- * had made said the answer was exact.
+ * Reaching it is not a failure. The count says `atLeast` and the card renders
+ * `N+` — a reader learns the scale, and nothing claims to be whole that is not.
+ * Every mechanism that tried to preserve exactness past a bound instead produced
+ * a wrong answer: a document quota could not tell "exactly this many" from "more
+ * than this many", and a shortcut on documents already seen conflated meeting a
+ * document with deciding it, since authorization is per language.
  */
-const CANDIDATE_SCAN = 1000;
+const COUNT_ROW_BUDGET = 2000;
 
 /**
- * Rows read per round while gathering documents.
+ * How many rows a LIST reads before answering with what it has.
  *
- * Rows, not documents: a document contributes one row per locale it is drafted
- * in, and rows a stored rule hides contribute none at all, so how many rows a
- * page of documents costs is not knowable in advance. Rounds are what make that
- * unnecessary — this only has to be large enough that the ordinary install,
- * where nothing is filtered, finishes in one.
+ * Much smaller, because a card wants a handful of rows and the ordinary install
+ * — where nothing is filtered — fills it from the first page. A list that comes
+ * back short under heavy filtering is a thin card, never a wrong one.
+ */
+const LIST_ROW_BUDGET = 400;
+
+/**
+ * Rows read per round.
+ *
+ * A document contributes one row per language, and rows a stored rule hides
+ * contribute none, so how many rows a page of DOCUMENTS costs is not knowable in
+ * advance. Rounds make that unnecessary; this only has to be large enough that
+ * the ordinary install finishes in one.
  */
 const ROW_PAGE = 100;
-
-/**
- * How many rounds a gather runs before answering with what it has.
- *
- * The bound on an install whose pending edits are almost entirely unreadable to
- * this caller. Reaching it returns FEWER documents than asked for, and the count
- * refuses rather than publishing that as a total — so the failure direction is a
- * thin card or an honest refusal, never a number that is quietly too small.
- *
- * Generous because the count runs to exhaustion over a set the aggregate has
- * already bounded at {@link CANDIDATE_SCAN} DOCUMENTS, while a round reads
- * ROWS: a document contributes one per locale, so the rows behind that bound are
- * a multiple of it that nothing here can know in advance.
- */
-const MAX_GATHER_ROUNDS = 60;
 
 /**
  * The fields this source publishes.
@@ -265,16 +254,10 @@ interface Gathered {
   documents: VersionMeta[];
   /** Documents already kept, so one split across a page cannot appear twice. */
   seen: Set<string>;
-  /**
-   * Every document the walk has MET, visible or not. The candidate aggregate
-   * counts documents too, so meeting that many means every candidate has been
-   * decided — which is exhaustion, whether or not another page exists.
-   */
-  met: Set<string>;
 }
 
 /**
- * Fold one page and its authorized rows into `gathered`; true when it is full.
+ * Fold one page's authorized rows into `gathered`; true when it is full.
  *
  * The collapse runs per round against what is already kept rather than over the
  * whole walk at the end, so a document drafted in several languages across a
@@ -282,11 +265,9 @@ interface Gathered {
  */
 function absorbPage(
   gathered: Gathered,
-  rows: readonly VersionMeta[],
   visible: readonly VersionMeta[],
   wanted: number
 ): boolean {
-  for (const row of rows) gathered.met.add(documentKey(row));
   for (const row of newestPerDocument(visible, Number.MAX_SAFE_INTEGER)) {
     const key = documentKey(row);
     if (gathered.seen.has(key)) continue;
@@ -297,53 +278,57 @@ function absorbPage(
   return false;
 }
 
+/**
+ * Walk pending-edit rows, authorizing each page, until `wanted` documents are
+ * found or `rowBudget` rows have been read.
+ *
+ * 🔴 `exhausted` means the ROWS ran out — nothing else. Earlier versions tried
+ * to conclude it sooner, and each shortcut was wrong in its own way: stopping at
+ * a document quota could not tell "exactly this many" from "more than this
+ * many", and stopping once every candidate had been MET conflated seeing a
+ * document with deciding it. Authorization is per LANGUAGE, so a document first
+ * met through a locale it is denied in may still be readable in a locale that
+ * has not been read yet — and a walk that stopped there reported zero for a set
+ * the caller could see entirely.
+ */
 async function gatherVisibleDocuments(
   wanted: number,
+  rowBudget: number,
+  order: PendingEditOrder,
   readableSlugs: readonly string[],
-  caller: ReadCaller,
-  candidateTotal?: number
+  caller: ReadCaller
 ): Promise<{ documents: VersionMeta[]; exhausted: boolean }> {
-  const gathered: Gathered = {
-    documents: [],
-    seen: new Set(),
-    met: new Set(),
-  };
+  const gathered: Gathered = { documents: [], seen: new Set() };
   let after: PendingEditCursor | undefined;
-  // 🔴 Three ways out, and only two of them are exhaustion. Rows running out and
-  // every candidate having been decided both mean nothing further exists; the
-  // ROUNDS running out means the walk stopped early, and a count published from
-  // that would be a floor. Tracked explicitly because collapsing the exits into
-  // one `break` loses exactly that distinction.
-  let exhausted = false;
+  let read = 0;
 
-  for (let round = 0; round < MAX_GATHER_ROUNDS; round++) {
+  while (read < rowBudget) {
+    const want = Math.min(ROW_PAGE, rowBudget - read);
     const rows = await service().pendingEditRows({
       readableSlugs,
-      limit: ROW_PAGE,
+      order,
+      limit: want,
       ...(after ? { after } : {}),
     });
     if (rows.length === 0) {
-      exhausted = true;
-      break;
+      return { documents: gathered.documents, exhausted: true };
     }
+    read += rows.length;
     // Anchored to the LAST row of this page, in the order it was read.
     const last = rows[rows.length - 1];
     after = { updatedAt: last.updatedAt, id: last.id };
 
     const visible = await visiblePendingEdits(rows, caller);
-    if (absorbPage(gathered, rows, visible, wanted)) {
+    if (absorbPage(gathered, visible, wanted)) {
       return { documents: gathered.documents, exhausted: false };
     }
-
-    const everyCandidateMet =
-      candidateTotal !== undefined && gathered.met.size >= candidateTotal;
-    if (everyCandidateMet || rows.length < ROW_PAGE) {
-      exhausted = true;
-      break;
+    // A short page is the end of the rows, not the end of this round.
+    if (rows.length < want) {
+      return { documents: gathered.documents, exhausted: true };
     }
   }
 
-  return { documents: gathered.documents, exhausted };
+  return { documents: gathered.documents, exhausted: false };
 }
 
 async function resolveVersions(
@@ -363,47 +348,46 @@ async function resolveVersions(
   ];
 
   if (query.op === "count") {
-    // Asked BEFORE gathering anything, and it is the one thing SQL can still
-    // answer here: how many documents are candidates at all, before row rules
-    // narrow them. Larger than the bound means no honest exact answer is
-    // available, so it refuses rather than reporting a floor -- and refusing
-    // costs one aggregate rather than a thousand-document walk that would be
-    // discarded.
-    const refuse = (): never => {
-      throw NextlyError.internal({
-        logContext: {
-          reason: "pending-edits-scan-exhausted",
-          scanned: CANDIDATE_SCAN,
-        },
-      });
-    };
-    const candidateTotal = await service().countPendingEdits(readableSlugs);
-    if (candidateTotal > CANDIDATE_SCAN) refuse();
-
-    // 🔴 Asked to run to EXHAUSTION rather than to a document quota. Stopping
-    // at a quota cannot tell "there are exactly this many" from "there are more
-    // than this many", so a set of exactly `CANDIDATE_SCAN` readable documents
-    // -- which the aggregate above admits -- came back unexhausted and refused,
-    // at precisely the boundary the bound documents as answerable. The
-    // aggregate is what bounds this walk; the walk's own job is to finish.
+    // 🔴 No pre-authorization aggregate decides anything here any more. Counting
+    // candidates before the row rules narrow them made the answer depend on data
+    // the caller cannot see: one collection accumulating other people's drafts
+    // past the bound broke every owner's card, and whether a caller got a number
+    // or a failure disclosed which side of the threshold that unseen population
+    // sat on. The walk is bounded by ROWS it reads, which is the caller's own
+    // work and nobody else's.
     const { documents, exhausted } = await gatherVisibleDocuments(
       Number.MAX_SAFE_INTEGER,
+      COUNT_ROW_BUDGET,
+      // By IDENTITY, because a count needs to ENUMERATE rather than to rank, and
+      // an id cannot be outrun by the rows being enumerated.
+      "identity",
       readableSlugs,
-      caller,
-      candidateTotal
+      caller
     );
-    // The candidate count passing is still not enough on its own. It counts
-    // documents, while the walk reads rows, and rows a stored rule hides are
-    // read without yielding one -- so a caller who may see little can exhaust
-    // the rounds on a set the aggregate said was small. Publishing what the
-    // walk found there would be a floor wearing an exactness check.
-    if (!exhausted) refuse();
-    return { op: "count", total: documents.length };
+    return {
+      op: "count",
+      total: documents.length,
+      // Said plainly rather than refused or quietly truncated. A reader learns
+      // the scale, the card renders `N+`, and nothing claims to be whole that
+      // is not.
+      ...(exhausted ? {} : { atLeast: true as const }),
+    };
   }
 
   const limit = query.limit ?? DEFAULT_LIMIT;
-  const rows = (await gatherVisibleDocuments(limit, readableSlugs, caller))
-    .documents;
+  const rows = (
+    await gatherVisibleDocuments(
+      limit,
+      LIST_ROW_BUDGET,
+      // By RECENCY, because "recently edited" is what the card means. A row
+      // saved mid-walk can move ahead of the cursor and be missed, which for a
+      // point-in-time list of the newest few is an ordinary consequence of
+      // reading a moving set -- and is why the COUNT does not order this way.
+      "recency",
+      readableSlugs,
+      caller
+    )
+  ).documents;
   const names = selectedNames(query);
   const fields = query.select?.length ? describe(names) : undefined;
 

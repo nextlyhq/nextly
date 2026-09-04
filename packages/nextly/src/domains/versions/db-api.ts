@@ -106,21 +106,6 @@ export interface VersionsDbApi {
    * by both the adapter and the transaction context, whose wider `where` and
    * extra optional arguments remain assignable to this narrower shape.
    */
-  /**
-   * How many rows match, or how many DISTINCT column combinations do.
-   *
-   * 🔴 OPTIONAL, and that is not timidity about the feature. This port is
-   * satisfied structurally by two different things: the pooled adapter, which
-   * has this, and the transaction context, which does not -- and the releases
-   * and jobs repositories are typed against the same port. A required method
-   * would make every one of them stop satisfying it for a capability none of
-   * them uses. A caller that needs it asks and refuses when absent, which is
-   * the same shape `dialect?` above already takes.
-   */
-  count?(
-    table: string,
-    options?: { where?: VersionsWhere; distinctOn?: string[] }
-  ): Promise<number>;
   delete(table: string, where: VersionsWhere): Promise<number>;
   /**
    * Update rows matching `where`.

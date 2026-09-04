@@ -75,7 +75,21 @@ not a total order, and paging one with OFFSET can return a row twice and skip
 another, losing a document that nothing downstream can notice is missing.
 
 That answer cannot be computed in SQL — the rule lives on the collection, the
-candidates live in the version table, and the data layer has no join — so an
-exact count means considering candidates in memory, which is bounded. Past that
-bound the count refuses rather than reporting a number that is quietly too
-small.
+candidates live in the version table, and the data layer has no join — so the
+count walks candidates and authorizes them, which is bounded work. Past that
+bound it reports `atLeast` and the card renders `N+`, rather than failing or
+showing a number that is quietly too small.
+
+It is a floor rather than a refusal because every mechanism that tried to keep
+the promise of exactness past a bound produced a wrong answer instead: a
+document quota could not tell "exactly this many" from "more than this many",
+and a shortcut on documents already seen conflated encountering a document with
+deciding it, since authorization is per language. The bound is also on rows the
+CALLER reads, not on a count of candidates taken before the rules narrow them —
+that made one reader's card depend on data they cannot see, and disclosed which
+side of the threshold that unseen population sat on.
+
+The count enumerates by row id rather than by recency. `updatedAt` advances
+every time somebody types, so a draft not yet read can move ahead of a
+recency cursor and be skipped for the rest of the walk; a working-draft update
+never rewrites the id.
