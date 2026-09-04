@@ -1,0 +1,49 @@
+---
+title: Audit Log
+description: A durable record of who changed what, and when.
+---
+
+The audit log records mutations as they happen: which user, which action, which document,
+and which fields changed.
+
+## Availability
+
+| | |
+|---|---|
+| Built in | No plugin required, and not gated behind a paid tier |
+| Admin | Activity is surfaced on the dashboard |
+| Permission | Reading activity is an admin capability |
+
+## What a record holds
+
+| Field | Meaning |
+|---|---|
+| Actor | The user or API key responsible, or the system for unattended work |
+| Action | What happened — a create, an update, a delete |
+| Target | The collection and document |
+| Changed fields | Which fields differed, computed from the write itself |
+
+Recording the changed field list — rather than the whole document — keeps the log useful
+without turning it into a second copy of your content. [Version
+history](/docs/versions) is where the full before-and-after lives.
+
+## Erasing a person without erasing the record
+
+A deletion request under privacy law asks you to remove a person's data. An audit log
+exists precisely so records cannot quietly disappear. Those pull in opposite directions.
+
+Nextly resolves it by separating the actor from the act: a person's identifying details can
+be erased while the entries they produced remain, still counted, still ordered, still
+showing that a change happened and what it touched. You keep the record and lose the
+person, which is what both obligations actually require.
+
+## Retention
+
+Audit entries are pruned on a schedule, so the log holds a useful window rather than
+growing forever.
+
+## Related
+
+- [Version history](/docs/versions) — the full before-and-after of one document
+- [Roles and permissions](/docs/permissions)
+- [Webhooks](/docs/webhooks) — the same events, delivered to another system

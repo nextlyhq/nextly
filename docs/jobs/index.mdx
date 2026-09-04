@@ -1,0 +1,53 @@
+---
+title: Background Jobs
+description: Run work outside the request that triggered it, with retries and a visible history.
+---
+
+Some work should not happen while a user waits: sending a batch of email, regenerating
+images, calling a slow third-party API. A job is that work, queued and run later.
+
+## Availability
+
+| | |
+|---|---|
+| Built in | No plugin required |
+| Admin | A **Background Jobs** screen showing queued, running, failed and completed work |
+| Permission | Viewing jobs is an admin capability; a job runs as a user you nominate |
+
+## Define a job
+
+```ts
+import { defineJob } from "nextly";
+
+export const sendDigest = defineJob({
+  slug: "send-digest",
+  handler: async ctx => {
+    // ctx carries the payload the job was enqueued with.
+  },
+});
+```
+
+## Retries and backoff
+
+A failed job is retried with exponential backoff, starting at **1 second** and capped at
+**1 hour**, with jitter so a batch of simultaneous failures does not retry in lockstep.
+
+`attemptCount` counts the attempt that just failed, so a job with a budget of three
+attempts gives up when the third fails — not after a fourth. That boundary is the usual
+bug in retry code, so it is worth stating rather than leaving to be discovered.
+
+## Who a job runs as
+
+A job is not run with the authority of whoever enqueued it. It resolves a **run-as** user,
+and that identity is what access control sees while the job runs, so a job cannot quietly
+do more than the user it runs as is allowed to do.
+
+## Retention
+
+Finished jobs are pruned on a schedule, so the table holds recent history rather than
+everything that has ever run.
+
+## Related
+
+- [Webhooks](/docs/webhooks) — telling another system that something changed
+- [Audit log](/docs/audit-log)

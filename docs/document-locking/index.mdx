@@ -1,0 +1,45 @@
+---
+title: Document Locking
+description: Stop two people silently overwriting each other's work on the same document.
+---
+
+When someone opens a document to edit it, they take a lock on it. Anyone else opening the
+same document is told who is editing rather than being allowed to save over them.
+
+## Availability
+
+| | |
+|---|---|
+| Built in | No plugin required |
+| Admin | Shown on the edit screen when someone else holds the document |
+| Permission | The same access as editing the document |
+
+## How it behaves
+
+A lock lasts **150 seconds** and is renewed by a heartbeat while the editor is on the page.
+The short lifetime is deliberate: a browser tab that dies takes its lock with it, and the
+document frees itself two and a half minutes later without anyone filing a ticket.
+
+Opening a document has one of two outcomes:
+
+| Outcome | Meaning |
+|---|---|
+| `acquired` | You hold the lock, and are given a claim token used to renew and release it |
+| `held` | Somebody else holds it. You are told who, and how long until it expires |
+
+Renewal is why a long edit does not lose the lock: the client renews well before the
+deadline, so an editor writing for an hour keeps it, and one who closed their laptop
+does not.
+
+## What it is not
+
+<Callout type="warn">
+This is not collaborative editing. Two people cannot type into one document at once; the
+lock exists precisely to prevent that. It is also not an authorization control — it
+prevents accidental collisions between people who are both allowed to edit.
+</Callout>
+
+## Related
+
+- [Roles and permissions](/docs/permissions) — who may edit at all
+- [Version history](/docs/versions) — recovering from an overwrite that did happen

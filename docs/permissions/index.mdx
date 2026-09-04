@@ -1,0 +1,83 @@
+---
+title: Roles and Permissions
+description: Control who can do what, down to individual fields.
+---
+
+Access control answers three questions, at three levels of detail: what a role may do,
+which documents it may do it to, and which fields inside those documents it may see or
+change.
+
+## Availability
+
+| | |
+|---|---|
+| Built in | No plugin required, and not gated behind a paid tier |
+| Admin | A **Roles** screen for managing roles and their grants |
+| Applies to | The REST API, the Direct API and the admin alike — this is enforced in the service layer, not in the UI |
+
+## Roles and grants
+
+A role holds grants named `<action>-<resource>`: `create-posts`, `delete-media`,
+`publish-content-releases`, `update-users`. A user's roles are the union of their grants.
+
+Because grants are per-resource, a role can be narrow in a way that is actually useful — a
+release manager who may schedule releases without holding a general read grant over
+everything.
+
+## Collection access
+
+Grants say what a role may do. Collection access says which documents:
+
+```ts
+import { defineCollection, relationship, text } from "nextly/config";
+
+export const Posts = defineCollection({
+  slug: "posts",
+  fields: [
+    text({ name: "title" }),
+    relationship({ name: "author", relationTo: "users" }),
+  ],
+  access: {
+    read: true,
+    create: ({ roles }) => roles.includes("editor") || roles.includes("admin"),
+  },
+});
+```
+
+`true` means anyone, including unauthenticated readers. A function receives the request
+context and decides.
+
+## Field-level access
+
+Any field takes its own `access`, with separate `create`, `read` and `update` rules:
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const Users = defineCollection({
+  slug: "users",
+  fields: [
+    text({ name: "name" }),
+    text({
+      name: "internalNotes",
+      access: {
+        read: ({ req }) => req.user?.role === "admin",
+        update: ({ req }) => req.user?.role === "admin",
+      },
+    }),
+  ],
+});
+```
+
+A field the reader may not see is removed from the response rather than blanked, and a
+field they may not change is rejected on write rather than silently dropped.
+
+This is the level most systems either do not have or sell separately. It is what lets one
+collection serve two audiences — an editor who sees the article, and a finance user who
+also sees the fields describing what it cost.
+
+## Related
+
+- [Authentication](/docs/guides/authentication) — how a user proves who they are
+- [Document locking](/docs/document-locking) — two people who may both edit
+- [Audit log](/docs/audit-log) — what they did
