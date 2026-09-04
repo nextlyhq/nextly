@@ -227,6 +227,12 @@ describe("the definitions a document reaches", () => {
 
     expect(found.has("chosen")).toBe(true);
     expect(batches.flat()).toContain("chosen");
+    // And the stored default is never asked for. Without this the test passes
+    // on a discovery that fetches BOTH — which resolves the page correctly and
+    // pays for a definition no render inlines, so the assertion that the
+    // override was FOLLOWED cannot be told from one that it was merely added.
+    expect(found.has("default")).toBe(false);
+    expect(batches.flat()).not.toContain("default");
   });
 
   it("asks for nothing when the page holds no instance", async () => {
