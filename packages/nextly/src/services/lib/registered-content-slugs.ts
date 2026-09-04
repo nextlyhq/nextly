@@ -61,9 +61,35 @@ async function singleSlugs(): Promise<string[]> {
  * were the whole answer.
  */
 export async function registeredContentSlugs(): Promise<string[]> {
+  return [...(await registeredContentKinds()).keys()];
+}
+
+/**
+ * The same slugs, each paired with the registry that owns it.
+ *
+ * 🔴 The kind is not decoration. A Single is read through its own service, so a
+ * caller that authorizes one as a collection asks about a table that does not
+ * hold the document — and deleting a collection leaves its history behind, so a
+ * freed slug that a Single later takes leaves version rows whose own scope kind
+ * disagrees with the registry. A surface holding only a slug and a recorded kind
+ * needs this to tell a live subject from an orphaned one.
+ *
+ * A name in NEITHER registry is absent rather than defaulted: guessing a kind
+ * for it would send a row to a read path that cannot answer about it.
+ *
+ * Collections are written last, so a slug claimed by both resolves to the
+ * collection. The registries do not permit that overlap; stating the precedence
+ * keeps this total rather than order-dependent if they ever do.
+ */
+export async function registeredContentKinds(): Promise<
+  Map<string, "collection" | "single">
+> {
   const [collections, singles] = await Promise.all([
     collectionSlugs(),
     singleSlugs(),
   ]);
-  return [...collections, ...singles];
+  const kinds = new Map<string, "collection" | "single">();
+  for (const slug of singles) kinds.set(slug, "single");
+  for (const slug of collections) kinds.set(slug, "collection");
+  return kinds;
 }

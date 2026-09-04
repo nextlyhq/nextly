@@ -269,21 +269,34 @@ function asResultFields(value: unknown): WidgetResultField[] | undefined {
  * field to a result would drop it before the plugin saw it, so this function is
  * the place that has to grow when the result contract does.
  */
+/**
+ * A count result, or `undefined` when the payload does not carry one.
+ *
+ * `atLeast` is carried through rather than dropped: it says the total is a
+ * FLOOR, and a card that loses it renders a partial figure as though it were the
+ * whole answer.
+ */
+function asCount(total: unknown, atLeast: unknown): WidgetResult | undefined {
+  if (typeof total !== "number" || !Number.isFinite(total)) return undefined;
+  return {
+    op: "count",
+    total,
+    ...(atLeast === true ? { atLeast: true } : {}),
+  };
+}
+
 function asResult(value: unknown): WidgetResult | undefined {
   if (!isObject(value)) return undefined;
 
   const result = value as {
     op?: unknown;
     total?: unknown;
+    atLeast?: unknown;
     items?: unknown;
     fields?: unknown;
   };
 
-  if (result.op === "count") {
-    return typeof result.total === "number" && Number.isFinite(result.total)
-      ? { op: "count", total: result.total }
-      : undefined;
-  }
+  if (result.op === "count") return asCount(result.total, result.atLeast);
 
   if (result.op === "list") {
     // The MEMBERS as well as the array, because a row is dereferenced per field

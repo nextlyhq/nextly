@@ -29,7 +29,26 @@ export interface WidgetResultField {
 }
 
 export type WidgetResult =
-  | { op: "count"; total: number }
+  | {
+      op: "count";
+      total: number;
+      /**
+       * Whether `total` is a FLOOR rather than the whole answer.
+       *
+       * 🔴 Present because some counts cannot be computed in the database. Where
+       * a source's rows are filtered by a rule the query cannot express — a
+       * stored `owner-only` or `custom` read rule lives on the collection, not
+       * on the sidecar table being counted — the only honest count walks
+       * candidates and authorizes them, which is bounded work. Past that bound
+       * the choice is to refuse, to publish a number that is quietly too small,
+       * or to say plainly that there are at least this many.
+       *
+       * Saying so is the option that stays true: a reader learns the scale
+       * without being told a wrong figure, and a card renders `1,000+` rather
+       * than failing. Absent means the count is whole.
+       */
+      atLeast?: boolean;
+    }
   | {
       op: "list";
       items: Record<string, unknown>[];

@@ -66,6 +66,17 @@ export interface VersionsSelectOptions {
     nulls?: "first" | "last";
   }[];
   limit?: number;
+  /**
+   * Where the page starts.
+   *
+   * Exposed because a cross-document read cannot size its query in advance: a
+   * document contributes one row per locale, and rows a stored access rule
+   * hides contribute none at all, so how many rows a page of DOCUMENTS costs is
+   * not knowable before reading them. Paging is what lets the caller keep
+   * reading until it has what it asked for, rather than guessing a bound from a
+   * number that does not describe the data. The adapter has always supported it.
+   */
+  offset?: number;
 }
 
 /** The database methods the versions repository depends on. */
@@ -95,21 +106,6 @@ export interface VersionsDbApi {
    * by both the adapter and the transaction context, whose wider `where` and
    * extra optional arguments remain assignable to this narrower shape.
    */
-  /**
-   * How many rows match, or how many DISTINCT column combinations do.
-   *
-   * 🔴 OPTIONAL, and that is not timidity about the feature. This port is
-   * satisfied structurally by two different things: the pooled adapter, which
-   * has this, and the transaction context, which does not -- and the releases
-   * and jobs repositories are typed against the same port. A required method
-   * would make every one of them stop satisfying it for a capability none of
-   * them uses. A caller that needs it asks and refuses when absent, which is
-   * the same shape `dialect?` above already takes.
-   */
-  count?(
-    table: string,
-    options?: { where?: VersionsWhere; distinctOn?: string[] }
-  ): Promise<number>;
   delete(table: string, where: VersionsWhere): Promise<number>;
   /**
    * Update rows matching `where`.

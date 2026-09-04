@@ -46,7 +46,20 @@ export interface WidgetResultField {
 }
 
 export type WidgetResult =
-  | { op: "count"; total: number }
+  | {
+      op: "count";
+      total: number;
+      /**
+       * `total` is a FLOOR, not the whole answer.
+       *
+       * Some counts cannot be computed in the database: where a source's rows
+       * are filtered by a rule the query cannot express, the only honest count
+       * walks candidates and authorizes them, which is bounded work. Past that
+       * bound the card says `N+` rather than failing or showing a number that
+       * is quietly too small.
+       */
+      atLeast?: boolean;
+    }
   | {
       op: "list";
       items: Record<string, unknown>[];

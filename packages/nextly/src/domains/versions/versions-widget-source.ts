@@ -8,9 +8,14 @@
  * that simply called it would answer an install-wide number to a reader
  * entitled to part of it.
  *
- * The bound is `readableEntities`, asked once per registered entity, and NOT a
- * filter over the caller's permission slugs. The two look equivalent and are
- * not, in both directions:
+ * Authorization here has TWO axes, and each is load-bearing. The first decides
+ * which collections are in reach; the second decides which of their documents
+ * are, and stopping at the first is what made this card disclose one author's
+ * work to another.
+ *
+ * **Which collections.** `readableEntities`, asked once per registered entity,
+ * and NOT a filter over the caller's permission slugs. The two look equivalent
+ * and are not, in both directions:
  *
  * - An API key is judged on its OWN stamped scope. Resolving the owner's
  *   role-derived slugs instead hands a narrowly scoped key everything its
@@ -33,6 +38,17 @@
  * nothing, instead of the three-way `undefined | [] | list` whose collapse hands
  * every document to a caller granted none.
  *
+ * **Which documents.** `readableEntities` is coarse BY CONTRACT — it says
+ * whether an entity is in reach at all, and leaves the per-row rules of the
+ * query that follows to decide what comes back. A collection carrying a stored
+ * `owner-only` or `custom` read rule therefore admits every editor at that
+ * check while the ordinary read path narrows to a subset, and a version query
+ * filtered by collection name alone counted and listed the documents in
+ * between: other authors' entry ids, their languages, and when they last
+ * touched them. `visiblePendingEdits` closes it by asking the ordinary read
+ * path which of the candidate documents survive, rather than reproducing a rule
+ * that may be an arbitrary function.
+ *
  * @module domains/versions/versions-widget-source
  */
 
@@ -50,12 +66,58 @@ import { failUnavailableSourceOrOp } from "../widgets/sources";
 import { VERSIONS_SOURCE_ID } from "../widgets/system-source-ids";
 import { registerSystemSource } from "../widgets/system-sources";
 
+import { visiblePendingEdits } from "./pending-edit-visibility";
+import {
+  documentKey,
+  newestPerDocument,
+  type PendingEditCursor,
+  type PendingEditOrder,
+  type VersionMeta,
+} from "./versions-repository";
 import type { VersionsService } from "./versions-service";
 
 export { VERSIONS_SOURCE_ID };
 
 /** How many rows the list card draws when the query names no limit. */
 const DEFAULT_LIMIT = 5;
+
+/**
+ * How many ROWS a count may read before it answers with a floor.
+ *
+ * 🔴 Rows, not documents, and bounded on the CALLER's own work. The bound used
+ * to be a pre-authorization count of candidate documents, which made one
+ * caller's card depend on data they cannot see: a collection accumulating other
+ * people's drafts past the threshold broke every owner's dashboard, and whether
+ * a caller received a number or a failure disclosed which side of it that unseen
+ * population sat on.
+ *
+ * Reaching it is not a failure. The count says `atLeast` and the card renders
+ * `N+` — a reader learns the scale, and nothing claims to be whole that is not.
+ * Every mechanism that tried to preserve exactness past a bound instead produced
+ * a wrong answer: a document quota could not tell "exactly this many" from "more
+ * than this many", and a shortcut on documents already seen conflated meeting a
+ * document with deciding it, since authorization is per language.
+ */
+const COUNT_ROW_BUDGET = 2000;
+
+/**
+ * How many rows a LIST reads before answering with what it has.
+ *
+ * Much smaller, because a card wants a handful of rows and the ordinary install
+ * — where nothing is filtered — fills it from the first page. A list that comes
+ * back short under heavy filtering is a thin card, never a wrong one.
+ */
+const LIST_ROW_BUDGET = 400;
+
+/**
+ * Rows read per round.
+ *
+ * A document contributes one row per language, and rows a stored rule hides
+ * contribute none, so how many rows a page of DOCUMENTS costs is not knowable in
+ * advance. Rounds make that unnecessary; this only has to be large enough that
+ * the ordinary install finishes in one.
+ */
+const ROW_PAGE = 100;
 
 /**
  * The fields this source publishes.
@@ -173,6 +235,102 @@ function describe(
   });
 }
 
+/**
+ * Up to `wanted` DOCUMENTS the caller may see, newest first.
+ *
+ * 🔴 The order is the correctness property. Rows are read, then AUTHORIZED, and
+ * only then collapsed to one per document — because a localized Single is
+ * authorized per language while a document is one thing to publish across all of
+ * them. Collapsing first offers the visibility filter each document's newest
+ * locale alone, so a document whose newest pending locale is denied disappears
+ * even when an older locale is readable and the reader is entitled to it.
+ *
+ * `exhausted` says whether the table ran out rather than the rounds. A count may
+ * only be published when it did: otherwise the answer is a floor, and a metric
+ * that quietly under-reports is the failure this whole source was repaired for.
+ */
+/** What a walk has accumulated so far, across its rounds. */
+interface Gathered {
+  documents: VersionMeta[];
+  /** Documents already kept, so one split across a page cannot appear twice. */
+  seen: Set<string>;
+}
+
+/**
+ * Fold one page's authorized rows into `gathered`; true when it is full.
+ *
+ * The collapse runs per round against what is already kept rather than over the
+ * whole walk at the end, so a document drafted in several languages across a
+ * page boundary is still counted once.
+ */
+function absorbPage(
+  gathered: Gathered,
+  visible: readonly VersionMeta[],
+  wanted: number
+): boolean {
+  for (const row of newestPerDocument(visible, Number.MAX_SAFE_INTEGER)) {
+    const key = documentKey(row);
+    if (gathered.seen.has(key)) continue;
+    gathered.seen.add(key);
+    gathered.documents.push(row);
+    if (gathered.documents.length >= wanted) return true;
+  }
+  return false;
+}
+
+/**
+ * Walk pending-edit rows, authorizing each page, until `wanted` documents are
+ * found or `rowBudget` rows have been read.
+ *
+ * 🔴 `exhausted` means the ROWS ran out — nothing else. Earlier versions tried
+ * to conclude it sooner, and each shortcut was wrong in its own way: stopping at
+ * a document quota could not tell "exactly this many" from "more than this
+ * many", and stopping once every candidate had been MET conflated seeing a
+ * document with deciding it. Authorization is per LANGUAGE, so a document first
+ * met through a locale it is denied in may still be readable in a locale that
+ * has not been read yet — and a walk that stopped there reported zero for a set
+ * the caller could see entirely.
+ */
+async function gatherVisibleDocuments(
+  wanted: number,
+  rowBudget: number,
+  order: PendingEditOrder,
+  readableSlugs: readonly string[],
+  caller: ReadCaller
+): Promise<{ documents: VersionMeta[]; exhausted: boolean }> {
+  const gathered: Gathered = { documents: [], seen: new Set() };
+  let after: PendingEditCursor | undefined;
+  let read = 0;
+
+  while (read < rowBudget) {
+    const want = Math.min(ROW_PAGE, rowBudget - read);
+    const rows = await service().pendingEditRows({
+      readableSlugs,
+      order,
+      limit: want,
+      ...(after ? { after } : {}),
+    });
+    if (rows.length === 0) {
+      return { documents: gathered.documents, exhausted: true };
+    }
+    read += rows.length;
+    // Anchored to the LAST row of this page, in the order it was read.
+    const last = rows[rows.length - 1];
+    after = { updatedAt: last.updatedAt, id: last.id };
+
+    const visible = await visiblePendingEdits(rows, caller);
+    if (absorbPage(gathered, visible, wanted)) {
+      return { documents: gathered.documents, exhausted: false };
+    }
+    // A short page is the end of the rows, not the end of this round.
+    if (rows.length < want) {
+      return { documents: gathered.documents, exhausted: true };
+    }
+  }
+
+  return { documents: gathered.documents, exhausted: false };
+}
+
 async function resolveVersions(
   query: WidgetQuery,
   caller: ReadCaller
@@ -190,16 +348,46 @@ async function resolveVersions(
   ];
 
   if (query.op === "count") {
+    // 🔴 No pre-authorization aggregate decides anything here any more. Counting
+    // candidates before the row rules narrow them made the answer depend on data
+    // the caller cannot see: one collection accumulating other people's drafts
+    // past the bound broke every owner's card, and whether a caller got a number
+    // or a failure disclosed which side of the threshold that unseen population
+    // sat on. The walk is bounded by ROWS it reads, which is the caller's own
+    // work and nobody else's.
+    const { documents, exhausted } = await gatherVisibleDocuments(
+      Number.MAX_SAFE_INTEGER,
+      COUNT_ROW_BUDGET,
+      // By IDENTITY, because a count needs to ENUMERATE rather than to rank, and
+      // an id cannot be outrun by the rows being enumerated.
+      "identity",
+      readableSlugs,
+      caller
+    );
     return {
       op: "count",
-      total: await service().countPendingEdits(readableSlugs),
+      total: documents.length,
+      // Said plainly rather than refused or quietly truncated. A reader learns
+      // the scale, the card renders `N+`, and nothing claims to be whole that
+      // is not.
+      ...(exhausted ? {} : { atLeast: true as const }),
     };
   }
 
-  const rows = await service().recentPendingEdits({
-    readableSlugs,
-    limit: query.limit ?? DEFAULT_LIMIT,
-  });
+  const limit = query.limit ?? DEFAULT_LIMIT;
+  const rows = (
+    await gatherVisibleDocuments(
+      limit,
+      LIST_ROW_BUDGET,
+      // By RECENCY, because "recently edited" is what the card means. A row
+      // saved mid-walk can move ahead of the cursor and be missed, which for a
+      // point-in-time list of the newest few is an ordinary consequence of
+      // reading a moving set -- and is why the COUNT does not order this way.
+      "recency",
+      readableSlugs,
+      caller
+    )
+  ).documents;
   const names = selectedNames(query);
   const fields = query.select?.length ? describe(names) : undefined;
 

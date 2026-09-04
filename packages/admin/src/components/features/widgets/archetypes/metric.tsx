@@ -59,6 +59,17 @@ export const metricBody: ArchetypeBody = (result, definition) => {
         className="text-2xl font-bold leading-none tabular-nums tracking-tight text-foreground"
       >
         {result.total.toLocaleString()}
+        {result.atLeast === true ? (
+          <>
+            {/* A floor, said in the number itself. The card cannot know the
+                whole figure -- the rows behind it are filtered by a rule the
+                database cannot apply -- and a bare number would claim it does.
+                Announced to assistive technology in words, since a trailing
+                "+" is punctuation a screen reader may not voice. */}
+            <span aria-hidden="true">+</span>
+            <span className="sr-only"> or more</span>
+          </>
+        ) : null}
       </p>
     ),
   };

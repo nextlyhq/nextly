@@ -74,31 +74,19 @@ const VERSION_META_COLUMNS = [
 ] as const;
 
 /**
- * The largest number of rows a recent-edits scan will read.
- *
- * A ceiling on the over-fetch, not on the answer. It only binds when
- * `limit * maxPerDocument` exceeds it -- a 5-row card needs it past 100
- * configured locales -- and when it does the card returns FEWER documents rather
- * than wrong ones. Worth having because `maxPerDocument` is the configured
- * locale count, and rows written under a locale later removed from the config
- * are not bounded by it.
- */
-const MAX_PENDING_EDIT_SCAN = 500;
-
-/** How many rows to read to be sure of finding `limit` distinct documents. */
-function scanBound(limit: number, maxPerDocument: number): number {
-  return Math.min(limit * Math.max(maxPerDocument, 1), MAX_PENDING_EDIT_SCAN);
-}
-
-/**
  * A document's identity across locales.
  *
  * NUL-joined rather than concatenated, so a slug ending in the separator cannot
  * spell the same key as a different slug and entry id pair -- the columns are
  * free strings and a delimiter that can occur inside one is a collision waiting
  * for the install that names a collection unusually.
+ *
+ * Exported because the collapse it keys now happens AFTER authorization, in the
+ * caller: a version row's identity belongs to this module, and the decision
+ * about which rows a reader may see belongs to the read path, so the two meet at
+ * the caller rather than one reimplementing the other.
  */
-function documentKey(row: VersionMeta): string {
+export function documentKey(row: VersionMeta): string {
   return [row.scopeKind, row.scopeSlug, row.entryId].join("\u0000");
 }
 
@@ -107,10 +95,17 @@ function documentKey(row: VersionMeta): string {
  *
  * Relies on the caller's `updatedAt DESC` ordering: the first row seen for a
  * document IS its latest instant, so keeping the first and dropping the rest
- * needs no comparison. Stops at `limit`, which is what makes the scan bound
- * above sufficient rather than merely generous.
+ * needs no comparison.
+ *
+ * 🔴 Run this AFTER authorization, never before. The key deliberately excludes
+ * `locale`, because a document is one thing to publish however many languages
+ * it is drafted in -- but a localized Single is authorized PER LANGUAGE, so
+ * collapsing first hands the visibility filter only the newest locale. Where
+ * that one is denied and an older one is readable, the document disappears from
+ * a card its reader is entitled to see, and no test that uses an unlocalized
+ * document can tell.
  */
-function newestPerDocument(
+export function newestPerDocument(
   rows: readonly VersionMeta[],
   limit: number
 ): VersionMeta[] {
@@ -124,6 +119,79 @@ function newestPerDocument(
     if (newest.length === limit) break;
   }
   return newest;
+}
+
+/**
+ * Where a page of pending edits left off.
+ *
+ * The ordering key in full, which is what a cursor has to be: `updatedAt` alone
+ * is not unique, so a cursor carrying only the instant cannot say WHICH of the
+ * rows sharing it was the last one read.
+ */
+export interface PendingEditCursor {
+  updatedAt: Date;
+  id: string;
+}
+
+/**
+ * How a paged pending-edit read is ordered, and why the choice is the CALLER's.
+ *
+ * - `recency` — newest first, which is what a "recently edited" card means.
+ * - `identity` — by row id, which means nothing to a reader and is STABLE.
+ *
+ * 🔴 A count pages by identity, and that is a correctness decision rather than a
+ * preference. `updatedAt` advances every time somebody types, so a draft not yet
+ * read can move AHEAD of a recency cursor and be excluded from every later page
+ * — not a race window but a guaranteed miss for the rest of the walk, which
+ * makes a total silently too small. A working-draft update rewrites `snapshot`,
+ * `createdBy` and `updatedAt` and never the id, so an identity cursor cannot be
+ * outrun by the rows it is enumerating.
+ */
+export type PendingEditOrder = "recency" | "identity";
+
+/**
+ * Strictly after `cursor` in `updatedAt DESC, id DESC` order.
+ *
+ * 🔴 A cursor rather than an OFFSET, because the rows being paged are the most
+ * MUTABLE in the system: a working draft's `updatedAt` advances every time
+ * somebody types. Under OFFSET, a row updated between two pages moves ahead of
+ * the offset, so the next page repeats a row already seen and SKIPS one that was
+ * never read — and the skipped document is lost silently, since de-duplicating
+ * what arrived cannot reveal what did not. Anchoring to the last row read makes
+ * the pages disjoint whatever moves behind them.
+ *
+ * Spelled as the two-branch disjunction rather than a row constructor, because
+ * `(a, b) < (x, y)` is not portable across the three dialects this must run on.
+ */
+function olderThan(
+  cursor: PendingEditCursor,
+  order: PendingEditOrder
+): VersionsWhere {
+  if (order === "identity") {
+    return { and: [{ column: "id", op: "<", value: cursor.id }] };
+  }
+  return {
+    or: [
+      { and: [{ column: "updatedAt", op: "<", value: cursor.updatedAt }] },
+      {
+        and: [
+          { column: "updatedAt", op: "=", value: cursor.updatedAt },
+          { column: "id", op: "<", value: cursor.id },
+        ],
+      },
+    ],
+  };
+}
+
+/** The ordering clause for `order`, unique in both cases so a cursor is exact. */
+function orderClause(
+  order: PendingEditOrder
+): { column: string; direction: "desc"; nulls?: "last" }[] {
+  if (order === "identity") return [{ column: "id", direction: "desc" }];
+  return [
+    { column: "updatedAt", direction: "desc", nulls: "last" },
+    { column: "id", direction: "desc" },
+  ];
 }
 
 /** Identifies the document a version belongs to. */
@@ -340,78 +408,55 @@ export class VersionsRepository {
     };
   }
 
-  /** The count capability, or a refusal naming why it is absent. */
-  private counter(): NonNullable<VersionsDbApi["count"]> {
-    const count = this.db.count?.bind(this.db);
-    if (!count) {
-      // The pooled adapter has it; a transaction context does not. A read path
-      // reaching here on a tx handle is a wiring mistake, not a caller's.
-      throw NextlyError.internal({
-        logContext: { reason: "versions-count-unsupported" },
-      });
-    }
-    return count;
-  }
-
   /**
-   * How many DOCUMENTS hold a pending edit, within the given collections.
+   * One PAGE of pending-edit rows, newest first — rows, not documents.
    *
-   * 🔴 Documents, not rows. A working draft is one row per document per LOCALE,
-   * so a document edited in three languages is one thing to fix and three rows
-   * -- and "14 documents have unpublished changes" counted from rows says 42.
-   * The distinct combination is the document's identity, which is why the
-   * adapter's `distinctOn` exists rather than a row count here.
-   */
-  async countDocumentsWithPendingEdits(
-    slugs: readonly string[]
-  ): Promise<number> {
-    if (slugs.length === 0) return 0;
-    return this.counter()(TABLE, {
-      where: this.pendingEditWhere(slugs),
-      distinctOn: ["scopeKind", "scopeSlug", "entryId"],
-    });
-  }
-
-  /**
-   * The DOCUMENTS most recently left with a pending edit, newest first.
+   * 🔴 It returns rows and collapses nothing, and that ordering is the point. A
+   * working draft is one row per document per LOCALE, and a document is one
+   * thing to publish however many languages it is drafted in — so the two views
+   * are both needed and the collapse has to happen AFTER the caller has
+   * authorized what it may see. Collapsing here handed the visibility filter
+   * only each document's newest locale, and a localized Single is authorized per
+   * language: where its newest pending locale is denied and an older one is
+   * readable, the document vanished from a card its reader was entitled to.
+   * {@link newestPerDocument} is exported for the caller to apply on the far
+   * side of that decision.
    *
-   * 🔴 Documents, not rows, and the difference is visible on the dashboard. A
-   * working draft is one row per document per LOCALE, so a page edited in three
-   * languages is three rows -- and limiting the query alone let one document
-   * take three of a five-row card while other recent work fell off the end. The
-   * count beside it is document-based, so the list also disagreed with the
-   * number it sits under, and because the card's `select` omits `locale` the
-   * extra rows rendered as indistinguishable duplicates rather than as anything
-   * a reader could explain.
-   *
-   * Over-fetch then collapse, because the data port has no GROUP BY and adding
-   * one for a single card would widen every adapter. The bound is exact rather
-   * than a guess: rows arrive newest-first, so a document's FIRST row is its
-   * latest instant, and every row preceding it belongs to a document at least as
-   * recent. At most `maxPerDocument` rows can come from any one of those, so the
-   * newest `limit` documents are all represented within
-   * `limit * maxPerDocument` rows. See {@link scanBound} for the cap and what it
-   * costs.
+   * 🔴 Paged by CURSOR rather than bounded by an arithmetic guess. The bound
+   * used to be `limit * maxPerDocument`, where `maxPerDocument` was the
+   * install's CURRENT locale count — which does not bound the data: working
+   * drafts written under a locale since removed from the configuration are still
+   * rows, so the read could return too few rows to yield `limit` documents while
+   * the caller's feasibility check said its answer was exact. Paging makes the
+   * caller's real bound — how many DOCUMENTS it wants — the only one; the cursor
+   * is what keeps the pages disjoint while the rows underneath them move. See
+   * {@link olderThan}.
    *
    * The snapshot is projected away. It is the largest column in the table and a
    * card that lists titles has no use for it.
    */
-  async findRecentPendingEdits(input: {
+  async findPendingEditRows(input: {
     slugs: readonly string[];
     limit: number;
-    maxPerDocument: number;
+    order: PendingEditOrder;
+    after?: PendingEditCursor;
   }): Promise<VersionMeta[]> {
     if (input.slugs.length === 0 || input.limit <= 0) return [];
-    const rows = await this.db.select<VersionMeta>(TABLE, {
+    const scope = this.pendingEditWhere(input.slugs);
+    return this.db.select<VersionMeta>(TABLE, {
       columns: [...VERSION_META_COLUMNS],
-      where: this.pendingEditWhere(input.slugs),
-      // `nulls` is stated for the reason the module's other ordered read states
-      // it: the default differs per dialect, and a limited list must not return
-      // different rows per engine.
-      orderBy: [{ column: "updatedAt", direction: "desc", nulls: "last" }],
-      limit: scanBound(input.limit, input.maxPerDocument),
+      where: input.after
+        ? { and: [scope, olderThan(input.after, input.order)] }
+        : scope,
+      // Both orderings end in a UNIQUE column, which is what lets a cursor name
+      // a position exactly: `updatedAt` alone is not total -- SQLite stores
+      // whole seconds, so drafts saved together tie -- and a cursor over a
+      // non-unique key cannot say which of the tied rows a page ended on.
+      // `nulls` is stated because the default differs per dialect, and a limited
+      // list must not return different rows per engine.
+      orderBy: orderClause(input.order),
+      limit: input.limit,
     });
-    return newestPerDocument(rows, input.limit);
   }
 
   /**

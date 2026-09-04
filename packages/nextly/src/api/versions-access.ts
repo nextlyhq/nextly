@@ -21,6 +21,7 @@ import { getService } from "../di";
 import { container } from "../di/container";
 import type { FieldGroupDataService } from "../domains/field-groups/services/field-group-data-service";
 import {
+  resolveSingleDocumentId,
   singleDocumentEditable,
   singleDocumentReadable,
 } from "../domains/singles/services/single-document-access";
@@ -310,27 +311,12 @@ async function canReadLiveSingle(
 }
 
 /**
- * The id of a Single's live document, or `null` when it has not been
- * materialized yet.
- *
- * A Single's URL carries no entry id (there is only ever one document), so
- * callers must resolve it from the backing row rather than trusting a
- * client-supplied value — otherwise the id check that stops a recreated Single
- * exposing its predecessor's snapshots could simply be bypassed. Reads the row
- * directly instead of going through `SingleEntryService.get`, which would
- * materialize a missing Single as a side effect of a read.
+ * Re-exported from the Singles domain, where it now lives beside the read probe
+ * it guards. A DOMAIN module needs the same resolution — the dashboard's
+ * pending-edit cards must not materialize a Single while deciding what to show —
+ * and `domains/` must not import from `api/`.
  */
-export async function resolveSingleDocumentId(
-  slug: string
-): Promise<string | null> {
-  const registry = getService("singleRegistryService");
-  const record = await registry.getSingleBySlug(slug);
-  if (!record?.tableName) return null;
-
-  const adapter = getService("adapter");
-  const row = await adapter.selectOne<{ id?: unknown }>(record.tableName, {});
-  return typeof row?.id === "string" ? row.id : null;
-}
+export { resolveSingleDocumentId };
 
 /**
  * Collapse a live-read result into "may the caller see this document".

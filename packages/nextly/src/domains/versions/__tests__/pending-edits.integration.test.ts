@@ -1,10 +1,16 @@
 /**
- * Counting and listing pending edits across collections, against a real database.
+ * Reading pending edits across collections, against a real database.
  *
- * The distinctness is the whole claim and only a database can settle it: a
- * working draft is one row per document per LOCALE, so "14 documents have
- * unpublished changes" counted from rows says 42 for an install translating
- * into three languages.
+ * The SQL distinct-count tests that stood here are gone with the code they
+ * described. Counting documents in the database could not survive
+ * authorization: a stored read rule lives on the collection rather than on the
+ * version row, so the number it produced included documents the caller may not
+ * open, and using it even as a BOUND made one caller's card depend on data they
+ * cannot see. The count is a walk over authorized rows now, covered where that
+ * walk lives.
+ *
+ * What a database still has to settle is here: which rows a scope admits, and
+ * that a document drafted in several languages is one document.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -16,7 +22,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
-import { VersionsRepository } from "../versions-repository";
+import { newestPerDocument, VersionsRepository } from "../versions-repository";
 
 let current: TestNextly | undefined;
 
@@ -65,44 +71,6 @@ function draft(patch: {
 }
 
 describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
-  it("counts DOCUMENTS, not the rows their locales create", async () => {
-    // 🔴 The distinguishing case. One document translated into two languages is
-    // one thing an editor must publish; counting rows reports two, and the
-    // number a dashboard shows would grow with the install's locale count
-    // rather than with its unpublished work.
-    const app = await boot(dialect);
-    const repo = new VersionsRepository(app.adapter);
-
-    for (const row of [
-      draft({ entryId: "e1", locale: "en" }),
-      draft({ entryId: "e1", locale: "fr" }),
-      draft({ entryId: "e2", locale: "en" }),
-    ]) {
-      await app.adapter.insert(VERSIONS_TABLE, row);
-    }
-
-    expect(await repo.countDocumentsWithPendingEdits(["posts"])).toBe(2);
-  });
-
-  it("ignores autosaves, which are not pending edits", async () => {
-    // An autosave is the editor's in-flight buffer, not a change awaiting
-    // publication. Counting it tells a reader to publish something nobody
-    // decided to keep.
-    const app = await boot(dialect);
-    const repo = new VersionsRepository(app.adapter);
-
-    await app.adapter.insert(
-      VERSIONS_TABLE,
-      draft({ entryId: "e1", locale: null })
-    );
-    await app.adapter.insert(
-      VERSIONS_TABLE,
-      draft({ entryId: "e2", locale: null, isAutosave: true })
-    );
-
-    expect(await repo.countDocumentsWithPendingEdits(["posts"])).toBe(1);
-  });
-
   it("counts and lists only the collections the caller may read", async () => {
     const app = await boot(dialect);
     const repo = new VersionsRepository(app.adapter);
@@ -116,13 +84,12 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
       draft({ entryId: "e2", locale: null, scopeSlug: "secrets" })
     );
 
-    expect(await repo.countDocumentsWithPendingEdits(["posts"])).toBe(1);
-    const listed = await repo.findRecentPendingEdits({
+    const listed = await repo.findPendingEditRows({
       slugs: ["posts"],
+      order: "recency" as const,
       limit: 10,
-      maxPerDocument: 1,
     });
-    expect(listed.map(r => r.scopeSlug)).toEqual(["posts"]);
+    expect(listed.map(row => row.scopeSlug)).toEqual(["posts"]);
   });
 
   it("answers ZERO and an empty list for a caller who may read nothing", async () => {
@@ -137,12 +104,11 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
       draft({ entryId: "e1", locale: null })
     );
 
-    expect(await repo.countDocumentsWithPendingEdits([])).toBe(0);
     expect(
-      await repo.findRecentPendingEdits({
+      await repo.findPendingEditRows({
         slugs: [],
         limit: 10,
-        maxPerDocument: 1,
+        order: "recency" as const,
       })
     ).toEqual([]);
   });
@@ -176,15 +142,58 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
       await app.adapter.insert(VERSIONS_TABLE, row);
     }
 
-    const rows = await repo.findRecentPendingEdits({
-      slugs: ["posts"],
-      limit: 2,
-      maxPerDocument: 2,
-    });
-    expect(rows.map(r => r.entryId)).toEqual(["translated", "other"]);
+    // The collapse is the CALLER's now, applied after it has authorized what it
+    // may show: a localized Single is authorized per language, so collapsing
+    // inside the read would offer only each document's newest locale and lose a
+    // readable older one. The repository returns rows; this is the same
+    // property, asserted where it now lives.
+    const rows = newestPerDocument(
+      await repo.findPendingEditRows({
+        slugs: ["posts"],
+        order: "recency" as const,
+        limit: 10,
+      }),
+      2
+    );
+    expect(rows.map(row => row.entryId)).toEqual(["translated", "other"]);
     // The row kept is the document's LATEST instant, which is what makes the
     // list agree with the order it claims.
     expect(rows[0]?.locale).toBe("en");
+  });
+
+  it("returns every row asked for, past the ceiling a scan used to carry", async () => {
+    // 🔴 The regression this file exists to hold. The row fetch used to take
+    // `Math.min` against a ceiling declared beside it, and that ceiling did not
+    // know what the caller had asked for: a request for a thousand documents
+    // read five hundred rows and returned five hundred documents, so the caller
+    // under-reported while every feasibility check it had made said its answer
+    // was exact. 501 is one past that old ceiling, which is the smallest input
+    // that separates the two implementations.
+    //
+    // The bound is the caller's alone now, and the caller pages until it has the
+    // DOCUMENTS it wants -- so no number taken from configuration stands between
+    // the request and the rows. Drafts written under a locale since removed from
+    // the config are still rows, and a bound derived from the live locale count
+    // cannot see them.
+    const app = await boot(dialect);
+    const repo = new VersionsRepository(app.adapter);
+
+    for (let index = 0; index < 501; index++) {
+      await app.adapter.insert(
+        VERSIONS_TABLE,
+        draft({ entryId: `e${index}`, locale: null })
+      );
+    }
+
+    const rows = await repo.findPendingEditRows({
+      slugs: ["posts"],
+      order: "recency" as const,
+      limit: 1000,
+    });
+    expect(rows).toHaveLength(501);
+    // Asserted on IDENTITY too: a scan that returned 501 of the wrong rows, or
+    // 501 with a duplicate, has the same length.
+    expect(new Set(rows.map(row => row.entryId)).size).toBe(501);
   });
 
   it("lists the most recently touched first, and never the snapshot", async () => {
@@ -208,14 +217,14 @@ describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
       })
     );
 
-    const rows = await repo.findRecentPendingEdits({
+    const rows = await repo.findPendingEditRows({
       slugs: ["posts"],
+      order: "recency" as const,
       limit: 10,
-      maxPerDocument: 1,
     });
-    expect(rows.map(r => r.entryId)).toEqual(["new", "old"]);
+    expect(rows.map(row => row.entryId)).toEqual(["new", "old"]);
     // The snapshot is the document's unpublished content and the largest column
     // in the table; a card listing titles has no use for it.
-    expect(rows.every(r => !("snapshot" in r))).toBe(true);
+    expect(rows.every(row => !("snapshot" in row))).toBe(true);
   });
 });

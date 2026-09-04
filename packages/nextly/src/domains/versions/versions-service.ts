@@ -22,6 +22,8 @@ import type { VersionsDbApi } from "./db-api";
 import {
   VersionsRepository,
   type AutosaveWriteResult,
+  type PendingEditCursor,
+  type PendingEditOrder,
   type VersionMeta,
   type VersionRef,
   type VersionRow,
@@ -39,57 +41,35 @@ export interface VersionListOptions {
   locale?: string;
 }
 
-/** Construction-time facts this service cannot derive from its database handle. */
-export interface VersionsServiceOptions {
-  /**
-   * How many working drafts one document can hold — the install's configured
-   * locale count, since a working draft is one row per document per locale.
-   *
-   * Read by the recent-edits list to bound the rows it must scan to find a full
-   * page of distinct DOCUMENTS. Defaults to 1, which is exactly right for an
-   * install with no localization configured and merely conservative otherwise:
-   * too low returns fewer documents than asked, never wrong ones.
-   */
-  maxWorkingDraftsPerDocument?: number;
-}
-
 export class VersionsService {
   private readonly repo: VersionsRepository;
-  private readonly maxWorkingDraftsPerDocument: number;
 
-  constructor(db: VersionsDbApi, options: VersionsServiceOptions = {}) {
+  constructor(db: VersionsDbApi) {
     this.repo = new VersionsRepository(db);
-    this.maxWorkingDraftsPerDocument = Math.max(
-      Math.trunc(options.maxWorkingDraftsPerDocument ?? 1) || 1,
-      1
-    );
   }
 
   /**
-   * How many documents hold a pending edit, within collections the caller reads.
+   * One page of pending-edit ROWS, newest first.
    *
-   * 🔴 The allowlist is REQUIRED and ENUMERATED — `[]` means exactly nothing,
-   * and there is no value meaning "no filter". This service has no authorization
-   * of its own (unlike `ReleasesService`, none of its methods takes an actor) so
-   * the bound has to arrive from the caller, and an optional parameter would
-   * produce an install-wide number for a reader entitled to part of it the first
-   * time somebody forgot it. The one caller resolves the list through
-   * `readableEntities`, which answers every registered entity for a super admin
-   * rather than a bypass, so nothing here needs a wider case.
+   * 🔴 Rows rather than documents, and the caller collapses them itself — after
+   * it has decided which it may show. A working draft is one row per document
+   * per locale, and a localized Single is authorized per language, so collapsing
+   * before that decision offers the newest locale alone and loses a readable
+   * older one. This service used to take the install's locale count to size a
+   * single read; that number does not bound the data, because drafts written
+   * under a locale since removed from the configuration are still rows.
    */
-  async countPendingEdits(readableSlugs: readonly string[]): Promise<number> {
-    return this.repo.countDocumentsWithPendingEdits(readableSlugs);
-  }
-
-  /** The documents most recently left with a pending edit, newest first. */
-  async recentPendingEdits(input: {
+  async pendingEditRows(input: {
     readableSlugs: readonly string[];
     limit: number;
+    order: PendingEditOrder;
+    after?: PendingEditCursor;
   }): Promise<VersionMeta[]> {
-    return this.repo.findRecentPendingEdits({
+    return this.repo.findPendingEditRows({
       slugs: input.readableSlugs,
       limit: input.limit,
-      maxPerDocument: this.maxWorkingDraftsPerDocument,
+      order: input.order,
+      ...(input.after ? { after: input.after } : {}),
     });
   }
 
