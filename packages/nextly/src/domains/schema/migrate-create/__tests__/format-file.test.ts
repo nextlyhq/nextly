@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  FIELD_GROUP_HEADER_PATTERN,
   formatBlankFile,
   formatMigrationFile,
   formatTimestamp,
@@ -177,5 +178,47 @@ describe("slugify", () => {
 
   it("handles empty input", () => {
     expect(slugify("")).toBe("");
+  });
+});
+
+describe("field-group header", () => {
+  const args = (components: string[]) => ({
+    name: "add_hero",
+    dialect: "postgresql" as const,
+    sqlStatements: ['ALTER TABLE "dc_posts" ADD COLUMN "hero" jsonb'],
+    downSqlStatements: [],
+    collections: ["posts"],
+    singles: [],
+    components,
+    hasUserExt: false,
+    now: new Date("2026-04-29T15:45:00.123Z"),
+  });
+
+  it("writes the current vocabulary, not the pre-rename one", () => {
+    const out = formatMigrationFile(args(["hero", "seo"]));
+    expect(out).toContain("-- Field groups: hero, seo");
+    expect(out).not.toContain("-- Components:");
+  });
+
+  it("reads back a file it just wrote", () => {
+    const out = formatMigrationFile(args(["hero", "seo"]));
+    expect(out.match(FIELD_GROUP_HEADER_PATTERN)?.[1]).toBe("hero, seo");
+  });
+
+  it("still reads the legacy headers, which remain on disk forever", () => {
+    // Files generated before the rename are never rewritten. A reader that knew only the
+    // current header would report those migrations as touching no field groups, silently.
+    expect(
+      "-- Components: hero, seo".match(FIELD_GROUP_HEADER_PATTERN)?.[1]
+    ).toBe("hero, seo");
+    expect("-- Component: hero".match(FIELD_GROUP_HEADER_PATTERN)?.[1]).toBe(
+      "hero"
+    );
+  });
+
+  it("does not match a different header", () => {
+    expect(
+      "-- Collections: posts".match(FIELD_GROUP_HEADER_PATTERN)
+    ).toBeNull();
   });
 });
