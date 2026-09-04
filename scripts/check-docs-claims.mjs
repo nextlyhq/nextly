@@ -74,6 +74,9 @@ const REPO_LINK = /github\.com\/nextlyhq\/nextly\/(?:blob|tree|raw)\/([^\s)\]"'`
 
 const HEX_REF = /^[0-9a-f]{7,40}$/i;
 
+/** Markdown links pointing inside the docs site, e.g. `[Preview](/docs/preview)`. */
+const INTERNAL_DOCS_LINK = /\]\((\/docs\/[^)\s]*)\)/g;
+
 /**
  * Split a link's tail into the ref and the path under it.
  *
@@ -257,6 +260,50 @@ function metaReachability(repoRoot, tracked, findings) {
   }
 }
 
+/**
+ * Every `/docs/...` link resolves to a page that exists.
+ *
+ * Cross-links are how a reader moves between capabilities, and a moved or renamed page
+ * breaks them silently: the build still succeeds and the sidebar still renders, so nothing
+ * reports it until a reader hits a 404. The set of pages is derived from the same tracked
+ * list everything else here reads, so a link to a page that exists only locally fails too.
+ */
+function internalLinks(repoRoot, tracked, findings) {
+  const pages = new Set(tracked.filter(rel => rel.endsWith(".mdx")));
+  const resolves = target => {
+    const path = target.split("#")[0].replace(/\/+$/, "");
+    if (path === "/docs") return true;
+    const rel = `docs${path.slice("/docs".length)}`;
+    return pages.has(`${rel}.mdx`) || pages.has(`${rel}/index.mdx`);
+  };
+
+  for (const rel of tracked) {
+    if (!rel.endsWith(".mdx") && !rel.endsWith(".md")) continue;
+    if (basename(rel) === "CHANGELOG.md") continue;
+    let text;
+    try {
+      text = readFileSync(join(repoRoot, rel), "utf-8");
+    } catch {
+      continue;
+    }
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      INTERNAL_DOCS_LINK.lastIndex = 0;
+      let match;
+      while ((match = INTERNAL_DOCS_LINK.exec(lines[i])) !== null) {
+        if (!resolves(match[1])) {
+          findings.push({
+            check: "internal-docs-link",
+            file: rel,
+            line: i + 1,
+            message: `links to ${match[1]}, which is not a docs page`,
+          });
+        }
+      }
+    }
+  }
+}
+
 export async function runChecks({
   repoRoot,
   allowlist = {},
@@ -424,6 +471,7 @@ export async function runChecks({
     }
   }
 
+  internalLinks(repoRoot, tracked, findings);
   metaReachability(repoRoot, tracked, findings);
 
   return { findings, unverifiable };

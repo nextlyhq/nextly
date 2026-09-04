@@ -368,3 +368,38 @@ describe("meta.json is consulted only when tracked", () => {
     expect(findings.map(f => f.check)).toContain("meta-reachable");
   });
 });
+
+describe("internal-docs-link", () => {
+  it("fires on a link to a docs page that does not exist", async () => {
+    expect(
+      await checksFor({ "docs/a.mdx": "See [gone](/docs/nope) for more.\n" })
+    ).toContain("internal-docs-link");
+  });
+
+  it("does not fire when the target exists as a file", async () => {
+    expect(
+      await checksFor({
+        "docs/a.mdx": "See [b](/docs/b) for more.\n",
+        "docs/b.mdx": "# b\n",
+      })
+    ).not.toContain("internal-docs-link");
+  });
+
+  it("resolves a directory target through its index page", async () => {
+    expect(
+      await checksFor({
+        "docs/a.mdx": "See [preview](/docs/preview) for more.\n",
+        "docs/preview/index.mdx": "# preview\n",
+      })
+    ).not.toContain("internal-docs-link");
+  });
+
+  it("ignores the anchor when resolving", async () => {
+    expect(
+      await checksFor({
+        "docs/a.mdx": "See [b](/docs/b#a-heading) for more.\n",
+        "docs/b.mdx": "# b\n",
+      })
+    ).not.toContain("internal-docs-link");
+  });
+});
