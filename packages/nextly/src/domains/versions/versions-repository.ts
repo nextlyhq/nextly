@@ -29,6 +29,26 @@ import { workingDraftKey } from "./working-draft-key";
 
 const TABLE = VERSIONS_TABLE;
 
+/**
+ * What makes a row a WORKING DRAFT, independent of which document it belongs to.
+ *
+ * 🔴 The single declaration of "pending edit", spread by both the per-document
+ * predicate and the cross-document ones. It is one value rather than one comment
+ * asking two predicates to agree: a working draft is the only non-autosave row
+ * carrying no version number (durable history rows always take a sequence
+ * number; autosave rows set `isAutosave = true`), and the day that definition
+ * changes it must change for the document read and the dashboard together. Two
+ * spellings would keep answering, and the disagreement would surface as a count
+ * that does not match the documents it points at.
+ *
+ * Never mutated -- both consumers spread it into a fresh `and` array.
+ */
+const WORKING_DRAFT_SHAPE: readonly VersionsWhereCondition[] = [
+  { column: "isAutosave", op: "=", value: false },
+  { column: "versionNo", op: "IS NULL" },
+  { column: "status", op: "=", value: "draft" },
+];
+
 // Ids deleted per statement. Each id binds one parameter and SQLite's default
 // SQLITE_MAX_VARIABLE_NUMBER is 999 (the lowest across supported dialects), so
 // this stays well under it rather than tracking per-dialect capabilities.
@@ -52,6 +72,59 @@ const VERSION_META_COLUMNS = [
   "createdAt",
   "updatedAt",
 ] as const;
+
+/**
+ * The largest number of rows a recent-edits scan will read.
+ *
+ * A ceiling on the over-fetch, not on the answer. It only binds when
+ * `limit * maxPerDocument` exceeds it -- a 5-row card needs it past 100
+ * configured locales -- and when it does the card returns FEWER documents rather
+ * than wrong ones. Worth having because `maxPerDocument` is the configured
+ * locale count, and rows written under a locale later removed from the config
+ * are not bounded by it.
+ */
+const MAX_PENDING_EDIT_SCAN = 500;
+
+/** How many rows to read to be sure of finding `limit` distinct documents. */
+function scanBound(limit: number, maxPerDocument: number): number {
+  return Math.min(limit * Math.max(maxPerDocument, 1), MAX_PENDING_EDIT_SCAN);
+}
+
+/**
+ * A document's identity across locales.
+ *
+ * NUL-joined rather than concatenated, so a slug ending in the separator cannot
+ * spell the same key as a different slug and entry id pair -- the columns are
+ * free strings and a delimiter that can occur inside one is a collision waiting
+ * for the install that names a collection unusually.
+ */
+function documentKey(row: VersionMeta): string {
+  return [row.scopeKind, row.scopeSlug, row.entryId].join("\u0000");
+}
+
+/**
+ * One row per document -- its newest -- keeping at most `limit` of them.
+ *
+ * Relies on the caller's `updatedAt DESC` ordering: the first row seen for a
+ * document IS its latest instant, so keeping the first and dropping the rest
+ * needs no comparison. Stops at `limit`, which is what makes the scan bound
+ * above sufficient rather than merely generous.
+ */
+function newestPerDocument(
+  rows: readonly VersionMeta[],
+  limit: number
+): VersionMeta[] {
+  const seen = new Set<string>();
+  const newest: VersionMeta[] = [];
+  for (const row of rows) {
+    const key = documentKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    newest.push(row);
+    if (newest.length === limit) break;
+  }
+  return newest;
+}
 
 /** Identifies the document a version belongs to. */
 export interface VersionRef {
@@ -238,12 +311,107 @@ export class VersionsRepository {
     return {
       and: [
         ...this.docWhere(ref),
-        { column: "isAutosave", op: "=", value: false },
-        { column: "versionNo", op: "IS NULL" },
-        { column: "status", op: "=", value: "draft" },
+        ...WORKING_DRAFT_SHAPE,
         this.localeCondition(locale),
       ],
     };
+  }
+
+  /**
+   * The working-draft predicate WITHOUT a document scope.
+   *
+   * 🔴 Derived from {@link WORKING_DRAFT_SHAPE}, the same value
+   * `workingDraftWhere` spreads, so the per-document read and the cross-document
+   * reads cannot disagree about what a pending edit IS. Two spellings of
+   * "non-autosave, no version number, draft" would answer the same question
+   * differently the first time one of them changed, and the disagreement would
+   * show as a dashboard number that does not match the document it points at.
+   */
+  private pendingEditWhere(slugs: readonly string[]): VersionsWhere {
+    return {
+      and: [
+        ...WORKING_DRAFT_SHAPE,
+        // Always applied, because this read is bounded by what its caller may
+        // see and the allowlist is enumerated for every caller -- a super admin
+        // included. An empty list therefore means exactly nothing, and the
+        // callers below short-circuit it rather than emitting `IN ()`.
+        { column: "scopeSlug", op: "IN", value: [...new Set(slugs)] },
+      ],
+    };
+  }
+
+  /** The count capability, or a refusal naming why it is absent. */
+  private counter(): NonNullable<VersionsDbApi["count"]> {
+    const count = this.db.count?.bind(this.db);
+    if (!count) {
+      // The pooled adapter has it; a transaction context does not. A read path
+      // reaching here on a tx handle is a wiring mistake, not a caller's.
+      throw NextlyError.internal({
+        logContext: { reason: "versions-count-unsupported" },
+      });
+    }
+    return count;
+  }
+
+  /**
+   * How many DOCUMENTS hold a pending edit, within the given collections.
+   *
+   * 🔴 Documents, not rows. A working draft is one row per document per LOCALE,
+   * so a document edited in three languages is one thing to fix and three rows
+   * -- and "14 documents have unpublished changes" counted from rows says 42.
+   * The distinct combination is the document's identity, which is why the
+   * adapter's `distinctOn` exists rather than a row count here.
+   */
+  async countDocumentsWithPendingEdits(
+    slugs: readonly string[]
+  ): Promise<number> {
+    if (slugs.length === 0) return 0;
+    return this.counter()(TABLE, {
+      where: this.pendingEditWhere(slugs),
+      distinctOn: ["scopeKind", "scopeSlug", "entryId"],
+    });
+  }
+
+  /**
+   * The DOCUMENTS most recently left with a pending edit, newest first.
+   *
+   * 🔴 Documents, not rows, and the difference is visible on the dashboard. A
+   * working draft is one row per document per LOCALE, so a page edited in three
+   * languages is three rows -- and limiting the query alone let one document
+   * take three of a five-row card while other recent work fell off the end. The
+   * count beside it is document-based, so the list also disagreed with the
+   * number it sits under, and because the card's `select` omits `locale` the
+   * extra rows rendered as indistinguishable duplicates rather than as anything
+   * a reader could explain.
+   *
+   * Over-fetch then collapse, because the data port has no GROUP BY and adding
+   * one for a single card would widen every adapter. The bound is exact rather
+   * than a guess: rows arrive newest-first, so a document's FIRST row is its
+   * latest instant, and every row preceding it belongs to a document at least as
+   * recent. At most `maxPerDocument` rows can come from any one of those, so the
+   * newest `limit` documents are all represented within
+   * `limit * maxPerDocument` rows. See {@link scanBound} for the cap and what it
+   * costs.
+   *
+   * The snapshot is projected away. It is the largest column in the table and a
+   * card that lists titles has no use for it.
+   */
+  async findRecentPendingEdits(input: {
+    slugs: readonly string[];
+    limit: number;
+    maxPerDocument: number;
+  }): Promise<VersionMeta[]> {
+    if (input.slugs.length === 0 || input.limit <= 0) return [];
+    const rows = await this.db.select<VersionMeta>(TABLE, {
+      columns: [...VERSION_META_COLUMNS],
+      where: this.pendingEditWhere(input.slugs),
+      // `nulls` is stated for the reason the module's other ordered read states
+      // it: the default differs per dialect, and a limited list must not return
+      // different rows per engine.
+      orderBy: [{ column: "updatedAt", direction: "desc", nulls: "last" }],
+      limit: scanBound(input.limit, input.maxPerDocument),
+    });
+    return newestPerDocument(rows, input.limit);
   }
 
   /**

@@ -23,6 +23,7 @@ import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WidgetQuery } from "../widgets/query";
 import type { WidgetResult, WidgetResultField } from "../widgets/result";
 import { failUnavailableSourceOrOp } from "../widgets/sources";
+import { RELEASES_SOURCE_ID } from "../widgets/system-source-ids";
 import { registerSystemSource } from "../widgets/system-sources";
 
 import type { ReleaseRow } from "./releases-repository";
@@ -31,7 +32,7 @@ import type {
   ReleasesService,
 } from "./services/releases-service";
 
-export const RELEASES_SOURCE_ID = "system:releases";
+export { RELEASES_SOURCE_ID };
 
 /**
  * How many releases the card reads when the query names no limit.

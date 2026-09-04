@@ -32,6 +32,7 @@
  */
 
 import type { WidgetDefinition } from "./definition";
+import { VERSIONS_SOURCE_ID } from "./system-source-ids";
 
 /**
  * The prefix core's dashboard components resolve under.
@@ -100,5 +101,29 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     defaultSize: "full",
     defaultOrder: 30,
     component: "core#TeamSummary",
+  },
+  {
+    id: "core/pending-edits",
+    title: "Unpublished changes",
+    description: "Documents holding edits that are not live yet",
+    archetype: "metric",
+    defaultSize: "sm",
+    defaultOrder: 25,
+    query: { source: VERSIONS_SOURCE_ID, op: "count" },
+  },
+  {
+    id: "core/recently-edited",
+    title: "Recently edited",
+    description:
+      "The documents most recently left with unpublished edits, newest first.",
+    archetype: "list",
+    defaultSize: "md",
+    defaultOrder: 35,
+    query: {
+      source: VERSIONS_SOURCE_ID,
+      op: "list",
+      select: ["scopeSlug", "entryId", "updatedAt"],
+      limit: 5,
+    },
   },
 ] as const;
