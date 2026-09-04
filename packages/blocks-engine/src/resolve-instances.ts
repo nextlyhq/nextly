@@ -667,21 +667,40 @@ function mergeableDevices(
 }
 
 /**
- * Write the instance's hiding into the map, reporting whether anything moved.
+ * Write the instance's per-breakpoint setting into the map, reporting whether
+ * anything moved.
  *
- * Only `false` travels. The instance may hide what the definition shows; it
- * may not show what the definition hid, because that decision belongs to the
- * author of the component's own content.
+ * BOTH values travel, not only `false`, and that is the correction: hiding
+ * INHERITS to narrower breakpoints until a `true` ends the band. So
+ * `{ tablet: false, mobile: true }` means "hidden from tablet down to mobile,
+ * shown again at mobile", and copying only the `false` hides the component
+ * everywhere below tablet — further than the author asked, from a rule meant
+ * to be conservative.
+ *
+ * A `true` is still refused where the definition's own map says `false` at
+ * that same breakpoint, so an instance cannot re-show what the component's
+ * author explicitly hid.
+ *
+ * The residual gap is stated rather than hidden: a definition that hid a WIDER
+ * breakpoint hides the narrower ones by inheritance rather than by an entry,
+ * so an instance's band-ending `true` can end that inherited band too.
+ * Closing it needs the breakpoints in order, and this module has no style
+ * context by design — the engine is the place where composition is pure. The
+ * alternative, dropping every `true`, corrupts every bounded band, which is
+ * the ordinary way responsive visibility is authored.
  */
 function hideEach(
   merged: Record<string, unknown>,
   devices: Record<string, unknown>,
-  hidden: readonly string[]
+  named: readonly string[]
 ): boolean {
   let changed = false;
-  for (const id of hidden) {
-    if (ownEntry(devices, id) !== false) continue;
-    defineEntry(merged, id, false);
+  for (const id of named) {
+    const wanted = ownEntry(devices, id);
+    if (typeof wanted !== "boolean") continue;
+    if (wanted && ownEntry(merged, id) === false) continue;
+    if (ownEntry(merged, id) === wanted) continue;
+    defineEntry(merged, id, wanted);
     changed = true;
   }
   return changed;
@@ -716,11 +735,21 @@ function withRemappedIdReferences(
       const attributes = isPlainRecord(node.attributes)
         ? remapIdReferences(node.attributes, ctx.domIds)
         : node.attributes;
+      const props = remapFragments(node.props, ctx.domIds, 0) as Record<
+        string,
+        unknown
+      >;
       const slots = isPlainRecord(node.slots)
         ? rewriteSlots(node.slots)
         : node.slots;
-      if (attributes === node.attributes && slots === node.slots) return node;
-      return { ...node, attributes, slots };
+      if (
+        attributes === node.attributes &&
+        slots === node.slots &&
+        props === node.props
+      ) {
+        return node;
+      }
+      return { ...node, attributes, props, slots };
     });
   const rewriteSlots = (
     slots: Record<string, ResolvedBlockNode[]>
@@ -740,6 +769,84 @@ function withRemappedIdReferences(
     return changed ? (next as Record<string, ResolvedBlockNode[]>) : slots;
   };
   return rewrite(roots);
+}
+
+/**
+ * How deep a prop tree is searched for fragment links.
+ *
+ * A bound on work over values a stored definition supplied, generous enough
+ * that no authored prop shape reaches it.
+ */
+const MAX_PROP_SCAN_DEPTH = 8;
+
+/**
+ * Point a block's `#fragment` props at wherever those ids ended up.
+ *
+ * `cssId` is not referenced only by markup: a link's `href` may be `#pricing`,
+ * and the renderer accepts that — `core/button` passes a bare fragment through
+ * to the DOM. Remapping the target without the link leaves every composed
+ * instance anchored to an id nothing carries, which is the same silent
+ * breakage as a dangling `aria-labelledby`, one prop over.
+ *
+ * A value is rewritten ONLY when the whole string is `#` followed by an id
+ * this composition actually minted, and that is what keeps it away from
+ * content: `"#1 bestseller"` names no minted id and is left exactly as
+ * written, and so is a fragment addressing something outside the component.
+ */
+function remapFragments(
+  props: unknown,
+  domIds: ReadonlyMap<string, string>,
+  depth: number
+): unknown {
+  if (domIds.size === 0 || depth > MAX_PROP_SCAN_DEPTH) return props;
+  if (typeof props === "string") return remapOneFragment(props, domIds);
+  if (Array.isArray(props)) return remapFragmentList(props, domIds, depth);
+  if (!isPlainRecord(props)) return props;
+  return remapFragmentRecord(props, domIds, depth);
+}
+
+/** The same, for a record-valued prop. */
+function remapFragmentRecord(
+  props: Record<string, unknown>,
+  domIds: ReadonlyMap<string, string>,
+  depth: number
+): unknown {
+  const keys = boundedOwnKeys(props, MAX_ENVELOPE_ENTRIES);
+  if (keys === null) return props;
+  let changed = false;
+  const next: Record<string, unknown> = {};
+  for (const key of keys) {
+    const value = ownEntry(props, key);
+    const mapped = remapFragments(value, domIds, depth + 1);
+    if (mapped !== value) changed = true;
+    defineEntry(next, key, mapped);
+  }
+  return changed ? next : props;
+}
+
+/** The same, for an array-valued prop. */
+function remapFragmentList(
+  items: readonly unknown[],
+  domIds: ReadonlyMap<string, string>,
+  depth: number
+): unknown {
+  let changed = false;
+  const next = items.map(item => {
+    const mapped = remapFragments(item, domIds, depth + 1);
+    if (mapped !== item) changed = true;
+    return mapped;
+  });
+  return changed ? next : items;
+}
+
+/** One string, rewritten only if it is exactly a fragment this run minted. */
+function remapOneFragment(
+  value: string,
+  domIds: ReadonlyMap<string, string>
+): string {
+  if (!value.startsWith("#")) return value;
+  const target = domIds.get(value.slice(1));
+  return target === undefined ? value : `#${target}`;
 }
 
 /** Everything one speculative expansion may have to give back. */
@@ -791,9 +898,15 @@ function refusalFor(
 ): ComponentUnresolvedReason | undefined {
   if (scope.onPath.has(componentId)) return "cycle";
   if (scope.depth >= run.maxComposedDepth) return "composed-depth";
+  // ABSENT from the map is `missing` — nobody supplied one, and the remedy is
+  // to publish or restore it. A value that IS supplied and cannot be read is a
+  // document fault, so it takes `malformed`: offering the publish remedy for
+  // corrupt component data sends an author to the wrong screen, which is the
+  // whole reason these reasons are a closed list rather than a message.
+  if (!run.definitions.has(componentId)) return "missing";
   const definition = run.definitions.get(componentId);
   if (!isPlainRecord(definition) || !Array.isArray(definition.nodes)) {
-    return "missing";
+    return "malformed";
   }
   // A structural check is not the discrimination. `DefinitionsById` is keyed to
   // `BlockDocument`, so a page, a region or a template satisfies "has a nodes
@@ -1181,7 +1294,14 @@ function cloneDefinitionNode(
   depth: number
 ): ResolvedBlockNode[] | null {
   const plan = ctx.plans.get(node.id);
-  if (plan?.visible === false) return [];
+  if (plan?.visible === false) {
+    // The node goes and its slots go with it, INSTANCE-SUPPLIED content
+    // included — which the host survey already charged for. Without this the
+    // page pays for a subtree nobody receives, and a later visible root is
+    // refused for room the hidden one freed.
+    refundPlannedSlots(plan, ctx.run);
+    return [];
+  }
 
   const scoped = scopeNode(node, ctx, plan);
 
@@ -1209,6 +1329,20 @@ function cloneDefinitionNode(
     );
   }
   return [scoped];
+}
+
+/**
+ * Give back the budget for slot content that goes with a hidden target.
+ *
+ * Only the PLANNED content, never the definition's own children: those were
+ * charged as they were cloned, and a hidden node is abandoned before its slots
+ * are visited, so nothing was spent on them to return.
+ */
+function refundPlannedSlots(plan: NodePlan, run: ResolveRun): void {
+  if (plan.slots === undefined) return;
+  for (const content of plan.slots.values()) {
+    run.budget += countNodes(content);
+  }
 }
 
 /** A definition node under the instance's identity, with its overrides applied. */

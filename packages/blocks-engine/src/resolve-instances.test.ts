@@ -809,12 +809,15 @@ describe("resolveComponentInstances what an instance carries", () => {
     const nodes = resolveComponentInstances(doc, definitions).document.nodes;
 
     expect(nodes).toHaveLength(2);
-    expect(nodes.map(e => e.visibility?.devices?.mobile)).toEqual([
-      false,
-      false,
+    // The whole setting travels, both values. Hiding inherits to narrower
+    // breakpoints until a `true` ends the band, so copying only the `false`
+    // would hide the component further than the author asked. What an instance
+    // may NOT do is re-show a breakpoint the definition explicitly hid, which
+    // the case below pins.
+    expect(nodes.map(e => e.visibility?.devices)).toEqual([
+      { mobile: false, desktop: true },
+      { mobile: false, desktop: true },
     ]);
-    // Only hiding travels: the instance may not un-hide what the definition hid.
-    expect(nodes[0]!.visibility?.devices).not.toHaveProperty("desktop");
   });
 
   it("does not let an instance re-show a root its definition hid", () => {
@@ -1170,6 +1173,157 @@ describe("resolveComponentInstances ownership and cost", () => {
     // `isConditionGated` reads null exactly like an absent envelope, so the
     // merge must too — refusing it silently drops the author's hiding.
     expect(nodes[0]!.visibility?.devices?.mobile).toBe(false);
+  });
+});
+
+describe("resolveComponentInstances references, bands and cost", () => {
+  it("points a fragment link at the id it now names", () => {
+    const doc = page([instance("i1", "hero"), instance("i2", "hero")]);
+    const definitions = defs({
+      hero: component([
+        node("d1", { cssId: "pricing" }),
+        node("d2", { props: { href: "#pricing", label: "See" } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[1]!.props.href).toBe(`#${String(nodes[0]!.cssId)}`);
+    expect(nodes[3]!.props.href).toBe(`#${String(nodes[2]!.cssId)}`);
+  });
+
+  it("leaves a fragment that names nothing in the component alone", () => {
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        node("d1", { cssId: "own" }),
+        node("d2", { props: { href: "#elsewhere", text: "#1 seller" } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[1]!.props.href).toBe("#elsewhere");
+    expect(nodes[1]!.props.text).toBe("#1 seller");
+  });
+
+  it("rewrites a fragment nested inside a prop", () => {
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        node("d1", { cssId: "pricing" }),
+        node("d2", {
+          props: { cta: { links: [{ href: "#pricing" }] } },
+        }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+    const cta = nodes[1]!.props.cta as { links: { href: string }[] };
+
+    // A block's props are a tree, not a flat record — a fragment reached only
+    // through a record and an array is the ordinary shape, not the exotic one.
+    expect(cta.links[0]!.href).toBe(`#${String(nodes[0]!.cssId)}`);
+  });
+
+  it("calls a definition supplied as null malformed, not missing", () => {
+    const doc = page([instance("i1", "hero")]);
+    const definitions = new Map<string, BlockDocument>([
+      ["hero", null as unknown as BlockDocument],
+    ]);
+
+    const result = resolveComponentInstances(doc, definitions);
+
+    // Present-and-unreadable, so the key's PRESENCE is what separates it from
+    // absent — a falsy value would read as absent to anything asking the map
+    // for the value instead.
+    expect(result.unresolved.map(e => e.reason)).toEqual(["malformed"]);
+  });
+
+  it("keeps the true that ends an instance's hidden band", () => {
+    const doc = page([
+      stored(instance("i1", "hero"), {
+        visibility: { devices: { tablet: false, mobile: true } },
+      }),
+    ]);
+    const definitions = defs({ hero: component([node("d1")]) });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    // Hiding inherits to narrower breakpoints until a `true` ends the band, so
+    // dropping the `true` hides the component further than the author asked.
+    expect(nodes[0]!.visibility?.devices).toEqual({
+      tablet: false,
+      mobile: true,
+    });
+  });
+
+  it("will not let an instance re-show a breakpoint the definition hid", () => {
+    const doc = page([
+      stored(instance("i1", "hero"), {
+        visibility: { devices: { mobile: true } },
+      }),
+    ]);
+    const definitions = defs({
+      hero: component([
+        node("d1", { visibility: { devices: { mobile: false } } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[0]!.visibility?.devices?.mobile).toBe(false);
+  });
+
+  it("refunds slot content dropped with a hidden slot target", () => {
+    const doc = page([
+      instance(
+        "i1",
+        "hero",
+        { overrides: { hide: false } },
+        { slots: { body: [node("x"), node("y")] } }
+      ),
+    ]);
+    const definitions = defs({
+      hero: component([box("c1", []), node("r1"), node("r2")], {
+        slots: { body: { label: "B", nodeId: "c1", slot: "children" } },
+        exposed: [
+          {
+            id: "hide",
+            label: "H",
+            nodeId: "c1",
+            propPath: "p",
+            type: "visibility",
+          },
+        ],
+      }),
+    });
+
+    const result = resolveComponentInstances(doc, definitions, {
+      limits: { ...DEFAULT_LIMITS, maxNodes: 3 },
+    });
+
+    // The two supplied children go with the hidden target, so their charge has
+    // to come back or the two visible roots are refused for room they freed.
+    expect(result.unresolved).toEqual([]);
+    expect(flatten(result.document.nodes)).toHaveLength(2);
+  });
+
+  it("calls a supplied-but-unreadable definition malformed", () => {
+    const doc = page([instance("i1", "hero")]);
+    const definitions = new Map<string, BlockDocument>([
+      [
+        "hero",
+        { formatVersion: 1, kind: "component" } as unknown as BlockDocument,
+      ],
+    ]);
+
+    const result = resolveComponentInstances(doc, definitions);
+
+    // `missing` asks somebody to publish or restore a component; a supplied
+    // record that cannot be read is a document fault, and offering the wrong
+    // remedy is the whole reason the reasons are a closed list.
+    expect(result.unresolved.map(e => e.reason)).toEqual(["malformed"]);
   });
 });
 
