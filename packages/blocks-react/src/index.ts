@@ -279,6 +279,14 @@ export type {
   SlotLock,
   SlotSpec,
   BreakpointContextOptions,
+  // Composition. `PrepareDocumentArgs` names the definitions map in a
+  // parameter position and the stages name what came back, so a host that
+  // cannot write these down cannot annotate the call it is required to make.
+  ComponentUnresolvedReason,
+  DefinitionsById,
+  ResolvedBlockNode,
+  ResolvedDocument,
+  UnresolvedInstance,
   StyleCompileContext,
   StyleOrigin,
   StyleState,

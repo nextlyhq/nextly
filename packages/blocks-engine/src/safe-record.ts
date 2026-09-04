@@ -92,6 +92,33 @@ export function ownEntry<T>(
 }
 
 /**
+ * The own keys of an untrusted record, or `null` when there are too many.
+ *
+ * Counted with `for...in` and stopped at the budget rather than calling
+ * `Object.keys` first. The difference is the whole point: `Object.keys`
+ * materialises EVERY key into an array before any caller can look at the
+ * length, so a record with a hundred thousand keys is fully enumerated and
+ * allocated before the cap that exists to prevent it gets a turn. A budget
+ * checked after the allocation bounds only what happens next.
+ *
+ * `null` rather than a truncated list, because a caller that got fewer keys
+ * than the record holds cannot tell that from a small record, and the two
+ * deserve opposite treatment: one is ordinary, the other is a document to
+ * refuse.
+ */
+export function boundedOwnKeys(record: object, limit: number): string[] | null {
+  const keys: string[] = [];
+  for (const key in record) {
+    // The record's own keys are stored data, so it may carry a
+    // `hasOwnProperty` of its own and answer the question with it.
+    if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
+    if (keys.length >= limit) return null;
+    keys.push(key);
+  }
+  return keys;
+}
+
+/**
  * ## What is already safe, so nobody "fixes" it
  *
  * Only ASSIGNMENT is affected. These define rather than assign, and each

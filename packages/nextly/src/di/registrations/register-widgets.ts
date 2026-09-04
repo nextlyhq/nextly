@@ -37,10 +37,12 @@
  * @module di/registrations/register-widgets
  */
 
+import { registerReleasesWidgetSource } from "../../domains/releases/releases-widget-source";
 import { setContributedWidgets } from "../../domains/widgets/canonical";
 import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
 import { clearWidgets, registerWidget } from "../../domains/widgets/registry";
 import { clearSources } from "../../domains/widgets/sources";
+import { clearSystemResolvers } from "../../domains/widgets/system-sources";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
 
@@ -49,6 +51,13 @@ export function resetWidgetRegistries(
 ): void {
   clearWidgets();
   clearSources();
+  // 🔴 Cleared WITH the source store, never apart from it. The two are halves
+  // of one registration and both are pinned to `globalThis`, so a reset that
+  // took only the sources left every previous boot's resolver addressable —
+  // holding the domain services its closure captured for the process lifetime,
+  // and ready to answer again the moment anything republished that id through
+  // the generic `registerSource` door.
+  clearSystemResolvers();
 
   // The OTHER channel a widget arrives by. A contribution never passes through
   // `registerWidget`, so without this the server's canonical set holds core's
@@ -61,4 +70,11 @@ export function resetWidgetRegistries(
   for (const definition of CORE_WIDGETS) {
     registerWidget(definition);
   }
+
+  // The domains that answer a source of their own publish it here, after the
+  // stores are empty. PUSHED from the composition root rather than pulled by
+  // the widgets domain, which knows nothing about releases and must not have to
+  // import it — that inversion is what would make the widgets package depend on
+  // most of the codebase in order to offer a card.
+  registerReleasesWidgetSource();
 }

@@ -65,10 +65,11 @@ import {
 } from "../../../schemas/releases/types";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
-import { documentRefKey } from "../releases-repository";
+import { documentRefKey, RELEASE_LIST_ORDERS } from "../releases-repository";
 import type {
   DocumentRef,
   NewRelease,
+  ReleaseListOrder,
   ReleaseMemberRow,
   ReleaseRow,
   ReleasesRepository,
@@ -310,7 +311,8 @@ export interface ReleaseBlocker {
   entryId: string;
 }
 
-export interface FindReleasesQuery {
+/** The filters every release listing accepts, whichever ordering it uses. */
+interface FindReleasesFilters {
   /**
    * Restrict to one lifecycle state.
    *
@@ -329,20 +331,6 @@ export interface FindReleasesQuery {
   scheduledAfter?: Date;
   scheduledBefore?: Date;
   /**
-   * Only releases that CONTAIN this document.
-   *
-   * The inverse of `listMembers`, and the question a document editor asks: what
-   * is going to happen to the thing I am looking at. Expressed as a filter on
-   * the release list rather than a route of its own, because that is what it is
-   * — the same resource, narrowed — and because a literal path segment under
-   * `/api/releases` would be read as a release id.
-   *
-   * Answers about SCHEDULED releases only. A draft membership changes nothing on
-   * its own, and the question this serves is whether the document will change
-   * without anyone touching it again.
-   */
-  containing?: DocumentRef;
-  /**
    * How many rows at most. Must be a non-negative integer when given.
    *
    * There is no `offset`: the select port this reads through exposes `where`,
@@ -354,6 +342,56 @@ export interface FindReleasesQuery {
    */
   limit?: number;
 }
+
+/**
+ * What a release listing asks for.
+ *
+ * 🔴 A union on `containing` rather than one flat shape, because the two
+ * listings do not offer the same thing. `containing` routes to a different
+ * query whose order is part of its CONTRACT -- soonest first, the order the
+ * releases will actually be applied to that document -- and `resolveReleaseEffect`
+ * reads the last row as the final state. Honouring a caller's `order` there
+ * would reverse that and hand the winner's place to the loser.
+ *
+ * So the combination is unrepresentable rather than merely refused: an author
+ * writing `{ containing, order }` learns at compile time, which is where the
+ * public docblock on `ReleasesNamespace.find` has always said this. `find`
+ * refuses it at runtime too, because a type binds neither JavaScript nor a cast.
+ */
+export type FindReleasesQuery = FindReleasesFilters &
+  (
+    | {
+        /**
+         * Only releases that CONTAIN this document.
+         *
+         * The inverse of `listMembers`, and the question a document editor asks: what
+         * is going to happen to the thing I am looking at. Expressed as a filter on
+         * the release list rather than a route of its own, because that is what it is
+         * — the same resource, narrowed — and because a literal path segment under
+         * `/api/releases` would be read as a release id.
+         *
+         * Answers about SCHEDULED releases only. A draft membership changes nothing on
+         * its own, and the question this serves is whether the document will change
+         * without anyone touching it again.
+         */
+        containing?: DocumentRef;
+        /** Always soonest-first; see above. */
+        order?: never;
+      }
+    | {
+        containing?: undefined;
+        /**
+         * Which end of the timeline a `limit` keeps.
+         *
+         * Defaults to `"latest"`, the recent-first order every caller before the
+         * dashboard wanted. `"soonest"` exists because the two are not the same
+         * question narrowed differently: asking for the next five releases under the
+         * recent-first order returns the five FURTHEST OUT, and answers with real
+         * rows in a plausible order, so nothing about the result says it is wrong.
+         */
+        order?: ReleaseListOrder;
+      }
+  );
 
 /**
  * The document scopes a release can actually materialise.
@@ -658,6 +696,42 @@ export class ReleasesService {
       throw NextlyError.invalidInput({
         message: "`limit` must be a non-negative integer.",
         logContext: { reason: "invalid-limit", limit: query.limit },
+      });
+    }
+    // Read through a widened view, deliberately: the type above makes this
+    // combination unrepresentable, and a type binds neither a JavaScript caller
+    // nor a cast. Refused rather than honoured, because `findContaining`'s
+    // soonest-first order is its contract -- `resolveReleaseEffect` takes the
+    // LAST row as the final state -- so applying a caller's order there would
+    // hand the winner's place to the loser. Refused rather than ignored,
+    // because accepting an ordering and not applying it answers a different
+    // question than the one asked, with rows that look right.
+    const asked: FindReleasesFilters & {
+      containing?: DocumentRef;
+      order?: ReleaseListOrder;
+    } = query;
+    // 🔴 An unrecognised order is not a smaller mistake than an unrecognised
+    // state. `state` reaches a WHERE clause, so a typo answers with an empty
+    // list -- wrong, but visibly so. `order` reaches a ternary, so a typo
+    // selects the DEFAULT end and answers with real rows in the exact reverse
+    // of what was asked. Checked against the vocabulary's runtime form rather
+    // than trusted from the type, because the public Direct API is reachable
+    // from JavaScript and from a cast.
+    if (
+      asked.order !== undefined &&
+      !RELEASE_LIST_ORDERS.includes(asked.order)
+    ) {
+      throw NextlyError.invalidInput({
+        message: `\`order\` must be one of: ${RELEASE_LIST_ORDERS.join(", ")}.`,
+        logContext: { reason: "invalid-order", order: asked.order },
+      });
+    }
+    if (asked.containing !== undefined && asked.order !== undefined) {
+      throw NextlyError.invalidInput({
+        message:
+          "`order` is not available with `containing`: that listing is always " +
+          "soonest first, the order the releases will be applied to the document.",
+        logContext: { reason: "order-with-containing", order: asked.order },
       });
     }
     if (query.containing !== undefined) {

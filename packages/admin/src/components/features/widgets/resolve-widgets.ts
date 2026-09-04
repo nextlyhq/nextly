@@ -17,6 +17,7 @@ import type {
   WidgetHeight,
   WidgetQuery,
   WidgetSize,
+  WidgetStatCell,
   WidgetChrome,
 } from "nextly/config";
 
@@ -92,6 +93,8 @@ export interface ReadableWidgetDeclaration {
   query?: WidgetQuery;
   component?: string;
   actions?: WidgetAction[];
+  /** Present for `stats`: the numbers the card draws, each with its own query. */
+  cells?: WidgetStatCell[];
   link?: { label: string; href: string };
   defaultOrder?: number;
   chrome?: WidgetChrome;
@@ -217,6 +220,7 @@ function resolveOne(
     query: meta.query,
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
+    cells: meta.cells,
     link: meta.link,
     defaultOrder: meta.defaultOrder,
     chrome: meta.chrome,
@@ -261,6 +265,7 @@ function resolveRegistered(
     query: meta.query,
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
+    cells: meta.cells,
     link: meta.link,
     defaultOrder: meta.defaultOrder,
     chrome: meta.chrome,
@@ -288,6 +293,22 @@ function resolveRegistered(
  * the title fallback, the size fallback and the permission gate are the same
  * code in both paths rather than a second copy that can drift.
  */
+/**
+ * The registration's value where it states one, else the contribution's.
+ *
+ * A named function rather than `??` repeated down the merge table. The table is
+ * a list of FIELDS, and spelling the same fallback beside each one turns a
+ * lookup into a chain of decisions -- which is what the complexity gate
+ * objected to before a reader would have. One rule, stated once, applied by
+ * name at each field it governs.
+ */
+function preferRegistered<T>(
+  registered: T | undefined,
+  contributed: T | undefined
+): T | undefined {
+  return registered ?? contributed;
+}
+
 function mergeCollision(
   contribution: ReadableWidgetDeclaration,
   registration: RegisteredWidgetMeta
@@ -300,15 +321,21 @@ function mergeCollision(
     // would overwrite the contributed component with that `undefined`, which is
     // the exact defect this function exists to close.
     title: registration.title,
-    description: registration.description ?? contribution.description,
-    icon: registration.icon ?? contribution.icon,
+    description: preferRegistered(
+      registration.description,
+      contribution.description
+    ),
+    icon: preferRegistered(registration.icon, contribution.icon),
     archetype: registration.archetype,
     defaultSize: registration.defaultSize,
     // The registry wins where it states one, exactly as `defaultOrder` and
     // `chrome` do below. Named in this list rather than left out because the
     // list IS the contract: a field missing from it is dropped silently, and a
     // merged widget would lose the height its contribution declared.
-    defaultHeight: registration.defaultHeight ?? contribution.defaultHeight,
+    defaultHeight: preferRegistered(
+      registration.defaultHeight,
+      contribution.defaultHeight
+    ),
     minSize: registration.minSize,
     maxSize: registration.maxSize,
     // The contributed size is the FALLBACK, read only when the registration
@@ -316,16 +343,26 @@ function mergeCollision(
     size: contribution.size,
     requiredPermission: registration.requiredPermission,
     query: registration.query,
-    link: registration.link ?? contribution.link,
-    component: registration.component ?? contribution.component,
-    actions: registration.actions ?? contribution.actions,
+    link: preferRegistered(registration.link, contribution.link),
+    component: preferRegistered(registration.component, contribution.component),
+    actions: preferRegistered(registration.actions, contribution.actions),
+    // 🔴 NOT `preferRegistered`. The archetype comes from the registration, so
+    // a contributed stats card colliding with a registered metric would hand
+    // its cells to a widget drawn from one query -- and the batch prefers cells
+    // over that query, so no answer is ever filed under the widget's own id and
+    // the card loads forever. Cells travel only with the archetype that draws
+    // them.
+    cells: registration.archetype === "stats" ? registration.cells : undefined,
     // Both channels can state these, and the registry wins where it does --
     // the rule `defaultSize` already follows above. Rebuilt field by field
     // here, so a field added to the contract and not to THIS list is dropped
     // silently: the merged widget loses its declared position, and an unframed
     // custom widget is wrapped in the card it asked not to have.
-    defaultOrder: registration.defaultOrder ?? contribution.defaultOrder,
-    chrome: registration.chrome ?? contribution.chrome,
+    defaultOrder: preferRegistered(
+      registration.defaultOrder,
+      contribution.defaultOrder
+    ),
+    chrome: preferRegistered(registration.chrome, contribution.chrome),
   };
 }
 

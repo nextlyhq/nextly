@@ -440,3 +440,21 @@ describe("a source's title field", () => {
     expect(getSource("plugin:acme/orders")?.titleField).toBeUndefined();
   });
 });
+
+describe("lifecycleStatus is a capability, so it must be one", () => {
+  it("refuses a non-boolean value", () => {
+    // The consumer tests `=== true`, so `"true"` reads as NOT having a
+    // lifecycle and the card the fact exists to enable is silently never
+    // generated. A truthiness test would be wrong in the other direction.
+    expect(() =>
+      registerSource({
+        id: "collection:posts",
+        label: "Posts",
+        kind: "collection",
+        lifecycleStatus: "true" as unknown as boolean,
+        supports: ["count"],
+        fields: [{ name: "title", type: "string" }],
+      })
+    ).toThrow(/lifecycleStatus, when given, must be a boolean/);
+  });
+});

@@ -292,6 +292,7 @@ export type {
   PluginAdminWidget,
   PluginAdminCustomWidget,
   PluginAdminDataWidget,
+  PluginAdminStatsWidget,
   PluginAdminDeclarativeWidget,
   PluginAdminQuerylessWidget,
   DeclarativeWidgetArchetype,

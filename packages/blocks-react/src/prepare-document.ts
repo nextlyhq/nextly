@@ -17,21 +17,28 @@
  * 2. **Shape repair**, against the caps the SITE configured — a site that
  *    raised `maxNodes` for long pages must not have its content truncated
  *    against the default.
- * 3. **Migration**, so a node behind its definition is read as its current
+ * 3. **Composition**, which replaces each component instance with the tree its
+ *    definition describes. Before migration, so a definition written against
+ *    an older block version is upgraded like any other content rather than
+ *    reaching the renderer at whatever version it was authored at. Its
+ *    definitions are shape-repaired first, for the reason pass 2 exists: an
+ *    unsanitized node inlined into a sanitized host reintroduces one level
+ *    down exactly what the host was repaired to remove.
+ * 4. **Migration**, so a node behind its definition is read as its current
  *    props rather than its stored ones.
- * 4. **Condition gating**, which removes a node and its whole subtree from the
+ * 5. **Condition gating**, which removes a node and its whole subtree from the
  *    output. This is the one whose absence leaks: a gated node is deliberately
  *    withheld, so anything derived from it publishes what was withheld.
- * 5. **Address repair**, which drops later duplicates of a repeated id — so a
+ * 6. **Address repair**, which drops later duplicates of a repeated id — so a
  *    duplicate that never renders cannot speak for the page.
- * 6. **Known placeholders**, whose subtrees the renderer replaces wholesale. A
+ * 7. **Known placeholders**, whose subtrees the renderer replaces wholesale. A
  *    node whose migration failed, whose type nothing registered, or whose
  *    stored version is ahead of its definition emits a placeholder and none of
  *    its content.
  *
  * Gathering the passes here does not by itself make two readers agree. Each
  * pass's ARGUMENTS are as much of the contract as the pass and its position:
- * the same six calls made with a different predicate or different caps is a
+ * the same calls made with a different predicate or different caps is a
  * COPY of this pipeline rather than a use of it, and it diverges exactly as a
  * hand-written sequence would. The placeholder predicate handed to the address
  * repair is the sharp one, because omitting it is silent and changes which
@@ -40,16 +47,23 @@
  * @module prepare-document
  */
 import {
+  COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
+  isPlainRecord,
   migrateDocument,
+  resolveComponentInstances,
 } from "@nextlyhq/blocks-engine";
 import type {
   BlockDocument,
-  BlockNode,
+  ComponentLookup,
+  DefinitionsById,
   DocumentLimits,
   MigratedNode,
+  ResolvedBlockNode,
+  ResolvedDocument,
   StyleCompileContext,
+  UnresolvedInstance,
 } from "@nextlyhq/blocks-engine";
 
 import type { BlockResolver } from "./resolver";
@@ -64,6 +78,19 @@ export interface PrepareDocumentArgs {
   limits?: DocumentLimits;
   /** Consulted for `limits` when none was given directly. */
   styleContext?: StyleCompileContext;
+  /**
+   * The component definitions this document may inline, at whatever posture
+   * the caller chose — a draft one for the editor, a published one for a
+   * served page.
+   *
+   * Optional, and its absence is not the same as an empty map only in what it
+   * SAYS: both compose nothing, but a caller that never fetched has a page
+   * whose components are all reported unresolved, which is the honest answer
+   * for a reader that did not ask for them. Every existing caller omits it and
+   * keeps exactly the behaviour it had, because a document holding no instance
+   * is returned unchanged.
+   */
+  definitions?: DefinitionsById;
 }
 
 /**
@@ -93,9 +120,15 @@ export interface PrepareDocumentArgs {
  * different design than compiling the document once up front.
  */
 export function rendersOwnMarkup(
-  node: BlockNode,
+  node: ResolvedBlockNode,
   resolver: BlockResolver
 ): boolean {
+  // An instance nothing could inline stands for a subtree that is not here, so
+  // it is a placeholder for the same reason a failed migration is — and it is
+  // asked FIRST, because the reserved instance type has no registered block
+  // and would otherwise fall through to the unknown-block answer, which is
+  // true and tells an author nothing they can act on.
+  if (isUnresolvedInstance(node)) return false;
   if (node.migrationFailed === true) return false;
   const definition = resolver.get(node.type);
   if (definition === undefined) return false;
@@ -115,8 +148,8 @@ export function pruneKnownPlaceholders(
 ): BlockDocument {
   let changed = false;
 
-  const walk = (nodes: BlockNode[]): BlockNode[] => {
-    const kept: BlockNode[] = [];
+  const walk = (nodes: ResolvedBlockNode[]): ResolvedBlockNode[] => {
+    const kept: ResolvedBlockNode[] = [];
     for (const node of nodes) {
       // The whole subtree goes: a placeholder replaces the node AND everything
       // it would have contained, so a healthy child of a broken parent never
@@ -143,7 +176,7 @@ export function pruneKnownPlaceholders(
       const declared = resolver.get(node.type)?.slots ?? {};
       const slotKeys = Object.keys(node.slots);
       let slotsChanged = false;
-      const slots: Record<string, BlockNode[]> = {};
+      const slots: Record<string, ResolvedBlockNode[]> = {};
       // Iterated in DECLARATION order, not stored order. The renderer asks for
       // its slots by calling `renderSlot` once per declaration, so declaration
       // order is the order the page presents — and this tree is documented as
@@ -215,6 +248,21 @@ export function pruneKnownPlaceholders(
 export interface DocumentReadStages {
   /** After the caps pass. */
   sanitized: BlockDocument;
+  /** After component instances are replaced by the trees they stand for. */
+  resolved: ResolvedDocument;
+  /**
+   * Every component definition this document READ, unresolvable ones included.
+   *
+   * Carried out of the pipeline because its consumer is cache tagging, which
+   * is several layers up and cannot re-derive it: the transitive set is only
+   * known once the composition has walked. An id that failed to resolve
+   * belongs in it for the same reason it belongs in the resolver's own list —
+   * a page that could not draw a component because it is not published yet
+   * must regenerate when it is.
+   */
+  referencedComponents: readonly string[];
+  /** Every instance left standing, and why. Empty on a clean composition. */
+  unresolvedInstances: readonly UnresolvedInstance[];
   /** After migration to the current format. */
   migrated: BlockDocument;
   /**
@@ -264,8 +312,15 @@ export function prepareDocumentReadStages(
 
   const limits = args.limits ?? args.styleContext?.limits ?? DEFAULT_LIMITS;
   const sanitized = sanitizeDocument(document, limits);
-  const { doc, rewritten } = migrateDocument(
+  const composed = resolveComponentInstances(
     sanitized,
+    args.definitions === undefined || args.definitions.size === 0
+      ? EMPTY_DEFINITIONS
+      : repairingLookup(args.definitions, limits),
+    { limits }
+  );
+  const { doc, rewritten } = migrateDocument(
+    composed.document,
     migrationSourceFor(args.resolver)
   );
   // The predicate matters as much as the pass: a placeholder replaces its whole
@@ -297,6 +352,9 @@ export function prepareDocumentReadStages(
   // gating and then turned out to be unrenderable is a placeholder-only page.
   return {
     sanitized,
+    resolved: composed.document,
+    referencedComponents: composed.referenced,
+    unresolvedInstances: composed.unresolved,
     migrated: doc,
     rewritten,
     gated,
@@ -304,6 +362,135 @@ export function prepareDocumentReadStages(
     prepared,
   };
 }
+
+/**
+ * Whether a node is an instance THIS RUN could not compose.
+ *
+ * The marker is a render-time fact and nothing removes it from stored content:
+ * node validation does not reject unknown keys, so a hand-edited, imported or
+ * legacy document can carry `unresolvedComponent` on an ordinary block. Read
+ * as a resolver marker, that would replace real content with a placeholder —
+ * and where it is the page's only node, the reading view answers `null` and
+ * the page is withheld entirely.
+ *
+ * The TYPE is what carries the discrimination, and checking the reason
+ * against the engine's list as well was measured to add none: a node wearing
+ * the reserved name is an instance whatever string sits beside it, and no
+ * block may register that name, so the two answers never differ. A marker on
+ * any other type is stored data claiming to be a render-time fact, which is
+ * exactly what this refuses.
+ */
+export function isUnresolvedInstance(node: ResolvedBlockNode): boolean {
+  return (
+    node.type === COMPONENT_INSTANCE_TYPE &&
+    node.unresolvedComponent !== undefined
+  );
+}
+
+/**
+ * The definitions, shape-repaired ON DEMAND against the same caps the host was.
+ *
+ * Repair is not defensive tidiness. The resolver asks only that a definition
+ * node be a record with a string id, while the repair pass additionally
+ * requires a string type and a whole version and DROPS a node failing either —
+ * and the reason it does is one this renderer has already paid for: a node
+ * whose `type` is an object reaches the unknown-block placeholder, which writes
+ * that value into a data attribute and into text, and React throws inside the
+ * one component that exists to contain a failure. Inlining an unrepaired
+ * definition into a repaired host reintroduces that a level down.
+ *
+ * Repaired against HEADROOM rather than against the caps themselves, and that
+ * is the whole subtlety. The repair pass TRUNCATES what it finds past a limit
+ * — silently, because for a stored page truncation is the answer — while the
+ * resolver REFUSES an oversized definition and says which instance and why.
+ * Repairing at the caps would let the truncation happen first, so a page would
+ * publish a component missing part of itself with nothing in
+ * `unresolvedInstances` to report it: the silent truncation the resolver was
+ * built to replace, reintroduced one layer up.
+ *
+ * One node and one level of headroom is all it takes. Anything the resolver
+ * would accept passes through untouched; anything it would refuse survives
+ * repair intact and reaches the refusal that names it.
+ *
+ * The DEPTH headroom is currently unobservable and is here anyway. It matters
+ * exactly when the resolver refuses an over-deep definition rather than
+ * returning an empty branch for it — while it truncates, repairing at the cap
+ * and repairing above it produce the same tree, so no test can separate them.
+ * Splitting the rule to match what is observable today would leave the gap
+ * open on the day the refusal arrives, and that gap is silent content loss.
+ *
+ * ON DEMAND rather than over a set computed up front, and that is not an
+ * optimisation. Repairing ahead of the resolver means predicting which
+ * definitions it will read, and it is the resolver that decides: an instance's
+ * overrides may name a different component than the definition stored, its
+ * composition cap stops the chain long before the catalog does, and the nodes
+ * it walks are the ones repair itself retained. A separate traversal answering
+ * that question disagreed on all three, and each disagreement handed the page
+ * `missing` for a definition the caller had supplied. Asking here means there
+ * is one answer, given at the moment the definition is actually wanted.
+ *
+ * NOT memoized here, and that is deliberate rather than an omission. The
+ * resolver reads the lookup once per component per resolution and holds the
+ * answer for the run — it has to, because a lookup is a caller's object and a
+ * resolution owes one answer about one component. A second cache on this side
+ * would be a second implementation of that guarantee, agreeing on the day it
+ * is written; removing it was measured to change nothing.
+ */
+function repairingLookup(
+  definitions: DefinitionsById,
+  limits: DocumentLimits
+): ComponentLookup {
+  const shapeOnly: DocumentLimits = {
+    ...limits,
+    maxDepth: limits.maxDepth + 1,
+    maxNodes: limits.maxNodes + 1,
+  };
+  return {
+    // Answered from the SUPPLIED map, never from whether `get` produced a
+    // document. Presence is what separates "nobody supplied one" from "one was
+    // supplied and cannot be read", and the resolver reports those as
+    // different reasons with different remedies — publish the component, or
+    // repair its stored data.
+    has: id => definitions.has(id),
+    get: id => {
+      const stored = definitions.get(id);
+      // `undefined` for an envelope this build cannot read, rather than a
+      // repaired shell. The shape pass reads `document.nodes` on its first
+      // line, so a `null` or a string here throws before any block boundary
+      // exists to contain it — and the resolver, which still sees the id in
+      // `has`, reports it as unreadable rather than missing.
+      return isReadableEnvelope(stored)
+        ? sanitizeDocument(stored, shapeOnly)
+        : undefined;
+    },
+  };
+}
+
+/**
+ * Whether a definition is a document THIS BUILD can read.
+ *
+ * The format version is the half nothing else checks. An unreadable envelope
+ * refuses the whole HOST document one function up, for the reason given
+ * there — nothing below it can be trusted to mean what it says — and a
+ * definition gets the same treatment rather than being repaired into shape,
+ * because repair would normalise nodes written to a schema this build has
+ * never seen.
+ *
+ * The KIND is deliberately not checked. The engine's resolver asks
+ * `isComponentDocument` and reports a page or a region filed under a
+ * component's id as unreadable, so asking again would be a second answer to
+ * one question — and a second answer is the one that goes stale.
+ */
+function isReadableEnvelope(definition: unknown): definition is BlockDocument {
+  return (
+    isPlainRecord(definition) &&
+    definition.formatVersion === DOCUMENT_FORMAT_VERSION &&
+    Array.isArray(definition.nodes)
+  );
+}
+
+/** Shared so a page with no components allocates no map at all. */
+const EMPTY_DEFINITIONS: DefinitionsById = new Map<string, BlockDocument>();
 
 /**
  * The tree a READER should present, or `null` when it should present none.

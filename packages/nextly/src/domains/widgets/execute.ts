@@ -24,15 +24,14 @@ import type { FindArgs } from "../../direct-api/types/collections";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WhereFilter } from "../collections/query/query-operators";
 
+import { resolveExecutableSource } from "./executable-source";
 import type { WidgetQuery } from "./query";
 import type { WidgetResult, WidgetResultField } from "./result";
 import {
   failUnavailableSourceOrOp,
-  getSource,
   sourceTarget,
   type WidgetSource,
 } from "./sources";
-import { systemResolver, type SystemSourceResolver } from "./system-sources";
 
 export type { WidgetResult, WidgetResultField };
 
@@ -42,60 +41,6 @@ function toSelect(
 ): Record<string, boolean> | undefined {
   if (!fields || fields.length === 0) return undefined;
   return Object.fromEntries(fields.map(field => [field, true]));
-}
-
-/**
- * A resolved source together with HOW it is answered.
- *
- * 🔴 The two travel as one value because they must never be decided
- * separately. Asking the resolver store "is there an entry for this id?" and
- * asking the source "what kind are you?" are two questions with two answers,
- * and a dispatch that took the first would send a query wherever the map
- * happened to point -- so an entry left under a collection id, by any route,
- * would divert that collection's rows away from the access-controlled Direct
- * API. Deciding once, on the KIND, and carrying the resolver out of that same
- * branch makes the disagreement unrepresentable rather than merely unlikely.
- */
-type ExecutableSource =
-  | { kind: "system"; source: WidgetSource; resolve: SystemSourceResolver }
-  | { kind: "collection"; source: WidgetSource };
-
-/**
- * Resolves `query.source` against the live registry, or fails loudly.
- *
- * Every refusal goes through `failUnavailableSourceOrOp`, so a source that does
- * not exist and one that exists but is not executable answer the caller
- * identically -- the second would otherwise confirm the source is real. The
- * distinction survives in the log.
- */
-function resolveExecutableSource(sourceId: string): ExecutableSource {
-  // Re-resolve rather than trusting the caller's copy: a source can be
-  // deregistered between configuration and execution, and a query pointing at
-  // a source that no longer exists must fail rather than fall through.
-  const source = getSource(sourceId);
-  if (!source) {
-    failUnavailableSourceOrOp(`unknown source "${sourceId}" at execution`);
-  }
-  // A SYSTEM source is executable exactly when something registered a resolver
-  // for it. The two halves are published together, so a source with no
-  // resolver means a registration that never completed rather than a caller
-  // asking for something reasonable -- and it answers like every other dead
-  // end, because saying which is which would confirm the source exists.
-  if (source.kind === "system") {
-    const resolve = systemResolver(source.id);
-    if (!resolve) {
-      failUnavailableSourceOrOp(
-        `system source "${sourceId}" has no registered resolver`
-      );
-    }
-    return { kind: "system", source, resolve };
-  }
-  if (source.kind !== "collection") {
-    failUnavailableSourceOrOp(
-      `source "${sourceId}" has kind "${source.kind}", which is not executable yet; only collections and system sources are`
-    );
-  }
-  return { kind: "collection", source };
 }
 
 /**

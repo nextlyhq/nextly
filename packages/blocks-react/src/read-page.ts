@@ -22,6 +22,7 @@ import type {
   BlockDocument,
   RemotePatternInput,
   StyleCompileContext,
+  UnresolvedInstance,
 } from "@nextlyhq/blocks-engine";
 
 import type {
@@ -76,6 +77,16 @@ export interface PreparedPage {
   document: BlockDocument | null;
   /** The stylesheet for that tree. */
   styles: PageStyles;
+  /**
+   * Every component definition this page read, unresolvable ones included.
+   *
+   * Surfaced here because the caller that fetched those definitions is the one
+   * that has to tag the page with them, and it cannot re-derive the transitive
+   * set — only the composition knows what a definition itself referenced.
+   */
+  referencedComponents: readonly string[];
+  /** Every instance that could not be composed, and why. */
+  unresolvedInstances: readonly UnresolvedInstance[];
 }
 
 /**
@@ -133,6 +144,19 @@ function storedSheetCannotDescribe(
     gatedMapCoversPrunedNodes(stages.migrated, stages.gated, gatedRules);
   return (
     stages.sanitized !== document ||
+    // Composition. A stored sheet was compiled from the page's OWN nodes;
+    // inlining a component adds nodes whose ids that sheet never named, so
+    // each of them would render unstyled while the sheet looked intact.
+    //
+    // Covered TODAY by the unaccounted-node clause below, and stated here
+    // anyway because that coverage is incidental rather than structural: it
+    // holds only because the compiler assigns a class to EVERY node, so
+    // removing the instance always leaves the artifact naming one the document
+    // no longer has. Measured, not assumed — and a change to sparse class
+    // assignment would remove it silently, which is the wrong way for a
+    // stylesheet guarantee to lapse. No test can separate the two while both
+    // hold; break-verified as a survivor rather than left looking covered.
+    stages.resolved !== stages.sanitized ||
     hasDuplicateNodeIds(stages.migrated) ||
     (stages.gated !== stages.migrated && !gatingCovered) ||
     stages.prepared !== stages.deduped ||
@@ -166,6 +190,8 @@ export function preparePageForRead(
     return {
       document: null,
       styles: { css: "", classes: {} },
+      referencedComponents: [],
+      unresolvedInstances: [],
     };
   }
 
@@ -193,5 +219,10 @@ export function preparePageForRead(
   // is not worth showing, but its scope and class names are still the ones the
   // rest of the system expects, and rebuilding them from an empty document would
   // hand the caller a sheet for a page that does not exist.
-  return { document: readingViewOf(stages), styles };
+  return {
+    document: readingViewOf(stages),
+    styles,
+    referencedComponents: stages.referencedComponents,
+    unresolvedInstances: stages.unresolvedInstances,
+  };
 }

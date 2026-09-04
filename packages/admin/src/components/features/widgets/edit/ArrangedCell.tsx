@@ -15,6 +15,7 @@
 import { cn } from "@admin/lib/utils";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
 
+import type { CellSlotLookup } from "../archetypes/types";
 import { moveAffordance, columnAffordance } from "../layout-editor";
 import { widgetSpanClass } from "../sizes";
 import { WidgetRenderer } from "../WidgetRenderer";
@@ -29,6 +30,8 @@ export interface ArrangedCellProps {
   count: number;
   isEditing: boolean;
   slot: WidgetSlot | undefined;
+  /** How a `stats` card reaches each cell's answer; absent for other archetypes. */
+  slotFor?: CellSlotLookup;
   /** `null` when this card took no part in the batch. */
   updatedAt: Date | null;
   isFetching: boolean;
@@ -57,6 +60,7 @@ export function ArrangedCell({
   count,
   isEditing,
   slot,
+  slotFor,
   updatedAt,
   isFetching,
   onMove,
@@ -149,6 +153,7 @@ export function ArrangedCell({
           <WidgetRenderer
             definition={widget}
             slot={slot}
+            slotFor={slotFor}
             updatedAt={updatedAt}
             isFetching={isFetching}
           />
@@ -164,6 +169,7 @@ export function ArrangedCell({
         <WidgetRenderer
           definition={widget}
           slot={slot}
+          slotFor={slotFor}
           updatedAt={updatedAt}
           isFetching={isFetching}
         />

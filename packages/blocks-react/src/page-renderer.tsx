@@ -5,6 +5,7 @@ import {
   PAGE_ROOT_CLASS,
   resolveSiteTokens,
   type BlockDocument,
+  type DefinitionsById,
   type DocumentLimits,
   type SiteSheetInput,
   type StyleCompileContext,
@@ -48,6 +49,17 @@ export interface PageRendererProps {
   context?: PageContext;
   /** Where block definitions come from. Defaults to the process registry. */
   blocks?: BlockResolver;
+  /**
+   * The component definitions this page may inline, at the posture the caller
+   * chose — drafts for the editor, published for a served page.
+   *
+   * Passed through to the shared pipeline rather than resolved here, so this
+   * renderer and every other reader of the same document compose it the same
+   * way. Absent, an instance renders the marker that says its component could
+   * not be loaded, which is the honest answer for a reader that did not fetch
+   * one.
+   */
+  definitions?: DefinitionsById;
   /**
    * The stylesheet compiled when the document was saved, with the class each
    * node was assigned. Supplying it is the normal path.
@@ -453,6 +465,7 @@ export function PageRenderer({
   document,
   context,
   blocks,
+  definitions,
   styles,
   styleContext,
   siteStyles,
@@ -519,6 +532,7 @@ export function PageRenderer({
     resolver,
     limits,
     styleContext,
+    definitions,
   });
   // `null` here means only an unreadable ENVELOPE, which the two guards above
   // already answered. Kept because unreachability is a property of the current
@@ -531,7 +545,13 @@ export function PageRenderer({
       </div>
     );
   }
-  const { sanitized, migrated: doc, gated: pruned, deduped: visible } = stages;
+  const {
+    sanitized,
+    resolved,
+    migrated: doc,
+    gated: pruned,
+    deduped: visible,
+  } = stages;
 
   // The scope comes from whichever input supplied the stylesheet, never from a
   // separate prop. Two inputs would have to agree, and when they did not the
@@ -644,6 +664,17 @@ export function PageRenderer({
   // answer for that one.
   const repairedDocument =
     sanitized !== document ||
+    // Composition is a sixth, and the only one that ADDS nodes rather than
+    // removing them: a stored sheet names the page's own ids, and an inlined
+    // component's are not among them.
+    //
+    // Redundant today with the artifact's own unaccounted-node check, for the
+    // reason recorded beside the same clause in `read-page.ts` — every node
+    // gets a class, so a replaced instance always trips that one first. Kept
+    // because the redundancy is a property of class assignment rather than of
+    // composition, and inheriting a guarantee from something that never
+    // promised it is how one lapses without a failing test.
+    resolved !== sanitized ||
     (pruned !== doc && !gatingCoveredByArtifact) ||
     visible !== pruned ||
     (drawlessInput !== visible && !drawlessCoveredByArtifact) ||

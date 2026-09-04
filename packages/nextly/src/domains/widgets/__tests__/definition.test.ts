@@ -432,3 +432,143 @@ describe("a declared permission", () => {
     expect(widgetValueProblem({})).toBeUndefined();
   });
 });
+
+describe("a stats widget draws from cells, not from one query", () => {
+  const statsBase = {
+    id: "core/content-health",
+    title: "Content health",
+    archetype: "stats" as const,
+    defaultSize: "md" as const,
+  };
+  const cell = (key: string) => ({
+    key,
+    label: key,
+    query: { source: "collection:posts", op: "count" as const },
+  });
+
+  it("accepts a well-formed stats widget", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...statsBase, cells: [cell("a")] })
+    ).not.toThrow();
+  });
+
+  it("refuses a stats widget with no cells", () => {
+    // Every other archetype's "requires its body" rule, for the field that IS
+    // this one's body: a stats card without cells is a title over blank space.
+    expect(() => validateWidgetDefinition(statsBase)).toThrow(
+      /requires a non-empty cells/
+    );
+    expect(() => validateWidgetDefinition({ ...statsBase, cells: [] })).toThrow(
+      /requires a non-empty cells/
+    );
+  });
+
+  it("refuses cells on any OTHER archetype", () => {
+    // The direction that would otherwise pass silently: a `metric` carrying
+    // cells is an author who meant `stats`, and nothing would draw them.
+    expect(() =>
+      validateWidgetDefinition({ ...valid, cells: [cell("a")] })
+    ).toThrow(/only valid for archetype "stats"/);
+  });
+
+  it("refuses a top-level query on a stats widget, naming where it belongs", () => {
+    // 🔴 Refused with its OWN reason rather than the queryless one. `stats` is
+    // not queryless -- it takes MORE queries than any other archetype -- so a
+    // message saying it takes no data would send the author to delete the very
+    // thing the card is made of.
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [cell("a")],
+        query: { source: "collection:posts", op: "count" as const },
+      })
+    ).toThrow(/draws from cells, so it takes no top-level query/);
+  });
+
+  it("refuses a cell whose query is not a count", () => {
+    // 🔴 The card draws ONE number per cell and refuses any other result shape.
+    // A `list` here passes the container check, reaches a source that supports
+    // it, succeeds, and then renders a muted dash forever -- a declaration
+    // mistake wearing the appearance of unavailable data, which is the one
+    // reading nobody investigates.
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [
+          {
+            key: "a",
+            label: "A",
+            query: { source: "collection:posts", op: "list" },
+          },
+        ],
+      })
+    ).toThrow(/must be a "count" query/);
+  });
+
+  it("refuses two cells sharing a key", () => {
+    // 🔴 The card keys each answer back by `key`, so a duplicate collapses two
+    // cells into one answer: the same number drawn twice under two different
+    // labels, which no reader can detect.
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [cell("a"), cell("a")],
+      })
+    ).toThrow(/declare the key "a" more than once/);
+  });
+
+  it("refuses a cell link that cannot be followed", () => {
+    // 🔴 The admin hands `href` to `Link`, whose external-destination check
+    // calls `href.startsWith` -- so a blank or non-string href makes activating
+    // the number throw instead of navigating, in the one card whose whole point
+    // is navigating.
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [{ ...cell("a"), link: { label: "Go", href: "" } }],
+      })
+    ).toThrow(/link requires a non-empty href/);
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [{ ...cell("a"), link: { label: "  ", href: "/admin" } }],
+      })
+    ).toThrow(/link requires a non-empty label/);
+  });
+
+  it("accepts a cell with a usable link", () => {
+    // The control: a check that refused every link would satisfy both cases.
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [{ ...cell("a"), link: { label: "Go", href: "/admin" } }],
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses more cells than one batch can afford", () => {
+    // Each cell is its own query, so an unbounded card would consume the whole
+    // request budget and darken every other widget on the dashboard.
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: Array.from({ length: 9 }, (_, i) => cell(`c${i}`)),
+      })
+    ).toThrow(/at most 8 cells/);
+  });
+
+  it("refuses a cell missing its label or its query", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [{ key: "a", label: "  ", query: { source: "x", op: "count" } }],
+      })
+    ).toThrow(/requires a non-empty label/);
+    expect(() =>
+      validateWidgetDefinition({
+        ...statsBase,
+        cells: [{ key: "a", label: "A" }],
+      })
+    ).toThrow(/requires a query object/);
+  });
+});

@@ -25,6 +25,8 @@ import {
   defaultOrderProblem,
   legacySizeToWidgetSize,
   querylessQueryProblem,
+  CELL_ARCHETYPES,
+  cellsProblem,
   QUERYLESS_ARCHETYPES,
   widgetValueProblem,
   WIDGET_ARCHETYPES,
@@ -66,6 +68,7 @@ const DATA_ARCHETYPE_SET: ReadonlySet<string> = new Set(DATA_ARCHETYPES);
 const QUERYLESS_ARCHETYPE_SET: ReadonlySet<string> = new Set(
   QUERYLESS_ARCHETYPES
 );
+const CELL_ARCHETYPE_SET: ReadonlySet<string> = new Set(CELL_ARCHETYPES);
 
 /**
  * Why core cannot draw a QUERYLESS widget from its declaration, or `undefined`.
@@ -139,6 +142,18 @@ function describesDrawableBody(widget: Record<string, unknown>): boolean {
 
   if (QUERYLESS_ARCHETYPE_SET.has(archetype)) {
     return querylessProblem(widget) === undefined;
+  }
+
+  if (CELL_ARCHETYPE_SET.has(archetype)) {
+    // 🔴 Through the REGISTRY's own cell rule, not a similar one written here.
+    // Checking only that the array was non-empty published contributions the
+    // registry refuses -- a `list` query, a missing query, two cells under one
+    // key -- which then render as silent dashes or one answer drawn twice.
+    // A stats card also takes no top-level query, the same pair
+    // `validateWidgetDefinition` refuses, so a contribution carrying both
+    // describes two bodies and is not drawable as either.
+    if (widget.query !== undefined) return false;
+    return cellsProblem(widget.cells) === undefined;
   }
 
   if (DATA_ARCHETYPE_SET.has(archetype)) {

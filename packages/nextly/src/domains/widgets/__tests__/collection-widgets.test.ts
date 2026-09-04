@@ -38,6 +38,125 @@ describe("what a collection gets", () => {
     ]);
   });
 
+  it("adds a health card ONLY for a collection that declares a status", () => {
+    // 🔴 The refusal is the point. Without a status there is one number to
+    // draw, which is the `metric` card this source already has -- a reader
+    // placing both would see the same figure twice under two names and
+    // reasonably assume they measured different things.
+    const without = collectionWidgets([source({})]).map(w => w.archetype);
+    expect(without).not.toContain("stats");
+
+    const withStatus = collectionWidgets([
+      source({
+        lifecycleStatus: true,
+        fields: [
+          { name: "id", type: "string" },
+          { name: "title", type: "string" },
+          { name: "updatedAt", type: "date" },
+          { name: "status", type: "string" },
+        ],
+      }),
+    ]);
+    const stats = withStatus.find(w => w.archetype === "stats");
+    expect(stats?.id).toBe("collection/posts-stats");
+    expect(stats?.cells?.map(c => c.key)).toEqual([
+      "total",
+      "published",
+      "draft",
+    ]);
+  });
+
+  it("is PUBLISHED, not withheld for naming no collection", () => {
+    // 🔴 `readableGeneratedWidgets` withholds a card whose subject it cannot
+    // identify, and the slug was derived from `widget.query.source` alone -- a
+    // field a stats card does not have. Every health card was generated,
+    // registered, and then silently never published. Asserted through the
+    // publication path rather than the generator, because the generator was
+    // never the thing that was wrong.
+    setGeneratedWidgets(collectionWidgets([source({ lifecycleStatus: true })]));
+    const published = readableGeneratedWidgets(() => true, new Set());
+    expect(published.map(w => w.id)).toContain("collection/posts-stats");
+  });
+
+  it("withholds a health card when its cells disagree about the collection", () => {
+    // A card reading two collections cannot be gated by one permission, so the
+    // slug is refused rather than taken from whichever cell came first -- the
+    // access decision and the rows would be about different collections.
+    expect(
+      generatedCollectionSlug({
+        id: "core/mixed",
+        title: "Mixed",
+        archetype: "stats",
+        defaultSize: "md",
+        cells: [
+          {
+            key: "a",
+            label: "A",
+            query: { source: "collection:posts", op: "count" },
+          },
+          {
+            key: "b",
+            label: "B",
+            query: { source: "collection:pages", op: "count" },
+          },
+        ],
+      })
+    ).toBeUndefined();
+  });
+
+  it("reads the LIFECYCLE capability, not a field named status", () => {
+    // 🔴 A collection with lifecycle disabled may declare an ordinary user
+    // field called `status`, and the two are indistinguishable in `fields`. A
+    // card built on the name counts every row three times while its links
+    // filter something unrelated.
+    const impostor = collectionWidgets([
+      source({
+        lifecycleStatus: false,
+        fields: [
+          { name: "id", type: "string" },
+          { name: "status", type: "string" },
+          { name: "title", type: "string" },
+          { name: "updatedAt", type: "date" },
+        ],
+      }),
+    ]);
+    expect(impostor.map(w => w.archetype)).not.toContain("stats");
+  });
+
+  it("makes each cell's LINK ask the same question as its number", () => {
+    // 🔴 The card's whole promise is that a number and the page behind it are
+    // one question. A cell counting drafts whose link opens an unfiltered list
+    // is not visibly broken: the reader sees a list, counts nothing, and keeps
+    // believing the number. So the link is decoded and put back through the
+    // entry list's OWN filter builder, and the result must be the filter the
+    // cell's query asked for.
+    const [stats] = collectionWidgets([
+      source({
+        lifecycleStatus: true,
+        fields: [
+          { name: "id", type: "string" },
+          { name: "status", type: "string" },
+          { name: "title", type: "string" },
+          { name: "updatedAt", type: "date" },
+        ],
+      }),
+    ]).filter(w => w.archetype === "stats");
+
+    for (const cell of stats?.cells ?? []) {
+      const url = new URL(cell.link!.href, "https://example.test");
+      expect(url.pathname).toBe("/admin/collections/posts");
+      const where = url.searchParams.get("where");
+      if (cell.query.where === undefined) {
+        // The total is deliberately unfiltered: it is what the parts are OF.
+        expect(where).toBeNull();
+        continue;
+      }
+      // 🔴 The link carries the query's OWN predicate, not a re-derivation of
+      // it. The count and the destination therefore cannot answer differently.
+      expect(JSON.parse(where!)).toEqual(cell.query.where);
+    }
+  });
+
   it("carries NO requiredPermission, because the SERVER gates it", () => {
     // 🔴 It used to carry the source's permission, and that was wrong in the
     // direction that loses cards. The client checks `requiredPermission` against

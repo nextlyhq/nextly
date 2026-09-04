@@ -2,11 +2,18 @@ import {
   blockPartClassName,
   blockTypeClassName,
   type BlockNode,
+  type ComponentUnresolvedReason,
+  type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
 import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
 import type { BlockHostPolicy, PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
+// The SAME predicate the pipeline uses. Asking the question twice is how the
+// renderer came to hide a node the exported reader returns: the pipeline kept
+// a block carrying a stored `unresolvedComponent` key and this boundary drew a
+// placeholder over it, so one document had two readings.
+import { isUnresolvedInstance } from "./prepare-document";
 import {
   createsNoHostElement,
   describeThrown,
@@ -16,9 +23,58 @@ import {
 import type { BlockResolver } from "./resolver";
 import { isUnconditional } from "./visibility";
 
+/**
+ * The wording for one reason, or nothing when the marker names none.
+ *
+ * Asked of a `Map`, and that is the whole point of the indirection. The
+ * predicate that admits a node here reads the reserved instance TYPE, and the
+ * reason beside it is stored content nothing strips — so an unrecognised
+ * string arrives, and `constructor` or `__proto__` indexed on a record answer
+ * with an inherited member rather than with nothing. React refuses an object
+ * for a child, so the page dies inside the one component that exists to
+ * contain a failure. A `Map` holds only what was put in it.
+ */
+function unresolvedDetail(
+  reason: ComponentUnresolvedReason | undefined
+): string | undefined {
+  return reason === undefined ? undefined : DETAIL_BY_REASON.get(reason);
+}
+
+/**
+ * What an author is told when a component did not load.
+ *
+ * Wording per cause, because the remedies are different things and a single
+ * message would send an author looking in the wrong place for most of them.
+ * Development only: the production placeholder renders nothing.
+ *
+ * A record rather than the `Map` it becomes, so the compiler still requires a
+ * wording for every reason the engine publishes — a `Map` literal would accept
+ * one that named five of them and go quiet about the sixth.
+ */
+const UNRESOLVED_DETAIL: Readonly<Record<ComponentUnresolvedReason, string>> = {
+  missing: "No published component was found for this reference",
+  cycle: "This component contains itself",
+  "composed-depth": "This component is nested inside too many components",
+  "node-depth": "This component's own content is nested too deeply",
+  budget: "This page is already at its node limit",
+  malformed: "This instance names no component",
+  unreadable: "This component's stored data cannot be read",
+};
+
+/** Derived, so the two cannot name different sets of reasons. */
+const DETAIL_BY_REASON: ReadonlyMap<string, string> = new Map(
+  Object.entries(UNRESOLVED_DETAIL)
+);
+
 /** What a render needs to turn one node into output. */
 export interface BlockBoundaryProps {
-  node: BlockNode;
+  /**
+   * A node of the RESOLVED tree. Widened from `BlockNode` rather than narrowed
+   * to it: every stored node already satisfies this, so no caller changes, and
+   * the boundary is the one place that has to tell a composed node apart from
+   * an authored one.
+   */
+  node: ResolvedBlockNode;
   context: PageContext;
   blocks: BlockResolver;
   /** Node id to generated class, from the compiled stylesheet. */
@@ -911,6 +967,21 @@ export function BlockBoundary({
   // `=== true`, not truthy. A stored `"false"` or `{}` is truthy and would drop
   // public content that never failed anything; the repair pass normalises
   // structure but leaves this control flag as written.
+  // Asked before the definition lookup, because the reserved instance type has
+  // no registered block: falling through would draw "no block is registered
+  // for this type", which is true, tells an author nothing, and hides the one
+  // fact they can act on — that a component they placed did not load.
+  if (isUnresolvedInstance(node)) {
+    return (
+      <BlockPlaceholder
+        reason="unresolved-component"
+        type={node.type}
+        id={node.id}
+        detail={unresolvedDetail(node.unresolvedComponent)}
+      />
+    );
+  }
+
   if (node.migrationFailed === true) {
     return (
       <BlockPlaceholder

@@ -1,6 +1,8 @@
 import type {
   WidgetChrome,
   DataWidgetArchetype,
+  CellWidgetArchetype,
+  WidgetStatCell,
   WidgetAction,
   QuerylessWidgetArchetype,
   WidgetArchetype,
@@ -188,6 +190,7 @@ export interface PluginAdminPage {
  */
 export type DeclarativeWidgetArchetype =
   | DataWidgetArchetype
+  | CellWidgetArchetype
   | QuerylessWidgetArchetype;
 
 /** Everything a contributed widget may carry whichever way it is drawn. */
@@ -276,6 +279,29 @@ export interface PluginAdminDataWidget extends PluginAdminWidgetBase {
 }
 
 /**
+ * @experimental A widget the HOST draws as several labelled numbers.
+ *
+ * `cells` rather than `query`, and the registry validator refuses the pair:
+ * each cell carries its own count, which is what keeps every number an ordinary
+ * access-controlled read instead of one composite answer covering all of them.
+ *
+ * Declared here because the authoring union is what a TypeScript plugin writes
+ * against. An archetype core CLASSIFIES but this union cannot express is
+ * accepted by the boot gate -- which derives its rule from the vocabulary --
+ * and rejected by the type, with nothing anywhere saying so.
+ */
+export interface PluginAdminStatsWidget extends PluginAdminWidgetBase {
+  archetype: CellWidgetArchetype;
+  /** One entry per number, each with its own count query and optional link. */
+  cells: WidgetStatCell[];
+  /**
+   * Optional FALLBACK body, for an admin release that cannot draw this
+   * archetype yet. Omit it and the card says so by name.
+   */
+  component?: ComponentPath;
+}
+
+/**
  * @experimental A widget the HOST draws from its declared prose.
  *
  * No query -- the registry validator refuses one -- and no actions, which
@@ -342,6 +368,7 @@ export type PluginAdminQuerylessWidget =
 /** @experimental Either shape of a widget the host draws. */
 export type PluginAdminDeclarativeWidget =
   | PluginAdminDataWidget
+  | PluginAdminStatsWidget
   | PluginAdminQuerylessWidget;
 
 /**

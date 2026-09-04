@@ -24,9 +24,15 @@ import {
 } from "../../domains/widgets/registry";
 import {
   clearSources,
+  getSource,
   listSources,
   registerSource,
 } from "../../domains/widgets/sources";
+import {
+  registerSystemSource,
+  systemResolver,
+} from "../../domains/widgets/system-sources";
+import { RELEASES_SOURCE_ID } from "../../domains/releases/releases-widget-source";
 import { resetWidgetRegistries } from "../registrations/register-widgets";
 
 beforeEach(() => {
@@ -58,16 +64,51 @@ function seedWidget(id: string): void {
 }
 
 describe("resetWidgetRegistries", () => {
-  it("empties the source registry so a reload cannot collide with itself", () => {
+  it("drops the previous boot's sources so a reload cannot collide with itself", () => {
     seedSource("plugin:stripe/revenue");
     expect(listSources()).toHaveLength(1);
 
     resetWidgetRegistries();
 
-    expect(listSources()).toHaveLength(0);
+    // The property is that nothing SURVIVES a boot, not that the store ends
+    // empty -- core publishes its own system source in this same function, so
+    // an emptiness assertion would only have held while it published none.
+    expect(getSource("plugin:stripe/revenue")).toBeUndefined();
+    expect(listSources().map(source => source.id)).toEqual([
+      RELEASES_SOURCE_ID,
+    ]);
     // The proof that the clear is what made room: the same id registers again
     // without the conflict `registerSource` raises for a duplicate.
     expect(() => seedSource("plugin:stripe/revenue")).not.toThrow();
+  });
+
+  it("drops a resolver whose source did not survive the boot", () => {
+    // 🔴 The discriminating case, and it is NOT the reset republishing its own
+    // source: that id is written again either way, so a resolver store left
+    // uncleared is simply overwritten and nothing observable changes. What only
+    // a cleared store gets right is an id the new boot does NOT republish --
+    // a source removed or renamed between reloads. Its resolver is addressable
+    // for the lifetime of the process, holding every service its closure
+    // captured, and republishing that id through the generic `registerSource`
+    // door makes the stale one executable again.
+    registerSystemSource(
+      {
+        id: "system:from-previous-boot",
+        label: "Gone",
+        kind: "system",
+        supports: ["list"],
+        fields: [{ name: "title", type: "string" }],
+      },
+      () => Promise.resolve({ op: "list" as const, items: [] })
+    );
+    expect(systemResolver("system:from-previous-boot")).toBeDefined();
+
+    resetWidgetRegistries();
+
+    expect(systemResolver("system:from-previous-boot")).toBeUndefined();
+    // The control: the source core DOES republish is still answerable, so this
+    // cannot pass by clearing everything and registering nothing.
+    expect(systemResolver(RELEASES_SOURCE_ID)).toBeDefined();
   });
 
   it("drops the previous boot's widgets and leaves core's own", () => {

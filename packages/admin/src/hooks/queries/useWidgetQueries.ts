@@ -40,12 +40,24 @@ import type {
 /** One widget's request: the id to key the answer back to, and what to ask. */
 export interface WidgetQueryRequest {
   widgetId: string;
+  /**
+   * Which of the widget's cells this answer belongs to, for a `stats` card.
+   *
+   * Absent for every archetype that asks ONE question, so their slot key stays
+   * the bare widget id and every existing reader is untouched.
+   */
+  cellKey?: string;
   query: WidgetQuery;
 }
+
+/** One card's cell answers, keyed by cell key. */
+export type CellSlots = Record<string, Record<string, WidgetSlot>>;
 
 export interface UseWidgetQueriesResult {
   /** Keyed by `widgetId`. A widget with no answer yet is simply absent. */
   slots: Record<string, WidgetSlot>;
+  /** Keyed by `widgetId`, then by cell key. Only `stats` cards appear here. */
+  cellSlots: CellSlots;
   isLoading: boolean;
   /**
    * Whether any request is in flight, INCLUDING a background refetch that is
@@ -68,6 +80,49 @@ export interface UseWidgetQueriesResult {
    * partition that answered a second ago.
    */
   updatedAt: Date | null;
+}
+
+/**
+ * A dictionary with NO prototype, for keys this code does not control.
+ *
+ * 🔴 A contributed widget id is checked only for being usable text, so `id` may
+ * be `"__proto__"` -- and on a `{}` dictionary that key is not data. Reading it
+ * returns `Object.prototype`, so `dict[id] ??= {}` never assigns and the cell
+ * key is written onto the prototype every object in the admin inherits;
+ * assigning it directly replaces the dictionary's own prototype instead of
+ * storing an entry. Either way one widget's answer becomes visible to
+ * unrelated code, from nothing more than receiving a response. `constructor`
+ * and `toString` misbehave for the same reason without the global damage.
+ *
+ * A null prototype makes every key data. `Object.keys`, `in` and index reads all
+ * behave as they already did for ordinary ids, so nothing downstream changes.
+ */
+function emptyRecord<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+/**
+ * Files one answer where its widget will look for it.
+ *
+ * 🔴 Two maps rather than one map with a composite key. A contributed widget id
+ * is checked only for being usable TEXT, not against the registry's slug
+ * pattern, so it may contain any character -- including whichever separator a
+ * composite key chose. `core/a` cell `b` and a contributed widget literally
+ * named `core/a#b` would then file into the same entry and one card would draw
+ * the other's number. Nesting removes the encoding, and with it the class of
+ * bug: there is no string to collide.
+ */
+function fileAnswer(
+  slots: Record<string, WidgetSlot>,
+  cellSlots: CellSlots,
+  entry: WidgetQueryRequest,
+  slot: WidgetSlot
+): void {
+  if (entry.cellKey === undefined) {
+    slots[entry.widgetId] = slot;
+    return;
+  }
+  (cellSlots[entry.widgetId] ??= emptyRecord())[entry.cellKey] = slot;
 }
 
 /** What a widget is told when the batch came back shorter than it went out. */
@@ -342,7 +397,9 @@ export function useWidgetQueries(
   // Not memoized, and deliberately: `useQueries` builds a fresh result array on
   // every render, so a memo keyed on it would recompute every render anyway
   // while reading as though it did not. The walk is one pass over the widgets.
-  const slots: Record<string, WidgetSlot> = {};
+  // Both dictionaries are keyed by caller-supplied ids; see `emptyRecord`.
+  const slots: Record<string, WidgetSlot> = emptyRecord();
+  const cellSlots: CellSlots = emptyRecord();
   partitions.forEach((partition, index) => {
     const answer = results[index];
     if (!answer) return;
@@ -354,7 +411,7 @@ export function useWidgetQueries(
         // disagreeing about the shape. Saying so per widget is what stops the
         // trailing cards spinning silently forever -- and what keeps one bad
         // entry from throwing out of the renderer and taking the page with it.
-        slots[entry.widgetId] = asSlot(answer.data[position]);
+        fileAnswer(slots, cellSlots, entry, asSlot(answer.data[position]));
       });
       return;
     }
@@ -367,7 +424,10 @@ export function useWidgetQueries(
     // reader was looking at.
     if (answer.isError) {
       partition.forEach(entry => {
-        slots[entry.widgetId] = { ok: false, error: BATCH_FAILED_ERROR };
+        fileAnswer(slots, cellSlots, entry, {
+          ok: false,
+          error: BATCH_FAILED_ERROR,
+        });
       });
     }
   });
@@ -376,6 +436,7 @@ export function useWidgetQueries(
 
   return {
     slots,
+    cellSlots,
     isLoading: results.some(answer => answer.isLoading),
     isFetching: results.some(answer => answer.isFetching),
     // The FIRST failure, which is enough for the grid: what a reader needs per
