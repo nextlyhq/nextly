@@ -81,7 +81,11 @@ export async function definitionsFor(
     level < MAX_COMPOSED_DEPTH && wanted.length > 0;
     level++
   ) {
-    const unread = wanted.filter(id => !found.has(id));
+    // Deduplicated as the batch is built, not as ids are collected. A
+    // component two others hold is reached twice in one level, and asking for
+    // it twice in one `IN` is a wider query and a longer cache key for one
+    // answer.
+    const unread = [...new Set(wanted.filter(id => !found.has(id)))];
     if (unread.length === 0) break;
     const batch = await source(unread);
     // Recorded for every id ASKED FOR, not for every id answered. An id the
