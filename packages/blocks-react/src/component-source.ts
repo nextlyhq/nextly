@@ -126,9 +126,11 @@ export async function definitionsFor(
   //
   // It terminates on its own: a round proceeds only when it has an id nobody
   // has asked for yet, and every id it asks for enters `attempted`, which is
-  // never emptied. The cap below bounds WORK on a store that keeps offering
-  // new ids, not correctness.
-  while (attempted.size < limits.maxNodes) {
+  // never emptied. The cap is its OWN number rather than the node cap, because
+  // those count unrelated things — `maxNodes` bounds the composed OUTPUT and
+  // this bounds definitions TRAVERSED — and tying them stopped discovery on a
+  // one-node page holding one component that holds one more.
+  while (attempted.size < MAX_DISCOVERED_COMPONENTS) {
     const unread = [...new Set(wanted)].filter(id => !attempted.has(id));
     if (unread.length === 0) break;
     for (const id of unread) attempted.add(id);
@@ -189,6 +191,23 @@ function repairedOnce(
     },
   };
 }
+
+/**
+ * How many distinct definitions one page may pull in before discovery gives up.
+ *
+ * A bound on WORK, not a statement about design. Discovery stops on its own
+ * when a composition asks for nothing new; this only matters for a store that
+ * keeps answering with definitions naming further ones, so the number sits far
+ * above any page a person would build and far below anything that could hold a
+ * request open.
+ *
+ * Deliberately NOT derived from `limits.maxNodes`. That bounds nodes in the
+ * composed output; this bounds definitions traversed, and the two have no
+ * relation — a single-node page can legitimately reach a chain of components
+ * that each compose to almost nothing. Tying them together stopped discovery on
+ * exactly that page.
+ */
+const MAX_DISCOVERED_COMPONENTS = 1000;
 
 /** What one batched definition read needs to know about the route asking. */
 export interface ComponentReadOptions {

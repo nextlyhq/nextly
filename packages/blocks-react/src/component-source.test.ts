@@ -235,6 +235,24 @@ describe("the definitions a document reaches", () => {
     expect(batches.flat()).not.toContain("default");
   });
 
+  it("keeps discovering on a page whose node cap is smaller than its component count", async () => {
+    // `maxNodes` bounds nodes in the composed OUTPUT; discovery counts
+    // definitions TRAVERSED. They are unrelated quantities, and tying one to
+    // the other stops the walk on a page that composes perfectly well: one
+    // node, one component, and one empty component inside it.
+    const { source } = recording({
+      a: component([instance("n1", "b")]),
+      b: component([]),
+    });
+
+    const found = await definitionsFor(page([instance("i1", "a")]), source, {
+      ...DEFAULT_LIMITS,
+      maxNodes: 1,
+    });
+
+    expect([...found.keys()]).toEqual(["a", "b"]);
+  });
+
   it("asks for nothing when the page holds no instance", async () => {
     const { source, batches } = recording({ hero: component([]) });
 
