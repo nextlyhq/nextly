@@ -351,9 +351,10 @@ host would hit an unsatisfiable peer one level down.
 pnpm add @nextlyhq/builder
 ```
 
-You are unlikely to install this directly. It arrives with
-[`@nextlyhq/plugin-page-builder`](../plugin-page-builder), which is what an app adds
-to get a page builder.
+You install this alongside [`@nextlyhq/plugin-page-builder`](../plugin-page-builder),
+which is what an app adds to get a page builder. The plugin declares this package as a
+**peer dependency**, so a package manager that does not auto-install peers will not
+supply it and the plugin's admin entry will fail to resolve its imports.
 
 ## Related packages
 

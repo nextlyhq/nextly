@@ -16,8 +16,14 @@ are still evolving.
 ## Install
 
 ```bash
-pnpm add @nextlyhq/plugin-page-builder
+pnpm add @nextlyhq/plugin-page-builder @nextlyhq/builder @nextlyhq/plugin-sdk react-hook-form
 ```
+
+Those three are **peer dependencies** that a scaffolded Nextly app does not already
+have, so install them explicitly rather than relying on your package manager to
+auto-install peers. The plugin's other peers — `@nextlyhq/admin`, `@nextlyhq/ui`,
+`@tanstack/react-query`, `lucide-react`, `nextly`, `next`, `react`, `react-dom` — come
+with the scaffold.
 
 Peers (provided by a Nextly app): `nextly`, `@nextlyhq/admin`, `@nextlyhq/ui`,
 `@nextlyhq/plugin-sdk`, `react`, `react-dom`, `next`, `@tanstack/react-query`,

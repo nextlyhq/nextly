@@ -532,4 +532,45 @@ describe("readme-skeleton reads only what npm renders", () => {
     expect(out).not.toContain("## Install");
     expect(out).not.toContain("## License");
   });
+
+  it("treats an unclosed fence as code through to the end of the file", () => {
+    // Markdown does. Stopping at paired fences would leave the tail in prose, so a
+    // truncated example could satisfy the sections this is looking for.
+    const out = renderedProse("intro\n\n```md\nNextly is in alpha.\n## Install\n");
+    expect(out).toContain("intro");
+    expect(out).not.toContain("## Install");
+    expect(out).not.toContain("in alpha");
+  });
+
+  it("does not accept sections that exist only inside an unclosed fence", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md":
+          "# t\n\n```md\nNextly is in alpha.\n## Install\n## Related packages\n## License\n",
+      })
+    ).toContain("readme-skeleton");
+  });
+
+  it("rejects an empty Status section, which answers nothing", async () => {
+    const checks = await checksFor({
+      "README.md": "# nextly\n\n@nextlyhq/thing\n",
+      "packages/thing/package.json": pkg(),
+      "packages/thing/README.md":
+        "# t\n\n## Status\n\n## Install\n\n## Related packages\n\n## License\n",
+    });
+    expect(checks).toContain("readme-skeleton");
+  });
+
+  it("accepts a Status section once it carries a value", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md":
+          "# t\n\n## Status\n\nBeta.\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).not.toContain("readme-skeleton");
+  });
 });

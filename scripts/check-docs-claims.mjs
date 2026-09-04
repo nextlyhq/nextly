@@ -325,7 +325,10 @@ const README_SECTIONS = [
     // "in alpha" rejected `## Stability` / "Alpha." — a correct statement several
     // packages already used — and would go on to reject an accurate "Beta" or
     // "Stable" note later, which turns the check into a demand for boilerplate.
-    test: /in alpha|@?experimental|^##\s+(status|stability)/im,
+    // The section alternative requires a NON-EMPTY body: an empty `## Status` answers
+    // nothing, and accepting the heading alone would let the check be satisfied by a
+    // section that exists rather than by a state that is stated.
+    test: /in alpha|@?experimental|^##[ \t]+(status|stability)[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*(?!#)\S/im,
   },
   {
     key: "install",
@@ -349,9 +352,16 @@ const README_SECTIONS = [
  * by the appearance of the thing rather than the thing.
  */
 export function renderedProse(markdown) {
-  return markdown
-    .replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1[^\n]*$/gm, "")
-    .replace(/<!--[\s\S]*?-->/g, "");
+  return (
+    markdown
+      // Paired fences first, then an unpaired one. An opening fence with no closing
+      // fence renders as code all the way to the end of the file, so stopping at
+      // paired blocks would leave that tail in `prose` and let a truncated example
+      // satisfy the very sections this is checking for.
+      .replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1[^\n]*$/gm, "")
+      .replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*$/m, "")
+      .replace(/<!--[\s\S]*?-->/g, "")
+  );
 }
 
 function readmeSkeleton(repoRoot, packages, findings) {
