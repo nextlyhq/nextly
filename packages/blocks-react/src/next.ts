@@ -14,12 +14,14 @@
  * @module next
  */
 import {
+  DEFAULT_LIMITS,
   deriveSeoFromDocument,
   isFetchableUrl,
   DOCUMENT_FORMAT_VERSION,
 } from "@nextlyhq/blocks-engine";
 import type {
   BlockDocument,
+  DefinitionsById,
   BlockSeoContribution,
   DocumentLimits,
   RemotePatternInput,
@@ -29,10 +31,12 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import type { Metadata } from "next";
 import {
+  cachedFind,
   createContentRoute,
   createPublicContentRoute,
   createPublicSingleRoute,
   createSingleRoute,
+  entryIdTag,
   getNextly,
   nextlyTags,
   nextlySingleTags,
@@ -55,6 +59,13 @@ import type { ReactElement, ReactNode } from "react";
 import { createElement } from "react";
 
 import { url } from "./blocks/props";
+import {
+  COMPONENT_DOCUMENT_FIELD,
+  COMPONENT_TAG_COLLECTION,
+  definitionsFor,
+  EMPTY_DEFINITIONS,
+  type ComponentSource,
+} from "./component-source";
 import { createStandaloneContext } from "./context";
 import type {
   BlockHostPolicy,
@@ -243,6 +254,33 @@ export interface BlocksPageConfig
    * media namespace rather than naming a collection at all.
    */
   mediaCollection?: string;
+  /**
+   * The collection component definitions are stored in.
+   *
+   * Named rather than discovered, and defaulted rather than required. The
+   * page-builder plugin ships the collection this defaults to, so a site using
+   * it configures nothing — and `blocks-react` must not import the plugin to
+   * learn the name, because the renderer is usable without it and the
+   * dependency would only run the other way.
+   */
+  componentCollection?: string;
+  /**
+   * The field a component definition's blocks live in.
+   *
+   * Its own option for the same reason `field` is one for the page: a default
+   * would be a guess at the site's schema, and guessing wrong inlines nothing
+   * while reporting every reference as unreadable.
+   */
+  componentField?: string;
+  /**
+   * Where definitions come from, for a host that does not store them in a
+   * Nextly collection at all.
+   *
+   * Mirrors `resolveMedia`. Given one, this route reads nothing itself — so a
+   * host supplying this owns the posture and the cache tags too, exactly as a
+   * host supplying `resolveMedia` owns them for images.
+   */
+  resolveComponents?: ComponentSource;
   /** Resolve a media id yourself, instead of reading the media collection. */
   resolveMedia?: (id: string) => Promise<ResolvedMedia | null>;
   /** Resolve an entry reference to a path, instead of reading its slug. */
@@ -723,6 +761,184 @@ async function mediaByQuery(
   return found.items[0];
 }
 
+/**
+ * The route's component source: one batched, tagged, posture-carrying read.
+ *
+ * TAGGED PER ID and never with the collection tag. `nextlyTags` always
+ * prepends it, so using it here would make publishing any component rebuild
+ * every page on the site that embeds any component at all — the exact opposite
+ * of what a component store is for. The id tags attach to the PAGE's cache
+ * entry because this read happens inside the page's render, so one component
+ * publish invalidates exactly the pages that embedded it.
+ *
+ * The identity channels are cleared and the scope is the route's, for the
+ * reasons `mediaResolver` clears them: `mergeConfig` spreads the reader's
+ * defaults UNDER the call, so an omitted `user` or `req` restores whatever
+ * identity the instance was booted with — on a read this route performs for an
+ * anonymous visitor, into a page that is then cached. And the lifecycle scope
+ * is the entry read's, not a second opinion: a route serving published content
+ * must not inline a draft component, and a preview route must.
+ *
+ * The row is handed over WHOLE and unjudged. Whether that field holds a
+ * readable component document is the pipeline's question, and it answers it
+ * with reasons a store cannot: an id present with an unreadable value is a
+ * definition somebody published and cannot be read, and an id absent is one
+ * nobody published.
+ */
+function componentSource(
+  config: BlocksPageConfig,
+  reader: NextlyContentReader,
+  budget: QueryBudget,
+  locale: string | undefined
+): ComponentSource {
+  if (config.resolveComponents) {
+    const custom = config.resolveComponents;
+    // Charged like every other read on this path, for the reason
+    // `mediaResolver` charges a host's own resolver: a site's source is the
+    // one most likely to be database- or network-backed, and exempting it
+    // bounds the reader we wrote while leaving unbounded the one a site
+    // supplies. A nested chain asks it once per level, so an uncharged source
+    // is `MAX_COMPOSED_DEPTH` unbounded reads on a route that stated a limit.
+    return async ids => (budget.take() ? await custom(ids) : EMPTY_DEFINITIONS);
+  }
+  const collection = config.componentCollection ?? COMPONENT_TAG_COLLECTION;
+  const field = config.componentField ?? COMPONENT_DOCUMENT_FIELD;
+  const status = config.status ?? (config.draft === true ? "all" : "published");
+
+  return async (ids: readonly string[]) => {
+    // Dropped before anything is built from them, not repaired. `entryIdTag`
+    // refuses a blank segment by THROWING — correctly, because a bare
+    // `nextly:components:id:` tag would over-invalidate — and a stored
+    // `componentId` of `"   "` is a nonempty string that `componentIdsIn`
+    // reports as a reference. Left in, one malformed instance takes the whole
+    // page down before a block boundary exists to contain it; left out, it is
+    // an id nobody supplied a definition for, which is exactly what it is.
+    const wanted = [...new Set(ids)].filter(id => id.trim().length > 0);
+    if (wanted.length === 0) return EMPTY_DEFINITIONS;
+
+    const found = new Map<string, BlockDocument>();
+    for (const chunk of chunked(wanted, COMPONENT_BATCH_SIZE)) {
+      // One claim per QUERY. A page embedding twenty components spends one
+      // read because that is what it costs; charging per definition would
+      // refuse a page for an allowance it never spent, and charging nothing
+      // would leave the read on this path that grows with the page unbounded.
+      if (!budget.take()) break;
+      const page = await readComponentChunk(chunk, {
+        reader,
+        collection,
+        status,
+        locale,
+        cacheScope: config.cacheScope,
+      });
+      for (const [id, document] of definitionsById(page.items, field)) {
+        found.set(id, document);
+      }
+    }
+    return found;
+  };
+}
+
+/**
+ * How many definitions one query may ask for.
+ *
+ * The smaller of two caps that are enforced elsewhere and silent when crossed.
+ * Nextly clamps a collection query to 500 rows (`PAGINATION_DEFAULTS.maxLimit`),
+ * so a larger `limit` returns a SUBSET and the components missing from it are
+ * reported as though nobody had published them. Next drops cache tags past
+ * `NEXT_CACHE_TAG_MAX_ITEMS`, 128 in the version this package builds against,
+ * so a component whose tag was dropped is never invalidated by its own publish
+ * and stays stale until some unrelated write busts the entry.
+ *
+ * 128 satisfies both. A page embedding more components than that costs one
+ * extra query per 128, which is the honest price of staying invalidatable.
+ */
+const COMPONENT_BATCH_SIZE = 128;
+
+/**
+ * The caps this route holds its documents to, resolved the way the pipeline
+ * resolves them.
+ *
+ * One answer, because two would be a disagreement about which nodes exist: the
+ * fetch decides what to load and the renderer decides what to draw, and a page
+ * whose instances sit past one cap but inside the other loses exactly the
+ * blocks between them.
+ */
+function effectiveLimits(config: BlocksPageConfig): DocumentLimits {
+  return config.limits ?? config.styleContext?.limits ?? DEFAULT_LIMITS;
+}
+
+/** Successive slices of at most `size`. */
+function chunked<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+}
+
+/** One batched, tagged, posture-carrying read of at most a full chunk. */
+async function readComponentChunk(
+  wanted: readonly string[],
+  args: {
+    reader: NextlyContentReader;
+    collection: string;
+    status: "published" | "draft" | "all";
+    locale: string | undefined;
+    cacheScope: string | undefined;
+  }
+): Promise<{ items: Record<string, unknown>[] }> {
+  const { reader, collection, status, locale, cacheScope } = args;
+  return await cachedFind(
+    async () =>
+      await reader.find({
+        collection,
+        where: { id: { in: [...wanted] } },
+        limit: wanted.length,
+        status,
+        overrideAccess: true,
+        disableErrors: true,
+        user: undefined,
+        req: undefined,
+        ...(locale ? { locale } : {}),
+      }),
+    {
+      tags: wanted.map(id => entryIdTag(collection, id)),
+      keyParts: [
+        "nextly-components",
+        collection,
+        status,
+        locale ?? "",
+        // The tenant discriminator, exactly as `resolveContent` keys its own
+        // read. Two deployments pointed at different databases ask for the
+        // same component ids under the same collection, status and locale —
+        // so without this the first to warm the entry serves its definitions
+        // to the other's pages.
+        cacheScope ?? "",
+        // Sorted, so two pages embedding the same components in a different
+        // order share one entry rather than filling two with one answer.
+        ...[...wanted].sort(),
+      ],
+    }
+  );
+}
+
+/** The rows a batched read returned, keyed by id, with the block field taken. */
+function definitionsById(
+  items: readonly Record<string, unknown>[],
+  field: string
+): DefinitionsById {
+  const found = new Map<string, BlockDocument>();
+  for (const item of items) {
+    const id = item.id;
+    if (typeof id !== "string") continue;
+    // Whatever the field held. A row present with an unusable value is what
+    // lets the pipeline say `unreadable` rather than `missing`, so nothing is
+    // filtered out here.
+    found.set(id, item[field] as BlockDocument);
+  }
+  return found;
+}
+
 function mediaResolver(
   config: BlocksPageConfig,
   reader: NextlyContentReader,
@@ -1176,11 +1392,33 @@ function blocksRouteConfig(
           ? undefined
           : { ...configuredSiteStyles, breakpoints: siteBreakpoints };
 
+      // Read BEFORE the element is created, because the renderer's pipeline is
+      // synchronous: composition is a pass of it, and a pass cannot await. The
+      // route is the layer that can, which is why the fetch lives here and not
+      // in the renderer.
+      const definitions = await definitionsFor(
+        document,
+        componentSource(config, readerFor(config), budget, context.locale),
+        // The SAME caps the pipeline will read this document under, resolved
+        // once. `prepareDocumentReadStages` falls back to the style context's
+        // when no limits are given directly, so passing the default here made
+        // a route that raised `maxNodes` through `styleContext` fetch for the
+        // first 5,000 nodes while the renderer kept — and tried to draw —
+        // every instance after them.
+        effectiveLimits(config)
+      );
+
       return createElement(PageRenderer, {
         document,
         context: pageContext,
         blocks,
         styles: resolved,
+        // Spread conditionally, matching `hostPolicy` below: a page holding no
+        // instance resolves to an empty map, and handing `PageRenderer` an
+        // empty map rather than nothing states that definitions WERE fetched
+        // and none was found — which is the honest answer for a page that
+        // references none, and the wrong one for a caller that never asked.
+        ...(definitions.size === 0 ? {} : { definitions }),
         styleContext,
         blockFallback,
         limits,

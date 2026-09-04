@@ -14,6 +14,23 @@ import {
 } from "../../revalidation/compute-tags";
 
 /**
+ * `nextly:{collection}:id:{id}` on its own — the entity, without its collection.
+ *
+ * Published beside {@link nextlyTags} rather than instead of it, because the
+ * two answer different questions and the collection tag is the wrong answer
+ * for some reads. A read that names ONE record it already knows the id of —
+ * a page inlining the components it embeds, say — wants to regenerate when
+ * that record changes and not when any of its siblings do. Tagged with the
+ * collection, publishing one component would rebuild every page on the site
+ * that embeds any component.
+ *
+ * A read that DISCOVERS which records it wants still needs the collection tag:
+ * a listing has no id to name until it runs, so nothing narrower can tell it
+ * that a newly created row belongs in it.
+ */
+export { entryIdTag };
+
+/**
  * The tags a content read should carry so an on-write bust invalidates it.
  *
  * - `nextlyTags("posts")` → the collection tag: for a listing / index / sitemap

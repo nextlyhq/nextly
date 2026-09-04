@@ -8,6 +8,6 @@
 export { NextCacheRevalidator } from "./next-cache-revalidator";
 export type { NextCacheModule } from "./next-cache-revalidator";
 export { registerNextCacheRevalidator } from "./register";
-export { nextlyTags, nextlySingleTags } from "./nextly-tags";
+export { entryIdTag, nextlyTags, nextlySingleTags } from "./nextly-tags";
 export { cachedFind } from "./cached-find";
 export type { CachedFindOptions } from "./cached-find";
