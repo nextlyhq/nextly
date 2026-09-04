@@ -823,16 +823,24 @@ function componentSource(
   const status = config.status ?? (config.draft === true ? "all" : "published");
   // Whether this route may surface a component's PENDING edits.
   //
-  // Both halves are load-bearing. `draft: true` is the route declaring itself
-  // the editor's, and only the literal is consulted because a per-path `draft`
-  // FUNCTION answers about one entry the visitor asked for and says nothing
-  // about the components inside it — which is also why a shareable preview
-  // link, whose gate is such a function, keeps reading published definitions
-  // (design 6.4, founder Q10). And an explicit `status` beats the widening, in
-  // the same order `resolveDraftOverlay` applies it: a route that asked for
-  // `published` is asking for the live document, so overlaying a draft on top
-  // of it would answer a question it did not ask.
-  const overlayDrafts = config.draft === true && status !== "published";
+  // Both halves are load-bearing, and both are about what this read can
+  // HONESTLY promise.
+  //
+  // Only the LITERAL `draft` counts. A per-path `draft` function answers about
+  // the one entry a visitor asked for and says nothing about the components
+  // inside it, so a route whose gate is such a function keeps reading published
+  // definitions rather than inheriting a grant that was never about them.
+  //
+  // And the scope must be the unnarrowed one. `findByID` accepts no `status`,
+  // and under `overrideAccess` an absent status is no filter at all, so the
+  // per-id read cannot express a lifecycle scope and falls back to the live row
+  // when no pending snapshot exists. A route that named `status: "draft"` would
+  // then receive a PUBLISHED component it had excluded. Which states are public
+  // is the workflow's question, answered in the query service, so this narrows
+  // by declining the per-id route rather than by re-deciding that rule here —
+  // `status: "all"` is the only scope that excludes nothing and can therefore
+  // be served by an unfiltered read.
+  const overlayDrafts = config.draft === true && status === "all";
 
   return async (ids: readonly string[]) => {
     // Dropped before anything is built from them, not repaired. `entryIdTag`
@@ -1710,7 +1718,19 @@ function blocksSingleConfig(
   } = config;
 
   const routeConfig = blocksRouteConfig(
-    { ...blocksOptions, collections: [slug] },
+    {
+      ...blocksOptions,
+      collections: [slug],
+      // The LITERAL intent, carried; the hook, still not. `draft: true` is a
+      // statement about what this route serves, and the reads it governs here —
+      // the components a page embeds and the media they reference — are the
+      // page's own, not the Single's. Dropped along with the hook, a Single
+      // serving its working draft still drew every embedded component from the
+      // published read, and referenced a never-published image as no picture at
+      // all. A FUNCTION is still withheld: it resolves an entry id this route
+      // has nothing to compare against.
+      ...(config.draft === true ? { draft: true } : {}),
+    },
     isPublic
   );
 

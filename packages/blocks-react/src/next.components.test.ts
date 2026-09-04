@@ -40,7 +40,7 @@ vi.mock("nextly/runtime", async importActual => {
   };
 });
 
-const { createBlocksPage } = await import("./next");
+const { createBlocksPage, createSinglePage } = await import("./next");
 const { entryIdTag } = await import("nextly/runtime");
 
 interface FindArgs {
@@ -552,5 +552,99 @@ describe("a component's pending edits in draft mode", () => {
     await route.ContentPage({ params: { slug: ["about"] } });
 
     expect(r.byId).toEqual([{ id: "hero", draft: true }]);
+  });
+});
+
+describe("the lifecycle scope a draft-mode component read stays inside", () => {
+  it("leaves an explicit draft-ONLY scope on the batched read", async () => {
+    // `findByID` takes no `status`, so the per-id read cannot express a
+    // lifecycle scope at all: under `overrideAccess` it is unfiltered and falls
+    // back to the live row when no pending snapshot exists. A route that named
+    // `status: "draft"` would then be handed a PUBLISHED component it excluded.
+    // Which states are public is the workflow's question and it is answered in
+    // the query service, so this path narrows by not taking the per-id route
+    // rather than by re-deciding that rule here.
+    const r = splitStoreReader(
+      { hero: definition([headingNode("PUBLISHED")]) },
+      {},
+      page(["hero"])
+    );
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: r.nextly,
+      draft: true,
+      status: "draft",
+    } as Parameters<typeof createBlocksPage>[0]);
+
+    await route.ContentPage({ params: { slug: ["about"] } });
+
+    expect(r.byId).toEqual([]);
+    expect(componentReads(r.calls)[0]!.status).toBe("draft");
+  });
+});
+
+describe("a Single blocks page and the components it embeds", () => {
+  /** A reader serving one Single whose document embeds a component. */
+  function singleStore(published: unknown, drafts: unknown) {
+    const byId: { id: string; draft?: boolean }[] = [];
+    const reader = {
+      findSingle: vi.fn(async () => ({
+        title: "Home",
+        content: page(["hero"]),
+      })),
+      find: vi.fn(async (args: FindArgs) => {
+        if (args.collection === "components") {
+          const wanted = args.where?.id?.in;
+          const ids = Array.isArray(wanted) ? (wanted as string[]) : [];
+          return {
+            items: ids.map(id => ({ id, content: published })),
+            meta: {},
+          };
+        }
+        return { items: [], meta: {} };
+      }),
+      findByID: vi.fn(
+        async (args: { collection: string; id: string; draft?: boolean }) => {
+          if (args.collection !== "components") return null;
+          byId.push({ id: args.id, draft: args.draft });
+          return {
+            id: args.id,
+            content: args.draft === true ? drafts : published,
+          };
+        }
+      ),
+    };
+    return { reader, byId };
+  }
+
+  it("carries a Single's literal draft intent into the component read", async () => {
+    // `blocksSingleConfig` pulls `draft` out before building the shared blocks
+    // route, because the Single's hook has a different shape from the page
+    // route's. The LITERAL is not that hook, and dropping it too left the
+    // Single rendering its own working draft while every component inside it
+    // came from the published batched read — the same stale preview, one level
+    // down.
+    const s = singleStore(
+      definition([headingNode("PUBLISHED")]),
+      definition([headingNode("PENDING EDIT")])
+    );
+    const route = createSinglePage({
+      slug: "homepage",
+      field: "content",
+      nextly: s.reader as never,
+      blocks: createBlockResolver(coreBlocks),
+      draft: true,
+      metadata: (
+        _entry: unknown,
+        _context: unknown,
+        derived: { title?: string }
+      ) => ({ title: derived.title ?? "NO TITLE" }),
+    } as Parameters<typeof createSinglePage>[0]);
+
+    const meta = await route.generateMetadata();
+
+    expect(s.byId).toEqual([{ id: "hero", draft: true }]);
+    expect(meta.title).toBe("PENDING EDIT");
   });
 });
