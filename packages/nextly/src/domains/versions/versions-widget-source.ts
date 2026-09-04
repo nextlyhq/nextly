@@ -121,8 +121,13 @@ const ROW_PAGE = 100;
  * this caller. Reaching it returns FEWER documents than asked for, and the count
  * refuses rather than publishing that as a total — so the failure direction is a
  * thin card or an honest refusal, never a number that is quietly too small.
+ *
+ * Generous because the count runs to exhaustion over a set the aggregate has
+ * already bounded at {@link CANDIDATE_SCAN} DOCUMENTS, while a round reads
+ * ROWS: a document contributes one per locale, so the rows behind that bound are
+ * a multiple of it that nothing here can know in advance.
  */
-const MAX_GATHER_ROUNDS = 20;
+const MAX_GATHER_ROUNDS = 60;
 
 /**
  * The fields this source publishes.
@@ -329,12 +334,18 @@ async function resolveVersions(
       refuse();
     }
 
+    // 🔴 Asked to run to EXHAUSTION rather than to a document quota. Stopping
+    // at a quota cannot tell "there are exactly this many" from "there are more
+    // than this many", so a set of exactly `CANDIDATE_SCAN` readable documents
+    // -- which the aggregate above admits -- came back unexhausted and refused,
+    // at precisely the boundary the bound documents as answerable. The
+    // aggregate is what bounds this walk; the walk's own job is to finish.
     const { documents, exhausted } = await gatherVisibleDocuments(
-      CANDIDATE_SCAN,
+      Number.MAX_SAFE_INTEGER,
       readableSlugs,
       caller
     );
-    // 🔴 The candidate count passing is NOT enough on its own. It counts
+    // The candidate count passing is still not enough on its own. It counts
     // documents, while the walk reads rows, and rows a stored rule hides are
     // read without yielding one -- so a caller who may see little can exhaust
     // the rounds on a set the aggregate said was small. Publishing what the

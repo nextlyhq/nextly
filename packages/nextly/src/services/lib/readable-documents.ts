@@ -60,11 +60,18 @@ function chunked(ids: readonly string[]): string[][] {
  * Only `id` is selected. The caller needs membership, and a projection wide
  * enough to answer that is the narrowest thing that also cannot carry field
  * values into a surface that never asked for them.
+ *
+ * 🔴 `locale` is part of the QUESTION, not a presentation detail. A stored rule
+ * is a predicate over the collection's fields, and a localized field answers
+ * differently per language, so a read that names no locale judges whichever
+ * translation it defaults to. Asking once per slug and applying that verdict to
+ * every language discloses the rows a rule refuses in the others.
  */
 export async function readableDocumentIds(
   collection: string,
   entryIds: readonly string[],
-  caller: ReadCaller
+  caller: ReadCaller,
+  locale?: string | null
 ): Promise<Set<string>> {
   const readable = new Set<string>();
   if (entryIds.length === 0) return readable;
@@ -78,6 +85,7 @@ export async function readableDocumentIds(
       // the remainder as unreadable.
       limit: chunk.length,
       status: "all",
+      ...(locale === null || locale === undefined ? {} : { locale }),
       overrideAccess: false,
       user: caller.user,
       ...(caller.authenticatedScope

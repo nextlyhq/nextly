@@ -42,8 +42,10 @@ different document per language and a rule can answer differently for each. A
 row whose scope is neither a collection nor a single is dropped rather than
 admitted, since nothing can judge it.
 
-A localized document is authorized per LANGUAGE, so the rows reach that
-decision one per locale and are collapsed to one per document only afterwards.
+A localized document is authorized per LANGUAGE — collections as well as
+Singles, because a stored rule is a predicate over the collection's own fields
+and a localized field answers differently per language. Rows reach that decision
+one per locale and are collapsed to one per document only afterwards.
 Collapsing first offered each document's newest locale alone: where that one was
 denied and an older one readable, the document vanished from a card its reader
 was entitled to see.
@@ -54,6 +56,16 @@ drafts written under a locale since removed are still rows — so it could fetch
 too few rows to find the documents asked for while every check said the answer
 was exact. The read is paged instead, and the only bound is how many documents
 the caller wants.
+
+A pending row for a Single is checked against the live document's id, resolved
+without materializing it. Version rows outlive the documents they describe, so a
+Single deleted and recreated leaves rows naming its predecessor — and the read
+probe goes through a path that auto-creates a missing Single, which would have
+made loading a dashboard perform a write.
+
+Paged reads order by a unique key as well as the instant. `updatedAt` alone is
+not a total order, and paging one with OFFSET can return a row twice and skip
+another, losing a document that nothing downstream can notice is missing.
 
 That answer cannot be computed in SQL — the rule lives on the collection, the
 candidates live in the version table, and the data layer has no join — so an

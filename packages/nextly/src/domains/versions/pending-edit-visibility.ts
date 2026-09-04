@@ -24,13 +24,36 @@ import { readableDocumentIds } from "../../services/lib/readable-documents";
 
 import type { VersionMeta } from "./versions-repository";
 
-/** Rows grouped by the slug they belong to, preserving their order. */
-function bySlug(rows: readonly VersionMeta[]): Map<string, VersionMeta[]> {
-  const grouped = new Map<string, VersionMeta[]>();
+/**
+ * Rows grouped by the slug AND locale they belong to, order preserved.
+ *
+ * 🔴 Locale is part of the key, not a detail. A stored read rule is a predicate
+ * over the collection's own fields, and a localized field answers differently
+ * per language — `localized-target-predicate.integration.test.ts` pins exactly
+ * that, with one row readable in `en` and denied in `de`. Authorizing a slug
+ * once therefore judges whichever translation the read defaults to and marks
+ * every locale row visible on the strength of it, disclosing the entry id,
+ * language and edit time of a translation the rule refuses.
+ */
+function byReadUnit(
+  rows: readonly VersionMeta[]
+): Map<string, { slug: string; locale: string | null; rows: VersionMeta[] }> {
+  const grouped = new Map<
+    string,
+    { slug: string; locale: string | null; rows: VersionMeta[] }
+  >();
   for (const row of rows) {
-    const existing = grouped.get(row.scopeSlug);
-    if (existing) existing.push(row);
-    else grouped.set(row.scopeSlug, [row]);
+    // NUL-joined for the reason the version key is: a slug may contain any
+    // delimiter that reads as safe.
+    const key = `${row.scopeSlug}\u0000${row.locale ?? ""}`;
+    const existing = grouped.get(key);
+    if (existing) existing.rows.push(row);
+    else
+      grouped.set(key, {
+        slug: row.scopeSlug,
+        locale: row.locale,
+        rows: [row],
+      });
   }
   return grouped;
 }
@@ -41,13 +64,16 @@ async function visibleCollectionRows(
   caller: ReadCaller
 ): Promise<Set<VersionMeta>> {
   const visible = new Set<VersionMeta>();
-  for (const [slug, slugRows] of bySlug(rows)) {
+  for (const unit of byReadUnit(rows).values()) {
     const readable = await readableDocumentIds(
-      slug,
-      slugRows.map(row => row.entryId),
-      caller
+      unit.slug,
+      unit.rows.map(row => row.entryId),
+      caller,
+      unit.locale
     );
-    for (const row of slugRows) if (readable.has(row.entryId)) visible.add(row);
+    for (const row of unit.rows) {
+      if (readable.has(row.entryId)) visible.add(row);
+    }
   }
   return visible;
 }
@@ -79,12 +105,32 @@ async function visibleSingleRows(
   // order, and the failure would land at boot rather than here. Deferring it
   // also means an install whose pending edits are all collections never loads
   // the Singles query service at all.
-  const { singleDocumentReadable } = await import(
+  const { singleDocumentReadable, resolveSingleDocumentId } = await import(
     "../singles/services/single-document-access"
   );
 
+  // 🔴 Resolved BEFORE the probe, and without materializing anything. A version
+  // row outlives the document it describes, so a Single that was deleted and
+  // recreated leaves rows naming the predecessor -- and judging those by the
+  // replacement's verdict exposes the old entry id and edit time. The probe
+  // itself cannot be asked first either: it reads through `SingleEntryService`,
+  // which AUTO-CREATES a missing Single, so loading a dashboard would perform a
+  // write. `resolveSingleDocumentId` exists for exactly this and reads the
+  // backing row directly; `canReadLiveSingle` compares the id the same way.
+  const liveIds = new Map<string, Promise<string | null>>();
+  const liveIdOf = (slug: string): Promise<string | null> => {
+    let pending = liveIds.get(slug);
+    if (!pending) {
+      pending = resolveSingleDocumentId(slug);
+      liveIds.set(slug, pending);
+    }
+    return pending;
+  };
+
   const verdicts = new Map<string, Promise<boolean>>();
   for (const row of rows) {
+    // An unmaterialized Single, or a row belonging to a predecessor document.
+    if ((await liveIdOf(row.scopeSlug)) !== row.entryId) continue;
     const key = `${row.scopeSlug} ${row.locale ?? ""}`;
     let verdict = verdicts.get(key);
     if (!verdict) {

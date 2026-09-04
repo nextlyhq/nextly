@@ -162,6 +162,29 @@ describe("who the numbers are for", () => {
     expect(visible).toHaveBeenCalledWith([row], caller);
   });
 
+  it("ANSWERS a count of exactly the bound, rather than refusing at it", async () => {
+    // 🔴 The boundary the bound documents as answerable. Stopping the walk at a
+    // document quota cannot tell "exactly this many" from "more than this
+    // many", so a set of exactly CANDIDATE_SCAN readable documents came back
+    // unexhausted and was refused -- at the one size the aggregate admits. The
+    // walk runs to exhaustion now; the aggregate is what bounds it.
+    countPendingEdits.mockResolvedValue(1000);
+    const many = Array.from({ length: 1000 }, (_, index) => ({
+      ...row,
+      entryId: `e${index}`,
+    }));
+    // One full page, then the remainder, then the end of the table.
+    pendingEditRows
+      .mockResolvedValueOnce(many.slice(0, 100))
+      .mockResolvedValueOnce(many.slice(100))
+      .mockResolvedValue([]);
+    visible.mockImplementation((rows: unknown) => Promise.resolve(rows));
+
+    await expect(
+      executeWidgetQuery({ source: VERSIONS_SOURCE_ID, op: "count" }, caller)
+    ).resolves.toEqual({ op: "count", total: 1000 });
+  });
+
   it("refuses a COUNT it cannot answer exactly, rather than reporting a floor", async () => {
     // 🔴 Row rules cannot be applied in SQL -- the rule lives on the collection,
     // the candidates live in the version table, and the port has no join -- so
@@ -175,17 +198,6 @@ describe("who the numbers are for", () => {
       executeWidgetQuery({ source: VERSIONS_SOURCE_ID, op: "count" }, caller)
     ).rejects.toThrow();
     expect(pendingEditRows).not.toHaveBeenCalled();
-  });
-
-  it("answers a COUNT that sits exactly ON the bound", async () => {
-    // The boundary control. Comparing the FETCHED length instead of the total
-    // cannot tell "exactly at the bound" from "beyond it", and would refuse a
-    // set it could have answered.
-    countPendingEdits.mockResolvedValue(1000);
-
-    await expect(
-      executeWidgetQuery({ source: VERSIONS_SOURCE_ID, op: "count" }, caller)
-    ).resolves.toMatchObject({ op: "count" });
   });
 
   it("authorizes each LOCALE row, then keeps the newest one that survives", async () => {
@@ -208,7 +220,7 @@ describe("who the numbers are for", () => {
 
     // BOTH locale rows must reach the decision -- handing it one is the defect.
     expect(visible).toHaveBeenCalledWith([newer, older], caller);
-    const items = (result as { items: { locale: string }[] }).items;
+    const items = (result as unknown as { items: { locale: string }[] }).items;
     expect(items).toHaveLength(1);
     expect(items[0]?.locale).toBe("en");
   });

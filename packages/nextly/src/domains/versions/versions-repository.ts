@@ -405,7 +405,17 @@ export class VersionsRepository {
       // `nulls` is stated for the reason the module's other ordered read states
       // it: the default differs per dialect, and a limited list must not return
       // different rows per engine.
-      orderBy: [{ column: "updatedAt", direction: "desc", nulls: "last" }],
+      // 🔴 `id` breaks the ties, and it is what makes OFFSET paging sound. An
+      // order on `updatedAt` alone is not TOTAL -- SQLite stores whole seconds,
+      // so working drafts saved in the same second tie -- and a database may
+      // order tied rows differently between two queries. Paging an unstable
+      // order returns one row twice and SKIPS another, and the skipped document
+      // is simply lost: a caller de-duplicating what it received cannot notice
+      // the one it never saw.
+      orderBy: [
+        { column: "updatedAt", direction: "desc", nulls: "last" },
+        { column: "id", direction: "desc" },
+      ],
       limit: input.limit,
       offset: input.offset,
     });
