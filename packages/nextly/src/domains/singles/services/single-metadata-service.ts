@@ -825,13 +825,18 @@ export class SingleMetadataService {
     const [tableHasAnyRows, foreignKeysByColumn, indexNames] =
       await this.readLiveTableFacts(db, liveDialect, tableName);
 
+    // Detected from the FULL field lists: a renamed LOCALIZED field-group
+    // field sits in neither side of alterInput (the localized filter removes
+    // both spellings), and its association migration must not be excluded
+    // along with the column handling.
     const groupMigration = await this.planFieldGroupAssociationMigration(
       adapter,
-      alterInput.oldFields,
-      alterInput.newFields
+      previousFields,
+      fields
     );
 
-    return {      migrationSQL: schemaService.generateAlterTableMigration(
+    return {
+      migrationSQL: schemaService.generateAlterTableMigration(
         tableName,
         alterInput.oldFields,
         alterInput.newFields,

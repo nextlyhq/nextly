@@ -623,19 +623,30 @@ export function validateRelationshipTargetShared(
 
 /**
  * The reference keys a component field may declare, from the two storage
- * catalogs: today's spelling and the one the storage migration moves to.
- * Read from the catalogs rather than spelled here, so the validator cannot
- * drift from the vocabulary the readers resolve.
+ * catalogs and one pinned historical spelling per shape.
+ *
+ * `"component"` / `"components"` are pinned literals, not derived from the
+ * catalog: the day `STORAGE_FORMAT.refKeys` flips to the migration targets, a
+ * list built from the two catalogs collapses to duplicate copies of the
+ * migrated keys — `declared()` would then count every migrated reference
+ * twice and reject it as a conflict, while the historical spellings vanished
+ * from validation entirely. Deduplicated, because the pairs are the same
+ * string today and again after the flip.
  */
-const COMPONENT_REF_SINGLE_KEYS = [
+const uniqueKeys = (keys: readonly string[]): string[] =>
+  keys.filter((key, i, all) => all.indexOf(key) === i);
+
+const COMPONENT_REF_SINGLE_KEYS = uniqueKeys([
+  "component",
   STORAGE_FORMAT.refKeys.single,
   MIGRATION_TARGET.refKeys.single,
-] as const;
+]);
 
-const COMPONENT_REF_MULTI_KEYS = [
+const COMPONENT_REF_MULTI_KEYS = uniqueKeys([
+  "components",
   STORAGE_FORMAT.refKeys.many,
   MIGRATION_TARGET.refKeys.many,
-] as const;
+]);
 
 /**
  * Validate a component-typed field's reference shape.
