@@ -33,7 +33,7 @@ live", that is not what a release does.
 | Create | An empty release with a name |
 | Add members | Each member names a document and an action, `publish` or `unpublish` |
 | Schedule | The release is given a time. Blocking problems are checked first |
-| Apply | On the first background-jobs pass **after** that time, every member's action is applied |
+| Apply | On a background-jobs pass after that time, every member's action is applied |
 | Cancel | An unapplied release can be cancelled |
 
 ## Scheduling stores a time; a job runner applies it
@@ -45,9 +45,15 @@ runs as part of the [background jobs](/docs/jobs) pass, which is triggered by ca
 <Callout type="warn">
 **With no scheduler configured, a release stays scheduled forever.** Its due time passes and
 nothing happens, because nothing ran the sweep. Set up an authenticated periodic call to
-`/api/jobs/run` before you rely on scheduling, and expect application on the first successful
-pass after the due time rather than exactly at it.
+`/api/jobs/run` before you rely on scheduling.
 </Callout>
+
+A pass is bounded — `/api/jobs/run` takes at most 10 queued jobs and runs for at most 20
+seconds — and the sweep can defer work past its deadline while still reporting success. So a
+release is applied on the first pass that actually **reaches and completes** it, which is not
+always the first pass after its due time. With a backlog, or several expensive releases due
+together, expect it a pass or two later. Treat the scheduled time as "not before", not as
+"at".
 
 ## Blocking reasons
 

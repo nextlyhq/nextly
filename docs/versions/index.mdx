@@ -17,10 +17,20 @@ export const Posts = defineCollection({
 });
 ```
 
+`status: true` also switches history on by itself: an entity with the draft/publish lifecycle
+captures history even when `versions` is omitted. It does **not** get working drafts, which
+need an explicit `versions: true` or `versions: { drafts: true }`.
+
+| Config | History | Working drafts |
+|---|---|---|
+| Neither `versions` nor `status` | No | No |
+| `status: true` alone | **Yes** | No |
+| `versions: true` | Yes | Yes |
+| `versions: { drafts: false }` | Yes | No |
+
 <Callout type="warn">
-Without `versions`, an entity is unversioned and captures nothing. There is no cost to
-leaving it off, and no history if you do — a save cannot be recovered after the fact by
-turning it on later. Decide before you need it.
+An entity with neither flag is unversioned and captures nothing — and turning versioning on
+later does not recover saves made before. Decide before you need it, not after.
 </Callout>
 
 ## Availability

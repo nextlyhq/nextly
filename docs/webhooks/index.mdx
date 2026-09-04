@@ -34,14 +34,23 @@ signedContent = "<id>.<timestamp>.<rawBody>"
 signature     = base64(HMAC_SHA256(key, signedContent))
 ```
 
-The `webhook-signature` header carries it as a versioned token, `v1,<signature>`, so split on
-the comma before comparing.
+The `webhook-signature` header carries versioned tokens shaped `v1,<signature>`. During a
+secret rotation a delivery is signed with **every** active secret, and the tokens are joined
+by **spaces**:
+
+```
+webhook-signature: v1,<sigA> v1,<sigB>
+```
+
+So: split the header on whitespace, then split each token on its comma, and accept the
+delivery if any token matches.
 
 <Callout type="warn">
-Using the `whsec_...` string directly as the HMAC key, or comparing against the whole header
-without stripping `v1,`, makes every authentic delivery fail verification. Those are the two
-usual causes of "the signature never matches". Any Standard Webhooks verifier library handles
-both for you.
+Three ways to reject every authentic delivery, in the order people hit them: using the
+`whsec_...` string as the HMAC key instead of its decoded bytes; comparing against the whole
+header without stripping `v1,`; and splitting only on commas, which folds the next token into
+the first signature and breaks the moment you rotate a secret. Using a Standard Webhooks
+verifier library handles all three.
 </Callout>
 
 Three headers travel with each delivery:

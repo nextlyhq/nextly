@@ -94,10 +94,16 @@ const posts = await nextly.find({
 ```
 
 <Callout type="warn">
-If you read content in a Server Component on behalf of a signed-in visitor and do not pass
-both `overrideAccess: false` and `user`, restricted rows will be returned. This is the single
-easiest way to leak data with Nextly.
+**Leaving `overrideAccess` at its default is the case that leaks.** Reading on behalf of a
+visitor without setting `overrideAccess: false` returns rows that visitor was not allowed to
+see. This is the easiest way to expose data with Nextly.
 </Callout>
+
+Forgetting the `user` is a different and much less dangerous mistake. An owner-based rule has
+nobody to compare against, so the request is refused rather than answered loosely — you get
+an authorization error, not somebody else's rows. If a query that should return data returns
+"authentication required", a missing `user` alongside `overrideAccess: false` is the first
+thing to check.
 
 Field-level rules behave differently: they run whenever `overrideAccess` is `false`, user or
 not, because "which fields may this writer set" has a sensible answer for nobody. Internal

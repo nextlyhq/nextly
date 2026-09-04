@@ -37,10 +37,13 @@ without recreating anything or losing content.
 
 ## What differs from a code-first collection
 
-- Its **definition** is a database row rather than a file, so the shape itself is not in your
-  git history even though the migration that creates the table is.
-- Because it is not in the repository, it is not reviewed. That is the trade being made:
-  speed for the editor, less oversight for you.
+- Its **runtime definition** lives in a database row. The generated migration, however,
+  carries both the table DDL and a serialized copy of the field definition, so once you commit
+  it the shape *is* in git and *is* reviewable in a pull request.
+- What stays database-only is a metadata-only edit that produces no migration — renaming a
+  label, changing help text. Those change the admin without leaving a reviewable artifact.
+- The trade is narrower than "no oversight": structural changes arrive as a committed
+  migration you can review, while presentational ones do not arrive at all.
 - It **does** generate a SQL migration file under your `migrationsDir`, and that file is
   what recreates the table and its registry row in another environment. **Commit it.**
   Deploying without it leaves the collection unreproducible outside the database it was
