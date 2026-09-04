@@ -139,6 +139,27 @@ function WarningDetail({
         {warnings.map((warning, index) => (
           <li key={`${warning.phase}-${warning.code}-${index}`}>
             {warning.message}
+            {/*
+              Named when the server said which row it was about. A bulk write
+              produces one of these per entry, and several identically-worded
+              notices tell an author that something needs attention without
+              telling them WHICH page — which is the same as not telling them.
+              The server sends `entryId` for exactly this, and it discloses
+              nothing: the caller either supplied the id or is being handed it
+              back in the same response.
+            */}
+            {warning.entryId === undefined ? null : (
+              <span className="opacity-70"> ({warning.entryId})</span>
+            )}
+            {/*
+              Named when the server said which row it was about. A bulk write
+              produces one of these per entry, and several identically-worded
+              notices tell an author that something needs attention without
+              telling them WHICH page — which is the same as not telling them.
+              The server sends `entryId` for exactly this, and it discloses
+              nothing: the caller either supplied the id or is being handed it
+              back in the same response.
+            */}
           </li>
         ))}
       </ul>

@@ -47,7 +47,11 @@ import type { HookContext } from "nextly";
 import { recordAdvisoryNotice } from "nextly";
 
 import { blocksFieldsOf } from "./class-usage-blocks-fields";
-import { requestContextFor, writeTargetOf } from "./write-target";
+import {
+  requestContextFor,
+  writeTargetOf,
+  type WriteTarget,
+} from "./write-target";
 
 /** The phases a document can become published in. */
 const PUBLISHING_PHASES = ["afterCreate", "afterUpdate"] as const;
@@ -76,6 +80,10 @@ export interface ReadinessDirectApi {
     status?: "published" | "draft" | "all";
     overrideAccess?: boolean;
     depth?: number;
+    // Part of this call's SHAPE, so a caller cannot build a read here that
+    // omits one and silently inherits the instance's identity.
+    user?: undefined;
+    req?: undefined;
   }): Promise<{ items: unknown[] }>;
 }
 
@@ -107,6 +115,18 @@ export function registerComponentReadinessNotice(args: {
   ctx: ReadinessPluginContext;
   /** The RESOLVED slug component definitions are stored under. */
   componentCollection: string;
+  /**
+   * The collections a route actually renders, when a host names them.
+   *
+   * The hook is registered on the wildcard because the set of collections is
+   * not known when a plugin is wired. That is right for finding blocks fields
+   * and wrong for claiming what a VISITOR sees: a blocks field on a collection
+   * no `createBlocksPage` route renders is content nobody visits, and saying
+   * its components "will not appear for visitors" is a claim about a page that
+   * does not exist. Left unset every collection with a blocks field is
+   * examined, which is the useful default; named, only these are.
+   */
+  renderedCollections?: readonly string[];
   /**
    * The field on a written PAGE holding the document the route renders, when a
    * host renders one specific field.
@@ -174,24 +194,9 @@ async function composeNotice(
   context: HookContext<unknown>,
   phase: string
 ): Promise<Parameters<typeof recordAdvisoryNotice>[0] | null> {
-  const target = writeTargetOf<ReadinessDirectApi>(context, {
-    // The component store itself is NOT excluded: a component embedding another
-    // component has the same hole for the same reason, and an author publishing
-    // it wants the same sentence.
-    excluded: [],
-  });
-  if (target === null) return null;
-
-  const collection = await args.ctx.services.collections.getCollection(
-    target.slug,
-    requestContextFor(context)
-  );
-  if (!leavesDocumentPublished(context, collection)) return null;
-  const documents = writtenDocuments(
-    context,
-    renderedFields(blocksFieldsOf(collection as never), args.pageField)
-  );
-  if (documents.length === 0) return null;
+  const subject = await subjectOf(args, context);
+  if (subject === null) return null;
+  const { target, documents } = subject;
 
   const store = await args.ctx.services.collections.getCollection(
     args.componentCollection,
@@ -233,6 +238,59 @@ async function composeNotice(
     message: describe(missing.size),
     entryId: target.documentId,
   };
+}
+
+/**
+ * The write this notice may speak about, and the documents it wrote.
+ *
+ * Every reason to say nothing is gathered here, so the notice itself reads as
+ * one sequence rather than as a decision interleaved with its own preconditions.
+ * `null` at any point is "not my business", never an error.
+ */
+async function subjectOf(
+  args: Parameters<typeof registerComponentReadinessNotice>[0],
+  context: HookContext<unknown>
+): Promise<{
+  target: WriteTarget<ReadinessDirectApi>;
+  documents: BlockDocument[];
+} | null> {
+  const target = writeTargetOf<ReadinessDirectApi>(context, {
+    // The component store itself is NOT excluded: a component embedding another
+    // component has the same hole for the same reason, and an author publishing
+    // it wants the same sentence.
+    excluded: [],
+  });
+  if (target === null) return null;
+  if (!withinRenderedScope(args, target.slug)) return null;
+
+  const collection = await args.ctx.services.collections.getCollection(
+    target.slug,
+    requestContextFor(context)
+  );
+  if (!leavesDocumentPublished(context, collection)) return null;
+
+  const documents = writtenDocuments(
+    context,
+    renderedFields(blocksFieldsOf(collection as never), args.pageField)
+  );
+  return documents.length === 0 ? null : { target, documents };
+}
+
+/**
+ * Whether a route actually serves this collection.
+ *
+ * The component store stays in scope even when nothing renders it directly: a
+ * component embedding an unpublished component is a hole on every page that
+ * embeds IT, which is exactly what its author needs to hear.
+ */
+function withinRenderedScope(
+  args: Parameters<typeof registerComponentReadinessNotice>[0],
+  slug: string
+): boolean {
+  if (args.renderedCollections === undefined) return true;
+  return (
+    args.renderedCollections.includes(slug) || slug === args.componentCollection
+  );
 }
 
 /**
@@ -381,6 +439,15 @@ function storeSource(
         status: "published",
         overrideAccess: true,
         depth: 0,
+        // BOTH identity channels cleared, stated rather than omitted.
+        // `mergeConfig` spreads the pooled reader's defaults UNDER the call, so
+        // an omitted key restores whatever identity the instance was booted
+        // with — and an `afterRead` hook branching on the caller would then
+        // hand this read a definition the anonymous visitor never sees,
+        // suppressing a real notice or inventing one. The renderer's own
+        // component read states both for the same reason.
+        user: undefined,
+        req: undefined,
       });
       for (const item of page.items) {
         const row = item as Record<string, unknown> | null;
@@ -390,14 +457,20 @@ function storeSource(
         // pipeline's question, and it answers it with reasons a store cannot:
         // an id present with an unreadable value is a definition somebody
         // published and cannot be read, and that is not the same as absent.
-        // The definition is decoded the same way, and for the same reason: a
-        // row read back through the Direct API carries whatever the adapter
-        // stores, so a text column would reach the resolver as a string and be
-        // reported as a published-but-unreadable definition.
-        const definition = asDocument(row?.[field]);
-        if (typeof id === "string" && definition !== null) {
-          found.set(id, definition);
-        }
+        if (typeof id !== "string") continue;
+        // PRESENT even when the value will not read as a document. The row came
+        // back under a published scope, so somebody published it, and dropping
+        // it here would report the component as one nobody published — a
+        // diagnosis republishing cannot repair. The resolver keeps those apart
+        // by asking presence and readability separately, and reports the second
+        // as `unreadable`; handing the raw value over is what lets it.
+        //
+        // Decoded first all the same: an adapter storing JSON as text hands
+        // back a string, and a string is unreadable to the resolver for a
+        // reason that has nothing to do with the data.
+        const stored = row?.[field];
+        const decoded = asDocument(stored);
+        found.set(id, (decoded ?? stored) as BlockDocument);
       }
     }
     return found;

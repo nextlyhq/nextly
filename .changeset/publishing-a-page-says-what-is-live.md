@@ -102,6 +102,19 @@ admin dropped them at the response type, so an author publishing ten pages at
 once was told nothing an author publishing one of them would have been told.
 Both bulk hooks now report through the same presenter single-entry writes use.
 
+A published component whose stored document cannot be read is no longer reported
+as unpublished. Somebody published it, and republishing cannot repair a
+malformed value — presence and readability are separate questions and the
+resolver already reports them as different reasons.
+
+The store read clears both identity channels, as the renderer's own component
+read does: an omitted `user` or `req` restores whatever identity the pooled
+reader was booted with, and an `afterRead` hook branching on the caller would
+hand this check a definition the anonymous visitor never sees.
+
+A warning names the row it is about wherever the server said so, so several
+notices from one bulk write can be told apart.
+
 A component the discovery cap stopped it from asking about is no longer named as
 unpublished. The page does have a hole there, but nobody failed to publish
 anything, and publishing the named component again cannot repair it.

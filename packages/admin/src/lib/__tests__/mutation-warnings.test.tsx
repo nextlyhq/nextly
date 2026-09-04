@@ -221,3 +221,41 @@ describe("an advisory that is not a failure", () => {
     expect(infoSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("telling several notices apart", () => {
+  it("names the row each warning is about", () => {
+    // A bulk write produces one of these per entry. Several identically-worded
+    // notices tell an author that something needs attention without telling
+    // them WHICH page, which is the same as not telling them. The server sends
+    // `entryId` for exactly this, and it discloses nothing new: the caller
+    // either supplied the id or is being handed it back in the same response.
+    toastMutationResult("Updated 2 entries", [
+      notice({ entryId: "page-a" }),
+      notice({ entryId: "page-b" }),
+    ]);
+
+    const options = infoSpy.mock.calls[0]?.[1] as {
+      description: React.ReactElement;
+    };
+    render(options.description);
+
+    expect(screen.getByText(/page-a/)).toBeInTheDocument();
+    expect(screen.getByText(/page-b/)).toBeInTheDocument();
+  });
+
+  it("renders a warning that carries no row id without an empty marker", () => {
+    // The control: not every phase knows an id, and a bare "()" beside the
+    // message would read as a missing value rather than an absent question.
+    toastMutationResult("Entry updated successfully", [
+      notice(),
+      notice({ message: "Another advisory." }),
+    ]);
+
+    const options = infoSpy.mock.calls[0]?.[1] as {
+      description: React.ReactElement;
+    };
+    const { container } = render(options.description);
+
+    expect(container.textContent).not.toContain("()");
+  });
+});

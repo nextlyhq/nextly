@@ -704,3 +704,96 @@ describe("what a post-commit hook actually receives", () => {
     expect(finds).toEqual([]);
   });
 });
+
+describe("what the notice is allowed to claim", () => {
+  it("keeps a published-but-unreadable definition PRESENT", async () => {
+    // The row came back under a published scope, so somebody published it.
+    // Dropping it would report the component as one nobody published — a
+    // diagnosis republishing cannot repair. Presence and readability are
+    // separate questions and the resolver reports them as different reasons.
+    const handlers: ((c: unknown) => unknown)[] = [];
+    const ctx = {
+      hooks: {
+        on: (_t: string, _c: string, h: (c: unknown) => unknown) => {
+          handlers.push(h);
+        },
+      },
+      services: {
+        collections: {
+          getCollection: async () => ({
+            status: true,
+            localized: false,
+            fields: [{ name: "content", type: "blocks" }],
+          }),
+        },
+      },
+    };
+    registerComponentReadinessNotice({
+      ctx: ctx as never,
+      componentCollection: COMPONENTS,
+      componentField: "content",
+      limits: () => LIMITS,
+    });
+    const write = writeContext();
+    (write.req as Record<string, unknown>).nextly = {
+      // Published, and its document is garbage.
+      find: async () => ({ items: [{ id: "hero", content: { nope: true } }] }),
+    };
+
+    await handlers[0]!(write);
+
+    expect(recorded).toEqual([]);
+  });
+
+  it("clears BOTH identity channels on the store read", async () => {
+    // `mergeConfig` spreads the pooled reader's defaults UNDER the call, so an
+    // omitted key restores whatever identity the instance was booted with, and
+    // an `afterRead` hook branching on the caller would hand this read a
+    // definition the anonymous visitor never sees.
+    const h = harness({ published: [] });
+    const ctx = writeContext();
+    (ctx.req as Record<string, unknown>).nextly = h.nextly;
+
+    await h.handlers[0]!(ctx);
+
+    const read = h.finds[0]!;
+    expect("user" in read).toBe(true);
+    expect(read.user).toBeUndefined();
+    expect("req" in read).toBe(true);
+    expect(read.req).toBeUndefined();
+  });
+
+  it("says nothing about a collection no route renders", async () => {
+    const h = harness({ published: [] });
+    const handlers: ((c: unknown) => unknown)[] = [];
+    const ctx = {
+      hooks: {
+        on: (_t: string, _c: string, x: (c: unknown) => unknown) => {
+          handlers.push(x);
+        },
+      },
+      services: {
+        collections: {
+          getCollection: async () => ({
+            status: true,
+            localized: false,
+            fields: [{ name: "content", type: "blocks" }],
+          }),
+        },
+      },
+    };
+    registerComponentReadinessNotice({
+      ctx: ctx as never,
+      componentCollection: COMPONENTS,
+      componentField: "content",
+      renderedCollections: ["pages"],
+      limits: () => LIMITS,
+    });
+    const write = writeContext({ collection: "snippets" });
+    (write.req as Record<string, unknown>).nextly = h.nextly;
+
+    await handlers[0]!(write);
+
+    expect(recorded).toEqual([]);
+  });
+});
