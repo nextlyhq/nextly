@@ -1,0 +1,141 @@
+---
+title: Page Builder
+description: Let your team compose pages from blocks you define, rendered on the server with no client JavaScript by default.
+---
+
+The Page Builder gives non-developers a canvas. They drag blocks onto a page, arrange
+them, set text and images, and publish. You decide which blocks exist.
+
+That split is the point. Your developers decide what is possible; your team decides what
+goes on the page. Someone editing a page cannot invent a new kind of section, so a site
+cannot drift away from its design system by accident.
+
+It ships as a plugin, `@nextlyhq/plugin-page-builder`, built on the same public API any
+plugin uses.
+
+## What you get
+
+- **20 blocks out of the box** — layout (section, box, columns, column, card, accordion,
+  accordion item, spacer, divider), content (heading, paragraph, rich text, list, quote,
+  image, gallery, button, embed, form), and one that reads from your content
+  ([collection loop](#reading-content-into-a-page)).
+- **Your own blocks**, defined in code, sitting beside the built-in ones.
+- **Responsive control** per block, against breakpoints you declare.
+- **Server-first rendering.** A page ships no client JavaScript unless a block on it
+  needs some.
+
+## Availability
+
+| | |
+|---|---|
+| Package | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app |
+| Status | Alpha. The block model, registries and render pipeline are stable; editor interactions are still evolving |
+| Permission | Editing a page requires update access to the collection holding it |
+
+## Install
+
+```bash
+pnpm add @nextlyhq/plugin-page-builder @nextlyhq/blocks-react
+```
+
+Add the plugin to your config. It contributes a `pages` collection whose edit screen is
+the builder:
+
+```ts
+import { pageBuilder } from "@nextlyhq/plugin-page-builder";
+import { defineConfig } from "nextly";
+
+export default defineConfig({
+  plugins: [pageBuilder()],
+});
+```
+
+## Render the pages
+
+A plugin cannot add routes to your Next.js app, so you declare one catch-all route and
+let `createBlocksPage` fill it. It resolves the incoming path against your collections,
+404s on a miss, and renders the stored document.
+
+```tsx
+// app/(frontend)/[...slug]/page.tsx
+import { createBlockResolver } from "@nextlyhq/blocks-react";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+import { getNextly } from "nextly";
+
+import nextlyConfig from "../../../nextly.config";
+
+const instance = () => getNextly({ config: nextlyConfig });
+
+const reader = {
+  find: async args => (await instance()).find(args),
+  findByID: async args => (await instance()).findByID(args),
+  // Images that store a media id resolve through this. Omit it and those images
+  // render nothing, while images holding a literal URL keep working.
+  media: {
+    findByID: async args => (await instance()).media.findByID(args),
+  },
+};
+
+const { ContentPage, generateMetadata } = createBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  nextly: reader,
+  blocks: createBlockResolver(coreBlocks),
+  styleContext: {
+    breakpoints: {
+      viewport: [
+        { id: "base", label: "Base" },
+        { id: "tablet", label: "Tablet", maxWidth: 1024 },
+        { id: "mobile", label: "Mobile", maxWidth: 640 },
+      ],
+      container: [],
+    },
+  },
+});
+
+export { generateMetadata };
+export default ContentPage;
+```
+
+<Callout type="warn">
+Without a breakpoint set the renderer emits class names with no CSS behind them, and
+pages come out structurally correct and visually bare. Declare at least a `base`
+breakpoint.
+</Callout>
+
+### Public sites read differently
+
+`createBlocksPage` reads **access-enforced** content, so it needs no database during
+`next build`. A wholly public site calls `createPublicBlocksPage` instead: it reads
+trusted, pre-renders, and returns a `generateStaticParams` to export alongside the other
+two. Which one you call *is* the security posture — there is no option to flip.
+
+## Use it as a field instead
+
+You do not have to accept the `pages` collection. The builder is also a field, usable in
+any collection or single next to ordinary fields:
+
+```ts
+import { blocks } from "@nextlyhq/plugin-page-builder";
+import { defineSingle, text } from "nextly/config";
+
+export const Homepage = defineSingle({
+  slug: "homepage",
+  fields: [text({ name: "title" }), blocks({ name: "content" })],
+});
+```
+
+## Reading content into a page
+
+The **collection loop** block queries one of your collections and repeats its child
+blocks once per entry — a post list, a team grid, a product row — without anyone writing
+a query. The developer decides which collections are available to it; the editor decides
+what each repeated item looks like.
+
+## Related
+
+- [Block document format](/docs/api-reference/block-document-format) — how a page is stored
+- [Plugins](/docs/plugins) — the SDK this plugin is built on
+- [Preview](/docs/preview) — see a page before it is published
+- [Routing and SEO](/docs/guides/routing-and-seo) — how paths resolve
