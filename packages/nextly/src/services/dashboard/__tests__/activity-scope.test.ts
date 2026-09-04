@@ -307,3 +307,67 @@ describe("history of a document that no longer exists", () => {
     expect(result.activities).toEqual([]);
   });
 });
+
+describe("a settings row under a slug a collection also owns", () => {
+  /**
+   * 🔴 `assertGlobalResourceSlugAvailable` lets a resource that already held a
+   * now-reserved name keep it, so an upgraded install can have a real
+   * collection called `email-providers`. Registry membership then classifies
+   * the settings namespace of the same name as a collection document — its id
+   * is not in that collection, the read path refuses it, and the row is treated
+   * as history for a deleted document: stripped of the changed-field detail a
+   * credential rotation exists to record.
+   */
+  const settingsRow = {
+    id: "s1",
+    action: "update",
+    collection: "email-providers",
+    entryId: "provider-1",
+    entryTitle: "SMTP (primary)",
+    metadata: '{"changed":["host","port"]}',
+    subjectKind: "settings",
+    createdAt: new Date(2026, 0, 1),
+  };
+
+  const drawFeed = async (row: Record<string, unknown>) => {
+    const { service, adapter } = makeService();
+    // The collision: a real collection owns the settings namespace.
+    registeredKinds.mockReturnValue(
+      new Map<string, "collection" | "single">([
+        ["email-providers", "collection"],
+      ])
+    );
+    (adapter.select as ReturnType<typeof vi.fn>).mockResolvedValueOnce([row]);
+    return service.getRecentActivity({
+      limit: 5,
+      scope: someResources(["email-providers"]),
+      caller: { user: { id: "u1", roles: ["editor"] } },
+    });
+  };
+
+  it("keeps the settings row WHOLE, because the row says what it is about", async () => {
+    const result = await drawFeed(settingsRow);
+
+    expect(result.activities).toHaveLength(1);
+    expect(result.activities[0]?.entryTitle).toBe("SMTP (primary)");
+    expect(result.activities[0]?.metadata).toEqual({
+      changed: ["host", "port"],
+    });
+  });
+
+  it("still authorizes a real DOCUMENT under that same slug", async () => {
+    // The control, and the one that stops the clause above becoming a way in:
+    // a row that does not claim to be settings is judged as a document, so a
+    // colliding collection cannot be read by filing activity under its name.
+    //
+    // The document EXISTS here, so the refusal is a refusal rather than the
+    // deleted-history case -- which would keep the row, redacted, and is a
+    // different behaviour with its own tests above.
+    existingIds.mockResolvedValue(new Set(["doc-1"]));
+    const { subjectKind: _dropped, ...documentRow } = settingsRow;
+
+    const result = await drawFeed({ ...documentRow, entryId: "doc-1" });
+
+    expect(result.activities).toEqual([]);
+  });
+});

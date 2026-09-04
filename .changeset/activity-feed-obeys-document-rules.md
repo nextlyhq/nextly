@@ -87,3 +87,12 @@ Refill rounds are anchored to the last row read rather than to a running offset,
 and ordered by a unique key as well as the instant: `activity_log` grows while a
 feed is being built, so under OFFSET a row inserted between rounds shifts every
 later position, repeating one row and silently skipping another.
+
+Each activity row now records what it is ABOUT — a collection document, a
+single, or an install-level settings change — rather than leaving the feed to
+infer it from the slug. A resource that already held a now-reserved name may
+keep it, so an upgraded installation can have a real collection sharing a
+settings namespace; registry membership then read a credential rotation as a
+document in that collection, refused it, and stripped the changed-field detail
+the row exists to record. Rows written before the column fall back to the
+registry, which is what they were always judged by.

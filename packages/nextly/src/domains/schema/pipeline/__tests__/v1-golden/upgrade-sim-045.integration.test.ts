@@ -329,6 +329,21 @@ const addsActivityLocaleColumn = (stmt: string): boolean => {
   );
 };
 
+/**
+ * The activity log gains what each row is ABOUT.
+ *
+ * The slug alone cannot decide it: a resource that already held a now-reserved
+ * name may keep it, so an upgraded install can have a real collection sharing a
+ * settings namespace, and registry membership then reads a credential rotation
+ * as a document in that collection.
+ */
+const addsActivitySubjectKindColumn = (stmt: string): boolean => {
+  const s = stmt.trim().replace(/;$/, "");
+  return /^ALTER TABLE [`"]?activity_log[`"]? ADD (COLUMN )?[`"]?subject_kind[`"]?[^,]*$/i.test(
+    s
+  );
+};
+
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).
 const hasCreateTableFor = (stmts: string[], table: string): boolean =>
@@ -440,6 +455,7 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               migratesActivityLogActor(s) ||
               addsAuditLogErasureStamp(s) ||
               addsActivityLocaleColumn(s) ||
+              addsActivitySubjectKindColumn(s) ||
               addsPreviewGenerationColumn(s),
             `phantom diff: ${s}`
           ).toBe(true);
@@ -520,6 +536,7 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               migratesActivityLogActor(s) ||
               addsAuditLogErasureStamp(s) ||
               addsActivityLocaleColumn(s) ||
+              addsActivitySubjectKindColumn(s) ||
               addsPreviewGenerationColumn(s),
             `unexpected reconcile statement shape: ${s}`
           ).toBe(true);

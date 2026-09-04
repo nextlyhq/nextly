@@ -32,37 +32,39 @@ interface RegistryRead {
  * One registry's slugs, separating "there is no such registry" from "it could
  * not answer".
  *
- * 🔴 Two failures that look identical and mean opposite things, and the split is
- * why they are attempted separately. A registry that is NOT REGISTERED describes
- * an install with none of that kind of content: contributing nothing is the
- * COMPLETE answer, and a caller that refuses on a floor must not refuse here or
- * it refuses forever. A registry that is registered and then THROWS has told us
- * nothing about how much it holds, so its empty result is a floor — and a
- * caller counting or authorizing against it would otherwise treat a transient
- * dependency failure as "there is nothing here".
+ * 🔴 Two failures that look identical and mean opposite things. A registry that
+ * is NOT REGISTERED describes an install with none of that kind of content:
+ * contributing nothing is the COMPLETE answer, and a caller that refuses on a
+ * floor must not refuse here or it refuses forever. A registry that is
+ * registered and then FAILS has told us nothing about how much it holds, so its
+ * empty result is a floor — and a caller counting or authorizing against it
+ * would otherwise treat a transient dependency failure as "there is nothing
+ * here", which is the direction that admits unauthorized rows.
  *
- * Told apart by which operation failed, not by `container.has`: a container may
- * answer `has` and `get` differently, and taking the presence check as the
- * discriminator emptied the candidate set for every caller rather than only the
- * one asking about degradation.
+ * 🔴 `has` decides absence, and a throw from a REGISTERED service is a floor —
+ * both halves matter, and each was wrong on its own first. `Container.get`
+ * invokes the factory, so a lazy singleton whose construction throws propagates
+ * from `get` exactly as an unregistered name does, while `has` is true: catching
+ * around `get` alone reports a failed dependency as an intentionally absent one.
+ * Reading `has` alone is no better — it answered before the factory ever ran, so
+ * a container that resolves a name it does not report emptied the candidate set
+ * for every caller rather than only the one asking about degradation. Ask `has`
+ * for absence, then let anything after it count as failure.
  */
 async function registryRead<T>(
   service: string,
   enumerate: (registry: T) => Promise<Array<{ slug: string }>>
 ): Promise<RegistryRead> {
-  let registry: T;
+  // Absent: this install registers no content of that kind, and that is a whole
+  // answer rather than a shortfall.
+  if (!container.has(service)) return { slugs: [], reachable: true };
   try {
-    registry = container.get<T>(service);
-  } catch {
-    // Absent: this install registers no content of that kind, and that is a
-    // whole answer rather than a shortfall.
-    return { slugs: [], reachable: true };
-  }
-  try {
+    const registry = container.get<T>(service);
     const entries = await enumerate(registry);
     return { slugs: entries.map(entry => String(entry.slug)), reachable: true };
   } catch {
-    // Present but unreadable: contribute nothing, and SAY that it is a floor.
+    // Registered and unable to answer -- a construction failure inside the
+    // factory included. Contribute nothing, and SAY that it is a floor.
     return { slugs: [], reachable: false };
   }
 }

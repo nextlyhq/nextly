@@ -54,10 +54,9 @@ describe("enumerating the content registries", () => {
   it("is NOT degraded when a registry is simply not registered", async () => {
     // An install with no singles has no singles, and that is a whole answer.
     // Marking it a floor makes every caller that refuses on one refuse forever.
-    containerGet.mockImplementation((name: string) => {
-      if (name === "collectionRegistryService") return collections;
-      throw new Error("no such service");
-    });
+    containerHas.mockImplementation(
+      (name: string) => name === "collectionRegistryService"
+    );
 
     const snapshot = await registeredContentSnapshot();
 
@@ -65,7 +64,7 @@ describe("enumerating the content registries", () => {
     expect(snapshot.kinds.get("posts")).toBe("collection");
   });
 
-  it("IS degraded when a registry is present and cannot answer", async () => {
+  it("IS degraded when a registered registry cannot answer", async () => {
     // The case the flag exists for: a registered registry that throws has said
     // nothing about how much it holds, so its empty result is a floor.
     collections.getAllCollections.mockRejectedValue(new Error("pool timeout"));
@@ -75,15 +74,20 @@ describe("enumerating the content registries", () => {
     expect(snapshot.degraded).toBe(true);
   });
 
-  it("does not read `container.has` to decide either one", async () => {
-    // The control on the discriminator itself. A container may answer `has` and
-    // `get` differently, and taking `has` as the tell emptied the candidate set
-    // for every caller -- silently, because an empty registry is a legal state.
-    containerHas.mockReturnValue(false);
+  it("IS degraded when a registered service FAILS TO CONSTRUCT", async () => {
+    // 🔴 `Container.get` invokes the factory, so a lazy singleton whose
+    // construction throws propagates from `get` exactly as an unregistered name
+    // does -- while `has` is true. Catching around `get` and calling that
+    // "absent" reports a failed dependency as an intentionally empty install,
+    // which is the direction that lets a caller treat missing kinds as
+    // install-level events and admit them unauthorized.
+    containerGet.mockImplementation((name: string) => {
+      if (name === "singleRegistryService") return singles;
+      throw new Error("factory blew up during initialization");
+    });
 
     const snapshot = await registeredContentSnapshot();
 
-    expect(snapshot.kinds.get("posts")).toBe("collection");
-    expect(snapshot.degraded).toBe(false);
+    expect(snapshot.degraded).toBe(true);
   });
 });

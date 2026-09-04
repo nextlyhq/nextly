@@ -205,6 +205,9 @@ export async function recordMutationActivity(
     action: input.action,
     collection: input.collection,
     ...(input.locale === undefined ? {} : { locale: input.locale }),
+    // This recorder runs only for collection entries; the caller gates on the
+    // resource kind before reaching it.
+    subjectKind: "collection" as const,
     ...(input.entryId !== undefined ? { entryId: input.entryId } : {}),
     ...(() => {
       const heading = feedHeading(input.collection, input.data, input.entryId);

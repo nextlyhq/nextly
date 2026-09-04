@@ -20,14 +20,26 @@ vi.mock("../init", () => ({
   getCachedNextly: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { containerGet } = vi.hoisted(() => ({ containerGet: vi.fn() }));
+const { containerGet, containerHas } = vi.hoisted(() => ({
+  containerGet: vi.fn(),
+  // 🔴 `has` must agree with what `get` resolves. A real container answers both
+  // from one registration map, so a mock offering only `get` is a container
+  // that cannot exist -- and code asking `has` first (to tell an ABSENT registry
+  // from one that failed to construct) either throws on the missing method or
+  // reads this install as having no content at all.
+  containerHas: vi.fn(),
+}));
 // BOTH specifiers, because they are two module records: the handlers reach the
 // container through the barrel and `registered-content-slugs` through the
 // narrow module, so mocking one leaves the other reading the real container --
 // which answers nothing here and takes the registry read's `catch` branch,
 // reporting an empty candidate list as though the install had no collections.
-vi.mock("../di", () => ({ container: { get: containerGet } }));
-vi.mock("../di/container", () => ({ container: { get: containerGet } }));
+vi.mock("../di", () => ({
+  container: { get: containerGet, has: containerHas },
+}));
+vi.mock("../di/container", () => ({
+  container: { get: containerGet, has: containerHas },
+}));
 
 vi.mock("../services/lib/permissions", () => ({
   // `readCaller` (via `authenticated-read.ts`) resolves this to build the
@@ -113,6 +125,8 @@ function decidingCaller(): Record<string, unknown> {
 beforeEach(() => {
   vi.clearAllMocks();
   serviceStub = {};
+  // Anything the switch below resolves is, by construction, registered.
+  containerHas.mockReturnValue(true);
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
       return {
@@ -402,12 +416,10 @@ describe("dashboard activity scope", () => {
   it("scopes the activity feed to the entities the access layer admitted", async () => {
     readableEntities.mockResolvedValue(new Set(["posts"]));
 
-    const getRecentActivity = vi
-      .fn()
-      .mockResolvedValue({
-        activities: [],
-        hasMore: false,
-      } satisfies ActivityLogResult);
+    const getRecentActivity = vi.fn().mockResolvedValue({
+      activities: [],
+      hasMore: false,
+    } satisfies ActivityLogResult);
     serviceStub = { getRecentActivity };
 
     await getDashboardActivity(
@@ -426,12 +438,10 @@ describe("dashboard activity scope", () => {
   it("passes an EMPTY scope through rather than omitting it", async () => {
     readableEntities.mockResolvedValue(new Set());
 
-    const getRecentActivity = vi
-      .fn()
-      .mockResolvedValue({
-        activities: [],
-        hasMore: false,
-      } satisfies ActivityLogResult);
+    const getRecentActivity = vi.fn().mockResolvedValue({
+      activities: [],
+      hasMore: false,
+    } satisfies ActivityLogResult);
     serviceStub = { getRecentActivity };
 
     await getDashboardActivity(
@@ -524,12 +534,10 @@ describe("dashboard read scope for an API-KEY caller", () => {
     authenticateAsApiKey(["read-posts"]);
     readableEntities.mockResolvedValue(new Set(["posts"]));
 
-    const getRecentActivity = vi
-      .fn()
-      .mockResolvedValue({
-        activities: [],
-        hasMore: false,
-      } satisfies ActivityLogResult);
+    const getRecentActivity = vi.fn().mockResolvedValue({
+      activities: [],
+      hasMore: false,
+    } satisfies ActivityLogResult);
     serviceStub = { getRecentActivity };
 
     await getDashboardActivity(

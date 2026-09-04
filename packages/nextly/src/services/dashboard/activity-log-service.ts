@@ -94,6 +94,12 @@ export interface LogActivityInput {
   entryTitle?: string;
   /** The language this write was made in; NULL means the default one. */
   locale?: string | null;
+  /**
+   * What this row is ABOUT: a collection document, a single, or an
+   * install-level settings change. Omitted means "not stated", which the feed
+   * falls back to inferring from the registry — see `documentRefOf`.
+   */
+  subjectKind?: ActivitySubjectKind | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -164,6 +170,29 @@ const ACTIVITY_PAGE_SIZE = 100;
 const MAX_REFILL_ROUNDS = 10;
 
 /**
+ * Which read path can answer for a row, or `null` when none can.
+ *
+ * The RECORDED kind wins over the registry: a row that says it is a settings
+ * change names no document, whatever a collection of the same name suggests. A
+ * row that states nothing is one written before the column existed, and falls
+ * back to the registry — which is what those rows were always judged by.
+ *
+ * A stated kind is still checked against the registry, so a slug that no longer
+ * names anything readable stays undecidable rather than being probed against a
+ * read path that cannot answer about it.
+ */
+function subjectKindOf(
+  stated: unknown,
+  kinds: ReadonlyMap<string, "collection" | "single">,
+  slug: string
+): "collection" | "single" | null {
+  if (stated === "settings") return null;
+  if (!kinds.has(slug)) return null;
+  if (stated === "collection" || stated === "single") return stated;
+  return kinds.get(slug) ?? null;
+}
+
+/**
  * The document an activity row is about, or `null` when it is about no document.
  *
  * The row's `collection` is a FREE STRING whose namespace is deliberately wider
@@ -179,7 +208,7 @@ function documentRefOf(
   const slug = typeof row.collection === "string" ? row.collection : undefined;
   const entryId = typeof row.entryId === "string" ? row.entryId : undefined;
   if (!slug || !entryId) return null;
-  const kind = kinds.get(slug);
+  const kind = subjectKindOf(row.subjectKind, kinds, slug);
   if (!kind) return null;
   // 🔴 The language the write was made IN, so the read rule is evaluated for
   // that translation. A localized field answers differently per language, so a
@@ -283,6 +312,20 @@ type ActivityFilter =
   | (ActivityFilterBase & { op: "="; value: string })
   | (ActivityFilterBase & { op: "IN"; value: string[] });
 
+/**
+ * What an activity row is about.
+ *
+ * 🔴 RECORDED rather than inferred from the slug, because the slug cannot always
+ * decide it. `assertGlobalResourceSlugAvailable` lets a resource that already
+ * held a now-reserved name keep it, so an upgraded install can have a real
+ * collection called `email-providers` — and registry membership then classifies
+ * the settings namespace of the same name as a collection document. Its id is
+ * not in that collection, so the read path refuses it and the row is treated as
+ * history for a deleted document: stripped of the very changed-field detail a
+ * credential rotation exists to record.
+ */
+export type ActivitySubjectKind = "collection" | "single" | "settings";
+
 /** A position in the feed's `(createdAt desc, id desc)` order. */
 interface ActivityCursor {
   createdAt: Date;
@@ -372,6 +415,7 @@ export class ActivityLogService extends BaseService {
       entryId: input.entryId ?? null,
       entryTitle: input.entryTitle ?? null,
       locale: input.locale ?? null,
+      subjectKind: input.subjectKind ?? null,
       metadata: input.metadata ? JSON.stringify(input.metadata) : null,
       createdAt,
     };
