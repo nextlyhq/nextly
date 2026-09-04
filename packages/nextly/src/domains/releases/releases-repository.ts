@@ -124,7 +124,17 @@ export interface DocumentRef {
  * `"soonest"` serves "what ships next". A `soonestFirst: false` would read as
  * the absence of a preference rather than as the other choice.
  */
-export type ReleaseListOrder = "soonest" | "latest";
+export const RELEASE_LIST_ORDERS = ["soonest", "latest"] as const;
+
+/**
+ * Declared as a const array with the type DERIVED from it, the way this
+ * codebase spells every other closed vocabulary. A bare type union has no
+ * runtime form, so nothing can check a value against it -- and this particular
+ * field fails silently when unchecked: an unrecognised order does not throw and
+ * does not return nothing, it returns the OPPOSITE END of the schedule, which
+ * reads as a working query.
+ */
+export type ReleaseListOrder = (typeof RELEASE_LIST_ORDERS)[number];
 
 export interface ReleaseRow {
   id: string;

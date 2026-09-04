@@ -11,6 +11,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { RELEASE_LIST_ORDERS } from "../releases-repository";
 import { ReleasesService } from "../services/releases-service";
 import type {
   ReleaseAuthority,
@@ -442,6 +443,36 @@ describe("ReleasesService refuses input the database would answer differently", 
       svc.schedule("r1", new Date(), "x".repeat(65), ADMIN)
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(repo.scheduleRelease).not.toHaveBeenCalled();
+  });
+
+  it("refuses an order it does not recognise, rather than defaulting", async () => {
+    // 🔴 The failure this closes is quieter than a bad `state`. A typo in
+    // `state` reaches a WHERE clause and answers with an empty list -- wrong,
+    // but visibly so. A typo in `order` reaches a ternary and selects the
+    // DEFAULT end, so `"soonestt"` answers with real releases in the exact
+    // reverse of what was asked, and nothing in the result says so.
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(
+      svc.find(
+        { order: "soonestt" } as unknown as Parameters<typeof svc.find>[0],
+        ADMIN
+      )
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.findReleases).not.toHaveBeenCalled();
+  });
+
+  it("accepts both orders the vocabulary declares", async () => {
+    // The control, driven FROM the vocabulary rather than from a literal pair:
+    // a validator checking against a hand-copied list would pass this while
+    // rejecting a value the type admits, and adding a third order later would
+    // not widen this test.
+    for (const order of RELEASE_LIST_ORDERS) {
+      const { svc, repo } = service({ holds: ["read"] });
+      await svc.find({ order }, ADMIN);
+      expect(repo.findReleases).toHaveBeenCalledWith(
+        expect.objectContaining({ order })
+      );
+    }
   });
 
   it("refuses `order` alongside `containing`, rather than ignoring it", async () => {

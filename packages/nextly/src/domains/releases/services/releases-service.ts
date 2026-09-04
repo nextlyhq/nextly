@@ -65,7 +65,7 @@ import {
 } from "../../../schemas/releases/types";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
-import { documentRefKey } from "../releases-repository";
+import { documentRefKey, RELEASE_LIST_ORDERS } from "../releases-repository";
 import type {
   DocumentRef,
   NewRelease,
@@ -710,6 +710,22 @@ export class ReleasesService {
       containing?: DocumentRef;
       order?: ReleaseListOrder;
     } = query;
+    // 🔴 An unrecognised order is not a smaller mistake than an unrecognised
+    // state. `state` reaches a WHERE clause, so a typo answers with an empty
+    // list -- wrong, but visibly so. `order` reaches a ternary, so a typo
+    // selects the DEFAULT end and answers with real rows in the exact reverse
+    // of what was asked. Checked against the vocabulary's runtime form rather
+    // than trusted from the type, because the public Direct API is reachable
+    // from JavaScript and from a cast.
+    if (
+      asked.order !== undefined &&
+      !RELEASE_LIST_ORDERS.includes(asked.order)
+    ) {
+      throw NextlyError.invalidInput({
+        message: `\`order\` must be one of: ${RELEASE_LIST_ORDERS.join(", ")}.`,
+        logContext: { reason: "invalid-order", order: asked.order },
+      });
+    }
     if (asked.containing !== undefined && asked.order !== undefined) {
       throw NextlyError.invalidInput({
         message:
