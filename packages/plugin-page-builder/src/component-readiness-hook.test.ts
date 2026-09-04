@@ -858,3 +858,22 @@ describe("a write to the component store itself", () => {
     );
   });
 });
+
+describe("reading definitions the way the renderer reads them", () => {
+  it("does not force a relationship depth", async () => {
+    // The renderer's own component read states no `depth`, so the collection
+    // service expands to its default before running `afterRead`. Forcing zero
+    // here hands those hooks bare ids, and a hook whose blocks output depends
+    // on an expanded relationship then yields a different component graph than
+    // the page draws — missing an unpublished component, or naming one no
+    // visitor meets.
+    const h = harness({ published: [] });
+    const ctx = writeContext();
+    (ctx.req as Record<string, unknown>).nextly = h.nextly;
+
+    await h.handlers[0]!(ctx);
+
+    expect(h.finds).toHaveLength(1);
+    expect("depth" in h.finds[0]!).toBe(false);
+  });
+});
