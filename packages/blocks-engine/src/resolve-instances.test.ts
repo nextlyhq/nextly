@@ -1050,6 +1050,141 @@ describe("resolveComponentInstances what an instance carries", () => {
     expect(result.referenced).toEqual(["hero", "empty"]);
   });
 
+  it("does not let the order two slots are declared in decide whether a page fits", () => {
+    // One node exposes two slots. The page fills one with a component that
+    // GROWS — a single instance becoming four nodes — and the other with three
+    // instances of an empty component, which SHRINK to nothing and hand back
+    // the nodes they occupied. The composed document is five nodes and fits.
+    //
+    // Composed in declaration order, the growing slot spends the room before
+    // the shrinking ones release it, and the instance is refused for `budget`
+    // — so whether a page renders depends on the order an author happened to
+    // declare two independent slots in.
+    const definition = component([box("t", [])], {
+      slots: {
+        grow: { label: "Grow", nodeId: "t", slot: "a" },
+        shrink: { label: "Shrink", nodeId: "t", slot: "b" },
+      },
+    });
+    const doc = page([
+      instance(
+        "i1",
+        "hero",
+        {},
+        {
+          slots: {
+            grow: [instance("g", "big")],
+            shrink: [
+              instance("e1", "empty"),
+              instance("e2", "empty"),
+              instance("e3", "empty"),
+            ],
+          },
+        }
+      ),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({
+        hero: definition,
+        big: component([node("b1"), node("b2"), node("b3"), node("b4")]),
+        empty: component([]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 6 } }
+    );
+
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it("takes the loan back, so it cannot pay for a LATER instance", () => {
+    // The loan is for the slot content that earns it and for nothing else. Not
+    // repaying leaves the budget permanently inflated, which is invisible on
+    // the instance that borrowed — it spends what it was owed — and shows up
+    // on the NEXT one, which composes on room that was never released.
+    const definition = component([box("t", [])], {
+      slots: { hole: { label: "Hole", nodeId: "t", slot: "a" } },
+    });
+    const doc = page([
+      instance("i1", "hero", {}, { slots: { hole: [instance("e", "empty")] } }),
+      instance("i2", "big"),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({
+        hero: definition,
+        empty: component([]),
+        // One node more than the room left after the first instance settles.
+        big: component([
+          node("b1"),
+          node("b2"),
+          node("b3"),
+          node("b4"),
+          node("b5"),
+          node("b6"),
+        ]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 6 } }
+    );
+
+    expect(result.unresolved).toEqual([
+      { instanceId: "i2", componentId: "big", reason: "budget" },
+    ]);
+  });
+
+  it("CONTROL: still refuses a page whose composed tree does not fit", () => {
+    // The loan changes WHEN room is available, never how much. Same shape as
+    // the case above with a definition twice the size, so the three empty
+    // components cannot pay for it however early they are credited — without
+    // this the rule above passes on an implementation that simply hands out
+    // budget, which is the cap gone.
+    const definition = component([box("t", [])], {
+      slots: {
+        grow: { label: "Grow", nodeId: "t", slot: "a" },
+        shrink: { label: "Shrink", nodeId: "t", slot: "b" },
+      },
+    });
+    const doc = page([
+      instance(
+        "i1",
+        "hero",
+        {},
+        {
+          slots: {
+            grow: [instance("g", "big")],
+            shrink: [
+              instance("e1", "empty"),
+              instance("e2", "empty"),
+              instance("e3", "empty"),
+            ],
+          },
+        }
+      ),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({
+        hero: definition,
+        big: component([
+          node("b1"),
+          node("b2"),
+          node("b3"),
+          node("b4"),
+          node("b5"),
+          node("b6"),
+          node("b7"),
+          node("b8"),
+        ]),
+        empty: component([]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 6 } }
+    );
+
+    expect(result.unresolved.map(e => e.reason)).toEqual(["budget"]);
+  });
+
   it("does not compose content bound for a default subtree the page replaced", () => {
     // Two exposed slots: one on a container, one on a node sitting inside that
     // container's DEFAULT children. Filling the outer slot replaces those

@@ -1572,7 +1572,47 @@ function composePlannedFor(
   ctx: InlineContext
 ): void {
   if (plan?.slots === undefined) return;
+  // Lent before anything is composed, and taken back after. Every instance in
+  // this content is about to be REPLACED, and each replacement hands back the
+  // node it occupied — but that credit arrives as the instance expands, so a
+  // slot composed early spends room a later sibling has not released yet.
+  // Whether a page fits then depends on the order its author happened to
+  // declare two independent slots in, which is not a decision anybody made.
+  //
+  // The loan changes only WHEN room is available, never how much: each
+  // expansion still credits its own node as it goes, and subtracting the same
+  // figure afterwards leaves the budget exactly where crediting alone would
+  // have left it. Content that is never placed earns nothing and repays
+  // nothing, which is the same no-op.
+  const lent = plannedReplacements(plan, ctx.run.maxNodes);
+  ctx.run.budget += lent;
   for (const content of plan.slots.values()) placedContent(content, ctx);
+  ctx.run.budget -= lent;
+}
+
+/**
+ * How many nodes this node's uncomposed planned content will hand back.
+ *
+ * One per component instance in it, because that is what replacing an instance
+ * frees: the node it occupied, already charged to the page by the host survey.
+ * Content that has been composed already is skipped — its credits are spent.
+ *
+ * Bounded like every other walk of stored content, because this is the page's
+ * own tree and nothing here validated it.
+ */
+function plannedReplacements(plan: NodePlan, maxNodes: number): number {
+  let count = 0;
+  let budget = maxNodes;
+  for (const content of plan.slots?.values() ?? []) {
+    if (content.composed) continue;
+    walkForest(content.nodes, entry => {
+      if (budget <= 0) return "stop";
+      budget -= 1;
+      if (componentIdOf(entry.node) !== undefined) count += 1;
+      return "descend";
+    });
+  }
+  return count;
 }
 
 /**
