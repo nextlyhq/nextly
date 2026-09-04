@@ -16,10 +16,14 @@
 
 import { container } from "../di/container";
 import type { NextlyServiceConfig } from "../di/register";
+import type { FieldGroupRegistryService } from "../domains/field-groups/services/field-group-registry-service";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { SanitizationConfigInput } from "../schemas/security-config";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
-import { sanitizeEntryData } from "../services/security/sanitization-service";
+import {
+  attachFieldGroupChildren,
+  sanitizeEntryData,
+} from "../services/security/sanitization-service";
 
 import type { HookHandler, HookContext } from "./types";
 
@@ -33,8 +37,11 @@ import type { HookHandler, HookContext } from "./types";
  * Otherwise the handler:
  * 1. Skips collections/singles that set `sanitize: false` in code-first config
  * 2. Retrieves the collection's field definitions from the registry
- * 3. Calls `sanitizeEntryData()` which mutates `context.data` in place
- * 4. Returns `context.data` so the hook pipeline carries the sanitized version
+ * 3. Attaches each field group's referenced child definitions (a registry
+ *    lookup on the caller's executor), so the descent reaches the group's
+ *    nested text and not only the parent row's own fields
+ * 4. Calls `sanitizeEntryData()` which mutates `context.data` in place
+ * 5. Returns `context.data` so the hook pipeline carries the sanitized version
  *
  * @param sanitizationConfig - From `defineConfig({ security: { sanitization } })`
  * @returns A {@link HookHandler} to register on `beforeCreate` and `beforeUpdate` with `'*'`
@@ -89,6 +96,56 @@ export function createSanitizationHook(
     return optOutSlugs;
   }
 
+  /**
+   * Attach each field group's referenced child definitions, best-effort.
+   *
+   * A stored field-group definition is a leaf reference by slug: its child
+   * definitions live behind a registry lookup, not on the field itself, so
+   * the descent can only reach the group's nested text once they are
+   * attached. Resolved on the caller's executor — this hook fires inside
+   * entry-write transactions, and a pooled read here would wait for a
+   * connection that transaction is holding. A per-request cache keeps one
+   * lookup per referenced slug; a failure leaves that group's top-level text
+   * sanitized and its subtree as written, which must never fail the save it
+   * rides on.
+   */
+  async function attachFieldGroupChildFields(
+    fields: FieldDefinition[],
+    executor: unknown
+  ): Promise<FieldDefinition[]> {
+    let fieldGroupRegistry: FieldGroupRegistryService;
+    try {
+      fieldGroupRegistry = container.get<FieldGroupRegistryService>(
+        "fieldGroupRegistryService"
+      );
+    } catch {
+      // Registry unavailable — sanitize the top level with the raw definitions.
+      return fields;
+    }
+    const cache = new Map<string, FieldDefinition[] | undefined>();
+    return attachFieldGroupChildren(fields, async slug => {
+      const cached = cache.get(slug);
+      if (cached !== undefined || cache.has(slug)) {
+        return cached;
+      }
+      try {
+        const meta = await fieldGroupRegistry.getComponentBySlug(
+          slug,
+          executor
+        );
+        const children =
+          meta && Array.isArray(meta.fields)
+            ? (meta.fields as FieldDefinition[])
+            : undefined;
+        cache.set(slug, children);
+        return children;
+      } catch {
+        cache.set(slug, undefined);
+        return undefined;
+      }
+    });
+  }
+
   return async (context: HookContext) => {
     // Nothing to sanitize
     if (!context.data || typeof context.data !== "object") return;
@@ -122,6 +179,8 @@ export function createSanitizationHook(
     }
 
     if (!fields || fields.length === 0) return;
+
+    fields = await attachFieldGroupChildFields(fields, context.executor);
 
     // Mutates context.data in place
     sanitizeEntryData(

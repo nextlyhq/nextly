@@ -53,3 +53,14 @@ export {
   isFieldGroupType,
   writeFieldGroupType,
 } from "./domains/field-groups/storage/field-group-type-key";
+
+// The definition-side vocabulary: which `type` token a stored FIELD carries
+// and which reference keys it may point at. Renderers that dispatch on a
+// field's type — the admin entry form among them — ask the predicate rather
+// than compare either literal, so a migrated definition renders as what it is.
+// Renamed on this surface to keep the two predicates apart: the `isFieldGroupType`
+// above judges a stored INSTANCE's value, this one judges a FIELD's type token.
+export {
+  extractFieldGroupReferences,
+  isFieldGroupType as isFieldGroupFieldType,
+} from "./domains/field-groups/storage/field-group-field-type";

@@ -36,6 +36,7 @@ import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
+  validateContainerFieldsShared,
   validateFieldNameShared,
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
@@ -237,35 +238,29 @@ function validateField(
       validateRelationshipTargetShared(f, path, errsBase);
       break;
 
-    case "repeater": {
-      const arrayFields = f.fields;
-      if (!arrayFields) {
-        errors.push({
-          path: `${path}.fields`,
-          message: "Array field must have a 'fields' array",
-          code: "ARRAY_FIELDS_REQUIRED",
-        });
-      } else if (Array.isArray(arrayFields)) {
-        validateFieldsArray(arrayFields, `${path}.fields`, errors);
-      }
+    case "repeater":
+      validateContainerFieldsShared(
+        f,
+        path,
+        errsBase,
+        { label: "Array field", code: "ARRAY_FIELDS_REQUIRED" },
+        (children, basePath) => validateFieldsArray(children, basePath, errors)
+      );
       break;
-    }
 
-    case "group": {
-      const groupFields = f.fields;
-      if (!groupFields) {
-        errors.push({
-          path: `${path}.fields`,
-          message: "Group field must have a 'fields' array",
-          code: "GROUP_FIELDS_REQUIRED",
-        });
-      } else if (Array.isArray(groupFields)) {
-        validateFieldsArray(groupFields, `${path}.fields`, errors);
-      }
+    case "group":
+      validateContainerFieldsShared(
+        f,
+        path,
+        errsBase,
+        { label: "Group field", code: "GROUP_FIELDS_REQUIRED" },
+        (children, basePath) => validateFieldsArray(children, basePath, errors)
+      );
       break;
-    }
 
     case "component":
+    case "fieldGroup":
+      // The migrated spelling follows the same reference rule for field groups.
       validateComponentFieldRefShared(f, path, errsBase);
       break;
 

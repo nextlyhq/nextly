@@ -55,6 +55,7 @@ import type {
 } from "../../../schemas/dynamic-singles/types";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import type { Logger } from "../../../shared/types";
+import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { applyMigrationStatements } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
@@ -824,6 +825,16 @@ export class SingleMetadataService {
     const [tableHasAnyRows, foreignKeysByColumn, indexNames] =
       await this.readLiveTableFacts(db, liveDialect, tableName);
 
+    // Detected from the FULL field lists: a renamed LOCALIZED field-group
+    // field sits in neither side of alterInput (the localized filter removes
+    // both spellings), and its association migration must not be excluded
+    // along with the column handling.
+    const groupMigration = await this.planFieldGroupAssociationMigration(
+      adapter,
+      previousFields,
+      fields
+    );
+
     return {
       migrationSQL: schemaService.generateAlterTableMigration(
         tableName,
@@ -835,6 +846,7 @@ export class SingleMetadataService {
           tableHasRows: tableHasAnyRows,
           foreignKeysByColumn,
           indexNames,
+          ...groupMigration,
         }
       ),
       fields,
@@ -844,6 +856,76 @@ export class SingleMetadataService {
     };
   }
 
+  /**
+   * The options a field-group association rename contributes to the alter
+   * generator: the rename pair itself and the registry-resolved physical
+   * table per referenced slug.
+   *
+   * A field-group rename migrates the association key on the group's own
+   * table, whose physical name only the registry knows — the storage
+   * migration renames comp_ tables to fg_, and a group may carry a historical
+   * custom name. Resolved strictly when a rename is detected: a precondition
+   * of that migration, since proceeding without it orphans every existing
+   * row under the old field name.
+   */
+  private async planFieldGroupAssociationMigration(
+    adapter: DrizzleAdapter,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): Promise<{
+    associationRename?: {
+      from: FieldDefinition;
+      to: FieldDefinition;
+    };
+    fieldGroupTableNames: ReadonlyMap<string, string>;
+  }> {
+    const { DynamicCollectionSchemaService } = await import(
+      "../../dynamic-collections/services/dynamic-collection-schema-service"
+    );
+    const rename = new DynamicCollectionSchemaService(
+      undefined,
+      this.dialect
+    ).detectFieldGroupAssociationRename(oldFields, newFields);
+    if (!rename) return { fieldGroupTableNames: new Map() };
+
+    const { FieldGroupRegistryService } = await import(
+      "../../field-groups/services/field-group-registry-service"
+    );
+    const registry = new FieldGroupRegistryService(adapter, this.logger);
+    const resolved = new Map<string, string>();
+    const slugs = new Set<string>();
+    for (const f of [...oldFields, ...newFields]) {
+      for (const slug of fieldGroupSlugList(f)) slugs.add(slug);
+    }
+    await Promise.all(
+      [...slugs].map(async slug => {
+        const record = await registry.getComponentBySlug(slug);
+        if (record) resolved.set(slug, record.tableName);
+      })
+    );
+    const unresolved = [...slugs].filter(slug => !resolved.has(slug));
+    if (unresolved.length > 0) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `fields.${unresolved.join(", ")}`,
+            code: "FIELD_GROUP_TABLE_UNRESOLVED",
+            message:
+              `Cannot rename this field group: its data lives in tables ` +
+              `whose names come from the field-group registry, and no ` +
+              `record could be resolved for: ${unresolved.join(", ")}. ` +
+              `Restore the missing field group (or remove the field) and ` +
+              `save again.`,
+          },
+        ],
+        logContext: { unresolvedFieldGroups: unresolved },
+      });
+    }
+    return {
+      associationRename: rename,
+      fieldGroupTableNames: resolved,
+    };
+  }
   /**
    * The two field lists the ALTER diff compares, normalised to describe the same table.
    *

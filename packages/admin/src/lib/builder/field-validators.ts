@@ -1,3 +1,8 @@
+import {
+  extractFieldGroupReferences,
+  isFieldGroupFieldType,
+} from "nextly/field-group-type";
+
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
 export interface FieldBuilderValidationResult {
@@ -52,10 +57,13 @@ export function findComponentFieldMissingReference(
   fields: BuilderField[]
 ): string | null {
   for (const field of fields) {
-    if (field.type === "component") {
-      const hasSingle = Boolean(field.component);
-      const hasMulti =
-        Array.isArray(field.components) && field.components.length > 0;
+    // Either spelling of the stored field type: a migrated definition whose
+    // references were cleared must fail HERE, with the actionable message,
+    // rather than at the API boundary after submission.
+    if (isFieldGroupFieldType(field.type)) {
+      const refs = extractFieldGroupReferences(field);
+      const hasSingle = refs.single !== undefined;
+      const hasMulti = (refs.many?.length ?? 0) > 0;
       if (!hasSingle && !hasMulti) {
         return field.name || field.label || "unnamed";
       }

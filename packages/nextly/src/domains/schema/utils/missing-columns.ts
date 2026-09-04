@@ -27,10 +27,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { FieldConfig } from "../../../collections/fields/types/index";
 import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections/legacy-types";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types/index";
 import type { SupportedDialect } from "../../../types/database";
 import {
+  fieldProducesColumn,
   getColumnDescriptor,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
@@ -153,9 +153,9 @@ export function fieldToColumnDef(
     return null;
   }
 
-  // Component fields store their data in a separate comp_{slug} table and are
+  // Field-group and component fields store their data in separate tables and are
   // stripped from the parent row on write, so they get no parent column.
-  if (field.type === STORAGE_FORMAT.fieldType) {
+  if (!fieldProducesColumn(field)) {
     return null;
   }
 

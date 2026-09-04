@@ -18,6 +18,10 @@
  */
 
 import type { FieldConfig } from "nextly/config";
+// The shared predicate keeps migrated and legacy field-group definitions
+// normalizing to the same shape here, where the core normalizer's unwrap is
+// mirrored for the preview surface.
+import { isFieldGroupFieldType } from "nextly/field-group-type";
 
 /** Field types whose value is persisted as JSON. */
 const JSON_BACKED_TYPES = new Set([
@@ -93,20 +97,23 @@ export function normalizeStoredValue(
     return value === true || value === "true" || value === 1 || value === "1";
   }
 
+  // A non-repeatable field group arrives as an array even when the field holds
+  // one instance, because it is populated from its own table. Asked through
+  // the shared predicate, mirroring the core normalizer: only the legacy
+  // spelling here would leave a migrated definition's array in place, and the
+  // preview would fall back to plain text instead of its child fields.
+  if (isFieldGroupFieldType(field.type)) {
+    const repeatable = (field as { repeatable?: boolean }).repeatable;
+    if (!repeatable && Array.isArray(value)) return value[0] ?? null;
+    return value;
+  }
+
   switch (field.type) {
     case "chips": {
       // A chips value is always a list. A single stored string is a legacy
       // single-entry value, not a list of its characters.
       if (Array.isArray(value)) return value;
       return typeof value === "string" ? [value] : [];
-    }
-
-    case "component": {
-      // Components arrive as an array even when the field holds one instance,
-      // because they are populated from their own table.
-      const repeatable = (field as { repeatable?: boolean }).repeatable;
-      if (!repeatable && Array.isArray(value)) return value[0] ?? null;
-      return value;
     }
 
     case "repeater":

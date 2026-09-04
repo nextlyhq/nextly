@@ -564,9 +564,10 @@ export function EntryTableCell({
       );
     }
 
-    // Field-group field — indicate a nested field group. The case value is the STORED
-    // field type and stays as it is; only the badge text is display copy.
-    case "component": {
+    // Field-group field — indicate a nested field group. The case values are the
+    // STORED field type under either spelling; only the badge text is display copy.
+    case "component":
+    case "fieldGroup": {
       return <Badge variant="default">Field Group</Badge>;
     }
 

@@ -76,6 +76,7 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
+import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
@@ -163,10 +164,15 @@ function writtenComponentInstances(
   fieldConfig: { component?: string; components?: string[] },
   value: unknown
 ): Array<{ slug: string; data: Record<string, unknown> }> {
-  if (fieldConfig.component) {
+  // Through the shared extractor: a migrated definition names its fixed slug
+  // under `fieldGroup`, and a fixed instance carries no type discriminator —
+  // missing the slug here labels the write's event with a null locale and
+  // reads the default-locale subtree instead of the locale just written.
+  const { single } = extractFieldGroupReferences(fieldConfig);
+  if (single !== undefined) {
     // A fixed single-component field is one instance; with `repeatable: true`
     // the value is an array of instances, all under the same component slug.
-    const slug = fieldConfig.component;
+    const slug = single;
     const items = Array.isArray(value) ? value : value != null ? [value] : [];
     return items
       .filter((d): d is Record<string, unknown> => !!d && typeof d === "object")

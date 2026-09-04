@@ -56,6 +56,10 @@ export type DynamicFieldType =
   | "group"
   | "json"
   | "component"
+  // The migrated spelling of "component": stored definitions rewritten by the
+  // storage migration carry it, and an exported type that omits it cannot
+  // represent what an API read actually returns.
+  | "fieldGroup"
   | "chips";
 
 export type FieldDefinition = {
@@ -164,8 +168,15 @@ export type FieldDefinition = {
 
   /** Single component slug for component fields (mutually exclusive with components) */
   component?: string;
+  /**
+   * The migrated spelling of `component`, on definitions rewritten by the
+   * storage migration. Read both through `extractFieldGroupReferences`.
+   */
+  fieldGroup?: string;
   /** Multiple component slugs for dynamic zone (mutually exclusive with component) */
   components?: string[];
+  /** The migrated spelling of `components`. Read through the same extractor. */
+  fieldGroups?: string[];
   /** Whether this component field allows multiple instances (array) */
   repeatable?: boolean;
 

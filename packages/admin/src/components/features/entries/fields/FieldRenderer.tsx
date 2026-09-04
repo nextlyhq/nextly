@@ -33,6 +33,7 @@ import type {
   RichTextFieldConfig,
   ChipsFieldConfig,
 } from "nextly/config";
+import { isFieldGroupFieldType } from "nextly/field-group-type";
 import { lazy, Suspense, useState, useEffect } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 
@@ -324,8 +325,11 @@ export function FieldRenderer({
 
   // Component fields bypass FieldWrapper — they own their own header/label
   // rendering (accordion in sidebar, card in main content).
+  // Asked through the shared predicate: stored definitions rewritten by the
+  // storage migration carry `fieldGroup`, and a dispatch against one literal
+  // rendered the migrated field as an unknown type.
   const fieldType = field.type as string;
-  if (fieldType === "component") {
+  if (isFieldGroupFieldType(fieldType)) {
     return (
       <ComponentInput
         {...commonProps}

@@ -8,7 +8,7 @@
  * @since 1.0.0
  */
 
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { isFieldGroupType } from "../../domains/field-groups/storage/field-group-field-type";
 
 import type {
   // Text field types
@@ -310,9 +310,11 @@ export const isJSONField = createTypeGuard<JSONFieldConfig>("json");
  * }
  * ```
  */
-export const isFieldGroupField = createTypeGuard<FieldGroupFieldConfig>(
-  STORAGE_FORMAT.fieldType
-);
+export function isFieldGroupField(
+  field: { type: string }
+): field is FieldGroupFieldConfig {
+  return isFieldGroupType(field.type);
+}
 
 // ============================================================
 // Individual Type Guards - Chips Fields

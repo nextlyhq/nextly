@@ -18,6 +18,8 @@ import type {
 import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
+import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
+import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
@@ -182,6 +184,9 @@ export class DynamicCollectionService extends BaseService {
    */
   private readonly localizationConfigured?: boolean;
 
+  /** Lazily built field-group registry, owned by this instance's adapter. */
+  private fieldGroupRegistry?: FieldGroupRegistryService;
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -259,6 +264,67 @@ export class DynamicCollectionService extends BaseService {
       foreignKeysByColumn: foreignKeys,
       indexNames: indexes,
     };
+  }
+
+  /**
+   * Physical table name per field-group slug these fields reference, resolved
+   * from the REGISTRY record each group was created with.
+   *
+   * The association migration a field-group rename emits has to name the
+   * group's data table, and that table is whatever the registry says it is —
+   * the storage migration renames comp_ tables to fg_, and a group may carry a
+   * historical custom name — so deriving it from the slug again would target a
+   * table that does not exist and fail the save.
+   *
+   * A precondition of the rename, not a best-effort lookup: when any referenced
+   * slug cannot be resolved — the registry is unavailable, or a record is
+   * missing — the save is refused. Letting it proceed would advance the
+   * collection metadata to the new field name while every existing instance
+   * row stays keyed by the old one, and the renamed field would read as empty.
+   */
+  private async resolveFieldGroupTableNames(
+    fields: FieldDefinition[]
+  ): Promise<ReadonlyMap<string, string>> {
+    const slugs = new Set<string>();
+    for (const field of fields) {
+      for (const slug of fieldGroupSlugList(field)) slugs.add(slug);
+    }
+    if (slugs.size === 0) return new Map();
+
+    const resolved = new Map<string, string>();
+    // Instance-owned, like every other service this class news up: a caller
+    // that constructed DynamicCollectionService directly has no global
+    // container, and the rename path must not depend on one having been
+    // registered.
+    const registry = (this.fieldGroupRegistry ??= new FieldGroupRegistryService(
+      this.adapter,
+      this.logger
+    ));
+    await Promise.all(
+      [...slugs].map(async slug => {
+        const record = await registry.getComponentBySlug(slug);
+        if (record) resolved.set(slug, record.tableName);
+      })
+    );
+
+    const unresolved = [...slugs].filter(slug => !resolved.has(slug));
+    if (unresolved.length > 0) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `fields.${unresolved.join(", ")}`,
+            code: "FIELD_GROUP_TABLE_UNRESOLVED",
+            message:
+              `Cannot rename this field group: its data lives in tables whose ` +
+              `names come from the field-group registry, and no record could ` +
+              `be resolved for: ${unresolved.join(", ")}. Restore the missing ` +
+              `field group (or remove the field) and save again.`,
+          },
+        ],
+        logContext: { unresolvedFieldGroups: unresolved },
+      });
+    }
+    return resolved;
   }
 
   /**
@@ -976,11 +1042,32 @@ export class DynamicCollectionService extends BaseService {
           f => !excludedLocalized.has(f.name)
         );
 
+        // Detected from the FULL lists: a renamed LOCALIZED field-group field
+        // sits in neither shared list, and its association migration must not
+        // be excluded along with its column handling.
+        const groupAssociationRename = this.schemaService.detectFieldGroupAssociationRename(
+          oldUserFields,
+          userDefinedFields
+        );
         const mainSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
           oldShared,
           newShared,
-          { wasStatus, hasStatus, ...(await liveTable()) }
+          {
+            wasStatus,
+            hasStatus,
+            ...(await liveTable()),
+            // Strict only when an association rename will occur: the table
+            // names are a precondition of THAT migration, and requiring them
+            // for every edit would refuse saves unrelated to renames.
+            associationRename: groupAssociationRename ?? undefined,
+            fieldGroupTableNames: groupAssociationRename
+              ? await this.resolveFieldGroupTableNames([
+                  ...oldUserFields,
+                  ...userDefinedFields,
+                ])
+              : new Map(),
+          }
         );
         const {
           sql: companionSQL,
@@ -1014,11 +1101,26 @@ export class DynamicCollectionService extends BaseService {
           localMigrationSQL = assemble(localCompanionSQL);
         }
       } else {
+        const groupAssociationRename = this.schemaService.detectFieldGroupAssociationRename(
+          oldUserFields,
+          userDefinedFields
+        );
         migrationSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
           oldUserFields,
           userDefinedFields,
-          { wasStatus, hasStatus, ...(await liveTable()) }
+          {
+            wasStatus,
+            hasStatus,
+            ...(await liveTable()),
+            associationRename: groupAssociationRename ?? undefined,
+            fieldGroupTableNames: groupAssociationRename
+              ? await this.resolveFieldGroupTableNames([
+                  ...oldUserFields,
+                  ...userDefinedFields,
+                ])
+              : new Map(),
+          }
         );
       }
       migrationFileName = `${Date.now()}_update_${collectionName}.sql`;

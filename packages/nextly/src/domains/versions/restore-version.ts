@@ -27,6 +27,7 @@ import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
 } from "../../shared/lib/field-level-registry";
+import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 import { isValidLocale } from "../i18n/resolve-locale";
 import type { UserContext } from "../singles/types";
 
@@ -134,11 +135,13 @@ export async function resolveComponentSchemas(
 
   const collect = (list: FieldConfig[]): void => {
     for (const field of list) {
-      const one = (field as { component?: unknown }).component;
-      const many = (field as { components?: unknown }).components;
-      if (typeof one === "string") slugs.add(one);
-      if (Array.isArray(many)) {
-        for (const slug of many) if (typeof slug === "string") slugs.add(slug);
+      // Through the shared extractor: a restore whose schema walk misses a
+      // migrated definition's slugs leaves those subtrees opaque, and an
+      // opaque subtree can be neither credential-filtered nor pruned.
+      const { single, many } = extractFieldGroupReferences(field);
+      if (single !== undefined) slugs.add(single);
+      if (many !== undefined) {
+        for (const slug of many) slugs.add(slug);
       }
       const nested = (field as { fields?: unknown }).fields;
       if (Array.isArray(nested)) collect(nested as FieldConfig[]);
@@ -198,11 +201,10 @@ export async function resolveComponentSchemas(
       const collected = new Set<string>();
       const gather = (list: FieldConfig[]): void => {
         for (const field of list) {
-          const one = (field as { component?: unknown }).component;
-          const many = (field as { components?: unknown }).components;
-          if (typeof one === "string") collected.add(one);
-          if (Array.isArray(many)) {
-            for (const s of many) if (typeof s === "string") collected.add(s);
+          const { single, many } = extractFieldGroupReferences(field);
+          if (single !== undefined) collected.add(single);
+          if (many !== undefined) {
+            for (const s of many) collected.add(s);
           }
           const nested = (field as { fields?: unknown }).fields;
           if (Array.isArray(nested)) gather(nested as FieldConfig[]);

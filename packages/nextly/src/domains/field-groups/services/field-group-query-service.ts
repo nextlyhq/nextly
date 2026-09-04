@@ -27,6 +27,10 @@ import {
   resolveCompanionSchemaReadiness,
   type CompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import {
+  isFieldGroupType,
+  withResolvedFieldGroupReferences,
+} from "../storage/field-group-field-type";
 import { currentFieldGroupTypeKey } from "../storage/field-group-type-key";
 
 import {
@@ -147,7 +151,7 @@ export interface PopulateComponentDataManyParams {
 // Duplicated here (and in the mutation service) to avoid a cross-domain
 // import into collections just for a type predicate.
 function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
-  return field.type === STORAGE_FORMAT.fieldType;
+  return isFieldGroupType(field.type);
 }
 
 /**
@@ -468,13 +472,17 @@ export class FieldGroupQueryService extends BaseService {
         continue;
       }
 
+      // References resolved once, before the dispatch AND its failure path:
+      // the populate default for a migrated dynamic zone is a list, and the
+      // catch below can only answer that from the resolved field.
+      const f = withResolvedFieldGroupReferences(field);
       try {
-        if (field.components && field.components.length > 0) {
+        if (f.components && f.components.length > 0) {
           result[fieldName] = await this.populateMultiComponentField(
             entryId,
             parentTable,
             fieldName,
-            field,
+            f,
             depth,
             currentDepth,
             locale,
@@ -483,13 +491,13 @@ export class FieldGroupQueryService extends BaseService {
             strict,
             access
           );
-        } else if (field.component) {
-          if (field.repeatable) {
+        } else if (f.component) {
+          if (f.repeatable) {
             result[fieldName] = await this.populateRepeatableField(
               entryId,
               parentTable,
               fieldName,
-              field.component,
+              f.component,
               depth,
               currentDepth,
               locale,
@@ -503,7 +511,7 @@ export class FieldGroupQueryService extends BaseService {
               entryId,
               parentTable,
               fieldName,
-              field.component,
+              f.component,
               depth,
               currentDepth,
               locale,
@@ -522,7 +530,7 @@ export class FieldGroupQueryService extends BaseService {
           fieldName,
           error: error instanceof Error ? error.message : String(error),
         });
-        result[fieldName] = this.getPopulateDefaultValue(field);
+        result[fieldName] = this.getPopulateDefaultValue(f);
       }
     }
 
@@ -559,7 +567,11 @@ export class FieldGroupQueryService extends BaseService {
         if (!this.shouldPopulateField(field.name, select)) {
           continue;
         }
-        componentFields.push(field);
+        // Resolved once, at collection: every reader below — the dispatch,
+        // the slug reads, and the populate default for a failed or absent
+        // entry — sees the references on the keys it opens, whichever
+        // spelling the stored definition carries.
+        componentFields.push(withResolvedFieldGroupReferences(field));
       }
     }
     if (componentFields.length === 0) return entries;

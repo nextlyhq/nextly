@@ -27,6 +27,10 @@ import {
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import {
+  extractFieldGroupReferences,
+  isFieldGroupType,
+} from "../storage/field-group-field-type";
 import { resolveRegistryTableName } from "../storage/resolve-storage-names";
 
 import { teardownEntityComponentData } from "./teardown-entity-field-group-data";
@@ -1017,15 +1021,15 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     for (const field of fields) {
       const fieldType = field.type as string;
 
-      if (fieldType === STORAGE_FORMAT.fieldType) {
-        const componentSlug = field.component as string | undefined;
-        if (componentSlug) {
-          slugs.add(componentSlug);
+      // The slugs come from the shared reader so a definition referencing its
+      // field group through either key spelling is collected the same way.
+      if (isFieldGroupType(fieldType)) {
+        const { single, many } = extractFieldGroupReferences(field);
+        if (single) {
+          slugs.add(single);
         }
-
-        const componentsArray = field.components as string[] | undefined;
-        if (Array.isArray(componentsArray)) {
-          for (const slug of componentsArray) {
+        if (many) {
+          for (const slug of many) {
             slugs.add(slug);
           }
         }
@@ -1094,8 +1098,9 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       const fieldType = field.type as string;
       const enrichedField: EnrichedFieldConfig = { ...field };
 
-      if (fieldType === STORAGE_FORMAT.fieldType) {
-        const componentSlug = field.component as string | undefined;
+      if (isFieldGroupType(fieldType)) {
+        const { single: componentSlug, many: componentsArray } =
+          extractFieldGroupReferences(field);
         if (componentSlug) {
           const component = componentMap.get(componentSlug);
           if (component) {
@@ -1130,8 +1135,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           }
         }
 
-        const componentsArray = field.components as string[] | undefined;
-        if (Array.isArray(componentsArray) && componentsArray.length > 0) {
+        if (componentsArray && componentsArray.length > 0) {
           const componentSchemas: Record<string, EnrichedComponentSchema> = {};
 
           for (const slug of componentsArray) {
@@ -1231,16 +1235,13 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       const fieldPath = parentPath ? `${parentPath}.${fieldName}` : fieldName;
       const fieldType = field.type as string;
 
-      if (fieldType === STORAGE_FORMAT.fieldType) {
-        if (field.component === targetSlug) {
+      if (isFieldGroupType(fieldType)) {
+        const { single, many } = extractFieldGroupReferences(field);
+        if (single === targetSlug) {
           references.push({ entityType, entitySlug, fieldName, fieldPath });
         }
 
-        const componentsArray = field.components;
-        if (
-          Array.isArray(componentsArray) &&
-          componentsArray.includes(targetSlug)
-        ) {
+        if (many && many.includes(targetSlug)) {
           references.push({ entityType, entitySlug, fieldName, fieldPath });
         }
       }
