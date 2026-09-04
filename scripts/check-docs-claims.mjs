@@ -354,13 +354,17 @@ const README_SECTIONS = [
 export function renderedProse(markdown) {
   return (
     markdown
-      // Paired fences first, then an unpaired one. An opening fence with no closing
+      // Comments first. A fence marker inside a comment is not a fence, and running
+      // the fence rules first let `<!--\n```\n-->` swallow the rest of the file —
+      // reporting real sections after it as missing, which is a red on a correct
+      // README and the worst direction for this check to fail in.
+      .replace(/<!--[\s\S]*?-->/g, "")
+      // Then paired fences, then an unpaired one. An opening fence with no closing
       // fence renders as code all the way to the end of the file, so stopping at
       // paired blocks would leave that tail in `prose` and let a truncated example
       // satisfy the very sections this is checking for.
       .replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1[^\n]*$/gm, "")
       .replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*$/m, "")
-      .replace(/<!--[\s\S]*?-->/g, "")
   );
 }
 

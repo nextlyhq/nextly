@@ -574,3 +574,35 @@ describe("readme-skeleton reads only what npm renders", () => {
     ).not.toContain("readme-skeleton");
   });
 });
+
+describe("a fence marker inside a comment is not a fence", () => {
+  it("does not let a commented-out fence swallow the rest of the file", () => {
+    // Running the fence rules before comment removal made `<!--\n```\n-->` eat
+    // everything after it, reporting real sections as missing on a correct README.
+    const out = renderedProse("# t\n\n<!--\n```\n-->\n\n## Status\n\nAlpha.\n\n## License\n");
+    expect(out).toContain("## Status");
+    expect(out).toContain("## License");
+  });
+
+  it("passes a README whose comment contains a stray fence marker", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md":
+          "# t\n\n<!--\n```\n-->\n\n## Status\n\nAlpha.\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).not.toContain("readme-skeleton");
+  });
+
+  it("still strips a real unclosed fence that is not inside a comment", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": pkg(),
+        "packages/thing/README.md":
+          "# t\n\n```md\n## Status\n\nAlpha.\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).toContain("readme-skeleton");
+  });
+});
