@@ -183,6 +183,16 @@ async function recordActivity(
     action,
     collection: args.resource.collection,
     ...(args.resource.id !== undefined ? { entryId: args.resource.id } : {}),
+    // 🔴 DERIVED from the resource the event already carries, not passed
+    // separately. The write sites that know a language already record it there
+    // for receivers to route on, so taking it from one place means a site
+    // cannot report a locale to a subscriber and a different one — or none — to
+    // the activity trail. A resource without a locale leaves the column NULL,
+    // which the feed reads as the default language: exactly what an unlocalized
+    // write, and every row predating the column, already meant.
+    ...(args.resource.locale !== undefined
+      ? { locale: args.resource.locale }
+      : {}),
     data: args.data,
     previous: args.previous ?? null,
     actor: args.actor ?? null,

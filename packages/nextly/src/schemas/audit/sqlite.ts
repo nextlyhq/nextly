@@ -70,6 +70,10 @@ export const activityLog = sqliteTable(
     collection: text("collection").notNull(),
     entryId: text("entry_id"),
     entryTitle: text("entry_title"),
+    /** The language this mutation was made in; see `documentRefOf`. */
+    locale: text("locale"),
+    /** What the row is ABOUT; see `documentRefOf`. NULL on legacy rows. */
+    subjectKind: text("subject_kind"),
     metadata: text("metadata"), // JSON string for additional context
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()

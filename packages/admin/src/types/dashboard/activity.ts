@@ -75,8 +75,13 @@ export interface Activity {
 export interface RecentActivityResponse {
   /** Array of activity entries */
   activities: Activity[];
-  /** Total count of activities (for pagination) */
-  total: number;
-  /** Whether there are more activities to load */
+  /**
+   * Whether more activity exists beyond this page.
+   *
+   * There is no total. The server cannot count the feed without authorizing
+   * every matching row against its document's read rule, which is unbounded
+   * over an audit table -- so it publishes what it can observe exactly rather
+   * than a number that would count edits the reader may not see.
+   */
   hasMore: boolean;
 }

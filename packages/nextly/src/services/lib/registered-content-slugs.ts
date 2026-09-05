@@ -28,40 +28,59 @@ interface RegistryRead {
   reachable: boolean;
 }
 
-/** The registered collection slugs, or none when the registry is unreachable. */
-async function collectionSlugs(): Promise<RegistryRead> {
+/**
+ * One registry's slugs, separating "there is no such registry" from "it could
+ * not answer".
+ *
+ * 🔴 Two failures that look identical and mean opposite things. A registry that
+ * is NOT REGISTERED describes an install with none of that kind of content:
+ * contributing nothing is the COMPLETE answer, and a caller that refuses on a
+ * floor must not refuse here or it refuses forever. A registry that is
+ * registered and then FAILS has told us nothing about how much it holds, so its
+ * empty result is a floor — and a caller counting or authorizing against it
+ * would otherwise treat a transient dependency failure as "there is nothing
+ * here", which is the direction that admits unauthorized rows.
+ *
+ * 🔴 `has` decides absence, and a throw from a REGISTERED service is a floor —
+ * both halves matter, and each was wrong on its own first. `Container.get`
+ * invokes the factory, so a lazy singleton whose construction throws propagates
+ * from `get` exactly as an unregistered name does, while `has` is true: catching
+ * around `get` alone reports a failed dependency as an intentionally absent one.
+ * Reading `has` alone is no better — it answered before the factory ever ran, so
+ * a container that resolves a name it does not report emptied the candidate set
+ * for every caller rather than only the one asking about degradation. Ask `has`
+ * for absence, then let anything after it count as failure.
+ */
+async function registryRead<T>(
+  service: string,
+  enumerate: (registry: T) => Promise<Array<{ slug: string }>>
+): Promise<RegistryRead> {
+  // Absent: this install registers no content of that kind, and that is a whole
+  // answer rather than a shortfall.
+  if (!container.has(service)) return { slugs: [], reachable: true };
   try {
-    const collections = await container
-      .get<{
-        getAllCollections: () => Promise<Array<{ slug: string }>>;
-      }>("collectionRegistryService")
-      .getAllCollections();
-    return {
-      slugs: collections.map(collection => String(collection.slug)),
-      reachable: true,
-    };
+    const registry = container.get<T>(service);
+    const entries = await enumerate(registry);
+    return { slugs: entries.map(entry => String(entry.slug)), reachable: true };
   } catch {
-    // Unreachable registry: contribute nothing rather than guess.
+    // Registered and unable to answer -- a construction failure inside the
+    // factory included. Contribute nothing, and SAY that it is a floor.
     return { slugs: [], reachable: false };
   }
 }
 
+/** The registered collection slugs, or none when the registry is unreachable. */
+function collectionSlugs(): Promise<RegistryRead> {
+  return registryRead<{
+    getAllCollections: () => Promise<Array<{ slug: string }>>;
+  }>("collectionRegistryService", registry => registry.getAllCollections());
+}
+
 /** The registered single slugs, or none when the registry is unreachable. */
-async function singleSlugs(): Promise<RegistryRead> {
-  try {
-    const singles = await container
-      .get<{
-        getAllSingles: () => Promise<Array<{ slug: string }>>;
-      }>("singleRegistryService")
-      .getAllSingles();
-    return {
-      slugs: singles.map(single => String(single.slug)),
-      reachable: true,
-    };
-  } catch {
-    // As above.
-    return { slugs: [], reachable: false };
-  }
+function singleSlugs(): Promise<RegistryRead> {
+  return registryRead<{
+    getAllSingles: () => Promise<Array<{ slug: string }>>;
+  }>("singleRegistryService", registry => registry.getAllSingles());
 }
 
 /**
@@ -87,7 +106,11 @@ export async function registeredContentSlugs(): Promise<string[]> {
  * needs this to tell a live subject from an orphaned one.
  *
  * A name in NEITHER registry is absent rather than defaulted: guessing a kind
- * for it would send a row to a read path that cannot answer about it.
+ * for it would send a row to a read path that cannot answer about it. The
+ * activity log makes that concrete — it files settings mutations under
+ * namespaces that are neither a collection nor a single, and its scope column
+ * is free text, so a map that defaulted them would hand a settings row to a
+ * content read path with nothing to say about it.
  *
  * Collections are written last, so a slug claimed by both resolves to the
  * collection. The registries do not permit that overlap; stating the precedence

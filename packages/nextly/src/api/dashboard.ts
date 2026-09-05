@@ -201,10 +201,14 @@ export const getDashboardRecentEntries = withErrorHandler(
  * Query params:
  *   - limit: number (default: 5, max: 50)
  *
- * Body shape: `{ activities, total, hasMore }`. The activity feed is
- * cursor-style (`hasMore` flag, no page/limit/totalPages metadata
- * surfaced to clients), so this uses `respondData` rather than
- * `respondList`.
+ * Body shape: `{ activities, hasMore }`. The activity feed is cursor-style
+ * (`hasMore` flag, no page/limit/totalPages metadata surfaced to clients), so
+ * this uses `respondData` rather than `respondList`.
+ *
+ * No `total`, deliberately: it counted the rows the collection scope admitted,
+ * so it reported edits to documents the reader may not open, and narrowing it
+ * would mean authorizing every matching row — unbounded over a table that only
+ * grows. `ActivityLogResult` carries the same note beside the field's absence.
  */
 export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
@@ -217,10 +221,17 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
     : 5;
 
   const service = await getActivityLogService();
-  const scope = await resolveReadableResources(await readCaller(auth));
-  const result = await service.getRecentActivity({ limit, scope });
+  // The caller WHOLE, and resolved ONCE. Both consumers read it: the scope
+  // decides which collections are in reach, and the feed then authorizes each
+  // row's DOCUMENT as this caller -- a stored owner-only or custom read rule
+  // makes those two different sets, and a feed given only the scope reports one
+  // author's entry titles to another.
+  const caller = await readCaller(auth);
+  const scope = await resolveReadableResources(caller);
+  const result = await service.getRecentActivity({ limit, scope, caller });
 
-  // Cursor-shaped read: keep `hasMore` adjacent to `activities` and `total`.
+  // Cursor-shaped read: `hasMore` sits beside `activities`, with no `total` --
+  // see `ActivityLogResult` for why a count is not published here.
   // Spread into a fresh literal so the response-shape generic accepts the
   // named `ActivityLogResult` interface (no implicit index signature).
   return respondData({ ...result }, { headers: PRIVATE_NO_STORE_HEADERS });

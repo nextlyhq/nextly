@@ -7273,6 +7273,16 @@ export class CollectionMutationService extends BaseService {
                   action: "update",
                   collection: params.collectionName,
                   entryId: params.entryId,
+                  // 🔴 The resolved write locale, exactly as the event-backed
+                  // path above records it. This seam bypasses the outbox --
+                  // a draft save changes no live document -- so omitting it
+                  // filed every localized draft edit as default-locale
+                  // activity, and the feed then authorized the row against the
+                  // default translation while its heading came from the edited
+                  // one.
+                  ...(localizedUpdate
+                    ? { locale: localizedUpdate.writeLocale }
+                    : {}),
                   data: workingDraftDocument ?? updatedDocument,
                   previous: priorWorkingDraftDocument ?? previousDocument,
                   actor: actorForWrite(params.actor, params.user),
