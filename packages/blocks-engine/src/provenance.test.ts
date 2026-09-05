@@ -357,6 +357,27 @@ describe("a pattern handed over without an identity", () => {
     expect(plan.problem).toBe("invalid-source");
     expect(plan.pageOps).toBeUndefined();
   });
+
+  it("refuses an id that is not a string at all", () => {
+    // This is a published entry point, and the value reaching it comes from a
+    // JavaScript caller or a stored row as often as from a typed one — so the
+    // type is a claim about the callers it can see, not about the input.
+    for (const id of [42, null, undefined, {}]) {
+      const odd = {
+        id,
+        document: {
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "pattern",
+          nodes: [node("p1")],
+        },
+      } as unknown as StoredPattern;
+
+      expect(
+        planInsertPattern(page([node("a")]), odd, { index: 1 }, anyParent)
+          .problem
+      ).toBe("invalid-source");
+    }
+  });
 });
 
 describe("the round trip between the two planners", () => {

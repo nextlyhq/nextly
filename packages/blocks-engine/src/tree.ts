@@ -1257,22 +1257,6 @@ export const ID_REFERENCE_ATTRIBUTES: readonly string[] = [
 const ID_REFERENCE_SET = new Set(ID_REFERENCE_ATTRIBUTES);
 
 /**
- * Point a node's id REFERENCES at wherever those ids ended up.
- *
- * Applied as a second pass, after every id has been minted, and that ordering
- * is the whole reason it is a separate function: a node may reference an id
- * defined on a node the walk has not reached yet, so rewriting during the copy
- * would leave every forward reference pointing at the original.
- *
- * A token with no entry in the map is left ALONE rather than dropped. It
- * addresses something outside the copied subtree — an element the host page
- * owns, or one the application renders — and rewriting or removing it would
- * break a relationship that was working.
- *
- * Returns the SAME record when nothing referenced anything, so the ordinary
- * node allocates nothing.
- */
-/**
  * An IDREFS value as its tokens, with the separators gone.
  *
  * The single statement of what such a value MEANS: a list of ids, where runs of
@@ -1289,6 +1273,22 @@ export function idReferenceTokens(value: string): string[] {
   return value.split(/\s+/).filter(token => token !== "");
 }
 
+/**
+ * Point a node's id REFERENCES at wherever those ids ended up.
+ *
+ * Applied as a second pass, after every id has been minted, and that ordering
+ * is the whole reason it is a separate function: a node may reference an id
+ * defined on a node the walk has not reached yet, so rewriting during the copy
+ * would leave every forward reference pointing at the original.
+ *
+ * A token with no entry in the map is left ALONE rather than dropped. It
+ * addresses something outside the copied subtree — an element the host page
+ * owns, or one the application renders — and rewriting or removing it would
+ * break a relationship that was working.
+ *
+ * Returns the SAME record when nothing referenced anything, so the ordinary
+ * node allocates nothing.
+ */
 export function remapIdReferences(
   attributes: Record<string, string>,
   domIds: ReadonlyMap<string, string>

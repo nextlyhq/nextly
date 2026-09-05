@@ -354,11 +354,14 @@ export function planInsertPattern(
   target: InsertTarget,
   nesting: NestingSource
 ): PlanResult<never> {
-  // The identity BEFORE anything is built on it. An empty id produces a record
-  // `isBlockOrigin` refuses, so the plan would succeed and the insert throw —
-  // and the type cannot say this, because every non-empty string is legal and
-  // only the empty one is not.
-  if (pattern.id === "") return { problem: "invalid-source" };
+  // The identity BEFORE anything is built on it. A record whose id is not a
+  // non-empty string is one `isBlockOrigin` refuses, so the plan would succeed
+  // and the insert throw. Checked at RUNTIME as well as in the type: this is a
+  // published entry point, and the value reaching it comes from a JavaScript
+  // caller or a stored row as often as from a typed one.
+  if (typeof pattern.id !== "string" || pattern.id === "") {
+    return { problem: "invalid-source" };
+  }
 
   const stored = storedRefusal(document, pattern.document);
   if (stored !== undefined) return stored;
