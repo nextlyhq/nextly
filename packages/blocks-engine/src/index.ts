@@ -111,6 +111,11 @@ export {
   makeNode,
   expandSlotDefaults,
   walkNodes,
+  // The one forest rewrite. A caller changing a field across a stored tree
+  // needs its three learned behaviours — a cycle entry dropped, a malformed
+  // entry passed through, a malformed slot preserved — and writing a second
+  // traversal inherits none of them.
+  mapForest,
   findNode,
   locateNode,
   insertNode,
@@ -170,10 +175,12 @@ export type {
 // create and the ops the page needs. Split from the doing so the caller can put
 // both writes in one unit of work and roll the create back — and so the dry run
 // and the real run are the same function rather than two that agree for now.
+export { patternDigest } from "./pattern-digest";
 export { planInsertPattern, planSaveAsPattern } from "./composition-planners";
 export type {
   CompositionPlan,
   InsertTarget,
+  StoredPattern,
   PlacementTarget,
   PatternTarget,
   PlanProblem,

@@ -731,8 +731,14 @@ function queueSlotRebuilds(
  * would let any unrelated edit silently destroy stored content that a caller
  * may still need to read or repair, which is a worse outcome than the throw it
  * replaced: the throw was loud and lost nothing.
+ *
+ * Published because those three are exactly what a caller rewriting one field
+ * across a stored forest gets wrong, and each was learned here rather than
+ * guessed. A planner stripping a lock or a provenance record wrote its own walk
+ * and inherited none of them; the rule is that a forest rewrite is this
+ * function with a different `fn`, not a new traversal.
  */
-function mapForest(
+export function mapForest(
   nodes: BlockNode[],
   fn: (node: BlockNode) => BlockNode
 ): BlockNode[] {
