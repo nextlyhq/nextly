@@ -2362,16 +2362,20 @@ function assertNodeId(id: string, verb: string): void {
  * structurally invalid — `version: 0` is the cheap example — and without this
  * the plan reports success and the apply throws.
  *
- * Judged against the DEFAULT limits unless a caller says otherwise. The
- * structural rules do not depend on them; the machine caps on depth and size
- * do, and a caller that applies with tighter limits can still be refused there.
- * That one refusal is deliberately left to the apply, because a plan cannot
- * foresee a cap it was never given.
+ * Judged with the SHAPE-ONLY limits by default, which is what makes this usable
+ * from a planner. The structural rules do not depend on limits; the caps on
+ * depth and size do, and those belong to whoever applies — a host that raises
+ * `maxDepth` would otherwise have a plan refuse a document its own apply
+ * accepts, which is the dry run disagreeing with the run it predicts in the
+ * direction nobody can debug. The same constant the remove path uses, for the
+ * same reason: it asks whether this is a node, not whether it fits.
+ *
+ * A caller that wants a cap judged too passes its own limits.
  */
 export function nodeShapeRefusal(
   node: BlockNode,
   verb = "insert",
-  limits: DocumentLimits = DEFAULT_LIMITS
+  limits: DocumentLimits = SHAPE_ONLY_LIMITS
 ): string | undefined {
   try {
     assertNodeShape(node, verb, limits);

@@ -112,7 +112,9 @@ export type PlanProblem =
   /** The position names nowhere the op layer would accept. */
   | "invalid-position"
   /** The stored pattern holds a node the op layer will not carry. */
-  | "invalid-node";
+  | "invalid-node"
+  /** The stored pattern spells one rendered id on two of its own nodes. */
+  | "duplicate-dom-id";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -315,11 +317,9 @@ export type InsertTarget = OpPosition | "document";
  * The one refusal left to the apply is the machine cap on depth and size, which
  * depends on limits the caller passes there.
  *
- * Provenance is NOT recorded on the inserted roots. Design Q12 proposes an inert
- * `origin: { pattern, digest }` so "upstream changed" is answerable later, but
- * `origin` is not one of the frozen `keyof BlockNode` keys, so recording it is a
- * change to the stored format rather than an additive field —
- * `decision:pb6-q12-provenance-on-copies` is with the founder.
+ * Nothing records where the copy came from. A pattern is copy-on-insert and
+ * keeps no link back, so the inserted nodes are ordinary content from the
+ * moment they land.
  */
 export function planInsertPattern(
   document: BlockDocument,
@@ -341,6 +341,7 @@ export function planInsertPattern(
     // pattern can hold a node that type-checks and is still structurally
     // invalid — `version: 0` — and the insert would throw on it.
     shapeRefusal(copy.nodes) ??
+    duplicateDomIdRefusal(copy.nodes) ??
     placementRefusal(copy.nodes, destination.place.where, nesting) ??
     lockRefusal(copy.nodes, "locked") ??
     // The `"document"` target REMOVES what is there, and a remove refuses a
@@ -348,7 +349,10 @@ export function planInsertPattern(
     // page that holds a locked block throws at apply time unless it is caught
     // here. Only that target deletes anything; a positional insert adds.
     (target === "document"
-      ? lockRefusal(document.nodes, "destination-locked")
+      ? (lockRefusal(document.nodes, "destination-locked") ??
+        // A remove asks the same shape question an insert does, so replacing a
+        // page holding a malformed node throws unless it is caught here.
+        shapeRefusal(document.nodes))
       : undefined);
   if (refusal !== undefined) return refusal;
 
@@ -448,6 +452,50 @@ function shapeRefusal(roots: readonly BlockNode[]): PlanRefusal | undefined {
       return { problem: "invalid-node" };
   }
   return undefined;
+}
+
+/**
+ * A DOM id the copy uses twice, phrased as a refusal.
+ *
+ * Re-identifying does not fix this and is not meant to. A subtree that already
+ * spelled one id on two nodes is malformed, and `reidForestWithMap` maps both
+ * occurrences to ONE replacement deliberately — the pair addressed one target
+ * before and still addresses one after, which is the honest reading of a
+ * document that should not have existed. What that preserves is the duplicate:
+ * the copy carries it into the page, where an anchor resolves to whichever
+ * element the browser reaches first and a label names the wrong control.
+ *
+ * So a stored pattern this broken is refused rather than placed. Folded the way
+ * HTML folds attribute names, and the way validation reports `duplicate-dom-id`
+ * for the same shape.
+ */
+function duplicateDomIdRefusal(
+  roots: readonly BlockNode[]
+): PlanRefusal | undefined {
+  const seen = new Set<string>();
+  let repeated = false;
+  walkNodes([...roots], node => {
+    if (repeated) return;
+    for (const id of domIdsOf(node)) {
+      if (seen.has(id)) {
+        repeated = true;
+        return;
+      }
+      seen.add(id);
+    }
+  });
+  return repeated ? { problem: "duplicate-dom-id" } : undefined;
+}
+
+/** Every DOM id one node carries, from either spelling. */
+function domIdsOf(node: BlockNode): string[] {
+  const ids: string[] = [];
+  if (typeof node.cssId === "string" && node.cssId !== "") ids.push(node.cssId);
+  for (const [name, value] of Object.entries(node.attributes ?? {})) {
+    if (name.toLowerCase() !== "id") continue;
+    if (typeof value === "string" && value !== "") ids.push(value);
+  }
+  return ids;
 }
 
 /** A locked node anywhere in a forest, phrased as the caller's own refusal. */

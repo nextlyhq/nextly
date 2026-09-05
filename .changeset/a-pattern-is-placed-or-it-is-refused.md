@@ -90,3 +90,20 @@ reported success while the insert threw on it. Asked of the op layer's own rule
 rather than a copy of it, so the two cannot come to disagree about what a node
 is. The machine caps on depth and size stay with the apply, because they depend
 on limits the plan was never given.
+
+The shape check judges structure, not caps. Depth and size depend on the limits
+whoever applies passes, so judging them here made a plan refuse a document the
+caller's own apply would accept — the dry run disagreeing with the run it
+predicts, in the direction nobody can debug. It uses the same shape-only limits
+the remove path already uses, and the caps stay where the numbers are known.
+
+Replacing a document checks the shape of what it removes. That target removes
+every root, and a remove asks the same shape question an insert does, so a page
+holding a malformed node produced a plan that could not apply.
+
+A pattern that spells one rendered id on two of its own nodes is refused rather
+than placed. Re-identifying does not repair it and is not meant to: two nodes
+sharing an id map to ONE replacement deliberately, because the pair addressed
+one target before and still addresses one after. What that preserves is the
+duplicate, and the copy carries it into a page where an anchor resolves to
+whichever element the browser reaches first and a label names the wrong control.

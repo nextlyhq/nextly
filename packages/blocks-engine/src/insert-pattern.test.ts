@@ -383,6 +383,53 @@ describe("what it refuses before the op layer would", () => {
     expect(plan.problem).toBe("invalid-node");
   });
 
+  it("REFUSES A PATTERN THAT SPELLS ONE RENDERED ID TWICE", () => {
+    // Re-identifying does not repair this: two nodes sharing an id map to ONE
+    // replacement on purpose, so the copy carries the duplicate into the page
+    // where an anchor resolves to whichever element the browser reaches first.
+    const broken = pattern([
+      node("p1", { cssId: "hero" }),
+      node("p2", { attributes: { ID: "hero" } }),
+    ]);
+
+    expect(
+      planInsertPattern(page([node("a")]), broken, { index: 1 }, anyParent)
+        .problem
+    ).toBe("duplicate-dom-id");
+  });
+
+  it("REFUSES REPLACING A PAGE THAT HOLDS A MALFORMED NODE", () => {
+    // The replacing target removes every root, and a remove asks the same
+    // shape question an insert does.
+    const doc = page([
+      { id: "bad", type: "core/box", version: 0, props: {} } as BlockNode,
+    ]);
+
+    expect(
+      planInsertPattern(doc, pattern([node("p1")]), "document", anyParent)
+        .problem
+    ).toBe("invalid-node");
+  });
+
+  it("DOES NOT refuse a deep pattern the caller's own limits would accept", () => {
+    // The shape check judges structure, not caps. Depth and size belong to
+    // whoever applies: a host that raises `maxDepth` must not have a plan
+    // refuse a document its own apply accepts.
+    let deep: BlockNode = node("leaf");
+    for (let i = 0; i < 12; i += 1) {
+      deep = node(`w${i}`, {}, { body: [deep] });
+    }
+
+    const plan = planInsertPattern(
+      page([node("a")]),
+      pattern([deep]),
+      { index: 1 },
+      anyParent
+    );
+
+    expect(plan.problem).toBeUndefined();
+  });
+
   it("refuses a document that is not a pattern", () => {
     const notAPattern: BlockDocument = {
       formatVersion: DOCUMENT_FORMAT_VERSION,
