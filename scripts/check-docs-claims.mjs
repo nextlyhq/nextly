@@ -654,6 +654,34 @@ export function renderedProse(markdown) {
   );
 }
 
+/**
+ * A published package's keywords are a category claim, on the surface people search.
+ *
+ * The GitHub topic list forbids `framework` and `app-framework` for the reason the whole
+ * repositioning turned on: the word could mean an application framework, a UI framework or a
+ * backend framework, which made it the least informative word available. npm keywords are the
+ * same kind of surface and were left carrying it after the topic was cleared, so the rule is
+ * applied to both rather than to whichever one someone remembered.
+ *
+ * Matched whole, not as a substring: `page-builder` and `nextly-plugin` are keywords this must
+ * never touch.
+ */
+const RETIRED_KEYWORD = /^(?:app-)?frameworks?$/i;
+
+function retiredKeywords(repoRoot, packages, findings) {
+  for (const pkg of packages) {
+    for (const keyword of pkg.json?.keywords ?? []) {
+      if (!RETIRED_KEYWORD.test(keyword)) continue;
+      findings.push({
+        check: "retired-category-keyword",
+        file: relative(repoRoot, join(pkg.dir, "package.json")),
+        line: null,
+        message: `${pkg.name} publishes the keyword "${keyword}", which names the retired category`,
+      });
+    }
+  }
+}
+
 function readmeSkeleton(repoRoot, packages, findings) {
   for (const pkg of packages) {
     const readme = join(pkg.dir, "README.md");
@@ -919,6 +947,7 @@ export async function runChecks({
   }
 
   readmeSkeleton(repoRoot, packages, findings);
+  retiredKeywords(repoRoot, packages, findings);
   internalLinks(repoRoot, tracked, findings);
   metaReachability(repoRoot, tracked, findings);
 

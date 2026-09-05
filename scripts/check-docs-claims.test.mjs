@@ -1103,3 +1103,61 @@ describe("a fence marker inside a comment is not a fence", () => {
     ).toContain("readme-skeleton");
   });
 });
+
+describe("retired-category-keyword", () => {
+  it("fires on the bare 'framework' keyword", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": JSON.stringify({
+          name: "@nextlyhq/thing",
+          keywords: ["cms", "framework"],
+        }),
+        "packages/thing/README.md": "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).toContain("retired-category-keyword");
+  });
+
+  it("fires on 'app-framework' and on the plural", async () => {
+    for (const keyword of ["app-framework", "frameworks", "App-Frameworks"]) {
+      expect(
+        await checksFor({
+          "README.md": "# nextly\n\n@nextlyhq/thing\n",
+          "packages/thing/package.json": JSON.stringify({
+            name: "@nextlyhq/thing",
+            keywords: [keyword],
+          }),
+          "packages/thing/README.md":
+            "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+        })
+      ).toContain("retired-category-keyword");
+    }
+  });
+
+  it("does not fire on keywords that merely contain the word", async () => {
+    // `page-builder` and `nextly-plugin` are keywords this must never touch, and a substring
+    // match would have taken anything hyphenated with the word along with it.
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": JSON.stringify({
+          name: "@nextlyhq/thing",
+          keywords: ["page-builder", "nextly-plugin", "framework-agnostic"],
+        }),
+        "packages/thing/README.md":
+          "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).not.toContain("retired-category-keyword");
+  });
+
+  it("does not fire on a package with no keywords at all", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": JSON.stringify({ name: "@nextlyhq/thing" }),
+        "packages/thing/README.md":
+          "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).not.toContain("retired-category-keyword");
+  });
+});
