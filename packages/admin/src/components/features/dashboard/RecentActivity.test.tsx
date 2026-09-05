@@ -92,7 +92,7 @@ describe("RecentActivity", () => {
 
     expect(
       // The copy the error branch renders.
-      screen.getByText(/failed to fetch activity stream/i)
+      screen.getByText(/couldn't load recent activity/i)
     ).toBeInTheDocument();
   });
 
@@ -202,7 +202,7 @@ describe("RecentActivity", () => {
     });
   });
 
-  it("has correct accessibility structure", async () => {
+  it("names its own region, since the grid frames it with no chrome", async () => {
     mockUseRecentActivity.mockReturnValue({
       data: { activities: mockActivities },
       isLoading: false,
@@ -215,11 +215,44 @@ describe("RecentActivity", () => {
     render(<RecentActivity />);
 
     await waitFor(() => {
-      // Header should be present
-      expect(screen.getByText("System Event Log")).toBeInTheDocument();
+      // Asked by ACCESSIBLE NAME rather than by the heading's text, because the
+      // card declares `chrome: "none"` and so owns its own labelled region --
+      // `getByText` would still pass on a heading that labels nothing.
+      expect(
+        screen.getByRole("region", { name: "Recent activity" })
+      ).toBeInTheDocument();
 
-      // Content should be visible
       expect(screen.getByText("John Doe")).toBeVisible();
     });
+  });
+
+  /*
+   * 🔴 Both controls existed and neither worked: a "Detailed Log" link whose
+   * href was the dashboard the card sits on, and a "Sync Previous Events"
+   * button with no handler. Asserted as ABSENCE OF ANY link or button rather
+   * than of those two strings, because the defect is a control that promises a
+   * destination this feed does not have -- re-adding one under a different
+   * label is the same defect and a string match would pass it.
+   */
+  it("offers no navigation or pagination control", async () => {
+    mockUseRecentActivity.mockReturnValue({
+      data: { activities: mockActivities },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isSuccess: true,
+      status: "success",
+    } as ReturnType<typeof useRecentActivity>);
+
+    render(<RecentActivity />);
+
+    // The control: the rows must have rendered, or an empty card would satisfy
+    // the two absence assertions below without the feed ever having drawn.
+    await waitFor(() => {
+      expect(screen.getByText("John Doe")).toBeVisible();
+    });
+
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
 });

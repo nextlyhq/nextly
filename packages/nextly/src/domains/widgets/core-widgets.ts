@@ -15,24 +15,49 @@
  * contributions, so without a declared position core's cards would sit BELOW
  * every plugin's, which is not the dashboard anyone has today.
  *
- * All four are `custom` with `chrome: "none"`. Each already draws a titled
- * section with its own rules, loading skeleton and error state; framed by
- * `WidgetCard` each would gain a second heading above its own. `title` is still
- * required and still meaningful -- it is what names the card in the layout
- * editor, where a reader chooses what to show.
+ * The `custom` ones carry `chrome: "none"`. Each already draws a titled section
+ * with its own rules, loading skeleton and error state; framed by `WidgetCard`
+ * each would gain a second heading above its own. `title` is still required and
+ * still meaningful -- it is what names the card in the layout editor, where a
+ * reader chooses what to show. Stated as a property of that group rather than
+ * as a count, because the count was written as "all four" and was wrong by two
+ * before anyone reread it.
  *
- * Deliberately NO `requiredPermission`. Every one of these is visible to any
- * authenticated admin today, and adding a gate here would hide a card someone
- * currently sees -- a behaviour change wearing the costume of a refactor. The
- * gate that belongs on `core/team` in particular waits on a question this
- * repository has not answered: which permission gates a bare COUNT of users,
- * given `dashboard-service` computes it unscoped.
+ * Each `custom` card names its body as a `core#` STRING, resolved in the admin
+ * by `core-components.ts`. Nothing in either package can check that the two
+ * agree -- neither depends on the other -- so a card naming a path that was
+ * never registered draws the unresolved fallback, silently and only for the
+ * reader who has it. `core-widget-components.test.ts` in the admin is what
+ * holds the halves together; it reads this file.
+ *
+ * Deliberately no `requiredPermission` on the cards that predate the widget
+ * grid. Every one of those is visible to any authenticated admin today, and
+ * adding a gate would hide a card someone currently sees -- a behaviour change
+ * wearing the costume of a refactor. The gate that belongs on `core/team` in
+ * particular waits on a question this repository has not answered: which
+ * permission gates a bare COUNT of users, given `dashboard-service` computes it
+ * unscoped.
+ *
+ * 🔴 A card added HERE is new to every reader, so that argument does not extend
+ * to it: nothing is hidden that was previously visible, so the gate is decided
+ * by what the CARD'S SOURCE does to a caller who may not see its rows. The two
+ * cards added together answer that differently, and neither is the default:
+ *
+ * - `core/upcoming-releases` is gated. `ReleasesService.find` authorizes by
+ *   THROWING, so an ungranted reader gets a card stuck in its error state
+ *   rather than an empty one -- see its own note.
+ * - `core/recent-activity` is not. Its feed takes the caller's readable
+ *   collections as a scope and defaults that scope to NOTHING, so a reader
+ *   entitled to none of it is shown an empty feed. That is a card correctly
+ *   saying there is nothing to report, which needs no gate; a gate would
+ *   instead hide the feed from anyone whose permissions happened to be narrow
+ *   today.
  *
  * @module domains/widgets/core-widgets
  */
 
 import type { WidgetDefinition } from "./definition";
-import { VERSIONS_SOURCE_ID } from "./system-source-ids";
+import { RELEASES_SOURCE_ID, VERSIONS_SOURCE_ID } from "./system-source-ids";
 
 /**
  * The prefix core's dashboard components resolve under.
@@ -125,5 +150,50 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
       select: ["scopeSlug", "entryId", "updatedAt"],
       limit: 5,
     },
+  },
+  {
+    id: "core/upcoming-releases",
+    title: "Upcoming releases",
+    description: "Scheduled releases that have not shipped yet, soonest first.",
+    archetype: "list",
+    defaultSize: "md",
+    defaultOrder: 40,
+    /*
+     * 🔴 The ONLY core card with a gate, and the asymmetry is deliberate rather
+     * than an inconsistency. `ReleasesService.find` opens with
+     * `authorize(actor, "read")`, which THROWS -- so an ungranted reader does
+     * not get an empty card, they get one stuck in its error state, reporting a
+     * failure that is really a permission they were never meant to have. The
+     * two outcomes a card can have here are "hidden" and "broken", and nothing
+     * in between is reachable.
+     *
+     * `partitionPlacements` drops a card whose `requiredPermission` this caller
+     * lacks before the query is ever batched, and keeps it in the stored ROW so
+     * a reader whose grant is later widened gets it back where it was.
+     *
+     * The slug is `${action}-${resource}` and `parsePermissionSlug` splits on
+     * the FIRST hyphen, so this parses to `read` / `content-releases` --
+     * matching `RELEASES_RESOURCE` and the authority `api/releases.ts` requires
+     * of a human. Written out rather than composed from the constant because
+     * importing it would pull the releases service's wiring into this list, the
+     * same coupling `system-source-ids.ts` exists to avoid.
+     */
+    requiredPermission: "read-content-releases",
+    query: {
+      source: RELEASES_SOURCE_ID,
+      op: "list",
+      select: ["title", "state", "scheduledAt"],
+      limit: 5,
+    },
+  },
+  {
+    id: "core/recent-activity",
+    title: "Recent activity",
+    description: "Who changed what, most recent first.",
+    archetype: "custom",
+    chrome: "none",
+    defaultSize: "full",
+    defaultOrder: 45,
+    component: "core#RecentActivity",
   },
 ] as const;
