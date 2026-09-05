@@ -65,6 +65,251 @@ const FORBIDDEN_PHRASES = [
 const BARE_VISUAL_BUILDER = /(?<!schema )(?<!page )\bvisual builder\b/gi;
 
 /**
+ * The files that say what Nextly is.
+ *
+ * The naming rule above stops one word being overloaded. This stops a retired
+ * category coming back, which had already happened in three of these six at
+ * once, including the prompt this repository's own review agent is given.
+ *
+ * Every path here is asserted to exist by this script's own tests, so a rename
+ * cannot quietly take a surface out of scope while the renamed file goes on
+ * stating the category.
+ *
+ * Named rather than matched by glob, and six files rather than every document.
+ * A category is stated in a handful of places and repeated nowhere else, so a
+ * wider net would only add ways to be wrong: a tutorial quoting the old name,
+ * or a code sample containing the words, are not the project calling itself
+ * something. Adding a surface here is a deliberate act, which is the point.
+ */
+export const CATEGORY_SURFACES = [
+  "README.md",
+  "AGENTS.md",
+  "ARCHITECTURE.md",
+  ".github/review-prompt.md",
+  "docs/index.mdx",
+  "docs/getting-started/index.mdx",
+];
+
+/**
+ * The category the project moved away from.
+ *
+ * A hyphen or whitespace between the words, because the repository has spelled
+ * it both ways and a reader sees no difference, and an optional plural, because
+ * "one of several app frameworks" is the same claim about the same category.
+ */
+const RETIRED_CATEGORY = /\bapp(?:-|\s+)frameworks?\b/i;
+
+/**
+ * A document reduced to what a reader is shown.
+ *
+ * `renderedProse` drops fenced examples and commented-out blocks. This drops
+ * the rest of what renders as nothing or as the text inside it, so the phrase
+ * is judged as it reaches a reader: an MDX import or comment shows nothing, a
+ * code span is a name rather than a claim, and a tag, a link or emphasis around
+ * one word leaves only its text.
+ *
+ * The separator entities are decoded, in every spelling of a space and of a
+ * hyphen, because the pattern turns on what sits between the two words; an
+ * entity anywhere else in a sentence cannot hide the phrase.
+ *
+ * ESM statements are removed for MDX only, and only unindented, which is where
+ * MDX accepts them. Markdown has no imports at all, so there a line beginning
+ * "import" is an ordinary sentence, and an indented one under a list item is
+ * that item continuing; treating either as a statement blanks real prose.
+ *
+ * Frontmatter keeps its title and description, which are published as the page's
+ * own metadata, and drops the rest. The forms
+ * An image's alternative text is read aloud and shown when the image is not,
+ * so it comes out of the tag before the tag goes. The forms
+ * that carry a line break carry a space with it: a `<br>` and a trailing
+ * backslash both separate the words they sit between, so removing them outright
+ * would join those words instead. And `<code>` is the HTML spelling of a code
+ * span, so it names a literal on the same terms.
+ */
+function stripEsm(markdown) {
+  const kept = [];
+  let inStatement = false;
+  for (const line of markdown.split("\n")) {
+    if (!inStatement && /^(?:import|export)\b/.test(line)) inStatement = true;
+    if (!inStatement) {
+      kept.push(line);
+      continue;
+    }
+    kept.push("");
+    // A statement ends at its semicolon or its quoted module path. A blank line
+    // ends it too, so an unterminated one cannot swallow the document.
+    if (/(?:;|["'])[ \t]*;?[ \t]*$/.test(line) || line.trim() === "") inStatement = false;
+  }
+  return kept.join("\n");
+}
+
+/**
+ * The frontmatter fields a reader is shown.
+ *
+ * A page's title and description are published: the description is served
+ * verbatim as the page's meta description. The rest of the block is machinery
+ * nobody meets.
+ *
+ * A value may be a folded or literal scalar, whose text is on the indented
+ * lines beneath the marker rather than beside it, so those are collected too.
+ */
+function publishedFrontmatter(block) {
+  const lines = block.split(/\r?\n/);
+  const published = [];
+  for (let index = 0; index < lines.length; index++) {
+    const field = lines[index].match(/^(?:title|description):[ \t]*(.*)$/);
+    if (field === null) continue;
+    // A quoted value ends at its closing quote and an unquoted one at a
+    // comment. YAML publishes neither the quotes nor anything after them.
+    const quoted = field[1].match(/^(['"])((?:\\.|(?!\1).)*)\1/);
+    const inline =
+      quoted === null
+        ? field[1].replace(/(?:^|[ \t])#.*$/, "")
+        : // A double-quoted scalar spells characters as escapes, and YAML
+          // publishes what they stand for.
+          quoted[2]
+            .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) =>
+              String.fromCharCode(Number.parseInt(hex, 16))
+            )
+            .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
+              String.fromCharCode(Number.parseInt(hex, 16))
+            )
+            .replace(/\\U([0-9a-fA-F]{8})/g, (_, hex) =>
+              String.fromCodePoint(Number.parseInt(hex, 16))
+            )
+            .replace(/\\([nt])/g, " ");
+    const value = [inline.replace(/^[>|][-+]?[ \t]*$/, "")];
+    // A block scalar runs over the indented lines beneath it, and a blank line
+    // inside one is a paragraph break rather than its end, so the scan runs to
+    // the last indented line instead of stopping at the first gap.
+    let last = index;
+    for (let probe = index + 1; probe < lines.length; probe++) {
+      if (/^[ \t]+\S/.test(lines[probe])) last = probe;
+      else if (lines[probe].trim() !== "") break;
+    }
+    for (let line = index + 1; line <= last; line++) value.push(lines[line].trim());
+    index = last;
+    published.push(value.join(" ").trim());
+  }
+  return published.length === 0 ? "" : `${published.join("\n\n")}\n\n`;
+}
+
+/**
+ * The strings a component tag puts on the page.
+ *
+ * A list passed in a braces expression is data the component renders, and an
+ * attribute named for a caption holds one. Everything else in a tag is
+ * configuration, and reading it would fail on a class or a path that happens to
+ * carry the words.
+ */
+const CAPTION_ATTRIBUTES = /\b(?:title|label|caption|heading|summary|placeholder)=/;
+
+function componentCaptions(tag) {
+  const captions = [];
+  for (const expression of tag.match(/\{\s*\[[^\]]*\]\s*\}/g) ?? []) {
+    captions.push(...(expression.match(/"[^"\n]*"|'[^'\n]*'/g) ?? []));
+  }
+  for (const attribute of tag.match(/\b[a-zA-Z]+=(?:"[^"\n]*"|'[^'\n]*')/g) ?? []) {
+    if (CAPTION_ATTRIBUTES.test(attribute)) captions.push(attribute.replace(/^[^=]+=/, ""));
+  }
+  return captions.map(text => text.slice(1, -1)).join(" ");
+}
+
+function readableProse(markdown, { mdx }) {
+  // A diagram fence is drawn rather than printed, so its labels are read while
+  // the syntax around them is not. Pulled out before `renderedProse` drops the
+  // fence with every other one.
+  const drawn = markdown.replace(
+    /^ {0,3}```mermaid\b[\s\S]*?^ {0,3}```[ \t]*$/gm,
+    fence =>
+      (fence.match(/"[^"\n]*"|'[^'\n]*'|\[[^\]\n]*\]|\([^)\n]*\)|\|[^|\n]*\||\{[^}\n]*\}/g) ?? [])
+        .map(label => label.slice(1, -1))
+        .join("\n\n")
+  );
+  const prose = renderedProse(drawn).replace(
+    /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/,
+    (_, block) => publishedFrontmatter(block)
+  );
+  return (mdx ? stripEsm(prose) : prose)
+    .replace(/&(?:nbsp|ensp|emsp|thinsp|#0*32|#0*160|#x0*20|#x0*a0);/gi, " ")
+    .replace(/&(?:hyphen|dash|#0*45|#x0*2d);/gi, "-")
+    .replace(/<code[^>]*>[\s\S]*?<\/code>/gi, " ")
+    .replace(
+      /<img\b[^>]*?\balt=(?:"([^"]*)"|'([^']*)')[^>]*>/gi,
+      (_, quoted, single) => ` ${quoted ?? single} `
+    )
+    // A component is given its captions as props, so those strings are drawn
+    // even though the tag is not. Only the props that carry text: a list passed
+    // as data, and the attributes whose names say they hold a caption. A
+    // `className` or an `href` is configuration and naming a stylesheet class
+    // after the old category is not the project claiming it.
+    .replace(/<[A-Z][A-Za-z0-9]*\b[^>]*>/g, tag => ` ${componentCaptions(tag)} `)
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/^ {0,3}\[[^\]\n]+\]:[ \t]*\S[^\n]*$/gm, " ")
+    .replace(/\\\n/g, " ")
+    .replace(/\\([-!"#$%&'()*+,./:;<=>?@[\]^_`{|}~])/g, "$1")
+    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, " ")
+    .replace(/(`+)[\s\S]*?\1/g, " ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\[[^\]]*\]/g, "$1")
+    .replace(/[*_]/g, "");
+}
+
+/**
+ * Split where a run of quoted lines begins or ends.
+ *
+ * A quotation and the paragraph beside it are two blocks even with no blank
+ * line between them, and the marker is stripped before the lines are joined, so
+ * without this the two would read as one sentence.
+ */
+function splitOnQuoteBoundary(block) {
+  const blocks = [];
+  let current = [];
+  let quoted = null;
+  for (const line of block.split("\n")) {
+    const isQuoted = /^\s*>/.test(line);
+    if (quoted !== null && isQuoted !== quoted && current.length > 0) {
+      blocks.push(current.join("\n"));
+      current = [];
+    }
+    current.push(line);
+    quoted = isQuoted;
+  }
+  if (current.length > 0) blocks.push(current.join("\n"));
+  return blocks;
+}
+
+/**
+ * The paragraphs a document renders, each on one line.
+ *
+ * These files are hand-wrapped, so a sentence is regularly split across source
+ * lines and a per-line search would miss the phrase whenever a wrap fell inside
+ * it. A blank line ends a paragraph, a list item starts its own and a heading is
+ * one line by definition, so closing up the wraps cannot run two separate
+ * statements together. A quote marker repeats on every line of a quotation, so
+ * it comes off before the lines are joined rather than landing between them.
+ */
+function proseParagraphs(markdown, { mdx }) {
+  return readableProse(markdown, { mdx })
+    .split(/\n\s*\n/)
+    .flatMap(block => block.split(/\n(?=\s*(?:[-*+]|\d+[.)])\s)/))
+    .flatMap(block => block.split(/\n(?=\s*#{1,6}\s)/))
+    .flatMap(block => {
+      const heading = block.match(/^(\s*#{1,6}\s[^\n]*)\n([\s\S]+)$/);
+      return heading ? [heading[1], heading[2]] : [block];
+    })
+    .flatMap(splitOnQuoteBoundary)
+    .map(paragraph =>
+      paragraph
+        .replace(/^[ \t]*>+[ \t]?/gm, "")
+        .replace(/\s+/g, " ")
+        .trim()
+    )
+    .filter(Boolean);
+}
+
+/**
  * Captures everything after `blob|tree|raw`, because the ref is not one segment. A branch may
  * contain slashes (`feature/docs-refresh`), and git accepts it: `git check-ref-format --branch
  * feature/docs-refresh` exits 0. Splitting on the first slash would read the ref as `feature`
@@ -140,7 +385,7 @@ function publishedPackages(repoRoot, findings) {
       continue;
     }
     if (json.private) continue;
-    out.push({ name: json.name, dir: join(pkgDir, name) });
+    out.push({ name: json.name, dir: join(pkgDir, name), json });
   }
   return out;
 }
@@ -421,11 +666,16 @@ export async function runChecks({
   const exemption = check => {
     const forCheck = allowlist[check] ?? {};
     const byPath = new Map();
+    // Both sides in POSIX form. The allowlist is written with "/" and git hands
+    // callers the same, but a caller deriving a path with `relative()` gets a
+    // backslash on Windows, and a key that does not match reads as "not exempt"
+    // rather than as an error.
+    const posix = value => value.split(sep).join("/");
     for (const [path, entry] of Object.entries(forCheck)) {
-      byPath.set(path.split("/").join(sep), new Set(entry.digests ?? []));
+      byPath.set(posix(path), new Set(entry.digests ?? []));
     }
     return (relPath, line) => {
-      const digests = byPath.get(relPath);
+      const digests = byPath.get(posix(relPath));
       return digests ? digests.has(digestLine(line)) : false;
     };
   };
@@ -465,6 +715,70 @@ export async function runChecks({
         message: `${pkg.name} is published but is not named in the root README`,
       });
     }
+  }
+
+  // --- the category these files state ---
+  //
+  // Read through `renderedProse`, the same view the README skeleton check uses,
+  // so a fenced example or a commented-out block is not mistaken for the
+  // project describing itself. No line number: these are whole documents making
+  // a claim, and the file is the useful thing to name, which is how the other
+  // document-level checks here report.
+  //
+  // Four Markdown forms are knowingly not handled, each counted across these
+  // six files and found zero times: a fence inside a quotation, code indented
+  // by four spaces, a code span closing on a shorter backtick run, and a
+  // shortcut reference link resolved against a `[label]:` definition. The first
+  // three would be a false report and the allowlist answers those; the last is
+  // a missed one. Resolving any of them means reading Markdown properly rather
+  // than reading what it renders, which is the depth this check exists without.
+  const categoryExempt = exemption("retired-category");
+  const trackedSet = new Set(tracked);
+  for (const rel of CATEGORY_SURFACES) {
+    if (!trackedSet.has(rel)) continue;
+    let text;
+    try {
+      text = readFileSync(join(repoRoot, rel), "utf-8");
+    } catch {
+      continue;
+    }
+    for (const paragraph of proseParagraphs(text, { mdx: rel.endsWith(".mdx") })) {
+      if (!RETIRED_CATEGORY.test(paragraph) || categoryExempt(rel, paragraph)) continue;
+      findings.push({
+        check: "retired-category",
+        file: rel,
+        line: null,
+        message: `"app framework" — the category is "content platform"; say what this is for`,
+      });
+      break;
+    }
+  }
+
+  // A published description and its keywords are read on npm rather than here,
+  // and say the same thing about the same product, so they are category surfaces
+  // too. A keyword is the searchable one: it is how the category is found rather
+  // than how it is stated.
+  //
+  // Taken from the list `publishedPackages` already parsed. Enumerating the
+  // manifests again here would be a second answer to "which packages ship",
+  // free to disagree with the first.
+  for (const pkg of packages) {
+    const rel = relative(repoRoot, join(pkg.dir, "package.json")).split(sep).join("/");
+    // Each field on its own. Joined, a description ending in "app" and a keyword
+    // "framework" would read as the phrase that neither of them contains.
+    const published = [pkg.json.description, ...(pkg.json.keywords ?? [])].filter(
+      value => typeof value === "string"
+    );
+    const claim = published.find(
+      value => RETIRED_CATEGORY.test(value) && !categoryExempt(rel, value)
+    );
+    if (claim === undefined) continue;
+    findings.push({
+      check: "retired-category",
+      file: rel,
+      line: null,
+      message: `"app framework" — the category is "content platform"; say what this is for`,
+    });
   }
 
   // --- per-line prose checks ---
