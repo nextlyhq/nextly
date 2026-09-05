@@ -236,6 +236,27 @@ describe("the digest describes what a COPY would carry", () => {
     expect(patternDigest(after)).not.toBe(patternDigest(before));
   });
 
+  it("HASHES AN ATTRIBUTE STORED UNDER __proto__, which the copy keeps", () => {
+    // A name that came from persisted JSON can be `__proto__`, and assigning
+    // to it runs the legacy prototype setter rather than creating an own
+    // property. The attribute would then be absent from what is hashed while
+    // the copier carries it, so editing it would produce the same digest and
+    // no upstream-change notice.
+    const attributesWith = (value: string): Record<string, string> =>
+      JSON.parse(`{"__proto__":${JSON.stringify(value)}}`) as Record<
+        string,
+        string
+      >;
+
+    // The control: the key really is an OWN property, not the prototype.
+    expect(Object.hasOwn(attributesWith("a"), "__proto__")).toBe(true);
+
+    const before = [node("p1", { attributes: attributesWith("a") })];
+    const after = [node("p1", { attributes: attributesWith("b") })];
+
+    expect(patternDigest(after)).not.toBe(patternDigest(before));
+  });
+
   it("does NOT collapse whitespace in an ordinary attribute", () => {
     // An attribute that holds no reference is content, and a copy carries its
     // spacing exactly.

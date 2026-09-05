@@ -70,6 +70,7 @@
  * @module pattern-digest
  */
 import type { BlockNode } from "./document";
+import { defineEntry } from "./safe-record";
 import { hashId } from "./style/node-class";
 import { ID_REFERENCE_ATTRIBUTES, idReferenceTokens } from "./tree";
 
@@ -102,11 +103,19 @@ function canonicalAttributes(
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(attributes)) {
-    out[name] =
+    // `defineEntry`, not assignment. These names came from stored JSON, and
+    // assigning to `"__proto__"` runs the legacy prototype setter instead of
+    // creating an own property — so the attribute would vanish from what is
+    // hashed while the copier carries it, and editing it would produce the
+    // same digest and no upstream-change notice.
+    defineEntry(
+      out,
+      name,
       ID_REFERENCE_ATTRIBUTES.includes(name.toLowerCase()) &&
-      typeof value === "string"
+        typeof value === "string"
         ? idReferenceTokens(value).join(" ")
-        : value;
+        : value
+    );
   }
   return out;
 }

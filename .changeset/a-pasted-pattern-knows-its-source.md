@@ -99,3 +99,10 @@ can show. Through the copier's own rule, now published, rather than a second
 split that would agree until one of them moved — and only for the
 reference-valued attributes, since whitespace inside an ordinary one is content
 a copy carries exactly.
+
+An attribute stored under `__proto__` is hashed like any other. Attribute names
+come from persisted JSON, and assigning to that one runs the legacy prototype
+setter instead of creating an own property — so the attribute would have been
+absent from what is hashed while the copier carries it, and editing it would
+have produced the same digest and no upstream-change notice. Written through the
+package's prototype-safe record writer, which exists for exactly this.
