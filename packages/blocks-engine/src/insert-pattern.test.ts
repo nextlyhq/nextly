@@ -268,45 +268,44 @@ describe("what it refuses before the op layer would", () => {
     expect(plan.problem).toBe("restricted-at-root");
   });
 
-  it("REFUSES A LOCKED SUBTREE, which the op layer will not insert", () => {
-    // Not a rule of this planner's own: `applyOp` refuses it because the
-    // inverse of an insert is a remove and a remove refuses a locked subtree,
-    // so the insert could never be undone.
+  it("PLACES A LOCKED BLOCK BY LOCKING IT AFTER IT LANDS", () => {
+    // `applyOp` refuses an insert carrying a locked subtree, because its
+    // inverse is a remove and a remove refuses one — so the insert could never
+    // be undone. Saving a selection with a locked block succeeds, though, so
+    // refusing here would build a library row nothing could ever place.
     const doc = page([node("a")]);
     const saved = pattern([
-      node("p1", {}, { body: [node("deep", { locked: true })] }),
+      node("p1", { locked: true }, { body: [node("deep", { locked: true })] }),
     ]);
 
     const plan = planInsertPattern(doc, saved, { index: 1 }, anyParent);
+    expect(plan.problem).toBeUndefined();
 
-    expect(plan.problem).toBe("locked");
+    const applied = applyOps(doc, (plan.pageOps ?? []) as never);
+    const locks: boolean[] = [];
+    walkNodes(applied.document.nodes, n => {
+      if (n.props?.mark !== undefined || n.id !== "a")
+        locks.push(n.locked === true);
+    });
+    // Both nodes end LOCKED, which is the state the pattern described.
+    expect(locks.filter(Boolean)).toHaveLength(2);
   });
 
-  it("REFUSES REPLACING A PAGE THAT HOLDS A LOCKED BLOCK", () => {
-    // The `"document"` target deletes what is there, and a remove refuses a
-    // locked subtree exactly as an insert does. Found by asking what the ops
-    // this planner emits would do, not by review — the planner reported success
-    // and `applyOps` threw.
-    const doc = page([node("keep", { locked: true }), node("b")]);
+  it("and the group is still undoable, which is why the lock is deferred", () => {
+    // The whole reason the op layer refuses a locked insert. Inverses are
+    // recorded in undo order, so the unlock runs before the remove and the
+    // remove never meets a locked node.
+    const doc = page([node("a")]);
+    const saved = pattern([node("p1", { locked: true })]);
 
-    const plan = planInsertPattern(
-      doc,
-      pattern([node("p1")]),
-      "document",
-      anyParent
-    );
+    const plan = planInsertPattern(doc, saved, { index: 1 }, anyParent);
+    const applied = applyOps(doc, (plan.pageOps ?? []) as never);
 
-    expect(plan.problem).toBe("destination-locked");
-  });
-
-  it("tells the page's locked block apart from the pattern's", () => {
-    // Different blocks, and only one of them is in front of the author here.
-    const lockedPattern = pattern([node("p1", { locked: true })]);
-
-    expect(
-      planInsertPattern(page([node("a")]), lockedPattern, "document", anyParent)
-        .problem
-    ).toBe("locked");
+    expect(() =>
+      applyOps(applied.document, applied.inverses as never)
+    ).not.toThrow();
+    const undone = applyOps(applied.document, applied.inverses as never);
+    expect(undone.document.nodes.map(n => n.id)).toEqual(["a"]);
   });
 
   it("a positional insert does NOT mind a locked block on the page", () => {
@@ -430,6 +429,43 @@ describe("what it refuses before the op layer would", () => {
     expect(plan.problem).toBeUndefined();
   });
 
+  it("REFUSES A DOCUMENT IN A FORMAT THIS VERSION CANNOT EDIT", () => {
+    // `applyOp` refuses to edit such a document before it looks at anything
+    // else, so a plan built against one is a plan that cannot apply.
+    const old = {
+      ...page([node("a")]),
+      formatVersion: 99,
+    } as unknown as BlockDocument;
+
+    expect(
+      planInsertPattern(old, pattern([node("p1")]), { index: 1 }, anyParent)
+        .problem
+    ).toBe("unsupported-format");
+  });
+
+  it("REFUSES A PLACEMENT INSIDE THE PATTERN THAT THE RULES NOW FORBID", () => {
+    // A pattern is stored, so its internal placements were legal when saved and
+    // the rules can have moved since. Checking only the roots would leave such
+    // a pattern insertable and the page unpublishable.
+    const columnsOnly = {
+      parentsOf: (type: string) =>
+        type === "core/column" ? ["core/columns"] : undefined,
+    };
+    const saved = pattern([
+      node(
+        "wrap",
+        { type: "core/box" },
+        {
+          body: [node("c", { type: "core/column" })],
+        }
+      ),
+    ]);
+
+    const plan = planInsertPattern(page([]), saved, "document", columnsOnly);
+
+    expect(plan.problem).toBe("wrong-parent");
+  });
+
   it("refuses a document that is not a pattern", () => {
     const notAPattern: BlockDocument = {
       formatVersion: DOCUMENT_FORMAT_VERSION,
@@ -469,7 +505,7 @@ describe("the refusals are the op layer's, not invented", () => {
     }
   });
 
-  it("the LOCKED refusal is real: applying that insert throws", () => {
+  it("a locked subtree really cannot be INSERTED, which is why it is deferred", () => {
     const doc = page([node("a")]);
     const locked = node("p1", {}, { body: [node("deep", { locked: true })] });
 

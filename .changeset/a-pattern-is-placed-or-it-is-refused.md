@@ -107,3 +107,25 @@ sharing an id map to ONE replacement deliberately, because the pair addressed
 one target before and still addresses one after. What that preserves is the
 duplicate, and the copy carries it into a page where an anchor resolves to
 whichever element the browser reaches first and a label names the wrong control.
+
+A saved pattern that contains a locked block can be inserted. The op layer
+refuses an insert carrying a locked subtree, because its inverse is a remove and
+a remove refuses one, so the insert could never be undone — and taken literally
+that made a supported flow impossible: saving a selection with a locked block
+succeeds, the stored pattern keeps the lock, and the pattern was then insertable
+nowhere. A library row nothing can place is worse than refusing the save or
+dropping the lock without saying so. The nodes now arrive unlocked and an update
+locks them where they landed, so the group ends in the state the pattern
+described and stays undoable: inverses are recorded in undo order, so the unlock
+runs before the remove and the remove never meets a locked node.
+
+Both stored documents are checked before either is copied. A pattern is
+persisted, so it can hold a value JSON cannot carry — a function reaching props
+from an in-process caller — and cloning it threw a native error rather than the
+refusal this layer promises. It can also be written in a format this version
+cannot edit, which the apply refuses before it looks at anything else.
+
+Nesting is checked throughout the copied forest rather than only at its roots. A
+pattern's internal placements were legal when it was saved and the rules can
+have moved since, so a pattern saved before a block gained a parent restriction
+would insert and leave the page unpublishable.

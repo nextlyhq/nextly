@@ -2370,7 +2370,11 @@ function assertNodeId(id: string, verb: string): void {
  * direction nobody can debug. The same constant the remove path uses, for the
  * same reason: it asks whether this is a node, not whether it fits.
  *
- * A caller that wants a cap judged too passes its own limits.
+ * A caller may pass its own limits to have the node-count and depth caps judged
+ * as well. The BYTE cap is not among them and cannot be: `assertFitsCaps`
+ * measures the document the node is going into, and this is handed a subtree
+ * with no destination. A caller that needs the byte cap judged has to ask the
+ * apply, which is where the destination is.
  */
 export function nodeShapeRefusal(
   node: BlockNode,

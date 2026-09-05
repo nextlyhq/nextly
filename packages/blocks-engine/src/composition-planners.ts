@@ -23,7 +23,11 @@
  *
  * @module composition-planners
  */
-import type { BlockDocument, BlockNode } from "./document";
+import {
+  DOCUMENT_FORMAT_VERSION,
+  type BlockDocument,
+  type BlockNode,
+} from "./document";
 import {
   canBeRoot,
   canNest,
@@ -97,8 +101,6 @@ export type PlanProblem =
   | "not-a-pattern"
   /** The destination id is held by more than one node. */
   | "duplicate-destination"
-  /** The pattern holds a locked node, which the op layer will not insert. */
-  | "locked"
   /**
    * Replacing the document would delete a locked block already on the page.
    *
@@ -114,7 +116,9 @@ export type PlanProblem =
   /** The stored pattern holds a node the op layer will not carry. */
   | "invalid-node"
   /** The stored pattern spells one rendered id on two of its own nodes. */
-  | "duplicate-dom-id";
+  | "duplicate-dom-id"
+  /** One of the documents is written in a format this version cannot edit. */
+  | "unsupported-format";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -327,8 +331,8 @@ export function planInsertPattern(
   target: InsertTarget,
   nesting: NestingSource
 ): PlanResult<never> {
-  if (pattern.kind !== "pattern") return { problem: "not-a-pattern" };
-  if (pattern.nodes.length === 0) return { problem: "empty" };
+  const stored = storedRefusal(document, pattern);
+  if (stored !== undefined) return stored;
 
   const destination = destinationOf(document, target);
   if (destination.problem !== undefined) return destination;
@@ -337,28 +341,75 @@ export function planInsertPattern(
   if (copy.problem !== undefined) return copy;
 
   const refusal =
-    // The op layer's own shape rule, asked before the plan exists. A STORED
-    // pattern can hold a node that type-checks and is still structurally
-    // invalid — `version: 0` — and the insert would throw on it.
-    shapeRefusal(copy.nodes) ??
-    duplicateDomIdRefusal(copy.nodes) ??
     placementRefusal(copy.nodes, destination.place.where, nesting) ??
-    lockRefusal(copy.nodes, "locked") ??
-    // The `"document"` target REMOVES what is there, and a remove refuses a
-    // locked subtree for the same reason an insert refuses one — so replacing a
-    // page that holds a locked block throws at apply time unless it is caught
-    // here. Only that target deletes anything; a positional insert adds.
+    internalNestingRefusal(copy.nodes, nesting) ??
+    // The `"document"` target REMOVES what is there, and a remove refuses both
+    // a locked subtree and a malformed node for the same reasons an insert
+    // does. Only that target deletes anything; a positional insert adds.
     (target === "document"
-      ? (lockRefusal(document.nodes, "destination-locked") ??
-        // A remove asks the same shape question an insert does, so replacing a
-        // page holding a malformed node throws unless it is caught here.
-        shapeRefusal(document.nodes))
+      ? (lockRefusal(document.nodes) ?? shapeRefusal(document.nodes))
       : undefined);
   if (refusal !== undefined) return refusal;
 
   return {
     pageOps: insertOps(copy.nodes, destination.place, document, target),
   };
+}
+
+/**
+ * What must be true of the two STORED documents, asked before anything is
+ * copied out of either.
+ *
+ * Before, and not after, because copying is itself a step that can fail on a
+ * stored document: `structuredClone` throws on a value JSON cannot carry — a
+ * function reaching `props` from an in-process caller — and it throws a native
+ * `DOMException` rather than the refusal this module promises. The shape rule
+ * catches that same node, so asking it first turns a crash into a cause.
+ */
+function storedRefusal(
+  document: BlockDocument,
+  pattern: BlockDocument
+): PlanRefusal | undefined {
+  if (pattern.kind !== "pattern") return { problem: "not-a-pattern" };
+  if (pattern.nodes.length === 0) return { problem: "empty" };
+  // Both envelopes, because the ops are built from one and applied to the
+  // other, and `applyOp` refuses to edit a document written in a format this
+  // version does not know before it looks at anything else.
+  if (
+    document.formatVersion !== DOCUMENT_FORMAT_VERSION ||
+    pattern.formatVersion !== DOCUMENT_FORMAT_VERSION
+  ) {
+    return { problem: "unsupported-format" };
+  }
+  return shapeRefusal(pattern.nodes) ?? duplicateDomIdRefusal(pattern.nodes);
+}
+
+/**
+ * The first placement INSIDE the copied forest that the current rules refuse.
+ *
+ * A pattern is stored, so its internal placements were legal when it was saved
+ * and the rules can have moved since — a block that gained a `parent`
+ * restriction, or a slot that narrowed what it admits. Checking only the roots
+ * against the destination leaves such a pattern insertable and the page
+ * unpublishable, because strict validation asks about every edge.
+ */
+function internalNestingRefusal(
+  roots: readonly BlockNode[],
+  nesting: NestingSource
+): PlanRefusal | undefined {
+  let refusal: PlanRefusal | undefined;
+  walkNodes([...roots], node => {
+    if (refusal !== undefined) return;
+    for (const [slot, children] of Object.entries(node.slots ?? {})) {
+      if (!Array.isArray(children)) continue;
+      refusal ??= placementRefusal(
+        children,
+        { kind: "slot", parentType: node.type, slot },
+        nesting
+      );
+    }
+  });
+  return refusal;
 }
 
 /** Where the run will sit, once the destination has been checked. */
@@ -498,13 +549,19 @@ function domIdsOf(node: BlockNode): string[] {
   return ids;
 }
 
-/** A locked node anywhere in a forest, phrased as the caller's own refusal. */
-function lockRefusal(
-  roots: readonly BlockNode[],
-  problem: "locked" | "destination-locked"
-): PlanRefusal | undefined {
+/**
+ * A locked node the replacing target would DELETE, phrased as a refusal.
+ *
+ * Only the destination side asks this now. A lock on the incoming pattern is
+ * carried across the insert as an update rather than refused — see
+ * {@link insertOps} — but a lock on the page is content an author protected,
+ * and a remove refuses it for a reason no re-ordering of the group can satisfy.
+ */
+function lockRefusal(roots: readonly BlockNode[]): PlanRefusal | undefined {
   for (const root of roots) {
-    if (lockedWithin(root) !== undefined) return { problem };
+    if (lockedWithin(root) !== undefined) {
+      return { problem: "destination-locked" };
+    }
   }
   return undefined;
 }
@@ -597,6 +654,22 @@ function domIdsIn(nodes: BlockNode[]): Set<string> {
  * ids do not move, so the order among the removes does not matter — but they
  * must all precede the inserts, or the pattern's roots would be counted among
  * the roots being cleared away.
+ *
+ * ## A locked block arrives unlocked and is locked once it has landed
+ *
+ * `applyOp` refuses an insert whose subtree arrives locked, because the inverse
+ * of an insert is a remove and a remove refuses a locked subtree — so such an
+ * insert could never be undone. That rule is right, and taken literally it made
+ * a whole supported flow impossible: saving a selection containing a locked
+ * block succeeds, the stored pattern keeps the lock, and the pattern was then
+ * insertable nowhere. A library row nothing can place is worse than either
+ * refusing the save or dropping the lock without saying so.
+ *
+ * So the lock is neither carried on the insert nor discarded: the nodes arrive
+ * unlocked and an update locks them where they landed. The group ends in the
+ * state the pattern described, and it stays undoable because inverses are
+ * recorded in undo order — the unlock runs before the remove, so the remove
+ * never meets a locked node.
  */
 function insertOps(
   roots: readonly BlockNode[],
@@ -608,8 +681,9 @@ function insertOps(
     target === "document"
       ? document.nodes.map(node => ({ kind: "remove", id: node.id }))
       : [];
+  const { nodes, lockedIds } = withoutLocks(roots);
   const start = place.at === null ? 0 : place.at.index;
-  roots.forEach((node, offset) => {
+  nodes.forEach((node, offset) => {
     const at: OpPosition =
       place.at === null || place.at.parentId === undefined
         ? { index: start + offset }
@@ -620,5 +694,56 @@ function insertOps(
           };
     ops.push({ kind: "insert", node, at });
   });
+  for (const id of lockedIds) {
+    ops.push({ kind: "update", id, patch: { locked: true } });
+  }
   return ops;
+}
+
+/** A forest with every lock removed, and the ids that carried one. */
+interface UnlockedForest {
+  readonly nodes: BlockNode[];
+  readonly lockedIds: readonly string[];
+}
+
+/**
+ * Take the locks off, remembering where they were.
+ *
+ * A rebuild rather than a mutation: these nodes are a copy the planner was
+ * handed, and editing them in place would change what the dry run was asked
+ * about. Only `locked` moves — a `slots` value that is not an array is carried
+ * across as it stands, because malformed content is the shape rule's business
+ * and not this function's.
+ */
+function withoutLocks(roots: readonly BlockNode[]): UnlockedForest {
+  const lockedIds: string[] = [];
+
+  const strip = (node: BlockNode): BlockNode => {
+    const slots = node.slots === undefined ? undefined : stripSlots(node.slots);
+    if (node.locked === true) lockedIds.push(node.id);
+    if (node.locked !== true && slots === node.slots) return node;
+    const { locked: _locked, ...rest } = node;
+    return slots === undefined ? rest : { ...rest, slots };
+  };
+
+  const stripSlots = (
+    slots: Record<string, BlockNode[]>
+  ): Record<string, BlockNode[]> => {
+    let changed = false;
+    const next: Record<string, BlockNode[]> = {};
+    for (const [name, children] of Object.entries(slots)) {
+      if (!Array.isArray(children)) {
+        next[name] = children;
+        continue;
+      }
+      const mapped = children.map(strip);
+      if (mapped.some((child, index) => child !== children[index])) {
+        changed = true;
+      }
+      next[name] = mapped;
+    }
+    return changed ? next : slots;
+  };
+
+  return { nodes: roots.map(strip), lockedIds };
 }
