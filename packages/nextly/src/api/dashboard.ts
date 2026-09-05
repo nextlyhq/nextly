@@ -201,10 +201,14 @@ export const getDashboardRecentEntries = withErrorHandler(
  * Query params:
  *   - limit: number (default: 5, max: 50)
  *
- * Body shape: `{ activities, total, hasMore }`. The activity feed is
- * cursor-style (`hasMore` flag, no page/limit/totalPages metadata
- * surfaced to clients), so this uses `respondData` rather than
- * `respondList`.
+ * Body shape: `{ activities, hasMore }`. The activity feed is cursor-style
+ * (`hasMore` flag, no page/limit/totalPages metadata surfaced to clients), so
+ * this uses `respondData` rather than `respondList`.
+ *
+ * No `total`, deliberately: it counted the rows the collection scope admitted,
+ * so it reported edits to documents the reader may not open, and narrowing it
+ * would mean authorizing every matching row — unbounded over a table that only
+ * grows. `ActivityLogResult` carries the same note beside the field's absence.
  */
 export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
