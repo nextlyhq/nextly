@@ -144,10 +144,22 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     archetype: "list",
     defaultSize: "md",
     defaultOrder: 35,
+    /*
+     * Two fields, for the reason spelled out on `core/upcoming-releases`: the
+     * `list` archetype draws the first two and silently drops the rest. This
+     * card selected three, so it showed a collection beside an opaque document
+     * id and never the timestamp -- on a card whose own description promises
+     * "most recently ... newest first".
+     *
+     * `entryId` is the one dropped rather than `updatedAt`, because it is a
+     * UUID: `asText` prints it verbatim, so the row read as a collection name
+     * followed by 36 characters no reader can act on, while WHEN, the thing the
+     * card is sorted by, was the field being discarded.
+     */
     query: {
       source: VERSIONS_SOURCE_ID,
       op: "list",
-      select: ["scopeSlug", "entryId", "updatedAt"],
+      select: ["scopeSlug", "updatedAt"],
       limit: 5,
     },
   },
@@ -171,18 +183,43 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
      * lacks before the query is ever batched, and keeps it in the stored ROW so
      * a reader whose grant is later widened gets it back where it was.
      *
-     * The slug is `${action}-${resource}` and `parsePermissionSlug` splits on
-     * the FIRST hyphen, so this parses to `read` / `content-releases` --
-     * matching `RELEASES_RESOURCE` and the authority `api/releases.ts` requires
-     * of a human. Written out rather than composed from the constant because
-     * importing it would pull the releases service's wiring into this list, the
-     * same coupling `system-source-ids.ts` exists to avoid.
+     * 🔴 THREE slugs, any of which opens it, because `authorize` does not treat
+     * read as the only way to read: it returns early when the caller holds
+     * `create` or `publish`, deliberately, so a role granted only `create` can
+     * see the release it just made. The admin's `canViewReleases` capability
+     * lists the same three. Gating on the read slug alone made this card a
+     * third encoding of one rule and the only one that disagreed -- a
+     * create-only editor could open the releases screen and never see its card.
+     *
+     * Each slug is `${action}-${resource}` and `parsePermissionSlug` splits on
+     * the FIRST hyphen, so these parse to read/create/publish over
+     * `content-releases` -- matching `RELEASES_RESOURCE` and the authorities
+     * `api/releases.ts` requires of a human. Written out rather than composed
+     * from the constants because importing them would pull the releases
+     * service's wiring into this list, the same coupling `system-source-ids.ts`
+     * exists to avoid; a test parses them back and compares.
      */
-    requiredPermission: "read-content-releases",
+    requiredPermission: [
+      "read-content-releases",
+      "create-content-releases",
+      "publish-content-releases",
+    ],
+    /*
+     * 🔴 TWO fields, and `state` is deliberately not one of them. The `list`
+     * archetype destructures `const [labelField, detailField] = select` and
+     * draws nothing past the second, so a third entry is not extra detail --
+     * it is silently dropped. Selecting title, state, scheduledAt therefore
+     * rendered each release beside the word "scheduled" and never showed WHEN,
+     * on a card whose entire subject is when.
+     *
+     * `state` would carry no information even if it were drawn: `resolveReleases`
+     * queries `state: "scheduled"` unconditionally, so every row this source can
+     * return already has it. The invariant field is the one to drop.
+     */
     query: {
       source: RELEASES_SOURCE_ID,
       op: "list",
-      select: ["title", "state", "scheduledAt"],
+      select: ["title", "scheduledAt"],
       limit: 5,
     },
   },

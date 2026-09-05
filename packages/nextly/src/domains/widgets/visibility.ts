@@ -18,6 +18,13 @@ import {
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
 
+import { requiredPermissionSlugs } from "./definition";
+
+// Re-exported from its own module rather than moved-and-forgotten: this is
+// where every caller already reaches for the gate, and the decision now lives
+// beside the reader it is built from.
+export { holdsWidgetPermission, requiredPermissionSlugs } from "./definition";
+
 /**
  * A decision per permission slug, taken in the bounded rounds the query batch
  * already prescribes.
@@ -27,15 +34,16 @@ import {
  * per-user TTL cache, so asking twice is two database reads for one answer.
  */
 export async function permissionVerdicts(
-  slugs: readonly (string | undefined)[],
+  gates: readonly unknown[],
   caller: ReadAccessCaller
 ): Promise<Map<string, boolean>> {
+  // Read through the SAME function the gate below reads with, so the set
+  // resolved here and the set asked about there cannot come apart. A gate may
+  // now name several slugs, so this flattens rather than filters -- collecting
+  // only the first of an any-of array would leave the others unresolved, and an
+  // unresolved slug is a missing verdict, which denies.
   const distinct = [
-    ...new Set(
-      slugs.filter(
-        (slug): slug is string => typeof slug === "string" && slug !== ""
-      )
-    ),
+    ...new Set(gates.flatMap(gate => requiredPermissionSlugs(gate) ?? [])),
   ];
 
   const verdicts = new Map<string, boolean>();
@@ -52,24 +60,4 @@ export async function permissionVerdicts(
     });
   }
   return verdicts;
-}
-
-/**
- * Whether a reader holding `verdicts` may know this widget exists.
- *
- * A widget with no `requiredPermission` is visible to any authenticated reader
- * -- that is what omitting it means, and what core's own cards rely on. A
- * declared permission that is not a usable string is refused rather than read
- * as absent: the gap used to fail OPEN, so a widget whose author wrote an
- * object there was gated for nobody.
- */
-export function holdsWidgetPermission(
-  requiredPermission: unknown,
-  verdicts: ReadonlyMap<string, boolean>
-): boolean {
-  if (requiredPermission === undefined) return true;
-  if (typeof requiredPermission !== "string" || requiredPermission === "") {
-    return false;
-  }
-  return verdicts.get(requiredPermission) === true;
 }

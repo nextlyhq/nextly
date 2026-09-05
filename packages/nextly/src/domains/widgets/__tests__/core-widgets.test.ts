@@ -13,7 +13,10 @@ import { describe, expect, it } from "vitest";
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
 import { CORE_WIDGETS } from "../core-widgets";
-import { validateWidgetDefinition } from "../definition";
+import {
+  requiredPermissionSlugs,
+  validateWidgetDefinition,
+} from "../definition";
 
 function card(id: string) {
   const found = CORE_WIDGETS.find(widget => widget.id === id);
@@ -54,13 +57,39 @@ describe("core widget definitions", () => {
    * a card gated on a resource that no longer exists.
    */
   it("gates upcoming releases on the resource the releases service enforces", () => {
-    const { requiredPermission } = card("core/upcoming-releases");
+    const slugs = requiredPermissionSlugs(
+      card("core/upcoming-releases").requiredPermission
+    );
 
-    expect(requiredPermission).toBeDefined();
-    expect(parsePermissionSlug(requiredPermission as string)).toEqual({
-      action: "read",
-      resource: RELEASES_RESOURCE,
-    });
+    // Read through the gate's own reader, so a declaration this test approves
+    // is one the gate can actually use.
+    expect(slugs).toBeDefined();
+    expect((slugs ?? []).map(parsePermissionSlug)).toEqual([
+      { action: "read", resource: RELEASES_RESOURCE },
+      { action: "create", resource: RELEASES_RESOURCE },
+      { action: "publish", resource: RELEASES_RESOURCE },
+    ]);
+  });
+
+  /*
+   * 🔴 The authorities, held against the RULE rather than against a list.
+   * `ReleasesService.authorize` returns early for `create` or `publish` when the
+   * authority asked for is `read`, so those two are what the card must also
+   * admit. Asserted by exercising that implication -- a card gated on read alone
+   * would satisfy the test above and still hide from a create-only editor, which
+   * is precisely the defect this replaced.
+   */
+  it("admits every authority the service treats as satisfying read", () => {
+    const slugs = new Set(
+      requiredPermissionSlugs(card("core/upcoming-releases").requiredPermission)
+    );
+
+    for (const action of ["read", "create", "publish"]) {
+      expect(
+        slugs.has(`${action}-${RELEASES_RESOURCE}`),
+        `a role holding only ${action}-${RELEASES_RESOURCE} can read releases, so the card must admit it`
+      ).toBe(true);
+    }
   });
 
   /*

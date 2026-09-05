@@ -177,6 +177,69 @@ export interface WidgetAction {
   external?: boolean;
 }
 
+/**
+ * The permission slugs a card's gate names, or `undefined` when the declaration
+ * cannot be used as a gate at all.
+ *
+ * 🔴 ONE reader, because three questions are asked of this field and a
+ * disagreement between any two of them hides a card silently: validation
+ * refuses an unusable declaration, `permissionVerdicts` decides which slugs to
+ * resolve, and `holdsWidgetPermission` decides whether the reader holds one. A
+ * collector that skipped a slug the decider then asked for would resolve to a
+ * missing verdict, which is `undefined`, which is not `true` -- so the card
+ * would vanish for everyone, with nothing logged and nothing thrown.
+ *
+ * The `undefined` return is NOT "no gate" -- that is the field being absent,
+ * which callers check before asking. It means the value is there and unusable,
+ * and every caller reads it as a REFUSAL. That direction is deliberate and is
+ * the one this validation already had to be corrected into once: reading a
+ * malformed gate as "no permission declared" failed OPEN, returning the card to
+ * every authenticated caller. An empty array is unusable for exactly the same
+ * reason -- "any of nothing" is satisfied by nobody, and treating it as an
+ * absent gate would let `requiredPermission: []` mean the opposite of what it
+ * plainly says.
+ */
+export function requiredPermissionSlugs(
+  value: unknown
+): readonly string[] | undefined {
+  const usable = (slug: unknown): slug is string =>
+    typeof slug === "string" && slug !== "";
+
+  if (usable(value)) return [value];
+  // Every member must be usable, rather than filtering the junk out: an array
+  // whose second entry is a number is a mistake its author can still see, and
+  // silently gating on the first entry alone answers a narrower question than
+  // they wrote.
+  if (Array.isArray(value) && value.length > 0 && value.every(usable)) {
+    return [...(value as readonly string[])];
+  }
+  return undefined;
+}
+
+/**
+ * Whether a reader holding `verdicts` may know this widget exists.
+ *
+ * A widget with no `requiredPermission` is visible to any authenticated reader
+ * -- that is what omitting it means, and what core's own cards rely on. A
+ * declared permission that is not a usable string is refused rather than read
+ * as absent: the gap used to fail OPEN, so a widget whose author wrote an
+ * object there was gated for nobody.
+ */
+export function holdsWidgetPermission(
+  requiredPermission: unknown,
+  verdicts: ReadonlyMap<string, boolean>
+): boolean {
+  if (requiredPermission === undefined) return true;
+  const slugs = requiredPermissionSlugs(requiredPermission);
+  // Present and unusable. Refused rather than read as absent, which is the
+  // direction this check was corrected into once already.
+  if (slugs === undefined) return false;
+  // ANY-OF. `verdicts.get` is `undefined` for a slug nobody resolved, and
+  // `undefined !== true`, so an unresolved member denies on its own terms
+  // rather than being mistaken for a held grant.
+  return slugs.some(slug => verdicts.get(slug) === true);
+}
+
 export interface WidgetDefinition {
   /** `namespace/name`, e.g. "core/recent-entries". */
   id: string;
@@ -223,8 +286,26 @@ export interface WidgetDefinition {
    *
    * A `PermissionSlug` spelling (`read-posts`), the same vocabulary
    * `WidgetSource.requiredPermission` and `PluginAdminWidget` carry.
+   *
+   * 🔴 An ARRAY means ANY-OF, and it exists because a single slug cannot
+   * describe the rule the services behind these cards actually apply. Release
+   * authority is the worked example: `ReleasesService.authorize` treats `create`
+   * or `publish` as satisfying `read` -- deliberately, so a role granted only
+   * `create` can see the release it just made -- and the admin's
+   * `canViewReleases` capability lists all three. A card gated on the read slug
+   * alone is a THIRD encoding of that rule and the only one that disagrees, so
+   * the reader can open the releases screen and never see its dashboard card.
+   *
+   * Any-of rather than all-of because that is the shape every consumer of this
+   * vocabulary already has -- `requireAnyPermission` at the route layer, the
+   * capability lists in the admin. A card needing all of several grants has no
+   * consumer yet, and inventing the second form before something needs it is
+   * how a declaration ends up with two meanings nobody can keep straight.
+   *
+   * `WidgetAction.requiredPermission` stays a single slug. It gates one
+   * shortcut rather than a card, and nothing has asked it for more.
    */
-  requiredPermission?: string;
+  requiredPermission?: string | readonly string[];
   /** Required for every data archetype; forbidden for `text` and `actions`. */
   query?: WidgetQuery;
   /** Required for `custom`; forbidden otherwise. */
@@ -394,11 +475,17 @@ export function widgetValueProblem(
   // author wrote `requiredPermission: { read: true }` was gated for nobody and
   // returned to every authenticated caller. Refusing the declaration is the
   // only place the mistake is still visible to the person who made it.
+  //
+  // Asked through the same reader the GATE uses, rather than by restating the
+  // shape here. Widening this to accept an any-of array added a second way for
+  // a declaration to be unusable -- an empty array, or one member that is not a
+  // slug -- and a validator that admitted a form the gate then refuses would
+  // hide a card with no error anywhere.
   if (
     widget.requiredPermission !== undefined &&
-    typeof widget.requiredPermission !== "string"
+    requiredPermissionSlugs(widget.requiredPermission) === undefined
   ) {
-    return "requiredPermission, when given, must be a string";
+    return "requiredPermission, when given, must be a permission slug or a non-empty array of them";
   }
 
   // A query is an OBJECT in every version, so it belongs here rather than

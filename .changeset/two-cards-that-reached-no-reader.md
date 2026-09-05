@@ -53,3 +53,17 @@ bound to a component in `@nextlyhq/admin`. The two packages do not depend on
 each other, so nothing could notice one naming something the other never
 registered — a card would quietly draw the unresolved placeholder. A test now
 holds the two lists against each other.
+
+A widget's `requiredPermission` now also accepts an ARRAY, meaning any-of. A
+single slug could not describe the rule the services behind these cards apply:
+`ReleasesService.authorize` treats `create` or `publish` as satisfying `read`,
+deliberately, so a role granted only `create` can see the release it just made,
+and the admin's `canViewReleases` capability lists all three. A card gated on
+the read slug alone was a third encoding of that rule and the only one that
+disagreed. Existing single-slug declarations are unchanged.
+
+Two shipped list cards selected more fields than the `list` archetype draws. It
+renders the first two and silently ignores the rest, so `core/recently-edited`
+showed a collection beside an opaque document id and never the timestamp, on a
+card whose description promises "newest first". Both now select two, and the
+renderer declares how many it draws so a test can hold declarations to it.

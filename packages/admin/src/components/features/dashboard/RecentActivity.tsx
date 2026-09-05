@@ -39,6 +39,7 @@ import type React from "react";
 
 import { AlertCircle } from "@admin/components/icons";
 import { useRecentActivity } from "@admin/hooks/queries/useRecentActivity";
+import { formatRelativeTime } from "@admin/lib/dashboard";
 import { cn } from "@admin/lib/utils";
 import type { Activity } from "@admin/types/dashboard/activity";
 
@@ -117,7 +118,17 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
 
         <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-muted-foreground">
           <Clock className="w-3 h-3 opacity-60" />
-          <time dateTime={activity.timestamp}>{activity.relativeTime}</time>
+          {/*
+            Derived HERE rather than carried on the entry. A relative time is a
+            function of when it is read, and computing it while mapping the
+            response froze it: an entry fetched as "just now" kept that label
+            for as long as the query's data was reused. `dateTime` carries the
+            absolute instant, so the machine-readable value is exact whatever
+            the prose says.
+          */}
+          <time dateTime={activity.timestamp}>
+            {formatRelativeTime(activity.timestamp)}
+          </time>
         </div>
       </div>
 

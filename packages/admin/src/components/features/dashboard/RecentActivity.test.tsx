@@ -16,6 +16,20 @@ vi.mock("@admin/hooks/queries/useRecentActivity", () => ({
 
 const mockUseRecentActivity = vi.mocked(useRecentActivity);
 
+/**
+ * The instant the tests pretend it is when the card is first read.
+ *
+ * The fixtures are anchored to it rather than carrying fixed dates, because the
+ * label under test is a function of NOW: hard-coded timestamps drift further
+ * into the past every day the suite runs, so an assertion on "2h ago" would
+ * pass today and fail forever after.
+ */
+const READ_AT = new Date("2026-03-01T12:00:00Z");
+
+function hoursBefore(instant: Date, hours: number): string {
+  return new Date(instant.getTime() - hours * 60 * 60 * 1000).toISOString();
+}
+
 const mockActivities: Activity[] = [
   {
     id: "1",
@@ -33,8 +47,7 @@ const mockActivities: Activity[] = [
     action: "created",
     target: "new user account",
     category: "success",
-    timestamp: "2025-01-10T10:00:00Z",
-    relativeTime: "2 hours ago",
+    timestamp: hoursBefore(READ_AT, 2),
   },
   {
     id: "2",
@@ -51,8 +64,7 @@ const mockActivities: Activity[] = [
     action: "updated",
     target: "role permissions",
     category: "info",
-    timestamp: "2025-01-10T09:30:00Z",
-    relativeTime: "3 hours ago",
+    timestamp: hoursBefore(READ_AT, 3),
   },
 ];
 
@@ -165,7 +177,18 @@ describe("RecentActivity", () => {
     expect(mockUseRecentActivity).toHaveBeenCalledWith(5);
   });
 
-  it("displays relative timestamps", async () => {
+  /*
+   * 🔴 The label is a function of WHEN IT IS READ, and the second render is what
+   * proves it. The label used to be computed while mapping the response and
+   * carried on the entry, so it was correct exactly once and then frozen: an
+   * item fetched as "just now" kept that wording for as long as the query's data
+   * was reused, which on a dashboard left open is indefinitely.
+   *
+   * A single render cannot separate the two implementations -- both print "2h
+   * ago" at the moment of the fetch. Only advancing the clock WITHOUT refetching
+   * does, which is the exact condition the defect needed.
+   */
+  it("derives each timestamp's label from the time it is read", async () => {
     mockUseRecentActivity.mockReturnValue({
       data: { activities: mockActivities },
       isLoading: false,
@@ -175,12 +198,29 @@ describe("RecentActivity", () => {
       status: "success",
     } as ReturnType<typeof useRecentActivity>);
 
-    render(<RecentActivity />);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.setSystemTime(READ_AT);
+      const { rerender } = render(<RecentActivity />);
 
-    await waitFor(() => {
-      expect(screen.getByText("2 hours ago")).toBeInTheDocument();
-      expect(screen.getByText("3 hours ago")).toBeInTheDocument();
-    });
+      await waitFor(() => {
+        expect(screen.getByText("2h ago")).toBeInTheDocument();
+        expect(screen.getByText("3h ago")).toBeInTheDocument();
+      });
+
+      // The SAME data, three hours later. Nothing refetches; the mock returns
+      // the identical array, so any change can only come from the render.
+      vi.setSystemTime(new Date(READ_AT.getTime() + 3 * 60 * 60 * 1000));
+      rerender(<RecentActivity />);
+
+      await waitFor(() => {
+        expect(screen.getByText("5h ago")).toBeInTheDocument();
+        expect(screen.getByText("6h ago")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("2h ago")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("displays activity badges with correct variants", async () => {
