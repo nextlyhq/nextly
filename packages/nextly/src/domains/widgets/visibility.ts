@@ -18,12 +18,12 @@ import {
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
 
-import { requiredPermissionSlugs } from "./definition";
+import { requiredPermissionSlugs } from "./gate";
 
 // Re-exported from its own module rather than moved-and-forgotten: this is
 // where every caller already reaches for the gate, and the decision now lives
 // beside the reader it is built from.
-export { holdsWidgetPermission, requiredPermissionSlugs } from "./definition";
+export { holdsWidgetPermission, requiredPermissionSlugs } from "./gate";
 
 /**
  * A decision per permission slug, taken in the bounded rounds the query batch

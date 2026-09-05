@@ -145,21 +145,27 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     defaultSize: "md",
     defaultOrder: 35,
     /*
-     * Two fields, for the reason spelled out on `core/upcoming-releases`: the
-     * `list` archetype draws the first two and silently drops the rest. This
-     * card selected three, so it showed a collection beside an opaque document
-     * id and never the timestamp -- on a card whose own description promises
+     * Two fields, because the `list` archetype draws the first two and silently
+     * drops the rest -- see `core/upcoming-releases`. This card selected three,
+     * so `updatedAt` was never drawn on a card whose own description promises
      * "most recently ... newest first".
      *
-     * `entryId` is the one dropped rather than `updatedAt`, because it is a
-     * UUID: `asText` prints it verbatim, so the row read as a collection name
-     * followed by 36 characters no reader can act on, while WHEN, the thing the
-     * card is sorted by, was the field being discarded.
+     * 🔴 `entryId` is KEPT and `scopeSlug` is the one dropped, and the first
+     * attempt at this had it the other way round. Dropping the id looked right
+     * -- it is a uuid, and the collection name reads better -- but two pending
+     * edits in the same collection then render as the same two values, so a
+     * card describing a list of DOCUMENTS could not tell one from another. A
+     * row that cannot name its subject is worse than one naming it awkwardly.
+     *
+     * The uuid is still the wrong thing to show a person, and the fix for that
+     * is not here: `system:versions` publishes no document title, so there is
+     * nothing better to select. Tracked separately -- the source needs a title
+     * field before this card can read the way it should.
      */
     query: {
       source: VERSIONS_SOURCE_ID,
       op: "list",
-      select: ["scopeSlug", "updatedAt"],
+      select: ["entryId", "updatedAt"],
       limit: 5,
     },
   },

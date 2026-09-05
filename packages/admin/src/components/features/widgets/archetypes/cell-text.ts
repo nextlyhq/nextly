@@ -47,3 +47,50 @@ export function selectsNothing(
   const name = title ?? `This ${archetype} widget`;
   return `"${name}" is a ${archetype} widget whose query selects no fields, so there is nothing to show in each ${unit}.`;
 }
+
+/**
+ * One cell as text, PRESENTED according to the kind the source declared it.
+ *
+ * 🔴 The layer `asText` deliberately is not. `asText` answers "can this value be
+ * printed at all", which is a question about the value; this answers "how should
+ * a reader see it", which is a question about the value AND its declared type.
+ * Keeping them apart is what lets a source with no declaration still render.
+ *
+ * A `date` is the case that forced this. Every source declares its date fields
+ * as such, the value crosses the wire as an ISO 8601 string, and printing it
+ * verbatim put `2026-09-01T07:00:00.000Z` in front of a reader on a card whose
+ * whole subject is when something happens. Selecting a different field is not a
+ * remedy — it just moves which column is unreadable.
+ *
+ * Formatted in the VIEWER's locale and zone via `toLocaleString`, which is the
+ * only zone the browser can speak for. That is a real limitation worth naming
+ * rather than hiding: a release scheduled against a specific timezone is stored
+ * with one, and this cell cannot show it, because the widget query contract
+ * carries a value and its type rather than a value and its zone. A card that
+ * must be authoritative about the authored zone needs its source to publish a
+ * preformatted string; a dashboard summary reading "1 Sept, 08:00" in the
+ * reader's own zone is the right answer for this surface and the wrong one for
+ * a scheduling screen.
+ *
+ * An UNPARSEABLE date falls back to the raw text rather than dropping the cell.
+ * The value is still evidence — a reader can see something is wrong with it —
+ * and an em dash would report a working row as missing data.
+ */
+export function asPresentedText(
+  value: unknown,
+  type: string | undefined
+): string | undefined {
+  const text = asText(value);
+  if (text === undefined) return undefined;
+  if (type !== "date") return text;
+
+  const at = new Date(text);
+  if (Number.isNaN(at.getTime())) return text;
+  return at.toLocaleString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}

@@ -11,7 +11,18 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 
+import { requiredPermissionSlugs } from "./gate";
 import type { WidgetQuery } from "./query";
+
+// The gate rule lives in a module with no imports so the BROWSER can read it
+// too (`nextly/widget-gate`). Validation asks the same reader the gate asks,
+// so a declaration this file admits is one the gate can actually use.
+
+export {
+  holdsWidgetPermission,
+  requiredPermissionSlugs,
+  widgetGateHolds,
+} from "./gate";
 
 /** Column span at the large breakpoint, as a named step rather than a number. */
 export const WIDGET_SIZES = ["sm", "md", "lg", "xl", "full"] as const;
@@ -175,69 +186,6 @@ export interface WidgetAction {
   requiredPermission?: string;
   /** Opens in a new tab, and says so. */
   external?: boolean;
-}
-
-/**
- * The permission slugs a card's gate names, or `undefined` when the declaration
- * cannot be used as a gate at all.
- *
- * 🔴 ONE reader, because three questions are asked of this field and a
- * disagreement between any two of them hides a card silently: validation
- * refuses an unusable declaration, `permissionVerdicts` decides which slugs to
- * resolve, and `holdsWidgetPermission` decides whether the reader holds one. A
- * collector that skipped a slug the decider then asked for would resolve to a
- * missing verdict, which is `undefined`, which is not `true` -- so the card
- * would vanish for everyone, with nothing logged and nothing thrown.
- *
- * The `undefined` return is NOT "no gate" -- that is the field being absent,
- * which callers check before asking. It means the value is there and unusable,
- * and every caller reads it as a REFUSAL. That direction is deliberate and is
- * the one this validation already had to be corrected into once: reading a
- * malformed gate as "no permission declared" failed OPEN, returning the card to
- * every authenticated caller. An empty array is unusable for exactly the same
- * reason -- "any of nothing" is satisfied by nobody, and treating it as an
- * absent gate would let `requiredPermission: []` mean the opposite of what it
- * plainly says.
- */
-export function requiredPermissionSlugs(
-  value: unknown
-): readonly string[] | undefined {
-  const usable = (slug: unknown): slug is string =>
-    typeof slug === "string" && slug !== "";
-
-  if (usable(value)) return [value];
-  // Every member must be usable, rather than filtering the junk out: an array
-  // whose second entry is a number is a mistake its author can still see, and
-  // silently gating on the first entry alone answers a narrower question than
-  // they wrote.
-  if (Array.isArray(value) && value.length > 0 && value.every(usable)) {
-    return [...(value as readonly string[])];
-  }
-  return undefined;
-}
-
-/**
- * Whether a reader holding `verdicts` may know this widget exists.
- *
- * A widget with no `requiredPermission` is visible to any authenticated reader
- * -- that is what omitting it means, and what core's own cards rely on. A
- * declared permission that is not a usable string is refused rather than read
- * as absent: the gap used to fail OPEN, so a widget whose author wrote an
- * object there was gated for nobody.
- */
-export function holdsWidgetPermission(
-  requiredPermission: unknown,
-  verdicts: ReadonlyMap<string, boolean>
-): boolean {
-  if (requiredPermission === undefined) return true;
-  const slugs = requiredPermissionSlugs(requiredPermission);
-  // Present and unusable. Refused rather than read as absent, which is the
-  // direction this check was corrected into once already.
-  if (slugs === undefined) return false;
-  // ANY-OF. `verdicts.get` is `undefined` for a slug nobody resolved, and
-  // `undefined !== true`, so an unresolved member denies on its own terms
-  // rather than being mistaken for a held grant.
-  return slugs.some(slug => verdicts.get(slug) === true);
 }
 
 export interface WidgetDefinition {

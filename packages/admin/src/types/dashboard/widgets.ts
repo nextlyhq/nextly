@@ -43,6 +43,20 @@ export interface WidgetResultField {
   name: string;
   /** Absent when the source has no human label for this field. */
   label?: string;
+  /**
+   * What KIND of value this column holds, as the source declared it.
+   *
+   * 🔴 Read so a cell can be PRESENTED rather than printed. Every source
+   * declares its date fields as dates, that declaration used to stop at the
+   * server, and the row drew the ISO string the value crossed as --
+   * `2026-09-01T07:00:00.000Z` on a card whose subject is when.
+   *
+   * Optional, and an UNRECOGNISED kind arrives as absent rather than rejecting
+   * the result: a newer server may name a type this admin has not learned, and
+   * refusing the whole field list over it would blank a card that could have
+   * rendered its values as text.
+   */
+  type?: "string" | "number" | "boolean" | "date";
 }
 
 export type WidgetResult =

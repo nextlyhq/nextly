@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { render, screen, waitFor } from "@admin/__tests__/utils";
+import { act, render, screen, waitFor } from "@admin/__tests__/utils";
 import { useRecentActivity } from "@admin/hooks/queries/useRecentActivity";
 import { Activity } from "@admin/types/dashboard/activity";
 
@@ -178,17 +178,19 @@ describe("RecentActivity", () => {
   });
 
   /*
-   * 🔴 The label is a function of WHEN IT IS READ, and the second render is what
-   * proves it. The label used to be computed while mapping the response and
-   * carried on the entry, so it was correct exactly once and then frozen: an
-   * item fetched as "just now" kept that wording for as long as the query's data
-   * was reused, which on a dashboard left open is indefinitely.
+   * 🔴 The label tracks the clock WITHOUT anything re-rendering the card, and
+   * that is the whole property. Deriving it at render instead of at fetch was
+   * only half the repair: a render has to happen for the derivation to run, and
+   * a dashboard card nobody touches gets none -- so an entry fetched as "just
+   * now" kept that wording for as long as the page stayed open, the same wrong
+   * label reached by a different route.
    *
-   * A single render cannot separate the two implementations -- both print "2h
-   * ago" at the moment of the fetch. Only advancing the clock WITHOUT refetching
-   * does, which is the exact condition the defect needed.
+   * The earlier version of this test called `rerender` itself, which is
+   * precisely what production has nothing to do. It went green on an
+   * implementation that could not update on its own. Here the ONLY thing that
+   * happens between the two assertions is time passing.
    */
-  it("derives each timestamp's label from the time it is read", async () => {
+  it("advances each label as time passes, with nothing re-rendering it", async () => {
     mockUseRecentActivity.mockReturnValue({
       data: { activities: mockActivities },
       isLoading: false,
@@ -201,17 +203,18 @@ describe("RecentActivity", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       vi.setSystemTime(READ_AT);
-      const { rerender } = render(<RecentActivity />);
+      render(<RecentActivity />);
 
       await waitFor(() => {
         expect(screen.getByText("2h ago")).toBeInTheDocument();
         expect(screen.getByText("3h ago")).toBeInTheDocument();
       });
 
-      // The SAME data, three hours later. Nothing refetches; the mock returns
-      // the identical array, so any change can only come from the render.
-      vi.setSystemTime(new Date(READ_AT.getTime() + 3 * 60 * 60 * 1000));
-      rerender(<RecentActivity />);
+      // Three hours pass. No refetch, no rerender, no interaction -- only the
+      // card's own clock.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000);
+      });
 
       await waitFor(() => {
         expect(screen.getByText("5h ago")).toBeInTheDocument();

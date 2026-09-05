@@ -47,6 +47,10 @@
       "types": "./dist/field-catalog.d.ts",
       "import": "./dist/collections/fields/catalog.mjs"
     },
+    "./widget-gate": {
+      "types": "./dist/widget-gate.d.ts",
+      "import": "./dist/domains/widgets/gate.mjs"
+    },
     "./query": {
       "types": "./dist/query/index.d.ts",
       "import": "./dist/query/index.mjs"

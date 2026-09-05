@@ -20,7 +20,7 @@
  * @module components/features/widgets/archetypes/list
  */
 
-import { asText, selectsNothing } from "./cell-text";
+import { asPresentedText, selectsNothing } from "./cell-text";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
 /** How many rows a card of this size can show without becoming a table. */
@@ -94,14 +94,26 @@ export const listBody: ArchetypeBody = (result, definition) => {
   }
 
   const rows = result.items.slice(0, MAX_ROWS);
+  // The declared kind per column, so each cell is presented rather than
+  // printed. `fields` is what the SOURCE said survived the read; a column it
+  // does not describe falls back to plain text, which is what every row did
+  // before types were carried.
+  const typeOf = new Map(
+    (result.fields ?? []).map(field => [field.name, field.type])
+  );
 
   return {
     ok: true,
     node: (
       <ul data-testid="widget-list" className="flex flex-col gap-2">
         {rows.map((item, index) => {
-          const label = asText(item[labelField]);
-          const detail = detailField ? asText(item[detailField]) : undefined;
+          const label = asPresentedText(
+            item[labelField],
+            typeOf.get(labelField)
+          );
+          const detail = detailField
+            ? asPresentedText(item[detailField], typeOf.get(detailField))
+            : undefined;
           return (
             <li
               // The index, because a widget's rows have no identity core can

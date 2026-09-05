@@ -49,9 +49,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { CORE_WIDGETS } from "../../../../../../nextly/src/domains/widgets/core-widgets";
-import { holdsWidgetPermission } from "../../../../../../nextly/src/domains/widgets/definition";
 import { LIST_RENDERED_FIELDS } from "../archetypes/list";
-import { holdsWidgetGate } from "../resolve-widgets";
 
 /**
  * Resolved from this file rather than from `process.cwd()`, so the test reads
@@ -152,66 +150,5 @@ describe("core list cards select only fields that get drawn", () => {
 
   it.each(listCards)("%s selects at most what is drawn", (_id, select) => {
     expect(select.length).toBeLessThanOrEqual(LIST_RENDERED_FIELDS);
-  });
-});
-
-/**
- * The admin's permission gate against core's.
- *
- * 🔴 `resolveWidgets` runs in the BROWSER and cannot import the server's
- * `holdsWidgetPermission`, which lives in a package the browser bundle must
- * not pull in wholesale -- the same constraint that makes `useCurrentUserPermissions` keep its
- * own copy of core's system resources. So the any-of rule is written twice, and
- * this is what makes the second copy checkable rather than merely intended.
- *
- * The comparison is on the DECISION, not the shape: for each declaration, what
- * core's reader says the gate names is used to answer the admin's
- * `hasPermission`, and the two verdicts must agree. A test asserting both
- * functions "look the same" would pass on two implementations that diverge on
- * the inputs nobody wrote down -- an empty array, a member that is not a slug.
- */
-describe("the admin's widget gate agrees with core's", () => {
-  const held = new Set(["read-content-releases"]);
-  const hasPermission = (slug: string) => held.has(slug);
-
-  /*
-   * Every case is one both copies must answer identically, and the malformed
-   * ones are the point: each has an obvious wrong reading that fails OPEN, and
-   * core's copy had to be corrected out of exactly that once already.
-   */
-  const cases: readonly (readonly [string, unknown, boolean])[] = [
-    ["no gate at all", undefined, true],
-    ["a held slug", "read-content-releases", true],
-    ["a slug not held", "read-posts", false],
-    ["any-of, first held", ["read-content-releases", "create-x"], true],
-    ["any-of, last held", ["create-x", "read-content-releases"], true],
-    ["any-of, none held", ["create-x", "publish-x"], false],
-    ["an empty string", "", false],
-    ["an empty array", [], false],
-    ["an array carrying a non-slug", ["read-content-releases", 7], false],
-    ["an object", { read: true }, false],
-  ];
-
-  /*
-   * Core's side is the REAL `holdsWidgetPermission`, not a restatement of it
-   * here. A test that recomputed the rule would be a third copy, and it would
-   * agree with whichever of the two it was written from while the other drifted.
-   *
-   * Its verdict map is what `permissionVerdicts` would have resolved: a decision
-   * per slug, with an unheld slug present and `false` rather than missing, so a
-   * gate naming an unknown slug is exercised too.
-   */
-  const verdicts = new Map(
-    [...held, "read-posts", "create-x", "publish-x"].map(slug => [
-      slug,
-      held.has(slug),
-    ])
-  );
-
-  it.each(cases)("%s", (_label, gate, expected) => {
-    expect(holdsWidgetPermission(gate, verdicts), "core's").toBe(expected);
-    expect(holdsWidgetGate(gate as never, hasPermission), "the admin's").toBe(
-      expected
-    );
   });
 });

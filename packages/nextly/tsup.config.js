@@ -93,6 +93,13 @@ const clientEntries = [
   "src/field-group-reconcile.ts",
   // Pure serializable data, consumed by the admin's field pickers and by plugins.
   "src/collections/fields/catalog.ts",
+  // The widget permission gate, as its OWN entry and with no imports of its
+  // own. The layout endpoint and the browser both decide whether a reader may
+  // be told a card exists, and a second implementation of that answer splits
+  // them apart silently -- a card the server sends and the browser hides
+  // reports nothing anywhere. Reaching it through `nextly/config` instead would
+  // make a bundler traverse the whole config surface for two pure functions.
+  "src/domains/widgets/gate.ts",
   // The query-parameter formats, so a caller writes one with the same code the
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.

@@ -67,3 +67,27 @@ renders the first two and silently ignores the rest, so `core/recently-edited`
 showed a collection beside an opaque document id and never the timestamp, on a
 card whose description promises "newest first". Both now select two, and the
 renderer declares how many it draws so a test can hold declarations to it.
+
+A widget's permission gate is now decided in ONE place, `nextly/widget-gate` — a
+browser-safe entry point with no imports of its own. The layout endpoint and the
+admin both decide whether a reader may be told a card exists, and they had two
+implementations of that answer: a card the server sends and the browser hides is
+invisible with nothing logged anywhere. The rule is parameterised by how a
+single slug is answered, so the server passes its resolved verdicts and the
+browser passes the session's predicate.
+
+A contributed any-of gate no longer goes missing. Boot accepted an array through
+the shared validator, but the summary layout resolution reads was built by a
+string-only reader that dropped it — so the layout endpoint saw no gate and
+published the card's id and default placement to every authenticated reader
+while the browser hid it.
+
+List and table cells are now PRESENTED by the kind their source declared, rather
+than printed. Every source already declares its date fields as dates and that
+declaration stopped at the server, so a row drew `2026-09-01T07:00:00.000Z` on
+cards whose whole subject is when. `WidgetResultField` carries the type, and an
+unrecognised one degrades to plain text rather than refusing the result.
+
+Relative times on the activity feed update while the card is open. Deriving the
+label at render instead of at fetch was half the repair; a card nobody touches
+gets no renders, so `useNowTick` supplies them.

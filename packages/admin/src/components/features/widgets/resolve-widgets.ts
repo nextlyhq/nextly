@@ -20,6 +20,7 @@ import type {
   WidgetStatCell,
   WidgetChrome,
 } from "nextly/config";
+import { widgetGateHolds } from "nextly/widget-gate";
 
 import type {
   PluginMetadata,
@@ -187,43 +188,6 @@ function declaredWidgets(
 }
 
 /**
- * Whether this reader satisfies a card's permission gate.
- *
- * 🔴 An ARRAY means ANY-OF, matching `holdsWidgetPermission` on the server. The
- * rule is spelled out twice because this file runs in the BROWSER and the
- * server's copy lives beside code that must not reach the bundle — the same
- * reason `useCurrentUserPermissions` keeps its own copy of core's system
- * resources. `core-widget-components.test.ts` holds the two against each other
- * so the duplication is checked rather than trusted.
- *
- * The server has already dropped cards this reader may not see, so a
- * disagreement here shows or hides a card the server disagrees about rather
- * than disclosing one — but a card the server SENT and this hides is invisible
- * with nothing logged, which is exactly the failure the any-of case was added
- * to fix.
- *
- * Fail-closed on a declaration that is present and unusable: an empty array, or
- * one carrying a non-slug, denies. Reading either as "no gate" would return the
- * card to every reader, which is the direction the server's copy had to be
- * corrected out of once already.
- */
-export function holdsWidgetGate(
-  requiredPermission: string | readonly string[] | undefined,
-  hasPermission: (permission: string) => boolean
-): boolean {
-  if (requiredPermission === undefined) return true;
-
-  const usable = (slug: unknown): slug is string =>
-    typeof slug === "string" && slug !== "";
-
-  if (usable(requiredPermission)) return hasPermission(requiredPermission);
-  if (!Array.isArray(requiredPermission)) return false;
-  if (requiredPermission.length === 0) return false;
-  if (!requiredPermission.every(usable)) return false;
-  return requiredPermission.some(slug => hasPermission(slug));
-}
-
-/**
  * One declaration as the grid renders it, or `undefined` when it is not
  * renderable at all.
  *
@@ -237,7 +201,7 @@ function resolveOne(
   meta: ReadableWidgetDeclaration,
   hasPermission: (permission: string) => boolean
 ): DashboardWidget | undefined {
-  if (!holdsWidgetGate(meta.requiredPermission, hasPermission)) {
+  if (!widgetGateHolds(meta.requiredPermission, hasPermission)) {
     return undefined;
   }
   const archetype = resolveArchetype(meta);
@@ -284,7 +248,7 @@ function resolveRegistered(
   meta: RegisteredWidgetMeta,
   hasPermission: (permission: string) => boolean
 ): DashboardWidget | undefined {
-  if (!holdsWidgetGate(meta.requiredPermission, hasPermission)) {
+  if (!widgetGateHolds(meta.requiredPermission, hasPermission)) {
     return undefined;
   }
 

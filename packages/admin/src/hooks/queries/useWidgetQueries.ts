@@ -222,20 +222,46 @@ function asSlot(value: unknown): WidgetSlot {
  * said this is "the place that has to grow when the result contract does" --
  * and then the contract grew.
  */
+/**
+ * The field kinds this admin knows how to present.
+ *
+ * Its own set rather than a check against core's exported tuple: this module
+ * parses UNTRUSTED JSON off the wire, so the question is what this build can
+ * render, which is a property of this package and not of whichever server
+ * answered.
+ */
+const KNOWN_FIELD_TYPES: ReadonlySet<string> = new Set([
+  "string",
+  "number",
+  "boolean",
+  "date",
+]);
+
 function asResultFields(value: unknown): WidgetResultField[] | undefined {
   if (!Array.isArray(value)) return undefined;
 
   const described: WidgetResultField[] = [];
   for (const raw of value) {
     if (!isObject(raw)) return undefined;
-    const field = raw as { name?: unknown; label?: unknown };
+    const field = raw as { name?: unknown; label?: unknown; type?: unknown };
     if (typeof field.name !== "string" || field.name === "") return undefined;
     if (field.label !== undefined && typeof field.label !== "string") {
       return undefined;
     }
+    /*
+     * An unrecognised kind is DROPPED, not refused. `label` above rejects the
+     * whole list on a wrong shape because a non-string label is a server that
+     * is broken; a type this admin does not know is a server that is NEWER, and
+     * blanking the card over it would make every future type a breaking change.
+     * Falling back to plain text is what the renderer did before types existed.
+     */
+    const type = KNOWN_FIELD_TYPES.has(field.type as string)
+      ? (field.type as WidgetResultField["type"])
+      : undefined;
     described.push({
       name: field.name,
       ...(field.label !== undefined && { label: field.label }),
+      ...(type !== undefined && { type }),
     });
   }
 

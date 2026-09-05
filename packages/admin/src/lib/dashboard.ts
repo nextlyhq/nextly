@@ -70,10 +70,15 @@ export function describeActivityActor(entry: {
  * Converts an ISO timestamp to a human-readable relative time string.
  *
  * @param isoTimestamp - ISO 8601 date string
+ * @param at - The instant to measure FROM, in epoch milliseconds. Defaults to
+ *   now, which is what every caller reading a one-off label wants. A caller
+ *   re-rendering on a clock passes the instant that caused the render, so the
+ *   label and the tick behind it cannot disagree -- and a test can state the
+ *   moment it is asking about instead of stubbing the global clock.
  * @returns Relative time string (e.g. "just now", "5m ago", "3h ago", "2d ago", "Mar 1")
  */
-export function formatRelativeTime(isoTimestamp: string): string {
-  const now = Date.now();
+export function formatRelativeTime(isoTimestamp: string, at?: number): string {
+  const now = at ?? Date.now();
   const then = new Date(isoTimestamp).getTime();
   const diffMs = now - then;
   const diffSec = Math.floor(diffMs / 1000);

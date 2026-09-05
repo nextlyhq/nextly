@@ -39,6 +39,7 @@ import type React from "react";
 
 import { AlertCircle } from "@admin/components/icons";
 import { useRecentActivity } from "@admin/hooks/queries/useRecentActivity";
+import { useNowTick } from "@admin/hooks/useNowTick";
 import { formatRelativeTime } from "@admin/lib/dashboard";
 import { cn } from "@admin/lib/utils";
 import type { Activity } from "@admin/types/dashboard/activity";
@@ -56,7 +57,12 @@ export interface RecentActivityProps {
  *
  * Displays a single activity entry with avatar, description, and badge.
  */
-const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
+const ActivityItem: React.FC<{ activity: Activity; now: number }> = ({
+  activity,
+  // Passed down rather than each row starting its own clock: one timer per
+  // CARD, not one per row, and every row then names the same instant.
+  now,
+}) => {
   const getBadgeStyle = (type: string) => {
     const t = type.toLowerCase();
     if (t.includes("create"))
@@ -127,7 +133,7 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
             the prose says.
           */}
           <time dateTime={activity.timestamp}>
-            {formatRelativeTime(activity.timestamp)}
+            {formatRelativeTime(activity.timestamp, now)}
           </time>
         </div>
       </div>
@@ -164,6 +170,17 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
   limit = 5,
 }) => {
   const { data, isLoading, error } = useRecentActivity(limit);
+  /*
+   * 🔴 Deriving the label at render is only half the repair. A render has to
+   * HAPPEN, and a dashboard card nobody touches gets none -- so an entry
+   * fetched as "just now" would keep that wording for as long as the page is
+   * open, which is the same wrong label reached by a different route. This is
+   * what makes the derivation run again.
+   *
+   * The value is passed to the formatter rather than discarded, so the label a
+   * reader sees and the instant this hook re-rendered for are the same one.
+   */
+  const now = useNowTick();
 
   return (
     <section aria-labelledby="dashboard-activity-heading" className="space-y-6">
@@ -201,7 +218,7 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
             <EmptyState />
           ) : (
             data.activities.map(activity => (
-              <ActivityItem key={activity.id} activity={activity} />
+              <ActivityItem key={activity.id} activity={activity} now={now} />
             ))
           )}
         </div>
