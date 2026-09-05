@@ -158,6 +158,40 @@ describe("into a container", () => {
     ).toEqual(["x", "p1"]);
   });
 
+  it("REPORTS A MISSING PARENT AS UNKNOWN, not as a duplicate", () => {
+    // Opposite remedies. None means the container is gone — a stale target, and
+    // the author aims somewhere that exists. More than one means the document
+    // is malformed, which no aiming fixes. Counting "not exactly one" collapsed
+    // them and sent a common stale target to the wrong sentence.
+    const doc = page([node("card", {}, { body: [] })]);
+
+    const plan = planInsertPattern(
+      doc,
+      pattern([node("p1")]),
+      { parentId: "ghost", slot: "body", index: 0 },
+      anyParent
+    );
+
+    expect(plan.problem).toBe("unknown");
+  });
+
+  it("REFUSES A POSITION THE OP LAYER WOULD REFUSE", () => {
+    // Asked of the op layer's own rule, not a second copy of it.
+    const doc = page([node("a")]);
+
+    expect(
+      planInsertPattern(doc, pattern([node("p1")]), { index: -1 }, anyParent)
+        .problem
+    ).toBe("invalid-position");
+
+    // A parent named without its slot — a shape a JavaScript caller can pass
+    // even though the published type forbids it.
+    const noSlot = { parentId: "a", index: 0 } as unknown as { index: number };
+    expect(
+      planInsertPattern(doc, pattern([node("p1")]), noSlot, anyParent).problem
+    ).toBe("invalid-position");
+  });
+
   it("refuses a destination id the document holds twice", () => {
     // `applyOp` refuses this outright: the incoming node would be placed under
     // both. Foreseeing it here is the difference between a refusal an author
@@ -284,6 +318,42 @@ describe("what it refuses before the op layer would", () => {
       doc,
       pattern([node("p1")]),
       { index: 1 },
+      anyParent
+    );
+
+    expect(plan.problem).toBeUndefined();
+    expect(() => applyOps(doc, (plan.pageOps ?? []) as never)).not.toThrow();
+  });
+
+  it("REFUSES REPLACING A DOCUMENT WHOSE IDS ARE NOT UNIQUE", () => {
+    // The replacing target removes every root, and a remove refuses an id the
+    // document holds twice — its own and any in the subtree it takes with it.
+    // A positional insert only cares about the container it aims at, so this
+    // check belongs to this target alone.
+    const doc = page([node("dup"), node("dup")]);
+
+    const plan = planInsertPattern(
+      doc,
+      pattern([node("p1")]),
+      "document",
+      anyParent
+    );
+
+    expect(plan.problem).toBe("duplicate-destination");
+  });
+
+  it("a positional insert does not mind a duplicate id elsewhere", () => {
+    // It removes nothing, so the rule that refuses one does not reach it.
+    const doc = page([
+      node("dup"),
+      node("dup"),
+      node("card", {}, { body: [] }),
+    ]);
+
+    const plan = planInsertPattern(
+      doc,
+      pattern([node("p1")]),
+      { parentId: "card", slot: "body", index: 0 },
       anyParent
     );
 

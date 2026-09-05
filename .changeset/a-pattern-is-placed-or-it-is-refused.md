@@ -59,3 +59,26 @@ cannot go here.
 `lockedWithin` is published from the engine. A planner has to be able to ask
 whether a subtree is locked before it builds an insert around it, and a rule the
 op layer keeps to itself is one a planner would have to guess at.
+
+One rule decides where a block may sit, for every planner and every
+destination. Saving a run lifts it to a document root and inserting a pattern
+puts it at a root or in a slot, and those were two implementations of one
+question — which is how two answers about where a block may live come to
+disagree. The target now says which half of the nesting rule to ask, rather than
+each planner asking in its own way.
+
+A destination that does not exist is told apart from one that exists twice.
+Counting "not exactly one" sent a stale target — a container that was deleted
+between opening the editor and dropping the pattern — to the sentence about a
+malformed document, which is advice no author can act on. None means aim
+somewhere that exists; more than one means the document itself is wrong.
+
+The position is checked against the op layer's own rule, asked without applying
+anything, so a negative index or a parent named without its slot is refused
+where a plan is made rather than thrown where it is applied.
+
+Replacing a document refuses one whose ids are not unique. The replacing target
+removes every root, and a remove refuses an id the document holds twice — its
+own and any inside the subtree it takes with it — so this was a plan that could
+not apply. A positional insert removes nothing and is unaffected, which is why
+the check belongs to the one target rather than to the planner.

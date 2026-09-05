@@ -32,7 +32,12 @@ import {
   type NestingSource,
   type NestingVerdict,
 } from "./nesting";
-import { lockedWithin, type BuilderOp, type OpPosition } from "./ops";
+import {
+  lockedWithin,
+  positionRefusal,
+  type BuilderOp,
+  type OpPosition,
+} from "./ops";
 import { contiguousRun, type RunProblem } from "./sibling-run";
 import { findNode, reidForestWithMap, walkNodes } from "./tree";
 
@@ -102,7 +107,9 @@ export type PlanProblem =
    */
   | "destination-locked"
   /** A minted DOM id keeps colliding with one the destination already holds. */
-  | "dom-id-collision";
+  | "dom-id-collision"
+  /** The position names nowhere the op layer would accept. */
+  | "invalid-position";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -168,7 +175,9 @@ export function planSaveAsPattern<TFields>(
   if (result.run === undefined) return { problem: result.problem };
 
   const selected = result.run.places.map(place => place.node);
-  const refusal = refusedAtRoot(selected, nesting);
+  // Saving LIFTS the run out, so its blocks become document roots — the same
+  // question an insert asks, asked of the same rule.
+  const refusal = placementRefusal(selected, { kind: "root" }, nesting);
   if (refusal !== undefined) return refusal;
 
   return {
@@ -191,34 +200,74 @@ export function planSaveAsPattern<TFields>(
 }
 
 /**
- * The first selected block that cannot stand at a document root, if any.
+ * Where a block is being put, in the terms the nesting rule judges.
  *
- * Saving a run lifts it OUT of whatever contained it: the pattern document's
- * roots are the selected blocks themselves. A block declaring which parents it
- * may sit in has just lost the only one it had, and the store validates root
- * placement through the same rule — so without this the planner reports success
- * and hands back a document the create then refuses. Selecting a `core/column`
- * inside a `core/columns` is the ordinary way to reach it, not a corner case.
- *
- * Asked of the SHARED rule rather than answered here. The canvas, the validator
- * and this planner have to agree about where a block may sit, and a second
- * implementation would agree only until one of them changed.
+ * A closed pair rather than a nullable parent, for the reason `canBeRoot` is a
+ * separate function from `canNest`: a parent variable that is accidentally
+ * undefined would otherwise turn a lookup that failed into a confident verdict
+ * about the root.
  */
-function refusedAtRoot(
-  selected: readonly BlockNode[],
+export type PlacementTarget =
+  | { readonly kind: "root" }
+  | {
+      readonly kind: "slot";
+      readonly parentType: string;
+      readonly slot: string;
+    };
+
+/**
+ * The first block that may not sit where it is being put, phrased as a refusal.
+ *
+ * ONE implementation for every planner and every destination. Saving a run
+ * lifts it to a document root; inserting a pattern puts it at a root or in a
+ * slot — and asking the same question two ways is how the two come to disagree
+ * about where a block may live. The root case is not a special case of the slot
+ * case, so the target says which question to ask rather than passing an
+ * optional parent that means both.
+ *
+ * A refusal carries `permitted` because the caller is the only place that still
+ * knows which selection was refused, and a surface explaining it needs to name
+ * somewhere the block CAN go — the same reason `NestingVerdict` carries it.
+ */
+function placementRefusal(
+  blocks: readonly BlockNode[],
+  where: PlacementTarget,
   nesting: NestingSource
 ): PlanRefusal | undefined {
-  for (const node of selected) {
-    const verdict = canBeRoot(node.type, nesting);
+  for (const block of blocks) {
+    const verdict =
+      where.kind === "root"
+        ? canBeRoot(block.type, nesting)
+        : bothHalves(block.type, where.parentType, where.slot, nesting);
     if (verdict.allowed) continue;
     return {
-      problem: "restricted-at-root",
+      problem: verdict.reason,
       ...(verdict.permitted === undefined
         ? {}
         : { permitted: verdict.permitted }),
     };
   }
   return undefined;
+}
+
+/**
+ * Both halves of the nesting rule, in the order that reports the more
+ * actionable refusal first.
+ *
+ * The child naming its permitted parents is the sharper answer — it names
+ * somewhere the block CAN go — where a slot's allow-list only says this one
+ * will not have it.
+ */
+function bothHalves(
+  childType: string,
+  parentType: string,
+  slot: string,
+  nesting: NestingSource
+): NestingVerdict {
+  const child = canNest(childType, parentType, nesting);
+  return child.allowed
+    ? canNestInSlot(childType, parentType, slot, nesting)
+    : child;
 }
 
 /**
@@ -285,7 +334,7 @@ export function planInsertPattern(
   if (copy.problem !== undefined) return copy;
 
   const refusal =
-    placementRefusal(copy.nodes, destination.place, nesting) ??
+    placementRefusal(copy.nodes, destination.place.where, nesting) ??
     lockRefusal(copy.nodes, "locked") ??
     // The `"document"` target REMOVES what is there, and a remove refuses a
     // locked subtree for the same reason an insert refuses one — so replacing a
@@ -318,28 +367,62 @@ interface Destination {
  */
 interface Placement {
   readonly at: OpPosition | null;
-  readonly parentType?: string;
-  readonly slot?: string;
+  readonly where: PlacementTarget;
 }
 
 function destinationOf(
   document: BlockDocument,
   target: InsertTarget
 ): Destination | PlanRefusal {
-  if (target === "document") return { place: { at: null } };
-  if (target.parentId === undefined) return { place: { at: target } };
-
-  // Uniqueness FIRST, then the lookup. `applyOp` refuses an insert whose
-  // destination id is held twice, and a find that answers with the first of two
-  // would describe a different container than the one the author aimed at.
-  if (countById(document.nodes, target.parentId) !== 1) {
-    return { problem: "duplicate-destination" };
+  if (target === "document") {
+    // The replacing target REMOVES every root, and a remove refuses an id the
+    // document holds twice — its own and any in the subtree it takes with it.
+    // So for this target the whole document has to be unambiguous, where a
+    // positional insert only cares about the container it aims at.
+    return firstRepeatedId(document.nodes) === undefined
+      ? { place: { at: null, where: { kind: "root" } } }
+      : { problem: "duplicate-destination" };
   }
+
+  // The op layer's own rule for whether a position names anywhere, asked before
+  // anything is built on it. A negative index, or a parent named without its
+  // slot, is refused by `applyOp` — so a plan carrying one is a dry run that
+  // disagrees with the run it predicts.
+  if (positionRefusal(target) !== undefined)
+    return { problem: "invalid-position" };
+
+  if (target.parentId === undefined) {
+    return { place: { at: target, where: { kind: "root" } } };
+  }
+
+  // Told apart, because the remedies are opposite. NONE means the container is
+  // gone — a stale target, and the author should aim somewhere that exists.
+  // MORE THAN ONE means the document is malformed, which no aiming fixes and
+  // which `applyOp` refuses outright because the node would be placed in both.
+  const held = countById(document.nodes, target.parentId);
+  if (held === 0) return { problem: "unknown" };
+  if (held > 1) return { problem: "duplicate-destination" };
+
   const parent = findNode(document.nodes, target.parentId);
   if (parent === undefined) return { problem: "unknown" };
   return {
-    place: { at: target, parentType: parent.type, slot: target.slot },
+    place: {
+      at: target,
+      where: { kind: "slot", parentType: parent.type, slot: target.slot },
+    },
   };
+}
+
+/** The first id this document holds twice, or `undefined`. */
+function firstRepeatedId(nodes: BlockNode[]): string | undefined {
+  const seen = new Set<string>();
+  let repeated: string | undefined;
+  walkNodes(nodes, node => {
+    if (repeated !== undefined) return;
+    if (seen.has(node.id)) repeated = node.id;
+    else seen.add(node.id);
+  });
+  return repeated;
 }
 
 /** How many nodes in a forest carry one id. */
@@ -349,48 +432,6 @@ function countById(nodes: BlockNode[], id: string): number {
     if (node.id === id) seen += 1;
   });
   return seen;
-}
-
-/** The first root that may not sit where it is being put, phrased as a refusal. */
-function placementRefusal(
-  roots: readonly BlockNode[],
-  place: Placement,
-  nesting: NestingSource
-): PlanRefusal | undefined {
-  for (const root of roots) {
-    const verdict =
-      place.parentType === undefined || place.slot === undefined
-        ? canBeRoot(root.type, nesting)
-        : bothHalves(root.type, place.parentType, place.slot, nesting);
-    if (verdict.allowed) continue;
-    return {
-      problem: verdict.reason,
-      ...(verdict.permitted === undefined
-        ? {}
-        : { permitted: verdict.permitted }),
-    };
-  }
-  return undefined;
-}
-
-/**
- * Both halves of the nesting rule, in the order that reports the more
- * actionable refusal first.
- *
- * The child naming its permitted parents is the sharper answer — it names
- * somewhere the block CAN go — where a slot's allow-list only says this one
- * will not have it.
- */
-function bothHalves(
-  childType: string,
-  parentType: string,
-  slot: string,
-  nesting: NestingSource
-): NestingVerdict {
-  const child = canNest(childType, parentType, nesting);
-  return child.allowed
-    ? canNestInSlot(childType, parentType, slot, nesting)
-    : child;
 }
 
 /** A locked node anywhere in a forest, phrased as the caller's own refusal. */
@@ -424,11 +465,17 @@ interface FreshCopy {
  * module keeps finding: two elements sharing a DOM id, an anchor resolving to
  * whichever the browser reaches first, and nothing on screen saying so.
  *
- * NOT covered by a test, and deliberately so: the suffix comes from a freshly
- * minted UUID, so no test can arrange for the destination to hold the string
- * that is about to be drawn. A test asserting the refusal would be one that
- * cannot fail. The property this protects IS covered — inserting one pattern
- * twice into one page and finding no repeated DOM id.
+ * NOT covered by a test, and deliberately so. The suffix comes from a freshly
+ * minted UUID, so no test can arrange for the destination to already hold the
+ * string that is about to be drawn — an assertion about the refusal, or about
+ * which spellings {@link domIdsIn} collects, is one that cannot fail whatever
+ * this code does. I wrote such a test first and deleted it: a green that no
+ * implementation can turn red is not coverage, and leaving it in would have
+ * made this look guarded when only the reasoning guards it.
+ *
+ * The property that IS covered, deterministically, is the one that matters in
+ * practice: inserting one pattern twice into one page and finding no repeated
+ * DOM id anywhere in the result.
  */
 const MAX_ID_MINTING_ATTEMPTS = 3;
 
@@ -445,14 +492,31 @@ function freshCopy(
   return { problem: "dom-id-collision" };
 }
 
-/** Every DOM id the destination already carries, from either spelling. */
+/**
+ * Every DOM id the destination already carries, from either spelling.
+ *
+ * Attribute names are FOLDED. HTML attribute names are case-insensitive, and
+ * the copier that mints replacements folds them too, so a destination storing
+ * `ID` is holding a DOM id as surely as one storing `id` — and an exact-case
+ * read here would not see it. Unreachable in a test for the reason
+ * {@link MAX_ID_MINTING_ATTEMPTS} gives, and correct for a reason that does not
+ * depend on being reachable: this set is a claim about what the page holds, and
+ * a claim that is wrong about half the spellings is wrong.
+ */
 function domIdsIn(nodes: BlockNode[]): Set<string> {
   const taken = new Set<string>();
   walkNodes(nodes, node => {
     if (typeof node.cssId === "string" && node.cssId !== "")
       taken.add(node.cssId);
-    const attribute = node.attributes?.id;
-    if (typeof attribute === "string" && attribute !== "") taken.add(attribute);
+    // FOLDED, because HTML attribute names are case-insensitive and the copier
+    // that mints replacements folds them too (`key.toLowerCase() === "id"`). An
+    // exact-case read here would miss a destination storing `ID`, and the miss
+    // is silent: the collision check passes and the page ends up with two
+    // elements answering to one id.
+    for (const [name, value] of Object.entries(node.attributes ?? {})) {
+      if (name.toLowerCase() !== "id") continue;
+      if (typeof value === "string" && value !== "") taken.add(value);
+    }
   });
   return taken;
 }

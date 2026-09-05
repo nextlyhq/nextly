@@ -2354,6 +2354,38 @@ function assertNodeId(id: string, verb: string): void {
  * honoured at the node and defeated one level up.
  */
 /**
+ * Why this position would be refused, phrased as the op layer phrases it, or
+ * `undefined` when it would be accepted.
+ *
+ * The SAME rule the apply runs, reached without applying anything. A planner
+ * has to know whether the position it is about to emit will be taken, and the
+ * alternative — a second, non-throwing copy of `assertPosition` — is the
+ * parallel implementation this package refuses everywhere else: it would agree
+ * on the day it was written and diverge the first time either moved.
+ *
+ * Expressed by catching rather than by restructuring the validator, and that is
+ * deliberate. `assertPosition` reports a different sentence per malformed field,
+ * so a predicate form of it IS this function; and it carries a
+ * `fallow-ignore-next-line complexity` suppression as RELOCATED code, so
+ * rewriting it here would reopen a move that was made byte-for-byte on purpose.
+ * Only an `OpError` is treated as a refusal — anything else is a fault in this
+ * module and is rethrown rather than reported as a bad position.
+ */
+export function positionRefusal(
+  at: unknown,
+  verb = "insert"
+): string | undefined {
+  try {
+    assertPositionContainer(at, verb);
+    assertPosition(at as TreePosition, verb);
+    return undefined;
+  } catch (error) {
+    if (error instanceof OpError) return error.message;
+    throw error;
+  }
+}
+
+/**
  * The first locked node anywhere in a subtree, or `undefined`.
  *
  * Exported because a PLANNER has to be able to ask it before an insert is

@@ -173,6 +173,7 @@ export { planInsertPattern, planSaveAsPattern } from "./composition-planners";
 export type {
   CompositionPlan,
   InsertTarget,
+  PlacementTarget,
   PatternTarget,
   PlanProblem,
   PlanRefusal,
@@ -696,6 +697,9 @@ export {
   // than hand back a plan the apply throws on.
   lockedWithin,
   OpError,
+  // The apply's own position rule, asked without applying: a planner that
+  // wrote its own copy would agree until one of the two moved.
+  positionRefusal,
   positionOf,
   sameStoredValue,
   sameStyleValue,
