@@ -51,6 +51,7 @@ import {
 } from "../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
+import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import { FIELD_GROUP_HEADER_PATTERN } from "../../domains/schema/migrate-create/format-file";
 import {
@@ -417,6 +418,8 @@ export interface MigrateCoreDeps {
   /** Junction tables the config names outright; see `runFileMigrations`. */
   knownJunctions?: ReadonlySet<string>;
   withLock?: typeof withMigrateLock;
+  /** Seam for tests; defaults to the real metadata reconciliation. */
+  reconcileMetadataFn?: typeof reconcileMigrationMetadata;
 }
 
 export interface MigrateCoreResult {
@@ -432,6 +435,19 @@ export interface MigrateCoreResult {
    * migrations that never started.
    */
   ran: boolean;
+  /**
+   * Registry rows this run brought into agreement with the tables.
+   *
+   * Reported so a caller can say what happened rather than implying it from
+   * `applied`, which counts migration FILES: a run can apply no files and still
+   * record a row whose table landed on a previous one.
+   */
+  metadata: {
+    collectionsRegistered: number;
+    singlesRegistered: number;
+    marked: number;
+    stillPending: number;
+  };
 }
 
 /** Clear a stale migrate lock when `--force-unlock` was passed (else no-op). */
@@ -449,9 +465,17 @@ export async function migrateCore(
 ): Promise<MigrateCoreResult> {
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
+  const reconcileMetadata =
+    deps.reconcileMetadataFn ?? reconcileMigrationMetadata;
   const lock = deps.withLock ?? withMigrateLock;
   let applied = 0;
   let coreChanged = false;
+  let metadata = {
+    collectionsRegistered: 0,
+    singlesRegistered: 0,
+    marked: 0,
+    stillPending: 0,
+  };
 
   const outcome = await lock(
     deps.db,
@@ -489,6 +513,40 @@ export async function migrateCore(
         logger: deps.logger,
         knownJunctions: deps.knownJunctions,
       });
+
+      /*
+       * Phase 3 — make the registry agree with the tables Phase 2 just created.
+       *
+       * 🔴 Inside the lock, unlike the dev-boot path, which runs its equivalent
+       * outside because several dev-server workers race there. A CLI invocation
+       * already holds the lock, so this sweep cannot interleave with another
+       * migrate and needs no conflict tolerance of its own.
+       *
+       * CAUGHT, and the command still succeeds. The DDL has landed by now, and
+       * MySQL commits DDL implicitly, so there is no transaction to roll back
+       * into: a bookkeeping failure leaves working tables beside a row that is
+       * behind. Failing here would report a migration that worked as broken,
+       * and the next invocation repairs the row because this runs every time.
+       */
+      deps.logger.info("Phase 3: recording migration metadata...");
+      try {
+        metadata = await reconcileMetadata({
+          adapter: deps.adapter as unknown as DrizzleAdapter,
+          dialect: deps.dialect,
+          migrationsDir: deps.migrationsDir,
+          logger: {
+            info: (m: string) => deps.logger.debug(m),
+            warn: (m: string) => deps.logger.warn(m),
+            debug: (m: string) => deps.logger.debug(m),
+          },
+        });
+      } catch (error) {
+        deps.logger.warn(
+          `Migration metadata was not recorded: ${
+            error instanceof Error ? error.message : String(error)
+          }. The tables are in place; run \`nextly migrate\` again to record it.`
+        );
+      }
     },
     {
       mode: deps.lockMode ?? "fail-fast",
@@ -501,7 +559,7 @@ export async function migrateCore(
     }
   );
 
-  return { applied, coreChanged, ran: outcome.ran };
+  return { applied, coreChanged, ran: outcome.ran, metadata };
 }
 
 /**

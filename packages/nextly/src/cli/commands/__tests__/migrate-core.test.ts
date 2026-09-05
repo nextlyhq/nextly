@@ -17,6 +17,12 @@ function deps(over: Record<string, unknown> = {}) {
     lockMode: "fail-fast" as const,
     reconcileCoreFn: vi.fn(async () => ({ changed: false })),
     runFileMigrationsFn: vi.fn(async () => 0),
+    reconcileMetadataFn: vi.fn(async () => ({
+      collectionsRegistered: 0,
+      singlesRegistered: 0,
+      marked: 0,
+      stillPending: 0,
+    })),
     // Pass-through lock that just runs fn (so we test the core, not the lock),
     // in the real shape: the outcome is discriminated so a caller cannot
     // confuse "returned undefined" with "never ran".
@@ -39,6 +45,109 @@ describe("migrateCore", () => {
     expect(d.reconcileCoreFn).toHaveBeenCalledOnce();
     expect(d.runFileMigrationsFn).toHaveBeenCalledOnce();
     expect(res).toMatchObject({ applied: 0, coreChanged: false });
+  });
+
+  /*
+   * 🔴 Phase 3 runs UNCONDITIONALLY, including when no migration file applied.
+   * A run that applies nothing can still have bookkeeping to do: the DDL landed
+   * on a previous invocation and the row stayed `pending`, which is exactly the
+   * production shape this phase exists for. Gating it on `applied > 0` would
+   * make the stuck row unreachable by the command that repairs it.
+   */
+  it("records metadata even when no migration file applied", async () => {
+    const d = deps({ runFileMigrationsFn: vi.fn(async () => 0) });
+    const res = await migrateCore(d as never);
+
+    expect(d.reconcileMetadataFn).toHaveBeenCalledOnce();
+    expect(res.applied).toBe(0);
+  });
+
+  it("reports what the metadata pass did", async () => {
+    const d = deps({
+      reconcileMetadataFn: vi.fn(async () => ({
+        collectionsRegistered: 2,
+        singlesRegistered: 1,
+        marked: 3,
+        stillPending: 1,
+      })),
+    });
+
+    // Surfaced on the RESULT rather than only logged, so a caller can report
+    // what happened instead of inferring it from `applied`, which counts files.
+    expect((await migrateCore(d as never)).metadata).toEqual({
+      collectionsRegistered: 2,
+      singlesRegistered: 1,
+      marked: 3,
+      stillPending: 1,
+    });
+  });
+
+  /*
+   * 🔴 The command SUCCEEDS when bookkeeping fails, and this is the assertion
+   * that keeps it that way. By Phase 3 the DDL has already landed -- MySQL
+   * commits DDL implicitly, so there is no transaction to roll back into --
+   * and failing here would report a migration that worked as broken. The row
+   * is repaired by the next invocation, because this phase runs every time.
+   */
+  it("does not fail the command when recording metadata throws", async () => {
+    const d = deps({
+      reconcileMetadataFn: vi.fn(async () => {
+        throw new Error("registry unreachable");
+      }),
+      runFileMigrationsFn: vi.fn(async () => 4),
+    });
+
+    const res = await migrateCore(d as never);
+
+    // The applied count is the load-bearing half: the files really did land,
+    // and the caller must still be told so.
+    expect(res.applied).toBe(4);
+    expect(res.metadata).toEqual({
+      collectionsRegistered: 0,
+      singlesRegistered: 0,
+      marked: 0,
+      stillPending: 0,
+    });
+  });
+
+  it("runs the metadata pass INSIDE the lock", async () => {
+    // Ordering is the correctness property: outside the lock, two migrates
+    // could sweep the same rows while one of them is still creating tables.
+    const order: string[] = [];
+    const d = deps({
+      runFileMigrationsFn: vi.fn(async () => {
+        order.push("files");
+        return 1;
+      }),
+      reconcileMetadataFn: vi.fn(async () => {
+        order.push("metadata");
+        return {
+          collectionsRegistered: 0,
+          singlesRegistered: 0,
+          marked: 0,
+          stillPending: 0,
+        };
+      }),
+      withLock: async (
+        _db: unknown,
+        _d: unknown,
+        fn: () => Promise<unknown>
+      ) => {
+        order.push("lock:acquired");
+        const value = await fn();
+        order.push("lock:released");
+        return { ran: true as const, value };
+      },
+    });
+
+    await migrateCore(d as never);
+
+    expect(order).toEqual([
+      "lock:acquired",
+      "files",
+      "metadata",
+      "lock:released",
+    ]);
   });
 
   it("THROWS (does not exit) when file migrations reject", async () => {

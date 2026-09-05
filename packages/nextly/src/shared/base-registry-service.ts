@@ -259,26 +259,12 @@ export abstract class BaseRegistryService<
    * Get all records, optionally filtered by source, migration status, and locked.
    */
   protected async getAllRecords(options?: BaseListOptions): Promise<TRecord[]> {
-    try {
-      const conditions = this.buildFilterConditions(options);
-
-      const results = await this.adapter.select<TRecord>(
-        await this.resolveRegistryTableName(),
-        {
-          where: conditions.length > 0 ? { and: conditions } : undefined,
-          orderBy: [{ column: "created_at", direction: "asc" }],
-          limit: options?.limit,
-          offset: options?.offset,
-        }
-      );
-
-      return results.map(record => this.deserializeRecord(record));
-    } catch (error) {
-      if (NextlyError.is(error)) throw error;
-      // Normalise raw driver errors before mapping so unique/fk/etc. are
-      // classified instead of collapsing to INTERNAL_ERROR.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
-    }
+    const conditions = this.buildFilterConditions(options);
+    return this.selectRecords({
+      where: conditions.length > 0 ? { and: conditions } : undefined,
+      limit: options?.limit,
+      offset: options?.offset,
+    });
   }
 
   /**
@@ -328,7 +314,7 @@ export abstract class BaseRegistryService<
         await this.resolveRegistryTableName(),
         {
           where: whereClause,
-          orderBy: [{ column: "created_at", direction: "asc" }],
+          orderBy: [{ column: "createdAt", direction: "asc" }],
           limit: options?.limit,
           offset: options?.offset,
         }
@@ -451,29 +437,65 @@ export abstract class BaseRegistryService<
 
   /**
    * Get all records with pending migrations (status 'pending' or 'generated').
+   *
+   * 🔴 Named by Drizzle SCHEMA PROPERTY, not by physical column.
+   * `adapter.select` resolves each `column` against the table's property names,
+   * so `migration_status` and `created_at` -- the names in the DDL -- do not
+   * resolve at all: the adapter refuses with "Column not found in table",
+   * listing `migrationStatus` and `createdAt` among what it does have.
+   *
+   * This threw for every caller, which is precisely why it had none. The method
+   * was written alongside `updateMigrationStatusWithTableVerification` for a
+   * reconciliation pass that was never wired up, so nothing ever ran it and the
+   * mistake could not surface. The identical defect is recorded in
+   * `activity-log-service`, where a physical name silently dropped an ORDER BY
+   * and made a filtered query fail outright.
    */
   protected async getRecordsWithPendingMigrations(): Promise<TRecord[]> {
+    return this.selectRecords({
+      where: {
+        and: [
+          {
+            column: "migrationStatus",
+            op: "IN",
+            value: ["pending", "generated"],
+          },
+        ],
+      },
+    });
+  }
+
+  /**
+   * Read registry rows, oldest first, deserialized — with driver errors mapped.
+   *
+   * 🔴 ONE reader for every list this service performs, because the three
+   * things it does are each easy to get subtly wrong and were previously
+   * written out per method. The ordering names `createdAt`, the SCHEMA
+   * PROPERTY: `adapter.select` resolves columns against the table's property
+   * names, and a physical `created_at` is not rejected in an `orderBy` — it is
+   * silently ignored, so the caller believes it asked for an order it never
+   * got. The error mapping keeps a unique or foreign-key violation classified
+   * rather than collapsing to INTERNAL_ERROR. And `deserializeRecord` is what
+   * turns stored JSON columns back into values.
+   *
+   * A method that skipped any one of those looked correct beside the others.
+   */
+  private async selectRecords(query: {
+    where?: { and: (WhereCondition | { or: WhereCondition[] })[] };
+    limit?: number;
+    offset?: number;
+  }): Promise<TRecord[]> {
     try {
       const results = await this.adapter.select<TRecord>(
         await this.resolveRegistryTableName(),
         {
-          where: {
-            and: [
-              {
-                column: "migration_status",
-                op: "IN",
-                value: ["pending", "generated"],
-              },
-            ],
-          },
-          orderBy: [{ column: "created_at", direction: "asc" }],
+          ...query,
+          orderBy: [{ column: "createdAt", direction: "asc" }],
         }
       );
-
       return results.map(record => this.deserializeRecord(record));
     } catch (error) {
       if (NextlyError.is(error)) throw error;
-      // Normalise raw driver errors before mapping to NextlyError kind.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
@@ -609,7 +631,10 @@ export abstract class BaseRegistryService<
 
     if (options?.migrationStatus) {
       conditions.push({
-        column: "migration_status",
+        // The SCHEMA PROPERTY, as everywhere else here: `adapter.select`
+        // resolves against the table's property names, so the physical
+        // `migration_status` refuses outright with "Column not found in table".
+        column: "migrationStatus",
         op: "=",
         value: options.migrationStatus as SqlParam,
       });
