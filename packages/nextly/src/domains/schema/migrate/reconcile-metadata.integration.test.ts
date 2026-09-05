@@ -204,6 +204,32 @@ describe.each(DIALECTS.filter(configured))(
       } as never);
     }
 
+    /**
+     * A table that EXISTS. Nothing else about it is under test.
+     *
+     * 🔴 Deliberately not built through the production DDL generator, and the
+     * reason is what the sweep asks. `markApplied` calls `tableExists(name)` and
+     * reads no column, no key and no type — so this stands in for "the DDL
+     * landed", not for a collection's physical table. A shape drifting from what
+     * production creates cannot make this test wrong, because no assertion here
+     * depends on the shape.
+     *
+     * The repository's rule against hand-copied DDL is about fixtures that MODEL
+     * a real table and silently stop matching it; the guard against becoming
+     * that is the sweep's own narrowness. If it ever inspects columns — verifying
+     * a schema change rather than existence, which is the direction this is
+     * heading — this must be built by the generator that creates the real thing,
+     * because then the shape would be the subject.
+     *
+     * One column, portable across all three dialects, so the statement carries
+     * no shape worth mistaking for a model of anything.
+     */
+    async function createStandInTable(name: string): Promise<void> {
+      await testDb.adapter.executeQuery(
+        `CREATE TABLE ${name} (id varchar(36) NOT NULL)`
+      );
+    }
+
     /** What the registry now says about one slug, read straight from the row. */
     async function statusOf(slug: string): Promise<string | undefined> {
       const rows = (await testDb.adapter.select("dynamic_collections", {
@@ -220,9 +246,7 @@ describe.each(DIALECTS.filter(configured))(
       expect(await statusOf(SLUG.posts)).toBe("pending");
 
       // The DDL, as a migration file would have applied it.
-      await testDb.adapter.executeQuery(
-        `CREATE TABLE ${TABLE.posts} (id varchar(36) NOT NULL, PRIMARY KEY (id))`
-      );
+      await createStandInTable(TABLE.posts);
 
       const result = await reconcileMigrationMetadata({
         adapter: testDb.adapter as never,
@@ -261,9 +285,7 @@ describe.each(DIALECTS.filter(configured))(
       // It runs on every invocation of `migrate`, so a second pass over an
       // already-applied row must be a no-op rather than an error or a rewrite.
       await pendingCollection(SLUG.pages, TABLE.pages);
-      await testDb.adapter.executeQuery(
-        `CREATE TABLE ${TABLE.pages} (id varchar(36) NOT NULL, PRIMARY KEY (id))`
-      );
+      await createStandInTable(TABLE.pages);
 
       const deps = {
         adapter: testDb.adapter as never,
