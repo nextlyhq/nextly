@@ -2360,7 +2360,87 @@ function assertNodeId(id: string, verb: string): void {
  * an author delete a locked block by deleting the column it sits in — the lock
  * honoured at the node and defeated one level up.
  */
-function lockedWithin(node: BlockNode): string | undefined {
+/**
+ * Why this node would be refused as an insert's subtree, or `undefined`.
+ *
+ * The companion to {@link positionRefusal} and published for the same reason: a
+ * planner has to know whether the subtree it is about to hand over will be
+ * taken. A stored pattern can hold a node that is type-compatible and
+ * structurally invalid — `version: 0` is the cheap example — and without this
+ * the plan reports success and the apply throws.
+ *
+ * Judged with the SHAPE-ONLY limits by default, which is what makes this usable
+ * from a planner. The structural rules do not depend on limits; the caps on
+ * depth and size do, and those belong to whoever applies — a host that raises
+ * `maxDepth` would otherwise have a plan refuse a document its own apply
+ * accepts, which is the dry run disagreeing with the run it predicts in the
+ * direction nobody can debug. The same constant the remove path uses, for the
+ * same reason: it asks whether this is a node, not whether it fits.
+ *
+ * A caller may pass its own limits to have the node-count and depth caps judged
+ * as well. The BYTE cap is not among them and cannot be: `assertFitsCaps`
+ * measures the document the node is going into, and this is handed a subtree
+ * with no destination. A caller that needs the byte cap judged has to ask the
+ * apply, which is where the destination is.
+ */
+export function nodeShapeRefusal(
+  node: BlockNode,
+  verb = "insert",
+  limits: DocumentLimits = SHAPE_ONLY_LIMITS
+): string | undefined {
+  try {
+    assertNodeShape(node, verb, limits);
+    return undefined;
+  } catch (error) {
+    if (error instanceof OpError) return error.message;
+    throw error;
+  }
+}
+
+/**
+ * Why this position would be refused, phrased as the op layer phrases it, or
+ * `undefined` when it would be accepted.
+ *
+ * The SAME rule the apply runs, reached without applying anything. A planner
+ * has to know whether the position it is about to emit will be taken, and the
+ * alternative — a second, non-throwing copy of `assertPosition` — is the
+ * parallel implementation this package refuses everywhere else: it would agree
+ * on the day it was written and diverge the first time either moved.
+ *
+ * Expressed by catching rather than by restructuring the validator, and that is
+ * deliberate. `assertPosition` reports a different sentence per malformed field,
+ * so a predicate form of it IS this function; and it carries a
+ * `fallow-ignore-next-line complexity` suppression as RELOCATED code, so
+ * rewriting it here would reopen a move that was made byte-for-byte on purpose.
+ * Only an `OpError` is treated as a refusal — anything else is a fault in this
+ * module and is rethrown rather than reported as a bad position.
+ */
+export function positionRefusal(
+  at: unknown,
+  verb = "insert"
+): string | undefined {
+  try {
+    assertPositionContainer(at, verb);
+    assertPosition(at as TreePosition, verb);
+    return undefined;
+  } catch (error) {
+    if (error instanceof OpError) return error.message;
+    throw error;
+  }
+}
+
+/**
+ * The first locked node anywhere in a subtree, or `undefined`.
+ *
+ * Exported because a PLANNER has to be able to ask it before an insert is
+ * built. `applyOp` refuses an insert whose subtree arrives locked — the inverse
+ * of an insert is a remove, and a remove refuses a locked subtree, so accepting
+ * it would put the document one edit from a state its own undo could not leave.
+ * A planner that could not ask would report a plan the apply then throws on,
+ * which is exactly the gap between a dry run and a real run that planning
+ * separately exists to close.
+ */
+export function lockedWithin(node: BlockNode): string | undefined {
   let found: string | undefined;
   walkNodes([node], candidate => {
     if (found === undefined && candidate.locked === true) found = candidate.id;
