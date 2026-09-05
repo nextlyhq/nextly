@@ -61,7 +61,7 @@ jobs:
       # Only the command parser, from the default branch, so the decision below
       # can be made before anything is cloned. The full checkout follows once we
       # know a review was actually asked for.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Pinned to the default branch. Without an explicit ref a review-thread
           # event checks out the pull request's own merge ref, so the candidate's
@@ -123,7 +123,7 @@ jobs:
             echo "base=$base"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.ask.outputs.run == 'true'
         with:
           # The PR head itself, not the merge ref: the review protocol judges
@@ -184,7 +184,7 @@ jobs:
 
       - name: Run review agent
         if: steps.ask.outputs.run == 'true'
-        uses: anthropics/claude-code-action@9db594c7a0e82298c121c18b7f08aa1579ce7341 # v1.0.185
+        uses: anthropics/claude-code-action@a874e9ecd7bb36efdad65429c6b35815f5a08f10 # v1.0.210
         env:
           # z.ai's Anthropic-compatible endpoint; the key goes in via
           # anthropic_api_key below and is exported as ANTHROPIC_AUTH_TOKEN.
