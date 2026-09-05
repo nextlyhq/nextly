@@ -143,35 +143,33 @@ export function planSaveAsPattern<TFields>(
 /**
  * The selected nodes themselves, in document order.
  *
- * `undefined` when the list the run named cannot be read back — which
- * {@link contiguousRun} having just located every id makes unreachable, so it
- * is reported as `"unknown"` rather than trusted: a planner that indexed into a
- * missing list would build a pattern out of holes.
+ * Each is fetched by ITS OWN id, never by re-resolving the run's parent and
+ * indexing into its slot. That reads like the same thing and is not, on a
+ * stored document nothing validated: two nodes may share an id, and then the
+ * parent `siblingRun` located a child under is not the parent a later lookup by
+ * that id returns — the first one is. The indexes were then read from the wrong
+ * container and the pattern was saved from blocks the author never selected,
+ * with nothing to show it. Measured on a document with two parents called
+ * `"dup"`: selecting the second parent's two children saved the FIRST parent's.
+ *
+ * Asking for each node by name removes the second lookup that could disagree.
+ * `findNode` and the `locateNode` behind `siblingRun` both answer with the
+ * first match in one forest walk, so they cannot resolve one id differently.
+ *
+ * `undefined` when a node cannot be read back at all, which is unreachable
+ * after {@link contiguousRun} has just located every one of them — reported
+ * rather than trusted, because a planner that skipped a hole would build a
+ * pattern quietly missing a block.
  */
 function runNodes(
   nodes: BlockNode[],
   run: SiblingRun
 ): BlockNode[] | undefined {
-  const list = siblingList(nodes, run);
-  if (list === undefined) return undefined;
   const selected: BlockNode[] = [];
   for (const place of run.places) {
-    const node = list[place.index];
+    const node = findNode(nodes, place.id);
     if (node === undefined) return undefined;
     selected.push(node);
   }
   return selected;
-}
-
-/** The sibling list a run sits in: the roots, or a parent's slot. */
-function siblingList(
-  nodes: BlockNode[],
-  run: SiblingRun
-): BlockNode[] | undefined {
-  if (run.parentId === undefined) return nodes;
-  const parent = findNode(nodes, run.parentId);
-  const slot = run.slot;
-  if (parent === undefined || slot === undefined) return undefined;
-  const children = parent.slots?.[slot];
-  return Array.isArray(children) ? children : undefined;
 }

@@ -201,6 +201,49 @@ describe("a run inside a container", () => {
   });
 });
 
+describe("a document whose ids are not unique", () => {
+  it("SAVES THE BLOCKS THE AUTHOR SELECTED, not a namesake parent's", () => {
+    // Two parents share an id. `siblingRun` located the selection under the
+    // SECOND; a lookup by that id answers with the FIRST. Reading the run's
+    // indexes out of the re-resolved parent therefore took the wrong
+    // container's blocks — a pattern saved from content nobody selected, with
+    // nothing reporting it. Each node is now fetched by its own id instead.
+    const doc: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        node(
+          "dup",
+          {},
+          {
+            body: [
+              node("f1", { props: { mark: "first-parent-a" } }),
+              node("f2", { props: { mark: "first-parent-b" } }),
+            ],
+          }
+        ),
+        node(
+          "dup",
+          {},
+          {
+            body: [
+              node("s1", { props: { mark: "wanted-a" } }),
+              node("s2", { props: { mark: "wanted-b" } }),
+            ],
+          }
+        ),
+      ],
+    };
+
+    const plan = planSaveAsPattern(doc, ["s1", "s2"], target);
+
+    expect(plan.create?.document.nodes.map(n => n.props?.mark)).toEqual([
+      "wanted-a",
+      "wanted-b",
+    ]);
+  });
+});
+
 describe("what it refuses, and why", () => {
   it("refuses a selection with a block left out of the middle", () => {
     const doc = page([node("a"), node("b"), node("c")]);

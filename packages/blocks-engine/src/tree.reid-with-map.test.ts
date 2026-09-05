@@ -329,6 +329,60 @@ describe("a fragment link in props follows the copy", () => {
     expect(items[0]!.href).toBe(`#${domIds.get("pricing")}`);
   });
 
+  it("LEAVES DISPLAY TEXT ALONE even when it names a minted id", () => {
+    // The narrowing that stops this rule reaching content. A heading may
+    // legitimately read "#pricing" while a sibling in the same run carries
+    // `cssId: "pricing"` — matching a minted id does not make a string a
+    // reference. Rewriting on the value alone turned the heading into
+    // "#pricing-<suffix>" and changed what the page says, silently, in every
+    // insertion of the pattern afterwards.
+    const forest = [
+      node("target", { cssId: "pricing" }),
+      node("heading", {
+        props: { text: "#pricing", href: "#pricing" },
+      } as Partial<BlockNode>),
+    ];
+
+    const { nodes, domIds } = reidForestWithMap(forest);
+
+    expect(nodes[1]!.props.text).toBe("#pricing");
+    // The field that HOLDS a target still moves, in the same node.
+    expect(nodes[1]!.props.href).toBe(`#${domIds.get("pricing")}`);
+  });
+
+  it("reaches a rich-text link far deeper than any authored nesting", () => {
+    // props → content → root → children → list → children → listitem →
+    // children → link → url. Ten values down, which a depth cap of eight cut
+    // off — so an ordinary link in a bulleted list was left dangling while its
+    // target was re-minted.
+    const link = {
+      type: "link",
+      url: "#pricing",
+      children: [{ type: "text", text: "Plans" }],
+    };
+    const richText = {
+      root: {
+        type: "root",
+        children: [
+          { type: "list", children: [{ type: "listitem", children: [link] }] },
+        ],
+      },
+    };
+    const forest = [
+      node("target", { cssId: "pricing" }),
+      node("body", { props: { content: richText } } as Partial<BlockNode>),
+    ];
+
+    const { nodes, domIds } = reidForestWithMap(forest);
+
+    const content = nodes[1]!.props.content as {
+      root: { children: { children: { children: { url: string }[] }[] }[] };
+    };
+    expect(content.root.children[0]!.children[0]!.children[0]!.url).toBe(
+      `#${domIds.get("pricing")}`
+    );
+  });
+
   it("leaves a string that only LOOKS like a fragment alone", () => {
     const forest = [
       node("target", { cssId: "pricing" }),

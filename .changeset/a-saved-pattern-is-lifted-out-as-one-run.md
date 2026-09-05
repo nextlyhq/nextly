@@ -98,3 +98,28 @@ took down every caller — a multi-block reorder and a saved pattern included �
 for a node neither of them had touched. These primitives are documented as
 reading documents nothing has validated, so a broken entry is skipped and the
 answer is about the nodes that were actually asked for.
+
+Only a field that HOLDS a link target is rewritten, and matching a minted id is
+not enough on its own. `core/heading` declares `text` and `href` as separate
+props, so a heading legitimately reading `#pricing` beside a sibling carrying
+`cssId: "pricing"` was rewritten to `#pricing-<suffix>` — authored content
+changed silently, and then carried into every insertion of the pattern. The
+field name now decides and the value only decides whether there is anything to
+do, with `href` and `url` listed as data the way the id-bearing markup
+attributes already are. A block with a differently-named target leaves a link
+that no longer jumps, which an author can see and repair; the alternative
+changed what a page said without anyone being able to see it.
+
+The scan bounds WORK rather than depth. A rich-text link inside a list item sits
+ten values down a prop tree, past the old depth cap of eight, so an ordinary
+link in a bulleted list was left pointing at an id that had been re-minted. Any
+fixed depth is arbitrary — rich text nests as deeply as an author nests it —
+while a visit budget bounds a wide tree as well as a deep one and still
+terminates on a value that refers to itself.
+
+A saved run reads each selected node by its own id. Resolving the run's parent a
+second time and indexing into its slot is not the same operation on a stored
+document nothing validated: two nodes may share an id, and the parent a lookup
+answers with is the first one, not necessarily the one the selection was located
+under. Measured on a document with two parents sharing an id, selecting the
+second parent's children saved the first parent's.
