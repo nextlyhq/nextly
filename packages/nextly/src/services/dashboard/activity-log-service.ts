@@ -23,6 +23,7 @@ import { toDbError } from "../../database/errors";
 // the underlying DbError is preserved as `cause` and rich DB context
 // (kind, dialect, code) flows into logContext automatically.
 import { insertErasureAware } from "../../domains/audit/erasure-aware-insert";
+import { SETTINGS_ACTIVITY_NAMESPACES } from "../../domains/audit/settings-activity-namespaces";
 import { NextlyError } from "../../errors";
 import { BaseService } from "../base-service";
 import {
@@ -185,40 +186,68 @@ function statedKindOf(
     : undefined;
 }
 
-/**
- * Which read path can answer for a row, or `null` when none can.
- *
- * The RECORDED kind wins over the registry: a row that says it is a settings
- * change names no document, whatever a collection of the same name suggests. A
- * row that states nothing is one written before the column existed, and falls
- * back to the registry — which is what those rows were always judged by.
- *
- * A stated kind is still checked against the registry, so a slug that no longer
- * names anything readable stays undecidable rather than being probed against a
- * read path that cannot answer about it.
- */
-function subjectKindOf(
-  stated: ActivitySubjectKind | undefined,
-  kinds: ReadonlyMap<string, "collection" | "single">,
-  slug: string
-): "collection" | "single" | null {
-  if (stated === "collection" || stated === "single") {
-    // A stated kind still has to be answerable: the registry is what supplies
-    // the read path, so a slug it no longer knows leaves the row undecidable
-    // rather than decided. The CALLER separates that from "not a document".
-    return kinds.has(slug) ? stated : null;
-  }
-  return kinds.get(slug) ?? null;
+/** True when `slug` names one of the install-level settings namespaces. */
+function isSettingsNamespace(slug: string): boolean {
+  return (SETTINGS_ACTIVITY_NAMESPACES as readonly string[]).includes(slug);
+}
+
+/** A decided document subject, with the language the write was made in. */
+function documentSubject(
+  kind: "collection" | "single",
+  slug: string,
+  entryId: string,
+  row: Record<string, unknown>
+): ActivitySubject {
+  // 🔴 The language the write was made IN, so the read rule is evaluated for
+  // that translation. A localized field answers differently per language, so a
+  // row judged without one is judged against the default — and an edit made in
+  // a language the rule denies would still show its title.
+  return {
+    kind: "document",
+    ref: { kind, slug, entryId, locale: stringOr(row.locale) ?? null },
+  };
 }
 
 /**
- * The document an activity row is about, or `null` when it is about no document.
+ * What to do with a row that states no kind — one written before the column.
+ *
+ * 🔴 The column is nullable and NOT backfilled, so every upgraded installation
+ * keeps rows like these indefinitely and this is the only classification they
+ * ever get. The settings namespaces are therefore named EXPLICITLY rather than
+ * inferred from a registry miss: reading "not in the registry" as install-level
+ * returns a document whose collection has just been removed with its raw title,
+ * metadata and actor and no rule applied, which an HMR reload between the scope
+ * query and this pass makes ordinary.
+ *
+ * The COLLISION is the case that cannot be resolved, and it is resolved the only
+ * safe way. A resource that already held a now-reserved name may keep it, so a
+ * slug can be both a settings namespace and a registered collection — and a
+ * legacy row carries nothing saying which it was. Guessing "settings" would
+ * return a real document's row unauthorized, so it is dropped. Rows written from
+ * here on state their kind and are never ambiguous; what is lost is legacy
+ * settings detail, on colliding installations only.
+ */
+function legacySubject(
+  row: Record<string, unknown>,
+  slug: string,
+  entryId: string,
+  kinds: ReadonlyMap<string, "collection" | "single">
+): ActivitySubject {
+  const registered = kinds.get(slug);
+  if (isSettingsNamespace(slug)) {
+    return registered ? { kind: "undecidable" } : { kind: "install-level" };
+  }
+  if (!registered) return { kind: "undecidable" };
+  return documentSubject(registered, slug, entryId, row);
+}
+
+/**
+ * What a feed row is, once the registry has been consulted.
  *
  * The row's `collection` is a FREE STRING whose namespace is deliberately wider
  * than the registries — settings mutations are filed under names that are
- * neither a collection nor a single — so the registry lookup is what separates
- * a content event from an install-level one. Guessing a kind instead would send
- * a settings row to a content read path that cannot answer about it.
+ * neither a collection nor a single — so what the row STATES, and failing that
+ * the registry, is what separates a content event from an install-level one.
  */
 function subjectOf(
   row: Record<string, unknown>,
@@ -234,26 +263,16 @@ function subjectOf(
     return { kind: "install-level" };
   }
 
-  const kind = subjectKindOf(stated, kinds, slug);
-  if (!kind) {
-    // 🔴 UNDECIDABLE, and it must not collapse into "install-level". A row whose
-    // slug is in neither registry may be a settings namespace this build does
-    // not list — or a document whose collection has just gone, which a registry
-    // reload between the scope query and this pass makes ordinary. The two are
-    // told apart by what the ROW says: one that states a document kind IS a
-    // document, and a document nothing can decide is dropped. Folding it into
-    // "install-level" returns its raw title with no rule applied at all.
-    return stated ? { kind: "undecidable" } : { kind: "install-level" };
+  // A row that STATES a document kind is a document — but only a registered
+  // slug supplies a read path to ask, so one whose collection has gone is
+  // undecidable rather than install-level.
+  if (stated) {
+    return kinds.has(slug)
+      ? documentSubject(stated, slug, entryId, row)
+      : { kind: "undecidable" };
   }
 
-  return {
-    kind: "document",
-    // 🔴 The language the write was made IN, so the read rule is evaluated for
-    // that translation. A localized field answers differently per language, so
-    // a row judged without one is judged against the default — and an edit made
-    // in a language the rule denies would still show its title.
-    ref: { kind, slug, entryId, locale: stringOr(row.locale) ?? null },
-  };
+  return legacySubject(row, slug, entryId, kinds);
 }
 
 /** One existence probe's worth of refused rows: a collection, in a language. */
@@ -919,8 +938,18 @@ export class ActivityLogService extends BaseService {
         const { unit, existing } = outcome.value;
         for (const entry of unit.entries) {
           if (existing.has(entry.entryId)) continue;
+          // 🔴 The IDENTIFIER goes with the title. Keeping `entryId` returns
+          // the denied document's id to every caller with collection access —
+          // the same thing the authorization pass exists to withhold, minus
+          // the words. What is left says an event happened, not which document
+          // it happened to.
+          //
+          // `userName` and `userEmail` stay, deliberately: an audit trail that
+          // cannot say WHO deleted something is not one, and that is the
+          // trade this redaction was chosen to make.
           kept.set(entry.row, {
             ...entry.row,
+            entryId: null,
             entryTitle: null,
             metadata: null,
           });

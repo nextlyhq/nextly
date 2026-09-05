@@ -526,3 +526,121 @@ describe("existence probes for refused rows", () => {
     expect(peak).toBeLessThanOrEqual(8);
   });
 });
+
+describe("rows written before the subject-kind column", () => {
+  /**
+   * 🔴 The column is nullable and NOT backfilled, so every upgraded install
+   * keeps these indefinitely — this classification is the only one they ever
+   * get. Reading "slug not in the registry" as install-level returned a
+   * document's raw title, metadata and actor with no rule applied, which an
+   * HMR removal between the scope query and this pass makes ordinary.
+   */
+  const legacyRow = (collection: string) => ({
+    id: "l1",
+    action: "update",
+    collection,
+    entryId: "e1",
+    entryTitle: "SECRET",
+    metadata: '{"changed":["host"]}',
+    createdAt: new Date(2026, 0, 1),
+  });
+
+  const drawFeed = async (
+    row: Record<string, unknown>,
+    registry: [string, "collection" | "single"][]
+  ) => {
+    const { service, adapter } = makeService();
+    registeredKinds.mockReturnValue(
+      new Map<string, "collection" | "single">(registry)
+    );
+    existingIds.mockImplementation((_s: string, ids: string[]) =>
+      Promise.resolve(new Set(ids))
+    );
+    (adapter.select as ReturnType<typeof vi.fn>).mockResolvedValueOnce([row]);
+    return service.getRecentActivity({
+      limit: 5,
+      scope: someResources([String(row.collection)]),
+      caller: { user: { id: "u1", roles: ["editor"] } },
+    });
+  };
+
+  it("KEEPS one under a known settings namespace", async () => {
+    // Named explicitly rather than inferred from a registry miss. These rows
+    // are credential rotations and their kin, and dropping them would empty
+    // that half of the trail on every upgraded install.
+    const result = await drawFeed(legacyRow("email-providers"), []);
+
+    expect(result.activities).toHaveLength(1);
+    expect(result.activities[0]?.entryTitle).toBe("SECRET");
+  });
+
+  it("DROPS one under a slug the registry does not know", async () => {
+    // The case the old rule got wrong: unknown stops meaning safe.
+    const result = await drawFeed(legacyRow("vanished"), []);
+
+    expect(result.activities).toEqual([]);
+  });
+
+  it("DROPS one when the slug is BOTH a namespace and a collection", async () => {
+    // Irreducibly ambiguous: a legacy row carries nothing saying which it was,
+    // and guessing "settings" would return a real document's row unauthorized.
+    // Fail closed. Rows written from here on state their kind.
+    const result = await drawFeed(legacyRow("email-providers"), [
+      ["email-providers", "collection"],
+    ]);
+
+    expect(result.activities).toEqual([]);
+  });
+
+  it("still authorizes one under an ordinary registered collection", async () => {
+    // The control: legacy rows naming a live collection are documents, and go
+    // through the read path exactly as before.
+    const result = await drawFeed(legacyRow("posts"), [
+      ["posts", "collection"],
+    ]);
+
+    expect(result.activities).toEqual([]);
+    expect(existingIds).toHaveBeenCalled();
+  });
+});
+
+describe("what a redacted deletion still carries", () => {
+  it("drops the document's IDENTIFIER along with its title", async () => {
+    // 🔴 Keeping `entryId` returns the denied document's id to every caller
+    // with collection access — the same thing the authorization pass exists to
+    // withhold, minus the words. The event survives; which document it happened
+    // to does not.
+    const { service, adapter } = makeService();
+    registeredKinds.mockReturnValue(
+      new Map<string, "collection" | "single">([["posts", "collection"]])
+    );
+    existingIds.mockResolvedValue(new Set<string>());
+    (adapter.select as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      {
+        id: "a1",
+        action: "delete",
+        collection: "posts",
+        entryId: "denied-doc",
+        entryTitle: "Q4 plan",
+        subjectKind: "collection",
+        userName: "Dana",
+        userEmail: "dana@example.com",
+        createdAt: new Date(2026, 0, 1),
+      },
+    ]);
+
+    const result = await service.getRecentActivity({
+      limit: 5,
+      scope: someResources(["posts"]),
+      caller: { user: { id: "u1", roles: ["editor"] } },
+    });
+
+    expect(result.activities).toHaveLength(1);
+    expect(result.activities[0]?.entryId).toBeNull();
+    expect(result.activities[0]?.entryTitle).toBeNull();
+    // The actor STAYS, deliberately: an audit trail that cannot say who
+    // deleted something is not one, and that is the trade this redaction was
+    // chosen to make.
+    expect(result.activities[0]?.userName).toBe("Dana");
+  });
+});
