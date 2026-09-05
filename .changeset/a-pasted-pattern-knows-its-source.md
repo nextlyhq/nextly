@@ -91,3 +91,11 @@ because the minted replacement is built from the stored value. The walk is
 structure-aware rather than a serializer replacer keyed on the name `id`, which
 would have dropped a prop an author named `id` and an `attributes.id` the copy
 does carry.
+
+An id reference is hashed as its tokens, because that is how the copier writes
+it back: `"hero   label"` and `"hero label"` name the same two references and
+every copy carries the second, so hashing the spacing reported a change no copy
+can show. Through the copier's own rule, now published, rather than a second
+split that would agree until one of them moved — and only for the
+reference-valued attributes, since whitespace inside an ordinary one is content
+a copy carries exactly.

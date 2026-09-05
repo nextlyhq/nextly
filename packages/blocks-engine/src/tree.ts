@@ -1272,6 +1272,23 @@ const ID_REFERENCE_SET = new Set(ID_REFERENCE_ATTRIBUTES);
  * Returns the SAME record when nothing referenced anything, so the ordinary
  * node allocates nothing.
  */
+/**
+ * An IDREFS value as its tokens, with the separators gone.
+ *
+ * The single statement of what such a value MEANS: a list of ids, where runs of
+ * whitespace are one separator and a leading or trailing one is nothing. Every
+ * parser reads `"hero   label"` and `"hero label"` as the same two references,
+ * and {@link remapIdReferences} writes both back as the second.
+ *
+ * Published because a second reader now depends on that being true rather than
+ * merely doing the same thing: a fingerprint of what a copy carries has to
+ * normalise exactly where the copier normalises, and a parallel `split`
+ * elsewhere would agree until one of them changed.
+ */
+export function idReferenceTokens(value: string): string[] {
+  return value.split(/\s+/).filter(token => token !== "");
+}
+
 export function remapIdReferences(
   attributes: Record<string, string>,
   domIds: ReadonlyMap<string, string>
@@ -1288,11 +1305,10 @@ export function remapIdReferences(
       defineEntry(next, name, value as string);
       continue;
     }
-    // Split on whitespace so an IDREFS list is rewritten token by token; the
-    // separator is normalised to one space, which is what every parser reads
-    // the original as anyway.
-    const tokens = value.split(/\s+/).filter(token => token !== "");
-    const mapped = tokens.map(token => domIds.get(token) ?? token);
+    // Token by token, through the one spelling of what an IDREFS list IS.
+    const mapped = idReferenceTokens(value).map(
+      token => domIds.get(token) ?? token
+    );
     const rewritten = mapped.join(" ");
     if (rewritten !== value) changed = true;
     defineEntry(next, name, rewritten);

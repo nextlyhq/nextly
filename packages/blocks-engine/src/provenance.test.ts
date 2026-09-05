@@ -19,6 +19,14 @@ import { applyOps } from "./ops";
 import { patternDigest } from "./pattern-digest";
 import { reidForestWithMap, walkNodes } from "./tree";
 
+/**
+ * A minimal node: enough to be well formed, and nothing that carries meaning.
+ *
+ * The defaults matter to what these tests can conclude. No `origin`, so a
+ * record appearing in a result was written by a planner rather than inherited
+ * from a fixture; empty `props` and one block type throughout, so a digest that
+ * differs differs because of the field under test.
+ */
 const node = (
   id: string,
   extra: Partial<BlockNode> = {},
@@ -32,19 +40,39 @@ const node = (
   ...(slots === undefined ? {} : { slots }),
 });
 
+/** A destination document. Kind `page`, because a pattern is inserted INTO one. */
 const page = (nodes: BlockNode[]): BlockDocument => ({
   formatVersion: DOCUMENT_FORMAT_VERSION,
   kind: "page",
   nodes,
 });
 
+/**
+ * A nesting source that restricts nothing.
+ *
+ * Explicit rather than defaulted: every planner here takes one, and a source
+ * that refused a placement would fail these tests for a reason that has nothing
+ * to do with provenance.
+ */
 const anyParent = { parentsOf: () => undefined };
+/**
+ * Where a saved pattern is stored, in the caller's vocabulary.
+ *
+ * Passed through by the planner untouched, so its contents are irrelevant here
+ * beyond being present — what these tests read is the document it wraps.
+ */
 const target = {
   collection: "patterns",
   fields: { title: "Hero", slug: "hero" },
 };
 
-/** Every origin record in a forest. */
+/**
+ * Every origin record in a forest, at every depth, in walk order.
+ *
+ * Collected rather than checked node by node because the assertions are about
+ * HOW MANY records exist and where — that only the roots are marked, or that a
+ * save left none anywhere — and both are claims about the whole forest.
+ */
 function originsIn(nodes: BlockNode[]): (BlockOrigin | undefined)[] {
   const out: (BlockOrigin | undefined)[] = [];
   walkNodes(nodes, n => out.push(n.origin));
@@ -179,6 +207,40 @@ describe("the digest describes what a COPY would carry", () => {
     // the name would drop this too, and it is content.
     const before = [node("p1", { props: { id: "left" } })];
     const after = [node("p1", { props: { id: "right" } })];
+
+    expect(patternDigest(after)).not.toBe(patternDigest(before));
+  });
+
+  it("IGNORES whitespace inside an id reference, which the copier collapses", () => {
+    // `"hero   label"` and `"hero label"` name the same two references and the
+    // copier writes both back as the second, so every copy carries the same
+    // value and a spacing edit is not a change any copy can show.
+    const spaced = [
+      node("t", { cssId: "hero" }),
+      node("p1", { attributes: { "aria-labelledby": "hero   label" } }),
+    ];
+    const tight = [
+      node("t", { cssId: "hero" }),
+      node("p1", { attributes: { "aria-labelledby": "hero label" } }),
+    ];
+
+    expect(patternDigest(spaced)).toBe(patternDigest(tight));
+  });
+
+  it("still notices a reference pointing somewhere else", () => {
+    // The control against collapsing the whole value: which ids are named IS
+    // carried, and changing one changes every copy.
+    const before = [node("p1", { attributes: { "aria-labelledby": "hero" } })];
+    const after = [node("p1", { attributes: { "aria-labelledby": "footer" } })];
+
+    expect(patternDigest(after)).not.toBe(patternDigest(before));
+  });
+
+  it("does NOT collapse whitespace in an ordinary attribute", () => {
+    // An attribute that holds no reference is content, and a copy carries its
+    // spacing exactly.
+    const before = [node("p1", { attributes: { "data-note": "a   b" } })];
+    const after = [node("p1", { attributes: { "data-note": "a b" } })];
 
     expect(patternDigest(after)).not.toBe(patternDigest(before));
   });

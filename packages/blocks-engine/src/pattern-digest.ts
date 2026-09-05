@@ -49,6 +49,19 @@
  * insert and put back by the same group; and an `origin` deeper than a root,
  * which is copied as it stands.
  *
+ * NORMALISED rather than kept verbatim: an id-reference attribute is hashed as
+ * its tokens, because the copier writes it back that way — `"hero   label"` and
+ * `"hero label"` name the same two references and every copy carries the
+ * second. Through the copier's own {@link idReferenceTokens}, not a second
+ * `split` that would agree until one of them moved.
+ *
+ * The copier only rewrites those attributes when it mints at least one DOM id,
+ * so a pattern carrying none keeps its spacing verbatim while this canonicalises
+ * anyway. The asymmetry is deliberate and it only ever costs a MISSED
+ * whitespace-only edit, which no consumer of an IDREFS list can observe —
+ * where hashing the spacing costs a false stale signal on every copy, which is
+ * the failure this rule exists to prevent.
+ *
  * The exclusion lives here rather than at the call site so the fingerprint and
  * the thing it fingerprints cannot be asked about different content — a later
  * staleness check hashes the pattern as it stands now and compares, and it must
@@ -58,6 +71,7 @@
  */
 import type { BlockNode } from "./document";
 import { hashId } from "./style/node-class";
+import { ID_REFERENCE_ATTRIBUTES, idReferenceTokens } from "./tree";
 
 /**
  * The digest of a pattern's stored nodes.
@@ -78,6 +92,26 @@ export function patternDigest(nodes: readonly BlockNode[]): string {
 }
 
 /**
+ * A node's attributes with every id reference reduced to its tokens.
+ *
+ * Only the reference-valued ones. An ordinary attribute is content, and
+ * collapsing whitespace inside one would hide an edit a copy really carries.
+ */
+function canonicalAttributes(
+  attributes: Record<string, string>
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(attributes)) {
+    out[name] =
+      ID_REFERENCE_ATTRIBUTES.includes(name.toLowerCase()) &&
+      typeof value === "string"
+        ? idReferenceTokens(value).join(" ")
+        : value;
+  }
+  return out;
+}
+
+/**
  * One node reduced to what a copy of it would carry.
  *
  * Structure-aware rather than a `JSON.stringify` replacer keyed on the name
@@ -90,8 +124,10 @@ export function patternDigest(nodes: readonly BlockNode[]): string {
  * this very input, so it adds no limit the caller did not already have.
  */
 function copiedShape(node: BlockNode, isRoot: boolean): unknown {
-  const { id: _id, origin, slots, ...rest } = node;
+  const { id: _id, origin, slots, attributes, ...rest } = node;
   const shape: Record<string, unknown> = { ...rest };
+  if (attributes !== undefined)
+    shape.attributes = canonicalAttributes(attributes);
   // A root's record is overwritten on insert; a deeper one travels with the copy.
   if (!isRoot && origin !== undefined) shape.origin = origin;
   if (slots !== undefined) {
