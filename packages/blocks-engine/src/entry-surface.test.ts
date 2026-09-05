@@ -2,23 +2,20 @@
  * Every primitive in the format and tree modules is reachable from the package
  * entry.
  *
- * This exists because the same gap has now been found three times by a reader
- * rather than a test, and each time the symbol's own docblock had already
- * claimed the thing that was not true: `idReferenceTokens` said it was
- * published so a second copier would not re-split an IDREFS value;
- * `isBlockOrigin` was moved beside its type so both roads into storage could
- * ask one question; `isPartName` says it is "the ONE answer" for the same
- * reason its exported sibling `isBlockType` is.
+ * `export` in a module makes a symbol importable WITHIN the package. A consumer
+ * gets only what the entry re-exports, and the two are independent: a symbol can
+ * satisfy every internal caller and be unreachable from outside.
  *
- * A rule nobody can import is a rule the next surface writes again, and the
- * second spelling is the defect — so "is it exported from the module" and "can
- * a consumer reach it" are two different claims, and only the second one
- * matters to the argument these docblocks make.
+ * That difference matters most for the symbols these two modules hold, because
+ * each is written as the single answer to a question — what a stored value IS,
+ * what a copied id reference means, how a forest is rewritten. A single answer
+ * a caller cannot import is one they write again, and the second spelling is
+ * the defect: it admits what the first refuses, and no test compares them.
  *
- * Scoped to the two modules that publish primitives OTHER code is meant to
- * reuse rather than to every module, because that is the claim being checked:
- * `document.ts` states what a stored document IS, and `tree.ts` holds the
- * traversal and copying rules a caller is not supposed to rewrite.
+ * Scoped to these two modules rather than to every module, because that is
+ * where the claim is made: `document.ts` states what a stored document is, and
+ * `tree.ts` holds the traversal and copying rules a caller is not meant to
+ * rewrite.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -47,11 +44,11 @@ function exportedFunctions(module: string): string[] {
 const reachable = new Set(Object.keys(entry));
 
 /**
- * Known unreachable, with the reason.
+ * Names the entry does not re-export.
  *
- * `isPartName` predates this guard and its own docblock argues it should be
- * published — it is left alone here rather than exported as a side effect of an
- * unrelated change, and filed instead.
+ * A record of what the entry holds today, not a judgement that it should: the
+ * assertion below fails on a name listed here that IS reachable, so the list
+ * cannot quietly outlive the state it describes.
  */
 const KNOWN_UNPUBLISHED = new Set(["isPartName"]);
 
