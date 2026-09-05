@@ -7,7 +7,7 @@ conventions, see AGENTS.md and CONTRIBUTING.md. For user-facing docs, see
 
 ## Overview
 
-Nextly is a CMS and app framework that runs INSIDE the user's Next.js app.
+Nextly is a CMS and visual page builder that runs INSIDE the user's Next.js app.
 There is no hosted service: the user's project mounts routes that delegate to
 our packages, and everything (admin panel, REST API, schema management,
 media) executes in their app against their database.
