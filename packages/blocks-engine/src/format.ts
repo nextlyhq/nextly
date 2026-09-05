@@ -62,7 +62,7 @@ export { measureBytes, surveyDocument } from "./measure-bytes";
 // against without reaching past it — which is the coupling this entry exists to
 // avoid.
 export type { DocumentSurvey, SurveyLimits } from "./measure-bytes";
-export type { BlockDocument, BlockNode } from "./document";
+export type { BlockDocument, BlockNode, BlockOrigin } from "./document";
 export { isPlainRecord } from "./plain-record";
 
 export {

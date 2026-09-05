@@ -63,10 +63,17 @@ export interface Activity {
   collectionLabel?: string;
   /** Activity category for badge styling */
   category: ActivityCategory;
-  /** Timestamp when the activity occurred (ISO 8601 format) */
+  /**
+   * When the activity occurred (ISO 8601).
+   *
+   * 🔴 The only time this entry carries, deliberately. A `relativeTime` string
+   * sat beside it, computed once while mapping the response -- so "just now"
+   * stayed "just now" for as long as the query's data was reused, which on a
+   * dashboard left open is indefinitely. A relative time is a function of when
+   * it is READ, so it is derived at render from this, the way every other
+   * relative time in the admin already is.
+   */
   timestamp: string;
-  /** Relative time string (e.g., "2 minutes ago") */
-  relativeTime: string;
 }
 
 /**

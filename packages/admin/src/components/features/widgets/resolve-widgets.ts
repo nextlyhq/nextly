@@ -20,6 +20,7 @@ import type {
   WidgetStatCell,
   WidgetChrome,
 } from "nextly/config";
+import { widgetGateHolds } from "nextly/widget-gate";
 
 import type {
   PluginMetadata,
@@ -80,7 +81,7 @@ function readableActions(
 export interface ReadableWidgetDeclaration {
   id: string;
   size?: "full" | "half";
-  requiredPermission?: string;
+  requiredPermission?: string | readonly string[];
   title?: string;
   description?: string;
   icon?: string;
@@ -200,7 +201,7 @@ function resolveOne(
   meta: ReadableWidgetDeclaration,
   hasPermission: (permission: string) => boolean
 ): DashboardWidget | undefined {
-  if (meta.requiredPermission && !hasPermission(meta.requiredPermission)) {
+  if (!widgetGateHolds(meta.requiredPermission, hasPermission)) {
     return undefined;
   }
   const archetype = resolveArchetype(meta);
@@ -247,7 +248,7 @@ function resolveRegistered(
   meta: RegisteredWidgetMeta,
   hasPermission: (permission: string) => boolean
 ): DashboardWidget | undefined {
-  if (meta.requiredPermission && !hasPermission(meta.requiredPermission)) {
+  if (!widgetGateHolds(meta.requiredPermission, hasPermission)) {
     return undefined;
   }
 

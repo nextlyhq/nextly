@@ -19,6 +19,7 @@
 
 import { CollectionQuickLinks } from "@admin/components/features/dashboard/CollectionQuickLinks";
 import { QuickCreate } from "@admin/components/features/dashboard/QuickCreate";
+import { RecentActivity } from "@admin/components/features/dashboard/RecentActivity";
 import { SeedDemoContentCard } from "@admin/components/features/dashboard/SeedDemoContentCard";
 import { SinglesQuickLinks } from "@admin/components/features/dashboard/SinglesQuickLinks";
 import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
@@ -38,4 +39,5 @@ export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#SinglesQuickLinks", SinglesQuickLinks);
   registerCoreComponent("core#QuickCreate", QuickCreate);
   registerCoreComponent("core#TeamSummary", TeamSummary);
+  registerCoreComponent("core#RecentActivity", RecentActivity);
 }

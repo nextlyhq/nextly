@@ -15,24 +15,49 @@
  * contributions, so without a declared position core's cards would sit BELOW
  * every plugin's, which is not the dashboard anyone has today.
  *
- * All four are `custom` with `chrome: "none"`. Each already draws a titled
- * section with its own rules, loading skeleton and error state; framed by
- * `WidgetCard` each would gain a second heading above its own. `title` is still
- * required and still meaningful -- it is what names the card in the layout
- * editor, where a reader chooses what to show.
+ * The `custom` ones carry `chrome: "none"`. Each already draws a titled section
+ * with its own rules, loading skeleton and error state; framed by `WidgetCard`
+ * each would gain a second heading above its own. `title` is still required and
+ * still meaningful -- it is what names the card in the layout editor, where a
+ * reader chooses what to show. Stated as a property of that group rather than
+ * as a count, because the count was written as "all four" and was wrong by two
+ * before anyone reread it.
  *
- * Deliberately NO `requiredPermission`. Every one of these is visible to any
- * authenticated admin today, and adding a gate here would hide a card someone
- * currently sees -- a behaviour change wearing the costume of a refactor. The
- * gate that belongs on `core/team` in particular waits on a question this
- * repository has not answered: which permission gates a bare COUNT of users,
- * given `dashboard-service` computes it unscoped.
+ * Each `custom` card names its body as a `core#` STRING, resolved in the admin
+ * by `core-components.ts`. Nothing in either package can check that the two
+ * agree -- neither depends on the other -- so a card naming a path that was
+ * never registered draws the unresolved fallback, silently and only for the
+ * reader who has it. `core-widget-components.test.ts` in the admin is what
+ * holds the halves together; it reads this file.
+ *
+ * Deliberately no `requiredPermission` on the cards that predate the widget
+ * grid. Every one of those is visible to any authenticated admin today, and
+ * adding a gate would hide a card someone currently sees -- a behaviour change
+ * wearing the costume of a refactor. The gate that belongs on `core/team` in
+ * particular waits on a question this repository has not answered: which
+ * permission gates a bare COUNT of users, given `dashboard-service` computes it
+ * unscoped.
+ *
+ * 🔴 A card added HERE is new to every reader, so that argument does not extend
+ * to it: nothing is hidden that was previously visible, so the gate is decided
+ * by what the CARD'S SOURCE does to a caller who may not see its rows. The two
+ * cards added together answer that differently, and neither is the default:
+ *
+ * - `core/upcoming-releases` is gated. `ReleasesService.find` authorizes by
+ *   THROWING, so an ungranted reader gets a card stuck in its error state
+ *   rather than an empty one -- see its own note.
+ * - `core/recent-activity` is not. Its feed takes the caller's readable
+ *   collections as a scope and defaults that scope to NOTHING, so a reader
+ *   entitled to none of it is shown an empty feed. That is a card correctly
+ *   saying there is nothing to report, which needs no gate; a gate would
+ *   instead hide the feed from anyone whose permissions happened to be narrow
+ *   today.
  *
  * @module domains/widgets/core-widgets
  */
 
 import type { WidgetDefinition } from "./definition";
-import { VERSIONS_SOURCE_ID } from "./system-source-ids";
+import { RELEASES_SOURCE_ID, VERSIONS_SOURCE_ID } from "./system-source-ids";
 
 /**
  * The prefix core's dashboard components resolve under.
@@ -119,11 +144,103 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     archetype: "list",
     defaultSize: "md",
     defaultOrder: 35,
+    /*
+     * Two fields, because the `list` archetype draws the first two and silently
+     * drops the rest -- see `core/upcoming-releases`. This card selected three,
+     * so `updatedAt` was never drawn on a card whose own description promises
+     * "most recently ... newest first".
+     *
+     * 🔴 `entryId` is KEPT and `scopeSlug` is the one dropped, and the first
+     * attempt at this had it the other way round. Dropping the id looked right
+     * -- it is a uuid, and the collection name reads better -- but two pending
+     * edits in the same collection then render as the same two values, so a
+     * card describing a list of DOCUMENTS could not tell one from another. A
+     * row that cannot name its subject is worse than one naming it awkwardly.
+     *
+     * The uuid is still the wrong thing to show a person, and nothing better is
+     * selectable: `VERSION_FIELDS` publishes `scopeSlug`, `entryId`, `locale`
+     * and `updatedAt`, so `entryId` is the only document identity this source
+     * has. A readable row needs the source to publish a title first, and that
+     * is an access-control change rather than a formatting one -- an entry
+     * title is field content, and `readable-documents.ts` selects `id` alone
+     * precisely so a visibility probe cannot carry field values into a surface
+     * that never asked for them.
+     */
     query: {
       source: VERSIONS_SOURCE_ID,
       op: "list",
-      select: ["scopeSlug", "entryId", "updatedAt"],
+      select: ["entryId", "updatedAt"],
       limit: 5,
     },
+  },
+  {
+    id: "core/upcoming-releases",
+    title: "Upcoming releases",
+    description: "Scheduled releases that have not shipped yet, soonest first.",
+    archetype: "list",
+    defaultSize: "md",
+    defaultOrder: 40,
+    /*
+     * 🔴 The ONLY core card with a gate, and the asymmetry is deliberate rather
+     * than an inconsistency. `ReleasesService.find` opens with
+     * `authorize(actor, "read")`, which THROWS -- so an ungranted reader does
+     * not get an empty card, they get one stuck in its error state, reporting a
+     * failure that is really a permission they were never meant to have. The
+     * two outcomes a card can have here are "hidden" and "broken", and nothing
+     * in between is reachable.
+     *
+     * `partitionPlacements` drops a card whose `requiredPermission` this caller
+     * lacks before the query is ever batched, and keeps it in the stored ROW so
+     * a reader whose grant is later widened gets it back where it was.
+     *
+     * 🔴 THREE slugs, any of which opens it, because `authorize` does not treat
+     * read as the only way to read: it returns early when the caller holds
+     * `create` or `publish`, deliberately, so a role granted only `create` can
+     * see the release it just made. The admin's `canViewReleases` capability
+     * lists the same three. Gating on the read slug alone made this card a
+     * third encoding of one rule and the only one that disagreed -- a
+     * create-only editor could open the releases screen and never see its card.
+     *
+     * Each slug is `${action}-${resource}` and `parsePermissionSlug` splits on
+     * the FIRST hyphen, so these parse to read/create/publish over
+     * `content-releases` -- matching `RELEASES_RESOURCE` and the authorities
+     * `api/releases.ts` requires of a human. Written out rather than composed
+     * from the constants because importing them would pull the releases
+     * service's wiring into this list, the same coupling `system-source-ids.ts`
+     * exists to avoid; a test parses them back and compares.
+     */
+    requiredPermission: [
+      "read-content-releases",
+      "create-content-releases",
+      "publish-content-releases",
+    ],
+    /*
+     * 🔴 TWO fields, and `state` is deliberately not one of them. The `list`
+     * archetype destructures `const [labelField, detailField] = select` and
+     * draws nothing past the second, so a third entry is not extra detail --
+     * it is silently dropped. Selecting title, state, scheduledAt therefore
+     * rendered each release beside the word "scheduled" and never showed WHEN,
+     * on a card whose entire subject is when.
+     *
+     * `state` would carry no information even if it were drawn: `resolveReleases`
+     * queries `state: "scheduled"` unconditionally, so every row this source can
+     * return already has it. The invariant field is the one to drop.
+     */
+    query: {
+      source: RELEASES_SOURCE_ID,
+      op: "list",
+      select: ["title", "scheduledAt"],
+      limit: 5,
+    },
+  },
+  {
+    id: "core/recent-activity",
+    title: "Recent activity",
+    description: "Who changed what, most recent first.",
+    archetype: "custom",
+    chrome: "none",
+    defaultSize: "full",
+    defaultOrder: 45,
+    component: "core#RecentActivity",
   },
 ] as const;

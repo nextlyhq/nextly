@@ -495,7 +495,27 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
   const id = contributedText(declaration, "id");
   if (id === undefined) return undefined;
 
-  const requiredPermission = contributedText(declaration, "requiredPermission");
+  /*
+   * 🔴 Read through the GATE's own reader, never `contributedText`. A gate may
+   * be a slug or an any-of array, and the string-only helper answered
+   * `undefined` for the array -- which this summary spells as "no
+   * requiredPermission", so `holdsWidgetPermission` returned true and the
+   * layout endpoint published the card's id and default placement to every
+   * authenticated reader. The browser hid it, so the only visible symptom was a
+   * card missing for someone who should have had it, while the disclosure had
+   * already happened on the wire.
+   *
+   * Carried VERBATIM when present, rather than normalised or filtered here.
+   * `holdsWidgetPermission` is the one place that decides what a gate means,
+   * including that a present-but-unusable one refuses -- so passing the value
+   * through unchanged is what keeps this summary from becoming a second opinion
+   * about it. Dropping an unusable gate would turn it into no gate, which is
+   * the same fail-open one level down.
+   */
+  const requiredPermission = declaration.requiredPermission as
+    | string
+    | readonly string[]
+    | undefined;
   const defaultSize = contributedSize(declaration);
   const defaultHeight = contributedText(declaration, "defaultHeight");
   const defaultOrder = declaration.defaultOrder;

@@ -60,7 +60,7 @@ import { container } from "../../di/container";
 import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WidgetQuery } from "../widgets/query";
-import type { WidgetResult } from "../widgets/result";
+import type { WidgetResult, WidgetResultField } from "../widgets/result";
 import { failUnavailableSourceOrOp } from "../widgets/sources";
 import { VERSIONS_SOURCE_ID } from "../widgets/system-source-ids";
 import { registerSystemSource } from "../widgets/system-sources";
@@ -254,15 +254,18 @@ function selectedNames(query: WidgetQuery): string[] {
 }
 
 /** Each selected name paired with the label this source publishes for it. */
-function describe(
-  names: readonly string[]
-): { name: string; label?: string }[] {
-  const labels = new Map(
-    VERSION_FIELDS.map(field => [field.name, field.label])
-  );
+function describe(names: readonly string[]): WidgetResultField[] {
+  // Type as well as label. The renderer presents a value by its declared kind,
+  // so a describer that publishes only the label leaves `updatedAt` to be
+  // printed as the ISO string it crossed the wire as.
+  const declared = new Map(VERSION_FIELDS.map(field => [field.name, field]));
   return names.map(name => {
-    const label = labels.get(name);
-    return { name, ...(label !== undefined && { label }) };
+    const field = declared.get(name);
+    return {
+      name,
+      ...(field?.label !== undefined && { label: field.label }),
+      ...(field?.type !== undefined && { type: field.type }),
+    };
   });
 }
 

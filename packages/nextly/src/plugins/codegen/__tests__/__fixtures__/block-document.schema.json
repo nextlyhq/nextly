@@ -361,6 +361,41 @@
         },
         "migrationFailed": {
           "type": "boolean"
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "const": "pattern"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string"
+                }
+              },
+              "required": ["from", "id", "digest"],
+              "additionalProperties": {}
+            },
+            {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "const": "component"
+                },
+                "id": {
+                  "type": "string"
+                }
+              },
+              "required": ["from", "id"],
+              "additionalProperties": {}
+            }
+          ]
         }
       },
       "required": ["id", "type", "version", "props"],

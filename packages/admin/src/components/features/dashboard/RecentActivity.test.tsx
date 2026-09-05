@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { render, screen, waitFor } from "@admin/__tests__/utils";
+import { act, render, screen, waitFor } from "@admin/__tests__/utils";
 import { useRecentActivity } from "@admin/hooks/queries/useRecentActivity";
 import { Activity } from "@admin/types/dashboard/activity";
 
@@ -15,6 +15,20 @@ vi.mock("@admin/hooks/queries/useRecentActivity", () => ({
 }));
 
 const mockUseRecentActivity = vi.mocked(useRecentActivity);
+
+/**
+ * The instant the tests pretend it is when the card is first read.
+ *
+ * The fixtures are anchored to it rather than carrying fixed dates, because the
+ * label under test is a function of NOW: hard-coded timestamps drift further
+ * into the past every day the suite runs, so an assertion on "2h ago" would
+ * pass today and fail forever after.
+ */
+const READ_AT = new Date("2026-03-01T12:00:00Z");
+
+function hoursBefore(instant: Date, hours: number): string {
+  return new Date(instant.getTime() - hours * 60 * 60 * 1000).toISOString();
+}
 
 const mockActivities: Activity[] = [
   {
@@ -33,8 +47,7 @@ const mockActivities: Activity[] = [
     action: "created",
     target: "new user account",
     category: "success",
-    timestamp: "2025-01-10T10:00:00Z",
-    relativeTime: "2 hours ago",
+    timestamp: hoursBefore(READ_AT, 2),
   },
   {
     id: "2",
@@ -51,8 +64,7 @@ const mockActivities: Activity[] = [
     action: "updated",
     target: "role permissions",
     category: "info",
-    timestamp: "2025-01-10T09:30:00Z",
-    relativeTime: "3 hours ago",
+    timestamp: hoursBefore(READ_AT, 3),
   },
 ];
 
@@ -92,7 +104,7 @@ describe("RecentActivity", () => {
 
     expect(
       // The copy the error branch renders.
-      screen.getByText(/failed to fetch activity stream/i)
+      screen.getByText(/couldn't load recent activity/i)
     ).toBeInTheDocument();
   });
 
@@ -165,7 +177,20 @@ describe("RecentActivity", () => {
     expect(mockUseRecentActivity).toHaveBeenCalledWith(5);
   });
 
-  it("displays relative timestamps", async () => {
+  /*
+   * 🔴 The label tracks the clock WITHOUT anything re-rendering the card, and
+   * that is the whole property. Deriving it at render instead of at fetch was
+   * only half the repair: a render has to happen for the derivation to run, and
+   * a dashboard card nobody touches gets none -- so an entry fetched as "just
+   * now" kept that wording for as long as the page stayed open, the same wrong
+   * label reached by a different route.
+   *
+   * The earlier version of this test called `rerender` itself, which is
+   * precisely what production has nothing to do. It went green on an
+   * implementation that could not update on its own. Here the ONLY thing that
+   * happens between the two assertions is time passing.
+   */
+  it("advances each label as time passes, with nothing re-rendering it", async () => {
     mockUseRecentActivity.mockReturnValue({
       data: { activities: mockActivities },
       isLoading: false,
@@ -175,12 +200,30 @@ describe("RecentActivity", () => {
       status: "success",
     } as ReturnType<typeof useRecentActivity>);
 
-    render(<RecentActivity />);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.setSystemTime(READ_AT);
+      render(<RecentActivity />);
 
-    await waitFor(() => {
-      expect(screen.getByText("2 hours ago")).toBeInTheDocument();
-      expect(screen.getByText("3 hours ago")).toBeInTheDocument();
-    });
+      await waitFor(() => {
+        expect(screen.getByText("2h ago")).toBeInTheDocument();
+        expect(screen.getByText("3h ago")).toBeInTheDocument();
+      });
+
+      // Three hours pass. No refetch, no rerender, no interaction -- only the
+      // card's own clock.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("5h ago")).toBeInTheDocument();
+        expect(screen.getByText("6h ago")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("2h ago")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("displays activity badges with correct variants", async () => {
@@ -202,7 +245,7 @@ describe("RecentActivity", () => {
     });
   });
 
-  it("has correct accessibility structure", async () => {
+  it("names its own region, since the grid frames it with no chrome", async () => {
     mockUseRecentActivity.mockReturnValue({
       data: { activities: mockActivities },
       isLoading: false,
@@ -215,11 +258,44 @@ describe("RecentActivity", () => {
     render(<RecentActivity />);
 
     await waitFor(() => {
-      // Header should be present
-      expect(screen.getByText("System Event Log")).toBeInTheDocument();
+      // Asked by ACCESSIBLE NAME rather than by the heading's text, because the
+      // card declares `chrome: "none"` and so owns its own labelled region --
+      // `getByText` would still pass on a heading that labels nothing.
+      expect(
+        screen.getByRole("region", { name: "Recent activity" })
+      ).toBeInTheDocument();
 
-      // Content should be visible
       expect(screen.getByText("John Doe")).toBeVisible();
     });
+  });
+
+  /*
+   * 🔴 Both controls existed and neither worked: a "Detailed Log" link whose
+   * href was the dashboard the card sits on, and a "Sync Previous Events"
+   * button with no handler. Asserted as ABSENCE OF ANY link or button rather
+   * than of those two strings, because the defect is a control that promises a
+   * destination this feed does not have -- re-adding one under a different
+   * label is the same defect and a string match would pass it.
+   */
+  it("offers no navigation or pagination control", async () => {
+    mockUseRecentActivity.mockReturnValue({
+      data: { activities: mockActivities },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isSuccess: true,
+      status: "success",
+    } as ReturnType<typeof useRecentActivity>);
+
+    render(<RecentActivity />);
+
+    // The control: the rows must have rendered, or an empty card would satisfy
+    // the two absence assertions below without the feed ever having drawn.
+    await waitFor(() => {
+      expect(screen.getByText("John Doe")).toBeVisible();
+    });
+
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
 });

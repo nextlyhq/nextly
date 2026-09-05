@@ -68,6 +68,7 @@ export type {
   Condition,
   DocumentFormatVersion,
   DocumentKind,
+  BlockOrigin,
   DocumentSettings,
   LocaleOverlay,
   LocaleOverlayValue,
