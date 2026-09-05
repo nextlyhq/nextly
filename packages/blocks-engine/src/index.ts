@@ -640,6 +640,27 @@ export {
   type ReservedOperationName,
 } from "./operations";
 
+// The op vocabulary itself: the edits an editor applies, addressed by id, with
+// the inverse derived before the mutation so undo is a fact rather than a
+// reconstruction. Exported from the ENGINE rather than owned by the editor
+// because applying an edit is not an editing-surface concern — a plugin route,
+// a script or an agent has the same right to it, and each would otherwise grow
+// its own vocabulary that agrees with this one only until one of them changed.
+export {
+  applyOp,
+  applyOps,
+  OpError,
+  positionOf,
+  sameStoredValue,
+  sameStyleValue,
+  type AppliedOp,
+  type AppliedOps,
+  type BuilderOp,
+  type NodePatch,
+  type OpPosition,
+  type SlotAddress,
+} from "./ops";
+
 /**
  * The stored shape of rich text.
  *
