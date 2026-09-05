@@ -82,3 +82,11 @@ removes every root, and a remove refuses an id the document holds twice — its
 own and any inside the subtree it takes with it — so this was a plan that could
 not apply. A positional insert removes nothing and is unaffected, which is why
 the check belongs to the one target rather than to the planner.
+
+A stored pattern's nodes are checked against the shape rule the insert applies.
+A pattern is persisted, so it can hold a node that type-checks and is still
+structurally invalid — a `version` of zero is the cheap example — and the plan
+reported success while the insert threw on it. Asked of the op layer's own rule
+rather than a copy of it, so the two cannot come to disagree about what a node
+is. The machine caps on depth and size stay with the apply, because they depend
+on limits the plan was never given.

@@ -361,6 +361,28 @@ describe("what it refuses before the op layer would", () => {
     expect(() => applyOps(doc, (plan.pageOps ?? []) as never)).not.toThrow();
   });
 
+  it("REFUSES A STORED NODE THE OP LAYER WILL NOT CARRY", () => {
+    // A pattern is stored, so it can hold a node that type-checks and is still
+    // structurally invalid. `version: 0` is the cheap example, and the insert
+    // throws on it — asked of the op layer's own shape rule, not a copy of it.
+    const malformed: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "pattern",
+      nodes: [
+        { id: "p1", type: "core/box", version: 0, props: {} } as BlockNode,
+      ],
+    };
+
+    const plan = planInsertPattern(
+      page([node("a")]),
+      malformed,
+      { index: 1 },
+      anyParent
+    );
+
+    expect(plan.problem).toBe("invalid-node");
+  });
+
   it("refuses a document that is not a pattern", () => {
     const notAPattern: BlockDocument = {
       formatVersion: DOCUMENT_FORMAT_VERSION,
@@ -407,6 +429,22 @@ describe("the refusals are the op layer's, not invented", () => {
     expect(() =>
       applyOps(doc, [
         { kind: "insert", node: locked, at: { index: 1 } },
+      ] as never)
+    ).toThrow();
+  });
+
+  it("the INVALID-NODE refusal is real: applying that insert throws", () => {
+    const doc = page([node("a")]);
+    const malformed = {
+      id: "p1",
+      type: "core/box",
+      version: 0,
+      props: {},
+    } as BlockNode;
+
+    expect(() =>
+      applyOps(doc, [
+        { kind: "insert", node: malformed, at: { index: 1 } },
       ] as never)
     ).toThrow();
   });

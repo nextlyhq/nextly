@@ -34,6 +34,7 @@ import {
 } from "./nesting";
 import {
   lockedWithin,
+  nodeShapeRefusal,
   positionRefusal,
   type BuilderOp,
   type OpPosition,
@@ -109,7 +110,9 @@ export type PlanProblem =
   /** A minted DOM id keeps colliding with one the destination already holds. */
   | "dom-id-collision"
   /** The position names nowhere the op layer would accept. */
-  | "invalid-position";
+  | "invalid-position"
+  /** The stored pattern holds a node the op layer will not carry. */
+  | "invalid-node";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -334,6 +337,10 @@ export function planInsertPattern(
   if (copy.problem !== undefined) return copy;
 
   const refusal =
+    // The op layer's own shape rule, asked before the plan exists. A STORED
+    // pattern can hold a node that type-checks and is still structurally
+    // invalid — `version: 0` — and the insert would throw on it.
+    shapeRefusal(copy.nodes) ??
     placementRefusal(copy.nodes, destination.place.where, nesting) ??
     lockRefusal(copy.nodes, "locked") ??
     // The `"document"` target REMOVES what is there, and a remove refuses a
@@ -432,6 +439,15 @@ function countById(nodes: BlockNode[], id: string): number {
     if (node.id === id) seen += 1;
   });
   return seen;
+}
+
+/** The first root the op layer would refuse to carry, phrased as a refusal. */
+function shapeRefusal(roots: readonly BlockNode[]): PlanRefusal | undefined {
+  for (const root of roots) {
+    if (nodeShapeRefusal(root) !== undefined)
+      return { problem: "invalid-node" };
+  }
+  return undefined;
 }
 
 /** A locked node anywhere in a forest, phrased as the caller's own refusal. */

@@ -2354,6 +2354,35 @@ function assertNodeId(id: string, verb: string): void {
  * honoured at the node and defeated one level up.
  */
 /**
+ * Why this node would be refused as an insert's subtree, or `undefined`.
+ *
+ * The companion to {@link positionRefusal} and published for the same reason: a
+ * planner has to know whether the subtree it is about to hand over will be
+ * taken. A stored pattern can hold a node that is type-compatible and
+ * structurally invalid — `version: 0` is the cheap example — and without this
+ * the plan reports success and the apply throws.
+ *
+ * Judged against the DEFAULT limits unless a caller says otherwise. The
+ * structural rules do not depend on them; the machine caps on depth and size
+ * do, and a caller that applies with tighter limits can still be refused there.
+ * That one refusal is deliberately left to the apply, because a plan cannot
+ * foresee a cap it was never given.
+ */
+export function nodeShapeRefusal(
+  node: BlockNode,
+  verb = "insert",
+  limits: DocumentLimits = DEFAULT_LIMITS
+): string | undefined {
+  try {
+    assertNodeShape(node, verb, limits);
+    return undefined;
+  } catch (error) {
+    if (error instanceof OpError) return error.message;
+    throw error;
+  }
+}
+
+/**
  * Why this position would be refused, phrased as the op layer phrases it, or
  * `undefined` when it would be accepted.
  *

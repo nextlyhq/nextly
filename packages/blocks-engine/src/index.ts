@@ -696,6 +696,8 @@ export {
   // refused by the op layer, so a planner has to be able to foresee it rather
   // than hand back a plan the apply throws on.
   lockedWithin,
+  // And the shape rule for what an insert will carry, for the same reason.
+  nodeShapeRefusal,
   OpError,
   // The apply's own position rule, asked without applying: a planner that
   // wrote its own copy would agree until one of the two moved.
