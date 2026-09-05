@@ -158,3 +158,23 @@ which a path set gives without capping anything.
 exported. A rule described as the single source for every copying surface, which
 a consumer cannot import, is a rule they will write again — which is precisely
 how this one came to exist twice.
+
+The link scan carries its own stack and its own replacement map. Three separate
+bounds had been tried here and each was a guess about how large a valid prop
+tree gets — a depth cap, a visit budget, and then the component-envelope key
+budget applied to opaque prop records the format does not cap at all. Every one
+of them failed in the same direction: a document past the guess had its links
+silently left dangling instead of being refused. Depth and width are properties
+of authored content, and how large a document may be is already decided once by
+the document limits, so the walk now has no limit of its own.
+
+A recursive walk also could not survive its own input: a few thousand nested
+records is tens of kilobytes, inside the byte limit, and exhausted the call
+stack. The walk is iterative for the same reason the forest walker is.
+
+Rebuilding through one replacement per source object is what makes a copied
+graph come out a graph. Guarding a cycle by tracking the path terminates but
+leaves the copy holding an edge back to the ORIGINAL object — still carrying the
+id the pass just rewrote — so one graph ends up with two versions of one node.
+The same map preserves structure shared without a cycle, rather than splitting a
+record reached from two places into two copies that can drift apart.

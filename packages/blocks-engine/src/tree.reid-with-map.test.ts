@@ -432,6 +432,65 @@ describe("the prop scan is bounded by the document, not by a number", () => {
     expect(children[children.length - 1]!.url).toBe(`#${domIds.get("x")}`);
   });
 
+  it("walks a record wider than any envelope budget", () => {
+    // The component-envelope key budget was borrowed for opaque prop records,
+    // which the format does not cap at all — so a record past it was returned
+    // UNCHANGED and counted as done, leaving the link addressing an id that had
+    // just been re-minted. A bound read as "refuse this document" in one place
+    // and as "nothing to do" in the other.
+    const wide: Record<string, unknown> = { href: "#x" };
+    for (let i = 0; i < 1_200; i += 1) wide[`filler${i}`] = `value ${i}`;
+    const forest = [
+      node("target", { cssId: "x" }),
+      node("wide", { props: { blob: wide } } as Partial<BlockNode>),
+    ];
+
+    const { nodes, domIds } = reidForestWithMap(forest);
+
+    const blob = nodes[1]!.props.blob as { href: string };
+    expect(blob.href).toBe(`#${domIds.get("x")}`);
+  });
+
+  it("CLOSES A CYCLE ON THE COPY, not back onto the original", () => {
+    // A path-set guard terminates and still gets this wrong: the cycle-closing
+    // edge returns the ORIGINAL record, so the rebuilt object holds an edge to
+    // an object still carrying the id this pass just rewrote — one graph with
+    // two versions of one node. One replacement per source object is what makes
+    // a graph come out a graph.
+    const cyclic: Record<string, unknown> = { href: "#x" };
+    cyclic.self = cyclic;
+    const forest = [
+      node("target", { cssId: "x" }),
+      node("looped", { props: { nested: cyclic } } as Partial<BlockNode>),
+    ];
+
+    const { nodes, domIds } = reidForestWithMap(forest);
+
+    const copy = nodes[1]!.props.nested as Record<string, unknown>;
+    expect(copy.href).toBe(`#${domIds.get("x")}`);
+    // The edge closes on the rebuild itself...
+    expect(copy.self).toBe(copy);
+    // ...so there is no second version of it still holding the old id.
+    expect((copy.self as Record<string, unknown>).href).toBe(
+      `#${domIds.get("x")}`
+    );
+  });
+
+  it("keeps shared structure shared instead of splitting it in two", () => {
+    // The same map that closes a cycle preserves a diamond: one record reached
+    // from two places is rebuilt once, so the copy has the aliasing the
+    // original had rather than two copies that can drift apart.
+    const shared: Record<string, unknown> = { href: "#x" };
+    const forest = [
+      node("target", { cssId: "x" }),
+      node("both", { props: { a: shared, b: shared } } as Partial<BlockNode>),
+    ];
+
+    const { nodes } = reidForestWithMap(forest);
+
+    expect(nodes[1]!.props.a).toBe(nodes[1]!.props.b);
+  });
+
   it("terminates on a props object that refers to itself", () => {
     // `structuredClone` carries a cycle through, and these primitives are
     // documented as running on documents nothing validated. Before the path

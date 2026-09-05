@@ -46,9 +46,8 @@
  *
  * @module fragment-refs
  */
-import { MAX_ENVELOPE_ENTRIES } from "./limits";
 import { isPlainRecord } from "./plain-record";
-import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
+import { defineEntry, ownEntry, ownKeys } from "./safe-record";
 
 /**
  * Prop names whose STRING value is a link target.
@@ -66,36 +65,63 @@ import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
 export const FRAGMENT_REFERENCE_PROPS: readonly string[] = ["href", "url"];
 
 const FRAGMENT_REFERENCE_SET = new Set(FRAGMENT_REFERENCE_PROPS);
-
 /**
  * Rewrite every link target in a prop tree that names an id this copy minted.
  *
  * Returns the SAME value when nothing matched, so an ordinary block allocates
  * nothing and a caller can compare by identity to tell whether anything moved.
  *
- * ## Bounded by the input, not by a number
+ * ## Bounded by the document, not by a number of its own
  *
- * There was a cap here — first on depth, then on values visited — and both were
- * wrong the same way: each was a guess about how large a legitimate prop tree
- * gets, and a document exceeding the guess had its links silently left dangling
- * rather than being refused. A depth cap of eight could not reach a rich-text
- * link inside a list item, which is ten values down. A budget of twenty
- * thousand visits was reachable by a rich-text value of a few hundred kilobytes
- * — well inside the document size limit — so it was the same silent failure,
- * moved further away rather than removed.
+ * There were two caps here — first on depth, then on values visited — and both
+ * were guesses about how large a legitimate prop tree gets. Each time a valid
+ * document exceeded the guess, its links were silently left dangling rather
+ * than the document being refused, so raising the number only moved the same
+ * failure further away. A third borrowed bound did the same thing sideways: the
+ * component-envelope key budget was applied to opaque prop records, which the
+ * format does not cap at all, so a record of a thousand keys was returned
+ * untouched and counted as done.
  *
- * A prop tree is part of a document, and how large a document may be is already
- * decided once, by the document limits. Scanning all of it is therefore bounded
- * work already, and the only thing a cap was really buying was TERMINATION on a
- * value that refers to itself. That is what the path set does, exactly as
- * `mapForest` does it one module over.
+ * How large a document may be is decided once, by the document limits. A prop
+ * tree is part of one, so walking all of it is bounded work already, and every
+ * bound this module added was solving a problem it did not have.
+ *
+ * ## Iterative, because a valid tree can be deeper than the stack
+ *
+ * Roughly three thousand nested records — tens of kilobytes, well inside the
+ * document byte limit — exhausted the call stack under a recursive walk. Depth
+ * is a property of authored content and not something this module may refuse,
+ * so the walk carries its own stack, the way the forest walker does for exactly
+ * the same reason.
+ *
+ * ## One replacement per source object
+ *
+ * The map is what makes a graph come out a graph. A record reached twice is
+ * rebuilt once and both edges point at that one rebuild — so a cycle closes on
+ * the REPLACEMENT rather than on the original, which is the bug a path-set
+ * guard leaves behind: it terminates, but the copy ends up holding an edge back
+ * to the original object, still carrying the id this pass just rewrote. Shared
+ * structure that is not cyclic is preserved for the same reason, rather than
+ * being duplicated into two divergent copies.
  */
 export function remapFragmentProps(
   props: unknown,
   domIds: ReadonlyMap<string, string>
 ): unknown {
-  if (domIds.size === 0) return props;
-  return scan(props, domIds, new Set());
+  if (domIds.size === 0 || !isTraversable(props)) return props;
+
+  const copy = shellFor(props);
+  const run: Rebuild = {
+    domIds,
+    copies: new Map([[props, copy]]),
+    stack: [frameFor(props, copy)],
+    changed: false,
+  };
+  while (run.stack.length > 0) step(run);
+
+  // Nothing matched, so the copy describes exactly what was already there and
+  // the caller learns "unchanged" from identity rather than from a comparison.
+  return run.changed ? copy : props;
 }
 
 /**
@@ -113,11 +139,9 @@ export function remapFragmentBindings(
   domIds: ReadonlyMap<string, string>
 ): unknown {
   if (domIds.size === 0 || !isPlainRecord(bindings)) return bindings;
-  const keys = boundedOwnKeys(bindings, MAX_ENVELOPE_ENTRIES);
-  if (keys === null) return bindings;
   let changed = false;
   const next: Record<string, unknown> = {};
-  for (const key of keys) {
+  for (const key of ownKeys(bindings)) {
     const binding = ownEntry(bindings, key);
     const mapped = FRAGMENT_REFERENCE_SET.has(key)
       ? withRemappedFallback(binding, domIds)
@@ -140,80 +164,104 @@ function withRemappedFallback(
   return mapped === fallback ? binding : { ...binding, fallback: mapped };
 }
 
-/**
- * One value: descended into, or returned as it stands.
- *
- * `onPath` holds the objects between here and the root of this walk. A value
- * re-entered while it is still on the path is a cycle, and returning it
- * untouched is what makes this terminate — stored JSON cannot hold one, but a
- * structured clone of an in-memory object can, and these primitives are
- * documented as running on documents nothing has validated.
- *
- * A PATH rather than everything seen, because a prop tree may legitimately
- * reach one object from two places, and a value that has merely been visited
- * before still needs rewriting where it appears again.
- */
-function scan(
-  value: unknown,
-  domIds: ReadonlyMap<string, string>,
-  onPath: Set<unknown>
-): unknown {
-  if (typeof value !== "object" || value === null) return value;
-  if (onPath.has(value)) return value;
-  onPath.add(value);
-  const out = Array.isArray(value)
-    ? scanList(value, domIds, onPath)
-    : isPlainRecord(value)
-      ? scanRecord(value, domIds, onPath)
-      : value;
-  onPath.delete(value);
-  return out;
+/** A value this walk descends into: a plain record, or an array. */
+type Traversable = Record<string, unknown> | unknown[];
+
+/** One object being rebuilt, and how far through its entries the walk is. */
+interface Frame {
+  readonly source: Traversable;
+  readonly copy: Traversable;
+  /** The source's own keys, or `null` when it is an array. */
+  readonly keys: string[] | null;
+  index: number;
+}
+
+/** Everything one rebuild carries between steps. */
+interface Rebuild {
+  readonly domIds: ReadonlyMap<string, string>;
+  /** Source object → the single replacement standing in for it. */
+  readonly copies: Map<Traversable, Traversable>;
+  readonly stack: Frame[];
+  changed: boolean;
+}
+
+function isTraversable(value: unknown): value is Traversable {
+  return Array.isArray(value) || isPlainRecord(value);
+}
+
+/** An empty replacement of the same shape, filled in as the walk proceeds. */
+function shellFor(value: Traversable): Traversable {
+  return Array.isArray(value) ? [] : {};
+}
+
+function frameFor(source: Traversable, copy: Traversable): Frame {
+  return {
+    source,
+    copy,
+    keys: Array.isArray(source) ? null : ownKeys(source),
+    index: 0,
+  };
+}
+
+/** How many entries a frame has to get through. */
+function sizeOf(frame: Frame): number {
+  return frame.keys === null
+    ? (frame.source as unknown[]).length
+    : frame.keys.length;
+}
+
+/** One entry of the frame on top of the stack. */
+function step(run: Rebuild): void {
+  const frame = run.stack[run.stack.length - 1];
+  if (frame === undefined) return;
+  if (frame.index >= sizeOf(frame)) {
+    run.stack.pop();
+    return;
+  }
+  const at = frame.index;
+  frame.index += 1;
+  const key = frame.keys === null ? null : (frame.keys[at] ?? null);
+  const value =
+    key === null
+      ? (frame.source as unknown[])[at]
+      : ownEntry(frame.source as Record<string, unknown>, key);
+  const resolved = resolveEntry(run, key, value);
+  if (key === null) (frame.copy as unknown[])[at] = resolved;
+  else defineEntry(frame.copy as Record<string, unknown>, key, resolved);
 }
 
 /**
- * A record, with an allowlisted string field rewritten and everything else
- * descended into.
+ * What one entry becomes in the copy.
  *
- * The name is checked HERE because this is the only place a value is reached
- * with the field that holds it still in hand. A string inside an array carries
- * no name of its own and is never rewritten on its own account — but
+ * The field name is checked HERE because this is the only place a value is
+ * reached with the field that holds it still in hand. A string inside an array
+ * carries no name of its own and is never rewritten on its own account — but
  * `cta.links[0].href` still is, because that string is reached as the value of
  * `href` on the record inside the array.
  */
-function scanRecord(
-  record: Record<string, unknown>,
-  domIds: ReadonlyMap<string, string>,
-  onPath: Set<unknown>
+function resolveEntry(
+  run: Rebuild,
+  key: string | null,
+  value: unknown
 ): unknown {
-  const keys = boundedOwnKeys(record, MAX_ENVELOPE_ENTRIES);
-  if (keys === null) return record;
-  let changed = false;
-  const next: Record<string, unknown> = {};
-  for (const key of keys) {
-    const value = ownEntry(record, key);
-    const mapped =
-      FRAGMENT_REFERENCE_SET.has(key) && typeof value === "string"
-        ? remapOneFragment(value, domIds)
-        : scan(value, domIds, onPath);
-    if (mapped !== value) changed = true;
-    defineEntry(next, key, mapped);
+  if (key !== null && FRAGMENT_REFERENCE_SET.has(key)) {
+    if (typeof value !== "string") return descend(run, value);
+    const mapped = remapOneFragment(value, run.domIds);
+    if (mapped !== value) run.changed = true;
+    return mapped;
   }
-  return changed ? next : record;
+  return descend(run, value);
 }
 
-/** An array, descended into item by item. */
-function scanList(
-  items: readonly unknown[],
-  domIds: ReadonlyMap<string, string>,
-  onPath: Set<unknown>
-): unknown {
-  let changed = false;
-  const next = items.map(item => {
-    const mapped = scan(item, domIds, onPath);
-    if (mapped !== item) changed = true;
-    return mapped;
-  });
-  return changed ? next : items;
+/** A child object's single replacement, queued for filling if it is new. */
+function descend(run: Rebuild, value: unknown): unknown {
+  if (!isTraversable(value)) return value;
+  const existing = run.copies.get(value);
+  if (existing !== undefined) return existing;
+  const copy = shellFor(value);
+  run.copies.set(value, copy);
+  run.stack.push(frameFor(value, copy));
+  return copy;
 }
 
 /** One target, rewritten only if it is exactly a fragment this run minted. */
