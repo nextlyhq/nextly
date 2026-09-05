@@ -116,7 +116,9 @@ export type PlanProblem =
   /** The stored pattern spells one rendered id on two of its own nodes. */
   | "duplicate-dom-id"
   /** One of the documents cannot be edited at all, whatever the ops say. */
-  | "unusable-document";
+  | "unusable-document"
+  /** The pattern was handed over without an identity to record. */
+  | "invalid-source";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -338,9 +340,13 @@ export type InsertTarget = OpPosition | "document";
  * The one refusal left to the apply is the machine cap on depth and size, which
  * depends on limits the caller passes there.
  *
- * Nothing records where the copy came from. A pattern is copy-on-insert and
- * keeps no link back, so the inserted nodes are ordinary content from the
- * moment they land.
+ * **Each inserted root records where it came from.** A pattern is still
+ * copy-on-insert and keeps no link back — nothing re-reads the pattern to
+ * update the copy — but the roots carry an inert `origin` naming the pattern
+ * and the digest it was copied at, so a surface can later ask whether the
+ * source has moved on. Only the roots: the run is what was inserted, and
+ * marking every node would make detaching one child read as a second
+ * insertion.
  */
 export function planInsertPattern(
   document: BlockDocument,
@@ -348,6 +354,12 @@ export function planInsertPattern(
   target: InsertTarget,
   nesting: NestingSource
 ): PlanResult<never> {
+  // The identity BEFORE anything is built on it. An empty id produces a record
+  // `isBlockOrigin` refuses, so the plan would succeed and the insert throw —
+  // and the type cannot say this, because every non-empty string is legal and
+  // only the empty one is not.
+  if (pattern.id === "") return { problem: "invalid-source" };
+
   const stored = storedRefusal(document, pattern.document);
   if (stored !== undefined) return stored;
 

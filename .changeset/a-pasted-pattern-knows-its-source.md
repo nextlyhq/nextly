@@ -67,3 +67,14 @@ dropped rather than kept, a malformed entry passed through, a malformed slot
 preserved — and each was learned here. A planner that wrote its own walk
 inherited none of them; the two that had are now expressed through the shared
 one.
+
+The digest describes what a copy would CARRY, so a root's own provenance is
+excluded from it. Inserting overwrites that field, and hashing it would make
+clearing an inert record nothing copies report every existing copy as stale. A
+record deeper than a root is hashed, because that one is copied as it stands.
+The exclusion lives inside the digest rather than at the call site, so a later
+staleness check cannot hash different content from the copy it is judging.
+
+A pattern handed over without an identity is refused rather than given a record
+the op layer rejects. Every non-empty string is a legal id and only the empty
+one is not, which a type cannot say.

@@ -138,6 +138,39 @@ describe("an inserted pattern records where it came from", () => {
   });
 });
 
+describe("the digest describes what a COPY would carry", () => {
+  it("IGNORES a root's own origin, which inserting overwrites anyway", () => {
+    // Clearing an inert field that nothing copies must not report every
+    // existing copy as stale.
+    const bare = [node("p1"), node("p2")];
+    const marked = [
+      node("p1", {
+        origin: { from: "pattern", id: "an-older-pattern", digest: "old" },
+      }),
+      node("p2"),
+    ];
+
+    expect(patternDigest(marked)).toBe(patternDigest(bare));
+  });
+
+  it("does NOT ignore an origin deeper than a root, which IS copied", () => {
+    // Insert overwrites the roots only, so a descendant's record travels into
+    // the page and a change to it is a change to what a copy holds.
+    const bare = [node("p1", {}, { body: [node("deep")] })];
+    const marked = [
+      node(
+        "p1",
+        {},
+        {
+          body: [node("deep", { origin: { from: "component", id: "c" } })],
+        }
+      ),
+    ];
+
+    expect(patternDigest(marked)).not.toBe(patternDigest(bare));
+  });
+});
+
 describe("a saved pattern carries no inherited provenance", () => {
   it("STRIPS an origin the selection was already carrying", () => {
     // A stored pattern's nodes came from the page, not from wherever the
@@ -178,6 +211,31 @@ describe("a saved pattern carries no inherited provenance", () => {
     expect(
       originsIn(plan.create?.document.nodes ?? []).filter(Boolean)
     ).toEqual([]);
+  });
+});
+
+describe("a pattern handed over without an identity", () => {
+  it("is refused rather than given a record the op layer rejects", () => {
+    // Every non-empty string is a legal id and only the empty one is not, so
+    // the type cannot say this and a check has to.
+    const nameless: StoredPattern = {
+      id: "",
+      document: {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "pattern",
+        nodes: [node("p1")],
+      },
+    };
+
+    const plan = planInsertPattern(
+      page([node("a")]),
+      nameless,
+      { index: 1 },
+      anyParent
+    );
+
+    expect(plan.problem).toBe("invalid-source");
+    expect(plan.pageOps).toBeUndefined();
   });
 });
 

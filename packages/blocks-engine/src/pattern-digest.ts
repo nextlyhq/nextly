@@ -22,12 +22,23 @@
  * non-cryptographic hash is the right size — this is a change hint, and paying
  * for a cryptographic digest would buy a guarantee no caller needs.
  *
- * ## Why the whole document is not hashed
+ * ## What is hashed is what a COPY would carry
  *
  * Only `nodes`. A pattern's settings are not copied into a page, so a change to
  * them is not a change to what any copy holds — and reporting one as an
  * upstream change would ask an author to accept an edit that would not alter
  * their page.
+ *
+ * And within the nodes, a ROOT's own `origin` is excluded, because inserting
+ * overwrites it: the copy records the pattern it came from, never whatever the
+ * stored pattern happened to say. Hashing it would make clearing an inert field
+ * nothing copies report every existing copy as stale. Origins DEEPER than a
+ * root are hashed, because those are copied as they stand.
+ *
+ * The exclusion lives here rather than at the call site so the fingerprint and
+ * the thing it fingerprints cannot be asked about different content — a later
+ * staleness check hashes the pattern as it stands now and compares, and it must
+ * be running the identical rule.
  *
  * @module pattern-digest
  */
@@ -49,5 +60,12 @@ import { hashId } from "./style/node-class";
  * the op layer's document rule first; the planners do.
  */
 export function patternDigest(nodes: readonly BlockNode[]): string {
-  return hashId(JSON.stringify(nodes));
+  return hashId(JSON.stringify(nodes.map(withoutOwnOrigin)));
+}
+
+/** One node without its own provenance record; its children are untouched. */
+function withoutOwnOrigin(node: BlockNode): BlockNode {
+  if (node.origin === undefined) return node;
+  const { origin: _origin, ...rest } = node;
+  return rest;
 }
