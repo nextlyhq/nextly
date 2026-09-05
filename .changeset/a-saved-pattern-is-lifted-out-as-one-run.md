@@ -123,3 +123,38 @@ document nothing validated: two nodes may share an id, and the parent a lookup
 answers with is the first one, not necessarily the one the selection was located
 under. Measured on a document with two parents sharing an id, selecting the
 second parent's children saved the first parent's.
+
+A run is identified by the nodes it was found at, not by their ids. An id is not
+an identity on a document nothing validated: two parents may share one, so
+comparing parent ids merged two containers and accepted children that were never
+siblings. Worse, two lookups of one id disagree in a way no reader would
+predict, because locating a node checks every root before descending while
+finding one walks each root and its descendants in turn — so a nested node and a
+later top-level node sharing an id resolve differently, and re-resolving stored
+the wrong one. The run now carries the node and the parent it actually reached,
+which removes the second lookup rather than trying to make the two agree.
+
+A saved run is refused when it could not be a document. Saving lifts the
+selection out of whatever contained it, so the pattern's roots are the selected
+blocks — and a block declaring which parents it may sit in has just lost the only
+one it had. Selecting columns inside a Columns block is the ordinary way to reach
+this, and the planner reported success while the create refused the document. The
+shared nesting rule is consulted before the lift and the refusal names the
+parents the block requires.
+
+A bound link's fallback follows the copy. A bound `href` keeps its literal in
+`bindings.href.fallback`, which is exactly what renders when the source is empty
+or unresolvable — so a fallback left behind produces a link that works until the
+data does not, which is the one case the fallback exists to cover.
+
+The prop scan is bounded by the document rather than by a number. Both earlier
+caps were guesses about how large a legitimate prop tree gets, and a document
+past the guess had its links silently left dangling instead of being refused. How
+large a document may be is already decided once, by the document limits, so all
+that a cap was really buying was termination on a value that refers to itself —
+which a path set gives without capping anything.
+
+`FRAGMENT_REFERENCE_PROPS`, `remapFragmentProps` and `remapFragmentBindings` are
+exported. A rule described as the single source for every copying surface, which
+a consumer cannot import, is a rule they will write again — which is precisely
+how this one came to exist twice.

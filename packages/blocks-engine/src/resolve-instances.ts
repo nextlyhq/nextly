@@ -55,7 +55,7 @@ import {
   type OverrideValue,
 } from "./document";
 import { walkForest } from "./forest-walk";
-import { remapFragmentProps } from "./fragment-refs";
+import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import {
   countNodes,
   DEFAULT_LIMITS,
@@ -836,17 +836,25 @@ function withRemappedIdReferences(
         string,
         unknown
       >;
+      // The BOUND form of the same field, for the same reason: a bound `href`
+      // renders `bindings.href.fallback` when its source is empty, so a
+      // fallback left behind points at an id this composition has re-minted.
+      const bindings = remapFragmentBindings(
+        node.bindings,
+        ctx.domIds
+      ) as ResolvedBlockNode["bindings"];
       const slots = isPlainRecord(node.slots)
         ? rewriteSlots(node.slots)
         : node.slots;
       if (
         attributes === node.attributes &&
         slots === node.slots &&
-        props === node.props
+        props === node.props &&
+        bindings === node.bindings
       ) {
         return node;
       }
-      return { ...node, attributes, props, slots };
+      return { ...node, attributes, props, bindings, slots };
     });
   const rewriteSlots = (
     slots: Record<string, ResolvedBlockNode[]>

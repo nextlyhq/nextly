@@ -143,6 +143,16 @@ export type {
   TreePosition,
 } from "./tree";
 
+// The one rule for which prop of a copied node holds a link, and what happens
+// to it. Published because the module claims to be the single source for every
+// copying surface, and a rule a consumer cannot import is a rule they will
+// write again — which is exactly how the fragment remap came to exist twice.
+export {
+  FRAGMENT_REFERENCE_PROPS,
+  remapFragmentBindings,
+  remapFragmentProps,
+} from "./fragment-refs";
+
 // Whether a selection is one run of siblings. Published because the editor and
 // every composition planner must agree on it, and they cannot share a
 // builder-side copy: a planner runs inside a plugin's server action, where the
@@ -163,6 +173,8 @@ export { planSaveAsPattern } from "./composition-planners";
 export type {
   CompositionPlan,
   PatternTarget,
+  PlanProblem,
+  PlanRefusal,
   PlanResult,
   PlannedCreate,
 } from "./composition-planners";

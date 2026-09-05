@@ -68,52 +68,106 @@ export const FRAGMENT_REFERENCE_PROPS: readonly string[] = ["href", "url"];
 const FRAGMENT_REFERENCE_SET = new Set(FRAGMENT_REFERENCE_PROPS);
 
 /**
- * How many values one prop tree may be scanned for.
- *
- * A bound on WORK, not on depth. Depth was the wrong quantity and it was set
- * too low to be safe either way: a rich-text link inside a list item sits at
- * `props → content → root → children → item → children → listitem → children →
- * link → url`, which is ten values down, so an ordinary authored link was
- * already past a cap of eight and was silently left dangling. Any fixed depth
- * is arbitrary here, because rich text nests lists as deeply as an author
- * nests them.
- *
- * Counting visits bounds what a wide tree costs as well as a deep one, and it
- * terminates on a value that refers to itself — which stored JSON cannot be,
- * but a structured clone of an in-memory object can.
- */
-const MAX_PROP_SCAN_VISITS = 20_000;
-
-/** A visit budget, spent as the walk reads values. */
-interface ScanBudget {
-  left: number;
-}
-
-/**
  * Rewrite every link target in a prop tree that names an id this copy minted.
  *
  * Returns the SAME value when nothing matched, so an ordinary block allocates
  * nothing and a caller can compare by identity to tell whether anything moved.
+ *
+ * ## Bounded by the input, not by a number
+ *
+ * There was a cap here — first on depth, then on values visited — and both were
+ * wrong the same way: each was a guess about how large a legitimate prop tree
+ * gets, and a document exceeding the guess had its links silently left dangling
+ * rather than being refused. A depth cap of eight could not reach a rich-text
+ * link inside a list item, which is ten values down. A budget of twenty
+ * thousand visits was reachable by a rich-text value of a few hundred kilobytes
+ * — well inside the document size limit — so it was the same silent failure,
+ * moved further away rather than removed.
+ *
+ * A prop tree is part of a document, and how large a document may be is already
+ * decided once, by the document limits. Scanning all of it is therefore bounded
+ * work already, and the only thing a cap was really buying was TERMINATION on a
+ * value that refers to itself. That is what the path set does, exactly as
+ * `mapForest` does it one module over.
  */
 export function remapFragmentProps(
   props: unknown,
   domIds: ReadonlyMap<string, string>
 ): unknown {
   if (domIds.size === 0) return props;
-  return scan(props, domIds, { left: MAX_PROP_SCAN_VISITS });
+  return scan(props, domIds, new Set());
 }
 
-/** One value: descended into, or returned as it stands. */
+/**
+ * Rewrite a bound prop's FALLBACK when that prop holds a link target.
+ *
+ * A bound `href` keeps its literal in `bindings.href.fallback`, and the binding
+ * contract renders exactly that when the source is empty or the path cannot
+ * resolve. A copy that moves the target and rewrites `props.href` while leaving
+ * the fallback behind therefore produces a link that works until the data does
+ * not — the worst shape this failure can take, because it appears only in the
+ * case the fallback exists to cover.
+ */
+export function remapFragmentBindings(
+  bindings: unknown,
+  domIds: ReadonlyMap<string, string>
+): unknown {
+  if (domIds.size === 0 || !isPlainRecord(bindings)) return bindings;
+  const keys = boundedOwnKeys(bindings, MAX_ENVELOPE_ENTRIES);
+  if (keys === null) return bindings;
+  let changed = false;
+  const next: Record<string, unknown> = {};
+  for (const key of keys) {
+    const binding = ownEntry(bindings, key);
+    const mapped = FRAGMENT_REFERENCE_SET.has(key)
+      ? withRemappedFallback(binding, domIds)
+      : binding;
+    if (mapped !== binding) changed = true;
+    defineEntry(next, key, mapped);
+  }
+  return changed ? next : bindings;
+}
+
+/** One binding, with a fragment fallback pointed at the copy's own target. */
+function withRemappedFallback(
+  binding: unknown,
+  domIds: ReadonlyMap<string, string>
+): unknown {
+  if (!isPlainRecord(binding)) return binding;
+  const fallback = ownEntry(binding, "fallback");
+  if (typeof fallback !== "string") return binding;
+  const mapped = remapOneFragment(fallback, domIds);
+  return mapped === fallback ? binding : { ...binding, fallback: mapped };
+}
+
+/**
+ * One value: descended into, or returned as it stands.
+ *
+ * `onPath` holds the objects between here and the root of this walk. A value
+ * re-entered while it is still on the path is a cycle, and returning it
+ * untouched is what makes this terminate — stored JSON cannot hold one, but a
+ * structured clone of an in-memory object can, and these primitives are
+ * documented as running on documents nothing has validated.
+ *
+ * A PATH rather than everything seen, because a prop tree may legitimately
+ * reach one object from two places, and a value that has merely been visited
+ * before still needs rewriting where it appears again.
+ */
 function scan(
   value: unknown,
   domIds: ReadonlyMap<string, string>,
-  budget: ScanBudget
+  onPath: Set<unknown>
 ): unknown {
-  if (budget.left <= 0) return value;
-  budget.left -= 1;
-  if (Array.isArray(value)) return scanList(value, domIds, budget);
-  if (!isPlainRecord(value)) return value;
-  return scanRecord(value, domIds, budget);
+  if (typeof value !== "object" || value === null) return value;
+  if (onPath.has(value)) return value;
+  onPath.add(value);
+  const out = Array.isArray(value)
+    ? scanList(value, domIds, onPath)
+    : isPlainRecord(value)
+      ? scanRecord(value, domIds, onPath)
+      : value;
+  onPath.delete(value);
+  return out;
 }
 
 /**
@@ -121,15 +175,15 @@ function scan(
  * descended into.
  *
  * The name is checked HERE because this is the only place a value is reached
- * with the field that holds it still in hand. A string found inside an array
- * carries no name of its own and is never rewritten on its own account — but
+ * with the field that holds it still in hand. A string inside an array carries
+ * no name of its own and is never rewritten on its own account — but
  * `cta.links[0].href` still is, because that string is reached as the value of
  * `href` on the record inside the array.
  */
 function scanRecord(
   record: Record<string, unknown>,
   domIds: ReadonlyMap<string, string>,
-  budget: ScanBudget
+  onPath: Set<unknown>
 ): unknown {
   const keys = boundedOwnKeys(record, MAX_ENVELOPE_ENTRIES);
   if (keys === null) return record;
@@ -140,7 +194,7 @@ function scanRecord(
     const mapped =
       FRAGMENT_REFERENCE_SET.has(key) && typeof value === "string"
         ? remapOneFragment(value, domIds)
-        : scan(value, domIds, budget);
+        : scan(value, domIds, onPath);
     if (mapped !== value) changed = true;
     defineEntry(next, key, mapped);
   }
@@ -151,11 +205,11 @@ function scanRecord(
 function scanList(
   items: readonly unknown[],
   domIds: ReadonlyMap<string, string>,
-  budget: ScanBudget
+  onPath: Set<unknown>
 ): unknown {
   let changed = false;
   const next = items.map(item => {
-    const mapped = scan(item, domIds, budget);
+    const mapped = scan(item, domIds, onPath);
     if (mapped !== item) changed = true;
     return mapped;
   });

@@ -24,9 +24,10 @@
  * @module composition-planners
  */
 import type { BlockDocument, BlockNode } from "./document";
+import { canBeRoot, type NestingSource } from "./nesting";
 import type { BuilderOp } from "./ops";
-import { contiguousRun, type RunProblem, type SiblingRun } from "./sibling-run";
-import { findNode, reidForestWithMap } from "./tree";
+import { contiguousRun, type RunProblem } from "./sibling-run";
+import { reidForestWithMap } from "./tree";
 
 /** A library row a planner asks the caller to create. */
 export interface PlannedCreate<TFields> {
@@ -57,6 +58,9 @@ export interface CompositionPlan<TFields> {
    */
   readonly pageOps: readonly BuilderOp[];
   readonly problem?: undefined;
+  // Declared on the success member too, so a caller reads either field off the
+  // union without narrowing first and cannot read a refusal's detail off a plan.
+  readonly permitted?: undefined;
 }
 
 /**
@@ -65,13 +69,32 @@ export interface CompositionPlan<TFields> {
  * Carries the cause from {@link contiguousRun} unchanged, so the sentence shown
  * to an author is composed once per surface rather than once per planner.
  */
-export type PlanResult<TFields> =
-  | CompositionPlan<TFields>
-  | {
-      readonly problem: RunProblem;
-      readonly create?: undefined;
-      readonly pageOps?: undefined;
-    };
+/**
+ * Why a composition action cannot be planned.
+ *
+ * The selection causes come from {@link contiguousRun} unchanged. The nesting
+ * one is this layer's own: a run lifted out of a container becomes the ROOTS of
+ * a new document, and a block that declares which parents it may sit in cannot
+ * be one.
+ */
+export type PlanProblem = RunProblem | "restricted-at-root";
+
+/** A refusal, with whatever the surface needs to phrase it. */
+export interface PlanRefusal {
+  readonly problem: PlanProblem;
+  /**
+   * For `"restricted-at-root"`: the parents the refused block requires.
+   *
+   * Carried rather than left to be looked up, because the caller is the only
+   * place that still knows which selection was refused — the same reason
+   * `NestingVerdict` carries it.
+   */
+  readonly permitted?: readonly string[];
+  readonly create?: undefined;
+  readonly pageOps?: undefined;
+}
+
+export type PlanResult<TFields> = CompositionPlan<TFields> | PlanRefusal;
 
 /** Where a saved selection is stored, in the caller's vocabulary. */
 export interface PatternTarget<TFields> {
@@ -113,13 +136,15 @@ export interface PatternTarget<TFields> {
 export function planSaveAsPattern<TFields>(
   document: BlockDocument,
   selectedIds: readonly string[],
-  target: PatternTarget<TFields>
+  target: PatternTarget<TFields>,
+  nesting: NestingSource
 ): PlanResult<TFields> {
   const result = contiguousRun(document.nodes, selectedIds);
   if (result.run === undefined) return { problem: result.problem };
 
-  const selected = runNodes(document.nodes, result.run);
-  if (selected === undefined) return { problem: "unknown" };
+  const selected = result.run.places.map(place => place.node);
+  const refusal = refusedAtRoot(selected, nesting);
+  if (refusal !== undefined) return refusal;
 
   return {
     create: {
@@ -141,35 +166,32 @@ export function planSaveAsPattern<TFields>(
 }
 
 /**
- * The selected nodes themselves, in document order.
+ * The first selected block that cannot stand at a document root, if any.
  *
- * Each is fetched by ITS OWN id, never by re-resolving the run's parent and
- * indexing into its slot. That reads like the same thing and is not, on a
- * stored document nothing validated: two nodes may share an id, and then the
- * parent `siblingRun` located a child under is not the parent a later lookup by
- * that id returns — the first one is. The indexes were then read from the wrong
- * container and the pattern was saved from blocks the author never selected,
- * with nothing to show it. Measured on a document with two parents called
- * `"dup"`: selecting the second parent's two children saved the FIRST parent's.
+ * Saving a run lifts it OUT of whatever contained it: the pattern document's
+ * roots are the selected blocks themselves. A block declaring which parents it
+ * may sit in has just lost the only one it had, and the store validates root
+ * placement through the same rule — so without this the planner reports success
+ * and hands back a document the create then refuses. Selecting a `core/column`
+ * inside a `core/columns` is the ordinary way to reach it, not a corner case.
  *
- * Asking for each node by name removes the second lookup that could disagree.
- * `findNode` and the `locateNode` behind `siblingRun` both answer with the
- * first match in one forest walk, so they cannot resolve one id differently.
- *
- * `undefined` when a node cannot be read back at all, which is unreachable
- * after {@link contiguousRun} has just located every one of them — reported
- * rather than trusted, because a planner that skipped a hole would build a
- * pattern quietly missing a block.
+ * Asked of the SHARED rule rather than answered here. The canvas, the validator
+ * and this planner have to agree about where a block may sit, and a second
+ * implementation would agree only until one of them changed.
  */
-function runNodes(
-  nodes: BlockNode[],
-  run: SiblingRun
-): BlockNode[] | undefined {
-  const selected: BlockNode[] = [];
-  for (const place of run.places) {
-    const node = findNode(nodes, place.id);
-    if (node === undefined) return undefined;
-    selected.push(node);
+function refusedAtRoot(
+  selected: readonly BlockNode[],
+  nesting: NestingSource
+): PlanRefusal | undefined {
+  for (const node of selected) {
+    const verdict = canBeRoot(node.type, nesting);
+    if (verdict.allowed) continue;
+    return {
+      problem: "restricted-at-root",
+      ...(verdict.permitted === undefined
+        ? {}
+        : { permitted: verdict.permitted }),
+    };
   }
-  return selected;
+  return undefined;
 }

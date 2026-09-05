@@ -399,3 +399,91 @@ describe("a fragment link in props follows the copy", () => {
     expect(nodes[1]!.props.href).toBe("#somewhere-else");
   });
 });
+
+describe("the prop scan is bounded by the document, not by a number", () => {
+  it("reaches a link past far more content than any cap allowed", () => {
+    // A budget of twenty thousand visits was reachable by a rich-text value of
+    // a few hundred kilobytes — inside the document size limit — so a link
+    // after enough ordinary content was silently left dangling. How large a
+    // document may be is already decided once, by the document limits.
+    const filler = Array.from({ length: 10_000 }, (_, i) => ({
+      type: "text",
+      text: `paragraph ${i}`,
+    }));
+    const forest = [
+      node("target", { cssId: "x" }),
+      node("body", {
+        props: {
+          content: {
+            root: {
+              type: "root",
+              children: [...filler, { type: "link", url: "#x" }],
+            },
+          },
+        },
+      } as Partial<BlockNode>),
+    ];
+
+    const { nodes, domIds } = reidForestWithMap(forest);
+
+    const children = (
+      nodes[1]!.props.content as { root: { children: { url?: string }[] } }
+    ).root.children;
+    expect(children[children.length - 1]!.url).toBe(`#${domIds.get("x")}`);
+  });
+
+  it("terminates on a props object that refers to itself", () => {
+    // `structuredClone` carries a cycle through, and these primitives are
+    // documented as running on documents nothing validated. Before the path
+    // set this recursed until the stack overflowed.
+    const cyclic: Record<string, unknown> = { href: "#x" };
+    cyclic.self = cyclic;
+    const forest = [
+      node("target", { cssId: "x" }),
+      node("looped", { props: { nested: cyclic } } as Partial<BlockNode>),
+    ];
+
+    const { nodes, domIds } = reidForestWithMap(forest);
+
+    const nested = nodes[1]!.props.nested as { href: string };
+    expect(nested.href).toBe(`#${domIds.get("x")}`);
+  });
+});
+
+describe("a bound link's fallback follows the copy", () => {
+  it("remaps the fallback of a bound href", () => {
+    // A bound `href` keeps its literal in `bindings.href.fallback`, and that is
+    // what renders when the source is empty — so a fallback left behind makes
+    // the link work until the data does not.
+    const forest = [
+      node("target", { cssId: "pricing" }),
+      node("cta", {
+        props: { href: "#pricing" },
+        bindings: { href: { $bind: "cta", fallback: "#pricing" } },
+      } as unknown as Partial<BlockNode>),
+    ];
+
+    const { nodes, domIds } = reidForestWithMap(forest);
+
+    const bound = nodes[1]!.bindings as unknown as {
+      href: { fallback: string };
+    };
+    expect(bound.href.fallback).toBe(`#${domIds.get("pricing")}`);
+  });
+
+  it("leaves a bound prop that is NOT a link target alone", () => {
+    const forest = [
+      node("target", { cssId: "pricing" }),
+      node("heading", {
+        bindings: { text: { $bind: "title", fallback: "#pricing" } },
+      } as unknown as Partial<BlockNode>),
+    ];
+
+    const { nodes } = reidForestWithMap(forest);
+
+    const bound = nodes[1]!.bindings as unknown as {
+      text: { fallback: string };
+    };
+    expect(bound.text.fallback).toBe("#pricing");
+  });
+});

@@ -82,7 +82,7 @@ import type { SlotSpec } from "./block";
 import { isBlockType } from "./document";
 import type { BlockNode } from "./document";
 import { walkForest } from "./forest-walk";
-import { remapFragmentProps } from "./fragment-refs";
+import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import { MAX_DEPTH, MAX_NODES } from "./limits";
 import { canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
@@ -1141,10 +1141,24 @@ function relinkOne(
   // for: only a whole string of `#` plus an id THIS copy minted is touched, and
   // nothing but a reference to the copy's own target can spell that.
   const props = remapFragmentProps(copy.props, domIds) as BlockNode["props"];
-  // Both remappers return their input unchanged when nothing matched, so an
+  // And the BOUND form of the same field. A bound `href` keeps its literal in
+  // `bindings.href.fallback`, which is what renders when the source is empty —
+  // so leaving it behind makes the link work until the data does not, which is
+  // the one case the fallback exists for.
+  const bindings = remapFragmentBindings(
+    copy.bindings,
+    domIds
+  ) as BlockNode["bindings"];
+  // Every remapper returns its input unchanged when nothing matched, so an
   // ordinary node is returned as it stands rather than reallocated.
-  if (attributes === copy.attributes && props === copy.props) return copy;
-  return { ...copy, attributes, props };
+  if (
+    attributes === copy.attributes &&
+    props === copy.props &&
+    bindings === copy.bindings
+  ) {
+    return copy;
+  }
+  return { ...copy, attributes, props, bindings };
 }
 
 /**

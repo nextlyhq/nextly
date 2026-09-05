@@ -32,7 +32,7 @@
  * @module sibling-run
  */
 import type { BlockNode } from "./document";
-import { locateNode } from "./tree";
+import { locateNode, type NodeLocation } from "./tree";
 
 /** Why a selection is not one run of siblings. */
 export type RunProblem =
@@ -50,6 +50,19 @@ export interface RunPlace {
   readonly id: string;
   /** Its index in that sibling list. */
   readonly index: number;
+  /**
+   * The node that was FOUND here, carried rather than left to be looked up.
+   *
+   * An id is not an identity on a stored document nothing validated: two nodes
+   * may carry the same one, and two lookups then disagree about which is meant.
+   * They disagree in a way no reader would predict — the search behind this one
+   * checks every root before descending, while a plain find walks each root and
+   * its descendants in turn, so a nested node and a later top-level node
+   * sharing an id resolve to different nodes in the two. Carrying the node the
+   * search actually reached removes the second lookup instead of trying to make
+   * the two agree.
+   */
+  readonly node: BlockNode;
 }
 
 /** A selection that all sits in one sibling list. */
@@ -98,7 +111,7 @@ export function siblingRun(
   if (ids.length === 0) return { problem: "empty" };
 
   const places: RunPlace[] = [];
-  let parentId: string | undefined;
+  let parent: BlockNode | undefined;
   let slot: string | undefined;
   let anchored = false;
 
@@ -111,14 +124,14 @@ export function siblingRun(
     // was written first.
     if (at === undefined) return { problem: "unknown" };
     if (!anchored) {
-      parentId = at.parent?.id;
+      parent = at.parent;
       slot = at.slot;
       anchored = true;
       // A separate flag rather than `parentId === undefined`, because that is
       // what a TOP-LEVEL run legitimately looks like — using it as "not yet
       // seen" would re-anchor on every root and read a whole document as one
       // list.
-    } else if (at.parent?.id !== parentId || at.slot !== slot) {
+    } else if (at.parent !== parent || at.slot !== slot) {
       // Compared FIELD BY FIELD, never as one joined string. Both halves are
       // arbitrary text — validation asks a node id only to be a non-empty
       // string, and these primitives run on stored documents nothing validated
@@ -131,10 +144,16 @@ export function siblingRun(
       // contain the separator.
       return { problem: "split" };
     }
-    places.push({ id, index: at.index });
+    const node = nodeAt(nodes, at);
+    // Unreachable: `locateNode` just read this node out of that very list. It
+    // is checked rather than asserted because the alternative is a run holding
+    // an `undefined` node, which every later step would treat as a block.
+    if (node === undefined) return { problem: "unknown" };
+    places.push({ id, index: at.index, node });
   }
 
   places.sort((left, right) => left.index - right.index);
+  const parentId = parent?.id;
   return {
     run: {
       ...(parentId === undefined ? {} : { parentId }),
@@ -142,6 +161,14 @@ export function siblingRun(
       places,
     },
   };
+}
+
+/** The node a location names, read out of the very list it was found in. */
+function nodeAt(nodes: BlockNode[], at: NodeLocation): BlockNode | undefined {
+  if (at.parent === undefined) return nodes[at.index];
+  const children =
+    at.slot === undefined ? undefined : at.parent.slots?.[at.slot];
+  return Array.isArray(children) ? children[at.index] : undefined;
 }
 
 /**

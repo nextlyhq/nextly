@@ -29,13 +29,16 @@ const flat = (): BlockNode[] => [node("a"), node("b"), node("c")];
 
 describe("a selection that shares one list", () => {
   it("reports each block's index, at the top level", () => {
-    const found = siblingRun(flat(), ["a", "b"]);
-    expect(found.run).toEqual({
-      places: [
-        { id: "a", index: 0 },
-        { id: "b", index: 1 },
-      ],
-    });
+    const nodes = flat();
+    const found = siblingRun(nodes, ["a", "b"]);
+    expect(found.run?.parentId).toBeUndefined();
+    expect(found.run?.slot).toBeUndefined();
+    expect(found.run?.places.map(p => [p.id, p.index])).toEqual([
+      ["a", 0],
+      ["b", 1],
+    ]);
+    // The node is carried, and it is the one in THIS forest, not a copy.
+    expect(found.run?.places[0]!.node).toBe(nodes[0]);
   });
 
   it("names the parent and slot when the run is nested", () => {
@@ -93,6 +96,31 @@ describe("a selection that does not share one list", () => {
     expect(contiguousRun(nodes, ["p", "y1"]).problem).toBe("split");
   });
 
+  it("refuses two DIFFERENT parents that share an id and a slot name", () => {
+    // Comparing the parent's id merged them: two distinct containers spelled
+    // the same, so children that were never siblings were accepted as one run
+    // and, with consecutive indexes, passed the contiguity check too. An id is
+    // not an identity on a document nothing validated — the parent OBJECT is.
+    const nodes = [
+      node("dup", { body: [node("a"), node("filler")] }),
+      node("dup", { body: [node("other"), node("b")] }),
+    ];
+
+    expect(siblingRun(nodes, ["a", "b"]).problem).toBe("split");
+    expect(contiguousRun(nodes, ["a", "b"]).problem).toBe("split");
+  });
+
+  it("still accepts a real run under a parent whose id is duplicated", () => {
+    // The guard is about identity, not about refusing duplicated ids: two
+    // genuine siblings under one of those parents are still one run.
+    const nodes = [
+      node("dup", { body: [node("a"), node("b")] }),
+      node("dup", { body: [node("x")] }),
+    ];
+
+    expect(contiguousRun(nodes, ["a", "b"]).run?.places).toHaveLength(2);
+  });
+
   it("tells an unknown id apart from a split", () => {
     expect(siblingRun(flat(), ["a", "nowhere"]).problem).toBe("unknown");
   });
@@ -110,16 +138,18 @@ describe("contiguity", () => {
   });
 
   it("accepts it whatever order the ids arrived in", () => {
-    expect(contiguousRun(flat(), ["b", "a"]).run?.places).toEqual([
-      { id: "a", index: 0 },
-      { id: "b", index: 1 },
+    expect(
+      contiguousRun(flat(), ["b", "a"]).run?.places.map(p => [p.id, p.index])
+    ).toEqual([
+      ["a", 0],
+      ["b", 1],
     ]);
   });
 
   it("accepts a single block", () => {
-    expect(contiguousRun(flat(), ["b"]).run?.places).toEqual([
-      { id: "b", index: 1 },
-    ]);
+    expect(
+      contiguousRun(flat(), ["b"]).run?.places.map(p => [p.id, p.index])
+    ).toEqual([["b", 1]]);
   });
 
   it("refuses a run with a block left out of the middle", () => {
