@@ -82,6 +82,7 @@ import type { SlotSpec } from "./block";
 import { isBlockType } from "./document";
 import type { BlockNode } from "./document";
 import { walkForest } from "./forest-walk";
+import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import { MAX_DEPTH, MAX_NODES } from "./limits";
 import { canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
@@ -643,13 +644,20 @@ export function locateNode(
   nodes: BlockNode[],
   id: string
 ): NodeLocation | undefined {
-  const topIndex = nodes.findIndex(node => node.id === id);
+  // Read defensively at every step. This is a stored document and nothing here
+  // has validated it — a slot may hold `null` instead of an array, and a list
+  // may hold a hole — so an entry is asked for its id rather than assumed to
+  // have one. It matters because ONE damaged node anywhere in the forest would
+  // otherwise throw, and the caller looking for a completely unrelated
+  // selection elsewhere in the document gets a crash instead of an answer.
+  const topIndex = nodes.findIndex(node => node?.id === id);
   if (topIndex !== -1) return { index: topIndex };
   let found: NodeLocation | undefined;
   walkNodes(nodes, node => {
     if (found || !node.slots) return;
     for (const [slot, children] of Object.entries(node.slots)) {
-      const index = children.findIndex(child => child.id === id);
+      if (!Array.isArray(children)) continue;
+      const index = children.findIndex(child => child?.id === id);
       if (index !== -1) {
         found = { parent: node, slot, index };
         return;
@@ -1051,8 +1059,18 @@ export interface ReidentifiedSubtree {
   domIds: ReadonlyMap<string, string>;
 }
 
+/** A re-identified FOREST, and the two maps describing what moved. */
+export interface ReidentifiedForest {
+  /** The rebuilt roots, in the order they were given. */
+  nodes: BlockNode[];
+  /** Every node's old id → its new one, across every root. */
+  nodeIds: ReadonlyMap<string, string>;
+  /** Every DOM id the forest carried → its replacement, across every root. */
+  domIds: ReadonlyMap<string, string>;
+}
+
 /**
- * Deep-clone a subtree with fresh ids, KEEPING its internal references usable.
+ * Deep-clone a FOREST with fresh ids, KEEPING its internal references usable.
  *
  * The same rebuild as {@link reidSubtree}, differing in what happens to a DOM
  * id: dropped there, minted afresh here and recorded. Two copies of one pattern
@@ -1065,32 +1083,93 @@ export interface ReidentifiedSubtree {
  * read and write: it appears in a URL fragment, in a stylesheet and in the
  * attribute panel. A UUID would be unique and unusable.
  *
- * Uniqueness is guaranteed WITHIN the returned subtree, not against the
- * document it is going into — this function is given a subtree and cannot see
- * anything else. A caller inserting into a page it can read should check
- * {@link ReidentifiedSubtree.domIds} against that page.
+ * ## Why a forest, and not one root at a time
+ *
+ * A saved selection is a contiguous RUN of siblings, so the document it becomes
+ * holds several roots, and re-identifying them with one call each is not the
+ * same operation. Each call can only see the subtree it was handed, so its
+ * `domIds` records that subtree's ids and nothing else — and a reference that
+ * crosses from one root to another finds no entry, and is left pointing at the
+ * ORIGINAL element. For `aria-labelledby` and `aria-describedby` that means the
+ * copy silently loses its accessible name, a failure invisible to everyone who
+ * does not use assistive technology. Re-identifying the roots TOGETHER is what
+ * makes the second pass see every id, so the guarantee is a property of this
+ * function rather than of each caller remembering not to loop.
+ *
+ * Uniqueness is guaranteed WITHIN the returned forest, not against the document
+ * it is going into — this function is given a forest and cannot see anything
+ * else. A caller inserting into a page it can read should check
+ * {@link ReidentifiedForest.domIds} against that page.
  */
-export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
+export function reidForestWithMap(nodes: BlockNode[]): ReidentifiedForest {
   const nodeIds = new Map<string, string>();
   const domIds = new Map<string, string>();
 
-  const [rebuilt] = mapForest([node], original =>
+  const rebuilt = mapForest(nodes, original =>
     reidOneKeepingReferences(original, nodeIds, domIds)
   );
   // A SECOND pass, because a node may reference an id defined on a node the
   // first had not reached yet. Without it a copied `aria-labelledby` points at
   // the original's id, so the copy loses its accessible name — the same gap
   // composition has, closed the same way.
-  const [linked] = mapForest([rebuilt ?? node], copy =>
-    // `isPlainRecord`, not `!== undefined`. A persisted `attributes: null` is
-    // content the first pass deliberately carries through untouched, and
-    // handing it to the remapper enumerates null and throws — a rebuild that
-    // destroys a node because of a field on a different one.
-    isPlainRecord(copy.attributes)
-      ? { ...copy, attributes: remapIdReferences(copy.attributes, domIds) }
-      : copy
-  );
-  return { node: linked ?? rebuilt ?? node, nodeIds, domIds };
+  const linked = mapForest(rebuilt, copy => relinkOne(copy, domIds));
+  return { nodes: linked, nodeIds, domIds };
+}
+
+/**
+ * One copied node, with every reference to a re-minted id following the copy.
+ *
+ * Both halves matter and only one of them is markup. `aria-labelledby` lives in
+ * `attributes`; a link's target lives in `props` as `href: "#pricing"`, and a
+ * copy that moves the id without the link leaves the anchor resolving to
+ * nothing. Applied HERE rather than left to each caller, because the caller
+ * that forgets does not fail — it stores a document that renders, validates and
+ * quietly points somewhere else.
+ */
+function relinkOne(
+  copy: BlockNode,
+  domIds: ReadonlyMap<string, string>
+): BlockNode {
+  // `isPlainRecord`, not `!== undefined`. A persisted `attributes: null` is
+  // content the first pass deliberately carries through untouched, and handing
+  // it to the remapper enumerates null and throws — a rebuild that destroys a
+  // node because of a field on a different one.
+  const attributes = isPlainRecord(copy.attributes)
+    ? remapIdReferences(copy.attributes, domIds)
+    : copy.attributes;
+  // See `fragment-refs` for why a copier may rewrite a prop it has no schema
+  // for: only a whole string of `#` plus an id THIS copy minted is touched, and
+  // nothing but a reference to the copy's own target can spell that.
+  const props = remapFragmentProps(copy.props, domIds) as BlockNode["props"];
+  // And the BOUND form of the same field. A bound `href` keeps its literal in
+  // `bindings.href.fallback`, which is what renders when the source is empty —
+  // so leaving it behind makes the link work until the data does not, which is
+  // the one case the fallback exists for.
+  const bindings = remapFragmentBindings(
+    copy.bindings,
+    domIds
+  ) as BlockNode["bindings"];
+  // Every remapper returns its input unchanged when nothing matched, so an
+  // ordinary node is returned as it stands rather than reallocated.
+  if (
+    attributes === copy.attributes &&
+    props === copy.props &&
+    bindings === copy.bindings
+  ) {
+    return copy;
+  }
+  return { ...copy, attributes, props, bindings };
+}
+
+/**
+ * One subtree, re-identified — {@link reidForestWithMap} for a single root.
+ *
+ * Delegates rather than repeating the two passes, so the singular and the
+ * plural cannot drift into disagreeing about what a copy is.
+ */
+export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
+  const { nodes, nodeIds, domIds } = reidForestWithMap([node]);
+  return { node: nodes[0] ?? node, nodeIds, domIds };
 }
 
 /** One node, re-identified, with its DOM id remapped rather than removed. */

@@ -117,6 +117,10 @@ export {
   moveNode,
   reidSubtree,
   reidSubtreeWithMap,
+  // The forest form, which is the shape a saved selection actually has: a
+  // pattern is a run of siblings, and re-identifying its roots one at a time
+  // leaves a reference that crosses between them pointing at the original.
+  reidForestWithMap,
   // The one rule for what a copied DOM id becomes. Public because two copiers
   // apply it — pattern insert and component composition — and a page may hold
   // the output of both, so a second spelling would put two ids on one target.
@@ -133,10 +137,47 @@ export {
 } from "./tree";
 export type {
   NodeLocation,
+  ReidentifiedForest,
   ReidentifiedSubtree,
   SlotDefaultSource,
   TreePosition,
 } from "./tree";
+
+// The one rule for which prop of a copied node holds a link, and what happens
+// to it. Published because the module claims to be the single source for every
+// copying surface, and a rule a consumer cannot import is a rule they will
+// write again — which is exactly how the fragment remap came to exist twice.
+export {
+  FRAGMENT_REFERENCE_PROPS,
+  remapFragmentBindings,
+  remapFragmentProps,
+} from "./fragment-refs";
+
+// Whether a selection is one run of siblings. Published because the editor and
+// every composition planner must agree on it, and they cannot share a
+// builder-side copy: a planner runs inside a plugin's server action, where the
+// builder — which peer-depends on React — has no business being imported.
+export { contiguousRun, siblingRun } from "./sibling-run";
+export type {
+  RunPlace,
+  RunProblem,
+  SiblingRun,
+  SiblingRunResult,
+} from "./sibling-run";
+
+// The composition planners: pure functions from a selection to the row to
+// create and the ops the page needs. Split from the doing so the caller can put
+// both writes in one unit of work and roll the create back — and so the dry run
+// and the real run are the same function rather than two that agree for now.
+export { planSaveAsPattern } from "./composition-planners";
+export type {
+  CompositionPlan,
+  PatternTarget,
+  PlanProblem,
+  PlanRefusal,
+  PlanResult,
+  PlannedCreate,
+} from "./composition-planners";
 
 // The node selection every reader of a stored document shares. Public because
 // the page-builder plugin's class-usage record has to stop exactly where the
