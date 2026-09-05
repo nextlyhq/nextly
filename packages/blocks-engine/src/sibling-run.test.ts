@@ -75,6 +75,24 @@ describe("a selection that does not share one list", () => {
     expect(siblingRun(nodes, ["a", "b"]).problem).toBe("split");
   });
 
+  it("refuses a pair whose parent and slot JOIN to the same text", () => {
+    // The list was once identified by `parentId + " " + slot`, on the stated
+    // ground that an id cannot contain a space. Validation asks a node id only
+    // to be a non-empty string, and these primitives read stored documents that
+    // nothing validated, so both halves are arbitrary text. Here `"a"` + `"b c"`
+    // and `"a b"` + `"c"` both spell `"a b c"`, and the two containers merged:
+    // the run was accepted, the contiguity check passed, and a pattern saved
+    // from it took the first container's second block instead of the one the
+    // author had actually selected in the second.
+    const nodes = [
+      node("a", { "b c": [node("p"), node("q")] }),
+      node("a b", { c: [node("y0"), node("y1")] }),
+    ];
+
+    expect(siblingRun(nodes, ["p", "y1"]).problem).toBe("split");
+    expect(contiguousRun(nodes, ["p", "y1"]).problem).toBe("split");
+  });
+
   it("tells an unknown id apart from a split", () => {
     expect(siblingRun(flat(), ["a", "nowhere"]).problem).toBe("unknown");
   });

@@ -80,20 +80,6 @@ export type SiblingRunResult =
   | { readonly problem: RunProblem; readonly run?: undefined };
 
 /**
- * Parent and slot as ONE key.
- *
- * One parent's two slots are two lists, so neither alone identifies the list.
- * The separator is a space, which an id cannot contain, so no pair of distinct
- * containers can collide into a single key.
- */
-function listKey(
-  parentId: string | undefined,
-  slot: string | undefined
-): string {
-  return `${parentId ?? ""} ${slot ?? ""}`;
-}
-
-/**
  * Where each selected node sits, once they all sit in one list.
  *
  * Gaps are ALLOWED here: a reorder steps every selected block one place and
@@ -112,9 +98,9 @@ export function siblingRun(
   if (ids.length === 0) return { problem: "empty" };
 
   const places: RunPlace[] = [];
-  let key: string | undefined;
   let parentId: string | undefined;
   let slot: string | undefined;
+  let anchored = false;
 
   for (const id of ids) {
     const at = locateNode(nodes, id);
@@ -124,12 +110,25 @@ export function siblingRun(
     // is a sentence to show, and a single refusal would send both to whichever
     // was written first.
     if (at === undefined) return { problem: "unknown" };
-    const here = listKey(at.parent?.id, at.slot);
-    if (key === undefined) {
-      key = here;
+    if (!anchored) {
       parentId = at.parent?.id;
       slot = at.slot;
-    } else if (key !== here) {
+      anchored = true;
+      // A separate flag rather than `parentId === undefined`, because that is
+      // what a TOP-LEVEL run legitimately looks like — using it as "not yet
+      // seen" would re-anchor on every root and read a whole document as one
+      // list.
+    } else if (at.parent?.id !== parentId || at.slot !== slot) {
+      // Compared FIELD BY FIELD, never as one joined string. Both halves are
+      // arbitrary text — validation asks a node id only to be a non-empty
+      // string, and these primitives run on stored documents nothing validated
+      // — so any separator can appear inside them, and a joined key merges two
+      // real containers. Measured with `parentId: "a"` / slot `"b c"` against
+      // `parentId: "a b"` / slot `"c"`: both spell `"a b c"`, the selection was
+      // accepted as one contiguous run, and the pattern was saved from the
+      // first container's blocks while the ones the author picked in the second
+      // were dropped. Silently, and only for documents whose ids happen to
+      // contain the separator.
       return { problem: "split" };
     }
     places.push({ id, index: at.index });
