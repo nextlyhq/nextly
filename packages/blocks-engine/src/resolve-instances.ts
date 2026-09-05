@@ -55,6 +55,7 @@ import {
   type OverrideValue,
 } from "./document";
 import { walkForest } from "./forest-walk";
+import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import {
   countNodes,
   DEFAULT_LIMITS,
@@ -831,21 +832,29 @@ function withRemappedIdReferences(
       const attributes = isPlainRecord(node.attributes)
         ? remapIdReferences(node.attributes, ctx.domIds)
         : node.attributes;
-      const props = remapFragments(node.props, ctx.domIds, 0) as Record<
+      const props = remapFragmentProps(node.props, ctx.domIds) as Record<
         string,
         unknown
       >;
+      // The BOUND form of the same field, for the same reason: a bound `href`
+      // renders `bindings.href.fallback` when its source is empty, so a
+      // fallback left behind points at an id this composition has re-minted.
+      const bindings = remapFragmentBindings(
+        node.bindings,
+        ctx.domIds
+      ) as ResolvedBlockNode["bindings"];
       const slots = isPlainRecord(node.slots)
         ? rewriteSlots(node.slots)
         : node.slots;
       if (
         attributes === node.attributes &&
         slots === node.slots &&
-        props === node.props
+        props === node.props &&
+        bindings === node.bindings
       ) {
         return node;
       }
-      return { ...node, attributes, props, slots };
+      return { ...node, attributes, props, bindings, slots };
     });
   const rewriteSlots = (
     slots: Record<string, ResolvedBlockNode[]>
@@ -865,84 +874,6 @@ function withRemappedIdReferences(
     return changed ? (next as Record<string, ResolvedBlockNode[]>) : slots;
   };
   return rewrite(roots);
-}
-
-/**
- * How deep a prop tree is searched for fragment links.
- *
- * A bound on work over values a stored definition supplied, generous enough
- * that no authored prop shape reaches it.
- */
-const MAX_PROP_SCAN_DEPTH = 8;
-
-/**
- * Point a block's `#fragment` props at wherever those ids ended up.
- *
- * `cssId` is not referenced only by markup: a link's `href` may be `#pricing`,
- * and the renderer accepts that — `core/button` passes a bare fragment through
- * to the DOM. Remapping the target without the link leaves every composed
- * instance anchored to an id nothing carries, which is the same silent
- * breakage as a dangling `aria-labelledby`, one prop over.
- *
- * A value is rewritten ONLY when the whole string is `#` followed by an id
- * this composition actually minted, and that is what keeps it away from
- * content: `"#1 bestseller"` names no minted id and is left exactly as
- * written, and so is a fragment addressing something outside the component.
- */
-function remapFragments(
-  props: unknown,
-  domIds: ReadonlyMap<string, string>,
-  depth: number
-): unknown {
-  if (domIds.size === 0 || depth > MAX_PROP_SCAN_DEPTH) return props;
-  if (typeof props === "string") return remapOneFragment(props, domIds);
-  if (Array.isArray(props)) return remapFragmentList(props, domIds, depth);
-  if (!isPlainRecord(props)) return props;
-  return remapFragmentRecord(props, domIds, depth);
-}
-
-/** The same, for a record-valued prop. */
-function remapFragmentRecord(
-  props: Record<string, unknown>,
-  domIds: ReadonlyMap<string, string>,
-  depth: number
-): unknown {
-  const keys = boundedOwnKeys(props, MAX_ENVELOPE_ENTRIES);
-  if (keys === null) return props;
-  let changed = false;
-  const next: Record<string, unknown> = {};
-  for (const key of keys) {
-    const value = ownEntry(props, key);
-    const mapped = remapFragments(value, domIds, depth + 1);
-    if (mapped !== value) changed = true;
-    defineEntry(next, key, mapped);
-  }
-  return changed ? next : props;
-}
-
-/** The same, for an array-valued prop. */
-function remapFragmentList(
-  items: readonly unknown[],
-  domIds: ReadonlyMap<string, string>,
-  depth: number
-): unknown {
-  let changed = false;
-  const next = items.map(item => {
-    const mapped = remapFragments(item, domIds, depth + 1);
-    if (mapped !== item) changed = true;
-    return mapped;
-  });
-  return changed ? next : items;
-}
-
-/** One string, rewritten only if it is exactly a fragment this run minted. */
-function remapOneFragment(
-  value: string,
-  domIds: ReadonlyMap<string, string>
-): string {
-  if (!value.startsWith("#")) return value;
-  const target = domIds.get(value.slice(1));
-  return target === undefined ? value : `#${target}`;
 }
 
 /** Everything one speculative expansion may have to give back. */
