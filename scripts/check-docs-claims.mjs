@@ -97,7 +97,7 @@ export const CATEGORY_SURFACES = [
  * it both ways and a reader sees no difference, and an optional plural, because
  * "one of several app frameworks" is the same claim about the same category.
  */
-const RETIRED_CATEGORY = /\bapp(?:-|\s+)frameworks?\b/i;
+export const RETIRED_CATEGORY = /\bapp(?:-|\s+)frameworks?\b/i;
 
 /**
  * A document reduced to what a reader is shown.

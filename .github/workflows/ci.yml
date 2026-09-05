@@ -225,6 +225,12 @@ jobs:
       - name: Docs and README claims
         run: pnpm check:docs-claims
 
+      # The About line and topic list are repository settings, not files, so every
+      # check that reads git's index is blind to them. Reports unverifiable rather
+      # than failing when the API cannot be reached.
+      - name: Repository metadata
+        run: pnpm check:repo-metadata
+
   ci:
     name: Lint / Typecheck / Test / Build
     needs: changes
