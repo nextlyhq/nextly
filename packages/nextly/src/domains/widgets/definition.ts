@@ -11,7 +11,18 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 
+import { requiredPermissionSlugs } from "./gate";
 import type { WidgetQuery } from "./query";
+
+// The gate rule lives in a module with no imports so the BROWSER can read it
+// too (`nextly/widget-gate`). Validation asks the same reader the gate asks,
+// so a declaration this file admits is one the gate can actually use.
+
+export {
+  holdsWidgetPermission,
+  requiredPermissionSlugs,
+  widgetGateHolds,
+} from "./gate";
 
 /** Column span at the large breakpoint, as a named step rather than a number. */
 export const WIDGET_SIZES = ["sm", "md", "lg", "xl", "full"] as const;
@@ -223,8 +234,26 @@ export interface WidgetDefinition {
    *
    * A `PermissionSlug` spelling (`read-posts`), the same vocabulary
    * `WidgetSource.requiredPermission` and `PluginAdminWidget` carry.
+   *
+   * 🔴 An ARRAY means ANY-OF, and it exists because a single slug cannot
+   * describe the rule the services behind these cards actually apply. Release
+   * authority is the worked example: `ReleasesService.authorize` treats `create`
+   * or `publish` as satisfying `read` -- deliberately, so a role granted only
+   * `create` can see the release it just made -- and the admin's
+   * `canViewReleases` capability lists all three. A card gated on the read slug
+   * alone is a THIRD encoding of that rule and the only one that disagrees, so
+   * the reader can open the releases screen and never see its dashboard card.
+   *
+   * Any-of rather than all-of because that is the shape every consumer of this
+   * vocabulary already has -- `requireAnyPermission` at the route layer, the
+   * capability lists in the admin. A card needing all of several grants has no
+   * consumer yet, and inventing the second form before something needs it is
+   * how a declaration ends up with two meanings nobody can keep straight.
+   *
+   * `WidgetAction.requiredPermission` stays a single slug. It gates one
+   * shortcut rather than a card, and nothing has asked it for more.
    */
-  requiredPermission?: string;
+  requiredPermission?: string | readonly string[];
   /** Required for every data archetype; forbidden for `text` and `actions`. */
   query?: WidgetQuery;
   /** Required for `custom`; forbidden otherwise. */
@@ -394,11 +423,17 @@ export function widgetValueProblem(
   // author wrote `requiredPermission: { read: true }` was gated for nobody and
   // returned to every authenticated caller. Refusing the declaration is the
   // only place the mistake is still visible to the person who made it.
+  //
+  // Asked through the same reader the GATE uses, rather than by restating the
+  // shape here. Widening this to accept an any-of array added a second way for
+  // a declaration to be unusable -- an empty array, or one member that is not a
+  // slug -- and a validator that admitted a form the gate then refuses would
+  // hide a card with no error anywhere.
   if (
     widget.requiredPermission !== undefined &&
-    typeof widget.requiredPermission !== "string"
+    requiredPermissionSlugs(widget.requiredPermission) === undefined
   ) {
-    return "requiredPermission, when given, must be a string";
+    return "requiredPermission, when given, must be a permission slug or a non-empty array of them";
   }
 
   // A query is an OBJECT in every version, so it belongs here rather than

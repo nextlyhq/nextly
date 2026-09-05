@@ -26,7 +26,11 @@
  */
 
 import { useQueries } from "@tanstack/react-query";
-import { MAX_QUERIES_PER_REQUEST, type WidgetQuery } from "nextly/config";
+import {
+  MAX_QUERIES_PER_REQUEST,
+  WIDGET_SOURCE_FIELD_TYPES,
+  type WidgetQuery,
+} from "nextly/config";
 import { useMemo } from "react";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
@@ -222,20 +226,49 @@ function asSlot(value: unknown): WidgetSlot {
  * said this is "the place that has to grow when the result contract does" --
  * and then the contract grew.
  */
+/**
+ * The field kinds a result may name, DERIVED from core's vocabulary.
+ *
+ * 🔴 Not a hand-kept list. The wire's `type` is a `WidgetSourceFieldType`, whose
+ * canonical tuple lives in core, and restating the strings here meant the two
+ * could disagree in the one direction nobody notices: core adds a presentable
+ * kind, the server emits it, and this parser silently erases it -- so the cell
+ * falls back to raw text with the new presentation quietly missing and nothing
+ * reporting a loss.
+ *
+ * The set still exists rather than trusting the wire, because this parses
+ * UNTRUSTED JSON: what arrives has to be checked against the vocabulary, and
+ * deriving the vocabulary from core is what makes that check track core.
+ */
+const KNOWN_FIELD_TYPES: ReadonlySet<string> = new Set(
+  WIDGET_SOURCE_FIELD_TYPES
+);
+
 function asResultFields(value: unknown): WidgetResultField[] | undefined {
   if (!Array.isArray(value)) return undefined;
 
   const described: WidgetResultField[] = [];
   for (const raw of value) {
     if (!isObject(raw)) return undefined;
-    const field = raw as { name?: unknown; label?: unknown };
+    const field = raw as { name?: unknown; label?: unknown; type?: unknown };
     if (typeof field.name !== "string" || field.name === "") return undefined;
     if (field.label !== undefined && typeof field.label !== "string") {
       return undefined;
     }
+    /*
+     * An unrecognised kind is DROPPED, not refused. `label` above rejects the
+     * whole list on a wrong shape because a non-string label is a server that
+     * is broken; a type this admin does not know is a server that is NEWER, and
+     * blanking the card over it would make every future type a breaking change.
+     * Falling back to plain text is what the renderer did before types existed.
+     */
+    const type = KNOWN_FIELD_TYPES.has(field.type as string)
+      ? (field.type as WidgetResultField["type"])
+      : undefined;
     described.push({
       name: field.name,
       ...(field.label !== undefined && { label: field.label }),
+      ...(type !== undefined && { type }),
     });
   }
 

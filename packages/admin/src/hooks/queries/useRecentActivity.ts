@@ -10,10 +10,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
-import {
-  describeActivityActor,
-  formatRelativeTime,
-} from "@admin/lib/dashboard";
+import { describeActivityActor } from "@admin/lib/dashboard";
 import type {
   Activity,
   ActivityCategory,
@@ -83,7 +80,6 @@ function mapEntry(entry: ActivityLogEntry): Activity {
     collectionLabel,
     category: ACTION_CATEGORIES[entry.action] ?? "info",
     timestamp: entry.createdAt,
-    relativeTime: formatRelativeTime(entry.createdAt),
   };
 }
 
