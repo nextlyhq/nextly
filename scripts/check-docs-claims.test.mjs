@@ -166,6 +166,462 @@ describe("naming-rule", () => {
   });
 });
 
+describe("retired-category", () => {
+  it("declares only surfaces that exist, so a rename cannot drop one silently", async () => {
+    const { CATEGORY_SURFACES } = await import("./check-docs-claims.mjs");
+    const { existsSync } = await import("node:fs");
+    const missing = CATEGORY_SURFACES.filter(rel => !existsSync(rel));
+    expect(missing).toEqual([]);
+  });
+
+  it("fires when a surface that states the category uses the retired one", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": "Nextly is an app framework for Next.js.\n" })
+    ).toContain("retired-category");
+  });
+
+  it("fires on the hyphenated spelling", async () => {
+    expect(
+      await checksFor({ "AGENTS.md": "A TypeScript CMS/app-framework monorepo.\n" })
+    ).toContain("retired-category");
+  });
+
+  it("fires on the plural, which claims the same category", async () => {
+    expect(
+      await checksFor({ "README.md": "Nextly is one of several app frameworks.\n" })
+    ).toContain("retired-category");
+  });
+
+  it("fires through a tag around one word of the phrase", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": "Nextly is an app <strong>framework</strong>.\n" })
+    ).toContain("retired-category");
+  });
+
+  it("fires through emphasis, an inline link and a reference link", async () => {
+    for (const body of [
+      "Nextly is an app **framework**.\n",
+      "Nextly is an app [framework](/x).\n",
+      "Nextly is an app [framework][term].\n",
+    ]) {
+      expect(await checksFor({ "docs/index.mdx": body })).toContain("retired-category");
+    }
+  });
+
+  it("fires when a soft wrap splits the phrase", async () => {
+    expect(
+      await checksFor({ "AGENTS.md": "Nextly is an app\nframework for Next.js.\n" })
+    ).toContain("retired-category");
+  });
+
+  it("fires on a published package description", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": JSON.stringify({
+          name: "nextly",
+          version: "1.0.0",
+          description: "Nextly is an app framework for Next.js.",
+        }),
+      })
+    ).toContain("retired-category");
+  });
+
+  it("does not read an mdx comment as prose", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": "a\n\n{/* once an app framework */}\n\nb\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not read a code span that spans lines as a claim", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": "Compare `an\napp framework\nliteral` here.\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not run two list items together into a phrase", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": "Notes:\n\n- app\n- framework\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("fires when a quotation wraps across its lines", async () => {
+    expect(
+      await checksFor({ "README.md": "> Nextly is an app\n> framework for Next.js.\n" })
+    ).toContain("retired-category");
+  });
+
+  it("fires on a published keyword", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": JSON.stringify({
+          name: "nextly",
+          version: "1.0.0",
+          description: "A content platform.",
+          keywords: ["cms", "app-framework"],
+        }),
+      })
+    ).toContain("retired-category");
+  });
+
+  it("does not read a heading as running into the paragraph beneath it", async () => {
+    expect(
+      await checksFor({ "README.md": "## App\nFramework notes follow here.\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not read an mdx import as prose", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": 'import D from "./x/app-framework.mjs";\n\nHello.\n' })
+    ).not.toContain("retired-category");
+  });
+
+  it("fires when a space entity stands between the words", async () => {
+    for (const body of ["an app&nbsp;framework.\n", "an app&#160;framework.\n"]) {
+      expect(await checksFor({ "docs/index.mdx": body })).toContain("retired-category");
+    }
+  });
+
+  it("does not join a paragraph into the quotation beneath it", async () => {
+    // `App\n> Framework configuration.` renders as a paragraph and then a
+    // separate blockquote, so the two words never meet.
+    expect(
+      await checksFor({ "README.md": "App\n> Framework configuration.\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("reads an unprefixed line beneath a quotation as continuing it", async () => {
+    // The other direction is not a boundary: `> Nextly is an app\nframework.`
+    // renders as one paragraph inside the quotation.
+    expect(
+      await checksFor({ "README.md": "> Nextly is an app\nframework for Next.js.\n" })
+    ).toContain("retired-category");
+  });
+
+  it("does not leave prose behind when a wide code span holds a shorter run", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": "Compare ``foo` app framework `` literally.\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not read an mdx import that wraps across lines", async () => {
+    expect(
+      await checksFor({
+        "docs/index.mdx": 'import {\n  Demo,\n} from "./examples/app-framework.mjs";\n\nHello.\n',
+      })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not join manifest fields into a phrase neither one contains", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": JSON.stringify({
+          name: "nextly",
+          version: "1.0.0",
+          description: "CLI for your Next.js app",
+          keywords: ["framework", "cms"],
+        }),
+      })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not read a heading as running on, wherever it sits in the block", async () => {
+    expect(
+      await checksFor({ "README.md": "Intro.\n## App\nFramework configuration.\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("reads a Markdown line beginning with import as prose, not a statement", async () => {
+    expect(
+      await checksFor({
+        "AGENTS.md": "Nextly lets developers\nimport Nextly as an app framework today.\n",
+      })
+    ).toContain("retired-category");
+  });
+
+  it("fires when a line break carries the space between the words", async () => {
+    for (const body of ["Nextly is an app<br/>framework.\n", "Nextly is an app\\\nframework.\n"]) {
+      expect(await checksFor({ "README.md": body })).toContain("retired-category");
+    }
+  });
+
+  it("does not read an html code element as a claim", async () => {
+    expect(
+      await checksFor({ "README.md": "Use <code>app framework</code> literally.\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("reads a page's published title and description out of its frontmatter", async () => {
+    for (const front of ["title: The app framework", "description: Nextly is an app framework."]) {
+      expect(
+        await checksFor({ "docs/index.mdx": `---\n${front}\n---\n\nHello.\n` })
+      ).toContain("retired-category");
+    }
+  });
+
+  it("does not read the rest of the frontmatter, but still reads the body", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": "---\nlegacy: app framework\n---\n\nHello.\n" })
+    ).not.toContain("retired-category");
+    expect(
+      await checksFor({ "docs/index.mdx": "---\ntitle: Docs\n---\n\nNextly is an app framework.\n" })
+    ).toContain("retired-category");
+  });
+
+  it("decodes every spelling of the separators", async () => {
+    for (const body of [
+      "an app&#x20;framework.\n",
+      "an app&#45;framework.\n",
+      "an app&#x2d;framework.\n",
+    ]) {
+      expect(await checksFor({ "docs/index.mdx": body })).toContain("retired-category");
+    }
+  });
+
+  it("reads a frontmatter value written as a folded or literal scalar", async () => {
+    for (const marker of [">-", "|"]) {
+      expect(
+        await checksFor({
+          "docs/index.mdx": `---\ndescription: ${marker}\n  Nextly is an app framework.\n---\n\nHi.\n`,
+        })
+      ).toContain("retired-category");
+    }
+  });
+
+  it("reads an image's alternative text, which a reader is shown", async () => {
+    expect(
+      await checksFor({
+        "README.md": '<img src="x.png" alt="Nextly is an app framework" />\n',
+      })
+    ).toContain("retired-category");
+  });
+
+  it("recognises frontmatter terminated by CRLF or by end of file", async () => {
+    for (const body of ["---\r\nlegacy: app framework\r\n---\r\n\r\nHi.\n", "---\nlegacy: app framework\n---"]) {
+      expect(await checksFor({ "docs/index.mdx": body })).not.toContain("retired-category");
+    }
+  });
+
+  it("reads a diagram's labels, which are drawn for the reader", async () => {
+    expect(
+      await checksFor({
+        "ARCHITECTURE.md": 'Intro.\n\n```mermaid\ngraph TD\n  N["Nextly app framework"]\n```\n\nTail.\n',
+      })
+    ).toContain("retired-category");
+  });
+
+  it("reads an indented mdx line as list content, not module syntax", async () => {
+    expect(
+      await checksFor({
+        "docs/index.mdx": "- Nextly lets developers\n  import Nextly as an app framework.\n",
+      })
+    ).toContain("retired-category");
+  });
+
+  it("does not read a yaml comment as part of the published value", async () => {
+    expect(
+      await checksFor({
+        "docs/index.mdx": "---\ndescription: A content platform # formerly an app framework\n---\n\nHi.\n",
+      })
+    ).not.toContain("retired-category");
+  });
+
+  it("reads a block scalar that has a blank line inside it", async () => {
+    expect(
+      await checksFor({
+        "docs/index.mdx": "---\ndescription: >-\n  Nextly is an app\n\n  framework for Next.js.\n---\n\nHi.\n",
+      })
+    ).toContain("retired-category");
+  });
+
+  it("reads a round mermaid node as well as a square one", async () => {
+    expect(
+      await checksFor({
+        "ARCHITECTURE.md": "Intro.\n\n```mermaid\ngraph TD\n  N(Nextly app framework)\n```\n\nTail.\n",
+      })
+    ).toContain("retired-category");
+  });
+
+  it("reads escaped punctuation as the mark it renders", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": "Nextly is an app\\-framework for Next.js.\n" })
+    ).toContain("retired-category");
+  });
+
+  it("does not read a comment that follows a quoted value", async () => {
+    expect(
+      await checksFor({
+        "docs/index.mdx": '---\ndescription: "A content platform" # formerly an app framework\n---\n\nHi.\n',
+      })
+    ).not.toContain("retired-category");
+    expect(
+      await checksFor({ "docs/index.mdx": '---\ndescription: "Nextly is an app framework"\n---\n\nHi.\n' })
+    ).toContain("retired-category");
+  });
+
+  it("honours an allowlist entry written with posix separators", async () => {
+    const claim = "Nextly is an app framework.";
+    const { root, files } = await fixture({ "docs/index.mdx": `${claim}\n` });
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files,
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+      allowlist: {
+        "retired-category": { "docs/index.mdx": { count: 1, digests: [digestLine(claim)] } },
+      },
+    });
+    expect(findings.filter(f => f.check === "retired-category")).toHaveLength(0);
+  });
+
+  it("reads a mermaid edge label", async () => {
+    expect(
+      await checksFor({
+        "ARCHITECTURE.md": "I.\n\n```mermaid\ngraph TD\n  A -->|Nextly app framework| B\n```\n\nT.\n",
+      })
+    ).toContain("retired-category");
+  });
+
+  it("reads the captions a component is given, and only those", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": '<Tabs items={["app framework", "cms"]}>\n\nHi.\n' })
+    ).toContain("retired-category");
+    expect(
+      await checksFor({ "docs/index.mdx": '<Callout title="Nextly is an app framework">\n\nHi.\n' })
+    ).toContain("retired-category");
+    expect(
+      await checksFor({ "docs/index.mdx": '<Tabs items={["content platform", "cms"]}>\n\nHi.\n' })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not read a component's configuration as a caption", async () => {
+    expect(
+      await checksFor({
+        "docs/index.mdx": '<Tabs items={["content platform"]} className="app-framework">\n\nHi.\n',
+      })
+    ).not.toContain("retired-category");
+  });
+
+  it("reads a brace-delimited mermaid node", async () => {
+    expect(
+      await checksFor({
+        "ARCHITECTURE.md": "I.\n\n```mermaid\ngraph TD\n  A{Nextly app framework}\n```\n\nT.\n",
+      })
+    ).toContain("retired-category");
+  });
+
+  it("does not read a link definition, which renders no text", async () => {
+    expect(
+      await checksFor({ "README.md": "[legacy]: https://example.com/app-framework\n\nHi.\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("removes module syntax with a punctuator after the keyword", async () => {
+    expect(
+      await checksFor({
+        "docs/index.mdx": 'export{default as Demo}from "./app-framework.mjs";\n\nHi.\n',
+      })
+    ).not.toContain("retired-category");
+  });
+
+  it("decodes escapes inside a double-quoted frontmatter value", async () => {
+    expect(
+      await checksFor({
+        "docs/index.mdx": '---\ndescription: "Nextly is an app\\x20framework"\n---\n\nHi.\n',
+      })
+    ).toContain("retired-category");
+  });
+
+  it("reads a single-quoted yaml value that escapes a quote by doubling it", async () => {
+    expect(
+      await checksFor({
+        "docs/index.mdx": "---\ndescription: 'Nextly''s app framework for Next.js'\n---\n\nHi.\n",
+      })
+    ).toContain("retired-category");
+  });
+
+  it("does not read an array passed to a prop that draws nothing", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": '<Widget classNames={["app-framework"]}>\n\nHi.\n' })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not read a mermaid click target as a label", async () => {
+    expect(
+      await checksFor({
+        "ARCHITECTURE.md":
+          'I.\n\n```mermaid\ngraph TD\n  A["Nextly"]\n  click A "https://example.com/app-framework"\n```\n\nT.\n',
+      })
+    ).not.toContain("retired-category");
+  });
+
+  it("reads keywords given as a bare string, which npm accepts", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": JSON.stringify({
+          name: "nextly",
+          version: "1.0.0",
+          description: "A content platform.",
+          keywords: "app-framework",
+        }),
+      })
+    ).toContain("retired-category");
+  });
+
+  it("does not decode escapes in a single-quoted yaml value, which are literal", async () => {
+    expect(
+      await checksFor({
+        "docs/index.mdx": "---\ndescription: 'Nextly is an app\\x20framework'\n---\n\nHi.\n",
+      })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not fire on the category that replaced it", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": "Nextly is an open-source content platform.\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not read a fenced example as the project describing itself", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": "intro\n\n```\napp framework\n```\n\ntail\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not read a commented-out block as prose", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": "a\n<!--\napp framework\n-->\nb\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not read a code span as a claim, at any delimiter width", async () => {
+    expect(
+      await checksFor({ "ARCHITECTURE.md": "Compare ``app framework`` and `app framework`.\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not read a document that states no category", async () => {
+    expect(
+      await checksFor({ "docs/guides/tutorial.mdx": "Nextly is an app framework.\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("reports the file rather than a line, and reports it once", async () => {
+    const { root, files } = await fixture({
+      "docs/index.mdx": "Nextly is an app framework.\nStill an app framework here.\n",
+    });
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files,
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+    });
+    const hits = findings.filter(f => f.check === "retired-category");
+    expect(hits).toHaveLength(1);
+    expect(hits[0].file).toBe("docs/index.mdx");
+    expect(hits[0].line).toBeNull();
+  });
+});
+
 describe("dead-branch-link", () => {
   it("fires when a linked ref does not resolve", async () => {
     expect(
