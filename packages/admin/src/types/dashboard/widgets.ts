@@ -29,6 +29,7 @@ import type {
   WidgetSize,
   WidgetStatCell,
   WidgetChrome,
+  WidgetSourceFieldType,
 } from "nextly/config";
 
 /**
@@ -51,12 +52,17 @@ export interface WidgetResultField {
    * server, and the row drew the ISO string the value crossed as --
    * `2026-09-01T07:00:00.000Z` on a card whose subject is when.
    *
-   * Optional, and an UNRECOGNISED kind arrives as absent rather than rejecting
-   * the result: a newer server may name a type this admin has not learned, and
-   * refusing the whole field list over it would blank a card that could have
-   * rendered its values as text.
+   * Typed from CORE's vocabulary rather than restated here. Repeating the four
+   * strings meant the server could add a kind this build then erased on the way
+   * in -- the parser would drop it, the cell would fall back to raw text, and
+   * nothing would report that a presentation had been lost.
+   *
+   * Still optional, and an unrecognised kind arrives as absent rather than
+   * rejecting the result: a newer server may name a type this build predates,
+   * and refusing the whole field list over it would blank a card that could
+   * have rendered its values as text.
    */
-  type?: "string" | "number" | "boolean" | "date";
+  type?: WidgetSourceFieldType;
 }
 
 export type WidgetResult =

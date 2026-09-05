@@ -91,3 +91,15 @@ unrecognised one degrades to plain text rather than refusing the result.
 Relative times on the activity feed update while the card is open. Deriving the
 label at render instead of at fetch was half the repair; a card nobody touches
 gets no renders, so `useNowTick` supplies them.
+
+Widget date cells honour the admin's configured timezone. General Settings
+carries one and `GeneralSettingsSyncProvider` publishes it to the formatter
+every other admin date already uses, so a cell reading the browser's own zone
+made these cards disagree with the dates beside them for any administrator who
+had set one.
+
+The admin derives the presentable field kinds from core's
+`WIDGET_SOURCE_FIELD_TYPES` instead of restating them. Hand-keeping the list
+meant core could add a kind, the server emit it, and the browser silently erase
+it on the way in — the cell falling back to raw text with nothing reporting that
+a presentation had been lost.

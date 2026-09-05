@@ -9,6 +9,8 @@
  * @module components/features/widgets/archetypes/cell-text
  */
 
+import { formatGlobalDateTime } from "@admin/lib/dates/format";
+
 /**
  * One cell as text, or `undefined` when it is not something to print.
  *
@@ -62,15 +64,26 @@ export function selectsNothing(
  * whole subject is when something happens. Selecting a different field is not a
  * remedy — it just moves which column is unreadable.
  *
- * Formatted in the VIEWER's locale and zone via `toLocaleString`, which is the
- * only zone the browser can speak for. That is a real limitation worth naming
- * rather than hiding: a release scheduled against a specific timezone is stored
- * with one, and this cell cannot show it, because the widget query contract
- * carries a value and its type rather than a value and its zone. A card that
- * must be authoritative about the authored zone needs its source to publish a
- * preformatted string; a dashboard summary reading "1 Sept, 08:00" in the
- * reader's own zone is the right answer for this surface and the wrong one for
- * a scheduling screen.
+ * 🔴 Formatted through `formatGlobalDateTime`, the same path every other admin
+ * date goes through, NOT a bare `toLocaleString`. General Settings carries a
+ * timezone, `GeneralSettingsSyncProvider` publishes it to that formatter at the
+ * root of the admin, and a cell reading the browser's own zone instead would
+ * make these cards disagree with every date beside them whenever an
+ * administrator has configured one. The formatter falls back to the local zone
+ * when nothing is configured, so the browser zone remains the default rather
+ * than the rule.
+ *
+ * It is imported from `lib/dates/format` rather than through
+ * `useAdminDateFormatter`: this module is a plain function called from a render
+ * body, not a hook, and the underlying formatter reads a module-level config
+ * that the provider has already set.
+ *
+ * What it still cannot show is the zone a value was AUTHORED against -- a
+ * release scheduled for 09:00 Berlin is stored with that zone, and the widget
+ * query contract carries a value and its declared type rather than a value and
+ * its zone. This renders in the ADMIN's zone, which is the right answer for a
+ * dashboard summary and the wrong one for a scheduling screen, where
+ * `formatScheduledAt` already serves the authored zone from the full release.
  *
  * An UNPARSEABLE date falls back to the raw text rather than dropping the cell.
  * The value is still evidence — a reader can see something is wrong with it —
@@ -84,13 +97,17 @@ export function asPresentedText(
   if (text === undefined) return undefined;
   if (type !== "date") return text;
 
-  const at = new Date(text);
-  if (Number.isNaN(at.getTime())) return text;
-  return at.toLocaleString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  // The raw text is the FALLBACK, so an unparseable value still reaches the
+  // reader as evidence rather than as an em dash claiming the row has nothing.
+  return formatGlobalDateTime(
+    text,
+    {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    },
+    text
+  );
 }

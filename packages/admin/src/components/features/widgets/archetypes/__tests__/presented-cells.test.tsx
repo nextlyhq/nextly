@@ -14,7 +14,12 @@
  * element a person looks at.
  */
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  getGlobalDateTimeConfig,
+  setGlobalDateTimeConfig,
+} from "@admin/lib/dates/format";
 
 import { asPresentedText } from "../cell-text";
 import { listBody } from "../list";
@@ -81,5 +86,48 @@ describe("asPresentedText", () => {
   it("drops what cannot be printed at all", () => {
     expect(asPresentedText({ nested: true }, "date")).toBeUndefined();
     expect(asPresentedText(null, "date")).toBeUndefined();
+  });
+});
+
+/**
+ * The cell honours the ADMIN's configured timezone, not the browser's.
+ *
+ * 🔴 General Settings carries a timezone and `GeneralSettingsSyncProvider`
+ * publishes it to `formatGlobalDateTime` at the root of the admin. A cell
+ * formatting with a bare `toLocaleString` reads the browser's zone instead, so
+ * these cards would disagree with every other date beside them the moment an
+ * administrator configured one -- silently, and only for the administrators who
+ * did.
+ */
+describe("a date cell reads the admin's configured timezone", () => {
+  const original = getGlobalDateTimeConfig();
+  afterEach(() => setGlobalDateTimeConfig(original));
+
+  it("renders the instant in the configured zone", () => {
+    setGlobalDateTimeConfig({ timezone: "Asia/Karachi", locale: "en-US" });
+
+    // 07:00Z is 12:00 in Asia/Karachi (UTC+5, no DST).
+    expect(asPresentedText(ISO, "date")).toContain("12:00");
+  });
+
+  /*
+   * The must-differ control, and it is the assertion that actually proves the
+   * configured zone is CONSULTED. A fixed expectation alone would also pass on
+   * a machine whose local zone happened to match, which is luck rather than
+   * evidence -- two different zones producing the same text can only mean the
+   * setting was ignored.
+   */
+  it("renders the same instant differently in a different zone", () => {
+    setGlobalDateTimeConfig({ timezone: "Asia/Karachi", locale: "en-US" });
+    const karachi = asPresentedText(ISO, "date");
+
+    setGlobalDateTimeConfig({
+      timezone: "Pacific/Kiritimati",
+      locale: "en-US",
+    });
+    const kiritimati = asPresentedText(ISO, "date");
+
+    expect(karachi).toBeDefined();
+    expect(kiritimati).not.toBe(karachi);
   });
 });

@@ -157,10 +157,14 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
      * card describing a list of DOCUMENTS could not tell one from another. A
      * row that cannot name its subject is worse than one naming it awkwardly.
      *
-     * The uuid is still the wrong thing to show a person, and the fix for that
-     * is not here: `system:versions` publishes no document title, so there is
-     * nothing better to select. Tracked separately -- the source needs a title
-     * field before this card can read the way it should.
+     * The uuid is still the wrong thing to show a person, and nothing better is
+     * selectable: `VERSION_FIELDS` publishes `scopeSlug`, `entryId`, `locale`
+     * and `updatedAt`, so `entryId` is the only document identity this source
+     * has. A readable row needs the source to publish a title first, and that
+     * is an access-control change rather than a formatting one -- an entry
+     * title is field content, and `readable-documents.ts` selects `id` alone
+     * precisely so a visibility probe cannot carry field values into a surface
+     * that never asked for them.
      */
     query: {
       source: VERSIONS_SOURCE_ID,

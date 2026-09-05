@@ -26,7 +26,11 @@
  */
 
 import { useQueries } from "@tanstack/react-query";
-import { MAX_QUERIES_PER_REQUEST, type WidgetQuery } from "nextly/config";
+import {
+  MAX_QUERIES_PER_REQUEST,
+  WIDGET_SOURCE_FIELD_TYPES,
+  type WidgetQuery,
+} from "nextly/config";
 import { useMemo } from "react";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
@@ -223,19 +227,22 @@ function asSlot(value: unknown): WidgetSlot {
  * and then the contract grew.
  */
 /**
- * The field kinds this admin knows how to present.
+ * The field kinds a result may name, DERIVED from core's vocabulary.
  *
- * Its own set rather than a check against core's exported tuple: this module
- * parses UNTRUSTED JSON off the wire, so the question is what this build can
- * render, which is a property of this package and not of whichever server
- * answered.
+ * 🔴 Not a hand-kept list. The wire's `type` is a `WidgetSourceFieldType`, whose
+ * canonical tuple lives in core, and restating the strings here meant the two
+ * could disagree in the one direction nobody notices: core adds a presentable
+ * kind, the server emits it, and this parser silently erases it -- so the cell
+ * falls back to raw text with the new presentation quietly missing and nothing
+ * reporting a loss.
+ *
+ * The set still exists rather than trusting the wire, because this parses
+ * UNTRUSTED JSON: what arrives has to be checked against the vocabulary, and
+ * deriving the vocabulary from core is what makes that check track core.
  */
-const KNOWN_FIELD_TYPES: ReadonlySet<string> = new Set([
-  "string",
-  "number",
-  "boolean",
-  "date",
-]);
+const KNOWN_FIELD_TYPES: ReadonlySet<string> = new Set(
+  WIDGET_SOURCE_FIELD_TYPES
+);
 
 function asResultFields(value: unknown): WidgetResultField[] | undefined {
   if (!Array.isArray(value)) return undefined;
