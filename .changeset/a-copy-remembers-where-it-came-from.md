@@ -64,3 +64,16 @@ valid, and documents carrying the new field are readable by older code — the
 node schema already admits properties it does not know, and an unknown node
 field is measured to survive an op round trip unchanged. So `formatVersion` does
 not move.
+
+The provenance type is reachable from every entry point that publishes the field
+that names it. A package that exports `BlockNode` and not the union one of its
+fields holds leaves a consumer able to read the value and unable to write its
+type, which is the coupling those entry points exist to avoid — and the
+renderer package already had a guard saying so, which caught it.
+
+The import scanner behind the format entry's boundary test no longer reads an
+import out of ordinary code. A module specifier cannot contain a newline, and
+without that constraint the literal `"from"` matched the keyword pattern — the
+string's closing quote read as a specifier's opening one, capturing the next two
+lines and reporting them as an external dependency. Any code holding that string
+would have tripped it.

@@ -45,10 +45,11 @@
  */
 
 import {
-  DOCUMENT_FORMAT_VERSION,
-  DOCUMENT_KINDS,
   type BlockDocument,
   type BlockNode,
+  DOCUMENT_FORMAT_VERSION,
+  DOCUMENT_KINDS,
+  isBlockOrigin,
 } from "./document";
 import {
   countNodes,
@@ -59,7 +60,6 @@ import {
 import { measureBytes } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
 import { isUsableSlotName } from "./registry";
-import { ownEntry } from "./safe-record";
 // The engine's own predicate, so a slot name is judged the same way at a
 // block's declaration and on every op that carries one. Two gates answering
 // differently is how a name a position could not use gets in through a subtree.
@@ -961,27 +961,6 @@ function isStringRecord(value: unknown): boolean {
  */
 function isSlotMap(value: unknown): boolean {
   return isPlainRecord(value) && Object.values(value).every(Array.isArray);
-}
-
-/**
- * A provenance record: a known source, a non-empty id, and a digest when the
- * source is one that can move underneath the copy.
- *
- * Checked field by field rather than trusted, for the same reason every other
- * entry in {@link NODE_FIELDS} is: an op arrives from storage, a crash buffer
- * or an agent, and a half-formed record here would be stored and then read by
- * a surface asking whether the upstream has changed — which would answer about
- * an id that is not one.
- */
-function isBlockOrigin(value: unknown): boolean {
-  if (!isPlainRecord(value)) return false;
-  const from = ownEntry(value, "from");
-  const id = ownEntry(value, "id");
-  if (typeof id !== "string" || id === "") return false;
-  if (from === "component") return true;
-  if (from !== "pattern") return false;
-  const digest = ownEntry(value, "digest");
-  return typeof digest === "string" && digest !== "";
 }
 
 /**

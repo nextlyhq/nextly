@@ -9,6 +9,7 @@
  * a framework.
  */
 import { isPlainRecord } from "./plain-record";
+import { ownEntry } from "./safe-record";
 
 /**
  * Engine document-format version. Bumped only when the envelope shape itself
@@ -203,6 +204,31 @@ export type BlockOrigin =
       /** The component definition's id. */
       readonly id: string;
     };
+
+/**
+ * Whether a stored value is a whole provenance record.
+ *
+ * Beside the type rather than beside either caller, because a document reaches
+ * storage by more than one road: an op through the edit vocabulary, and a field
+ * write through the document validator. A record that one road admits and the
+ * other refuses is a record that exists in the database and cannot be edited,
+ * so both ask this.
+ *
+ * Whole means every field the arm needs. A pattern origin without a digest
+ * cannot answer whether its source moved, which is the only question it exists
+ * for — storing one would leave a later reader with a record it must special
+ * case rather than trust.
+ */
+export function isBlockOrigin(value: unknown): value is BlockOrigin {
+  if (!isPlainRecord(value)) return false;
+  const id = ownEntry(value, "id");
+  if (typeof id !== "string" || id === "") return false;
+  const from = ownEntry(value, "from");
+  if (from === "component") return true;
+  if (from !== "pattern") return false;
+  const digest = ownEntry(value, "digest");
+  return typeof digest === "string" && digest !== "";
+}
 
 // ---------------------------------------------------------------------------
 // Bindings — typed field paths, never expressions
