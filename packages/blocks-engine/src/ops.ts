@@ -2353,7 +2353,18 @@ function assertNodeId(id: string, verb: string): void {
  * an author delete a locked block by deleting the column it sits in — the lock
  * honoured at the node and defeated one level up.
  */
-function lockedWithin(node: BlockNode): string | undefined {
+/**
+ * The first locked node anywhere in a subtree, or `undefined`.
+ *
+ * Exported because a PLANNER has to be able to ask it before an insert is
+ * built. `applyOp` refuses an insert whose subtree arrives locked — the inverse
+ * of an insert is a remove, and a remove refuses a locked subtree, so accepting
+ * it would put the document one edit from a state its own undo could not leave.
+ * A planner that could not ask would report a plan the apply then throws on,
+ * which is exactly the gap between a dry run and a real run that planning
+ * separately exists to close.
+ */
+export function lockedWithin(node: BlockNode): string | undefined {
   let found: string | undefined;
   walkNodes([node], candidate => {
     if (found === undefined && candidate.locked === true) found = candidate.id;

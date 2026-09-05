@@ -169,9 +169,10 @@ export type {
 // create and the ops the page needs. Split from the doing so the caller can put
 // both writes in one unit of work and roll the create back — and so the dry run
 // and the real run are the same function rather than two that agree for now.
-export { planSaveAsPattern } from "./composition-planners";
+export { planInsertPattern, planSaveAsPattern } from "./composition-planners";
 export type {
   CompositionPlan,
+  InsertTarget,
   PatternTarget,
   PlanProblem,
   PlanRefusal,
@@ -690,6 +691,10 @@ export {
 export {
   applyOp,
   applyOps,
+  // Published for the planners: an insert whose subtree arrives locked is
+  // refused by the op layer, so a planner has to be able to foresee it rather
+  // than hand back a plan the apply throws on.
+  lockedWithin,
   OpError,
   positionOf,
   sameStoredValue,
