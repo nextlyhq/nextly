@@ -106,3 +106,15 @@ setter instead of creating an own property — so the attribute would have been
 absent from what is hashed while the copier carries it, and editing it would
 have produced the same digest and no upstream-change notice. Written through the
 package's prototype-safe record writer, which exists for exactly this.
+
+The rules these copiers share are reachable from the package entry. A module's
+`export` keyword makes a symbol importable within the package; a consumer gets
+only what the entry re-exports, and two of these had the first without the
+second — so a surface holding `BlockOrigin` had no way to check one, and a
+surface copying nodes had no way to tokenise an id reference the way the copier
+does. Both are the defect the rules were centralised to prevent: a caller who
+cannot import the answer writes a second one.
+
+A test now asserts that every function `document.ts` and `tree.ts` export is
+reachable from the entry, asked of the module object rather than of the index
+source, so a re-export that does not resolve cannot pass it.
