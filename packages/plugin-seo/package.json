@@ -53,8 +53,7 @@
     "sitemap",
     "metadata",
     "cms",
-    "headless-cms",
-    "app-framework"
+    "headless-cms"
   ],
   "repository": {
     "type": "git",
