@@ -45,10 +45,11 @@
  */
 
 import {
-  DOCUMENT_FORMAT_VERSION,
-  DOCUMENT_KINDS,
   type BlockDocument,
   type BlockNode,
+  DOCUMENT_FORMAT_VERSION,
+  DOCUMENT_KINDS,
+  isBlockOrigin,
 } from "./document";
 import {
   countNodes,
@@ -58,10 +59,10 @@ import {
 } from "./limits";
 import { measureBytes } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
+import { isUsableSlotName } from "./registry";
 // The engine's own predicate, so a slot name is judged the same way at a
 // block's declaration and on every op that carries one. Two gates answering
 // differently is how a name a position could not use gets in through a subtree.
-import { isUsableSlotName } from "./registry";
 import {
   findNode,
   insertNode,
@@ -152,6 +153,7 @@ const NODE_FIELDS: {
   cssId: { holds: isString, optional: true },
   attributes: { holds: isStringRecord, optional: true },
   migrationFailed: { holds: isBoolean, optional: true },
+  origin: { holds: isBlockOrigin, optional: true },
 };
 
 /**
@@ -180,6 +182,11 @@ const PATCH_FIELDS: { readonly [K in keyof Required<NodePatch>]: true } = {
   cssId: true,
   attributes: true,
   migrationFailed: true,
+  // Patchable, like `migrationFailed`, rather than sealed. Provenance is a
+  // record and not a lock: an author who deliberately severs the link to a
+  // pattern should be able to, and a field an update can never address is one
+  // that can only be removed by deleting the node it sits on.
+  origin: true,
 };
 
 /** A field name an update may address. */

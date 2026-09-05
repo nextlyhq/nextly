@@ -247,6 +247,7 @@ export type {
   BlockIsland,
   BlockMigrationInfo,
   BlockNode,
+  BlockOrigin,
   BlockPart,
   BlockRenderResult,
   BlockSeoContribution,
