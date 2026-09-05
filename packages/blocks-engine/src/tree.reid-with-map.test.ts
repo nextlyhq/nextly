@@ -291,3 +291,57 @@ describe("a forest is re-identified as one thing", () => {
     expect(domIds.size).toBe(0);
   });
 });
+
+/**
+ * A fragment link lives in PROPS, and the copy has to take it along.
+ *
+ * `cssId` is not referenced only by markup. `core/button` passes a bare `href`
+ * of `#pricing` through to the DOM, so minting a new id for the target and
+ * leaving the link behind produces a copy whose anchor resolves to nothing —
+ * the same silent breakage as a dangling `aria-labelledby`, one prop over. The
+ * rule is deliberately narrow: only a whole string of `#` plus an id THIS copy
+ * minted is rewritten, because nothing else can spell that.
+ */
+describe("a fragment link in props follows the copy", () => {
+  it("repoints an href at the copy's own target", () => {
+    const forest = [
+      node("target", { cssId: "pricing" }),
+      node("link", { props: { href: "#pricing" } } as Partial<BlockNode>),
+    ];
+
+    const { nodes, domIds } = reidForestWithMap(forest);
+
+    expect(nodes[1]!.props.href).toBe(`#${domIds.get("pricing")}`);
+    expect(nodes[1]!.props.href).not.toBe("#pricing");
+  });
+
+  it("reaches a link nested inside an array-valued prop", () => {
+    const forest = [
+      node("target", { cssId: "pricing" }),
+      node("nav", {
+        props: { items: [{ label: "Plans", href: "#pricing" }] },
+      } as Partial<BlockNode>),
+    ];
+
+    const { nodes, domIds } = reidForestWithMap(forest);
+
+    const items = nodes[1]!.props.items as { href: string }[];
+    expect(items[0]!.href).toBe(`#${domIds.get("pricing")}`);
+  });
+
+  it("leaves a string that only LOOKS like a fragment alone", () => {
+    const forest = [
+      node("target", { cssId: "pricing" }),
+      node("copy", {
+        props: { text: "#1 bestseller", href: "#somewhere-else" },
+      } as Partial<BlockNode>),
+    ];
+
+    const { nodes } = reidForestWithMap(forest);
+
+    // Content, not a reference: it names no minted id.
+    expect(nodes[1]!.props.text).toBe("#1 bestseller");
+    // A target OUTSIDE the copied run belongs to the page and still works.
+    expect(nodes[1]!.props.href).toBe("#somewhere-else");
+  });
+});

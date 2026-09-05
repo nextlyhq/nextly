@@ -157,6 +157,26 @@ describe("a reference that crosses from one root to the next", () => {
   });
 });
 
+describe("a link inside the saved run still reaches its own target", () => {
+  it("stores an href pointing at the pattern's target, not the page's", () => {
+    const doc = page([
+      node("t", { cssId: "pricing", props: { mark: "target" } }),
+      node("l", { props: { mark: "link", href: "#pricing" } }),
+    ]);
+
+    const stored =
+      planSaveAsPattern(doc, ["t", "l"], target).create?.document.nodes ?? [];
+    const copiedTarget = marked(stored, "target");
+    const copiedLink = marked(stored, "link");
+
+    // The id moved, so a stored `#pricing` would address nothing at all — and
+    // insert cannot repair it later, because its own map is keyed by the id
+    // this copy already renamed.
+    expect(copiedTarget.cssId).not.toBe("pricing");
+    expect(copiedLink.props?.href).toBe(`#${copiedTarget.cssId}`);
+  });
+});
+
 describe("a run inside a container", () => {
   it("plans from the parent's slot, not from the roots", () => {
     const doc = page([

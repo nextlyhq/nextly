@@ -79,3 +79,22 @@ stored documents claiming one id leave any index keyed on it unable to say which
 node it describes. Page-scoped settings are not copied: a document background
 and its custom CSS describe the page, not the run, so a pattern carrying them
 would repaint every page it was inserted into.
+
+A copied subtree's fragment links follow it. `cssId` is not referenced only by
+markup: a link's `href` may be `#pricing`, and the renderer passes a bare
+fragment straight through to the DOM, so a copier that mints a new id for the
+target and leaves the link behind stores an anchor resolving to nothing — the
+same silent breakage as a dangling `aria-labelledby`, one prop over. Composition
+had grown this rule; the copier that saves a pattern was written without it, and
+a later insert cannot repair the result because its own map is keyed by the id
+the save already renamed. The rule now lives in one module that both copiers
+use. It stays narrow — only a whole string of `#` followed by an id THIS copy
+minted is rewritten — so `"#1 bestseller"` is content and a fragment addressing
+something outside the copied run belongs to the page and keeps working.
+
+Locating a node tolerates a damaged document. A stored slot holding `null`
+instead of an array, or a list with a hole in it, threw out of the search and
+took down every caller — a multi-block reorder and a saved pattern included —
+for a node neither of them had touched. These primitives are documented as
+reading documents nothing has validated, so a broken entry is skipped and the
+answer is about the nodes that were actually asked for.

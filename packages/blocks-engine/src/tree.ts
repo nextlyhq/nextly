@@ -82,6 +82,7 @@ import type { SlotSpec } from "./block";
 import { isBlockType } from "./document";
 import type { BlockNode } from "./document";
 import { walkForest } from "./forest-walk";
+import { remapFragmentProps } from "./fragment-refs";
 import { MAX_DEPTH, MAX_NODES } from "./limits";
 import { canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
@@ -643,13 +644,20 @@ export function locateNode(
   nodes: BlockNode[],
   id: string
 ): NodeLocation | undefined {
-  const topIndex = nodes.findIndex(node => node.id === id);
+  // Read defensively at every step. This is a stored document and nothing here
+  // has validated it — a slot may hold `null` instead of an array, and a list
+  // may hold a hole — so an entry is asked for its id rather than assumed to
+  // have one. It matters because ONE damaged node anywhere in the forest would
+  // otherwise throw, and the caller looking for a completely unrelated
+  // selection elsewhere in the document gets a crash instead of an answer.
+  const topIndex = nodes.findIndex(node => node?.id === id);
   if (topIndex !== -1) return { index: topIndex };
   let found: NodeLocation | undefined;
   walkNodes(nodes, node => {
     if (found || !node.slots) return;
     for (const [slot, children] of Object.entries(node.slots)) {
-      const index = children.findIndex(child => child.id === id);
+      if (!Array.isArray(children)) continue;
+      const index = children.findIndex(child => child?.id === id);
       if (index !== -1) {
         found = { parent: node, slot, index };
         return;
@@ -1104,16 +1112,39 @@ export function reidForestWithMap(nodes: BlockNode[]): ReidentifiedForest {
   // first had not reached yet. Without it a copied `aria-labelledby` points at
   // the original's id, so the copy loses its accessible name — the same gap
   // composition has, closed the same way.
-  const linked = mapForest(rebuilt, copy =>
-    // `isPlainRecord`, not `!== undefined`. A persisted `attributes: null` is
-    // content the first pass deliberately carries through untouched, and
-    // handing it to the remapper enumerates null and throws — a rebuild that
-    // destroys a node because of a field on a different one.
-    isPlainRecord(copy.attributes)
-      ? { ...copy, attributes: remapIdReferences(copy.attributes, domIds) }
-      : copy
-  );
+  const linked = mapForest(rebuilt, copy => relinkOne(copy, domIds));
   return { nodes: linked, nodeIds, domIds };
+}
+
+/**
+ * One copied node, with every reference to a re-minted id following the copy.
+ *
+ * Both halves matter and only one of them is markup. `aria-labelledby` lives in
+ * `attributes`; a link's target lives in `props` as `href: "#pricing"`, and a
+ * copy that moves the id without the link leaves the anchor resolving to
+ * nothing. Applied HERE rather than left to each caller, because the caller
+ * that forgets does not fail — it stores a document that renders, validates and
+ * quietly points somewhere else.
+ */
+function relinkOne(
+  copy: BlockNode,
+  domIds: ReadonlyMap<string, string>
+): BlockNode {
+  // `isPlainRecord`, not `!== undefined`. A persisted `attributes: null` is
+  // content the first pass deliberately carries through untouched, and handing
+  // it to the remapper enumerates null and throws — a rebuild that destroys a
+  // node because of a field on a different one.
+  const attributes = isPlainRecord(copy.attributes)
+    ? remapIdReferences(copy.attributes, domIds)
+    : copy.attributes;
+  // See `fragment-refs` for why a copier may rewrite a prop it has no schema
+  // for: only a whole string of `#` plus an id THIS copy minted is touched, and
+  // nothing but a reference to the copy's own target can spell that.
+  const props = remapFragmentProps(copy.props, domIds) as BlockNode["props"];
+  // Both remappers return their input unchanged when nothing matched, so an
+  // ordinary node is returned as it stands rather than reallocated.
+  if (attributes === copy.attributes && props === copy.props) return copy;
+  return { ...copy, attributes, props };
 }
 
 /**
