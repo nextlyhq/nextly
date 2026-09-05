@@ -281,10 +281,20 @@ describe("retired-category", () => {
     }
   });
 
-  it("does not join a paragraph and the quotation beside it, either way round", async () => {
-    for (const body of ["App\n> Framework configuration.\n", "> App\nFramework configuration.\n"]) {
-      expect(await checksFor({ "README.md": body })).not.toContain("retired-category");
-    }
+  it("does not join a paragraph into the quotation beneath it", async () => {
+    // `App\n> Framework configuration.` renders as a paragraph and then a
+    // separate blockquote, so the two words never meet.
+    expect(
+      await checksFor({ "README.md": "App\n> Framework configuration.\n" })
+    ).not.toContain("retired-category");
+  });
+
+  it("reads an unprefixed line beneath a quotation as continuing it", async () => {
+    // The other direction is not a boundary: `> Nextly is an app\nframework.`
+    // renders as one paragraph inside the quotation.
+    expect(
+      await checksFor({ "README.md": "> Nextly is an app\nframework for Next.js.\n" })
+    ).toContain("retired-category");
   });
 
   it("does not leave prose behind when a wide code span holds a shorter run", async () => {
@@ -518,6 +528,91 @@ describe("retired-category", () => {
       await checksFor({
         "docs/index.mdx": '---\ndescription: "Nextly is an app\\x20framework"\n---\n\nHi.\n',
       })
+    ).toContain("retired-category");
+  });
+
+  it("reads a single-quoted yaml value that escapes a quote by doubling it", async () => {
+    expect(
+      await checksFor({
+        "docs/index.mdx": "---\ndescription: 'Nextly''s app framework for Next.js'\n---\n\nHi.\n",
+      })
+    ).toContain("retired-category");
+  });
+
+  it("does not read an array passed to a prop that draws nothing", async () => {
+    expect(
+      await checksFor({ "docs/index.mdx": '<Widget classNames={["app-framework"]}>\n\nHi.\n' })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not read a mermaid click target as a label", async () => {
+    expect(
+      await checksFor({
+        "ARCHITECTURE.md":
+          'I.\n\n```mermaid\ngraph TD\n  A["Nextly"]\n  click A "https://example.com/app-framework"\n```\n\nT.\n',
+      })
+    ).not.toContain("retired-category");
+  });
+
+  it("reads keywords given as a bare string, which npm accepts", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": JSON.stringify({
+          name: "nextly",
+          version: "1.0.0",
+          description: "A content platform.",
+          keywords: "app-framework",
+        }),
+      })
+    ).toContain("retired-category");
+  });
+
+  it("does not decode escapes in a single-quoted yaml value, which are literal", async () => {
+    expect(
+      await checksFor({
+        "docs/index.mdx": "---\ndescription: 'Nextly is an app\\x20framework'\n---\n\nHi.\n",
+      })
+    ).not.toContain("retired-category");
+  });
+
+  it("reads a mermaid click tooltip but not its target", async () => {
+    expect(
+      await checksFor({
+        "ARCHITECTURE.md":
+          'I.\n\n```mermaid\ngraph TD\n  A["N"]\n  click A "https://example.test" "Nextly is an app framework"\n```\n\nT.\n',
+      })
+    ).toContain("retired-category");
+    expect(
+      await checksFor({
+        "ARCHITECTURE.md":
+          'I.\n\n```mermaid\ngraph TD\n  A["N"]\n  click A "https://example.com/app-framework"\n```\n\nT.\n',
+      })
+    ).not.toContain("retired-category");
+  });
+
+  it("does not continue a quotation into a block that opens its own line", async () => {
+    expect(
+      await checksFor({
+        "README.md": '> Configure the Nextly app\n<Callout title="Framework settings">\n',
+      })
+    ).not.toContain("retired-category");
+  });
+
+  it("reads a mermaid tooltip in the callback form, which carries no address", async () => {
+    expect(
+      await checksFor({
+        "ARCHITECTURE.md":
+          'I.\n\n```mermaid\ngraph TD\n  A["N"]\n  click A callback "Nextly is an app framework"\n```\n\nT.\n',
+      })
+    ).toContain("retired-category");
+  });
+
+  it("does not continue a quotation into an html block, but keeps an inline tag", async () => {
+    expect(
+      await checksFor({ "README.md": "> Configure the Nextly app\n<div>Framework settings</div>\n" })
+    ).not.toContain("retired-category");
+    expect(
+      await checksFor({ "README.md": "Configure the Nextly <b>app framework</b> here.\n" })
     ).toContain("retired-category");
   });
 

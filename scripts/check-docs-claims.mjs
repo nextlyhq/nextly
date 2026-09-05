@@ -153,6 +153,21 @@ function stripEsm(markdown) {
  * A value may be a folded or literal scalar, whose text is on the indented
  * lines beneath the marker rather than beside it, so those are collected too.
  */
+/** What a double-quoted YAML scalar's escapes stand for. */
+function decodeYamlEscapes(value) {
+  return value
+    .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) =>
+      String.fromCharCode(Number.parseInt(hex, 16))
+    )
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
+      String.fromCharCode(Number.parseInt(hex, 16))
+    )
+    .replace(/\\U([0-9a-fA-F]{8})/g, (_, hex) =>
+      String.fromCodePoint(Number.parseInt(hex, 16))
+    )
+    .replace(/\\([nt])/g, " ");
+}
+
 function publishedFrontmatter(block) {
   const lines = block.split(/\r?\n/);
   const published = [];
@@ -161,23 +176,15 @@ function publishedFrontmatter(block) {
     if (field === null) continue;
     // A quoted value ends at its closing quote and an unquoted one at a
     // comment. YAML publishes neither the quotes nor anything after them.
-    const quoted = field[1].match(/^(['"])((?:\\.|(?!\1).)*)\1/);
-    const inline =
-      quoted === null
-        ? field[1].replace(/(?:^|[ \t])#.*$/, "")
-        : // A double-quoted scalar spells characters as escapes, and YAML
-          // publishes what they stand for.
-          quoted[2]
-            .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) =>
-              String.fromCharCode(Number.parseInt(hex, 16))
-            )
-            .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
-              String.fromCharCode(Number.parseInt(hex, 16))
-            )
-            .replace(/\\U([0-9a-fA-F]{8})/g, (_, hex) =>
-              String.fromCodePoint(Number.parseInt(hex, 16))
-            )
-            .replace(/\\([nt])/g, " ");
+    // A single-quoted scalar is literal apart from a doubled quote. A
+    // double-quoted one spells characters as escapes, and YAML publishes what
+    // those stand for, so only that form is decoded.
+    const single = field[1].match(/^'((?:[^']|'')*)'/);
+    const double = single === null ? field[1].match(/^"((?:\\.|[^"])*)"/) : null;
+    let inline;
+    if (single !== null) inline = single[1].replace(/''/g, "'");
+    else if (double !== null) inline = decodeYamlEscapes(double[1]);
+    else inline = field[1].replace(/(?:^|[ \t])#.*$/, "");
     const value = [inline.replace(/^[>|][-+]?[ \t]*$/, "")];
     // A block scalar runs over the indented lines beneath it, and a blank line
     // inside one is a paragraph break rather than its end, so the scan runs to
@@ -202,15 +209,20 @@ function publishedFrontmatter(block) {
  * configuration, and reading it would fail on a class or a path that happens to
  * carry the words.
  */
-const CAPTION_ATTRIBUTES = /\b(?:title|label|caption|heading|summary|placeholder)=/;
+const CAPTION_PROPS =
+  /^(?:title|label|labels|caption|captions|heading|headings|summary|placeholder|items|options|tabs)$/;
 
 function componentCaptions(tag) {
   const captions = [];
-  for (const expression of tag.match(/\{\s*\[[^\]]*\]\s*\}/g) ?? []) {
-    captions.push(...(expression.match(/"[^"\n]*"|'[^'\n]*'/g) ?? []));
+  for (const [, name, list] of tag.matchAll(
+    /\b([a-zA-Z]+)=\{\s*(\[[^\]]*\])\s*\}/g
+  )) {
+    if (CAPTION_PROPS.test(name)) captions.push(...(list.match(/"[^"\n]*"|'[^'\n]*'/g) ?? []));
   }
-  for (const attribute of tag.match(/\b[a-zA-Z]+=(?:"[^"\n]*"|'[^'\n]*')/g) ?? []) {
-    if (CAPTION_ATTRIBUTES.test(attribute)) captions.push(attribute.replace(/^[^=]+=/, ""));
+  for (const [, name, text] of tag.matchAll(
+    /\b([a-zA-Z]+)=("[^"\n]*"|'[^'\n]*')/g
+  )) {
+    if (CAPTION_PROPS.test(name)) captions.push(text);
   }
   return captions.map(text => text.slice(1, -1)).join(" ");
 }
@@ -222,7 +234,17 @@ function readableProse(markdown, { mdx }) {
   const drawn = markdown.replace(
     /^ {0,3}```mermaid\b[\s\S]*?^ {0,3}```[ \t]*$/gm,
     fence =>
-      (fence.match(/"[^"\n]*"|'[^'\n]*'|\[[^\]\n]*\]|\([^)\n]*\)|\|[^|\n]*\||\{[^}\n]*\}/g) ?? [])
+      // A `click` binds a node to an address and may carry a tooltip. The
+      // address is not drawn and the tooltip is, and which comes first depends
+      // on the form, so the addresses go rather than the first string: the
+      // callback form has a tooltip and no address at all.
+      (fence
+        .replace(/^[ \t]*click\b[^\n]*$/gm, directive =>
+          (directive.match(/"[^"\n]*"|'[^'\n]*'/g) ?? [])
+            .filter(text => !/^["'](?:[a-z][a-z0-9+.-]*:|[./#])/i.test(text))
+            .join(" ")
+        )
+        .match(/"[^"\n]*"|'[^'\n]*'|\[[^\]\n]*\]|\([^)\n]*\)|\|[^|\n]*\||\{[^}\n]*\}/g) ?? [])
         .map(label => label.slice(1, -1))
         .join("\n\n")
   );
@@ -243,25 +265,37 @@ function readableProse(markdown, { mdx }) {
     // as data, and the attributes whose names say they hold a caption. A
     // `className` or an `href` is configuration and naming a stylesheet class
     // after the old category is not the project claiming it.
-    .replace(/<[A-Z][A-Za-z0-9]*\b[^>]*>/g, tag => ` ${componentCaptions(tag)} `)
+    .replace(/<[A-Z][A-Za-z0-9]*\b[^>]*>/g, (tag, offset, whole) => {
+      // A component opening its own line opens a block, so its captions start a
+      // paragraph rather than joining the sentence above them.
+      const opensLine = offset === 0 || /\n[ \t]*$/.test(whole.slice(0, offset));
+      return `${opensLine ? "\n\n" : " "}${componentCaptions(tag)} `;
+    })
     .replace(/<br\s*\/?>/gi, " ")
     .replace(/^ {0,3}\[[^\]\n]+\]:[ \t]*\S[^\n]*$/gm, " ")
     .replace(/\\\n/g, " ")
     .replace(/\\([-!"#$%&'()*+,./:;<=>?@[\]^_`{|}~])/g, "$1")
     .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, " ")
     .replace(/(`+)[\s\S]*?\1/g, " ")
-    .replace(/<[^>]+>/g, "")
+    .replace(/<[^>]+>/g, (tag, offset, whole) =>
+      // Same rule as a component: a tag opening its own line opens a block, so
+      // what follows is not a continuation of the sentence above it. An inline
+      // tag is only punctuation and leaves the sentence intact.
+      offset === 0 || /\n[ \t]*$/.test(whole.slice(0, offset)) ? "\n\n" : ""
+    )
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]*)\]\[[^\]]*\]/g, "$1")
     .replace(/[*_]/g, "");
 }
 
 /**
- * Split where a run of quoted lines begins or ends.
+ * Split where a quotation begins.
  *
- * A quotation and the paragraph beside it are two blocks even with no blank
- * line between them, and the marker is stripped before the lines are joined, so
- * without this the two would read as one sentence.
+ * A quotation and the paragraph above it are two blocks even with no blank line
+ * between them, and the marker is stripped before the lines are joined, so
+ * without this the two would read as one sentence. The other direction is only
+ * a boundary when the line beneath opens a block: plain text there continues
+ * the quotation, a tag or a table row does not.
  */
 function splitOnQuoteBoundary(block) {
   const blocks = [];
@@ -269,7 +303,14 @@ function splitOnQuoteBoundary(block) {
   let quoted = null;
   for (const line of block.split("\n")) {
     const isQuoted = /^\s*>/.test(line);
-    if (quoted !== null && isQuoted !== quoted && current.length > 0) {
+    // Entering a quotation is a boundary. Leaving one is only a boundary when
+    // the line beneath opens a block of its own: ordinary text there is a lazy
+    // continuation of the same paragraph, but a tag or a table row is not, and
+    // a blank line has already closed the block by the time this runs.
+    const opensBlock = /^\s*[<|]/.test(line);
+    const entering = quoted === false && isQuoted;
+    const leaving = quoted === true && !isQuoted && opensBlock;
+    if ((entering || leaving) && current.length > 0) {
       blocks.push(current.join("\n"));
       current = [];
     }
@@ -766,9 +807,13 @@ export async function runChecks({
     const rel = relative(repoRoot, join(pkg.dir, "package.json")).split(sep).join("/");
     // Each field on its own. Joined, a description ending in "app" and a keyword
     // "framework" would read as the phrase that neither of them contains.
-    const published = [pkg.json.description, ...(pkg.json.keywords ?? [])].filter(
-      value => typeof value === "string"
-    );
+    // npm accepts a bare string where the array is expected, and spreading one
+    // would compare the pattern against single characters.
+    const keywords = pkg.json.keywords;
+    const published = [
+      pkg.json.description,
+      ...(typeof keywords === "string" ? [keywords] : (keywords ?? [])),
+    ].filter(value => typeof value === "string");
     const claim = published.find(
       value => RETIRED_CATEGORY.test(value) && !categoryExempt(rel, value)
     );
