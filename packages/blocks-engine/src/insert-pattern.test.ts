@@ -429,7 +429,7 @@ describe("what it refuses before the op layer would", () => {
     expect(plan.problem).toBeUndefined();
   });
 
-  it("REFUSES A DOCUMENT IN A FORMAT THIS VERSION CANNOT EDIT", () => {
+  it("REFUSES A DESTINATION THE APPLY COULD NOT EDIT AT ALL", () => {
     // `applyOp` refuses to edit such a document before it looks at anything
     // else, so a plan built against one is a plan that cannot apply.
     const old = {
@@ -440,7 +440,34 @@ describe("what it refuses before the op layer would", () => {
     expect(
       planInsertPattern(old, pattern([node("p1")]), { index: 1 }, anyParent)
         .problem
-    ).toBe("unsupported-format");
+    ).toBe("unusable-document");
+  });
+
+  it("refuses a destination with a kind this editor does not know", () => {
+    // Checking the format version alone closed the case that is easy to
+    // imagine and left the ones that are not. The apply asks about the whole
+    // envelope before it looks at an op, so the plan asks the same thing.
+    const odd = {
+      ...page([node("a")]),
+      kind: "spreadsheet",
+    } as unknown as BlockDocument;
+
+    expect(
+      planInsertPattern(odd, pattern([node("p1")]), { index: 1 }, anyParent)
+        .problem
+    ).toBe("unusable-document");
+  });
+
+  it("refuses a destination carrying a value JSON cannot hold", () => {
+    const odd = {
+      ...page([node("a")]),
+      metadata: 1n,
+    } as unknown as BlockDocument;
+
+    expect(
+      planInsertPattern(odd, pattern([node("p1")]), { index: 1 }, anyParent)
+        .problem
+    ).toBe("unusable-document");
   });
 
   it("REFUSES A PLACEMENT INSIDE THE PATTERN THAT THE RULES NOW FORBID", () => {

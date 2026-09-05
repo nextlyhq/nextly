@@ -23,11 +23,7 @@
  *
  * @module composition-planners
  */
-import {
-  DOCUMENT_FORMAT_VERSION,
-  type BlockDocument,
-  type BlockNode,
-} from "./document";
+import type { BlockDocument, BlockNode } from "./document";
 import {
   canBeRoot,
   canNest,
@@ -37,6 +33,7 @@ import {
   type NestingVerdict,
 } from "./nesting";
 import {
+  documentRefusal,
   lockedWithin,
   nodeShapeRefusal,
   positionRefusal,
@@ -117,8 +114,8 @@ export type PlanProblem =
   | "invalid-node"
   /** The stored pattern spells one rendered id on two of its own nodes. */
   | "duplicate-dom-id"
-  /** One of the documents is written in a format this version cannot edit. */
-  | "unsupported-format";
+  /** One of the documents cannot be edited at all, whatever the ops say. */
+  | "unusable-document";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -372,14 +369,16 @@ function storedRefusal(
 ): PlanRefusal | undefined {
   if (pattern.kind !== "pattern") return { problem: "not-a-pattern" };
   if (pattern.nodes.length === 0) return { problem: "empty" };
-  // Both envelopes, because the ops are built from one and applied to the
-  // other, and `applyOp` refuses to edit a document written in a format this
-  // version does not know before it looks at anything else.
+  // BOTH envelopes, judged by the apply's own document rule rather than by a
+  // field of it. The ops are built from one document and applied to the other,
+  // and everything `applyOp` asks before it looks at an op — the envelope's
+  // keys, its values, its format and its kind — is a way a plan can be built
+  // against a destination that cannot be edited at all.
   if (
-    document.formatVersion !== DOCUMENT_FORMAT_VERSION ||
-    pattern.formatVersion !== DOCUMENT_FORMAT_VERSION
+    documentRefusal(document) !== undefined ||
+    documentRefusal(pattern) !== undefined
   ) {
-    return { problem: "unsupported-format" };
+    return { problem: "unusable-document" };
   }
   return shapeRefusal(pattern.nodes) ?? duplicateDomIdRefusal(pattern.nodes);
 }

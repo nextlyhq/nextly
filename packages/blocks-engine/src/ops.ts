@@ -2361,6 +2361,33 @@ function assertNodeId(id: string, verb: string): void {
  * honoured at the node and defeated one level up.
  */
 /**
+ * Why this DOCUMENT could not be edited at all, or `undefined`.
+ *
+ * The third of these asking forms, and the broadest: it covers everything
+ * `applyOp` checks before it looks at the op — the envelope being a record, its
+ * keys being ones JSON carries, `nodes` being an array, the envelope's values
+ * being serializable, `formatVersion` and `kind` being owned and known.
+ *
+ * A planner needs it because a stored destination can fail any of those and a
+ * plan built against one advertises an edit that throws. Checking a single
+ * field instead — the format version, say — closes the case that is easy to
+ * imagine and leaves the ones that are not: a page whose `kind` was written by
+ * a newer version, or one carrying a `BigInt` in an envelope field.
+ *
+ * Reported rather than thrown, and never re-implemented: the assertion is the
+ * rule, and a second predicate spelling of it would agree only until one moved.
+ */
+export function documentRefusal(document: unknown): string | undefined {
+  try {
+    assertEditableDocument(document as BlockDocument);
+    return undefined;
+  } catch (error) {
+    if (error instanceof OpError) return error.message;
+    throw error;
+  }
+}
+
+/**
  * Why this node would be refused as an insert's subtree, or `undefined`.
  *
  * The companion to {@link positionRefusal} and published for the same reason: a
@@ -2716,6 +2743,174 @@ function withNodes(document: BlockDocument, nodes: BlockNode[]): BlockDocument {
 }
 
 /**
+ * Every refusal that is about the DOCUMENT rather than about the edit.
+ *
+ * Extracted so a planner can ask it without applying anything. `applyOp` runs
+ * these before it dispatches an op, so a plan built against a document that
+ * fails any of them is a plan that cannot apply — and a dry run blind to them
+ * advertises success for an edit that throws. {@link documentRefusal} is the
+ * asking form.
+ *
+ * Three questions, asked in an order that is load-bearing: is this a record
+ * whose fields are safe to read, are the values it holds ones an edit can save,
+ * and does it say what it is. Each precedes the next because the next reads
+ * something the previous one vouched for.
+ */
+function assertEditableDocument(document: BlockDocument): void {
+  assertEditableEnvelope(document);
+  assertEnvelopeValues(document);
+  assertDocumentIdentity(document);
+}
+
+/**
+ * The envelope as a shape: a record, holding only keys JSON carries, with a
+ * forest that is an array.
+ *
+ * First, and every check below it depends on that: each one reads a field off
+ * the envelope, which is only safe once the envelope is known to be a record
+ * whose fields are held rather than computed.
+ */
+function assertEditableEnvelope(document: BlockDocument): void {
+  if (!isPlainRecord(document)) {
+    throw new OpError(
+      `a document of ${describe(document)} holds no forest to edit. Every ` +
+        `document is a record whose nodes are an array.`
+    );
+  }
+  // The ENVELOPE's own keys, by the same rule its contents are held to, and
+  // before anything reads a field off it — `nodes` included.
+  //
+  // `withNodes` builds the result by spreading, and a spread copies enumerable
+  // own properties only — so a `kind` or `formatVersion` defined as
+  // non-enumerable is read and accepted by the checks below and then absent
+  // from the document they admitted. The result enters history without a field
+  // every document must carry, and nothing downstream is looking.
+  //
+  // Accessors are refused for the second reason the value checks refuse them:
+  // reading one runs code, and the guard would be executing the document's own
+  // getters while deciding whether to trust it.
+  if (!hasOnlyJsonOwnKeys(document)) {
+    throw new OpError(
+      `a document carrying a field JSON cannot write, or one computed rather ` +
+        `than held, cannot be edited. Every field a document names must ` +
+        `survive being written down and read back.`
+    );
+  }
+  // NOW the forest, once reading a field off the envelope is known to be safe.
+  if (!Array.isArray(document.nodes)) {
+    throw new OpError(
+      `a document whose nodes are ${describe(document.nodes)} holds no forest ` +
+        `to edit. Every document is a record whose nodes are an array.`
+    );
+  }
+}
+
+/**
+ * The envelope's VALUES, which its descriptors say nothing about.
+ *
+ * Separate from the shape because it answers a different question and pays a
+ * different cost: this one walks, under a shared budget, and it is the check
+ * that stops a value the edit cannot serialize from reaching a save.
+ */
+function assertEnvelopeValues(document: BlockDocument): void {
+  // The envelope's VALUES, not only its keys. Descriptors say a field is held
+  // rather than computed; they say nothing about what is held. An in-process
+  // document carrying `metadata: 1n` satisfies every check above, and then
+  // `documentBytes` leaks `TypeError: Do not know how to serialize a BigInt`
+  // from inside an insert, a move or an update — while a remove, which never
+  // measures bytes, succeeds and hands back a document that cannot be saved.
+  //
+  // The forest is excluded deliberately rather than overlooked. `isJsonValue`
+  // refuses past its own value-depth bound, which is far below the depth a
+  // document may legitimately reach, so walking `nodes` through it would refuse
+  // documents the machine cap allows and name the wrong reason for it. The
+  // forest has its own entry walk, its own depth guard and its own per-op value
+  // checks; this covers the fields none of those look at.
+  //
+  // ONE budget across every envelope field, not one per field. A fresh
+  // `isJsonValue` call per key lets several fields referencing the same large
+  // dense array each pay the full walk, so a two-million-element array named by
+  // a handful of unknown envelope fields is cheap to construct and forces
+  // hundreds of millions of visits before any cap runs. The same shared
+  // decision the forest and an inserted subtree already use.
+  const envelopeKeys: string[] = [];
+  const envelopeValues: unknown[] = [];
+  for (const [key, value] of Object.entries(document)) {
+    if (key === "nodes") continue;
+    envelopeKeys.push(key);
+    envelopeValues.push(value);
+  }
+  if (!areJsonValues(envelopeValues)) {
+    // The offender named on the failing branch only, where a second walk is
+    // affordable because it runs once and then throws.
+    for (let index = 0; index < envelopeValues.length; index += 1) {
+      if (isJsonValue(envelopeValues[index])) continue;
+      throw new OpError(
+        `a document whose ${describe(envelopeKeys[index])} is ` +
+          `${describe(envelopeValues[index])} cannot be edited: JSON cannot ` +
+          `write that value, so the edit would apply and then fail to save.`
+      );
+    }
+    throw new OpError(
+      `this document's fields hold more values than an edit may examine, so ` +
+        `it would not save.`
+    );
+  }
+}
+
+/**
+ * What the document says it IS: its format and its kind, owned rather than
+ * inherited, and both known to this version.
+ *
+ * Last, because it reads two fields and the checks above are what make reading
+ * a field off this envelope safe.
+ */
+function assertDocumentIdentity(document: BlockDocument): void {
+  // Every ENTRY, not just the array. A stored forest carrying a `null` or a
+  // primitive passes the array check and then reaches helpers that read `.id`
+  // off it, so the failure surfaces as a TypeError from inside the engine
+  // rather than as a refusal naming the malformed document.
+  // The format this module knows how to edit. A document written by a newer
+  // version may carry fields with meanings this code does not have, and editing
+  // it with current semantics silently rewrites them. Refused rather than
+  // guessed: an editor that cannot read a document should say so, not save over
+  // it.
+  // OWN properties, not merely resolvable ones. `Object.prototype` can be given
+  // a `formatVersion` or a `kind`, and a document owning only `nodes` then
+  // satisfies both comparisons below by INHERITING them — while `withNodes`
+  // spreads, which copies own enumerable properties only. The edit succeeds and
+  // hands back `{ nodes: [] }` with neither mandatory field, so the document
+  // that enters history is missing what every reader after it requires.
+  for (const field of ["formatVersion", "kind"] as const) {
+    if (!Object.hasOwn(document, field)) {
+      throw new OpError(
+        `a document that does not carry its own ${field} cannot be edited. ` +
+          `The field resolves through the prototype, so the edit would return ` +
+          `a document without it.`
+      );
+    }
+  }
+  if (document.formatVersion !== DOCUMENT_FORMAT_VERSION) {
+    throw new OpError(
+      `a document in format ${describe(document.formatVersion)} cannot be ` +
+        `edited by this version, which writes format ` +
+        `${String(DOCUMENT_FORMAT_VERSION)}. Editing it would rewrite fields ` +
+        `whose meaning this code does not know.`
+    );
+  }
+  // The kind, asked of the engine's own set rather than restated here. A
+  // document with a missing or unknown kind is accepted by every structural
+  // check and then refused by `validate()` with `invalid-kind`, so the edit
+  // enters history and every save afterwards fails.
+  if (!DOCUMENT_KINDS.includes(document.kind)) {
+    throw new OpError(
+      `a document of kind ${describe(document.kind)} is not one this editor ` +
+        `knows. Every document names a kind from: ${DOCUMENT_KINDS.join(", ")}.`
+    );
+  }
+}
+
+/**
  * Apply one op, returning the new forest and the op that undoes it.
  *
  * **A document handed to this function must be treated as immutable
@@ -2773,124 +2968,8 @@ export function applyOp(
   // enumerable `nodes` is a throwing accessor ran its getter here and left this
   // module as a native error rather than the `OpError` it promises — the exact
   // fault the descriptor check exists to refuse, reached one line before it.
-  if (!isPlainRecord(document)) {
-    throw new OpError(
-      `a document of ${describe(document)} holds no forest to edit. Every ` +
-        `document is a record whose nodes are an array.`
-    );
-  }
-  // The ENVELOPE's own keys, by the same rule its contents are held to, and
-  // before anything reads a field off it — `nodes` included.
-  //
-  // `withNodes` builds the result by spreading, and a spread copies enumerable
-  // own properties only — so a `kind` or `formatVersion` defined as
-  // non-enumerable is read and accepted by the checks below and then absent
-  // from the document they admitted. The result enters history without a field
-  // every document must carry, and nothing downstream is looking.
-  //
-  // Accessors are refused for the second reason the value checks refuse them:
-  // reading one runs code, and the guard would be executing the document's own
-  // getters while deciding whether to trust it.
-  if (!hasOnlyJsonOwnKeys(document)) {
-    throw new OpError(
-      `a document carrying a field JSON cannot write, or one computed rather ` +
-        `than held, cannot be edited. Every field a document names must ` +
-        `survive being written down and read back.`
-    );
-  }
-  // NOW the forest, once reading a field off the envelope is known to be safe.
-  if (!Array.isArray(document.nodes)) {
-    throw new OpError(
-      `a document whose nodes are ${describe(document.nodes)} holds no forest ` +
-        `to edit. Every document is a record whose nodes are an array.`
-    );
-  }
-  // The envelope's VALUES, not only its keys. Descriptors say a field is held
-  // rather than computed; they say nothing about what is held. An in-process
-  // document carrying `metadata: 1n` satisfies every check above, and then
-  // `documentBytes` leaks `TypeError: Do not know how to serialize a BigInt`
-  // from inside an insert, a move or an update — while a remove, which never
-  // measures bytes, succeeds and hands back a document that cannot be saved.
-  //
-  // The forest is excluded deliberately rather than overlooked. `isJsonValue`
-  // refuses past its own value-depth bound, which is far below the depth a
-  // document may legitimately reach, so walking `nodes` through it would refuse
-  // documents the machine cap allows and name the wrong reason for it. The
-  // forest has its own entry walk, its own depth guard and its own per-op value
-  // checks; this covers the fields none of those look at.
-  //
-  // ONE budget across every envelope field, not one per field. A fresh
-  // `isJsonValue` call per key lets several fields referencing the same large
-  // dense array each pay the full walk, so a two-million-element array named by
-  // a handful of unknown envelope fields is cheap to construct and forces
-  // hundreds of millions of visits before any cap runs. The same shared
-  // decision the forest and an inserted subtree already use.
-  const envelopeKeys: string[] = [];
-  const envelopeValues: unknown[] = [];
-  for (const [key, value] of Object.entries(document)) {
-    if (key === "nodes") continue;
-    envelopeKeys.push(key);
-    envelopeValues.push(value);
-  }
-  if (!areJsonValues(envelopeValues)) {
-    // The offender named on the failing branch only, where a second walk is
-    // affordable because it runs once and then throws.
-    for (let index = 0; index < envelopeValues.length; index += 1) {
-      if (isJsonValue(envelopeValues[index])) continue;
-      throw new OpError(
-        `a document whose ${describe(envelopeKeys[index])} is ` +
-          `${describe(envelopeValues[index])} cannot be edited: JSON cannot ` +
-          `write that value, so the edit would apply and then fail to save.`
-      );
-    }
-    throw new OpError(
-      `this document's fields hold more values than an edit may examine, so ` +
-        `it would not save.`
-    );
-  }
+  assertEditableDocument(document);
   const nodes = document.nodes;
-  // Every ENTRY, not just the array. A stored forest carrying a `null` or a
-  // primitive passes the array check and then reaches helpers that read `.id`
-  // off it, so the failure surfaces as a TypeError from inside the engine
-  // rather than as a refusal naming the malformed document.
-  // The format this module knows how to edit. A document written by a newer
-  // version may carry fields with meanings this code does not have, and editing
-  // it with current semantics silently rewrites them. Refused rather than
-  // guessed: an editor that cannot read a document should say so, not save over
-  // it.
-  // OWN properties, not merely resolvable ones. `Object.prototype` can be given
-  // a `formatVersion` or a `kind`, and a document owning only `nodes` then
-  // satisfies both comparisons below by INHERITING them — while `withNodes`
-  // spreads, which copies own enumerable properties only. The edit succeeds and
-  // hands back `{ nodes: [] }` with neither mandatory field, so the document
-  // that enters history is missing what every reader after it requires.
-  for (const field of ["formatVersion", "kind"] as const) {
-    if (!Object.hasOwn(document, field)) {
-      throw new OpError(
-        `a document that does not carry its own ${field} cannot be edited. ` +
-          `The field resolves through the prototype, so the edit would return ` +
-          `a document without it.`
-      );
-    }
-  }
-  if (document.formatVersion !== DOCUMENT_FORMAT_VERSION) {
-    throw new OpError(
-      `a document in format ${describe(document.formatVersion)} cannot be ` +
-        `edited by this version, which writes format ` +
-        `${String(DOCUMENT_FORMAT_VERSION)}. Editing it would rewrite fields ` +
-        `whose meaning this code does not know.`
-    );
-  }
-  // The kind, asked of the engine's own set rather than restated here. A
-  // document with a missing or unknown kind is accepted by every structural
-  // check and then refused by `validate()` with `invalid-kind`, so the edit
-  // enters history and every save afterwards fails.
-  if (!DOCUMENT_KINDS.includes(document.kind)) {
-    throw new OpError(
-      `a document of kind ${describe(document.kind)} is not one this editor ` +
-        `knows. Every document names a kind from: ${DOCUMENT_KINDS.join(", ")}.`
-    );
-  }
   assertForestEntries(nodes);
   // Depth the ENGINE can survive, checked before any of its helpers run.
   //

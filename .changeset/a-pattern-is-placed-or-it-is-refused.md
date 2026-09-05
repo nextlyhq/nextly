@@ -129,3 +129,16 @@ Nesting is checked throughout the copied forest rather than only at its roots. A
 pattern's internal placements were legal when it was saved and the rules can
 have moved since, so a pattern saved before a block gained a parent restriction
 would insert and leave the page unpublishable.
+
+The destination is judged by the apply's own document rule rather than by one
+field of it. Checking the format version closed the case that is easy to imagine
+and left the ones that are not: a page whose kind was written by a newer
+version, or one carrying a value JSON cannot hold, planned successfully and threw
+before the first op was dispatched. Everything the apply asks before it looks at
+an op is now asked where the plan is made.
+
+Asking it meant naming it: the checks were written inline and are now three
+functions with the questions they answer — is this a record whose fields are safe
+to read, are its values ones an edit can save, and does it say what it is. The
+order between them is unchanged and load-bearing, because each reads something
+the one before it vouched for.

@@ -696,6 +696,9 @@ export {
   // Published for the planners: an insert whose subtree arrives locked is
   // refused by the op layer, so a planner has to be able to foresee it rather
   // than hand back a plan the apply throws on.
+  // And the document-level rule the apply runs before it looks at the op, so a
+  // plan is never built against a destination that cannot be edited at all.
+  documentRefusal,
   lockedWithin,
   // And the shape rule for what an insert will carry, for the same reason.
   nodeShapeRefusal,
