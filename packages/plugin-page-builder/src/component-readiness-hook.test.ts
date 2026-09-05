@@ -940,8 +940,21 @@ describe("reading definitions the way the renderer reads them", () => {
 
     await handlers[0]!(write);
 
-    // The nested component is not published, so the expanded read finds a hole
-    // the bare read cannot see. Forcing `depth: 0` makes this silent.
+    // WHICH component, not how many. A count alone cannot tell nested discovery
+    // from a top-level miss: had the first lookup failed to return `hero`, the
+    // resolver would report `hero` itself as missing, the same "1 component"
+    // would hold, and the depth assertion would hold too because that lone
+    // request also omits `depth`. So the discriminating fact is that a SECOND
+    // lookup went out for the nested id — which only happens if `hero` came
+    // back, its expanded document was read, and the walk descended into it.
+    const asked = finds.map(
+      find =>
+        ((find.where as { id?: { in?: string[] } }).id?.in ?? []) as string[]
+    );
+    expect(asked[0]).toEqual(["hero"]);
+    expect(asked.some(ids => ids.includes("nested-unpublished"))).toBe(true);
+
+    // And `hero` is NOT the one reported: it came back published.
     expect(recorded).toHaveLength(1);
     expect((recorded[0] as { message: string }).message).toContain(
       "1 component"
