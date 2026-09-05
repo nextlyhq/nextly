@@ -77,8 +77,7 @@
     "forms",
     "form-builder",
     "cms",
-    "headless-cms",
-    "app-framework"
+    "headless-cms"
   ],
   "repository": {
     "type": "git",
