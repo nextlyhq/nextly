@@ -9,6 +9,7 @@
  * a framework.
  */
 import { isPlainRecord } from "./plain-record";
+import { ownEntry } from "./safe-record";
 
 /**
  * Engine document-format version. Bumped only when the envelope shape itself
@@ -151,6 +152,82 @@ export interface BlockNode {
    * last-good props; a renderer shows a placeholder instead of crashing.
    */
   migrationFailed?: boolean;
+  /**
+   * Where this subtree was copied from, recorded once and never rendered.
+   *
+   * Written when a copy is taken and read by nothing at render time, the way
+   * {@link BlockNode.migrationFailed} is. What it buys is the one question a
+   * copy cannot otherwise answer: "the thing this came from has changed — do
+   * you want the change?" That question is asked by every mature builder's
+   * users and answered by none of them, because an unsynced copy keeps no
+   * record of its source.
+   *
+   * ONE field with a discriminant rather than one field per source. A pattern
+   * copy and a detached component are two provenances today and there will be
+   * more — an imported document, a duplicated page — and each of those as its
+   * own key is a stored format that grows a column per feature. The
+   * discriminant also makes the shapes differ honestly: a pattern copy carries
+   * a digest because the pattern it came from can change underneath it, and a
+   * detached component does not, because detaching is the act of declining
+   * further change.
+   */
+  origin?: BlockOrigin;
+}
+
+/**
+ * Where a copied subtree came from.
+ *
+ * Inert: no renderer reads it, no validator requires it, and a document
+ * without one is complete. It exists to be read LATER, by a surface asking
+ * whether an upstream source has moved on.
+ */
+export type BlockOrigin =
+  | {
+      /** Copied from a pattern, which keeps no link back. */
+      readonly from: "pattern";
+      /** The pattern entry's id. */
+      readonly id: string;
+      /**
+       * A digest of the pattern's content when this copy was taken.
+       *
+       * Content rather than a version number, because the engine is handed a
+       * document and not an entry row — it can hash what it was given and
+       * cannot see what the store calls it. A digest also answers the question
+       * more precisely than a version does: a re-save that changed nothing
+       * bumps a version and leaves a digest alone.
+       */
+      readonly digest: string;
+    }
+  | {
+      /** Detached from a component, severing the link deliberately. */
+      readonly from: "component";
+      /** The component definition's id. */
+      readonly id: string;
+    };
+
+/**
+ * Whether a stored value is a whole provenance record.
+ *
+ * Beside the type rather than beside either caller, because a document reaches
+ * storage by more than one road: an op through the edit vocabulary, and a field
+ * write through the document validator. A record that one road admits and the
+ * other refuses is a record that exists in the database and cannot be edited,
+ * so both ask this.
+ *
+ * Whole means every field the arm needs. A pattern origin without a digest
+ * cannot answer whether its source moved, which is the only question it exists
+ * for — storing one would leave a later reader with a record it must special
+ * case rather than trust.
+ */
+export function isBlockOrigin(value: unknown): value is BlockOrigin {
+  if (!isPlainRecord(value)) return false;
+  const id = ownEntry(value, "id");
+  if (typeof id !== "string" || id === "") return false;
+  const from = ownEntry(value, "from");
+  if (from === "component") return true;
+  if (from !== "pattern") return false;
+  const digest = ownEntry(value, "digest");
+  return typeof digest === "string" && digest !== "";
 }
 
 // ---------------------------------------------------------------------------

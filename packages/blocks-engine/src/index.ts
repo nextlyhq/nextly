@@ -68,6 +68,7 @@ export type {
   Condition,
   DocumentFormatVersion,
   DocumentKind,
+  BlockOrigin,
   DocumentSettings,
   LocaleOverlay,
   LocaleOverlayValue,
@@ -169,9 +170,11 @@ export type {
 // create and the ops the page needs. Split from the doing so the caller can put
 // both writes in one unit of work and roll the create back — and so the dry run
 // and the real run are the same function rather than two that agree for now.
-export { planSaveAsPattern } from "./composition-planners";
+export { planInsertPattern, planSaveAsPattern } from "./composition-planners";
 export type {
   CompositionPlan,
+  InsertTarget,
+  PlacementTarget,
   PatternTarget,
   PlanProblem,
   PlanRefusal,
@@ -690,7 +693,19 @@ export {
 export {
   applyOp,
   applyOps,
+  // Published for the planners: an insert whose subtree arrives locked is
+  // refused by the op layer, so a planner has to be able to foresee it rather
+  // than hand back a plan the apply throws on.
+  // And the document-level rule the apply runs before it looks at the op, so a
+  // plan is never built against a destination that cannot be edited at all.
+  documentRefusal,
+  lockedWithin,
+  // And the shape rule for what an insert will carry, for the same reason.
+  nodeShapeRefusal,
   OpError,
+  // The apply's own position rule, asked without applying: a planner that
+  // wrote its own copy would agree until one of the two moved.
+  positionRefusal,
   positionOf,
   sameStoredValue,
   sameStyleValue,
