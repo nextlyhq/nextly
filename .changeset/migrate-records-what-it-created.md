@@ -62,3 +62,16 @@ it never got — and one `migrationStatus` filter that would have thrown for
 anyone who passed it. The three list paths now share one reader, so a method
 cannot be written that skips the ordering, the deserialization or the error
 mapping while looking correct beside the others.
+
+The reconciliation could not have worked from the CLI at all. `adapter.select`
+maps a table name through a resolver and refuses when none is installed, and a
+`nextly migrate` run has no boot to install one — so every registry read threw,
+the per-registry guard caught all three, and the command reported success having
+repaired nothing. It now installs the resolver the way `prune`,
+`webhooks-prune`, `migrate-field-groups` and `dev-server` each already do.
+
+The guard no longer hides that. A registry the pass could not read is reported
+rather than folded into a count of zero, because zero rows repaired and zero
+rows readable are the same number and opposite facts. `nextly migrate` says so,
+and no longer announces "Database is up to date" while registry work it just
+measured is outstanding.

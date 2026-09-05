@@ -228,4 +228,51 @@ describe("reconcileMigrationMetadata", () => {
     ).not.toHaveBeenCalled();
     expect(result.stillPending).toBe(2);
   });
+
+  /*
+   * 🔴 A registry that cannot be READ must not read as a registry with nothing
+   * to do. This is the failure that shipped: `nextly migrate` installs no table
+   * resolver, so every `adapter.select` refuses with "not found in schema
+   * registry", the per-registry guard catches all three, and the pass returns
+   * zeroes -- identical to a database that was already correct. The command
+   * announced success having repaired nothing, in exactly the production case
+   * it was written for.
+   *
+   * `unreadable` is what separates the two. Asserting `marked === 0` cannot:
+   * it is zero in both.
+   */
+  it("reports a registry it could not read at all", async () => {
+    vi.resetModules();
+    const made = mockRegistries();
+    made.collection.getPendingMigrations.mockRejectedValue(
+      new Error("Table 'dynamic_collections' not found in schema registry")
+    );
+
+    const { reconcileMigrationMetadata: fresh } = await import(
+      "../reconcile-metadata"
+    );
+    const result = await fresh({
+      adapter: adapterWith([]),
+      dialect: "sqlite",
+      migrationsDir: "/tmp/migrations",
+      logger: silent,
+      registerFn: (async () => ({
+        collectionsRegistered: 0,
+        singlesRegistered: 0,
+      })) as never,
+    });
+
+    expect(result.unreadable).toContain("collection");
+    // The control: the other two were readable, so this is a report about ONE
+    // registry rather than a pass that failed wholesale.
+    expect(result.unreadable).not.toContain("single");
+  });
+
+  it("reports nothing unreadable when every registry answers", async () => {
+    // The negative half. Without it, an implementation that always listed all
+    // three would satisfy the assertion above.
+    const { result } = await run({ tables: [], collections: [] });
+
+    expect(result.unreadable).toEqual([]);
+  });
 });

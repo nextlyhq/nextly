@@ -36,6 +36,9 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { getDialectTables } from "../../database/index";
+import { SchemaRegistry } from "../../database/schema-registry";
+import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
   isLocalizationIntentRefusal,
@@ -248,6 +251,8 @@ export async function runMigrate(
     process.exit(1);
   }
 
+  installRegistryResolver(adapter as unknown as DrizzleAdapter);
+
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
     const cwd = options.cwd ?? process.cwd();
@@ -300,7 +305,7 @@ export async function runMigrate(
     // extraneous table) and BEFORE the event is recorded; idempotent. A thrown
     // error here maps to a non-zero CLI exit (the core itself never exits).
     try {
-      const { applied } = await migrateCore({
+      const { applied, metadata } = await migrateCore({
         dialect,
         db,
         adapter,
@@ -325,9 +330,40 @@ export async function runMigrate(
       });
 
       logger.newline();
+
+      /*
+       * 🔴 "Up to date" is a claim about the REGISTRY as well as the files.
+       * Phase 3 can leave rows outstanding while no migration file applied --
+       * a row whose table is absent produces no per-row warning, by design --
+       * so reporting only `applied` let a run announce a current database while
+       * registry work it had just measured was still owed.
+       */
+      const { marked, stillPending, unreadable } = metadata;
+      if (unreadable.length > 0) {
+        // Not a count of rows: this is "the sweep could not look". Reported
+        // separately because zero repaired and zero readable are the same
+        // number and opposite facts.
+        logger.warn(
+          `Could not read the ${unreadable.join(", ")} registry, so migration ` +
+            `status was not reconciled. The tables are in place; re-run \`nextly migrate\`.`
+        );
+      }
+      if (marked > 0) {
+        logger.success(
+          `${formatCount(marked, "registry row")} recorded as applied.`
+        );
+      }
+      if (stillPending > 0) {
+        logger.warn(
+          `${formatCount(stillPending, "registry row")} still awaiting a migration.`
+        );
+      }
+
       logger.success(
         applied === 0
-          ? "Nothing to migrate. Database is up to date."
+          ? stillPending > 0 || unreadable.length > 0
+            ? "No migration files to apply."
+            : "Nothing to migrate. Database is up to date."
           : `${formatCount(applied, "migration")} applied.`
       );
     } catch (err) {
@@ -447,6 +483,7 @@ export interface MigrateCoreResult {
     singlesRegistered: number;
     marked: number;
     stillPending: number;
+    unreadable: string[];
   };
 }
 
@@ -458,6 +495,39 @@ export async function maybeForceUnlock(
 ): Promise<void> {
   if (!options.forceUnlock) return;
   await forceUnlock(db, dialect);
+}
+
+/**
+ * Give the adapter a way to resolve core table NAMES to Drizzle tables.
+ *
+ * 🔴 Without this, the metadata reconciliation silently does nothing.
+ * `adapter.select` maps a name through a resolver and refuses with "not found
+ * in schema registry" when none is installed. A CLI run has no boot to install
+ * one — which is why `prune`, `webhooks-prune`, `migrate-field-groups` and
+ * `dev-server` each wire it up the same way before touching adapter CRUD.
+ *
+ * Missing here, every registry read in the sweep threw, the per-registry guard
+ * caught all three, and the command reported success having repaired nothing:
+ * a no-op in exactly the production case the phase exists for.
+ *
+ * Both spellings of the field-group registry are registered, because a database
+ * whose storage migration has run has no handle for it under the other name.
+ *
+ * Its own exported function so the wiring can be asserted by its OUTCOME — that
+ * the registry table resolves — rather than by whether a call appears in the
+ * source.
+ */
+export function installRegistryResolver(
+  adapter: DrizzleAdapter
+): SchemaRegistry {
+  const { dialect } = adapter.getCapabilities();
+  const schemaRegistry = new SchemaRegistry(dialect);
+  schemaRegistry.registerStaticSchemas({
+    ...getDialectTables(dialect),
+    ...getFieldGroupRegistryAliases(dialect),
+  });
+  adapter.setTableResolver(schemaRegistry);
+  return schemaRegistry;
 }
 
 export async function migrateCore(
@@ -475,6 +545,7 @@ export async function migrateCore(
     singlesRegistered: 0,
     marked: 0,
     stillPending: 0,
+    unreadable: [] as string[],
   };
 
   const outcome = await lock(
@@ -541,6 +612,12 @@ export async function migrateCore(
           },
         });
       } catch (error) {
+        // The whole pass failed, so nothing was read: say so in the result
+        // rather than returning zeroes that read like "nothing needed doing".
+        metadata = {
+          ...metadata,
+          unreadable: ["collection", "single", "field group"],
+        };
         deps.logger.warn(
           `Migration metadata was not recorded: ${
             error instanceof Error ? error.message : String(error)

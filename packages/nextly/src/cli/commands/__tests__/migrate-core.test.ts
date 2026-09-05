@@ -22,6 +22,7 @@ function deps(over: Record<string, unknown> = {}) {
       singlesRegistered: 0,
       marked: 0,
       stillPending: 0,
+      unreadable: [],
     })),
     // Pass-through lock that just runs fn (so we test the core, not the lock),
     // in the real shape: the outcome is discriminated so a caller cannot
@@ -69,6 +70,7 @@ describe("migrateCore", () => {
         singlesRegistered: 1,
         marked: 3,
         stillPending: 1,
+        unreadable: [],
       })),
     });
 
@@ -79,6 +81,7 @@ describe("migrateCore", () => {
       singlesRegistered: 1,
       marked: 3,
       stillPending: 1,
+      unreadable: [],
     });
   });
 
@@ -102,12 +105,17 @@ describe("migrateCore", () => {
     // The applied count is the load-bearing half: the files really did land,
     // and the caller must still be told so.
     expect(res.applied).toBe(4);
-    expect(res.metadata).toEqual({
-      collectionsRegistered: 0,
-      singlesRegistered: 0,
-      marked: 0,
-      stillPending: 0,
-    });
+
+    // 🔴 And the failure is REPORTED, not returned as zeroes. Zero rows
+    // repaired and zero rows readable are the same numbers and opposite facts:
+    // without `unreadable`, a pass that could not look at anything is
+    // indistinguishable from a database that needed nothing.
+    expect(res.metadata.marked).toBe(0);
+    expect(res.metadata.unreadable).toEqual([
+      "collection",
+      "single",
+      "field group",
+    ]);
   });
 
   it("runs the metadata pass INSIDE the lock", async () => {
@@ -126,6 +134,7 @@ describe("migrateCore", () => {
           singlesRegistered: 0,
           marked: 0,
           stillPending: 0,
+          unreadable: [],
         };
       }),
       withLock: async (

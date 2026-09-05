@@ -104,6 +104,17 @@ export interface ReconcileMetadataResult {
    * still waiting for a migration that has not been generated".
    */
   stillPending: number;
+  /**
+   * Registries this pass could not read at all, by kind.
+   *
+   * 🔴 Reported rather than only logged, because the per-registry guard below
+   * turns a TOTAL failure into an ordinary-looking success otherwise. That is
+   * not hypothetical: with no table resolver installed, every registry read
+   * refuses, all three are caught, and the command finishes claiming zero rows
+   * needed repair — indistinguishable from a database that was already correct.
+   * A caller that can see this list can say the difference.
+   */
+  unreadable: string[];
 }
 
 /** One registry service, reduced to the two calls this needs from it. */
@@ -235,6 +246,7 @@ export async function reconcileMigrationMetadata(
 
   let marked = 0;
   let stillPending = 0;
+  const unreadable: string[] = [];
   for (const registry of registries) {
     try {
       const swept = await markApplied(registry, adapter, logger);
@@ -252,6 +264,7 @@ export async function reconcileMigrationMetadata(
        * gap in what this pass claims to have done, and the count it would have
        * contributed is simply absent from the totals.
        */
+      unreadable.push(registry.kind);
       logger.warn(
         `Could not sweep ${registry.kind} migration statuses: ${
           error instanceof Error ? error.message : String(error)
@@ -265,6 +278,7 @@ export async function reconcileMigrationMetadata(
     singlesRegistered: registered.singlesRegistered,
     marked,
     stillPending,
+    unreadable,
   };
 }
 
