@@ -12,7 +12,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { BlockNode } from "./document";
-import { reidSubtree, reidSubtreeWithMap, walkNodes } from "./tree";
+import {
+  reidForestWithMap,
+  reidSubtree,
+  reidSubtreeWithMap,
+  walkNodes,
+} from "./tree";
 
 /** A node with an optional DOM id, and children. */
 function node(
@@ -215,5 +220,74 @@ describe("reidSubtreeWithMap malformed attributes", () => {
     } as unknown as BlockNode;
 
     expect(() => reidSubtreeWithMap(original)).not.toThrow();
+  });
+});
+
+/**
+ * A run of siblings, which is what a saved selection is.
+ *
+ * The singular function cannot answer for this shape. Given one root it builds
+ * its `domIds` from that root's subtree, so a caller looping over N roots hands
+ * each pass a map that knows nothing about the others — and a reference from
+ * the second root to a DOM id in the first is left addressing the ORIGINAL
+ * element. The whole point of the second pass is that no reference is left
+ * behind, and a per-root loop reinstates exactly the gap it closes.
+ */
+describe("a forest is re-identified as one thing", () => {
+  it("gives every node in every root a fresh id", () => {
+    const forest = [node("one", {}, [node("one-child")]), node("two")];
+
+    const { nodes, nodeIds } = reidForestWithMap(forest);
+
+    const fresh = nodes.flatMap(root => allNodes(root)).map(n => n.id);
+    expect(fresh).toHaveLength(3);
+    for (const original of ["one", "one-child", "two"]) {
+      expect(fresh).not.toContain(original);
+      expect(nodeIds.get(original)).toBeDefined();
+    }
+  });
+
+  it("keeps the roots in the order they were given", () => {
+    const forest = [node("first"), node("second")];
+
+    const { nodes, nodeIds } = reidForestWithMap(forest);
+
+    expect(nodes[0]!.id).toBe(nodeIds.get("first"));
+    expect(nodes[1]!.id).toBe(nodeIds.get("second"));
+  });
+
+  it("POINTS A REFERENCE THAT CROSSES ROOTS AT THE COPY", () => {
+    const forest = [
+      node("target", { cssId: "pricing" }),
+      node("pointer", { attributes: { "aria-labelledby": "pricing" } }),
+    ];
+
+    const { nodes, domIds } = reidForestWithMap(forest);
+
+    const copiedId = nodes[0]!.cssId;
+    expect(copiedId).toBe(domIds.get("pricing"));
+    expect(copiedId).not.toBe("pricing");
+    expect(nodes[1]!.attributes!["aria-labelledby"]).toBe(copiedId);
+  });
+
+  it("leaves a token it did not mint alone, so a host page anchor survives", () => {
+    const forest = [
+      node("a", { cssId: "mine" }),
+      node("b", { attributes: { "aria-controls": "mine theirs" } }),
+    ];
+
+    const { nodes, domIds } = reidForestWithMap(forest);
+
+    expect(nodes[1]!.attributes!["aria-controls"]).toBe(
+      `${domIds.get("mine")} theirs`
+    );
+  });
+
+  it("answers an empty forest with an empty forest", () => {
+    const { nodes, nodeIds, domIds } = reidForestWithMap([]);
+
+    expect(nodes).toEqual([]);
+    expect(nodeIds.size).toBe(0);
+    expect(domIds.size).toBe(0);
   });
 });

@@ -1051,8 +1051,18 @@ export interface ReidentifiedSubtree {
   domIds: ReadonlyMap<string, string>;
 }
 
+/** A re-identified FOREST, and the two maps describing what moved. */
+export interface ReidentifiedForest {
+  /** The rebuilt roots, in the order they were given. */
+  nodes: BlockNode[];
+  /** Every node's old id → its new one, across every root. */
+  nodeIds: ReadonlyMap<string, string>;
+  /** Every DOM id the forest carried → its replacement, across every root. */
+  domIds: ReadonlyMap<string, string>;
+}
+
 /**
- * Deep-clone a subtree with fresh ids, KEEPING its internal references usable.
+ * Deep-clone a FOREST with fresh ids, KEEPING its internal references usable.
  *
  * The same rebuild as {@link reidSubtree}, differing in what happens to a DOM
  * id: dropped there, minted afresh here and recorded. Two copies of one pattern
@@ -1065,23 +1075,36 @@ export interface ReidentifiedSubtree {
  * read and write: it appears in a URL fragment, in a stylesheet and in the
  * attribute panel. A UUID would be unique and unusable.
  *
- * Uniqueness is guaranteed WITHIN the returned subtree, not against the
- * document it is going into — this function is given a subtree and cannot see
- * anything else. A caller inserting into a page it can read should check
- * {@link ReidentifiedSubtree.domIds} against that page.
+ * ## Why a forest, and not one root at a time
+ *
+ * A saved selection is a contiguous RUN of siblings, so the document it becomes
+ * holds several roots, and re-identifying them with one call each is not the
+ * same operation. Each call can only see the subtree it was handed, so its
+ * `domIds` records that subtree's ids and nothing else — and a reference that
+ * crosses from one root to another finds no entry, and is left pointing at the
+ * ORIGINAL element. For `aria-labelledby` and `aria-describedby` that means the
+ * copy silently loses its accessible name, a failure invisible to everyone who
+ * does not use assistive technology. Re-identifying the roots TOGETHER is what
+ * makes the second pass see every id, so the guarantee is a property of this
+ * function rather than of each caller remembering not to loop.
+ *
+ * Uniqueness is guaranteed WITHIN the returned forest, not against the document
+ * it is going into — this function is given a forest and cannot see anything
+ * else. A caller inserting into a page it can read should check
+ * {@link ReidentifiedForest.domIds} against that page.
  */
-export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
+export function reidForestWithMap(nodes: BlockNode[]): ReidentifiedForest {
   const nodeIds = new Map<string, string>();
   const domIds = new Map<string, string>();
 
-  const [rebuilt] = mapForest([node], original =>
+  const rebuilt = mapForest(nodes, original =>
     reidOneKeepingReferences(original, nodeIds, domIds)
   );
   // A SECOND pass, because a node may reference an id defined on a node the
   // first had not reached yet. Without it a copied `aria-labelledby` points at
   // the original's id, so the copy loses its accessible name — the same gap
   // composition has, closed the same way.
-  const [linked] = mapForest([rebuilt ?? node], copy =>
+  const linked = mapForest(rebuilt, copy =>
     // `isPlainRecord`, not `!== undefined`. A persisted `attributes: null` is
     // content the first pass deliberately carries through untouched, and
     // handing it to the remapper enumerates null and throws — a rebuild that
@@ -1090,7 +1113,18 @@ export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
       ? { ...copy, attributes: remapIdReferences(copy.attributes, domIds) }
       : copy
   );
-  return { node: linked ?? rebuilt ?? node, nodeIds, domIds };
+  return { nodes: linked, nodeIds, domIds };
+}
+
+/**
+ * One subtree, re-identified — {@link reidForestWithMap} for a single root.
+ *
+ * Delegates rather than repeating the two passes, so the singular and the
+ * plural cannot drift into disagreeing about what a copy is.
+ */
+export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
+  const { nodes, nodeIds, domIds } = reidForestWithMap([node]);
+  return { node: nodes[0] ?? node, nodeIds, domIds };
 }
 
 /** One node, re-identified, with its DOM id remapped rather than removed. */
