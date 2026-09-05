@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import { applyOps } from "./ops";
-import { planInsertPattern } from "./composition-planners";
+import { planInsertPattern, type StoredPattern } from "./composition-planners";
 import { DOCUMENT_FORMAT_VERSION } from "./document";
 import type { BlockDocument, BlockNode } from "./document";
 import { walkNodes } from "./tree";
@@ -40,10 +40,20 @@ const page = (
   ...(settings === undefined ? {} : { settings }),
 });
 
-const pattern = (nodes: BlockNode[]): BlockDocument => ({
-  formatVersion: DOCUMENT_FORMAT_VERSION,
-  kind: "pattern",
-  nodes,
+/** A stored pattern: a document plus the identity the store gave it. */
+const pattern = (nodes: BlockNode[], id = "hero-pattern"): StoredPattern => ({
+  id,
+  document: {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "pattern",
+    nodes,
+  },
+});
+
+/** The same, for a document this planner should refuse outright. */
+const stored = (document: BlockDocument): StoredPattern => ({
+  id: "hero-pattern",
+  document,
 });
 
 const anyParent = { parentsOf: () => undefined };
@@ -374,7 +384,7 @@ describe("what it refuses before the op layer would", () => {
 
     const plan = planInsertPattern(
       page([node("a")]),
-      malformed,
+      stored(malformed),
       { index: 1 },
       anyParent
     );
@@ -501,7 +511,8 @@ describe("what it refuses before the op layer would", () => {
     };
 
     expect(
-      planInsertPattern(page([]), notAPattern, "document", anyParent).problem
+      planInsertPattern(page([]), stored(notAPattern), "document", anyParent)
+        .problem
     ).toBe("not-a-pattern");
   });
 

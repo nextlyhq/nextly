@@ -23,7 +23,7 @@
  *
  * @module composition-planners
  */
-import type { BlockDocument, BlockNode } from "./document";
+import type { BlockDocument, BlockNode, BlockOrigin } from "./document";
 import {
   canBeRoot,
   canNest,
@@ -40,8 +40,9 @@ import {
   type BuilderOp,
   type OpPosition,
 } from "./ops";
+import { patternDigest } from "./pattern-digest";
 import { contiguousRun, type RunProblem } from "./sibling-run";
-import { findNode, reidForestWithMap, walkNodes } from "./tree";
+import { findNode, mapForest, reidForestWithMap, walkNodes } from "./tree";
 
 /** A library row a planner asks the caller to create. */
 export interface PlannedCreate<TFields> {
@@ -115,7 +116,9 @@ export type PlanProblem =
   /** The stored pattern spells one rendered id on two of its own nodes. */
   | "duplicate-dom-id"
   /** One of the documents cannot be edited at all, whatever the ops say. */
-  | "unusable-document";
+  | "unusable-document"
+  /** The pattern was handed over without an identity to record. */
+  | "invalid-source";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -197,7 +200,10 @@ export function planSaveAsPattern<TFields>(
         // migrated and never brought forward.
         formatVersion: document.formatVersion,
         kind: "pattern",
-        nodes: reidForestWithMap(selected).nodes,
+        // Re-identified, then stripped of any provenance the selection
+        // inherited: these nodes came from the page, not from wherever the
+        // page's nodes came from.
+        nodes: withoutOrigin(reidForestWithMap(selected).nodes),
       },
       fields: target.fields,
     },
@@ -277,6 +283,22 @@ function bothHalves(
 }
 
 /**
+ * A pattern as it is STORED: the document, and the identity the store gave it.
+ *
+ * Both, because inserting one records where the copy came from and a document
+ * cannot say what row it is. Passed together rather than as two arguments so
+ * they cannot be supplied out of step — an id belonging to a different pattern
+ * than the nodes would write provenance that is worse than none, since it reads
+ * as authoritative.
+ */
+export interface StoredPattern {
+  /** The pattern entry's id. */
+  readonly id: string;
+  /** Its stored document. */
+  readonly document: BlockDocument;
+}
+
+/**
  * Where an inserted pattern goes: a position, or the document itself.
  *
  * `"document"` is not a position and is deliberately not spelled as one. It
@@ -318,28 +340,51 @@ export type InsertTarget = OpPosition | "document";
  * The one refusal left to the apply is the machine cap on depth and size, which
  * depends on limits the caller passes there.
  *
- * Nothing records where the copy came from. A pattern is copy-on-insert and
- * keeps no link back, so the inserted nodes are ordinary content from the
- * moment they land.
+ * **Each inserted root records where it came from.** A pattern is still
+ * copy-on-insert and keeps no link back — nothing re-reads the pattern to
+ * update the copy — but the roots carry an inert `origin` naming the pattern
+ * and the digest it was copied at, so a surface can later ask whether the
+ * source has moved on. Only the roots: the run is what was inserted, and
+ * marking every node would make detaching one child read as a second
+ * insertion.
  */
 export function planInsertPattern(
   document: BlockDocument,
-  pattern: BlockDocument,
+  pattern: StoredPattern,
   target: InsertTarget,
   nesting: NestingSource
 ): PlanResult<never> {
-  const stored = storedRefusal(document, pattern);
+  // The identity BEFORE anything is built on it. A record whose id is not a
+  // non-empty string is one `isBlockOrigin` refuses, so the plan would succeed
+  // and the insert throw. Checked at RUNTIME as well as in the type: this is a
+  // published entry point, and the value reaching it comes from a JavaScript
+  // caller or a stored row as often as from a typed one.
+  if (typeof pattern.id !== "string" || pattern.id === "") {
+    return { problem: "invalid-source" };
+  }
+
+  const stored = storedRefusal(document, pattern.document);
   if (stored !== undefined) return stored;
 
   const destination = destinationOf(document, target);
   if (destination.problem !== undefined) return destination;
 
-  const copy = freshCopy(pattern.nodes, document);
+  const copy = freshCopy(pattern.document.nodes, document);
   if (copy.problem !== undefined) return copy;
 
+  // Recorded on the way in, and OVERWRITTEN rather than filled in where absent:
+  // a root can arrive carrying a record from an earlier copy. The digest is
+  // taken from the pattern as it stands now, so a later reader can tell whether
+  // the source has moved on since this copy was made.
+  const marked = withOrigin(copy.nodes, {
+    from: "pattern",
+    id: pattern.id,
+    digest: patternDigest(pattern.document.nodes),
+  });
+
   const refusal =
-    placementRefusal(copy.nodes, destination.place.where, nesting) ??
-    internalNestingRefusal(copy.nodes, nesting) ??
+    placementRefusal(marked, destination.place.where, nesting) ??
+    internalNestingRefusal(marked, nesting) ??
     // The `"document"` target REMOVES what is there, and a remove refuses both
     // a locked subtree and a malformed node for the same reasons an insert
     // does. Only that target deletes anything; a positional insert adds.
@@ -349,7 +394,7 @@ export function planInsertPattern(
   if (refusal !== undefined) return refusal;
 
   return {
-    pageOps: insertOps(copy.nodes, destination.place, document, target),
+    pageOps: insertOps(marked, destination.place, document, target),
   };
 }
 
@@ -708,41 +753,54 @@ interface UnlockedForest {
 /**
  * Take the locks off, remembering where they were.
  *
- * A rebuild rather than a mutation: these nodes are a copy the planner was
- * handed, and editing them in place would change what the dry run was asked
- * about. Only `locked` moves — a `slots` value that is not an array is carried
- * across as it stands, because malformed content is the shape rule's business
- * and not this function's.
+ * Through the shared forest rewrite rather than a walk of its own: a
+ * hand-rolled traversal has to re-learn what that one already knows about a
+ * cycle entry, a malformed entry and a malformed slot value, and a planner
+ * editing one field has no business deciding any of them.
+ *
+ * Only `locked` moves; every other field is carried across untouched.
  */
 function withoutLocks(roots: readonly BlockNode[]): UnlockedForest {
   const lockedIds: string[] = [];
-
-  const strip = (node: BlockNode): BlockNode => {
-    const slots = node.slots === undefined ? undefined : stripSlots(node.slots);
-    if (node.locked === true) lockedIds.push(node.id);
-    if (node.locked !== true && slots === node.slots) return node;
+  const nodes = mapForest([...roots], node => {
+    if (node.locked !== true) return node;
+    lockedIds.push(node.id);
     const { locked: _locked, ...rest } = node;
-    return slots === undefined ? rest : { ...rest, slots };
-  };
+    return rest;
+  });
+  return { nodes, lockedIds };
+}
 
-  const stripSlots = (
-    slots: Record<string, BlockNode[]>
-  ): Record<string, BlockNode[]> => {
-    let changed = false;
-    const next: Record<string, BlockNode[]> = {};
-    for (const [name, children] of Object.entries(slots)) {
-      if (!Array.isArray(children)) {
-        next[name] = children;
-        continue;
-      }
-      const mapped = children.map(strip);
-      if (mapped.some((child, index) => child !== children[index])) {
-        changed = true;
-      }
-      next[name] = mapped;
-    }
-    return changed ? next : slots;
-  };
+/**
+ * The forest with every provenance record removed.
+ *
+ * A stored pattern's nodes came from the PAGE, not from wherever the page's
+ * nodes came from. Carrying an inherited `origin` across would make a pattern
+ * saved out of already-inserted content claim a source it never had — and a
+ * later "has the upstream changed" check would then compare against the wrong
+ * pattern and answer confidently, which is worse than having no record at all.
+ */
+function withoutOrigin(roots: readonly BlockNode[]): BlockNode[] {
+  return mapForest([...roots], node => {
+    if (node.origin === undefined) return node;
+    const { origin: _origin, ...rest } = node;
+    return rest;
+  });
+}
 
-  return { nodes: roots.map(strip), lockedIds };
+/**
+ * The inserted roots, each recording the pattern it came from.
+ *
+ * OVERWRITTEN, never filled in only where absent: a root can arrive carrying a
+ * record from an earlier copy, and leaving that in place would attribute this
+ * insertion to a pattern it has nothing to do with. Only the ROOTS are marked,
+ * because the run is what was inserted — a descendant did not come from the
+ * pattern separately, and marking every node would make an author detaching one
+ * child look like a second insertion.
+ */
+function withOrigin(
+  roots: readonly BlockNode[],
+  origin: BlockOrigin
+): BlockNode[] {
+  return roots.map(root => ({ ...root, origin }));
 }
