@@ -1,5 +1,2844 @@
 # @nextlyhq/storage-uploadthing
 
+## 0.0.2-alpha.63
+
+### Patch Changes
+
+- [#1480](https://github.com/nextlyhq/nextly/pull/1480) [`cb1b289`](https://github.com/nextlyhq/nextly/commit/cb1b289248e7c4f5727f39f6d3dd7ed8549a6e5b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The bound the public byte route reads under no longer depends on
+  configuration at all. It was the largest of a fixed floor, the row's recorded
+  size and the configured upload cap — and that last term could shrink: a row
+  recording less than it points at served under a raised cap and was refused
+  once the cap was lowered past the object, stranding a font already stored.
+
+  The cap states what may be written next, which is not a fact about an object
+  already written, so it is no longer an input. What remains describes the
+  object: the size every write path records from the bytes it actually wrote,
+  and a floor beneath it for rows written before that was true. Nothing an
+  administrator can change lowers it.
+
+- [#1495](https://github.com/nextlyhq/nextly/pull/1495) [`94dfbba`](https://github.com/nextlyhq/nextly/commit/94dfbba63ddf1747e5a087d942b5f591485fcc79) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A page rendered from a stored stylesheet drew its cards as hard boxes in the
+  text colour, with no fill.
+
+  A consumer with no write path compiles a page once, stores the CSS and hands it
+  back to the renderer. That artifact still carries every `var(--site-*)` it was
+  compiled with, and the renderer withheld the whole site sheet whenever the
+  site's breakpoints were not stated — so nothing declared those custom
+  properties. An unresolved `var()` makes its declaration invalid at
+  computed-value time, which drops each property to its INITIAL value rather than
+  the site's: `transparent` for a background, and `currentColor` for a border.
+
+  The withholding guarded the block-default and named-class tiers, which are
+  emitted under the at-rules a site's breakpoints imply. It reached the token tier
+  as well, which declares `:root { --site-*: ... }` and reads no breakpoints at
+  all. Those tiers are now separated, so a page compiled without stated
+  breakpoints still receives the declarations its own CSS references, and pages
+  that emit no stylesheet still receive nothing.
+
+- [#1483](https://github.com/nextlyhq/nextly/pull/1483) [`9a4bfb5`](https://github.com/nextlyhq/nextly/commit/9a4bfb5feec8a06cdc51ea8c60c8fe5bd7197891) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Your dashboard can show your own content.
+
+  Every collection your project has now offers two cards through the "Add a
+  widget" picker: how many entries it holds, and the entries changed most
+  recently. They are built from the collections your install actually has, read
+  when the page loads -- so a collection you draw in the Schema Builder can be
+  added to your dashboard straight away, without a restart.
+
+  They are OFFERED, never placed for you. An install with forty collections would
+  otherwise open onto eighty cards you did not ask for, and removing seventy-seven
+  of them is not a dashboard. Add the ones you want.
+
+  A card only appears where it can be honest. A collection with no field that names
+  its entries gets no "recent" list, because every row would read as an identifier;
+  one with no timestamps gets none either, because "recently" would have nothing to
+  sort by. And each card carries the same permission that gates the collection, so
+  you are only offered cards for content you can read.
+
+- [#1430](https://github.com/nextlyhq/nextly/pull/1430) [`0e9c097`](https://github.com/nextlyhq/nextly/commit/0e9c0976c1fd9913a1c681f9f60bb38fa2ae6878) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The `actions` archetype is drawn by the host, and Phase 1b's plumbing is finished.
+
+  A plugin declares a card of shortcuts with no UI code of its own:
+
+  ```ts
+  {
+    id: "acme/shortcuts",
+    title: "Shortcuts",
+    archetype: "actions",
+    defaultSize: "sm",
+    actions: [
+      { label: "New post", href: "/admin/collections/posts/create" },
+      { label: "Invite user", href: "/admin/users/create", requiredPermission: "create-users" },
+      { label: "Docs", href: "https://nextly.dev/docs", external: true },
+    ],
+  }
+  ```
+
+  `WidgetAction` is exported from `nextly`, `nextly/config` and `@nextlyhq/plugin-sdk`. An `actions` widget must carry a non-empty list and no other archetype may carry one — the same both-directions rule `component` and `query` follow — and each item needs a label and an href, since neither has a sensible default and a blank one is a shortcut that looks broken rather than absent.
+
+  Each shortcut is gated on its OWN `requiredPermission`, separately from the card's. The two answer different questions: the card's decides whether the widget appears, an item's decides whether that shortcut does. A card of five shortcuts where the reader may use two shows two rather than disappearing, and a shortcut to something they cannot do is worse than none — it advertises a capability, costs a click, and answers with a refusal screen. `external: true` opens in a new tab with `noopener` and says so to a screen reader. A card draws at most six and counts the rest rather than dropping them silently.
+
+  This also fixes a bug that would have broken the FIRST queryless archetype to ship. `text` and `actions` take no query, so they never enter the batch and no slot ever arrives — and the outcome resolver read that absence as "drawn from a query, and this widget declares none". Any body registered for one would have failed on every render, permanently. An archetype now declares whether it is drawn from a result or from the declaration, and the two are dispatched differently.
+
+  **Widget components are emitted into the generated import map.** Being pre-bundled by that map is what puts a component in the registry `PluginSlot` reads — the runtime fallback cannot resolve a bare package specifier in a bundled browser — so while widgets were excluded, a `custom` widget drew its card and then nothing inside it, unless the plugin called `registerComponents` itself from its admin entry, which the documented contract never asked it to do. A declarative widget still contributes no path, having no component to carry.
+
+  `PluginWidgetGrid` is deleted. `WidgetGrid` replaced it in the release that introduced it, nothing has mounted it since, and it survived only through its own test.
+
+- [#1513](https://github.com/nextlyhq/nextly/pull/1513) [`b971f66`](https://github.com/nextlyhq/nextly/commit/b971f66ecef7646ff2f25b94df2688111b96f354) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A placement's `column` is refused when it is present and malformed, and a
+  dashboard narrowed to fewer columns stores the arrangement the reader is
+  looking at.
+
+  `column` was the one placement field with no shape rule, so `column: "2"`
+  passed validation, failed the predicate that asks whether a placement stated a
+  column, became a 0, and was then read as an OMISSION -- which the layout
+  endpoint answers by keeping the column the card already had. A broken client
+  was told nothing and had its card silently kept or moved. Present and
+  malformed is now refused; omitted stays valid, because a client written
+  before columns sends none and that payload is supported.
+
+  Changing the column count moves no card and changes every answer about where
+  the cards are: narrowing four columns to two folds two of them into the last,
+  so the cards sharing a column are not the ones they were. The save renumbered
+  the array it was handed, which stored a reading of a grid that was no longer
+  on screen -- the canonical sequence disagreed with the arrangement until the
+  next drag. It is now numbered from the buckets at the count in force.
+
+  A collection also offers a TABLE card beside its count and its list: the same
+  recent entries drawn across named columns, which is the first consumer of the
+  `table` archetype the admin has always been able to draw and nothing has ever
+  generated.
+
+  Its columns are asked of the SOURCE rather than assumed. `status` exists only
+  for a collection declaring it and the timestamps only for one that has not
+  turned them off, so the card selects the ones that are there -- three columns
+  for a collection with a status and two without, rather than a fixed shape
+  padded with blanks or a select the read path refuses. A collection whose rows
+  nothing names, or that has no `updatedAt` to mean "recent", gets no table at
+  all, which are the two refusals the list card already makes.
+
+  The dashboard also offers a QUICK CREATE card: one click from the dashboard to
+  an empty entry form, for the collections this reader may create in.
+
+  Its shortcuts depend on the reader, which a declaration cannot express -- the
+  collection set changes while the process runs, and which of them a caller may
+  create in is a second question on top of that. So it is drawn from the
+  collection list the server already filtered, narrowed again by the create
+  grant. Neither half is a security boundary and the card does not pretend to be
+  one: the create endpoint enforces regardless, so a shortcut shown in error
+  costs a click rather than an entry nobody was allowed to make.
+
+  The singular label of a collection now has ONE resolver, which the create
+  shortcut and the entry form both ask, so a button and the page it opens name
+  the entity identically. The two recent-entry cards likewise share ONE
+  eligibility decision, so a collection cannot be given a table without its list.
+
+  The shortcut card also waits for both of its requests before speaking. Its two
+  queries resolve independently, so a collection list arriving before the
+  permission set filtered every row out and the card told the reader they could
+  create nothing -- for the whole of that interval, and permanently when either
+  request failed. It now says nothing until both have answered, and says nothing
+  about an empty set when the page it read was truncated, because "you may create
+  nothing" is false rather than incomplete on an install with more collections
+  than one page holds.
+
+- [#1541](https://github.com/nextlyhq/nextly/pull/1541) [`cd44127`](https://github.com/nextlyhq/nextly/commit/cd44127699efb1ee427c9b5556621083c816e760) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A component being edited previews the edit, not the last published version.
+
+  Draft mode previewed the wrong document. A page reads the components it embeds
+  in one batched query, and the working-draft overlay that surfaces an author's
+  pending edits is applied only on the single-entry read path — so the batched
+  query returned the live row however wide its lifecycle scope, and the editor
+  iframe drew the last published component while the form beside it showed the
+  edit in progress. The two disagreed about the same document.
+
+  `status: "all"` could not fix that. It widens which rows match; it does not
+  reach a working draft, which lives in a snapshot the list path never consults.
+
+  A route serving drafts now reads its definitions one per component, opting into
+  the overlay explicitly. That read is deliberately not cached, for the reason the
+  draft entry read is not: a working draft changes on every save while cache tags
+  are burst by writes to the live row, so a cached draft would show an editor
+  their previous save and call it a preview.
+
+  The cost is one query per component instead of one per page, and it is paid only
+  where drafts are served — the editor iframe, with one author and no shared cache
+  entry to protect. Every other route keeps the single batched read, still tagged
+  per component id, and a route that names `status: "published"` keeps it too:
+  an explicit lifecycle scope beats the draft widening, in the same order the
+  overlay rule itself applies them. A shareable preview link is unchanged and
+  still resolves embedded components to their published versions.
+
+- [#1490](https://github.com/nextlyhq/nextly/pull/1490) [`da22b42`](https://github.com/nextlyhq/nextly/commit/da22b429de19dde65b77e85e88620e4f58175fe3) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A generated type contributed by a plugin is bracketed before `| null` is added
+  to it, and the bracket is placed where a comment cannot reach it.
+
+  A plugin's `codegen.tsType` callback returns an arbitrary type expression. Two
+  shapes bind looser than a union and captured it: a conditional attached the
+  null to its FALSE branch, leaving the true branch rejecting a value the column
+  can return, and a function type attached it to the RETURN rather than to the
+  field.
+
+  Bracketing is decided by where the expression came from rather than by
+  inspecting it, so no formatting of the expression and no type-level syntax
+  added later can change the answer. The closing bracket sits on its own line
+  because `//` runs to the end of its line, and an expression ending in a
+  comment would otherwise swallow it and leave a file that does not compile.
+
+- [#1516](https://github.com/nextlyhq/nextly/pull/1516) [`163337e`](https://github.com/nextlyhq/nextly/commit/163337ef4aef901d1b66c240469882c2dad16d80) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Copying a block subtree can now keep the links it makes to itself.
+
+  A saved pattern whose button links to `#pricing` further down the same pattern
+  used to arrive with the link intact and the target gone: copying assigns fresh
+  ids and dropped the HTML `id` attributes, because two copies on one page must
+  not answer to the same anchor. The link then resolved to whatever `#pricing`
+  the destination page happened to own, or to nothing at all, and only on the
+  rendered page.
+
+  Those ids are now given new values instead of being removed — derived from the
+  original, so `pricing` becomes something an author still recognises in a URL,
+  a stylesheet and the attribute panel — and the copy reports what each one
+  became, so whatever holds the reference can follow it.
+
+- [#1558](https://github.com/nextlyhq/nextly/pull/1558) [`d7d924a`](https://github.com/nextlyhq/nextly/commit/d7d924a7a34dc370045115fe57f5c4f4d917d321) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A copied subtree can record where it came from, so "the thing this came from has
+  changed — do you want the change?" becomes answerable later.
+
+  `BlockNode.origin` is inert: no renderer reads it, no validator requires it, and
+  a document without one is complete. It exists to be read later by a surface
+  asking whether an upstream source has moved on — the question every mature
+  builder's users ask and none of them answer, because an unsynced copy keeps no
+  record of its source. It cannot be added retroactively: a page built before the
+  field exists can never be told where its blocks came from, which is why it lands
+  while the format is still pre-alpha rather than when the feature that reads it
+  is built.
+
+  ONE field with a discriminant, rather than one field per source. A pattern copy
+  and a detached component are two provenances today and there will be more — an
+  imported document, a duplicated page — and each as its own key is a stored
+  format that grows a column per feature. The discriminant also lets the arms
+  differ honestly: a pattern copy carries a digest of what it copied, because the
+  pattern can change underneath it; a detached component carries none, because
+  detaching is the act of declining further change.
+
+  The digest is of CONTENT rather than a version number. The engine is handed a
+  document and not an entry row, so it can hash what it was given and cannot see
+  what the store calls it — and content answers the question more precisely
+  anyway, since a re-save that changed nothing bumps a version and leaves a digest
+  alone.
+
+  A half-formed record is refused rather than stored. A pattern origin with no
+  digest, an empty id, or a source nobody declared would be written and then read
+  by a surface that trusts it, so the op layer checks the shape the way it checks
+  every other node field. The record is also removable by an ordinary update:
+  provenance is a record and not a lock, and a field an update can never address
+  is one that can only be removed by deleting the node it sits on.
+
+  The stored format gains an optional field and nothing else. Old documents remain
+  valid, and documents carrying the new field are readable by older code — the
+  node schema already admits properties it does not know, and an unknown node
+  field is measured to survive an op round trip unchanged. So `formatVersion` does
+  not move.
+
+  The provenance type is reachable from every entry point that publishes the field
+  that names it. A package that exports `BlockNode` and not the union one of its
+  fields holds leaves a consumer able to read the value and unable to write its
+  type, which is the coupling those entry points exist to avoid — and the
+  renderer package already had a guard saying so, which caught it.
+
+  The import scanner behind the format entry's boundary test no longer reads an
+  import out of ordinary code. A module specifier cannot contain a newline, and
+  without that constraint the literal `"from"` matched the keyword pattern — the
+  string's closing quote read as a specifier's opening one, capturing the next two
+  lines and reporting them as an external dependency. Any code holding that string
+  would have tripped it.
+
+- [#1469](https://github.com/nextlyhq/nextly/pull/1469) [`ec7cd63`](https://github.com/nextlyhq/nextly/commit/ec7cd63eea740373186d64b973cee0a716037a7c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The class manager could be taken down by one corrupt class.
+
+  `NodeStyles` says states map to breakpoints map to values. A stored document only
+  promises to be JSON, and the usability gate admits a class whose `styles` is a plain
+  record without walking into it — so a persisted `{ base: { base: null } }` reached
+  `Object.keys(null)` and threw. Not one broken row: the whole panel, including the
+  rows an author would have used to delete the class that broke it.
+
+  Three shapes reached it, in two different functions — a null state map, a null
+  values map under any state, and a null base that got as far as the engine's
+  compiler and threw inside it. All three are now guarded with `isPlainRecord`, the
+  predicate the page compiler already uses for exactly this, at exactly these two
+  levels. The class is still listed, because repairing a corrupt entry is not this
+  panel's job and hiding it would take away the only row an author could act on.
+
+  A context that writes no rule is also no longer counted as behaviour. The row said
+  "1 more elsewhere" whenever a state or breakpoint held any key at all, including
+  keys naming a property the catalog does not define or a value whose grammar it
+  refuses — both of which the compiler drops. The count now comes from the compiled
+  declarations, so the caveat describes the stylesheet the visitor actually gets.
+
+- [#1494](https://github.com/nextlyhq/nextly/pull/1494) [`9804e9d`](https://github.com/nextlyhq/nextly/commit/9804e9d64b22585db519950c854348ba9fea3974) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A generated create input may omit the publish status, and the lifecycle name is
+  reserved against column-less fields too.
+
+  The base artifacts state `status` as required because a read always carries one,
+  and the create artifacts are derived from them — so requiring it there made the
+  generated type and the generated validator reject an ordinary status-less
+  create that the API accepts and stores as a draft. The create artifacts now
+  drop it from the omit list and reintroduce it optional.
+
+  A column-less field named `status` — a component, or a many-to-many — was
+  accepted by config validation, because the column rules exempt fields that
+  occupy no column and returned before the lifecycle check. Such a field keeps
+  its declared name as its payload key, so the generated interface and schema
+  declared `status` twice and the generated file did not compile. The name is now
+  refused before that exemption, matched on the declared name, so a column-less
+  `Status` stays a distinct member.
+
+- [#1511](https://github.com/nextlyhq/nextly/pull/1511) [`a853ca4`](https://github.com/nextlyhq/nextly/commit/a853ca4694a70831ec6af073dede9ff750d611f3) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A dashboard is arranged in COLUMNS the reader chooses, rather than in one
+  wrapped twelve-column grid.
+
+  Cards took uneven fractions of twelve, so a card's width depended on its
+  neighbours. dnd-kit's sorting strategies predict positions from measured
+  rectangles and need a predictable layout; with mixed spans they mispredict and
+  the cards visibly resize mid-drag -- the behaviour its own tracker records as
+  variable sized sortables being stretched when dragged. Each column is now an
+  independent vertical list of equal-width items, which is the case those
+  strategies are built for and one that supports items of varying HEIGHT, the
+  dimension a dashboard card genuinely varies in.
+
+  A reader picks 2, 3 or 4 columns while editing. Placements gain a `column`
+  beside their existing `order`, the stored layout gains a `columnCount`, and the
+  schema moves to v2 -- migrating a v1 row on READ rather than refusing it, since
+  the reader would otherwise meet their own saved dashboard as an internal error.
+
+  Crossing columns is reachable by CLICK as well as by dragging. WCAG 2.2 SC
+  2.5.7 requires a single-pointer route to anything a drag achieves and states
+  that a keyboard equivalent does not satisfy it on its own, so the sideways
+  controls are what make the new drag permissible rather than a convenience
+  beside it.
+
+  Two fixes fall out of the same work. A card that changed only its column
+  compared as unchanged, so Save stayed disabled and a sideways move could not be
+  persisted at all. And a card whose column falls outside the current count is
+  folded into the last column for drawing while KEEPING its stored column, so
+  narrowing the dashboard and widening it again returns every card to where the
+  reader put it.
+
+- [#1454](https://github.com/nextlyhq/nextly/pull/1454) [`954b1f0`](https://github.com/nextlyhq/nextly/commit/954b1f03121e920e1b0c5b09511cfd5b8e71d3ba) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A dashboard arrangement now survives a reload.
+
+  `nextly_widget_layout` stores one row per reader: which cards, in which order,
+  at which size, and which they have put away. `GET /api/dashboard/layout` returns
+  that arrangement resolved against the live registry, and `PUT` replaces it,
+  guarded by a version so two tabs cannot silently overwrite each other. A reader
+  who has never arranged anything still sees the registry's own order, so nothing
+  changes for anybody until they move a card.
+
+  The stored row holds an identity and a position and nothing else. It never
+  copies a widget's `requiredPermission`: every question about whether this reader
+  may see a card is asked of the live registry on each read, so tightening a
+  permission takes effect immediately rather than after the reader next saves.
+  A card they may not see is dropped from the response silently -- and carried
+  through untouched on the next write, so being unable to see it is not a way to
+  lose it.
+
+  Both guards travel on the wire, and a write must echo both. `version` catches a
+  second tab that saved first. `scope` catches the other half: the snapshot a
+  client holds was shaped by which widgets it could see, and a permission grant
+  moves that without touching the row -- so a card that was hidden at read time
+  and visible at write time would otherwise be in neither the submission nor the
+  carried-through set, and the write would delete it with `version` still
+  matching.
+
+- [#1470](https://github.com/nextlyhq/nextly/pull/1470) [`976ae33`](https://github.com/nextlyhq/nextly/commit/976ae3303ef7ef4aebb76ddd73a490fe1677b76c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The dashboard arrangement agrees with the grid that draws it.
+
+  Six corrections to how a widget's declaration reaches the stored layout. Two
+  plugins contributing the same widget id now resolve to the same one on both
+  sides -- the first declared, which is what the grid has always rendered --
+  rather than the server placing one plugin's widget while the grid drew another's.
+  A contribution using the deprecated `size: "half"` alias is translated to a real
+  size when the server builds its default arrangement, instead of storing a
+  placement with no geometry under a card the grid was already drawing at half
+  width. That translation now has one implementation, in core, which both sides
+  ask.
+
+  Removing a card and adding it back restores the height its author declared, not
+  only its width. A widget whose component draws nothing collapses its grid cell
+  again rather than leaving a blank full-width slot. Cancelling after a save
+  failed takes the failure message with it, instead of leaving "your changes are
+  still here" on screen after discarding them.
+
+  And a default arrangement is now bounded by the same limit a save is: an install
+  declaring more widgets than a single write may carry was answered with a default
+  layout the server would refuse, so the reader's first gesture failed and the
+  dashboard could not be arranged at all.
+
+  A widget id names one declaration, chosen the same way on both sides. Two
+  plugins contributing the same id resolve to the first declared, and a
+  declaration the reader may not see no longer passes its id to the next one --
+  which had let a second plugin's ungated card render exactly where the first
+  plugin's gated one was withheld.
+
+  A declared size or height must be a non-empty string. An empty one was read as
+  "unstated" by the server and as "stated" by the grid, so a card was stored at one
+  width and drawn at another; a non-string height reached a placement the next
+  save would refuse. Both are refused at boot now, where the author can still see
+  the mistake, and an unfamiliar value like a newer core's size still passes.
+
+  The default arrangement is bounded by what one save may carry, and the bound is
+  applied to what the reader can actually see -- widgets they have no access to no
+  longer consume it. Past that limit the picker still lists what is left, says the
+  dashboard is full, and refuses the add rather than building an arrangement that
+  could never be saved.
+
+- [#1436](https://github.com/nextlyhq/nextly/pull/1436) [`270761c`](https://github.com/nextlyhq/nextly/commit/270761c23811a2b127df645ca7bfeb87cc1c8557) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A divider draws a line, and a spacer takes up space.
+
+  Both blocks rendered nothing an author could see. `core/divider` is an `<hr>`,
+  which a user agent draws with an inset 3D border no design system wants and a
+  CSS reset removes entirely — so the element was either wrong or invisible
+  depending on the host. It now states all four sides itself: three at zero and
+  one hairline in the border token, a token because it is a colour and a literal
+  would be wrong in whichever of light and dark it was not chosen for.
+
+  `core/spacer` renders an empty `<div>`, which is zero-high with nothing
+  declared, so inserting one produced no space and nothing to select. It starts at
+  `2rem`. That stays a style rather than becoming a prop — height is per-breakpoint
+  in this system — so any breakpoint may override it.
+
+  The population assertion in `base-styles.test.tsx` names both, which is what
+  makes a future block that declares a default the compiler silently drops fail
+  here rather than in a browser.
+
+- [#1450](https://github.com/nextlyhq/nextly/pull/1450) [`1ca360b`](https://github.com/nextlyhq/nextly/commit/1ca360b9c7565e9944523fab640a7368b6bee25a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A self-hosted font could be uploaded nowhere and served from nowhere. The
+  upload allowlist carried no font type, so a `.woff2` was refused before it was
+  stored; and a `@font-face` may not name another host, so a font that did reach
+  S3, Vercel Blob or UploadThing was unusable at the only address it had.
+
+  `font/woff2` and `font/woff` are now accepted — and only those two, because
+  nothing here converts TTF or OTF, which would be stored and sent to every
+  visitor at several times the size of the same face with nothing reporting it.
+
+  Stored bytes can now be served from the site's own origin at
+  `/api/media/:id/raw`, which the existing media handlers mount. It answers
+  without a session, because the browser fetching a font does not have one, and
+  what keeps that safe is the type: it serves the publicly servable formats and
+  answers 404 — never 403 — for everything else, so it cannot be used to read a
+  private file or to ask whether one exists.
+
+  Reading a stored object also stopped being two implementations. The attachment
+  path and the new route ask one function, which tries the adapter's own `read`
+  and falls back to a bounded fetch of its public URL, refusing over-cap bytes in
+  the same words either way. An over-sized error page is no longer reported as an
+  over-sized file.
+
+- [#1482](https://github.com/nextlyhq/nextly/pull/1482) [`2cfabb1`](https://github.com/nextlyhq/nextly/commit/2cfabb19a7b326e73ebe750886dc8b66babde54c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - An author can add a font file to a site from the fonts panel. Choosing a
+  `.woff2` or `.woff` stores it through the media pipeline and declares the
+  `@font-face` that loads it, pointing at this site's own byte route — the only
+  kind of source the engine accepts, since a face fetched from another server
+  hands that server every visitor's IP address before the page can be read.
+
+  The weight and style are asked for rather than guessed from the filename. A
+  face declaring the wrong weight loads, matches nothing the author meant, and
+  the page renders in the fallback with no error anywhere; the family alone is
+  prefilled from the filename, where a wrong guess is visible in a field before
+  it is stored.
+
+  The faces a site loads are now grouped by family, each cut named. Adding a
+  typeface means adding its regular, its bold and its italic, and a flat list
+  repeated the name while saying nothing about which weights the family covers.
+
+  `useUploadMedia` is available to plugin admin components through
+  `@nextlyhq/plugin-sdk/admin`. It is the one route a plugin has to put bytes on
+  the site, which anything referencing a file — a `@font-face` above all — needs
+  before it can point at one.
+
+  The panel's controls are not a form of their own. They are rendered inside the
+  entry editor's, and a nested form's submit reaches the editor's handler — so
+  pressing Enter in one of these fields started the upload AND saved the page
+  entry, committing the document as it stood before the builder opened. Enter now
+  adds the font and nothing else.
+
+  An add is refused when the stored style holds a font row this version cannot
+  read, naming the row. The section is saved by replacement, so appending to what
+  was read would have saved a list that row is missing from — and the save would
+  have succeeded, because the list sent is exactly the one the checker approves.
+
+  Web font formats carry the `format()` keyword their `src` entries take, so the
+  panel, the upload gate and the public byte route read one table instead of
+  three; a descending weight range such as `900 100` is refused, because it is a
+  range no specification gives a meaning to — a browser parses and keeps it, so
+  what the face then matches is left to the engine.
+
+- [#1464](https://github.com/nextlyhq/nextly/pull/1464) [`c38ac4a`](https://github.com/nextlyhq/nextly/commit/c38ac4aa5ebdc779f87deb2d19b01f1a3e21ac49) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A form block published to a page rendered as a column of labels with nothing
+  under them. The fields were there, focusable and submittable, and invisible: a
+  browser draws a border and a background on an input, a CSS reset takes both
+  away, and the reset the scaffold ships is one. Its submit had the same problem
+  from the other direction — a bare button stripped back to plain text, sitting
+  on the same page as a button block that is a blue rounded control.
+
+  Form controls now draw a border, a background and padding of their own, so they
+  do not depend on the host leaving a browser default alone. The submit wears the
+  button block's appearance rather than a second description of it, because a
+  form's submit and a button are one control to the person filling it in.
+
+  The colours come from tokens and the spacing does not, which is the split the
+  card block already states: a literal colour is wrong in whichever of light and
+  dark it was not chosen for, while a literal length is safe in both.
+
+  The control is outlined in a new guaranteed token, `color.border-strong`, and not in
+  the existing `color.border`. The hairline is decorative — `#e5e7eb` on `#ffffff` is
+  1.24:1 — and a control's border is the only thing telling a person where the field is,
+  which WCAG 2.2 SC 1.4.11 requires to clear 3:1. Outlining a field in a divider colour
+  is the same invisible control this change exists to fix. `color.border` keeps its
+  value and its job; sites inherit the new token automatically and can retune either
+  without moving the other, which is the split Material 3 draws between `outline` and
+  `outline-variant`.
+
+  The playground now selects its dark tokens with `darkMode: "media"`. The engine
+  defaults to writing them under `[data-nx-theme="dark"]`, which a host with a theme
+  toggle sets; this app has no toggle and switches theme through
+  `prefers-color-scheme`, so the whole dark half of the token set was never applying —
+  a control kept `#ffffff` on a `#0a0a0a` page.
+
+- [#1524](https://github.com/nextlyhq/nextly/pull/1524) [`2450aa6`](https://github.com/nextlyhq/nextly/commit/2450aa6a30545c66fee55fd86ec07cff2e128a4f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A block hidden by a visibility condition no longer draws the components inside
+  it. The condition already removed that block and everything under it before a
+  reader saw the page, but the components in it were still being loaded and
+  counted — so a page could be refused for publishing over a component nobody
+  could be shown, and a change to that component still made the page rebuild. A
+  component held directly by a hidden block was already treated this way; now a
+  component held further down is too.
+
+  A component whose stored data cannot be read is described as unreadable rather
+  than missing wherever that is reported, so the fix offered is to repair the
+  component rather than to publish one that already exists.
+
+  A page with an unrecognised note about a component that failed to load no
+  longer takes the whole page down with it.
+
+  The rule holds one level down as well: a hidden block inside a reusable
+  component no longer draws the components under it either.
+
+  Two places on a page that use the same component now always agree about it.
+  Where a site supplies components itself, one that answered differently the
+  second time it was asked could draw in one place and report itself broken in
+  the other.
+
+- [#1424](https://github.com/nextlyhq/nextly/pull/1424) [`523e95f`](https://github.com/nextlyhq/nextly/commit/523e95f429fe4f6f16f01d87a44379582626077c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The `list` archetype is drawn by the host. A plugin can declare a list widget with no UI code of its own:
+
+  ```ts
+  {
+    id: "acme/recent",
+    title: "Recent posts",
+    archetype: "list",
+    defaultSize: "md",
+    query: {
+      source: "collection:posts",
+      op: "list",
+      select: ["title", "slug"],
+      limit: 5,
+    },
+  }
+  ```
+
+  Which field each row shows is taken from the query's `select`, in order: the first selected field is the row's label, and the second — where there is one — is the muted line beneath it. Derived from `select` rather than declared again, because the author has already said which fields the widget is about and a second declaration could disagree with it; it also means a card cannot display a field it never asked the server for.
+
+  A `list` whose query selects nothing is refused by name in its own card rather than guessed at. Without `select` the rows carry whatever the collection happens to hold, so core would be picking a key out of a document it knows nothing about — and the key it picked would change the day someone added a column.
+
+  A cell that is not printable is left out rather than stringified. A relationship, a repeater or a localized value arrives as an object, and `String(value)` renders "[object Object]", which reads as data rather than as a defect; the row still holds its place so the number of rows matches the number of results. `0` and `false` are printed, since only `null`, `undefined` and blank strings are absences. An empty result says so instead of drawing an empty list, and a card shows at most five rows.
+
+- [#1449](https://github.com/nextlyhq/nextly/pull/1449) [`890d811`](https://github.com/nextlyhq/nextly/commit/890d8113e59c06a625d1ce825472049b298b4f9a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The default storage adapter resolved a file by name three times to read it
+  once: to validate the path, to ask for its size, and to pull in its contents.
+  A file replaced between the second and the third came back under a cap
+  measured on the file it displaced, and one still being appended to was
+  buffered whole however small it had been when asked. The read deadline reached
+  it not at all, so a storage directory on an unresponsive network mount held a
+  read open with nothing left to end it.
+
+  A local read now runs against one open descriptor, counts the bytes as they
+  arrive instead of trusting the size reported beforehand, and answers within
+  the deadline it advertises — the same bounds the cloud adapters already kept.
+
+- [#1519](https://github.com/nextlyhq/nextly/pull/1519) [`56bfd93`](https://github.com/nextlyhq/nextly/commit/56bfd93ea828a344273b9c9254780cf0ee8bf7d7) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A page could reference a reusable component and nothing would draw it. The
+  reference is one node holding a component id, a variant name and a set of
+  overrides; what a reader has to render is that component's whole tree, with the
+  overrides applied and the page's own slot content in place of the component's
+  defaults. Nothing turned the first into the second.
+
+  The blocks engine now resolves them. Every inlined node is identified from the
+  instance and the node it came from, so one page produces the same ids on every
+  render and two instances of one component never collide — which is what lets
+  styles, editor history and React keys go on addressing them. A variant's values
+  apply first and the instance's own beat them, and an override can clear a value
+  rather than only replace it, so an author can empty a subtitle the component
+  fills in.
+
+  A component that cannot be inlined — not published yet, containing itself, or
+  nested past the composition limit — costs its own region rather than the page:
+  the reference stays where it is, marked with why, and the rest of the page
+  renders.
+
+- [#1522](https://github.com/nextlyhq/nextly/pull/1522) [`3d8cb12`](https://github.com/nextlyhq/nextly/commit/3d8cb129507cc5699922d45c1fe9988d6c748d70) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A page could reference a reusable component and nothing drew it. The engine
+  knew how to replace the reference with the component's own blocks, but no
+  reader ran that step — so the renderer, the stylesheet, the page reader and the
+  route helper all worked from a document with a hole in it.
+
+  Composition is now a pass of the pipeline every one of those readers already
+  shares, so a component resolved for one of them is resolved for all four. It
+  runs before migration, so a component authored against an older version of a
+  block is brought up to date like any other content rather than handed over as
+  stored, and the components themselves are repaired against the same limits the
+  page is — an unchecked block inside a component would otherwise reach the page
+  through a door the page's own checks had closed.
+
+  A page also reports which components it drew and which it could not, so
+  whatever fetched them can keep the page up to date when they change.
+
+  A component that could not be loaded now says so where it sits, instead of
+  reading as an unrecognised block. A stored stylesheet is no longer reused once
+  composition has added blocks it was never compiled for, which would have left
+  every one of them unstyled on a page that looked fine.
+
+  Two limits behaved wrongly at the edges. A component larger than the page's
+  size limit was quietly trimmed to fit before anything could object, so the page
+  published part of a component with nothing to say the rest was missing; the
+  limit is now enforced where it can be reported. And the editor's style
+  explanations were computed without the components the page draws, so what an
+  author was told about where a value came from described a different page from
+  the one in front of them.
+
+  A component that arrived broken — empty, or not a document at all — brought
+  down the whole page, including pages that never used it. Such an entry is now
+  skipped and the reference it was for is reported as unreadable: the component
+  is there and its stored data is corrupt, which is a different thing to fix from
+  a component nobody has published.
+
+  Three more repairs at the same seam. A component that arrives as something
+  other than a document — an empty object, or a page saved under a component's
+  name — used to compose to nothing at all, so its whole region vanished from the
+  page with nothing to say why; it is now reported like any other component that
+  could not be loaded. A stored page can no longer claim one of its own blocks is
+  an unloadable component and have that believed. And a page now prepares only
+  the components it actually uses, following one component's reference to
+  another, instead of paying for the whole library on every render.
+
+  Three last repairs at the same seam. A page that referenced several components
+  it could not find could lose a component it COULD find, depending on the order
+  the references happened to appear in. A component stored in a format this
+  version does not understand is now reported rather than reshaped and drawn. And
+  the renderer and the page reader now agree about what an unloadable component
+  is, so the renderer no longer hides a block the reader returns.
+
+  One walk instead of two. Preparing a component and deciding to read one were
+  separate passes over the page, and they could disagree — so a component chosen
+  by an instance's override, one that survived a definition's own repair, or one
+  sitting past a truncated scan was reported as missing even though it had been
+  supplied. There is now a single answer, given where the component is actually
+  wanted, which also means a page follows a chain of components only as far as it
+  can draw it rather than preparing every component the chain names. And a
+  component whose stored data cannot be read is now reported as a fault in that
+  component, so the message points at it instead of at the page holding it.
+
+- [#1529](https://github.com/nextlyhq/nextly/pull/1529) [`fc42c6c`](https://github.com/nextlyhq/nextly/commit/fc42c6cd714d697567e94ad93a7f2203e4fb1599) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A page now loads the components it embeds. Placing a reusable component on a
+  page drew nothing on the served site, because nobody was fetching the
+  component: the renderer knew how to draw one and was never handed it.
+
+  A page reads every component it references in one query, follows a component
+  that holds another as far as a page can draw it, and reads them at the same
+  posture as the page itself — so a published page draws published components and
+  a draft preview draws drafts. Sites that store components somewhere of their own
+  can say where, or supply them directly.
+
+  Publishing one component now rebuilds exactly the pages that embed it, rather
+  than every page on the site. The read carries a tag naming that component alone,
+  so a page that never used it is left alone.
+
+  A site running several deployments against different databases no longer risks
+  one of them serving another's components from a shared cache. A page embedding
+  more components than a cache can track is now read in several queries, so every
+  component still updates the pages that use it. And a component reference that
+  is blank rather than missing no longer takes the whole page down.
+
+  Three more corrections at the same step. A site that raises its block limit
+  through its style settings now loads components for the whole page rather than
+  the first part of it. A site that supplies components itself is held to the same
+  per-page read allowance as one that does not. And a component that cannot be
+  found is looked for once rather than once per place it is referenced from,
+  which stops a page spending its allowance on the same absent component and
+  losing a later one that is really there.
+
+- [#1526](https://github.com/nextlyhq/nextly/pull/1526) [`8a326cd`](https://github.com/nextlyhq/nextly/commit/8a326cddb900bc5055f7cabe901df7cf2c69c190) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A page that exactly fills its block limit is no longer refused over where the
+  author happened to put a slot. Placing a component into a region of another
+  component frees the space the reference itself occupied, and that space was
+  only becoming available part-way through drawing — so an otherwise identical
+  page could be accepted or refused depending on the order of the blocks around
+  the region.
+
+  Two more repairs at the same step. A component whose stored blocks are wider
+  than the whole page allows is no longer walked in full before the page is
+  refused for being too large. And content a page places into a region of a
+  component is no longer loaded when the page has already replaced the region
+  around it — the blocks it was going into were never going to be drawn.
+
+- [#1421](https://github.com/nextlyhq/nextly/pull/1421) [`bdbf505`](https://github.com/nextlyhq/nextly/commit/bdbf5058c6cf3fa6dab1b737124dc2803d56e622) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A plugin can now contribute a dashboard widget WITHOUT shipping any UI code. Declare an `archetype` and the `query` it is drawn from and the host draws the card:
+
+  ```ts
+  contributes: {
+    admin: {
+      widgets: [
+        {
+          id: "acme/posts",
+          title: "Published posts",
+          archetype: "metric",
+          defaultSize: "sm",
+          query: { source: "collection:posts", op: "count" },
+        },
+      ],
+    },
+  }
+  ```
+
+  `component` was required on every contributed widget until now, which made this whole tier impossible to declare — an author had to name a component core would never resolve. The requirement was honest when it was written: `PluginWidgetGrid` was the only consumer, it rendered `PluginSlot path={widget.component}` and nothing else, so a widget without one drew an empty cell. That contract said the requirement would become conditional "when that grid exists and can draw a widget from its archetype alone". It does now, it draws `metric` from a query, and nothing mounts `PluginWidgetGrid` any more.
+
+  `PluginAdminWidget` is therefore a union of `PluginAdminCustomWidget` (ships a `component`) and `PluginAdminDeclarativeWidget`, which is itself split by whether core needs data: `PluginAdminDataWidget` (`metric`, `table`, `list` — an `archetype` AND a `query`) and `PluginAdminQuerylessWidget` (`text`, `actions` — an archetype and NO query, since the registry validator refuses one on them). All of them are exported from `nextly/config`, alongside `DataWidgetArchetype` and `QuerylessWidgetArchetype`. The classification is derived from `DATA_ARCHETYPES`/`QUERYLESS_ARCHETYPES` in core rather than restated, and a compile-time assertion fails if an archetype is ever added to the vocabulary without being classified — spelling the declarative half as "every archetype but `custom`" is what made `text` and `actions` undeclarable in the first place, while contradicting the registry validator about the same two names. A union rather than making `component` optional, because "either a component, or an archetype and a query" is the actual rule and all-optional fields cannot state it — `{ id }` would type-check as a widget describing no body at all. Both arms still allow `component`, so every existing `{ id, component, size }` declaration compiles unchanged: the union adds a second route rather than constraining the first. A component may accompany a data archetype deliberately, as the fallback body for an archetype this admin release cannot draw yet.
+
+  The archetype renderer table is looked up by OWN property. Accepting an unrecognised archetype means the name is an arbitrary string from a plugin, and a plain object answers for every name on `Object.prototype` too: `archetype: "__proto__"` made the table look like it held a renderer and then threw `body is not a function`, which took down the whole grid because nothing wraps a widget individually — and `"constructor"`, `"toString"` and `"valueOf"` are worse, since they ARE functions, get called with a widget result, and draw a blank error with no message.
+
+  An archetype this version of Nextly does not recognise no longer fails boot. `assertAdminWidgets` runs during plugin resolution, so refusing one would abort the whole install over a single card — and the reachable cause is a plugin built against a newer core. It is accepted, logged with the known vocabulary so a typo is still findable, and the grid reports it by name in that card's own place while the rest of the dashboard stands. This follows what Grafana does with an unknown panel type and what VS Code does with an unrecognised contribution.
+
+  The boot diagnostic for a widget that describes no body now names both routes out, rather than telling authors the grid renders a widget "through its `component` and through nothing else". The unknown-archetype warning is emitted from the boot gate alone: `validatedAdminWidgets` also runs on every `/api/admin-meta` request, which is public and uncached, so warning there would have written a line per anonymous request forever.
+
+  A widget whose archetype this release cannot draw, and which ships no component to draw it instead, no longer has its query put in the batch. Nothing could use the result: the card reports the missing renderer by name, and asking for the data spent an access-checked read and one of the batch's limited slots on a value discarded on arrival, on every mount and every window focus. A component-bearing widget still gets its query, because its component consumes the slot.
+
+  A widget that supplies a `component` must supply a usable one, even when its archetype and query would have carried it anyway. The admin resolver reads that field for truthiness, so `component: "   "` won the archetype fallback and drew a blank card where the archetype's own diagnostic belonged.
+
+  The unknown-archetype warning is emitted once per plugin, widget and archetype. `assertAdminWidgets` runs more than once per boot — `registerServices` calls it through `resolvePlugins` and again on the transformed list, and the CLI does the same — so an unchanged widget was reported at least twice, which reads as two problems.
+
+  Every new author-facing type is exported from the `nextly` root and `@nextlyhq/plugin-sdk` as well as `nextly/config`, so a plugin author can annotate a reusable declaration without importing from a core subpath.
+
+  The plugin documentation now shows both tiers; it previously showed only the component form and listed a declarative query as a future addition. It also states plainly that `metric` is the only archetype the host draws today, so an author does not follow the new example into a permanently failing card.
+
+- [#1473](https://github.com/nextlyhq/nextly/pull/1473) [`56031de`](https://github.com/nextlyhq/nextly/commit/56031de49b5b093b3c896cd6749d90125d8f0882) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The tokens panel refuses to preview a value carrying a `var()`, because a reference
+  there resolves against the PANEL's own custom properties rather than the canvas's and
+  would draw a colour or a size the published page does not have. It asked that question
+  with a regex over the raw text.
+
+  A CSS function token is an identifier immediately followed by `(`, and the identifier
+  is read decoded — so `v\61 r(--nx-measure-wide)` is a `var()` to a browser and was not
+  one to that regex. It was previewed, resolving against the admin `--nx-*` namespace,
+  which resolves in the panel and which no published page emits. The preview was
+  confidently wrong rather than merely absent, which is the failure the guard exists to
+  prevent.
+
+  `referencesCustomProperty` is a new export from `@nextlyhq/blocks-engine`. It parses
+  the value and compares decoded function names, so it also sees a reference nested
+  inside a `calc()` or inside a fallback, and it answers "yes" for a value it cannot
+  parse — a caller is deciding whether to draw something, and declining to draw a value
+  that would not have rendered costs nothing.
+
+  It lives in the engine because the engine owns CSS semantics and already held every
+  part. Three modules had answered this question three ways, on purpose: `contrast.ts`
+  decodes, `dtcg.ts` reads raw and documents that a var() with an escaped name is then
+  read as invalid rather than dynamic, and `css-value.ts` had the parser and the decoder
+  but kept the comparison private. A fourth answer written in the panel would have been
+  the defect rather than the fix — and the raw reading that is safe in `dtcg` fails in
+  the opposite direction here, where unseen means drawn.
+
+- [#1440](https://github.com/nextlyhq/nextly/pull/1440) [`2e9b56d`](https://github.com/nextlyhq/nextly/commit/2e9b56d0d776dda469020d71f200ac1ed253e7cf) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Publishing every language no longer discards a translation that was waiting to
+  go live.
+
+  A document that exists in one language only — German, say — keeps its other
+  translations in a pending state until someone publishes them. Saving English
+  text against such a document stores it as a pending edit, and publishing every
+  language should carry that edit live along with everything else.
+
+  It did not. The publish loaded the pending edit and folded it into the write,
+  then declined to write the translation row, then deleted the edit as though it
+  had been applied. The English text became unreachable from every read — the
+  public view, the editor's view, and the pending queue alike — while the call
+  reported success. Only a version-history snapshot retained it, recoverable by a
+  manual restore that nothing prompted anyone to perform.
+
+  Publishing every language deliberately does not invent a translation for a
+  language nobody has written; that remains true. An edit an author typed and
+  saved is not an invention, so it now lands where it was going, and the document
+  reads back with the text that was published. Both collections and Singles were
+  affected and both are fixed.
+
+- [#1457](https://github.com/nextlyhq/nextly/pull/1457) [`1f75ca8`](https://github.com/nextlyhq/nextly/commit/1f75ca8067ac7986a4707649e13b3036f27aad0a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A lifecycle-bounded read is bounded to a SET of states, not to one.
+
+  Nothing an author sees changes yet. The vocabulary is still `draft` and
+  `published`, every read returns what it returned before, and the whole suite
+  passes unchanged — which is the point of doing it this way round.
+
+  What changes is what the read path can EXPRESS. A workflow may call several
+  states public, or several states not-public, and an equality can only ever name
+  one of them: the rest would vanish from reads with nothing erroring. Phase 1
+  refused that case rather than emit a query it could not make correct. The
+  predicate now builds a set membership when there is more than one state and
+  stays an equality when there is one, so the widening is invisible to every
+  workflow that exists today.
+
+  The resolved filter carries WHY its set was chosen rather than leaving each
+  consumer to work it out. Deciding whether a due release may widen a read means
+  knowing whether the read is public, and four call sites were re-deriving that
+  from the values — a second answer to a question the resolver had already
+  answered, which disagrees the moment a workflow's public and non-public sets
+  are not complements.
+
+  The per-locale filter is widened with it. A translation is dropped when its
+  own `_status` falls outside the read's scope, and that test lived in two
+  copies plus two SQL builders; a draft translation surviving it is unpublished
+  text resolved onto a public row, so the copies are now one function.
+
+  A workflow is validated where it is DECLARED. A state name longer than the
+  status column, two states of one name, a workflow with nothing public: each is
+  otherwise found at write time, on one dialect, in production — and SQLite is the
+  permissive one, so a suite run against it says nothing about the two dialects
+  that reject it.
+
+  An EMPTY status set selects nothing rather than breaking the query. A workflow
+  whose every state is public leaves the non-public set empty, and an explicit
+  draft read of that collection resolves to it; rendered literally that is
+  `_status IN ()`, which PostgreSQL and MySQL reject as a syntax error. The read
+  then fails with a 500 instead of returning the no rows the caller asked for.
+
+  No collection can name a workflow yet. This change makes the read path able to
+  carry one and validates a workflow where it is declared; the option that lets a
+  config attach one is deliberately not here, because it reaches write, schema and
+  boot paths that still compare against a single word.
+
+- [#1437](https://github.com/nextlyhq/nextly/pull/1437) [`8ff06f9`](https://github.com/nextlyhq/nextly/commit/8ff06f92d61e7a82ebb1513d20e72b5e3f6d28e2) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A message the editor raised while its shell was too narrow to draw landed on a
+  surface nobody could reach. Below its minimum width the shell puts its whole
+  subtree behind `hidden` and `inert` and shows a notice in its place — but
+  neither attribute unmounts anything, so a control behind that notice was still
+  mounted and still deciding, from the fact that it was mounted, that it could
+  speak for itself. It wrote the message inline, into a subtree taken out of paint
+  and excluded from the accessibility tree. The queue it should have fallen back
+  to was no better: the region that draws it was mounted inside the same wrapper.
+  An author who narrowed a window while a class was being created saw the
+  narrow-width notice, no message, and left believing the class existed.
+
+  Being mounted is now only half of what "can still be seen" means: the shell
+  publishes whether it is the subtree the author is actually using, and the
+  decision to speak inline consults it. The notice region moved out of the
+  suppressed wrapper and is mounted once, unconditionally, rather than switched
+  between the two branches — a live region has to exist before text is put into
+  it, and one that remounts whenever the width crosses the threshold is created at
+  the exact moment it is needed.
+
+  Declaring the editor's tokens and BEING the editor's root are now separate
+  classes. They were one, so a surface mounted outside the root could only resolve
+  `--nx-builder-*` by claiming to be a second root, which every selector meaning
+  "the editor" would then match.
+
+  The canvas toolbar's `Show empty containers` switch says what it does. A
+  container holding no blocks has no height of its own and cannot be seen or
+  selected, which is the state the control exists for and the one its label never
+  named.
+
+- [#1461](https://github.com/nextlyhq/nextly/pull/1461) [`e60cdae`](https://github.com/nextlyhq/nextly/commit/e60cdaee78bf7d6e2dacea40144a90a8beb6fb8c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Moving a block with the keyboard now explains itself when the move is not
+  allowed. Before, a block that could not go where you sent it simply did not
+  move, with nothing said — while dragging the same block showed you why and what
+  would work instead. The reason reached people using a mouse and nobody else,
+  which is backwards: the keyboard route is the one someone uses when they cannot
+  drag.
+
+  The wording is the same one a drag shows, so both routes say the same thing. If
+  the move fails for a reason the layout rules do not explain, it says only that
+  the block did not move rather than inventing a cause. Pressing up on the first
+  block is still silent — there is nowhere to go, and saying so on every press
+  would be noise.
+
+- [#1423](https://github.com/nextlyhq/nextly/pull/1423) [`35bca3e`](https://github.com/nextlyhq/nextly/commit/35bca3ecfb6e50eb357a9faccf78dd592830a3e8) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - "Add to release" is now a document action like any other, and says why when it
+  cannot be used.
+
+  It was an untyped `ReactNode` slot on the entry and single forms, filled by a
+  component that rendered its own button. That shape decided four things it had
+  no business deciding. It was always a toolbar button, always leftmost, and
+  could not be moved. It could not be ordered against the built-in actions, so a
+  plugin's contribution and the page's had no defined sequence. It could not
+  carry a reason, so it returned `null` in three separate places — an author
+  without the document's publish grant, or editing a translation, saw nothing at
+  all, which is indistinguishable from a site with no releases feature. And its
+  width was what pushed Save under the version-history panel, because an
+  unplaceable control still changes where the placeable ones sit.
+
+  The page now contributes a DESCRIPTION paired with a handler, and the model
+  decides the rest: this belongs in the overflow menu beside Duplicate, because
+  scheduling a release is a document-management act rather than a leading one.
+
+  Existence and usability are now different questions. Authority over the
+  FEATURE decides whether the action exists — a caller who may not assemble
+  releases, or a document type with no publish lifecycle, has nothing worth
+  naming. Facts about THIS DOCUMENT decide whether it can be used, and those
+  appear disabled with the reason attached rather than vanishing.
+
+  A built-in wins an id collision, and one function decides both the action list
+  and the binding map. Splitting them would let the bar draw a built-in verb
+  wired to a contribution that lost its collision — Delete, from the model, with
+  its danger styling and its permission reason, running somebody else's handler.
+  Nothing about that looks wrong on screen.
+
+  The old trigger's hazard is retired rather than restated: it sat inside the
+  editor's own `<form>`, where a `<button>` with no `type` defaults to `submit`,
+  so opening the dialog once saved the document and published dirty fields before
+  anyone had chosen a release. A menu item is not inside the form and runs a
+  callback, so the shape cannot recur.
+
+- [#1420](https://github.com/nextlyhq/nextly/pull/1420) [`c2f01c6`](https://github.com/nextlyhq/nextly/commit/c2f01c621750664a4467bb05fa33aee097f5ce93) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Move every language of a document when a scheduled release runs. A release member that names no language means the whole document, but the write took that to mean the default language: a scheduled takedown pulled the main row down and left every translation live, and reported success while doing it — so a page could read as unpublished in the admin while its German version was still being served. A scheduled publish had the mirror problem, putting the document live with its translations still held back.
+
+  The selector is the wildcard locale the i18n layer already defines, and it rides the ordinary write path rather than a second one. That matters more than it sounds: the ordinary path is what authorizes the transition, runs the collection's hooks, folds in any pending working draft and records the outbox event, and a materialiser routed around it would publish different content than the same publish performed by hand. Singles behave the same way, because a release member holds either kind.
+
+  The wildcard moves a publication status and refuses anything else. "Write these values into every language" is a different and far more destructive operation than "move this document's lifecycle across every language" — it would copy one translation's prose over all the others — so a wildcard write that names any other field is rejected rather than narrowed, and says so.
+
+- [#1533](https://github.com/nextlyhq/nextly/pull/1533) [`cd67a66`](https://github.com/nextlyhq/nextly/commit/cd67a66e9b00b1b50f205d68034c19b3419003bf) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A page picks up a component's scheduled changes at the moment the release goes
+  live. The page itself was already refreshing on time; the components inside it
+  were not, so a page could keep drawing yesterday's version of a component until
+  something unrelated happened to change it.
+
+- [#1465](https://github.com/nextlyhq/nextly/pull/1465) [`677ae93`](https://github.com/nextlyhq/nextly/commit/677ae93c74e5cc4ef1ecffd5baf02bebf5ac9216) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A row of columns laid out a grid and left the gutter at zero, so the one block whose
+  whole purpose is side-by-side content rendered its columns touching. Measured on a
+  published page: three tracks of 427px with nothing between them. It now has a gutter,
+  `1rem` — the same amount `core/gallery` and `core/accordion` already space their
+  children by, so three grid containers do not space their children three different ways.
+
+  The value is a length rather than the `space.4` token it names, and that is a
+  deliberate limit rather than an oversight. A consumer with no write path compiles the
+  stylesheet once, stores it, and hands it back; on that path `PageRenderer` states no
+  breakpoints and emits no site sheet, so nothing defines `--site-*` while the stored CSS
+  still references it. A token gutter arrives as a `var()` with nothing behind it, which
+  is invalid at computed-value time, and the gap falls back to zero — the exact defect
+  this change exists to fix. A test now fails if the gutter becomes a token before that
+  path defines what it references.
+
+  A page's stored content is untouched, and an author who set their own gap still wins,
+  since authored styles outrank a block default.
+
+- [#1554](https://github.com/nextlyhq/nextly/pull/1554) [`2a25b1e`](https://github.com/nextlyhq/nextly/commit/2a25b1ecdfe1dc3c5d91c3690546888be8489536) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A selection can be saved as a pattern, and whether it is one run of siblings is
+  now decided in one place.
+
+  `planSaveAsPattern` is the first of the composition planners: it reads a
+  document and answers with the library row to create and the ops the page needs,
+  writing nothing. Saving a pattern leaves the page exactly as it was — a pattern
+  is copied on insert and keeps no link back — so its page ops are empty, and that
+  is the whole behavioural difference from converting a selection into a linked
+  component. Splitting the decision from the doing is what lets the caller put the
+  create and the page edit in one unit of work and roll the create back when the
+  edit fails, and it makes a dry run and a real run the same function rather than
+  two that agree until one moves.
+
+  The rule about what may be saved — a contiguous run of siblings in one parent
+  and slot — moves into the engine and is published from it. The builder had a
+  private half of it, which was right while the editor was its only caller and
+  stopped being right once planners existed: a planner runs inside a plugin's
+  server action, where the builder cannot be imported because it peer-depends on
+  React, and the dependency direction is builder to engine, so the engine could
+  not have imported a builder-side rule back. One of the two would have had to be
+  a second implementation of "do these blocks share a list", and the module that
+  held the first one says why that ends badly — it would eventually disagree with
+  the toolbar and the keyboard, which act through it. The builder's copy is
+  deleted and its multi-block reorder now asks the engine.
+
+  The refusal reports its CAUSE rather than a sentence. Which remedy to offer
+  belongs to the verb — moving, saving as a pattern and converting to a component
+  are three different things to be told to do instead — so the engine says what it
+  observed and each surface phrases it. An id the document does not hold is
+  reported separately from blocks that sit in different containers: one is a
+  caller out of step with the document and the other is an author who selected
+  across a boundary, and a single refusal would have sent both to whichever
+  sentence was written first.
+
+  `reidForestWithMap` re-identifies a run of roots as ONE copy. A saved selection
+  is several roots, and re-identifying them one at a time is not the same
+  operation: each call can only see the subtree it was handed, so a reference that
+  crosses from one root to the next finds no entry in that pass's map and is left
+  pointing at the element in the page the pattern was saved from. For
+  `aria-labelledby` and `aria-describedby` that is a copy that has silently lost
+  its accessible name — invisible to everyone not using assistive technology, and
+  by the time it is noticed the pattern is on twenty pages. `reidSubtreeWithMap`
+  is now this function called with one root, so the singular and the plural cannot
+  drift into disagreeing about what a copy is.
+
+  A stored pattern gets fresh ids rather than the page's. It would render
+  correctly either way, because insert re-identifies too; storing the page's ids
+  would still be wrong, because a node id is how everything here addresses a node
+  — styles, locale overlays, the class-usage record, editor history — and two
+  stored documents claiming one id leave any index keyed on it unable to say which
+  node it describes. Page-scoped settings are not copied: a document background
+  and its custom CSS describe the page, not the run, so a pattern carrying them
+  would repaint every page it was inserted into.
+
+  A copied subtree's fragment links follow it. `cssId` is not referenced only by
+  markup: a link's `href` may be `#pricing`, and the renderer passes a bare
+  fragment straight through to the DOM, so a copier that mints a new id for the
+  target and leaves the link behind stores an anchor resolving to nothing — the
+  same silent breakage as a dangling `aria-labelledby`, one prop over. Composition
+  had grown this rule; the copier that saves a pattern was written without it, and
+  a later insert cannot repair the result because its own map is keyed by the id
+  the save already renamed. The rule now lives in one module that both copiers
+  use. It stays narrow — only a whole string of `#` followed by an id THIS copy
+  minted is rewritten — so `"#1 bestseller"` is content and a fragment addressing
+  something outside the copied run belongs to the page and keeps working.
+
+  Locating a node tolerates a damaged document. A stored slot holding `null`
+  instead of an array, or a list with a hole in it, threw out of the search and
+  took down every caller — a multi-block reorder and a saved pattern included —
+  for a node neither of them had touched. These primitives are documented as
+  reading documents nothing has validated, so a broken entry is skipped and the
+  answer is about the nodes that were actually asked for.
+
+  Only a field that HOLDS a link target is rewritten, and matching a minted id is
+  not enough on its own. `core/heading` declares `text` and `href` as separate
+  props, so a heading legitimately reading `#pricing` beside a sibling carrying
+  `cssId: "pricing"` was rewritten to `#pricing-<suffix>` — authored content
+  changed silently, and then carried into every insertion of the pattern. The
+  field name now decides and the value only decides whether there is anything to
+  do, with `href` and `url` listed as data the way the id-bearing markup
+  attributes already are. A block with a differently-named target leaves a link
+  that no longer jumps, which an author can see and repair; the alternative
+  changed what a page said without anyone being able to see it.
+
+  The scan bounds WORK rather than depth. A rich-text link inside a list item sits
+  ten values down a prop tree, past the old depth cap of eight, so an ordinary
+  link in a bulleted list was left pointing at an id that had been re-minted. Any
+  fixed depth is arbitrary — rich text nests as deeply as an author nests it —
+  while a visit budget bounds a wide tree as well as a deep one and still
+  terminates on a value that refers to itself.
+
+  A saved run reads each selected node by its own id. Resolving the run's parent a
+  second time and indexing into its slot is not the same operation on a stored
+  document nothing validated: two nodes may share an id, and the parent a lookup
+  answers with is the first one, not necessarily the one the selection was located
+  under. Measured on a document with two parents sharing an id, selecting the
+  second parent's children saved the first parent's.
+
+  A run is identified by the nodes it was found at, not by their ids. An id is not
+  an identity on a document nothing validated: two parents may share one, so
+  comparing parent ids merged two containers and accepted children that were never
+  siblings. Worse, two lookups of one id disagree in a way no reader would
+  predict, because locating a node checks every root before descending while
+  finding one walks each root and its descendants in turn — so a nested node and a
+  later top-level node sharing an id resolve differently, and re-resolving stored
+  the wrong one. The run now carries the node and the parent it actually reached,
+  which removes the second lookup rather than trying to make the two agree.
+
+  A saved run is refused when it could not be a document. Saving lifts the
+  selection out of whatever contained it, so the pattern's roots are the selected
+  blocks — and a block declaring which parents it may sit in has just lost the only
+  one it had. Selecting columns inside a Columns block is the ordinary way to reach
+  this, and the planner reported success while the create refused the document. The
+  shared nesting rule is consulted before the lift and the refusal names the
+  parents the block requires.
+
+  A bound link's fallback follows the copy. A bound `href` keeps its literal in
+  `bindings.href.fallback`, which is exactly what renders when the source is empty
+  or unresolvable — so a fallback left behind produces a link that works until the
+  data does not, which is the one case the fallback exists to cover.
+
+  The prop scan is bounded by the document rather than by a number. Both earlier
+  caps were guesses about how large a legitimate prop tree gets, and a document
+  past the guess had its links silently left dangling instead of being refused. How
+  large a document may be is already decided once, by the document limits, so all
+  that a cap was really buying was termination on a value that refers to itself —
+  which a path set gives without capping anything.
+
+  `FRAGMENT_REFERENCE_PROPS`, `remapFragmentProps` and `remapFragmentBindings` are
+  exported. A rule described as the single source for every copying surface, which
+  a consumer cannot import, is a rule they will write again — which is precisely
+  how this one came to exist twice.
+
+  The link scan carries its own stack and its own replacement map. Three separate
+  bounds had been tried here and each was a guess about how large a valid prop
+  tree gets — a depth cap, a visit budget, and then the component-envelope key
+  budget applied to opaque prop records the format does not cap at all. Every one
+  of them failed in the same direction: a document past the guess had its links
+  silently left dangling instead of being refused. Depth and width are properties
+  of authored content, and how large a document may be is already decided once by
+  the document limits, so the walk now has no limit of its own.
+
+  A recursive walk also could not survive its own input: a few thousand nested
+  records is tens of kilobytes, inside the byte limit, and exhausted the call
+  stack. The walk is iterative for the same reason the forest walker is.
+
+  Rebuilding through one replacement per source object is what makes a copied
+  graph come out a graph. Guarding a cycle by tracking the path terminates but
+  leaves the copy holding an edge back to the ORIGINAL object — still carrying the
+  id the pass just rewrote — so one graph ends up with two versions of one node.
+  The same map preserves structure shared without a cycle, rather than splitting a
+  record reached from two places into two copies that can drift apart.
+
+- [#1501](https://github.com/nextlyhq/nextly/pull/1501) [`0de476f`](https://github.com/nextlyhq/nextly/commit/0de476fd4ed7cfccc25b93036423ab41887b83de) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A scaffolded app builds its absolute URLs from the origin it is actually served
+  on. The templates hardcoded `http://localhost:3000` in five places, so anyone
+  running on another port — or running when 3000 is taken, which moves Next to a
+  different port on its own — got pages that render while every canonical link,
+  Open Graph tag, sitemap entry and RSS URL points at nothing. The port is not
+  knowable when the project is generated and is knowable at runtime, so the
+  derivation moved into the app.
+
+  The base template also documented `NEXT_PUBLIC_APP_URL` while its layout read
+  `NEXT_PUBLIC_SITE_URL`, so setting the only URL variable a new project was given
+  changed nothing a reader would ever see. Both are now documented with what each
+  one is for — the app's own origin, which the backend uses for emails and preview
+  links, and the public site's origin, used for metadata — and the public one
+  falls back to the app's rather than to localhost.
+
+  The five copies of that expression are now one module, `src/lib/site-url.ts`,
+  which every template inherits.
+
+- [#1476](https://github.com/nextlyhq/nextly/pull/1476) [`e8ee9d5`](https://github.com/nextlyhq/nextly/commit/e8ee9d5bffcdf1f753c1b0ee5641263be326ae52) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The bound the public byte route reads under only ever grows now, because
+  each of its inputs is unreliable in a different direction. A row written
+  before the stored size was taken from the validated bytes can understate
+  what it points at, and an installation that lowers `security.limits.fileSize`
+  moves the configured cap below objects it accepted earlier. With both true at
+  once, every number derived from present state sits under the real object and a
+  font stored legitimately stops being served, permanently.
+
+  Keeping the route's long-standing default as a floor is what closes that: it
+  is not derived from present state, so no configuration change and no
+  mis-recorded row can push the bound below what was servable before.
+
+- [#1530](https://github.com/nextlyhq/nextly/pull/1530) [`cabf1ba`](https://github.com/nextlyhq/nextly/commit/cabf1ba5fbc3bd4abe8c417467d933af053044c4) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A page's title, description and link preview now come from the same page a
+  visitor sees. When a heading or an image lived inside a reusable component, the
+  page showed it and the metadata did not — so a search result or a shared link
+  described the page as though that content were not there, on exactly the pages
+  built out of components.
+
+- [#1518](https://github.com/nextlyhq/nextly/pull/1518) [`012c59f`](https://github.com/nextlyhq/nextly/commit/012c59f918cc0b1a779a412b790dd91eb280172d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A widget source can now be answered by a DOMAIN SERVICE rather than compiled to
+  a collection query, which is what the `system:` source kind has reserved
+  vocabulary for since it was declared.
+
+  Almost everything Nextly knows lives outside the collection tables -- a release
+  is not a row in one, a translation gap is a relationship between rows -- and
+  each is governed by a service that already decides who may see it. So a system
+  source hands the question to that service WITH the caller and adds nothing: no
+  `where` clause of its own, and no second copy of an authorization rule it
+  cannot see.
+
+  `registerSystemSource` publishes the source and its resolver together, because
+  a source registered without one is discoverable, validates, and fails only when
+  a reader puts the card on their dashboard. It accepts only a `system:` source:
+  the resolver store is keyed by id, and an entry under a collection id would
+  answer a question the access-controlled Direct API is meant to answer. A system
+  source nothing answers is refused exactly as a source that does not exist, since
+  a distinct message would confirm it is real.
+
+  `POST /api/dashboard/query` admits these sources, which is what makes the kind
+  reachable at all. It takes no read decision of its own for one: a system
+  source's rows are not an entity the permission table names, and the service that
+  owns them authorizes the same caller, so a check invented at the endpoint would
+  be a coarser second copy of a rule it cannot see. Collection sources are
+  unchanged, and every other kind is still refused.
+
+- [#1443](https://github.com/nextlyhq/nextly/pull/1443) [`55bf5d1`](https://github.com/nextlyhq/nextly/commit/55bf5d1ac4985e9a418bef297a6c02365691b3da) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A content state now declares whether it is public, and the read path asks.
+
+  Nothing an author sees changes. The vocabulary is still `draft` and `published`,
+  the default workflow declares exactly those two, and every read returns what it
+  returned before — which is the point of doing it this way round.
+
+  What changes is where the answer comes from. The auto-filter that decides what
+  an untrusted caller may see no longer compares against the literal `"published"`;
+  it asks the workflow which of its states are public. Admitting a third state
+  later is then a change to one file rather than to every reader.
+
+  A state the workflow does not declare answers NOT public. A row can carry a
+  state a later edit removed, and the only safe reading of "nobody has decided
+  about this" is that it is not published — absence of a decision is not
+  permission.
+
+  The release-aware read paths ask the same question. A due release publishes into
+  whatever state the workflow calls public, so the four places that recognised the
+  word `published` — the SQL condition, both collection read paths and Singles —
+  now ask whether the state IS public. Under the default workflow they take exactly
+  the branch they took before; under a workflow that renames its public state they
+  keep revealing scheduled publications and keep applying scheduled withdrawals,
+  where a literal would have skipped both and shown a query that returns rows and
+  looks like it worked.
+
+  The single-public-state assertion is deliberate. A workflow with two public
+  states needs a set predicate rather than an equality, which the SQL builder does
+  not construct yet, so this refuses rather than silently dropping rows from every
+  public read.
+
+- [#1531](https://github.com/nextlyhq/nextly/pull/1531) [`93d3651`](https://github.com/nextlyhq/nextly/commit/93d3651ded63f07655becea60a51d07a6b14de0d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A page draws a component chosen through a component's own settings. When one
+  component let a page swap which component sits inside it, the page loaded the
+  original and drew a placeholder where the chosen one should be — because the
+  step that loads components was reading the stored page while the step that
+  draws them was reading the page's settings.
+
+  The two now agree by construction: loading asks the drawing step what it needs
+  rather than working it out separately, so a component reached by any route the
+  renderer understands is loaded, including routes added later.
+
+- [#1428](https://github.com/nextlyhq/nextly/pull/1428) [`5a18cb0`](https://github.com/nextlyhq/nextly/commit/5a18cb07e8dce79255d7c102b97822457c15dcca) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The `table` archetype is drawn by the host. A plugin declares a table widget with no UI code of its own:
+
+  ```ts
+  {
+    id: "acme/posts",
+    title: "Recent posts",
+    archetype: "table",
+    defaultSize: "lg",
+    query: {
+      source: "collection:posts",
+      op: "list",
+      select: ["title", "publishedAt"],
+      limit: 5,
+    },
+  }
+  ```
+
+  Each column is headed by that field's label from the collection, so a heading reads "Published at" rather than `publishedAt` — the same string the entry form puts above the field, agreeing by construction rather than through a second declaration that could drift. Where a source has no label the field name is used, which is a poor heading but a true one.
+
+  The columns come from what the SERVER returned, not from `select`, and that is the difference that matters. A field carrying an `access.read` rule denying the viewer is stripped from every row before selection runs, so heading the table from the declaration would draw a column no row can fill and print the label of a field this reader may not see. Rows that arrive with no column descriptions are refused by name rather than falling back to `select`, because that fallback is exactly the one that would undo the server's filtering.
+
+  A table that selects nothing says so without running a query, an empty result says "Nothing yet." instead of drawing an empty table, and a card shows at most five rows with the footer link as the way to the rest. A cell holding an object is left blank rather than rendered as "[object Object]"; `0` and `false` are printed, since only null, undefined and blank are absences.
+
+  The cell reading shared with `list` now lives in one module, so "what does this cell say" has one answer rather than two that drift the first time either is corrected.
+
+- [#1500](https://github.com/nextlyhq/nextly/pull/1500) [`bb10eaf`](https://github.com/nextlyhq/nextly/commit/bb10eaf906333e42696b9f65ac217f0dad5f90c6) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A touch author is told what a press does. Pressing a tile in the insert panel
+  already moves the description to it, so a block can be read before it is taken —
+  on a pointer that cannot hover, that was the one affordance nothing announced.
+  The panel now says so in a line beside the description rather than on the tile,
+  and it appears from the pointer actually used rather than the one the device is
+  classified by, so a touchscreen laptop driven by its trackpad still shows it the
+  moment the author touches the screen.
+
+- [#1489](https://github.com/nextlyhq/nextly/pull/1489) [`5eab012`](https://github.com/nextlyhq/nextly/commit/5eab012263d3a0cf46a404510f543ee8884294c6) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A font weight is checked as CSS reads it rather than as JavaScript converts it.
+  `0x190` becomes 400 on the way through a numeric conversion and passes any
+  bound applied afterwards, while the string kept in the descriptor is still
+  `0x190` — which CSS cannot parse, so the browser drops the declaration and
+  matches the face at a weight nobody chose. The exponent and fraction forms CSS
+  does accept, such as `1e3`, `.5e3` and `400.0`, still work. A decimal point
+  with no digit after it is refused too: the tokenizer takes `400.` as `400`
+  followed by a stray point, and the descriptor is dropped.
+
+  Choosing the same font file twice in a row works. A file input is uncontrolled,
+  so clearing the panel's own state left the element still holding the previous
+  choice — and a browser raises no event for an unchanged selection, which left
+  the Add button disabled while the picker displayed the very file just chosen.
+  Adding one variable font's italic after its upright is that flow.
+
+- [#1425](https://github.com/nextlyhq/nextly/pull/1425) [`6af9888`](https://github.com/nextlyhq/nextly/commit/6af9888fe5bf829e5775c3de14d80791e4a52353) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A widget source now carries the human label of each field it exposes, and a `list` result describes the columns the query selected.
+
+  `WidgetSourceField` gains an optional `label`, carried from the field's own config — the same string the entry form puts above it. A widget that draws a TABLE needs a column heading, and the only honest one is the label the field already has. The alternatives are both worse: deriving prose from an identifier guesses at capitalisation and word breaks it cannot know, and asking the widget author to declare headings puts a second answer beside `select`, free to disagree with it.
+
+  A `list` result gains `fields`: the selected field names in the order they were selected, each with its label where the source has one. Carried on the RESULT rather than published as source metadata, and that placement is an access-control decision. A widget's source is proven readable before a row is returned and `select` names the fields the caller asked for, so answering with labels for exactly those fields discloses nothing new. A separate metadata channel would be an enumeration surface: the query endpoint is careful that a source the caller may not read answers exactly as one that does not exist, and publishing field lists beside it would undo that.
+
+  The columns describe what the caller could actually READ. A field may carry its own `access.read` rule, and the read strips a denied field from every row before selection runs — so describing the declared selection would advertise a column no row can fill and disclose the human label of a field the caller may not read. The description is derived from the rows that came back, in `select` order, and a field selected twice yields one column rather than two. Nothing is described when no rows came back: with no rows there is no evidence about which fields survived, and answering from the declaration would put the disclosure back on the empty case.
+
+  A field label that is present but unusable is refused at source registration rather than only normalized on the collection path. A plugin registering its own source through the SDK reaches the stored snapshot untouched by that path, and `label: "   "` is legal TypeScript — so the empty column head this field exists to prevent arrived through the one channel that had no normalization.
+
+  The admin carries the descriptions through. Its `WidgetResult` declares `fields`, and the response parser — which rebuilds a list result from checked fields, so anything not named is discarded — now names them, validating each descriptor. A malformed heading costs the columns and nothing more, because the rows are the answer.
+
+  `fields` is present only when the query declared `select`. Without it the rows carry whatever the collection holds, so there are no columns the widget chose and nothing honest to head them with. A label that is blank or whitespace is omitted rather than passed on, since an empty column head above real data is worse than falling back to the field name.
+
+- [#1459](https://github.com/nextlyhq/nextly/pull/1459) [`586951f`](https://github.com/nextlyhq/nextly/commit/586951f90200da183bfa00dafceed00614dc9c4b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The admin types a job's status as the wire can actually carry it.
+
+  The core's union describes what the current server sends and is right about
+  that. A client is a different position: during a rolling deploy a newer server
+  sends a status the bundle was built before, and typing the received field as the
+  closed union asserts that cannot happen — the exact claim every guard in this
+  feature exists because it is false.
+
+  So the admin widens `status` to a string at the boundary, where the
+  uncertainty actually is, and keeps the union for the exhaustive presentation
+  map, which is the one place a closed set is correct.
+
+- [#1545](https://github.com/nextlyhq/nextly/pull/1545) [`43ffe9b`](https://github.com/nextlyhq/nextly/commit/43ffe9b0a267ec6dd973c1c2dc5b1658c9e7a2f9) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The activity feed obeys a collection's stored read rule, and no longer publishes
+  a count it cannot authorize.
+
+  Its scope was collection-level, and `entryTitle` is stored on the log row at
+  write time rather than hydrated through the read path — so nothing between the
+  table and the response consulted a document rule. Under a stored `owner-only`
+  or `custom` read rule the feed reported other authors' entry titles, entry ids,
+  and the names and email addresses attached to their edits. Measured: with the
+  ordinary read returning one document for the caller, the feed returned four
+  rows spanning both authors.
+
+  Each row's document is now authorized as the caller, by the same decision the
+  pending-edit cards use — one implementation, so the two surfaces cannot come to
+  different conclusions about who may see a document. A stored rule can be an
+  arbitrary function and its constraint is expressed over the collection's own
+  fields, which an audit row does not carry, so the constraint cannot be pushed
+  into this query the way it is pushed into a collection read; asking the read
+  path about a known set of ids is the one form that works for every rule.
+
+  Rows that name no document keep their existing treatment: a settings mutation
+  is filed under a namespace that is neither a collection nor a single, the
+  caller's scope already admitted it, and dropping those would remove credential
+  rotations from the feed entirely.
+
+  `total` is gone from the response. It counted the rows the collection scope
+  admitted, so it reported edits to documents the reader may not open — the same
+  disclosure the rows carried, in a number — and it cannot be narrowed without
+  authorizing every matching row, which is unbounded over a table that only
+  grows. `hasMore` carries the pagination instead, observed by authorizing one
+  row past the page. The hand-written `COUNT(*)` behind the old field is removed
+  with it.
+
+  The activity feed now records the LANGUAGE a write was made in and authorizes
+  each row in it. A stored `custom` read rule is a predicate over a collection's
+  own fields, and a localized field answers differently per translation, so a row
+  judged without a locale is judged against the default one — and an edit made in
+  a language the rule denies could still show its title. The locale is derived
+  from the event resource that already carries it, so a write cannot report one
+  language to a webhook subscriber and a different one to the trail. Rows written
+  before the column, and writes with no language of their own, leave it NULL and
+  are read as the default, which is what they already meant.
+
+  Deleting a document no longer erases it from the feed. A collection delete
+  removes the row before appending `entry.deleted`, so the document the event
+  names can never be found again — and authorizing by readability alone dropped
+  the deletion, and every earlier event for that document, for everyone including
+  a super admin. Such a row is now kept without its stored title or metadata: the
+  rule that decided who could read them died with the document, so a reader learns
+  that something was deleted, by whom and when, but not what it was called. A
+  document that still exists and was refused stays refused, and a probe that
+  cannot answer drops the row rather than publishing it.
+
+  The feed also refuses outright when the content registry cannot be enumerated.
+  A slug missing from the registry is read as an install-level event and kept
+  without asking the read path — correct when the map is whole, and the same rule
+  admits every document row unauthorized when it is not.
+
+  Refill rounds are anchored to the last row read rather than to a running offset,
+  and ordered by a unique key as well as the instant: `activity_log` grows while a
+  feed is being built, so under OFFSET a row inserted between rounds shifts every
+  later position, repeating one row and silently skipping another.
+
+  Each activity row now records what it is ABOUT — a collection document, a
+  single, or an install-level settings change — rather than leaving the feed to
+  infer it from the slug. A resource that already held a now-reserved name may
+  keep it, so an upgraded installation can have a real collection sharing a
+  settings namespace; registry membership then read a credential rotation as a
+  document in that collection, refused it, and stripped the changed-field detail
+  the row exists to record. Rows written before the column fall back to the
+  registry, which is what they were always judged by.
+
+- [#1467](https://github.com/nextlyhq/nextly/pull/1467) [`b3532bd`](https://github.com/nextlyhq/nextly/commit/b3532bd5180e85e2e4585fc7503060df36127de3) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - An embed block dropped on a page rendered at 300 by 150 pixels — the size a
+  browser gives an iframe when nobody says otherwise — so a video sat
+  postage-stamp sized in the corner of a full-width column. The block declared no
+  default size at all.
+
+  An embed now fills the width it is given and takes its height from a sixteen by
+  nine ratio, which is what the players this block exists for actually serve. It
+  is a default rather than a rule: an author setting their own height or ratio
+  still wins, which is what a square player or an audio embed needs.
+
+- [#1496](https://github.com/nextlyhq/nextly/pull/1496) [`8527d85`](https://github.com/nextlyhq/nextly/commit/8527d8510672eee4db98fc9455bfe4e2bb825dc8) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - An empty paginated list no longer claims a row that is not there. The count
+  line builds its range from the page and page size at one end and clamps it to
+  the total at the other, so with no rows the two ends crossed and it read
+  "Showing 1-0 of 0" — a range starting past its end. It now says how many there
+  are, which for an empty list is none. Reachable today on a webhook endpoint's
+  deliveries page, which renders the control with no rows.
+
+- [#1521](https://github.com/nextlyhq/nextly/pull/1521) [`6a0ebf9`](https://github.com/nextlyhq/nextly/commit/6a0ebf932466fd75234fb0906bc6dd979d0930bc) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A component instance that an author had hidden was published to everyone. The
+  instance node carried the visibility rule; composition replaced it with the
+  component's own blocks, and the rule went with it — so the pass that withholds
+  hidden content found nothing left to withhold, and content restricted to one
+  audience was served to every visitor. An instance an author hides is now left
+  in place for that pass to remove, and hiding a component at one screen size
+  carries onto everything it draws.
+
+  Placing the same component twice also published its HTML ids twice. Anchors,
+  `<label for>` and id selectors then reached whichever copy the browser found
+  first. Each instance now derives its own, by the same rule that already applies
+  when a pattern is inserted, so a page holding both carries one spelling rather
+  than two.
+
+  Three limits were not the limits they claimed to be. A page's node cap counted
+  only what composition added, so a full page could resolve to twice the cap
+  while every later pass believed it was reading a bounded document. Slot content
+  left behind under a slot a component no longer offers was composed in full
+  before being discarded, which could exhaust that cap and cost the page a
+  component it does show. And a component's overrides were counted only after the
+  whole record had been read, so an oversized one was never bounded at all.
+
+  A page, a region or a template supplied where a component was expected is now
+  refused instead of being drawn as though it were one.
+
+  Copying a component also broke the relationships built on its ids. A heading
+  that names a field, or help text a control points at, is wired together by id —
+  and moving the ids without moving the references left every one of them
+  pointing at something that no longer exists, so a screen reader announced the
+  control with no name and no description at all. References now move with their
+  targets, including inside patterns, where the same copy had the same effect. A
+  reference to something the copy does not contain is left alone.
+
+  Three smaller repairs. A component instance stored with an empty visibility
+  setting could stop a page rendering outright. A component whose own visibility
+  setting could not be read was being rewritten into one that reads as
+  unrestricted, which would have published content that was meant to be withheld.
+  And content left behind under a slot a component no longer offers was still
+  counted against the page's size limit even though it is discarded, so a page
+  could be refused a component that would have fitted.
+
+  Four smaller repairs found the same way. Content a page places inside a
+  component kept its own id references, instead of having them redirected at the
+  component's copies. A block hidden by an instance no longer counts against the
+  page's size limit, since it draws nothing. A component whose visibility setting
+  was stored empty now takes the instance's per-screen hiding like any other. And
+  copying a pattern no longer fails on a node whose attributes were stored empty.
+
+  Two more relationships now travel with the copies. A link pointing at a spot
+  inside its own component — the "#pricing" kind — moves with that spot, so it no
+  longer sends a reader to somewhere on the page that does not exist; a link
+  naming anything else is left exactly as written. And hiding a component only on
+  some screen sizes now keeps its full setting, so a component hidden on tablet
+  but restored on mobile appears on mobile again, instead of staying hidden all
+  the way down.
+
+  A component that arrives unreadable is also reported as broken data rather than
+  as a component nobody has published, so an author is offered the remedy that
+  can actually help.
+
+- [#1488](https://github.com/nextlyhq/nextly/pull/1488) [`ebe163c`](https://github.com/nextlyhq/nextly/commit/ebe163cfb9febeb5ca592c378566b42878510030) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A generated type for an optional field now admits null, because the column
+  does. `field.required !== true` is what decides column nullability in
+  `field-column-descriptor.ts`, so an unset optional field is read back as SQL
+  NULL — and nothing on the collections read path turns that null into
+  undefined. The emitted `field?: T` claimed only that the key might be absent,
+  which is a different statement and one the database never makes: a consumer
+  writing `entry.subtitle.trim()` type-checked and threw at runtime.
+
+  Optional fields now emit `field?: T | null`.
+
+  The `?` is KEPT alongside `| null` rather than replaced by it, which is the
+  part worth stating. The input types are derived from the entity interface
+  (`CreateInput = Omit<...>`), and the same emission builds the field-group
+  interfaces that nest inside entity fields, so dropping `?` would demand an
+  explicit `null` for every optional key at every depth on create. A wrapper
+  could relax the top level; it could not reach the nested ones. Prisma and
+  Drizzle drop `?` because their row types are flat and their inputs are
+  generated separately rather than derived — the shape here is Payload's, for
+  the same nesting reason.
+
+  `unknown` is left alone, since it already admits null and the union would be
+  noise in a file a user reads. Required fields are unchanged: their columns are
+  NOT NULL, so offering null would send every consumer down a branch that cannot
+  happen.
+
+- [#1472](https://github.com/nextlyhq/nextly/pull/1472) [`dafbc83`](https://github.com/nextlyhq/nextly/commit/dafbc835cde8119d3bd99c3b19ff9bf076941b18) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The API Keys screen no longer offers controls the endpoint behind them will
+  refuse.
+
+  The list route was widened to admit `read-api-keys`, because the endpoint
+  accepts that grant — but the page still rendered Create unconditionally and
+  every active row still offered Edit and Revoke. A reader who could only view
+  keys was shown three controls, each leading to a route or request that turns
+  them away.
+
+  Each control is now gated on the grants its own operation needs, and the row
+  itself follows the same gate as the Edit item rather than staying clickable
+  into a route that refuses. The create route accepts what the endpoint accepts
+  instead of the narrower grant alone.
+
+  The rule behind all of them is declared once, in the package that enforces it:
+  `nextly/config` exports the API-key policy, the endpoints authorise from it, and
+  the admin's route guards and controls derive their grant slugs from the same
+  declaration through `permissionSlug`. Writing that rule twice is what let the
+  list route demand `update-api-keys` while the endpoint accepted `read-api-keys`.
+  The table's two gates are required props rather than defaulted, so a call site
+  cannot omit them and silently offer everything.
+
+- [#1463](https://github.com/nextlyhq/nextly/pull/1463) [`175b31e`](https://github.com/nextlyhq/nextly/commit/175b31eff640d9cbe9404cceb6c227dfdd3a3d98) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Arrange your own dashboard.
+
+  An "Edit dashboard" button turns the grid into edit mode: drag a card, or move it
+  with buttons, hide one without losing where it sat, remove one entirely, and add
+  back anything you are missing. Save commits the arrangement; Cancel discards it;
+  Reset puts you back on the default and keeps you tracking it, so a widget added
+  later still reaches you.
+
+  Every change is held locally until you save. Each write is guarded twice -- by a
+  version that catches another tab, and by a token that catches the set of widgets
+  available to you moving underneath what you are looking at -- and both refuse the
+  same way, with a message and a Reload rather than a silent overwrite. Your work
+  stays on screen while you decide.
+
+  Moving a card never requires a drag. Move up and Move down are ordinary buttons,
+  because WCAG 2.2 requires a single-pointer alternative to every dragging movement
+  and a keyboard shortcut does not satisfy it. Reorders are announced through the
+  grid's existing live region.
+
+  The dashboard also stops depending on the arrangement being reachable: if it has
+  not loaded, or cannot load, the cards draw in their declared order exactly as
+  before rather than leaving the page blank.
+
+- [#1509](https://github.com/nextlyhq/nextly/pull/1509) [`dbf2d0e`](https://github.com/nextlyhq/nextly/commit/dbf2d0e995f62f80f888815be4fe0d3fce53f455) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The gutters in `core/columns`, `core/gallery` and `core/accordion` follow the
+  site's spacing token again instead of a hard-coded length.
+
+  All three shipped with `{ $token: "space.4" }`, rendered their children
+  touching, and were changed to a literal `1rem` for it. The cause was not the
+  token: the renderer withheld the token tier from a consumer handing back a
+  stored stylesheet, so the reference arrived as a `var()` with nothing behind it
+  — invalid at computed-value time, and `gap` falls back to `normal`, which is
+  zero for a grid.
+
+  That path now carries the declaration, so the reference resolves and a site that
+  redefines `space.4` moves all three. The rendered value is unchanged for a site
+  that does not: measured in a browser on the path that used to fail, the computed
+  `column-gap` is `16px` and the space between two columns is 16 pixels.
+
+- [#1514](https://github.com/nextlyhq/nextly/pull/1514) [`c585ddd`](https://github.com/nextlyhq/nextly/commit/c585ddd4616302fe909475110dfd1fa693130248) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A component definition can now say which of its properties an instance may
+  override, and which regions an instance may fill.
+
+  A `component` document carries an `exposed` list — each entry pointing at a
+  node in its own tree and the prop on it an instance may replace — and a `slots`
+  map — keyed by slot id — naming the regions an instance may put its own
+  blocks into. Named variants
+  preset those values. A component that exposes nothing is still a component: a
+  footer nobody may edit is the point of one, not an unfinished definition.
+
+  Every pointer is checked when the document is validated, and one that does not
+  resolve is refused rather than stored. Deleting a node, renaming a container's
+  slot or removing an exposure leaves a definition that still loads and still
+  renders — the fault only appears later, as an author editing a property and
+  seeing nothing change on any page carrying the component. The refusal names the
+  node or slot it could not find, and what the node declares instead.
+
+  A variant states the label its picker shows and at least one override it
+  presets — one that presets nothing is a picker entry that does nothing when
+  chosen. An exposed slot needs a usable id, and the block types it accepts are
+  held to the same grammar a node's own type is. And
+  an exposed slot states the label the layers panel shows. A variant cannot carry slot content yet: that content is a second node
+  forest, and the one place a forest is checked for malformed nodes, duplicate
+  ids and depth is the walk over the document's own nodes — so it lands with the
+  resolver that inlines it, rather than being stored unchecked.
+
+  Component instances gained `overrides`, which distinguishes three states rather
+  than two: a property absent from the map inherits what the definition or
+  variant provides, one set to `{ $unset: true }` renders empty, and any other
+  value replaces. Without the middle state an author could not clear a subtitle
+  their definition fills in.
+
+- [#1498](https://github.com/nextlyhq/nextly/pull/1498) [`333ecc5`](https://github.com/nextlyhq/nextly/commit/333ecc5d46cbb46439e1985fa312d12a0d68a28d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A collection built in the Schema Builder now survives the deploy.
+
+  The migration that path writes created the table and nothing else. That file is
+  committed and replayed against a database that has never seen the Builder, where
+  the `dynamic_collections` row it writes locally does not exist -- so production
+  got the table and no row at all, and the collection was absent from the admin
+  rather than merely showing a stale status.
+
+  The migration now carries the row too, built by the same builder `migrate:create`
+  uses rather than a second statement that would have to agree with it. The two
+  committed migration is the only thing replayed against the target database, so
+  it has to be self-sufficient: nothing else recreates the registry row there.
+
+- [#1515](https://github.com/nextlyhq/nextly/pull/1515) [`48cb708`](https://github.com/nextlyhq/nextly/commit/48cb708dc9994e5c4e0f8a632027298cdcbe477a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The page builder's op vocabulary is now importable without React, from
+  `@nextlyhq/builder/ops`.
+
+  An op is a change to a document rather than a gesture in a React tree: a server
+  action that promotes a selection to a component, and an agent asked to insert a
+  section, apply the same ops the canvas applies. Published only from the package
+  root, those callers had two options and both were wrong — pull a client
+  boundary into a server module, or grow a second implementation that agrees with
+  this one until the day it does not.
+
+  The subpath is built by the same server-safe configuration that already
+  publishes `./geometry` and `./shell-state`, so it carries no `"use client"`
+  banner and a Server Component can load it. Nothing that already imports these
+  names from the package root has changed.
+
+- [#1540](https://github.com/nextlyhq/nextly/pull/1540) [`0ae809b`](https://github.com/nextlyhq/nextly/commit/0ae809bb20216966a15b7aa0e7f4754c1f15846a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The CLI now says "field group" where it still said "component". `db:sync` and
+  `generate-types` print a `Field groups` count, a failed sync reports field
+  groups, and a generated migration carries a `-- Field groups:` header. Migration
+  files written before this keep working: the header is read back under both
+  spellings, so an older file is still reported as touching the field groups it
+  touches.
+
+- [#1517](https://github.com/nextlyhq/nextly/pull/1517) [`71d2563`](https://github.com/nextlyhq/nextly/commit/71d2563bd0020c10f0b191c79ce4715834784fb7) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Listing collections filters by permission BEFORE it pages, so the count
+  describes the rows the caller can see.
+
+  Filtering the already-fetched page instead left the rows and the meta
+  describing different sets: `total` became the number of survivors on ONE page,
+  so `totalPages` collapsed to 1 and `hasNext` was false however many pages the
+  reader could actually reach. A client reading that stops at the first page and
+  every collection past it is unreachable -- and the pre-filter count it replaced
+  reported how many collections exist that the reader may not see.
+
+  The registry now takes a `slugAllowlist` and puts it in the WHERE clause, so
+  the COUNT and the page read the same rows. `readableSlugAllowlist` resolves it
+  once for both the collections and the singles listings, which had two copies of
+  that resolution; its three answers stay distinct -- no filter, no rows, or
+  exactly these slugs.
+
+- [#1528](https://github.com/nextlyhq/nextly/pull/1528) [`45e58b2`](https://github.com/nextlyhq/nextly/commit/45e58b2897071b6d7f914a6aabb0af57fdd1bbd9) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The dashboard can say how much work is waiting: `system:versions` answers how
+  many documents hold edits that are not live, and which ones were touched most
+  recently.
+
+  That needed a capability the data layer did not have. There was no `count`
+  anywhere in it -- collection totals go through an access-controlled path built
+  for collection tables, and nothing could count a system table, so a caller
+  wanting a number selected the rows and measured the array. The adapter now has
+  one, with `distinctOn` for the case that makes it worth having: a working draft
+  is one row per document per LOCALE, so "14 documents have unpublished changes"
+  counted from rows says 42 for an install translating into three languages.
+
+  `distinctOn` compiles to `COUNT(*)` over a `SELECT DISTINCT` subquery and never
+  to `COUNT(DISTINCT a, b)`. The inline form is not portable and fails in the
+  direction hardest to notice -- MySQL accepts it, PostgreSQL needs a row
+  constructor, and SQLite rejects it outright -- so a query written against one
+  engine is a syntax error on another. It is exercised against all three.
+
+  The access decision lives in the resolver, which is the difference from
+  `system:releases`. That service authorizes itself, so its resolver hands the
+  caller through and adds nothing; `VersionsService` has no authorization at all,
+  and none of its methods takes an actor. A resolver that simply called it would
+  answer an install-wide number to a reader entitled to part of it, so the reads
+  are bounded by asking the access layer per registered entity -- the same
+  decision the dashboard's own endpoints take. That is not the same as filtering
+  the caller's permission slugs, in either direction: an API key is judged on its
+  OWN stamped scope rather than on the roles of whoever minted it, and a
+  collection authorized or refused purely in code is decided by its rule rather
+  than by a permission row. The answer is always enumerated, so a caller who may
+  read nothing gets exactly nothing rather than a value that could be read as no
+  filter at all.
+
+  The card publishes the document's identity and its instant, never the snapshot:
+  that column is the unpublished content itself.
+
+- [#1427](https://github.com/nextlyhq/nextly/pull/1427) [`070cb7b`](https://github.com/nextlyhq/nextly/commit/070cb7ba01510c5c924070c5e39cc6c3c0a7ef34) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The admin derives its email draft-preview payload from the schema the server
+  validates against, instead of restating it.
+
+  The client type was a hand-written mirror of the endpoint's zod schema, so the
+  wire contract had two definitions. Adding a required field on the server left
+  the admin compiling cleanly while every preview request was rejected at
+  runtime — a failure that only shows up in a browser, on a surface whose whole
+  point is telling an author the truth about what they are sending.
+
+  `nextly/api/email-template-preview-types` now exposes the contract as a
+  types-only entry point, so a consumer building the request derives its payload
+  and its result from the canonical schema and the renderer's own output type. It
+  pulls zod and nothing else — no DI container, no route handler — so a type-only
+  import costs a browser bundle nothing.
+
+  The published request type is the schema's INPUT rather than its output. The
+  three fields that default to null are optional on the wire and required after
+  parsing, so exporting the parsed shape as the request contract would reject
+  payloads the endpoint accepts. Both are exposed: `DraftPreviewRequest` for a
+  caller building a body, `DraftPreviewParsed` for a handler reading one.
+
+- [#1540](https://github.com/nextlyhq/nextly/pull/1540) [`0ae809b`](https://github.com/nextlyhq/nextly/commit/0ae809bb20216966a15b7aa0e7f4754c1f15846a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - When a schema change needs a terminal it cannot get, the error listing what you
+  would have been asked to approve no longer stops at three items without saying
+  so. It now names how many more there are, and how many of the omitted ones are
+  column drops — the only kind that loses data. Previously a run with 57 events
+  listed three and gave no sign that 17 of the 18 column drops were among the
+  ones it did not show.
+
+- [`bec0a02`](https://github.com/nextlyhq/nextly/commit/bec0a02dafdcead5bf5c95da73dc7472076b693d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Whether core can draw a widget is now a question about the DECLARATION, not just its archetype.
+
+  An archetype having a renderer says nothing about whether that renderer can draw a particular widget: a `list` needs its query to `select` the fields each row shows, and the same renderer that claims the archetype refuses a declaration without them. Treating those as one question cost two things.
+
+  A list widget that selects nothing had its query batched anyway. The refusal arrived only after the request came back, so the server performed an unprojected read, shipped every accessible document to the browser, and the card discarded them to print "selects no fields" — on every mount and every window-focus refetch. The declaration is refused before the batch is built now, so the card says the same thing without a database read.
+
+  And a widget declared through both channels lost its plugin component. The contributed component is the fallback for a widget core cannot draw, and core reported that it could — so a registration naming `list` without `select` replaced a working plugin card with an error. The fallback now asks whether this declaration is drawable, so the component stays.
+
+  An archetype states its own precondition beside its body, and returns the reason rather than a boolean, so the card explains what is missing in the words of the archetype that knows.
+
+- [#1542](https://github.com/nextlyhq/nextly/pull/1542) [`bde930a`](https://github.com/nextlyhq/nextly/commit/bde930a70492d9bbcebc5fa48166bccb4fad6916) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Every package's npm page now answers the same four questions: what state the
+  package is in, how to install it, what it relates to, and its licence. Eight
+  packages were missing at least one of those, and `@nextlyhq/adapter-drizzle`
+  was a three-line stub that never said you are not meant to install it directly.
+
+- [#1442](https://github.com/nextlyhq/nextly/pull/1442) [`afb9daa`](https://github.com/nextlyhq/nextly/commit/afb9daa5e201bd8e382ea5cb86c2c4de4a59c651) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Every storage adapter can read a stored file back as bytes. The contract has
+  declared `read` as an optional member for some time and only the local adapter
+  supplied it, so a caller reaching for it against S3, Vercel Blob or UploadThing
+  got `undefined` and fell through whatever branch followed — a capability that
+  reads as present and behaves as absent.
+
+  The three remaining adapters implement it now. S3 reads through its own SDK; the
+  two URL-addressed services fetch the address their service issued, since a
+  derived URL is a guess at a string another system owns.
+
+  A missing key answers `null`, which is an ordinary fact about the store. A
+  transport failure does NOT: a dropped connection to a file whose lookup just
+  succeeded is reported as an error rather than as absence, because folding the
+  two together invites a caller to treat a live file as deleted and write a
+  replacement over it. That separation is stated once, in a shared helper both
+  URL-addressed adapters call, rather than being spelled out per adapter where the
+  two copies would drift.
+
+  S3 returns an empty buffer for a zero-byte object rather than `null`, for the
+  same reason: a stored empty file is not a missing one.
+
+- [#1456](https://github.com/nextlyhq/nextly/pull/1456) [`7eeb8e4`](https://github.com/nextlyhq/nextly/commit/7eeb8e4dc94991d3794f6a9ea5d380e3985050f5) Thanks [@muzzamil-rx](https://github.com/muzzamil-rx)! - Accept both the `"component"` and `"fieldGroup"` field type spellings in stored definitions — across the schema pipeline, query filters, entry defaults, sanitization, and field-group registry lookups — so collections containing field groups no longer grow ghost parent-table columns that trigger interactive rename prompts on startup.
+
+- [#1492](https://github.com/nextlyhq/nextly/pull/1492) [`2dd62dc`](https://github.com/nextlyhq/nextly/commit/2dd62dc69ddd89d927fc4bdcb4bc5104caa94754) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Generated types and Zod schemas now declare the publish lifecycle.
+
+  A collection or Single that sets `status: true` carries a draft/published
+  column, and the generated artifacts said nothing about it — so a consumer of
+  your generated types could not tell a draft from a published entry, which is
+  the one distinction the lifecycle exists to express.
+
+  Both artifacts now emit `status: "draft" | "published"` for those records, and
+  nothing at all for the ones that do not declare it.
+
+  The set comes from `LIFECYCLE_STATUSES` rather than being typed out, because
+  its own docblock says it is stated once so that callers rejecting other values
+  do not write the rejection from memory. Adding a status there now widens the
+  generated type and the generated validator together.
+
+  It is deliberately NOT `VersionStatus`. That union also carries `"unpublished"`,
+  which describes a row in the version history rather than an entry, and no entry
+  is ever written with it — offering it would send consumers down a branch that
+  cannot occur.
+
+  The member is neither optional nor nullable: the column is `NOT NULL DEFAULT
+'draft'`, so a read always has a value.
+
+- [#1527](https://github.com/nextlyhq/nextly/pull/1527) [`912c54d`](https://github.com/nextlyhq/nextly/commit/912c54dbb03b4aadbd048a3bd7b745b5cfc132ea) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A page that exactly fills its block limit is no longer refused because of parts
+  of a component that were hidden anyway. Hiding a block inside a component costs
+  the page nothing, and the step that prepares the page's own content for the
+  regions of that component was counting those hidden blocks against the page —
+  so a component with several hidden blocks before a region could push an
+  otherwise valid page over the limit.
+
+  Blocks hidden by a visibility CONDITION still count, and they should: the block
+  itself is still placed on the page until the condition is evaluated, so the
+  page pays for it either way.
+
+- [#1422](https://github.com/nextlyhq/nextly/pull/1422) [`079bcb1`](https://github.com/nextlyhq/nextly/commit/079bcb15a70e35b76484f941b81be57e6cf41ac3) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Opening a document's version history made most of the document's own controls
+  stop working, without disabling them or reporting anything.
+
+  The panel is pinned to the window's edge with `position: fixed`, which takes it
+  out of the layout — so the page underneath kept its full width and carried on
+  drawing beneath it. Measured in a browser at 1280x720, the panel occupied
+  x 800-1280 at every height, and `document.elementFromPoint` at each control's
+  own centre returned a row of the panel rather than the control: Save draft,
+  Publish, the overflow menu, the rail toggle, the entry's copy-id button, and
+  the account, theme and notification controls in the admin header. Eight
+  controls, all visible, all enabled, none of them reachable.
+
+  Nothing reported a refusal because nothing refused. The pointer simply landed
+  on a different element, which is worse than a disabled control — a disabled one
+  at least says it will not act.
+
+  Space is now reserved rather than fought over. `SidePanelReservation` carries a
+  mounted panel's claim up to the layout, which indents its content column by
+  that much, so the page ends where the panel begins. A `z-index` would not have
+  helped: raising the page over the panel puts the page's controls on top of the
+  panel's rows, which is the same collision with the winner swapped.
+
+  The width is stated once and both the element and the reservation are taken
+  from it. Two literals would agree until one of them changed, and the failure
+  after that is silent in the same way as the original: a strip of document drawn
+  under a panel, its controls quietly inert.
+
+  Where the window cannot hold both, the panel is modal instead of non-modal.
+  That is not a lesser fallback — it is the honest state. The panel covers the
+  document either way, and a modal one blocks the clicks it is swallowing and
+  scrims what it has withdrawn, instead of accepting them into nothing. Both
+  behaviours derive from the single question of whether room was made, so the
+  panel cannot end up non-modal over a page that nothing moved.
+
+- [#1525](https://github.com/nextlyhq/nextly/pull/1525) [`31be0c4`](https://github.com/nextlyhq/nextly/commit/31be0c43473c72e626622631a22a873b035a7738) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Content a page places inside a hidden part of a component is no longer loaded.
+  The blocks were never going to be shown — the part holding them is hidden, so
+  they and everything in them were already being dropped — but any component
+  among them was still being fetched and counted. A page could be refused for
+  publishing over a component in there, and a change to that component still
+  rebuilt the page.
+
+- [#1523](https://github.com/nextlyhq/nextly/pull/1523) [`a416256`](https://github.com/nextlyhq/nextly/commit/a416256b7d48000b874fcea91e83256a92a5023b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The dashboard can draw a card of several numbers, each one a link into the list
+  it counts. `stats` is a new archetype: where `metric` is one number from one
+  query, a `stats` card declares `cells`, and every cell carries its own query.
+
+  Each cell being its own ordinary `count` is what keeps the card honest about
+  access. A reader who may not read one of the collections simply loses that
+  number, judged by the same rule every other widget query is judged by -- where
+  one composite query would need a source that knows every domain it counts, and
+  a single authorization decision covering all of them.
+
+  Every collection that declares a status now generates a health card: total,
+  published and draft, with each number linking to that collection's list filtered
+  the same way. The link and the number are built from one value, so a card cannot
+  promise a filter its link does not apply.
+
+  `stats` is classified as its own kind rather than filed under an existing one.
+  `DATA_ARCHETYPES` means "requires the singular query field", which a stats card
+  must not have; `QUERYLESS_ARCHETYPES` means "needs no data at all", which the
+  admin turns into a body that never enters the batch. Both names have agreed
+  until now because no archetype needed data without using `query`.
+
+- [#1417](https://github.com/nextlyhq/nextly/pull/1417) [`3059b32`](https://github.com/nextlyhq/nextly/commit/3059b329754db1ca9b65394cc8cda25cf33cb199) Thanks [@muzzamil-rx](https://github.com/muzzamil-rx)! - Every admin list now takes its column policy from one hook instead of ten
+  hand-written copies.
+
+  The policy is small but load-bearing: some columns are pinned and never offered
+  to the toggle, the reader's choice is remembered per list, and a column is
+  hidden exactly when the remembered choice says so. Ten surfaces carried the
+  same three decisions written out by hand, each copy free to drift. The new
+  `useTableColumns` hook owns the policy once, and the ten entity lists — API
+  keys, collections, field groups, plugins, roles, email providers, email
+  templates, singles, users and image sizes — now declare their storage key,
+  their columns and their pinned set, nothing more.
+
+  Stored column choices are untouched: every list keeps the storage key its
+  readers already have choices under, so nothing anyone has hidden comes back.
+
+  The image sizes list also stops rebuilding its pinned-column set on every
+  render. The set now lives at module scope like every other list's, which
+  removes the last arrangement that could have been one refactor away from a
+  render loop.
+
+- [#1414](https://github.com/nextlyhq/nextly/pull/1414) [`123b6b7`](https://github.com/nextlyhq/nextly/commit/123b6b761b9c37b18ee724353bc0738d02fd73e8) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Make the preview one control instead of three. The entry header carried a pane toggle, an open-the-preview action and a copy-link action, the last two already sharing a menu while the toggle sat beside them looking like a second preview button — three of the header's seven controls for one idea. Where a side pane exists it now leads, because it is the cheapest of the three and the only one with a state worth showing, and opening and copying move into a menu beside it. Where no pane exists the shape is unchanged: a plain button when only one thing can be done, and one menu when both can.
+
+- [#1460](https://github.com/nextlyhq/nextly/pull/1460) [`25f3eb0`](https://github.com/nextlyhq/nextly/commit/25f3eb0a9db36fc88ca6583a7550b24cfd741404) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - An installation's upload policy applied to one entry point and not the other.
+  The published server action reaches the legacy media service, which never runs
+  the configured validator, so that path enforced no allowlist, no magic-byte
+  comparison and no sanitisation while the mounted REST handler enforced all
+  three. A deployment excluding a format through `security.uploads` had the
+  setting silently ignored on the action, and what lands there is retrievable
+  through the anonymous byte route. The action now builds the validator from the
+  same config and refuses before anything is stored.
+
+  A file's type is also inferred from its name for every accepted format rather
+  than for fonts alone. The media dropzone offers each of them by suffix, and a
+  browser reports no type at all for whatever its platform does not register — so
+  a file the browser accepted was refused by the server for carrying no type.
+  Fonts still answer to their own signature, because the sniffer recognises
+  neither WOFF nor WOFF2; every other inferred type meets the magic-byte
+  comparison.
+
+  A configured allowlist naming a font by its legacy spelling never met an
+  upload's canonicalised claim, so a full override advertised a format it then
+  refused. Allowlist entries canonicalise through the same table.
+
+- [#1432](https://github.com/nextlyhq/nextly/pull/1432) [`5f78af3`](https://github.com/nextlyhq/nextly/commit/5f78af3b16dc3072bbf6d3e491fd884a7cf61f01) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - One rule for a queryless widget's query, not two.
+
+  The registry refused a `query` on a `text` or `actions` widget while the same
+  declaration reached boot through `contributes.admin.widgets` and passed. Core
+  draws those archetypes from the declaration alone, so the admin batched a read
+  on every mount and refetch whose result the declared renderer never looks at.
+
+  `querylessQueryProblem` is now the single non-throwing rule, and both the
+  registry validator and the boot gate ask it — the same shape `actionProblem`
+  already established for shortcut items.
+
+- [#1444](https://github.com/nextlyhq/nextly/pull/1444) [`d990e70`](https://github.com/nextlyhq/nextly/commit/d990e707950654044420c0bfc487354ae744257a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The two channels into the widget registry now agree where they should, and
+  differ only where a plugin's version says they must.
+
+  `registerWidget` and `contributes.admin.widgets` had been validating the same
+  field values with two rule sets, and four fields came apart one at a time. The
+  shared half is now one rule both ask.
+
+  The shared half is deliberately narrow. A contribution crosses a VERSION
+  boundary -- a plugin may be built against a newer core -- so a closed-vocabulary
+  check applied there aborts a whole plugin install the moment that plugin names a
+  size, height or chrome value this core has not learned yet. The admin already
+  survives those by falling back. Vocabulary checks are therefore the registry's
+  alone, and only version-independent rules are shared: a shortcut missing its
+  label or href, a non-finite order, a query that is not an object, and a
+  placement rule that runs only for archetypes this core recognises.
+
+  One rule moved the other way: the registry accepted a truthy non-object `query`
+  that the contributions gate refused, so it now refuses one too.
+
+  A divergence test records the whole relationship -- the rules both channels must
+  agree on, and every difference that is deliberate, each with the reason it is
+  not drift.
+
+- [#1485](https://github.com/nextlyhq/nextly/pull/1485) [`f9d4f7b`](https://github.com/nextlyhq/nextly/commit/f9d4f7bfe6a035911be35b8c8f18d9f1d3509c4e) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The SQLite bootstrap module imports the storage-format catalog once.
+
+  Two changes landed within seconds of each other, each adding the same import at
+  a different line. Neither conflicted, so git kept both and the package stopped
+  building on `TS2300: Duplicate identifier 'STORAGE_FORMAT'`.
+
+- [#1512](https://github.com/nextlyhq/nextly/pull/1512) [`a19dcb7`](https://github.com/nextlyhq/nextly/commit/a19dcb7bda1d6e39e7a4fa12ef80424993cc8767) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Patterns, components and layouts are now three stores the page builder ships,
+  so a site can keep saved starting points and reusable pieces beside its pages.
+  - **Patterns** are copied when you insert them. A pattern carries a title,
+    description, category, keywords and a granularity, so the library can be
+    browsed and searched rather than scrolled.
+  - **Components** are placed by reference, so editing one changes every page
+    that carries it. A component may name the Layout area it suits, which is how
+    a site header stays out of the ordinary insert list without being a
+    different kind of thing.
+  - **Layouts** name which component fills each area around a page. Areas are
+    rows rather than columns, so adding an announcement bar or a sidebar later
+    costs no migration.
+
+  Each store is offered by one sidebar link — the page builder's own — rather
+  than also appearing in the automatic collection navigation.
+
+  All three separate saving from publishing: a draft is worked on privately and
+  publishing is the single act that ships it. Each appears in the admin behind
+  its own read permission, and each accepts only its own kind of document, so a
+  page cannot be stored as a pattern.
+
+  A Layout may fill each area only once, so one Layout cannot name two headers
+  and leave whatever reads it first to decide which page gets which.
+
+  Plugin menu items may now name the collection they point at, with
+  `collection: "patterns"` beside `to`. The item's destination and its read
+  permission are then derived from the slug the host actually registered, so a
+  `.rename({ patterns: "saved-patterns" })` no longer leaves the link pointing
+  at a list that does not exist or gates it on a permission nobody is seeded.
+
+  A menu item naming a collection its plugin does not contribute is refused when
+  the plugin is registered, rather than throwing on every admin request once the
+  app is already running. An item that names a collection keeps the destination
+  it declared — including any list state such as `?status=draft` — and only has
+  its collection segment rewritten when a rename actually moves it.
+
+  Creating a document in a blocks field now seeds an empty document of a kind
+  that field accepts. Previously it always seeded a page, so a store declaring
+  `kinds: ["pattern"]` offered an editor that looked like it worked and a save
+  the server refused.
+
+  Nothing yet renders a component instance or resolves a Layout — this is the
+  storage and the permissions the rest of the feature is built on. A Layout row
+  names no variant yet, because a component has none to name.
+
+- [#1532](https://github.com/nextlyhq/nextly/pull/1532) [`02e108d`](https://github.com/nextlyhq/nextly/commit/02e108d6d56ad35b3518a33decc2e55c642cbe28) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The dashboard's pending-edit cards obey a collection's stored read rule.
+
+  Entity-level access answers whether a collection is in reach; it does not
+  decide which of its documents are. A collection carrying a stored `owner-only`
+  or `custom` read rule admits every editor at that check while the ordinary read
+  path narrows to a subset — so counting and listing version rows filtered by
+  collection name alone reported one author's documents to another, handing back
+  their entry ids, languages and the instants they were last edited.
+
+  The cards now ask the ordinary read path which of the candidate documents the
+  caller may actually see, rather than reproducing a rule that can be an arbitrary
+  function. Singles are asked per language, because a localized Single is a
+  different document per language and a rule can answer differently for each. A
+  row whose scope is neither a collection nor a single is dropped rather than
+  admitted, since nothing can judge it.
+
+  A localized document is authorized per LANGUAGE — collections as well as
+  Singles, because a stored rule is a predicate over the collection's own fields
+  and a localized field answers differently per language. Rows reach that decision
+  one per locale and are collapsed to one per document only afterwards.
+  Collapsing first offered each document's newest locale alone: where that one was
+  denied and an older one readable, the document vanished from a card its reader
+  was entitled to see.
+
+  Nothing sizes the read from configuration either. The row bound used to be the
+  install's current locale count, which does not describe the data — working
+  drafts written under a locale since removed are still rows — so it could fetch
+  too few rows to find the documents asked for while every check said the answer
+  was exact. The read is paged instead, and the only bound is how many documents
+  the caller wants.
+
+  A pending row for a Single is checked against the live document's id, resolved
+  without materializing it. Version rows outlive the documents they describe, so a
+  Single deleted and recreated leaves rows naming its predecessor — and the read
+  probe goes through a path that auto-creates a missing Single, which would have
+  made loading a dashboard perform a write.
+
+  A row whose language is no longer configured, or whose scope kind no longer
+  matches the registry, is dropped rather than guessed at: forwarding an
+  unconfigured locale silently authorizes the default one, and a slug freed by a
+  deleted collection and taken over by a Single would send an orphaned row to a
+  read path that cannot answer about it.
+
+  Paged reads use a cursor anchored to the last row read, and order by a unique key
+  as well as the instant. `updatedAt` alone is
+  not a total order, and paging one with OFFSET can return a row twice and skip
+  another, losing a document that nothing downstream can notice is missing.
+
+  That answer cannot be computed in SQL — the rule lives on the collection, the
+  candidates live in the version table, and the data layer has no join — so the
+  count walks candidates and authorizes them, which is bounded work. Past that
+  bound it reports `atLeast` and the card renders `N+`, rather than failing or
+  showing a number that is quietly too small.
+
+  It is a floor rather than a refusal because every mechanism that tried to keep
+  the promise of exactness past a bound produced a wrong answer instead: a
+  document quota could not tell "exactly this many" from "more than this many",
+  and a shortcut on documents already seen conflated encountering a document with
+  deciding it, since authorization is per language. The bound is also on rows the
+  CALLER reads, not on a count of candidates taken before the rules narrow them —
+  that made one reader's card depend on data they cannot see, and disclosed which
+  side of the threshold that unseen population sat on.
+
+  The count enumerates by row id rather than by recency. `updatedAt` advances
+  every time somebody types, so a draft not yet read can move ahead of a
+  recency cursor and be skipped for the rest of the walk; a working-draft update
+  never rewrites the id.
+
+- [#1534](https://github.com/nextlyhq/nextly/pull/1534) [`3adf2f9`](https://github.com/nextlyhq/nextly/commit/3adf2f9c63ec74abe7cfb2bb84fe17de3854e455) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Plugin READMEs no longer tell you plugins are unavailable. Three plugins ship
+  today — the Visual Page Builder, SEO and the form builder — but the form
+  builder's README said "Plugins are not ready for use yet" and told you not to
+  rely on them in production, which is the page npm shows on the package. Every
+  plugin README now carries the same short alpha note and links to the stability
+  ladder, so you can see which surfaces are settled and which are still moving.
+
+  `@nextlyhq/admin-css` gains a README; it was published with a blank page on npm.
+
+  The plugin SDK's own source said dashboard widgets were "reserved, not
+  rendered". They do render, and are marked experimental only because the
+  contribution shape is still settling.
+
+- [#1493](https://github.com/nextlyhq/nextly/pull/1493) [`9ac96d7`](https://github.com/nextlyhq/nextly/commit/9ac96d7b1d1322a1a9f2ed618c09337682d5d7e9) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Hold a collection's handlers back when the metadata sync REPORTS a failure
+  after the DDL, not only when it throws.
+
+  The sync answers a per-collection failure by resolving with `errors[]` rather
+  than rejecting. The post-DDL landing read only the rejection, so a partial
+  failure published handlers and recording policies against a field tree the
+  registry had not accepted — the state the rejection branch beside it already
+  existed to prevent, reached by the shape it did not catch.
+
+- [#1544](https://github.com/nextlyhq/nextly/pull/1544) [`1e3da4f`](https://github.com/nextlyhq/nextly/commit/1e3da4f88a5288c5148484240daae365387d06d1) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Publishing a page says whether its components are live.
+
+  A page and the components it embeds are separate documents with separate
+  lifecycles, so publishing the page said nothing about them. The page then drew a
+  missing-component marker exactly where the author expected content, and the save
+  reported plain success.
+
+  It now reports. Publishing still succeeds — publishing a page before its
+  components is an ordinary order of work, and refusing it would block a
+  legitimate sequence to prevent a state the author is about to leave anyway — and
+  the response carries a notice saying how many embedded components are not live.
+
+  Which states count as published is not decided a second time. The check reads
+  the component store under a published scope and treats the ids that do not come
+  back as the answer, so the query service keeps owning a rule a project can
+  extend with public states of its own. That also collapses two cases worth
+  collapsing: an unpublished component and a deleted one leave the same hole, and
+  the author's next move is the same for both.
+
+  It asks the renderer's own discovery rather than walking stored documents. That
+  is not an optimisation, it is the difference between two questions: reachability
+  is decided after an instance's overrides have chosen a component, under the
+  composition cap, over the tree the repair pass retained. A walk answers before
+  all three, so it names components a visitor never meets — a condition-gated
+  instance, slot content the chosen definition discards, an id an override
+  replaced — and misses ones it does. `unsuppliedComponentIds` is exported from
+  `@nextlyhq/blocks-react` so a caller outside the render can ask the question
+  without building a second traversal, which is what this now uses.
+
+  That also settles nesting for free: a published component embedding an
+  unpublished one is a hole the renderer meets one level down, and the discovery
+  already runs to a fixed point.
+
+  It reads one component field, the one the renderer reads, rather than every
+  blocks field a store happens to carry.
+
+  It stays silent where it cannot decide. A localized component store publishes
+  per language on a companion row, so a published-scoped read answers for no
+  language in particular and would report live components as missing; a notice
+  that fires on a case it cannot decide is one authors learn to dismiss. It also
+  declines inside a caller-owned transaction, where it would read a database that
+  does not yet contain the write it was called for.
+
+  The condition is the state the write LEAVES BEHIND rather than the transition
+  into it, so dropping an unpublished component into an already-live page reports
+  too — the case a publish-time-only rule would miss. It requires the collection to
+  own the Draft/Published lifecycle, because `status` is an ordinary field name a
+  project may use for its own vocabulary and the name alone answers nothing. And it
+  says nothing on a working-draft save: a pending draft keeps the live parent's
+  `status`, so it is indistinguishable from a publish by its own fields while the
+  document a visitor loads has not changed at all.
+
+  To make that last one answerable, a write that stores a working draft now stamps
+  `_isWorkingDraft` on the document its post-commit hooks receive, not only on the
+  response. The read overlay already marked it; a hook could not ask.
+
+  The lookup is chunked. A collection query is clamped to 500 rows and returns a
+  subset silently, while a document may reference far more instances than that, so
+  one unbounded query would report every published component past the first page
+  as unpublished.
+
+  It reads what the adapter actually stored. JSON columns come back as text on
+  SQLite and any adapter that stores them that way, and the write path parses them
+  after these hooks run — so an object-only check found no documents at all there
+  and reported nothing for every page, silently.
+
+  It says nothing for a localized page collection, for the reason it says nothing
+  for a localized component store: publication happens per language on a companion
+  row whose status the write path deliberately does not merge into the document
+  its hooks receive, so the main row answers for no language in particular.
+
+  Bulk writes carry their warnings too. `respondBulk` already emitted them and the
+  admin dropped them at the response type, so an author publishing ten pages at
+  once was told nothing an author publishing one of them would have been told.
+  Both bulk hooks now report through the same presenter single-entry writes use.
+
+  A published component whose stored document cannot be read is no longer reported
+  as unpublished. Somebody published it, and republishing cannot repair a
+  malformed value — presence and readability are separate questions and the
+  resolver already reports them as different reasons.
+
+  The store read clears both identity channels, as the renderer's own component
+  read does: an omitted `user` or `req` restores whatever identity the pooled
+  reader was booted with, and an `afterRead` hook branching on the caller would
+  hand this check a definition the anonymous visitor never sees.
+
+  A warning names the row it is about wherever the server said so, so several
+  notices from one bulk write can be told apart.
+
+  A component the discovery cap stopped it from asking about is no longer named as
+  unpublished. The page does have a hole there, but nobody failed to publish
+  anything, and publishing the named component again cannot repair it.
+
+  A host that pointed the renderer at a different component store, or supplies
+  definitions from a custom source, can point the notice at the same store or turn
+  it off, and can name the single page field a route renders where a collection
+  declares several: the route is configured in the host's app and is not visible from the
+  write path, so a redirected renderer would otherwise be judged against a store it
+  does not read from.
+
+  Warnings now carry a severity. A post-commit hook could already tell a caller
+  that a side effect broke, by raising; there was no way to say something true
+  about a write that succeeded, and an advisory sent through the failure channel
+  arrives wearing a failure's code. Both travel in one array because they are one
+  question to a consumer, and the admin reports them differently: a save with only
+  an advisory is no longer phrased as though something failed, and a real failure
+  still owns the headline while the advisory travels beside it rather than being
+  dropped. Anything not explicitly marked an advisory is treated as a failure, so
+  a server that never sends the field cannot have its failures downgraded into
+  reassuring language.
+
+  The notice offers no action yet. Publishing the components alongside the page is
+  a separate capability, and copy promising an affordance nobody can reach is
+  worse than copy promising nothing.
+
+- [#1546](https://github.com/nextlyhq/nextly/pull/1546) [`e5b9788`](https://github.com/nextlyhq/nextly/commit/e5b9788975cc3b8a40853761d0ebcc789850cc52) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The readiness notice reads definitions the way the page renders them.
+
+  Relationship depth is no longer forced to zero. The renderer's component read
+  states no depth, so the collection service expands to its default before running
+  `afterRead` hooks. Forcing zero handed those hooks bare ids, and a hook whose
+  blocks output depends on an expanded relationship then produced a different
+  component graph than the page draws — missing an unpublished component, or
+  naming one no visitor meets.
+
+  A bulk write's warnings reach a consumer that renders its own feedback. They
+  were carried into the built-in toast only, so turning `showToast` off to handle
+  them yourself was the one route that could not see them: the presenter being
+  opted out of was the only thing reading the array. Post-commit hook failures
+  were lost the same way, not just readiness notices.
+
+- [#1537](https://github.com/nextlyhq/nextly/pull/1537) [`674584d`](https://github.com/nextlyhq/nextly/commit/674584d5beff4857f9ad907a37f4538fd7fdaf36) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Whether a page fits its block limit no longer depends on the order a
+  component's regions were set up in. When a component offers two regions and a
+  page fills one with something larger and one with something smaller, the
+  smaller content hands back room the larger one needs — but only after it has
+  been placed, so the page was accepted or refused according to which region
+  happened to be declared first. The larger content is now tried again once the
+  smaller has actually released its room.
+
+- [#1484](https://github.com/nextlyhq/nextly/pull/1484) [`712ef78`](https://github.com/nextlyhq/nextly/commit/712ef789d06ffe3db1db2a7e2ccb011b0d095be1) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The SQLite bootstrap reads the field-group registry's name from the catalog
+  instead of writing it out.
+
+  Six statements spelled `dynamic_components` as a literal. That is the spelling
+  the storage migration renames, and the catalog in `schemas/storage-format.ts`
+  is what makes that a rename rather than a search — a literal elsewhere is a
+  copy the rename cannot reach. The repository gates on this, and the gate was
+  failing on `main`.
+
+  No behavioural change: the constant resolves to the same string today. What
+  changes is that it will still resolve correctly after the registry moves.
+
+- [#1471](https://github.com/nextlyhq/nextly/pull/1471) [`56bf9c1`](https://github.com/nextlyhq/nextly/commit/56bf9c1f457877984d5ac9985d73e0816674f951) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A `db:sync` on an existing SQLite database no longer recreates the field-group
+  registry a migration moved away from.
+
+  The bootstrap replay added for existing databases ran every statement, including
+  `CREATE TABLE IF NOT EXISTS "dynamic_components"`. On a database whose registry
+  has been migrated to `dynamic_field_groups` that does not add a spare table:
+  `chooseRegistryTable` prefers the legacy spelling whenever it is present, so
+  every subsequent read and registration switches to the empty one and every
+  migrated component becomes unreachable.
+
+  The registry's `CREATE TABLE` is no longer replayed at all. Its five indexes
+  are, retargeted to whichever registry the database actually holds — an
+  installation created by the older fallback has none of them, and the rename
+  carries that gap across, so `db:sync` still reconciles them. A registry that is
+  genuinely absent is created by the system-table service, which resolves the
+  spelling before creating rather than writing a fixed name.
+
+  Which registry a database holds is resolved once, through the same catalog
+  resolver its readers use, and applied to both the fresh push bundle and the raw
+  DDL — so a database holding a migrated registry and no `users` table cannot have
+  the legacy spelling created for it by either path. When resolution cannot say,
+  neither path names a registry: a CREATE is additive and nothing undoes it.
+
+- [#1553](https://github.com/nextlyhq/nextly/pull/1553) [`cd8ad57`](https://github.com/nextlyhq/nextly/commit/cd8ad57224245aeba568da79f31fe254f137bc17) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Stop publishing the retired category as an npm keyword.
+
+  `nextly`, `@nextlyhq/plugin-form-builder` and `@nextlyhq/plugin-seo` each
+  listed `app-framework`, so the category the project moved away from was
+  searchable on npm, where more people meet it than meet the repository.
+  `nextly@0.0.2-alpha.62` carries it today.
+
+  The platform keyword becomes `page-builder`, which is the half of the
+  descriptor npm had no word for. The two plugins simply drop it: neither is a
+  framework, and the keyword was describing the host rather than the plugin.
+
+- [#1458](https://github.com/nextlyhq/nextly/pull/1458) [`6d1c03a`](https://github.com/nextlyhq/nextly/commit/6d1c03a4f0f01d195ec93d3ac89bd6d2eb694b99) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Rows in the tokens and classes panels named things without describing them.
+
+  A token row previewed only colours, so a shadow was an opaque string of
+  offsets, a size was a number with nothing to compare it against, and a weight
+  looked exactly like a number. Each kind that has a visual form is now drawn as
+  the thing it is: a shadow cast, a length measured, a weight and a family set in
+  themselves, and a duration shown by taking that long to cross its slot. A
+  number and a custom value are still shown as nothing, because neither has a
+  form to draw, and no value is previewed unless it can be resolved without the
+  site's token table — a reference resolved against the panel would show a colour
+  or a size the page does not have.
+
+  A class row named the class and counted the documents using it, and never said
+  what the class was for. It now lists the properties the class writes, compiled
+  by the engine rather than described a second time here, so what the row claims
+  and what the stylesheet carries cannot disagree. Because a class holds styles
+  for every state and breakpoint and a row can honestly show one, it shows the
+  base and says how many other places the class also sets something rather than
+  showing the base as though it were the whole story.
+
+- [#1468](https://github.com/nextlyhq/nextly/pull/1468) [`7560d27`](https://github.com/nextlyhq/nextly/commit/7560d27f18e530bcba51941fccbe5c09b8dc1cb3) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A font this installation agreed to store could not be served. The public byte
+  route bounded its read with a constant while `security.limits.fileSize` is
+  configurable, so a deployment accepting 20mb stored a 12MB font and then
+  refused it on every request — permanently, and with a status the author cannot
+  act on. The route now reads up to the same number the upload policy allowed,
+  which is the only defensible bound: below it the product declines to hand back
+  what it took.
+
+  A missing media row is also identified by the cross-realm brand rather than by
+  `instanceof`. A route handler and the shared media service can be instantiated
+  from different server bundles, and two copies of the package are two distinct
+  classes — so an absence raised by the other copy escaped to the generic
+  handler, which answers with a structured document, while a present-but-private
+  row answers with a blank 404. Telling those two apart is what the route exists
+  to prevent.
+
+- [#1462](https://github.com/nextlyhq/nextly/pull/1462) [`db4df47`](https://github.com/nextlyhq/nextly/commit/db4df47dcc7f5627c9f406d0ceecc620bcd53d1a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The Settings entry in the admin sidebar now sends each reader to the first
+  destination in the panel they can actually open, read off the panel's own
+  navigation table rather than a list maintained beside it.
+
+  An operator whose only settings-area grant was `manage-background-jobs` saw
+  the Settings entry, followed it, and landed on General Settings — a page whose
+  data answers to `manage-settings` and returns 403 — because the landing was a
+  hand-written chain of seven destinations that Background Jobs had never been
+  added to. Their one reachable screen was never offered.
+
+  A destination is now skipped when its own route is guarded more narrowly than
+  the link that shows it, so a reader holding only `read-api-keys` is no longer
+  sent to a page that turns them away.
+
+- [#1455](https://github.com/nextlyhq/nextly/pull/1455) [`414d92d`](https://github.com/nextlyhq/nextly/commit/414d92d7fcde43f4209c51308acf96e4b7ab6700) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Margin and padding now read as the box they describe. Instead of four stacked
+  rows — Block start, Block end, Inline start, Inline end — the four sides are
+  drawn around a small diagram, so which edge each value belongs to is something
+  you see rather than something you read.
+
+  The diagram follows the page being edited, not the admin. On a right-to-left
+  site the inline start is the right-hand edge, and that is where the control for
+  it appears, even while the admin itself is in English. Where the page cannot be
+  measured — before the canvas has drawn, or while a block is still loading — the
+  four labelled rows are shown instead, because a diagram that might be pointing
+  at the wrong edge is worse than words that cannot be.
+
+- [#1448](https://github.com/nextlyhq/nextly/pull/1448) [`9e79e11`](https://github.com/nextlyhq/nextly/commit/9e79e1150550c9ebff34f7feb7fdeb127d9d9911) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The page builder's inspector is easier to read. A property's label now sits
+  beside its control instead of above it, so a group of settings fits on screen
+  together instead of being scrolled through — and the panel re-stacks on its own
+  when you drag the rail narrow.
+
+  Settings offering three short choices, such as font style, are now shown as
+  three buttons rather than a menu you have to open to see them.
+
+- [#1466](https://github.com/nextlyhq/nextly/pull/1466) [`b0e7cd0`](https://github.com/nextlyhq/nextly/commit/b0e7cd062b8195b7280f83133bd6e4d740d399ad) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The SQLite bootstrap DDL now creates the indexes it declares, and the three
+  schema-registry tables it never created at all.
+
+  This DDL runs where drizzle-kit's push cannot — no TTY, no interactive
+  confirmation — so it is the path taken exactly where nobody is watching. A
+  missing index breaks no insert; it makes every query against that column a
+  scan, which is why fifty of them were declared on all three dialects and
+  created on none.
+
+  Forty-three added in total: twenty-eight on tables the bootstrap already
+  created, and fifteen on `dynamic_collections`, `dynamic_singles` and
+  `dynamic_components`, which are now created too. A UNIQUE constraint the DDL
+  already spells inline — on the column, or as `UNIQUE(a, b)` at the end of the
+  table — is the same index under a name SQLite chooses, so those are recognised
+  rather than emitted a second time; a named index beside one builds a second
+  B-tree over the same columns for every write.
+
+  Only `dynamic_singles` was entirely absent — nothing creates it outside tests.
+  The other two are created by `SystemTableService`, which the same fallback calls
+  next, but from its own hand-written DDL that has 19 columns on PostgreSQL and 21
+  on SQLite where the schema declares 25. Those definitions disagree with the
+  schema and with each other. The statements added here are generated from the
+  Drizzle column configs and run first, so on SQLite the complete definition is
+  the one that wins.
+
+  These statements now also reach databases that already exist. The caller
+  returned as soon as it saw a `users` table, so the only path that ran them was
+  the one taken by a database that did not exist yet — leaving `nextly db:sync`,
+  the documented recovery command, unable to supply anything added since an
+  install was created. An existing SQLite database is reconciled instead; every
+  statement is IF NOT EXISTS, so re-running adds only what is absent. A table
+  whose COLUMNS drifted is not repaired this way, since SQLite skips a CREATE
+  TABLE wholesale once the table exists.
+
+  The guard that was meant to catch this could not see two of the tables. It read
+  the schema SOURCE for a literal table name, and `dynamic_components` is built
+  by a factory from a computed one, so it was absent from every comparison and
+  passed by absence. It now walks the dialect bundle — the same object graph the
+  ORM writes through — and a new integration test executes the DDL against a real
+  SQLite database and reads the indexes back, rather than comparing two strings
+  drawn from the same repository.
+
+- [#1433](https://github.com/nextlyhq/nextly/pull/1433) [`b4c041d`](https://github.com/nextlyhq/nextly/commit/b4c041d2ef47af8328c82c8998dad6b5f8dff941) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The page builder's chrome now spends its width on the document rather than on
+  its own labels, and the page reads as a sheet.
+
+  The canvas declared no background, so it inherited the editor's frame — and a
+  block declares none of its own, so the grey showed through the document. What
+  an author composed looked nothing like what a visitor loads, which is the one
+  thing the canvas exists to show. It now carries the page surface, a border and
+  room around it. The border rather than tone alone, because which surface is
+  lighter INVERTS between modes: the page is 98.84 against a 96.52 frame in light
+  and 0 against 10.68 in dark, so a separation carried on the surfaces would need
+  tuning twice and checking twice, while one border token sits outside both on
+  either side of that inversion.
+
+  Everything that makes the sheet is stated on the PAGE rather than on the region
+  around it, so several side by side — one per breakpoint — would each carry
+  their own edge with nothing to revisit.
+
+  Exit, the breakpoint manager and the tier tabs are glyphs now. Together they
+  were spending about 170px of a bar whose job is to get out of the way, and
+  every one of them kept its accessible name and gained a tooltip.
+
+  A tier's glyph is chosen by the WIDTH it applies at, never by its label. A tier
+  is named by the site — "Tablet" on one, "Kiosk" or "Watch" on another — so a
+  lookup keyed by name answers for the words somebody happened to use and has
+  nothing to say for every site that chose differently.
+
+  The SELECTED tier keeps its word. The width readout beside these tabs is
+  deliberately empty while the selection already names the applying tier, so
+  icon-only throughout would take the name off the screen entirely in the
+  commonest state; two tiers can also share a glyph, and identical pictures would
+  then be the only thing telling them apart.
+
+  Zoom gained the stepper that its own model already supported: `steppedZoom` was
+  exported with no caller, so stepping was reachable from a host and not from the
+  editor. Each direction disables where the step list ends, so a button that
+  cannot move says so rather than depressing and changing nothing.
+
+- [#1445](https://github.com/nextlyhq/nextly/pull/1445) [`d9c3e98`](https://github.com/nextlyhq/nextly/commit/d9c3e9897b1e9f62f24d58f0f10ee65a0d2219fb) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The page builder says why a block will not go where you aimed it.
+
+  Dragging a block on the canvas used to answer one question — a line showing where
+  it would land between its siblings. Everything else was silent. A block gave no
+  sign it could be picked up, nothing showed which block was moving once it was,
+  and a region that would not accept it simply showed no line at all, which reads
+  as the editor not noticing rather than as an answer.
+
+  Dragging now says all of it. A block shows a grab cursor before the press and a
+  grabbing one during; the block being moved dims where it sits, so it stays
+  readable instead of being replaced by a floating copy; the container that will
+  receive the block is outlined, which the line alone cannot say when the same
+  coordinate is the bottom edge of one container and the top edge of the next.
+
+  And a refusal explains itself. Dropping a block into a container that will not
+  take it shows a "no drop" cursor, outlines that container, gives the reason, and
+  follows it with the remedy — so "no" arrives as an instruction rather than as
+  nothing happening.
+
+  The three reasons a drop can be refused each get their own wording, because they
+  need different things from an author. A slot that admits only certain blocks
+  says what it takes. The other two say where the block you are holding is allowed
+  to go, which is a different fact and the one you can act on: a block refused by
+  a container has not learned anything about that container's appetite, it has
+  learned which containers will have it.
+
+- [#1477](https://github.com/nextlyhq/nextly/pull/1477) [`245ef1f`](https://github.com/nextlyhq/nextly/commit/245ef1fbf32cba16fca7e880390e8735655fd130) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The dashboard's save-failure alert is legible at its edges.
+
+  Its border was drawn at 40% strength, which composites to 1.69:1 against the
+  page -- below the 3:1 a border carrying meaning has to meet. It is drawn at full
+  strength now, matching every other error surface in the admin. Nothing else about
+  the message changes.
+
+- [#1429](https://github.com/nextlyhq/nextly/pull/1429) [`1e24731`](https://github.com/nextlyhq/nextly/commit/1e2473199ad77041c647dc23b1dc5ed7ad1cf7c8) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The page builder now says when it is holding work the document does not have.
+
+  The editor takes the whole window and asks the admin to hide its chrome, so
+  nothing outside it is on screen while an author is editing. Inside it, the only
+  reading was the publish pill — and that pill answers a different question,
+  "is this page live?", which has no answer on a collection that declares no
+  publish lifecycle. There it renders nothing, correctly, and took the only
+  indication of unsaved work down with it. An author editing such a page had
+  nothing in the toolbar to read at all, while `documentDirty` was already being
+  computed a few lines away.
+
+  Whether work is outstanding and whether the page is live are two questions, so
+  they are now two readings. The dirty state is derived once and both read it, so
+  they cannot disagree about it.
+
+  The new reading is SILENT when nothing is outstanding, rather than saying
+  "Saved". The same `false` is produced by a document that was never saved — a
+  blocks field renders inside a create form and inside previews — so a positive
+  claim there would tell an author their work was safe on the strength of nothing
+  having been typed. That asymmetry is the point: the state worth interrupting
+  someone for is the one where leaving loses something.
+
+- [#1441](https://github.com/nextlyhq/nextly/pull/1441) [`c1a1668`](https://github.com/nextlyhq/nextly/commit/c1a1668c5abfe0da38e5f9b27a58d13e80179d84) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A page's edit screen now shows the page itself. Where the page-builder field
+  previously drew a grey box listing internal block type names — `core/section`,
+  `core/text ×3` — it draws a live, read-only miniature of the page, the number of
+  blocks it holds, and one clear button into the page builder. An empty page
+  invites you to build it rather than reporting that it is empty.
+
+  The miniature uses the same renderer that draws the published page, so what you
+  see on the edit screen is what a visitor gets. It waits for your site's own
+  styles before drawing, rather than showing a page styled with defaults your site
+  does not use.
+
+- [#1549](https://github.com/nextlyhq/nextly/pull/1549) [`e9b505a`](https://github.com/nextlyhq/nextly/commit/e9b505ac5fb922263e336985b1277a8d04b79cf5) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The op vocabulary is part of the engine.
+
+  `BuilderOp`, `applyOp`, `applyOps`, `OpError`, `positionOf` and the shapes
+  around them now live in `@nextlyhq/blocks-engine` and are re-exported by
+  `@nextlyhq/builder` unchanged. Applying an edit is not an editing-surface
+  concern: a plugin route, a script or an agent has the same right to the
+  operations the editor applies, and each would otherwise grow its own vocabulary
+  that agrees with this one only until one of them changed.
+
+  Nothing about the operations themselves changed. The relocation is byte for
+  byte, and the existing suite of 202 operation tests runs unchanged against it
+  through the builder's re-export — which is the point of leaving those tests
+  where they are.
+
+  They live in the engine's own module rather than beside the reserved operation
+  names. `format.ts` re-exports those names, and the vocabulary reaches the
+  registry and the validators, which pull in a glob matcher and a CSS parser. That
+  entry point exists so a generator or a schema publisher does not load the
+  validator, the migrations and the style compiler; putting the vocabulary beside
+  the names would have pulled all of it through, which its boundary test caught.
+
+  `@nextlyhq/builder/ops` is unchanged and still published: a server action or an
+  agent importing it keeps working exactly as before.
+
+- [#1451](https://github.com/nextlyhq/nextly/pull/1451) [`bfc42e8`](https://github.com/nextlyhq/nextly/commit/bfc42e89b262640c0b40c0d63600fc0eefd7e425) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The tokens and classes panels opened with machinery and never said what they
+  were for. A mode switch, a DTCG import/export control and eight tabs of
+  vocabulary came before any sentence about what a token does to the site, so an
+  author who did not already know the concept had nothing to read.
+
+  Each panel now opens with a sentence in the author's words. The tokens panel
+  says that every block using a token follows it, on every page, and names the
+  mode being edited — a token can hold separate light and dark values, and an
+  edit reaches only the one on screen. The
+  classes panel says a class is a saved set of styles and that you apply one
+  beside the style controls — which explains the split rather than leaving the
+  absent create button reading as a missing feature.
+
+  The eight token tabs become one grouped list. A kind with no tokens is now
+  absent rather than an empty tab to click into and find nothing, and search
+  crosses every kind at once, which the tabs could not do without silently
+  crossing the boundary they asserted. Because a list of only non-empty groups
+  leaves nowhere to stand to make the first token of a kind, creation now names
+  its kind instead of relying on which tab was open.
+
+  Empty states report what is absent, say what belongs there and offer the next
+  action. The classes panel's "Not in index" list is the one that most needed it:
+  an empty result there is good news, and it used to read as a failure.
+
+  The DTCG import and export control moves below the tokens it operates on.
+
+- [#1543](https://github.com/nextlyhq/nextly/pull/1543) [`4a70c95`](https://github.com/nextlyhq/nextly/commit/4a70c95a9df8657f285b37b87024d9d11be65f2d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Index the dashboard's pending-edit reads, and resolve the content registry once per query.
+
+  `nextly_versions` gains `nextly_versions_pending_edits_idx`, covering the
+  predicates that define a working draft plus the collection filter and the
+  cursor's ordering. Every existing index on that table leads with `scope_kind`,
+  which these queries never constrain, so both dashboard cards answered with a
+  full table scan: the count's row budget bounded the rows it received and
+  nothing about the work the database did to find them.
+
+  The pending-edit walk now resolves the registry and the configured locales ONCE
+  per query rather than per page, and derives its candidate collections from the
+  same snapshot it judges rows against. A registry that cannot be enumerated is
+  reported rather than silently contributing nothing, so the cards refuse instead
+  of stating that no document has unpublished edits.
+
+  Core-schema reconciliation now compares INDEXES, not columns alone. The core
+  snapshot omitted them, and the diff skips a table whose index data is absent, so
+  an index-only release produced no operations at all and `nextly migrate`
+  reported the core schema as up to date: the index reached newly created
+  databases and no existing one. Partial indexes stay out of the comparison, since
+  the snapshot type has nowhere to record a predicate and claiming one
+  unconditionally proposed the same index on every run.
+
+  A count that could only establish a floor now renders as one in every archetype
+  that draws it; `stats` cells previously formatted the total alone and presented
+  a bounded number as exact. A linked stats cell also names its count in the
+  link's accessible name — an `aria-label` replaces the element's descendants, so
+  a screen reader announced the destination with no number at all.
+
+- [#1419](https://github.com/nextlyhq/nextly/pull/1419) [`f4f464d`](https://github.com/nextlyhq/nextly/commit/f4f464d2ff4dc6492da6890da3b603ac3949a802) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The email template preview now shows what recipients receive.
+
+  The editor interpolated `{{variables}}` in the browser, which was a second
+  implementation of a render the server already performs — and the two had
+  drifted. The preview omitted the preheader entirely, and reported an empty
+  plain-text part for every template that does not author one, when the send path
+  derives that text from the body and delivers it. Both were invisible: a preview
+  that leaves something out looks correct.
+
+  The editor now renders through `POST /api/email-templates/preview`, which
+  composes a draft with the same function the transport uses, so the two cannot
+  disagree. The browser-side copy is deleted rather than kept in sync.
+
+  Also fixed in the renderer itself: a layout row rendering ITSELF resolved
+  `{{appName}}` and `{{year}}` against nothing and emitted `<footer> </footer>`.
+  Those values were supplied only to a wrapper that a body was spliced into, but
+  it is the same markup either way. An explicit value from the caller still wins.
+
+  The preview frame now draws at the 600px width HTML email is authored against
+  rather than 640, and scales to fit the pane instead of reflowing the email to a
+  width no recipient uses — with the real width and the scale shown, so a frame
+  drawn smaller is never mistaken for one at true size.
+
+- [#1418](https://github.com/nextlyhq/nextly/pull/1418) [`bfd8b83`](https://github.com/nextlyhq/nextly/commit/bfd8b8325bbe90d061ea8de5a39bfde0c3658349) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Let the preview control keep its name and show its progress. Its menu trigger carried a fixed accessible name, which overrode the label a collection had declared — so a control reading "View page" on screen answered to "Preview options" and to nothing a voice-control user could see. And once copying a link moved into that menu, choosing it closed the menu and took the only spinner with it, leaving a slow mint with no sign it had started. The trigger is now named after the control it belongs to, and it carries the copying state itself.
+
+- [#1438](https://github.com/nextlyhq/nextly/pull/1438) [`b77d772`](https://github.com/nextlyhq/nextly/commit/b77d772a051a22c96c0549d8df831f0dcda7e0e4) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `GET /api/jobs` reports what the background queue recently did.
+
+  A background job that fails is invisible. There is no request to inspect, no
+  status code and no page that went blank — so a scheduled release that did not
+  publish looked exactly like one that was not due yet. The outcome, the attempt
+  count and the error were all recorded on the row and readable only with SQL.
+
+  Each row carries a DERIVED status beside its stored state, because the stored
+  vocabulary cannot express the distinction that matters most. A job whose attempt
+  failed and which will try again is written back as `pending`, indistinguishable
+  by state from one that has never run — while `failed` is terminal and means the
+  work will not happen without a person. `jobDisplayStatus` separates them from
+  the attempt count, in one place, so a client cannot derive a second answer.
+
+  Read-only on purpose: no retry, no cancel, no requeue. Each is a write on
+  already-authorized work and needs its own decision about who may perform it,
+  and shipping them beside a read would settle those questions by omission.
+
+  Gated on `manage-background-jobs`, the permission the trigger already uses.
+  `lastError` carries whatever a handler threw, which is internal detail rather
+  than content, and there is no seeded read permission to widen to — inventing one
+  would change what preset roles grant as a side effect of adding an endpoint.
+
+  Terminal rows are pruned on the retention window, seven days by default, so this
+  is recent history by construction rather than an archive.
+
+  `meta.hasNext` is answered by a probe row rather than stated. Reading one row
+  beyond the limit is what proves more exists; a full page cannot, because a queue
+  whose length is an exact multiple of the limit would then claim a next page that
+  is empty. A monitor that reports itself complete while showing a slice is how an
+  operator concludes the failure they are hunting never happened.
+
+  `lastError` is delivered exactly as it was recorded. The response opts out of
+  the global timezone rewrite, as the webhook delivery endpoints do: that pass
+  rewrites every date-looking string in a payload by value, and a handler that
+  surfaces a timestamp as its whole message would have had the debugging record
+  altered. The row's own timestamps arrive in UTC, which is the same fallback the
+  pass takes when no timezone is configured.
+
+  The recent-jobs ordering index is now created on SQLite, not merely declared.
+  A Drizzle index declaration reaches an existing database through nothing —
+  core reconciliation compares names and columns only, so index-only drift
+  produces no operations — and SQLite's core DDL, which re-runs idempotently, had
+  no statement for it. PostgreSQL and MySQL create it on a fresh push; repairing
+  an existing installation on those dialects needs a general core index step in
+  `nextly upgrade`, which is filed rather than built here.
+
+- [#1415](https://github.com/nextlyhq/nextly/pull/1415) [`7892e77`](https://github.com/nextlyhq/nextly/commit/7892e773b7c3150b355b638c33f2137a8956fda9) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The reason a save was refused now stays on screen.
+
+  The message explaining a rejected save sat in the same strip as the variable
+  chips, which scrolls once a template declares enough of them — so on those
+  templates the explanation could sit just out of view and saving looked silent
+  again. The message now has its own row and cannot scroll away.
+
+- [#1435](https://github.com/nextlyhq/nextly/pull/1435) [`2b24391`](https://github.com/nextlyhq/nextly/commit/2b243917a54c527955a4d407428ebd391ff75b13) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The webhook signing secret is now the first thing on the edit page, not the last.
+
+  Setting up an endpoint means copying the signing secret into the receiving
+  system. That value sat below every configuration field, so the task a person
+  arrives to do was reachable only by scrolling past the form they had not come to
+  edit — and on a short window it was not visible at all.
+
+  The secret, its rotation controls and the link to the delivery log now sit in
+  one panel under the page header, which is where an integration credential lives
+  in every service a developer already uses. Configuration keeps its own reading
+  order beneath, and deletion stays at the bottom: the one irreversible act on the
+  page is not something to put where a reader lands.
+
+  Nothing changes about who may do what. Rotation was never gated on the update
+  permission and still is not, which is pinned by a test so a later reading of
+  `canManage` as "may rotate" has to be a deliberate change.
+
+  The create page shows no panel, because an endpoint has no secret until it
+  exists.
+
+- [#1439](https://github.com/nextlyhq/nextly/pull/1439) [`cee45fd`](https://github.com/nextlyhq/nextly/commit/cee45fdb0dd8512fecea4d30a9ad3a3cf4d6c15f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The whole dashboard is drawn by one grid.
+
+  Core's four dashboard cards — the seed prompt, collection counts, singles and the
+  team summary — are widgets now, registered through the same `registerWidget` door
+  a plugin uses and resolved from reserved `core#` component paths. The dashboard
+  page mounts a welcome header and the grid; nothing else.
+
+  Until now the grid drew only what plugins contributed, and nothing contributes a
+  widget yet, so a real dashboard rendered none of the widget system while the
+  cards a user actually saw sat hardcoded above it.
+
+  Two new optional fields make that possible without changing what anyone sees:
+  - `defaultOrder` states where a widget sits. Position previously depended on
+    which channel a widget arrived through, since registrations resolve after
+    contributions. Absent sorts last, so every existing dashboard keeps its order.
+  - `chrome: "none"` lets a `custom` widget decline the card frame when it is
+    already a designed surface. Refused on every archetype core draws, where the
+    card owns the title and the busy state.
+
+  A grid cell whose widget draws nothing now collapses, so a card that hides itself
+  leaves no gap.
+
+- [#1555](https://github.com/nextlyhq/nextly/pull/1555) [`01b9ddf`](https://github.com/nextlyhq/nextly/commit/01b9ddfaac42e141005b155f7cd8d9b7da2e32ac) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Two finished dashboard surfaces reached no reader, and both are now cards on the
+  widget grid.
+
+  `system:releases` shipped as a registered, access-controlled widget source with
+  no widget naming it, so nothing on any dashboard could ask it anything. It now
+  backs `core/upcoming-releases`, a list of what is scheduled and not yet shipped,
+  soonest first. It is the one core card carrying a `requiredPermission`, because
+  `ReleasesService.find` authorizes by throwing: an ungranted reader would get a
+  card stuck in its error state rather than an empty one, so the card is hidden
+  from them instead — and its placement is kept in the stored layout, so widening
+  someone's grant brings the card back where it was.
+
+  The recent-activity feed had an endpoint and a component and nothing rendering
+  it; the dashboard drew the welcome header and the grid alone. `RecentActivity`
+  is now `core/recent-activity`, which also makes it hideable and reorderable like
+  every other card. Two controls on it were removed rather than moved: a
+  "Detailed Log" link whose destination was the dashboard the card sits on, and a
+  "Sync Previous Events" button with no handler behind it. There is no audit-log
+  page for either to point at, and a dashboard feed showing a fixed handful of
+  rows with no in-widget pagination is what the products we compared against all
+  do. Its chrome now matches the cards beside it.
+
+  A core card names its body as a `core#` string in `nextly` and that string is
+  bound to a component in `@nextlyhq/admin`. The two packages do not depend on
+  each other, so nothing could notice one naming something the other never
+  registered — a card would quietly draw the unresolved placeholder. A test now
+  holds the two lists against each other.
+
+  A widget's `requiredPermission` now also accepts an ARRAY, meaning any-of. A
+  single slug could not describe the rule the services behind these cards apply:
+  `ReleasesService.authorize` treats `create` or `publish` as satisfying `read`,
+  deliberately, so a role granted only `create` can see the release it just made,
+  and the admin's `canViewReleases` capability lists all three. A card gated on
+  the read slug alone was a third encoding of that rule and the only one that
+  disagreed. Existing single-slug declarations are unchanged.
+
+  Two shipped list cards selected more fields than the `list` archetype draws. It
+  renders the first two and silently ignores the rest, so `core/recently-edited`
+  showed a collection beside an opaque document id and never the timestamp, on a
+  card whose description promises "newest first". Both now select two, and the
+  renderer declares how many it draws so a test can hold declarations to it.
+
+  A widget's permission gate is now decided in ONE place, `nextly/widget-gate` — a
+  browser-safe entry point with no imports of its own. The layout endpoint and the
+  admin both decide whether a reader may be told a card exists, and they had two
+  implementations of that answer: a card the server sends and the browser hides is
+  invisible with nothing logged anywhere. The rule is parameterised by how a
+  single slug is answered, so the server passes its resolved verdicts and the
+  browser passes the session's predicate.
+
+  A contributed any-of gate no longer goes missing. Boot accepted an array through
+  the shared validator, but the summary layout resolution reads was built by a
+  string-only reader that dropped it — so the layout endpoint saw no gate and
+  published the card's id and default placement to every authenticated reader
+  while the browser hid it.
+
+  List and table cells are now PRESENTED by the kind their source declared, rather
+  than printed. Every source already declares its date fields as dates and that
+  declaration stopped at the server, so a row drew `2026-09-01T07:00:00.000Z` on
+  cards whose whole subject is when. `WidgetResultField` carries the type, and an
+  unrecognised one degrades to plain text rather than refusing the result.
+
+  Relative times on the activity feed update while the card is open. Deriving the
+  label at render instead of at fetch was half the repair; a card nobody touches
+  gets no renders, so `useNowTick` supplies them.
+
+  Widget date cells honour the admin's configured timezone. General Settings
+  carries one and `GeneralSettingsSyncProvider` publishes it to the formatter
+  every other admin date already uses, so a cell reading the browser's own zone
+  made these cards disagree with the dates beside them for any administrator who
+  had set one.
+
+  The admin derives the presentable field kinds from core's
+  `WIDGET_SOURCE_FIELD_TYPES` instead of restating them. Hand-keeping the list
+  meant core could add a kind, the server emit it, and the browser silently erase
+  it on the way in — the cell falling back to raw text with nothing reporting that
+  a presentation had been lost.
+
+- [#1447](https://github.com/nextlyhq/nextly/pull/1447) [`801464b`](https://github.com/nextlyhq/nextly/commit/801464b25ec8ba8e92eb79bff13e2d3896f84dc9) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Background jobs are visible in the admin, under Settings.
+
+  A job that fails is invisible. There is no request to inspect, no status code
+  and no page that went blank, so a scheduled release that did not publish looks
+  exactly like one that was not due yet. `GET /api/jobs` made that readable; this
+  is the screen that reads it.
+
+  Read-only, and that is the design rather than a first step. Retry, cancel and
+  requeue are writes on already-authorized work, each needing its own decision
+  about who may perform it, and offering them beside a read would settle those
+  questions by omission.
+
+  Failures are stated ABOVE the table, because the question that brings someone
+  here is almost always "did the thing I expected happen", and a red row twelve
+  lines down is a worse answer than a sentence at the top. The notice is its own
+  component and fetches and authorizes for itself, so a release or a webhook page
+  can mount it beside the object whose work failed by adding one element. It stays
+  silent when nothing failed, when the window is still loading, and for a viewer
+  who may not read jobs — a notice that appears routinely is one its reader learns
+  to skip.
+
+  A retrying job is deliberately not presented as a failure. It is the system
+  healing itself and needs nobody; colouring it like a dead job is the documented
+  mistake in queue tooling, which raises an alarm for the harmless case and buries
+  the one that matters. `failed` is the only red pill on the screen.
+
+  Two sentences keep the screen honest. It says when the window is truncated,
+  because otherwise fifty rows read as the whole story. And it states the
+  seven-day retention, because a list that silently forgets is one an operator
+  reads as proof a job never ran.
+
+  The grants that reveal the Settings panel are now read off the panel itself.
+  A capability list decides whether the rail entry appears at all, separate from
+  the gate on each destination inside it, and it was maintained by hand beside the
+  navigation table — so Background Jobs was added to one side only, its own gate
+  passed, and an operator holding just `manage-background-jobs` was stopped by the
+  rail above it, with the page reachable solely by typing its URL and nothing
+  erroring to say so. The list is now derived from the navigation, so a
+  destination added to the panel reveals it by construction and the same omission
+  cannot be made twice.
+
+  Two enumerations of the Settings panel became one. Whether the rail entry
+  appears and whether `/admin/settings` opens at all were each maintained by hand
+  beside the navigation table, so Background Jobs was added to the panel and to
+  neither — and fixing only the first produced a rail entry that led to a page
+  which turned the operator away. Both now read the table, so a destination added
+  to the panel is both visible and reachable by construction.
+
+  The failure summary asks the SERVER for one task's jobs. It was fetching the
+  global recent window and filtering it, which filters rows a busier task has
+  already crowded out: mounted beside a release, it would have stayed silent about
+  that release's failure whenever webhook deliveries were noisier. The endpoint
+  takes a `slug` and narrows in the query, before the limit.
+
+  Which statuses need attention, and which stored states express them, are one
+  declaration. A predicate saying "this needs a person" and a list saying "select
+  these rows" are the same decision at two layers, and written separately they
+  agree only until a second actionable status is added — at which point the list
+  goes stale and the database discards the new failures before the predicate can
+  see them. The list is now computed from the same table the predicate reads, and
+  a test derives that table from the status function rather than trusting it.
+
+  An unknown job state is refused rather than dropped. Dropping looks
+  conservative and inverts the request: with every name dropped the filter
+  disappears, so `?state=faield` returned a successful read of every state — the
+  widest possible answer to a request for a narrower one.
+
+  Job timestamps render through the admin's configured formatter. An installation
+  sets a timezone and a date format; a local `toLocaleString` reads the browser's
+  instead, so the same instant appeared two different ways on one page and nothing
+  said so.
+
+  The table narrows on the SERVER too. Once the summary started asking the
+  database for failures, a locally-filtered table could show nothing under a
+  notice reporting one — the two halves of one screen disagreeing, because only
+  one of them had asked. Choosing a status now sends the stored states that can
+  produce it, and the client separates only the statuses that share a state.
+
+  "Needs attention" is total over wire strings. A newer server can send a status
+  this build has never heard of, which `jobStatusPresentation` already degrades
+  for; the predicate indexed its table directly and threw on that key, taking down
+  the page whose job is to report that something is wrong. It answers false for an
+  unfamiliar status, so the summary keeps two rules rather than one: a status the
+  core calls actionable is kept, and so is one this build does not recognise —
+  because the rows a stale client would otherwise drop are exactly the new kind of
+  failure nobody has seen yet. What it drops is only what it knows to be quiet.
+
+  A failed job is described as terminal, not as having spent its attempts. The
+  runner returns terminal immediately when the identity it would run as is gone,
+  so a job can reach that state on its first attempt, and telling an operator the
+  retries were exhausted sends them looking for a backoff that never happened.
+
+  An expanded error keeps an operable label. Hiding every child of the disclosure
+  on open left an empty control — nothing to click to collapse it and nothing for
+  a screen reader to announce.
+
+  It also asks for FAILURES rather than sifting recent rows. A window is the most
+  recent N jobs, so N healthy ones running after a failure push it out — and a
+  summary that looked inside that window would report nothing wrong with the
+  confidence of a check it never performed. The endpoint takes stored states, and
+  the core publishes which of them need attention.
+
+  A long error is readable without a mouse. A clipped line with the full text in a
+  `title` is unreachable on touch, which is where a queue often gets checked; a
+  long error is now a native disclosure, operable by pointer, touch and keyboard.
+
+  A failed read no longer looks like a healthy queue. When the request errors
+  there is no data, and rendering nothing there is exactly what "nothing failed"
+  renders — telling an operator that nothing needs attention when the truth is
+  that nothing could be checked. It now says the queue could not be read.
+
+  Retention is presented as the DEFAULT, not as the installation's policy. A host
+  passing `retentionMs` to `runJobsPass` keeps rows for another period, and `null`
+  disables pruning entirely; nothing on the read path can see which was chosen, so
+  a flat "removed after 7 days" is a claim the screen cannot support — and this is
+  the sentence operators are meant to trust about absent rows. The number itself
+  now comes from the core's own constant, moved to a leaf module so a client
+  importing it does not pull the Direct API graph along with it.
+
+  "Needs attention" is asked of the core's `jobNeedsAttention` rather than
+  compared against `failed` here, so a second actionable terminal state cannot be
+  silently omitted from the notice while the exhaustive presentation map goes on
+  compiling.
+
+  A due time reads the schedule as well as the retry. `runAt` is when a job asked
+  to run and `nextAttemptAt` is when a failed one will try again; reading only the
+  second showed a dash for a scheduled release, which is the case that brings
+  someone to this screen.
+
+  The failed-job reason stays in the narrow render. `hideOnMobile` removes a
+  column from the card view rather than truncating it, so marking the error text
+  that way left a phone showing that a job failed with no way to read why.
+
+  The status vocabulary is imported from the core rather than restated. `nextly`
+  now publishes `nextly/api/jobs-list-types`, and the wire item is DERIVED from
+  the row the route emits, so a field or a status added on the server reaches the
+  admin's types without a second edit — and an unfamiliar status still renders
+  verbatim rather than blank, for a server ahead of the client.
+
+- [#1520](https://github.com/nextlyhq/nextly/pull/1520) [`9f8aaec`](https://github.com/nextlyhq/nextly/commit/9f8aaeccf015bd3790a4577084334a206cd37835) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The dashboard can show what ships next: `system:releases` is the first widget
+  source answered by a domain service rather than compiled to a collection query.
+
+  Asking for it honestly needed one change underneath. `findReleases` ordered
+  recent-first, which is right for "what happened" and wrong for "what is coming":
+  a limited query for the next few releases returned the FURTHEST OUT ones, with
+  real rows in a plausible order and nothing in the result to say so. It now takes
+  an `order` option, defaulting to the existing recent-first behaviour so no
+  current caller changes, and NULLS LAST is stated in both directions — the
+  default differs per dialect, so an unscheduled draft would otherwise be the
+  "next release" on some databases and not others.
+
+  The card asks a fixed question and refuses a `where` or `sort` rather than
+  accepting one and discarding it, publishes three of the release row's eleven
+  columns, and hands the releases service the caller so that service's own
+  `authorize` remains the only rule deciding which releases anyone sees.
+
+  Two fixes to the source machinery itself. `POST /api/dashboard/query` decided a
+  system source was usable from its KIND alone, which admitted one nothing had
+  registered a resolver for — and every message past that point is specific, so an
+  undeclared field was answered in detail for a registered source and generically
+  for an invented one, distinguishing the two. The endpoint now asks the executor
+  the same question the executor asks, from one shared implementation. And the
+  boot-time registry reset cleared the widget sources without clearing their
+  resolvers, so a removed or renamed system source left its resolver addressable
+  for the process lifetime, holding whatever its closure captured.
+
+- [#1452](https://github.com/nextlyhq/nextly/pull/1452) [`58edba2`](https://github.com/nextlyhq/nextly/commit/58edba2fba1df9e4c03b8dd03506e5ea3e7bfb17) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Three follow-ups to the widget contract boundary.
+
+  `chrome` is a string in every version, and moving its closed vocabulary to the
+  registry took the shape check with it -- so `chrome: 42` was published as a
+  `WidgetChrome`. The renderer treats anything but `"none"` as `"card"`, so it
+  rendered and boot said nothing about a configuration its author got wrong.
+
+  The divergence rows now name the diagnostic they exist for. A fixture can
+  violate more than one rule -- `{ defaultSize: "sm", minSize: "xl", maxSize: "sm" }`
+  breaks both size orderings -- so a row could stay green when its own rule was
+  deleted and another caught the input.
+
+  And an acceptance case for `{ component, chrome: "none" }` with no archetype,
+  which is the typed and renderable form: resolution supplies `custom`, where
+  `"none"` is legal. Nothing else exercised that standing through the chrome rule.
+
+- [#1491](https://github.com/nextlyhq/nextly/pull/1491) [`332677c`](https://github.com/nextlyhq/nextly/commit/332677c986a4f127ead48d8b5a46bac172ad91b2) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Name an entry the same way on every surface, and announce a refused schema
+  change only where the metadata actually moved.
+
+  Three spellings of "is this value a usable title" disagreed: one accepted a
+  whitespace-only string, one refused a number, and one refused a bigint. A
+  collection whose title field held an invoice number was named by it in the
+  editor and by its id on the page comparing its versions. There is now one rule,
+  `readableTitleText`, and the three callers ask it.
+
+  The dashboard's recent-entries projection also named fewer candidates than the
+  heading walk considers, so `label`, `subject` and `heading` were absent from
+  every real read and could never be reached. It now spreads from the same list
+  the walk reads.
+
+  The widget source refresh no longer announces a deferral on a reload that
+  carries only a refused change: that path skips the metadata sync by design, so
+  its registry still describes the unchanged table, and announcing one withheld
+  generated cards that were working.
+
 ## 0.0.2-alpha.62
 
 ### Patch Changes
