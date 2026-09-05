@@ -17,7 +17,7 @@ import { DOCUMENT_FORMAT_VERSION } from "./document";
 import type { BlockDocument, BlockNode, BlockOrigin } from "./document";
 import { applyOps } from "./ops";
 import { patternDigest } from "./pattern-digest";
-import { walkNodes } from "./tree";
+import { reidForestWithMap, walkNodes } from "./tree";
 
 const node = (
   id: string,
@@ -151,6 +151,43 @@ describe("the digest describes what a COPY would carry", () => {
     ];
 
     expect(patternDigest(marked)).toBe(patternDigest(bare));
+  });
+
+  it("IGNORES regenerated node ids, at every depth", () => {
+    // Inserting mints every id fresh, so no stored id reaches a copy. Hashing
+    // them made an identity-only rewrite of the pattern report every existing
+    // copy as stale at once.
+    const before = [node("p1", {}, { body: [node("deep")] })];
+    const after = reidForestWithMap([...before]).nodes;
+
+    expect(after[0]!.id).not.toBe("p1");
+    expect(patternDigest(after)).toBe(patternDigest(before));
+  });
+
+  it("still notices a cssId rename, which every copy DOES render", () => {
+    // The control against over-excluding. A minted replacement is built from
+    // the stored value — `pricing` becomes `pricing-<suffix>` — so renaming it
+    // changes what every copy renders and must change the digest.
+    const before = [node("p1", { cssId: "pricing" })];
+    const after = [node("p1", { cssId: "plans" })];
+
+    expect(patternDigest(after)).not.toBe(patternDigest(before));
+  });
+
+  it("still hashes a PROP an author happened to name id", () => {
+    // The control against the shortcut: a `JSON.stringify` replacer keyed on
+    // the name would drop this too, and it is content.
+    const before = [node("p1", { props: { id: "left" } })];
+    const after = [node("p1", { props: { id: "right" } })];
+
+    expect(patternDigest(after)).not.toBe(patternDigest(before));
+  });
+
+  it("still hashes an attributes.id, which the copy derives from", () => {
+    const before = [node("p1", { attributes: { id: "hero" } })];
+    const after = [node("p1", { attributes: { id: "banner" } })];
+
+    expect(patternDigest(after)).not.toBe(patternDigest(before));
   });
 
   it("does NOT ignore an origin deeper than a root, which IS copied", () => {

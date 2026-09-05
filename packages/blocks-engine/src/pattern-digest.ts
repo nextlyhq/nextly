@@ -29,11 +29,25 @@
  * upstream change would ask an author to accept an edit that would not alter
  * their page.
  *
- * And within the nodes, a ROOT's own `origin` is excluded, because inserting
- * overwrites it: the copy records the pattern it came from, never whatever the
- * stored pattern happened to say. Hashing it would make clearing an inert field
- * nothing copies report every existing copy as stale. Origins DEEPER than a
- * root are hashed, because those are copied as they stand.
+ * The rule inside the nodes is one question asked of each field: does a copy
+ * carry this, or does inserting regenerate it? A field the copy regenerates
+ * contributes nothing to any copy, so hashing it reports changes no author can
+ * see — and after an identity-only rewrite that means every existing copy reads
+ * as stale at once.
+ *
+ * EXCLUDED, because inserting replaces them outright:
+ *
+ * - every node `id`, which `reidForestWithMap` mints fresh at every depth;
+ * - a ROOT's own `origin`, which the insert overwrites with the pattern it is
+ *   copying from.
+ *
+ * KEPT, because the copy derives from them and a change to one is visible in
+ * every copy: `cssId` and `attributes.id`, whose minted replacements are built
+ * FROM the stored value (`pricing` becomes `pricing-<suffix>`, so renaming it
+ * to `plans` changes what every copy renders); the id-reference attributes and
+ * fragment props remapped alongside them; `locked`, which is taken off for the
+ * insert and put back by the same group; and an `origin` deeper than a root,
+ * which is copied as it stands.
  *
  * The exclusion lives here rather than at the call site so the fingerprint and
  * the thing it fingerprints cannot be asked about different content — a later
@@ -60,12 +74,37 @@ import { hashId } from "./style/node-class";
  * the op layer's document rule first; the planners do.
  */
 export function patternDigest(nodes: readonly BlockNode[]): string {
-  return hashId(JSON.stringify(nodes.map(withoutOwnOrigin)));
+  return hashId(JSON.stringify(nodes.map(node => copiedShape(node, true))));
 }
 
-/** One node without its own provenance record; its children are untouched. */
-function withoutOwnOrigin(node: BlockNode): BlockNode {
-  if (node.origin === undefined) return node;
-  const { origin: _origin, ...rest } = node;
-  return rest;
+/**
+ * One node reduced to what a copy of it would carry.
+ *
+ * Structure-aware rather than a `JSON.stringify` replacer keyed on the name
+ * `id`: a replacer drops every `id` anywhere in the tree, which would silently
+ * exclude a prop an author named `id` and an `attributes.id` the copy does
+ * carry. The field being dropped is the NODE's identity, and only a walk that
+ * knows where it is can say that.
+ *
+ * Recursion is bounded by the same depth `JSON.stringify` already imposes on
+ * this very input, so it adds no limit the caller did not already have.
+ */
+function copiedShape(node: BlockNode, isRoot: boolean): unknown {
+  const { id: _id, origin, slots, ...rest } = node;
+  const shape: Record<string, unknown> = { ...rest };
+  // A root's record is overwritten on insert; a deeper one travels with the copy.
+  if (!isRoot && origin !== undefined) shape.origin = origin;
+  if (slots !== undefined) {
+    shape.slots = Object.fromEntries(
+      Object.entries(slots).map(([name, children]) => [
+        name,
+        // A malformed slot value is carried through rather than normalised: it
+        // is content the copy would carry too, and changing it is a change.
+        Array.isArray(children)
+          ? children.map(child => copiedShape(child, false))
+          : children,
+      ])
+    );
+  }
+  return shape;
 }

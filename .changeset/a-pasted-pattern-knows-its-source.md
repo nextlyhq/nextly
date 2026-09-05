@@ -78,3 +78,16 @@ staleness check cannot hash different content from the copy it is judging.
 A pattern handed over without an identity is refused rather than given a record
 the op layer rejects. Every non-empty string is a legal id and only the empty
 one is not, which a type cannot say.
+
+Node ids are excluded from the digest too, for the same reason a root's own
+provenance is: inserting mints every id fresh at every depth, so no stored id
+reaches a copy. Hashing them made an identity-only rewrite of a pattern report
+every existing copy as stale at once.
+
+The rule inside the digest is now one question asked of each field — does a copy
+carry this, or does inserting regenerate it? A field the copy derives FROM stays
+in: renaming a `cssId` from `pricing` to `plans` changes what every copy renders,
+because the minted replacement is built from the stored value. The walk is
+structure-aware rather than a serializer replacer keyed on the name `id`, which
+would have dropped a prop an author named `id` and an `attributes.id` the copy
+does carry.
