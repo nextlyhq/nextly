@@ -569,6 +569,63 @@ export const VALIDATION_FIXTURES: ValidationFixture[] = [
     expected: [{ path: "/nodes/1/cssId", code: "duplicate-dom-id" }],
   },
   {
+    name: "two GATED variants sharing one anchor are not a duplicate",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        // The case gating exists for: personalised variants of one section,
+        // each carrying the same anchor, with exactly one ever served. The
+        // renderer prunes both before markup, so the page holds neither.
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          cssId: "hero",
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+        },
+        {
+          id: "n2",
+          type: "core/text",
+          version: 1,
+          props: {},
+          cssId: "hero",
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "free" }]],
+          },
+        },
+      ],
+    },
+    expected: [],
+  },
+  {
+    name: "a gated node does not shield a VISIBLE duplicate",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          cssId: "hero",
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+        },
+        { id: "n2", type: "core/text", version: 1, props: {}, cssId: "hero" },
+        { id: "n3", type: "core/text", version: 1, props: {}, cssId: "hero" },
+      ],
+    },
+    expected: [{ path: "/nodes/2/cssId", code: "duplicate-dom-id" }],
+  },
+  {
     name: "a SHADOWED attributes id does not collide with another node's",
     mode: "strict",
     doc: {

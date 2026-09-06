@@ -50,7 +50,7 @@ import {
   validateStyleValues,
 } from "./style/validate-style-value";
 import type { ReadyStyleIssueBudget } from "./style/validate-style-value";
-import { walkNodes } from "./tree";
+import { hiddenSubtreeNodes, walkNodes } from "./tree";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
 export type IssueSeverity = "error" | "warning";
@@ -502,6 +502,9 @@ export function validateDocument(
     unknownSeverity,
     seenIds: new Map<string, string>(),
     seenDomIds: new Map<string, string>(),
+    hiddenNodes: hiddenSubtreeNodes(
+      Array.isArray(rawDoc.nodes) ? (rawDoc.nodes as BlockNode[]) : []
+    ),
     skipValueParsing: overLimits,
     styleBudget,
   };
@@ -914,6 +917,13 @@ interface NodeCheckState {
   seenIds: Map<string, string>;
   /** Non-empty DOM ids seen so far (from `cssId` or `attributes.id`) → pointer. */
   seenDomIds: Map<string, string>;
+  /**
+   * Nodes inside a subtree the renderer prunes, so their ids reach no page.
+   *
+   * Computed once for the document rather than asked per node, because gating
+   * is inherited: an ungated child of a gated parent is pruned with it.
+   */
+  hiddenNodes: ReadonlySet<BlockNode>;
   /** Shared across the whole document, so the limit is not per node. */
   styleBudget: ReadyStyleIssueBudget;
   /**
@@ -1078,6 +1088,18 @@ function validateDomIds(
   // unreadable, `cssId` is the only place an id can come from, and a string
   // `cssId` shadows the bag anyway. The node is already reported as
   // `invalid-attributes`, so nothing about it is being passed as sound.
+  // A node the renderer prunes emits no id, so it can collide with nothing.
+  // This is the case gating exists for: personalised variants of one section,
+  // each carrying the same anchor, with exactly one ever served — and reporting
+  // them as duplicates blocked publishing a page the planners now let an author
+  // save. The gate and the planners have to agree, or a save produces a pattern
+  // that cannot be published.
+  //
+  // What this cannot decide is the day an evaluator arrives and two gated nodes
+  // both match. That belongs to the evaluator, which alone can read the
+  // conditions; nothing here has them.
+  if (state.hiddenNodes.has(node)) return;
+
   const readable =
     node.attributes === undefined || isPlainRecord(node.attributes);
   const rendered = readable
