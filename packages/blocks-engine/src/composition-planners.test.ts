@@ -1390,3 +1390,63 @@ describe("a list nested inside an exposure is bounded too", () => {
     expect(plan?.problem).toBeUndefined();
   });
 });
+
+describe("the request is read once, so two passes cannot disagree", () => {
+  /** A nomination whose `nodeId` answers differently on each read. */
+  function shiftingNomination(values: readonly string[]) {
+    let reads = 0;
+    const entry: Record<string, unknown> = {
+      id: "p1",
+      label: "L",
+      propPath: "text",
+      type: "text",
+    };
+    Object.defineProperty(entry, "nodeId", {
+      enumerable: true,
+      get() {
+        const value = values[Math.min(reads, values.length - 1)]!;
+        reads += 1;
+        return value;
+      },
+    });
+    return { entry, reads: () => reads };
+  }
+
+  it("reads a nominated nodeId exactly once", () => {
+    const { entry, reads } = shiftingNomination(["headline"]);
+
+    planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      { properties: [entry] } as never,
+      anyParent
+    );
+
+    // Three reads before this: twice while collecting ids for the ambiguity
+    // guard, once again in the mapper. A value that shifts between them let the
+    // guard clear one id while the mapper stored another.
+    expect(reads()).toBe(1);
+  });
+
+  it("judges the id it will store, not one it saw on the way", () => {
+    // The selection holds `dup` twice, so a nomination naming it must refuse.
+    // Reading three times let a getter show the guard a safe id and the mapper
+    // the ambiguous one — the plan succeeding, the pointer resolving, and every
+    // instance override editing a node the author never chose.
+    const doc = page([
+      node("wrap", {}, { children: [node("safe"), node("dup"), node("dup")] }),
+    ]);
+    const { entry } = shiftingNomination(["dup", "safe", "safe"]);
+
+    expect(
+      planSaveAsComponent(
+        doc,
+        ["wrap"],
+        componentTarget,
+        { properties: [entry] } as never,
+        anyParent
+      ).problem
+    ).toBe("ambiguous-exposure");
+  });
+});

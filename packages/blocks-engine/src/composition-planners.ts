@@ -973,14 +973,18 @@ function componentDocument(
   }
   const asked: ComponentExposure = exposure ?? {};
 
-  const ambiguous = ambiguousNomination(saved.selected, asked);
+  // ONCE, before either pass. Both work from the result, so the id the guard
+  // judges is the id the mapper stores.
+  const read = readExposure(asked);
+
+  const ambiguous = ambiguousNomination(saved.selected, read);
   if (ambiguous !== undefined) return ambiguous;
 
   const definition: ComponentDocument = {
     ...saved.stored,
     kind: "component",
-    ...exposedProperties(asked.properties, saved.nodeIds),
-    ...exposedSlots(asked.slots, saved.nodeIds),
+    ...exposedProperties(read, saved.nodeIds),
+    ...exposedSlots(read, saved.nodeIds),
   };
 
   // The HOST's limits, not this module's default. The envelope check indexes
@@ -1005,6 +1009,170 @@ function componentDocument(
 }
 
 /**
+ * The exposure request, read ONCE into plain data.
+ *
+ * Every value this module will use is taken here and never asked for again.
+ * That is the whole point: a request reaching a published entry point may hold
+ * accessors, and until this pass runs nothing about it is data. Reading a field
+ * where it is needed meant reading it several times — and a value that answers
+ * differently on each read makes two passes disagree about the same nomination.
+ *
+ * Measured before this existed: `nodeId` was read three times, twice by the
+ * ambiguity guard and once by the mapper. A getter answering `safe` twice and
+ * then `dup` walked past the guard and stored the ambiguous pointer the guard
+ * exists to refuse — the plan reporting success, the pointer resolving, and
+ * every instance override editing a node the author never chose.
+ *
+ * It is also the one place a bound belongs. Each collection was bounded
+ * wherever it happened to be traversed, which is three chances to add a fourth
+ * traversal and forget.
+ *
+ * SHAPE-PRESERVING, not shape-correcting. A value this cannot read is carried
+ * across exactly as given, because the envelope check is what says what is
+ * wrong with it, in the vocabulary the publish gate already uses. Normalising
+ * here would answer for a document nobody stores.
+ */
+interface ReadExposure {
+  /** The nominated properties. */
+  readonly properties: ReadCollection;
+  /** The nominated slot regions. */
+  readonly slots: ReadMap;
+  /**
+   * Every source node id the read entries name.
+   *
+   * Collected DURING the read rather than by a later pass over the result, and
+   * that is what makes the bound hold: a collection carried verbatim because it
+   * is over-cap or unreadable was never traversed, so it names nothing here and
+   * a second pass cannot go looking. A separate walk would have to re-apply the
+   * same bound, which is a second place to add a traversal and forget.
+   */
+  readonly named: readonly string[];
+}
+
+/**
+ * A collection this module READ, one it is CARRYING, or one that is absent.
+ *
+ * Three states with three names rather than one value standing for all of them,
+ * for the reason {@link PlacementTarget} gives about nullable parents: a
+ * collection carried verbatim — past the cap, or the wrong shape — is still an
+ * array as often as not, so anything reading it as "the entries" walks exactly
+ * what the cap refused. Measured twice while writing this. Only `"read"` holds
+ * entries, so only entries can be mapped, and the mistake stops being
+ * representable rather than merely being fixed.
+ */
+type ReadCollection =
+  | { readonly kind: "absent" }
+  | { readonly kind: "read"; readonly entries: readonly unknown[] }
+  | { readonly kind: "carried"; readonly value: unknown };
+
+/**
+ * The same three states for the slot MAP, whose keys are the exposure ids.
+ *
+ * Its own type rather than a list's, because the two are not interchangeable
+ * and one type covering both is how the carried case came to be walked as
+ * entries in the first place: a map read successfully is not a list of entries,
+ * and a map carried verbatim must not be read at all.
+ */
+type ReadMap =
+  | { readonly kind: "absent" }
+  | { readonly kind: "read"; readonly slots: Record<string, unknown> }
+  | { readonly kind: "carried"; readonly value: unknown };
+
+function readExposure(exposure: ComponentExposure): ReadExposure {
+  const named: string[] = [];
+  return {
+    properties: readEntries(exposure.properties, one =>
+      readProperty(one, named)
+    ),
+    slots: readSlotMap(exposure.slots, named),
+    named,
+  };
+}
+
+/**
+ * A list of entries, bounded and read by index; anything else verbatim.
+ *
+ * By index because `map` and `Symbol.iterator` are inherited members a caller
+ * may shadow, which throws where this module promises a refusal — on a list
+ * whose entries are all well formed. Bounded because the envelope check refuses
+ * an over-cap list in one step, so reading it first is precisely the work that
+ * cap exists to refuse; the over-cap value is handed on for that refusal.
+ */
+function readEntries(
+  value: unknown,
+  read: (one: unknown) => unknown
+): ReadCollection {
+  if (value === undefined) return { kind: "absent" };
+  if (!Array.isArray(value)) return { kind: "carried", value };
+  if (value.length > MAX_ENVELOPE_ENTRIES) return { kind: "carried", value };
+  const entries: unknown[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    entries.push(read(value[index]));
+  }
+  return { kind: "read", entries };
+}
+
+/** A nested list as the envelope should hold it, read or carried. */
+function nestedValue(collection: ReadCollection): unknown {
+  if (collection.kind === "absent") return undefined;
+  return collection.kind === "read" ? collection.entries : collection.value;
+}
+
+/** The slot map, bounded to its own keys; anything else verbatim. */
+function readSlotMap(value: unknown, named: string[]): ReadMap {
+  if (value === undefined) return { kind: "absent" };
+  if (!isPlainRecord(value)) return { kind: "carried", value };
+  const names = boundedOwnKeys(value, MAX_ENVELOPE_ENTRIES);
+  if (names === null) return { kind: "carried", value };
+  const slots: Record<string, unknown> = {};
+  // DEFINED rather than assigned: a stored record may carry an own `__proto__`,
+  // and assigning to it runs the inherited setter instead of making a property.
+  for (const name of names) {
+    defineEntry(slots, name, readSlot(value[name], named));
+  }
+  return { kind: "read", slots };
+}
+
+/** One nominated property, each field taken exactly once. */
+function readProperty(one: unknown, named: string[]): unknown {
+  if (!isPlainRecord(one)) return one;
+  const nodeId = one.nodeId;
+  if (typeof nodeId === "string") named.push(nodeId);
+  const options = one.options;
+  return {
+    id: one.id,
+    label: one.label,
+    nodeId,
+    propPath: one.propPath,
+    type: one.type,
+    ...(options === undefined
+      ? {}
+      : { options: nestedValue(readEntries(options, readOption)) }),
+  };
+}
+
+/** One `select` option, copied so the caller cannot edit the plan afterwards. */
+function readOption(one: unknown): unknown {
+  return isPlainRecord(one) ? { ...one } : one;
+}
+
+/** One nominated slot region, each field taken exactly once. */
+function readSlot(one: unknown, named: string[]): unknown {
+  if (!isPlainRecord(one)) return one;
+  const nodeId = one.nodeId;
+  if (typeof nodeId === "string") named.push(nodeId);
+  const allow = one.allow;
+  return {
+    label: one.label,
+    nodeId,
+    slot: one.slot,
+    ...(allow === undefined
+      ? {}
+      : { allow: nestedValue(readEntries(allow, entry => entry)) }),
+  };
+}
+
+/**
  * A nomination naming a source id the selection holds TWICE.
  *
  * The save re-mints ids one per node, but the map it returns is keyed on the
@@ -1022,51 +1190,18 @@ function componentDocument(
  * is a property of the page, which is saved under forgiving validation and may
  * legitimately hold one — refusing on it would reject a component whose every
  * exposure is unambiguous.
+ *
+ * Asked of the READ request, so the id it judges is the id that will be stored.
  */
 function ambiguousNomination(
   selected: readonly BlockNode[],
-  exposure: ComponentExposure
+  read: ReadExposure
 ): PlanRefusal | undefined {
   const roots = [...selected];
-  for (const id of nominatedIds(exposure)) {
+  for (const id of read.named) {
     if (countById(roots, id) > 1) return { problem: "ambiguous-exposure" };
   }
   return undefined;
-}
-
-/**
- * Every source node id a nomination points at, properties and slots alike.
- *
- * Both halves, because both are pointers and both are re-aimed through the same
- * map — a slot region naming an ambiguous id lands on the wrong container just
- * as a property does. Anything it cannot read a `nodeId` from is skipped rather
- * than reported: an entry that malformed is refused by the envelope check,
- * which says what is wrong with it in its own words.
- */
-function nominatedIds(exposure: ComponentExposure): string[] {
-  const named: string[] = [];
-  const properties = exposure.properties;
-  // BOUNDED, and read by index. An over-cap collection is refused by the
-  // envelope check whatever this pass concludes, so reading it to answer a
-  // question that refusal makes moot is precisely the work the cap exists to
-  // refuse — and this runs BEFORE the mappers, so their caps do not cover it.
-  if (Array.isArray(properties) && properties.length <= MAX_ENVELOPE_ENTRIES) {
-    for (let i = 0; i < properties.length; i += 1) {
-      collectNodeId(properties[i], named);
-    }
-  }
-  if (isPlainRecord(exposure.slots)) {
-    const keys = boundedOwnKeys(exposure.slots, MAX_ENVELOPE_ENTRIES);
-    for (const id of keys ?? []) collectNodeId(exposure.slots[id], named);
-  }
-  return named;
-}
-
-/** The `nodeId` this entry names, when it names one readable as a string. */
-function collectNodeId(one: unknown, into: string[]): void {
-  if (isPlainRecord(one) && typeof one.nodeId === "string") {
-    into.push(one.nodeId);
-  }
 }
 
 /**
@@ -1076,180 +1211,59 @@ function collectNodeId(one: unknown, into: string[]): void {
  * {@link ComponentDocument.exposed} says absence means. Writing `[]` would
  * store a field to say what its absence already says, and make two saves of one
  * selection differ by whether the caller passed a list it had not filled.
- *
- * The array is read defensively because this is reached from a published entry
- * point: a non-array here would otherwise throw where the module promises to
- * refuse. An unusable nomination becomes an envelope the check reports on.
  */
 function exposedProperties(
-  requested: readonly RequestedProperty[] | undefined,
+  read: ReadExposure,
   nodeIds: ReadonlyMap<string, string>
 ): { exposed?: ExposedProperty[] } {
-  if (requested === undefined) return {};
-  // A value that is not a list is CARRIED, not normalised away. Dropping it
-  // reports success for a nomination the caller made and this could not read,
-  // where handing it on lets `checkExposedList` refuse it in the words it
-  // already has — the same reason {@link storedId} keeps an id it cannot map.
-  if (!Array.isArray(requested)) {
-    return { exposed: requested as unknown as ExposedProperty[] };
+  const properties = read.properties;
+  if (properties.kind === "absent") return {};
+  if (properties.kind === "carried") {
+    return { exposed: properties.value as ExposedProperty[] };
   }
-  if (requested.length === 0) return {};
-  // The validator's own cap, applied BEFORE the mapping. `eachBounded` refuses
-  // a list past it in one step; cloning every entry first does the work the cap
-  // exists to refuse, on a list a decoded input controls the length of.
-  if (requested.length > MAX_ENVELOPE_ENTRIES) {
-    return { exposed: requested };
-  }
-  // BY INDEX, never through `map`. This is a caller's array and `map` is an
-  // inherited member the caller may shadow with a value of its own, which
-  // throws where this module promises a refusal — on an array whose entries are
-  // perfectly well formed. The envelope validator reads untrusted arrays the
-  // same way, for the reason the op layer avoids `Symbol.iterator`: an
-  // inherited member belongs to whoever supplied the object.
+  if (properties.entries.length === 0) return {};
   const exposed: ExposedProperty[] = [];
-  for (let i = 0; i < requested.length; i += 1) {
-    const one = requested[i];
-    // Per ENTRY. A `null` or a primitive is not something this can re-aim, and
-    // reading `one.id` off it throws — so it is carried for the validator to
-    // report rather than dereferenced here.
-    exposed.push(
-      isPlainRecord(one)
-        ? mappedProperty(one as unknown as RequestedProperty, nodeIds)
-        : one
-    );
+  for (const one of properties.entries) {
+    exposed.push(aimedProperty(one, nodeIds));
   }
   return { exposed };
 }
 
-/**
- * A slot's allow-list, copied by index and bounded.
- *
- * A spread invokes `Symbol.iterator`, which is inherited and therefore the
- * caller's to shadow — throwing where this module promises a refusal, on an
- * array whose entries are all well formed. The same reason the properties list
- * is not read through `map`. Bounded for the reason {@link clonedOptions} is:
- * nothing outside an entry bounds a list nested inside it.
- */
-function copiedAllow(allow: readonly unknown[]): ExposedSlot["allow"] {
-  if (allow.length > MAX_ENVELOPE_ENTRIES) return allow as ExposedSlot["allow"];
-  const copied: string[] = [];
-  for (let i = 0; i < allow.length; i += 1) copied.push(allow[i] as string);
-  return copied;
-}
-
-/**
- * The option records, copied one level deep and read by index.
- *
- * By index for the reason {@link exposedProperties} gives: `map` is the
- * caller's to shadow. One level deep because cloning the list alone leaves
- * every option object shared with the request, so editing a label after
- * planning would edit the document the plan said it would store.
- */
-function clonedOptions(
-  options: readonly unknown[]
-): ExposedProperty["options"] {
-  // The cap, before the copy. A nested list sits INSIDE an entry the outer cap
-  // already admitted, so nothing else bounds it — and the envelope check
-  // refuses an over-cap list in one step, which makes copying every entry first
-  // exactly the work that cap exists to refuse.
-  if (options.length > MAX_ENVELOPE_ENTRIES) {
-    return options as ExposedProperty["options"];
-  }
-  const copied: { value: string; label: string }[] = [];
-  for (let i = 0; i < options.length; i += 1) {
-    const option = options[i];
-    copied.push(
-      (isPlainRecord(option) ? { ...option } : option) as {
-        value: string;
-        label: string;
-      }
-    );
-  }
-  return copied;
-}
-
-/** One nominated property, re-aimed at the stored tree. */
-function mappedProperty(
-  one: RequestedProperty,
+/** One read property, with its pointer moved onto the stored node. */
+function aimedProperty(
+  one: unknown,
   nodeIds: ReadonlyMap<string, string>
 ): ExposedProperty {
-  return {
-    id: one.id,
-    label: one.label,
-    nodeId: storedId(one.nodeId, nodeIds),
-    propPath: one.propPath,
-    type: one.type,
-    // Copied to a DEPTH of one record, not just the array. Cloning the list
-    // alone leaves every option object shared with the caller's request, so
-    // editing a label after planning silently edits the document the plan says
-    // it would store — an alias a test that only appends to the list cannot see.
-    //
-    // A value that is not a list is CARRIED rather than dropped, on the same
-    // terms as the nomination that holds it: the validator refuses a present
-    // `options` on anything but a select, and one that is not an array, so
-    // omitting it here turns a refusal into a success.
-    ...(one.options === undefined
-      ? {}
-      : {
-          options: Array.isArray(one.options)
-            ? clonedOptions(one.options)
-            : one.options,
-        }),
-  };
+  if (!isPlainRecord(one)) return one as ExposedProperty;
+  return { ...one, nodeId: storedId(one.nodeId, nodeIds) } as ExposedProperty;
 }
 
 /** The nominated slot regions, re-aimed, on the same terms as the properties. */
 function exposedSlots(
-  requested: Readonly<Record<string, RequestedSlot>> | undefined,
+  read: ReadExposure,
   nodeIds: ReadonlyMap<string, string>
 ): { slots?: Record<string, ExposedSlot> } {
-  if (requested === undefined) return {};
-  if (!isPlainRecord(requested)) {
-    return { slots: requested };
+  const requested = read.slots;
+  if (requested.kind === "absent") return {};
+  if (requested.kind === "carried") {
+    return { slots: requested.value as Record<string, ExposedSlot> };
   }
-  // Own keys only, and BOUNDED, for the two reasons those are separate rules.
-  // A record reached from a published entry point may inherit a key, and a key
-  // that is not the caller's own is a region no author asked for — while
-  // `structuredClone` and object spreads copy neither, so the guard and the
-  // writer would otherwise disagree about the same field. And materialising
-  // every key of a caller-sized record does the work the validator's cap exists
-  // to refuse in one step.
-  const named = boundedOwnKeys(requested, MAX_ENVELOPE_ENTRIES);
-  if (named === null) {
-    return { slots: requested };
-  }
-  if (named.length === 0) return {};
+  const names = Object.keys(requested.slots);
+  if (names.length === 0) return {};
   const slots: Record<string, ExposedSlot> = {};
-  for (const id of named) {
-    const one = requested[id];
-    // DEFINED rather than assigned. A stored record may carry an own
-    // `__proto__` key, and assigning to it runs the inherited setter instead of
-    // creating a property — so the slot the author asked for disappears and the
-    // result gains a prototype, making the validator refuse a nomination it
-    // accepts when the same document is stored directly.
-    defineEntry(
-      slots,
-      id,
-      isPlainRecord(one)
-        ? {
-            label: one.label,
-            nodeId: storedId(one.nodeId, nodeIds),
-            slot: one.slot,
-            // Carried when it is not a list, not dropped: the validator refuses
-            // a present non-array allow-list, and dropping it leaves an
-            // unrestricted slot the planner then reports as fine.
-            ...(one.allow === undefined
-              ? {}
-              : {
-                  allow: Array.isArray(one.allow)
-                    ? copiedAllow(one.allow)
-                    : (one.allow as ExposedSlot["allow"]),
-                }),
-          }
-        : (one as unknown as ExposedSlot)
-    );
+  for (const id of names) {
+    defineEntry(slots, id, aimedSlot(requested.slots[id], nodeIds));
   }
   return { slots };
+}
+
+/** One read slot, with its pointer moved onto the stored node. */
+function aimedSlot(
+  one: unknown,
+  nodeIds: ReadonlyMap<string, string>
+): ExposedSlot {
+  if (!isPlainRecord(one)) return one as ExposedSlot;
+  return { ...one, nodeId: storedId(one.nodeId, nodeIds) } as ExposedSlot;
 }
 
 /**
@@ -1265,9 +1279,10 @@ function exposedSlots(
  * ones, so a surviving source id is never one of them.
  */
 function storedId(
-  sourceId: string,
+  sourceId: unknown,
   nodeIds: ReadonlyMap<string, string>
-): string {
+): unknown {
+  if (typeof sourceId !== "string") return sourceId;
   return nodeIds.get(sourceId) ?? sourceId;
 }
 
