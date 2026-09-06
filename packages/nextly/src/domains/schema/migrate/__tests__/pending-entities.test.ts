@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { SCOPED_ENTITIES_MARKER } from "../../migrate-create/format-file";
 import { readPendingEntities } from "../pending-entities";
 
 let dir: string;
@@ -21,7 +22,26 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+/** A migration whose header is marked as naming what it changes. */
 function migration(file: string, headerLines: string[]): void {
+  writeFileSync(
+    join(dir, file),
+    [
+      `-- Migration: ${file}`,
+      ...headerLines,
+      SCOPED_ENTITIES_MARKER,
+      "",
+      "-- UP",
+      "SELECT 1;",
+    ].join("\n")
+  );
+}
+
+/**
+ * A migration generated BEFORE headers were scoped: it names entities, and
+ * those names are the whole config rather than what it changed.
+ */
+function legacyMigration(file: string, headerLines: string[]): void {
   writeFileSync(
     join(dir, file),
     [`-- Migration: ${file}`, ...headerLines, "", "-- UP", "SELECT 1;"].join(
@@ -147,6 +167,44 @@ describe("readPendingEntities", () => {
     });
 
     expect(asked).toEqual(["0001_x.sql"]);
+  });
+
+  /*
+   * 🔴 A legacy header lists every entity in the config, so reading it as
+   * ownership makes an unrelated old migration hold a collection's row — and
+   * its dashboard — until that migration runs. Nothing in the header itself
+   * distinguishes it from a scoped one; both are a list of slugs.
+   */
+  it("does not treat a legacy header's names as ownership", async () => {
+    legacyMigration("0001_legacy.sql", [
+      "-- Collections: posts, pages, authors",
+    ]);
+
+    const pending = await readPendingEntities({
+      migrationsDir: dir,
+      isApplied: async () => false,
+      logger: silent,
+    });
+
+    expect([...pending.collections]).toEqual([]);
+    // Reported as unknown scope rather than silently dropped, so the run can
+    // say why those rows were promoted from their tables alone.
+    expect(pending.unscoped).toEqual(["0001_legacy.sql"]);
+  });
+
+  it("does treat a MARKED header's names as ownership", async () => {
+    // The control. Without it, a reader that rejected every header would
+    // satisfy the case above while holding nothing back ever.
+    migration("0001_scoped.sql", ["-- Collections: posts"]);
+
+    const pending = await readPendingEntities({
+      migrationsDir: dir,
+      isApplied: async () => false,
+      logger: silent,
+    });
+
+    expect([...pending.collections]).toEqual(["posts"]);
+    expect(pending.unscoped).toEqual([]);
   });
 
   it("returns nothing for a directory that does not exist", async () => {

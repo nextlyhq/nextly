@@ -40,6 +40,20 @@ import { getDialectDisplayName } from "../../../cli/utils/adapter";
  * header would report those migrations as touching no field groups, silently.
  */
 export const FIELD_GROUP_HEADER = "-- Field groups:";
+
+/**
+ * Marks a file whose entity headers name what the migration CHANGES.
+ *
+ * 🔴 Provenance, not decoration. Migrations generated before headers were
+ * scoped list every entity in the config, so reading one as ownership makes an
+ * unrelated old migration hold a collection's row -- and its dashboard --
+ * until it runs. A reader cannot tell the two apart from the header itself:
+ * both are a comma-separated list of slugs.
+ *
+ * Absent means "this file's scope is unknown", which is the honest reading of a
+ * legacy header and of a hand-written file with no header at all.
+ */
+export const SCOPED_ENTITIES_MARKER = "-- Entity scope: touched";
 export const FIELD_GROUP_HEADER_PATTERN =
   /^-- (?:Field groups?|Components?):\s*(.+)$/m;
 
@@ -78,6 +92,9 @@ export function formatMigrationFile(args: FormatArgs): string {
       ? `${FIELD_GROUP_HEADER} ${args.components.join(", ")}\n`
       : "";
   const userExtLine = args.hasUserExt ? "-- UserExt: user_ext\n" : "";
+  // Written whether or not any entity is named: a migration that changes no
+  // entity is a different fact from one whose scope nobody recorded.
+  const scopeLine = `${SCOPED_ENTITIES_MARKER}\n`;
   // Each statement gets a trailing `;`. splitSqlStatements in migrate.ts
   // splits on `;` so statements MUST be terminated.
   const body = args.sqlStatements.map(s => `${s};`).join("\n\n");
@@ -87,7 +104,7 @@ export function formatMigrationFile(args: FormatArgs): string {
       : "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)";
 
   return `-- Migration: ${args.name}
-${collectionLine}${singleLine}${componentLine}${userExtLine}-- Generated at: ${now}
+${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}-- Generated at: ${now}
 -- Dialect: ${getDialectDisplayName(args.dialect)}
 
 -- UP
@@ -172,6 +189,14 @@ export interface MigrationEntityHeaders {
   collections: string[];
   singles: string[];
   components: string[];
+  /**
+   * Whether the names above are what this migration CHANGES.
+   *
+   * False for a legacy file, whose header lists the whole config, and for a
+   * hand-written one with no header. A caller deciding ownership must treat
+   * those as unknown rather than as evidence.
+   */
+  scoped: boolean;
 }
 
 const COLLECTIONS_HEADER_PATTERN = /^-- Collections?:\s*(.+)$/m;
@@ -192,6 +217,7 @@ export function parseEntityHeaders(content: string): MigrationEntityHeaders {
     collections: headerSlugs(content, COLLECTIONS_HEADER_PATTERN),
     singles: headerSlugs(content, SINGLES_HEADER_PATTERN),
     components: headerSlugs(content, FIELD_GROUP_HEADER_PATTERN),
+    scoped: content.includes(SCOPED_ENTITIES_MARKER),
   };
 }
 

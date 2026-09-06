@@ -83,10 +83,12 @@ export interface PendingEntities {
   /**
    * Unapplied migrations that name no entity at all.
    *
-   * 🔴 Reported rather than acted on. A blank migration from
-   * `migrate:create --blank` carries no entity header — a hand-written `ALTER`
-   * for a MySQL nullability change is exactly this — so its scope is unknown
-   * rather than empty, and a row it silently affects is promoted once its old
+   * 🔴 Reported rather than acted on. Two files land here: one from
+   * `migrate:create --blank`, which carries no entity header at all — a
+   * hand-written `ALTER` for a MySQL nullability change is exactly this — and
+   * one generated before headers were scoped, whose header lists the whole
+   * config rather than what it changes. Both have unknown scope rather than
+   * empty scope, and a row either silently affects is promoted once its old
    * table exists.
    *
    * Withholding every row while one of these is outstanding would be the
@@ -181,7 +183,18 @@ export async function readPendingEntities(
     const named = await namedEntitiesIn(migrationsDir, file, logger);
     if (!named) continue;
 
-    if (namesNothing(named)) {
+    /*
+     * 🔴 An UNMARKED file's names are not ownership. Migrations generated
+     * before headers were scoped list every entity in the config, so trusting
+     * one makes an unrelated old migration hold a collection's row — and its
+     * dashboard — until that migration runs. A reader cannot tell a legacy
+     * header from a scoped one by looking at it: both are a list of slugs.
+     *
+     * Treated as unknown scope, which is the same answer a file with no header
+     * gets, and reported for the same reason. Unknown promotes; a wrong
+     * withhold empties a dashboard with nothing on screen to explain it.
+     */
+    if (!named.scoped || namesNothing(named)) {
       pending.unscoped.push(file);
       continue;
     }
