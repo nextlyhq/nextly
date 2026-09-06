@@ -514,6 +514,7 @@
     "history-panel-is-not-modal",
     "history-reads-in-the-document",
     "history-sits-beside-the-document",
+    "hold-a-row-until-its-migration-runs",
     "hook-error-propagation",
     "host-fetch-policy",
     "i18n-companion-apply-and-registration",

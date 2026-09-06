@@ -1,5 +1,15 @@
 # @nextlyhq/plugin-seo
 
+## 0.0.2-alpha.64
+
+### Patch Changes
+
+- [#1571](https://github.com/nextlyhq/nextly/pull/1571) [`6a32025`](https://github.com/nextlyhq/nextly/commit/6a32025b0f41e07c60a9ea0a50e704dd35e16abc) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `nextly migrate` no longer records an edited collection, single or field group as `applied` on the strength of its table existing. Editing an entity leaves its old table in place, so existence proved nothing about the column, status or localization change the registry row was waiting for. A row is now held back while any migration naming it has not been applied, read from the entity header each migration carries and the applied-file ledger. A row no migration names is promoted exactly as before, and migrations whose scope was never recorded are reported by name at the end of the run.
+
+- Updated dependencies [[`6a32025`](https://github.com/nextlyhq/nextly/commit/6a32025b0f41e07c60a9ea0a50e704dd35e16abc)]:
+  - @nextlyhq/plugin-sdk@0.0.2-alpha.64
+  - nextly@0.0.2-alpha.64
+
 ## 0.0.2-alpha.63
 
 ### Patch Changes

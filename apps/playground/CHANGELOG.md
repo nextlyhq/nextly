@@ -1,5 +1,24 @@
 # playground
 
+## 0.1.2-alpha.8
+
+### Patch Changes
+
+- Updated dependencies [[`6a32025`](https://github.com/nextlyhq/nextly/commit/6a32025b0f41e07c60a9ea0a50e704dd35e16abc)]:
+  - @nextlyhq/adapter-drizzle@0.0.2-alpha.64
+  - @nextlyhq/adapter-mysql@0.0.2-alpha.64
+  - @nextlyhq/adapter-postgres@0.0.2-alpha.64
+  - @nextlyhq/adapter-sqlite@0.0.2-alpha.64
+  - @nextlyhq/admin@0.0.2-alpha.64
+  - @nextlyhq/blocks-engine@0.0.2-alpha.64
+  - @nextlyhq/blocks-react@0.0.2-alpha.64
+  - @nextlyhq/builder@0.0.2-alpha.64
+  - @nextlyhq/plugin-form-builder@0.0.2-alpha.64
+  - @nextlyhq/plugin-page-builder@0.0.2-alpha.64
+  - @nextlyhq/plugin-sdk@0.0.2-alpha.64
+  - @nextlyhq/ui@0.0.2-alpha.64
+  - nextly@0.0.2-alpha.64
+
 ## 0.1.2-alpha.7
 
 ### Patch Changes
