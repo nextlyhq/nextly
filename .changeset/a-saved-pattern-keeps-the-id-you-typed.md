@@ -60,3 +60,10 @@ does not accept. Pages are saved forgivingly and the rules move underneath
 them, so each of those could be sitting in a page that renders — and saving one
 produced a library entry that could be seen, could not be placed anywhere, and
 said nothing about why until someone tried.
+
+A block can name its HTML `id` two ways — the field in the panel and the
+custom-attributes escape hatch beside it — and the page shows only one of them.
+Four places in the codebase worked out which one for themselves, and two got it
+wrong in ways an author would see: a block was refused an id no other block was
+using, and a copied block was renamed to avoid an id that was never on the page.
+There is now one answer, and everything asks it.

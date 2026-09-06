@@ -213,7 +213,7 @@ export { isBlockOrigin } from "./document";
 // two ways and emits at most one, so anything asking "what ids are on this
 // page" — a planner steering an insert around collisions, a duplicate check —
 // has to ask this rather than read the two fields independently.
-export { renderedDomId } from "./document";
+export { renderedDomId, renderedDomIdIn } from "./document";
 
 export { selectNodes } from "./select-nodes";
 export type {

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import * as entry from "./index";
 
 import type { BlockDocument, BlockNode } from "./document";
-import { renderedDomId } from "./document";
+import { renderedDomId, renderedDomIdIn } from "./document";
 import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
@@ -255,6 +255,33 @@ describe("renderedDomId: which of a node's two spellings reaches the page", () =
 
   it("folds the attribute name, because HTML does", () => {
     expect(renderedDomId(bare({ attributes: { ID: "hero" } }))).toBe("hero");
+  });
+
+  it("lets a trailing EMPTY case variant overwrite an earlier one", () => {
+    // The renderer lowercases each key and assigns in turn, so
+    // `{ id: "hero", ID: "" }` leaves the element with `id=""`. Skipping the
+    // empty one keeps `hero` and reports an id that does not render — which
+    // then makes a copy rename itself away from an id nothing owns.
+    expect(
+      renderedDomId(bare({ attributes: { id: "hero", ID: "" } }))
+    ).toBeUndefined();
+  });
+
+  it("lets a trailing NON-empty variant win too", () => {
+    // The control. "Ignore empty values entirely" passes the case above only by
+    // accident; "last one wins, whatever it holds" is the rule.
+    expect(renderedDomId(bare({ attributes: { id: "", ID: "hero" } }))).toBe(
+      "hero"
+    );
+  });
+
+  it("asks the bag alone the same way", () => {
+    // The narrower question a surface asks when it needs to know whether an
+    // empty bag id would SHADOW something.
+    expect(renderedDomIdIn({ id: "hero", ID: "" })).toBe("");
+    expect(renderedDomIdIn({ id: "", ID: "hero" })).toBe("hero");
+    expect(renderedDomIdIn(null)).toBeUndefined();
+    expect(renderedDomIdIn(["id"])).toBeUndefined();
   });
 
   it("reports none when the node spells none", () => {

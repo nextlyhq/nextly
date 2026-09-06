@@ -767,41 +767,54 @@ export type ExposedPropertyType = (typeof EXPOSED_PROPERTY_TYPES)[number];
  *
  * A node can SPELL a DOM id two ways — the modelled `cssId` and the
  * `attributes` escape hatch — and it emits at most ONE. The renderer assigns
- * the bag first and then overwrites with the modelled field
- * (`block-boundary.tsx`: "The modelled field wins over an attribute of the same
- * name"), so a node carrying `cssId: "actual"` beside `attributes.id: "hero"`
- * puts `actual` on the page and never `hero`.
- *
- * Published because reading the two fields independently is wrong in both
- * directions, and both were live:
- *
- * - counting them as two ids made one node look like it collided with ITSELF,
- *   so a run spelling one id through both fields was refused as a duplicate —
- *   which `validateDomIds` explicitly does not do (`value === node.cssId` is
- *   skipped there);
- * - counting a SHADOWED attribute id as taken made a copy rename itself to
- *   avoid a string the destination never emits.
+ * the bag first, lowercasing every key, and then overwrites with the modelled
+ * field, so this mirrors that order exactly.
  *
  * Only a STRING `cssId` shadows, the empty string included. The renderer reads
- * it as `typeof node.cssId === "string" ? node.cssId : undefined` and then
- * overwrites the bag only when that is not `undefined` — so `cssId: ""` shadows
- * and emits `id=""`, which no anchor, label or selector can reach, while
- * `cssId: null` is normalised away and the bag's id is what renders. Reading
- * "present" instead of "a string" there costs a real duplicate: the destination
- * emits `hero` through its bag, this reports no id, and an inserted pattern
- * spelling `hero` is left alone to collide with it.
+ * it as `typeof node.cssId === "string" ? node.cssId : undefined` and
+ * overwrites only when that is not `undefined` — so `cssId: ""` shadows and
+ * emits `id=""`, while `cssId: null` is normalised away and the bag renders.
+ *
+ * An empty id is not an id: it takes nothing and only stops the bag.
+ *
+ * Published because reading the two fields independently is wrong in both
+ * directions, and every one of those readings was live somewhere:
+ *
+ * - counting them as two ids made a node look like it collided with ITSELF, so
+ *   a run spelling one id through both fields was refused as a duplicate;
+ * - counting a SHADOWED attribute id as taken made a copy rename itself to
+ *   avoid a string the destination never emits;
+ * - reading "any present `cssId`" instead of "a string" hid a bag id that does
+ *   render, and left two elements answering to one id.
  */
 export function renderedDomId(node: BlockNode): string | undefined {
-  if (typeof node.cssId === "string") {
-    return node.cssId === "" ? undefined : node.cssId;
-  }
-  if (!isPlainRecord(node.attributes)) return undefined;
-  // FOLDED, because HTML attribute names are case-insensitive. Last one wins,
-  // which is the order the renderer's own assignment loop leaves behind.
+  const modelled = typeof node.cssId === "string" ? node.cssId : undefined;
+  const rendered = modelled ?? renderedDomIdIn(node.attributes);
+  return rendered === "" ? undefined : rendered;
+}
+
+/**
+ * The `id` an attribute bag alone would render, if any.
+ *
+ * The LAST case variant wins, whatever it holds, empty included. The renderer
+ * lowercases each key and assigns in turn, so a bag of `{ id: "hero", ID: "" }`
+ * leaves the element with `id=""` — and skipping the empty one here keeps
+ * `hero` and reports an id that does not render.
+ *
+ * Separate from {@link renderedDomId} because the narrower question is a real
+ * one: a surface asking whether an empty bag id would SHADOW something has to
+ * ask about the bag alone.
+ *
+ * Shape-checked, because callers walk stored nodes and a document can hold
+ * whatever the database returned; `Object.entries(null)` throws, and the
+ * renderer treats a malformed bag as absent.
+ */
+export function renderedDomIdIn(attributes: unknown): string | undefined {
+  if (!isPlainRecord(attributes)) return undefined;
   let found: string | undefined;
-  for (const [name, value] of Object.entries(node.attributes)) {
+  for (const [name, value] of Object.entries(attributes)) {
     if (name.toLowerCase() !== "id") continue;
-    if (typeof value === "string" && value !== "") found = value;
+    if (typeof value === "string") found = value;
   }
   return found;
 }
