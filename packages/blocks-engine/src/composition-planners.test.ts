@@ -22,7 +22,8 @@ import { COMPONENT_INSTANCE_TYPE, DOCUMENT_FORMAT_VERSION } from "./document";
 import type { BlockDocument, BlockNode, ComponentDocument } from "./document";
 import { applyOps } from "./ops";
 import type { BuilderOp } from "./ops";
-import { MAX_ENVELOPE_ENTRIES } from "./limits";
+import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
+import type { DocumentLimits } from "./limits";
 import { walkNodes } from "./tree";
 
 function node(
@@ -1157,5 +1158,109 @@ describe("the exposure request itself is judged before its fields", () => {
 
     expect(plan({ slots }).problem).toBe("invalid-exposure");
     expect(reads).toBe(0);
+  });
+});
+
+describe("a caller-sized exposure costs a refusal, not a traversal", () => {
+  const plan = (exposure: unknown, limits?: DocumentLimits) =>
+    planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      exposure as never,
+      anyParent,
+      limits
+    );
+
+  it("does not read an over-cap list while checking for ambiguity", () => {
+    // The ambiguity pass runs BEFORE the mappers, so their caps do not cover
+    // it — and an over-cap list is refused by the envelope check whatever this
+    // pass concludes, which makes reading it work the cap exists to refuse.
+    let reads = 0;
+    const many = Array.from({ length: MAX_ENVELOPE_ENTRIES + 1 }, (_, i) => {
+      const entry: Record<string, unknown> = {
+        id: `p${String(i)}`,
+        label: "L",
+        propPath: "text",
+        type: "text",
+      };
+      Object.defineProperty(entry, "nodeId", {
+        enumerable: true,
+        get() {
+          reads += 1;
+          return "headline";
+        },
+      });
+      return entry;
+    });
+
+    expect(plan({ properties: many }).problem).toBe("invalid-exposure");
+    expect(reads).toBe(0);
+  });
+
+  it("refuses an array whose `map` the caller shadowed", () => {
+    // The entries and the array type are both valid here; only the inherited
+    // method is shadowed, so none of the entry guards sees anything wrong.
+    const shadowed: unknown[] = [exposeText("headline").properties[0]];
+    Object.defineProperty(shadowed, "map", {
+      value: "not a function",
+      enumerable: true,
+    });
+
+    let threw: unknown;
+    let result;
+    try {
+      result = plan({ properties: shadowed });
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeUndefined();
+    expect(result?.problem).toBeUndefined();
+  });
+
+  it("indexes the envelope under the HOST's node cap, not its own", () => {
+    // A host may raise `maxNodes`, and strict validation — the gate this dry
+    // run predicts — is given the host's limits. Indexing under the default
+    // leaves a large definition's later nodes outside the index, so a sound
+    // exposure is reported as pointing at nothing and the planner refuses a
+    // component the apply would publish.
+    const children: BlockNode[] = [];
+    for (let i = 0; i < 5200; i += 1) children.push(node(`k${String(i)}`));
+    const doc = page([node("root", {}, { children })]);
+    const exposure = {
+      properties: [
+        {
+          id: "p1",
+          label: "L",
+          nodeId: "k5100",
+          propPath: "text",
+          type: "text" as const,
+        },
+      ],
+    };
+
+    const raised = planSaveAsComponent(
+      doc,
+      ["root"],
+      componentTarget,
+      exposure,
+      anyParent,
+      { ...DEFAULT_LIMITS, maxNodes: 6000 }
+    );
+    expect(raised.problem).toBeUndefined();
+
+    // The control: under the DEFAULT cap the same definition is refused, so
+    // the assertion above is about the limit being threaded rather than about
+    // the pointer happening to resolve.
+    const defaulted = planSaveAsComponent(
+      doc,
+      ["root"],
+      componentTarget,
+      exposure,
+      anyParent
+    );
+    expect(defaulted.issues?.map(i => i.code)).toContain(
+      "exposed-node-missing"
+    );
   });
 });

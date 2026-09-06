@@ -33,7 +33,8 @@ import type {
   ExposedPropertyType,
   ExposedSlot,
 } from "./document";
-import { MAX_ENVELOPE_ENTRIES } from "./limits";
+import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
+import type { DocumentLimits } from "./limits";
 import {
   canBeRoot,
   canNest,
@@ -824,12 +825,13 @@ export function planSaveAsComponent<TFields>(
   selectedIds: readonly string[],
   target: LibraryTarget<TFields>,
   exposure: ComponentExposure,
-  nesting: NestingSource
+  nesting: NestingSource,
+  limits: DocumentLimits = DEFAULT_LIMITS
 ): PlanResult<TFields> {
   const saved = plannedSave(document, selectedIds, nesting);
   if (saved.problem !== undefined) return saved;
 
-  const definition = componentDocument(saved, exposure);
+  const definition = componentDocument(saved, exposure, limits);
   if (definition.problem !== undefined) return definition;
 
   return {
@@ -889,7 +891,8 @@ export function planConvertToComponent<TFields>(
   target: LibraryTarget<TFields>,
   componentId: string,
   exposure: ComponentExposure,
-  nesting: NestingSource
+  nesting: NestingSource,
+  limits: DocumentLimits = DEFAULT_LIMITS
 ): PlanResult<TFields> {
   // Before anything is built on it, at runtime as well as in the type, for the
   // reason the save-over checks its target id: this is a published entry point
@@ -903,7 +906,7 @@ export function planConvertToComponent<TFields>(
   const saved = plannedSave(document, selectedIds, nesting);
   if (saved.problem !== undefined) return saved;
 
-  const definition = componentDocument(saved, exposure);
+  const definition = componentDocument(saved, exposure, limits);
   if (definition.problem !== undefined) return definition;
 
   const replaced = replaceOps(document, saved, componentId, nesting);
@@ -944,7 +947,8 @@ interface SavedComponent {
  */
 function componentDocument(
   saved: PlannedSave,
-  exposure: ComponentExposure
+  exposure: ComponentExposure,
+  limits: DocumentLimits
 ): SavedComponent | PlanRefusal {
   // The CONTAINER, before either field is read off it. The guards below judge
   // the fields and their entries; none of them can be reached at all if the
@@ -970,7 +974,14 @@ function componentDocument(
     ...exposedSlots(asked.slots, saved.nodeIds),
   };
 
-  const issues = componentEnvelopeIssues(definition);
+  // The HOST's limits, not this module's default. The envelope check indexes
+  // the forest under whatever node cap it is given, and a host that raised
+  // `maxNodes` can hold a definition larger than the default — whose later
+  // nodes then fall outside a default-sized index, so its exposures are
+  // reported as pointing at nothing. Strict validation, the gate this predicts,
+  // is given the host's limits; a dry run using its own would refuse a
+  // component the apply would publish, which is the direction nobody can debug.
+  const issues = componentEnvelopeIssues(definition, limits);
   return issues.length === 0
     ? { document: definition }
     : { problem: "invalid-exposure", issues };
@@ -1017,13 +1028,19 @@ function ambiguousNomination(
  */
 function nominatedIds(exposure: ComponentExposure): string[] {
   const named: string[] = [];
-  if (Array.isArray(exposure.properties)) {
-    for (const one of exposure.properties) collectNodeId(one, named);
+  const properties = exposure.properties;
+  // BOUNDED, and read by index. An over-cap collection is refused by the
+  // envelope check whatever this pass concludes, so reading it to answer a
+  // question that refusal makes moot is precisely the work the cap exists to
+  // refuse — and this runs BEFORE the mappers, so their caps do not cover it.
+  if (Array.isArray(properties) && properties.length <= MAX_ENVELOPE_ENTRIES) {
+    for (let i = 0; i < properties.length; i += 1) {
+      collectNodeId(properties[i], named);
+    }
   }
   if (isPlainRecord(exposure.slots)) {
-    for (const id of Object.keys(exposure.slots)) {
-      collectNodeId(exposure.slots[id], named);
-    }
+    const keys = boundedOwnKeys(exposure.slots, MAX_ENVELOPE_ENTRIES);
+    for (const id of keys ?? []) collectNodeId(exposure.slots[id], named);
   }
   return named;
 }
@@ -1066,16 +1083,49 @@ function exposedProperties(
   if (requested.length > MAX_ENVELOPE_ENTRIES) {
     return { exposed: requested };
   }
-  return {
-    exposed: requested.map(one =>
-      // Per ENTRY, for the same reason. A `null` or a primitive in the list is
-      // not something this can re-aim, and reading `one.id` off it throws where
-      // the module promises a refusal.
+  // BY INDEX, never through `map`. This is a caller's array and `map` is an
+  // inherited member the caller may shadow with a value of its own, which
+  // throws where this module promises a refusal — on an array whose entries are
+  // perfectly well formed. The envelope validator reads untrusted arrays the
+  // same way, for the reason the op layer avoids `Symbol.iterator`: an
+  // inherited member belongs to whoever supplied the object.
+  const exposed: ExposedProperty[] = [];
+  for (let i = 0; i < requested.length; i += 1) {
+    const one = requested[i];
+    // Per ENTRY. A `null` or a primitive is not something this can re-aim, and
+    // reading `one.id` off it throws — so it is carried for the validator to
+    // report rather than dereferenced here.
+    exposed.push(
       isPlainRecord(one)
         ? mappedProperty(one as unknown as RequestedProperty, nodeIds)
         : one
-    ),
-  };
+    );
+  }
+  return { exposed };
+}
+
+/**
+ * The option records, copied one level deep and read by index.
+ *
+ * By index for the reason {@link exposedProperties} gives: `map` is the
+ * caller's to shadow. One level deep because cloning the list alone leaves
+ * every option object shared with the request, so editing a label after
+ * planning would edit the document the plan said it would store.
+ */
+function clonedOptions(
+  options: readonly unknown[]
+): ExposedProperty["options"] {
+  const copied: { value: string; label: string }[] = [];
+  for (let i = 0; i < options.length; i += 1) {
+    const option = options[i];
+    copied.push(
+      (isPlainRecord(option) ? { ...option } : option) as {
+        value: string;
+        label: string;
+      }
+    );
+  }
+  return copied;
 }
 
 /** One nominated property, re-aimed at the stored tree. */
@@ -1102,9 +1152,7 @@ function mappedProperty(
       ? {}
       : {
           options: Array.isArray(one.options)
-            ? one.options.map(option =>
-                isPlainRecord(option) ? { ...option } : option
-              )
+            ? clonedOptions(one.options)
             : one.options,
         }),
   };
