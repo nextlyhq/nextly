@@ -936,18 +936,10 @@ function duplicateDomIdRefusal(
 ): PlanRefusal | undefined {
   const seen = new Set<string>();
   let repeated = false;
-  walkNodes([...roots], node => {
-    if (repeated) return;
-    // ONE id per node, through the shared rule. Reading `cssId` and the
-    // attribute bag as two ids made a node spelling one id through both look
-    // like it collided with itself — which `validateDomIds` explicitly does not
-    // report, and rightly: the renderer emits a single id for it.
-    const id = renderedDomId(node);
-    if (id === undefined) return;
-    if (seen.has(id)) {
-      repeated = true;
-      return;
-    }
+  // Through the walk that answers what actually reaches the page, so this and
+  // the destination scan cannot come to disagree about what an id in use is.
+  walkRenderedIds(roots, id => {
+    if (seen.has(id)) repeated = true;
     seen.add(id);
   });
   return repeated ? { problem: "duplicate-dom-id" } : undefined;
@@ -998,6 +990,15 @@ interface FreshCopy {
  * implementation can turn red is not coverage, and leaving it in would have
  * made this look guarded when only the reasoning guards it.
  *
+ * The same is true of the copy's INTERNAL clash, which the retry now also
+ * asks about. Under `avoid` a copy keeps the ids its destination does not
+ * hold, so a minted `hero-<suffix>` can land on a `hero-<suffix>` the pattern
+ * itself carried and this kept — a collision the destination cannot see. It
+ * needs the drawn suffix to equal a string already in the pattern, so it is
+ * unreachable in a test for the reason above and it is checked for the reason
+ * above: this branch could not arise at all while every id was minted, and it
+ * arrived with the policy that stopped minting them.
+ *
  * The property that IS covered, deterministically, is the one that matters in
  * practice: inserting one pattern twice into one page and finding no repeated
  * DOM id anywhere in the result.
@@ -1010,7 +1011,14 @@ function freshCopy(
 ): FreshCopy | PlanRefusal {
   for (let attempt = 0; attempt < MAX_ID_MINTING_ATTEMPTS; attempt += 1) {
     const minted = reidForestWithMap(roots, { avoid: taken });
-    const clash = [...minted.domIds.values()].some(id => taken.has(id));
+    // The whole COPY, not only the ids it minted. Under `avoid` the copy keeps
+    // the ids the destination does not hold, so a minted `hero-<suffix>` can
+    // land on a `hero-<suffix>` the pattern already carried and this kept — a
+    // collision entirely inside the copy, which comparing against the
+    // destination cannot see. It could not arise while every id was minted.
+    const clash =
+      [...minted.domIds.values()].some(id => taken.has(id)) ||
+      duplicateDomIdRefusal(minted.nodes) !== undefined;
     if (!clash) return { nodes: minted.nodes };
   }
   return { problem: "dom-id-collision" };
@@ -1062,22 +1070,49 @@ function takenDomIds(
  */
 function domIdsIn(nodes: BlockNode[]): Set<string> {
   const taken = new Set<string>();
-  // Gated status is INHERITED, so it is carried down rather than asked of each
-  // node alone: the renderer prunes a gated node's whole subtree, so a `cssId`
-  // on a child of one never reaches the page either. Computed through the
-  // shared walk, which visits a parent before its children and hands the parent
-  // to each visit — a hand-rolled traversal here would have to re-learn what
-  // that one already knows about a malformed entry and a malformed slot.
+  walkRenderedIds(nodes, id => {
+    taken.add(id);
+  });
+  return taken;
+}
+
+/**
+ * Every DOM id a forest actually puts on the page, in walk order.
+ *
+ * ONE walk for every question about which ids are in use — which the
+ * destination holds, and whether a forest spells one twice. They are the same
+ * question asked of two forests, and the day they disagree is the day a save is
+ * refused for a collision the insert it is refused on behalf of would not have
+ * seen. That happened: the gating rule was added to one of them and not the
+ * other, and it refused exactly the case gating exists for — two personalised
+ * variants of a section carrying one anchor, only ever one of them served.
+ *
+ * Gated status is INHERITED rather than asked of each node alone, because the
+ * renderer prunes a gated node's whole subtree, so an ungated child of one does
+ * not render either. Carried through the shared walk, which visits a parent
+ * before its children and hands the parent to each visit — a hand-rolled
+ * traversal would have to re-learn what that one knows about a malformed entry
+ * and a malformed slot.
+ *
+ * It does NOT yet exclude a subtree the renderer replaces with a placeholder,
+ * which is the third way a stored id fails to render:
+ * `finding:pb6-avoid-set-counts-placeholder-node-ids` carries the measurement
+ * and the reason — the predicate lives in `blocks-react` and needs the block
+ * registry, which no planner is handed.
+ */
+function walkRenderedIds(
+  nodes: readonly BlockNode[],
+  fn: (id: string) => void
+): void {
   const gated = new Map<BlockNode, boolean>();
-  walkNodes(nodes, (node, parent) => {
+  walkNodes([...nodes], (node, parent) => {
     const inherited = parent !== undefined && gated.get(parent) === true;
     const hidden = inherited || isConditionGated(node);
     gated.set(node, hidden);
     if (hidden) return;
     const id = renderedDomId(node);
-    if (id !== undefined) taken.add(id);
+    if (id !== undefined) fn(id);
   });
-  return taken;
 }
 
 /**

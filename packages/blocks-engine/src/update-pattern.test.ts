@@ -55,6 +55,11 @@ const page = (
 
 const anyParent = { parentsOf: () => undefined };
 
+/** A node the renderer prunes: an author restricted it to a segment. */
+const gatedNode = {
+  conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+} as unknown as BlockNode["visibility"];
+
 /** The shipped shape of a restricted block: a column belongs inside columns. */
 const columnsOnly = {
   parentsOf: (type: string) =>
@@ -609,6 +614,48 @@ describe("what a save refuses on the INSERT's behalf", () => {
     expect(
       planUpdatePatternFromSelection(document, ["a", "b"], target, anyParent)
         .problem
+    ).toBe("duplicate-dom-id");
+  });
+
+  it("permits two GATED variants sharing one anchor", () => {
+    // The case gating exists for: personalised variants of a section, each
+    // carrying the same anchor, exactly one served. `pruneHiddenNodes` removes
+    // both before markup, so the page never holds a duplicate — and refusing
+    // here refused the feature's own use case.
+    const document = page([
+      node("a", { visibility: gatedNode, cssId: "hero" }),
+      node("b", { visibility: gatedNode, cssId: "hero" }),
+    ]);
+
+    expect(
+      planUpdatePatternFromSelection(document, ["a", "b"], target, anyParent)
+        .problem
+    ).toBeUndefined();
+    expect(
+      planSaveAsPattern(
+        document,
+        ["a", "b"],
+        { collection: "patterns", fields: {} },
+        anyParent
+      ).problem
+    ).toBeUndefined();
+  });
+
+  it("still refuses two UNGATED nodes sharing one", () => {
+    // The control. "Never report a duplicate" satisfies the test above.
+    const document = page([
+      node("a", { visibility: gatedNode, cssId: "hero" }),
+      node("b", { cssId: "hero" }),
+      node("c", { cssId: "hero" }),
+    ]);
+
+    expect(
+      planUpdatePatternFromSelection(
+        document,
+        ["a", "b", "c"],
+        target,
+        anyParent
+      ).problem
     ).toBe("duplicate-dom-id");
   });
 
