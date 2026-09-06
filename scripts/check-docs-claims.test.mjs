@@ -39,6 +39,19 @@ const pkg = (extra = {}) =>
 
 const REFS = new Set(["main", "feature/docs-refresh", "v1.2.3"]);
 
+/** The full findings, for the few assertions that are about more than the check name. */
+async function findingsFor(spec, opts = {}) {
+  const { root, files } = await fixture(spec);
+  const { findings } = await runChecks({
+    repoRoot: root,
+    files,
+    remoteRefs: REFS,
+    hasLocalCommit: () => true,
+    ...opts,
+  });
+  return findings;
+}
+
 async function checksFor(spec, opts = {}) {
   const { root, files } = await fixture(spec);
   const { findings } = await runChecks({
@@ -1335,16 +1348,42 @@ describe("documented-key-prefix", () => {
     ).not.toContain("key-prefix-undeclared");
   });
 
-  it("refuses when a second occurrence makes the value ambiguous", async () => {
-    // A comment showing the old format is the realistic way this happens, and it
-    // is exactly the case where guessing which one is live would be wrong.
-    const checks = await checksFor(
-      tree(
-        { "docs/guides/authentication.mdx": "Use `Authorization: Bearer nx_live_...`\n" },
-        '// Was KEY_PREFIX = "sk_" before the rename.\nconst KEY_PREFIX = "nx_live_";'
-      )
-    );
-    expect(checks).toContain("key-prefix-undeclared");
+  it("ignores a commented-out declaration left behind after a rename", async () => {
+    // The regex used to match the name anywhere. A stale
+    // `// const KEY_PREFIX = "nx_live_"` kept for context would then be the one
+    // declaration it found, and the docs would be held to a value the service
+    // no longer issues, reported clean.
+    expect(
+      await checksFor(
+        tree(
+          { "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n" },
+          '// const KEY_PREFIX = "nx_live_";\nconst API_KEY_PREFIX = "nx_v2_";',
+        ),
+      ),
+    ).toContain("key-prefix-undeclared");
+  });
+
+  it("refuses when two real declarations disagree", async () => {
+    expect(
+      await checksFor(
+        tree(
+          { "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n" },
+          'const KEY_PREFIX = "nx_live_";\nconst KEY_PREFIX = "sk_";',
+        ),
+      ),
+    ).toContain("key-prefix-undeclared");
+  });
+
+  it("accepts an exported declaration", async () => {
+    // Anchoring must not become so tight that the ordinary form stops matching.
+    expect(
+      await checksFor(
+        tree(
+          { "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n" },
+          'export const KEY_PREFIX = "nx_live_";',
+        ),
+      ),
+    ).not.toContain("key-prefix-undeclared");
   });
 
   it("refuses when the declaring file is not tracked at all", async () => {
@@ -1384,6 +1423,78 @@ describe("documented-key-prefix", () => {
         ),
       ).toContain("documented-key-prefix");
     }
+  });
+
+  it("covers prose outside docs/, such as ARCHITECTURE.md", async () => {
+    // The first scope named one directory. ARCHITECTURE.md publishes a bearer
+    // example too, and was unguarded.
+    expect(
+      await checksFor(
+        tree({ "ARCHITECTURE.md": "API keys: Authorization: Bearer sk_live_EXAMPLE\n" }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("finds an example wrapped after the scheme", async () => {
+    // Markdown renders the break as whitespace, so this is one example to a
+    // reader. Matching line by line saw two halves and judged neither.
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx": "Send Authorization: Bearer\nsk_wrapped_EXAMPLE now\n",
+        }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("ignores a wrong prefix nobody can see", async () => {
+    // An HTML or MDX comment is not published. Reporting it blocks a merge over
+    // text that reaches no reader and no generated file.
+    for (const comment of [
+      "<!-- Old: Authorization: Bearer sk_dead_EXAMPLE -->",
+      "{/* Old: Authorization: Bearer sk_dead_EXAMPLE */}",
+    ]) {
+      const checks = await checksFor(
+        tree({
+          "docs/guides/authentication.mdx":
+            comment + "\nUse Authorization: Bearer nx_live_EXAMPLE\n",
+        }),
+      );
+      expect(checks).not.toContain("documented-key-prefix");
+      expect(checks).not.toContain("key-prefix-unexamined");
+    }
+  });
+
+  it("reports the real line number even after a comment above it", async () => {
+    // Comments are blanked rather than removed, so offsets still name the line
+    // a reader would open.
+    const findings = await findingsFor(
+      tree({
+        "docs/guides/authentication.mdx":
+          "<!-- a\nmultiline\ncomment -->\nUse Authorization: Bearer sk_EXAMPLE\n",
+      }),
+    );
+    const hit = findings.find(f => f.check === "documented-key-prefix");
+    expect(hit.line).toBe(4);
+  });
+
+  it("refuses when the only remaining example is exempted", async () => {
+    // The population must count what was JUDGED. Counting before the exemption
+    // meant a tree whose last example was allowlisted reported neither a
+    // finding nor a refusal, having checked no Nextly key at all.
+    const line = "Use Authorization: Bearer partner_EXAMPLE";
+    expect(
+      await checksFor(
+        tree({ "docs/guides/integrations.mdx": line + "\n" }),
+        {
+          allowlist: {
+            "documented-key-prefix": {
+              "docs/guides/integrations.mdx": { count: 1, digests: [digestLine(line)] },
+            },
+          },
+        },
+      ),
+    ).toContain("key-prefix-unexamined");
   });
 
   it("refuses when it examined no example at all", async () => {
