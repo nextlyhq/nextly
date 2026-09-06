@@ -77,6 +77,22 @@ export interface PendingEntities {
   collections: Set<string>;
   singles: Set<string>;
   components: Set<string>;
+  /**
+   * Unapplied migrations that name no entity at all.
+   *
+   * 🔴 Reported rather than acted on. A blank migration from
+   * `migrate:create --blank` carries no entity header — a hand-written `ALTER`
+   * for a MySQL nullability change is exactly this — so its scope is unknown
+   * rather than empty, and a row it silently affects is promoted once its old
+   * table exists.
+   *
+   * Withholding every row while one of these is outstanding would be the
+   * conservative reading and is worse: it empties every dashboard on the
+   * strength of a file nobody has described. So promotion proceeds and the
+   * operator is told, which is the only response that neither hides the gap nor
+   * punishes the entities it cannot be about.
+   */
+  unscoped: string[];
 }
 
 /** Nothing is waiting — the shape a caller gets when there is no evidence. */
@@ -85,6 +101,7 @@ export function noPendingEntities(): PendingEntities {
     collections: new Set(),
     singles: new Set(),
     components: new Set(),
+    unscoped: [],
   };
 }
 
@@ -136,6 +153,14 @@ export async function readPendingEntities(
     }
 
     const named = parseEntityHeaders(content);
+    if (
+      named.collections.length === 0 &&
+      named.singles.length === 0 &&
+      named.components.length === 0
+    ) {
+      pending.unscoped.push(file);
+      continue;
+    }
     for (const slug of named.collections) pending.collections.add(slug);
     for (const slug of named.singles) pending.singles.add(slug);
     for (const slug of named.components) pending.components.add(slug);

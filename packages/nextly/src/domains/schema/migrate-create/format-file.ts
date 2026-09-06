@@ -109,6 +109,14 @@ export function formatBlankFile(
 --
 -- This is a blank migration file for custom SQL.
 -- Add your migration SQL below.
+--
+-- If this migration changes a collection, single or field group, name it:
+--   -- Collections: posts
+--   -- Singles: home
+--   -- Field groups: hero
+-- \`nextly migrate\` reads those lines to know which entities are still
+-- waiting on this file. Without them it cannot tell, and will record those
+-- entities as migrated once their tables exist.
 
 -- UP
 

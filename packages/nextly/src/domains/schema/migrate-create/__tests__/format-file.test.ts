@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   FIELD_GROUP_HEADER_PATTERN,
   formatBlankFile,
+  parseEntityHeaders,
   formatMigrationFile,
   formatTimestamp,
   slugify,
@@ -220,5 +221,41 @@ describe("field-group header", () => {
     expect(
       "-- Collections: posts".match(FIELD_GROUP_HEADER_PATTERN)
     ).toBeNull();
+  });
+});
+
+/*
+ * 🔴 A blank migration carries arbitrary hand-written SQL, so the tool cannot
+ * know which entities it changes — and `nextly migrate` reads exactly that to
+ * decide which registry rows are still waiting. Without the line, an entity the
+ * migration alters is recorded as migrated once its old table exists. The
+ * template asks for it, because the remedy is one line and nothing else can
+ * supply it.
+ */
+describe("the blank template asks for an entity header", () => {
+  it("tells the author how to name what the migration changes", () => {
+    const out = formatBlankFile(
+      "custom_thing",
+      "postgresql",
+      new Date("2026-04-29T15:45:00.123Z")
+    );
+
+    expect(out).toContain("-- Collections: posts");
+    expect(out).toContain("-- Singles: home");
+    expect(out).toContain("-- Field groups: hero");
+  });
+
+  it("leaves them as guidance, not as a header the parser would read", () => {
+    // The lines are examples inside a comment block. If they parsed as real
+    // headers, every blank migration would claim to change `posts`.
+    const out = formatBlankFile(
+      "custom_thing",
+      "postgresql",
+      new Date("2026-04-29T15:45:00.123Z")
+    );
+
+    expect(parseEntityHeaders(out).collections).toEqual([]);
+    expect(parseEntityHeaders(out).singles).toEqual([]);
+    expect(parseEntityHeaders(out).components).toEqual([]);
   });
 });

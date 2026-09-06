@@ -129,6 +129,11 @@ export interface ReconcileMetadataResult {
    */
   awaitingMigration: number;
   /**
+   * Unapplied migrations naming no entity, so nothing could be judged against
+   * them. Rows were promoted on table existence alone.
+   */
+  unscopedMigrations: string[];
+  /**
    * Registries this pass could not read at all, by kind.
    *
    * 🔴 Reported rather than only logged, because the per-registry guard below
@@ -405,6 +410,7 @@ export async function reconcileMigrationMetadata(
     marked,
     stillPending,
     awaitingMigration,
+    unscopedMigrations: awaiting.unscoped,
     unreadable,
   };
 }

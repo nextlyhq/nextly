@@ -270,18 +270,20 @@ export async function generateMigration(
    * makes every migration look like it touches every entity, which answers that
    * question the same way for all of them and so answers it for none.
    *
-   * A companion table counts as its entity's own change, so an operation on
-   * `dc_posts_locales` names `posts`.
+   * Matched on the EXACT table name. A prefix match looks like it would also
+   * catch companion tables, and catches unrelated entities instead: a
+   * collection whose table is `dc_posts_archive` shares the `dc_posts_` prefix
+   * with `dc_posts`, so editing the archive would name `posts` as well and hold
+   * a dashboard it has nothing to do with. Over-naming fails in the expensive
+   * direction here — a withheld row is an empty dashboard with nothing on
+   * screen to explain it.
    *
-   * A localization ENABLE is not covered by THIS header, and does not need to
-   * be: those transitions are emitted as their own companion `.sql` files,
-   * which carry their own header naming the entity by kind. What this file
-   * produces for a localize-only run is a migration with an empty `-- UP`, and
-   * naming an entity there would claim a change it does not carry.
+   * A localization transition is not covered by THIS header and does not need
+   * to be: those are emitted as their own companion `.sql` files, which carry
+   * their own header naming the entity by kind.
    */
   const namesTouched = (entity: MinimalConfigEntity): boolean =>
-    touched.has(entity.tableName) ||
-    [...touched].some(name => name.startsWith(`${entity.tableName}_`));
+    touched.has(entity.tableName);
 
   const collectionSlugs = args.collections
     .filter(namesTouched)

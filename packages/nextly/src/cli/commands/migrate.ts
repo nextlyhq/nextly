@@ -465,6 +465,7 @@ export interface MigrateCoreResult {
     marked: number;
     stillPending: number;
     awaitingMigration: number;
+    unscopedMigrations: string[];
     unreadable: string[];
   };
 }
@@ -525,7 +526,13 @@ function reportMetadataOutcome(
   metadata: MigrateCoreResult["metadata"],
   logger: CommandContext["logger"]
 ): void {
-  const { marked, stillPending, awaitingMigration, unreadable } = metadata;
+  const {
+    marked,
+    stillPending,
+    awaitingMigration,
+    unscopedMigrations,
+    unreadable,
+  } = metadata;
 
   if (unreadable.length > 0) {
     // Not a count of rows: this is "the sweep could not look". Reported
@@ -550,6 +557,19 @@ function reportMetadataOutcome(
    * not yet run, or has been edited since. One combined count says "something
    * is owed" and leaves them to guess which.
    */
+  if (unscopedMigrations.length > 0) {
+    /*
+     * Named, because the remedy is to add one line to those files. Silence here
+     * would leave an operator with rows recorded as migrated by a rule that
+     * could not see the migration that changes them.
+     */
+    logger.warn(
+      `${formatCount(unscopedMigrations.length, "pending migration")} name no collection, single or field group, ` +
+        `so registry rows were recorded from their tables alone: ${unscopedMigrations.join(", ")}. ` +
+        `Add a \`-- Collections:\` line naming what each one changes.`
+    );
+  }
+
   const awaitingTable = stillPending - awaitingMigration;
   if (awaitingTable > 0) {
     logger.warn(
@@ -581,6 +601,7 @@ export async function migrateCore(
     marked: 0,
     stillPending: 0,
     awaitingMigration: 0,
+    unscopedMigrations: [] as string[],
     unreadable: [] as string[],
   };
 
