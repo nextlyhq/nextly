@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { SchemaEventsRepository } from "../events/schema-events-repository";
+import { SCOPED_ENTITIES_MARKER } from "../migrate-create/format-file";
 
 import {
   createTestDatabase,
@@ -357,6 +358,10 @@ describe.each(DIALECTS.filter(configured))(
         [
           "-- Migration: edit_posts",
           `-- Collections: ${SLUG.edited}`,
+          // Written the way `migrate:create` writes it. Without the marker the
+          // header is read as unknown scope, the row is promoted, and this test
+          // asserts against a path it never reaches.
+          SCOPED_ENTITIES_MARKER,
           "-- Dialect: SQLite",
           "",
           "-- UP",
