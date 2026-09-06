@@ -281,3 +281,171 @@ describe("reconcileMigrationMetadata", () => {
     expect(result.unreadable).toEqual([]);
   });
 });
+
+/*
+ * 🔴 The half table existence cannot answer. When a collection is edited in
+ * the Schema Builder the row gets the NEW fields and goes back to `pending`
+ * while the physical table is untouched — so `tableExists` says yes for a
+ * change that has not migrated, and the sweep used to promote it. The registry
+ * then advertises a shape the database has never had.
+ */
+describe("reconcileMigrationMetadata weighs the shape, not only the table", () => {
+  const TITLE = [{ name: "title", type: "text" }];
+  const TITLE_BODY = [
+    { name: "title", type: "text" },
+    { name: "body", type: "richText" },
+  ];
+
+  /** A loader seam standing in for `migrations/meta` plus the ledger. */
+  function loaderFor(
+    entries: {
+      file: string;
+      applied: boolean;
+      slug: string;
+      fields: unknown[];
+    }[]
+  ) {
+    return async () =>
+      entries.map(e => ({
+        file: e.file,
+        applied: e.applied,
+        snapshot: {
+          collections: [
+            { slug: e.slug, tableName: `dc_${e.slug}`, fields: e.fields },
+          ],
+          singles: [],
+        },
+      })) as never;
+  }
+
+  async function sweep(opts: {
+    tables: string[];
+    row: Record<string, unknown>;
+    loadSnapshotsFn?: unknown;
+  }) {
+    vi.resetModules();
+    const made = mockRegistries([opts.row]);
+    const { reconcileMigrationMetadata: fresh } = await import(
+      "../reconcile-metadata"
+    );
+    const result = await fresh({
+      adapter: adapterWith(opts.tables),
+      dialect: "sqlite",
+      migrationsDir: "/tmp/migrations",
+      logger: silent,
+      registerFn: (async () => ({
+        collectionsRegistered: 0,
+        singlesRegistered: 0,
+      })) as never,
+      ...(opts.loadSnapshotsFn
+        ? { loadSnapshotsFn: opts.loadSnapshotsFn as never }
+        : {}),
+    });
+    return { result, made };
+  }
+
+  it("leaves an edited row pending when the applied migrations lack its shape", async () => {
+    const { result, made } = await sweep({
+      // The old table still stands, which is exactly why existence cannot decide.
+      tables: ["dc_posts"],
+      row: { slug: "posts", tableName: "dc_posts", fields: TITLE_BODY },
+      loadSnapshotsFn: loaderFor([
+        {
+          file: "0001.snapshot.json",
+          applied: true,
+          slug: "posts",
+          fields: TITLE,
+        },
+        // Generated for the edit, not yet run.
+        {
+          file: "0002.snapshot.json",
+          applied: false,
+          slug: "posts",
+          fields: TITLE_BODY,
+        },
+      ]),
+    });
+
+    expect(
+      made.collection.updateMigrationStatusWithVerification
+    ).not.toHaveBeenCalled();
+    expect(result.marked).toBe(0);
+    expect(result.shapeMismatch).toBe(1);
+    // Counted inside the total rather than beside it, so the two agree.
+    expect(result.stillPending).toBe(1);
+  });
+
+  it("promotes the same row once that migration is applied", async () => {
+    // The control. Without it, an implementation that withheld EVERY row would
+    // satisfy the case above — and withholding every row is the empty-dashboard
+    // defect this sweep exists to prevent.
+    const { result, made } = await sweep({
+      tables: ["dc_posts"],
+      row: { slug: "posts", tableName: "dc_posts", fields: TITLE_BODY },
+      loadSnapshotsFn: loaderFor([
+        {
+          file: "0001.snapshot.json",
+          applied: true,
+          slug: "posts",
+          fields: TITLE,
+        },
+        {
+          file: "0002.snapshot.json",
+          applied: true,
+          slug: "posts",
+          fields: TITLE_BODY,
+        },
+      ]),
+    });
+
+    expect(
+      made.collection.updateMigrationStatusWithVerification
+    ).toHaveBeenCalledWith("posts", "dc_posts");
+    expect(result.marked).toBe(1);
+    expect(result.shapeMismatch).toBe(0);
+  });
+
+  it("promotes a row no snapshot describes, rather than withholding it", async () => {
+    // A code-first collection, or an install predating snapshots. Silence is
+    // not disagreement: treating it as one empties dashboards that work today.
+    const { result } = await sweep({
+      tables: ["dc_authors"],
+      row: { slug: "authors", tableName: "dc_authors", fields: TITLE },
+      loadSnapshotsFn: loaderFor([
+        {
+          file: "0001.snapshot.json",
+          applied: true,
+          slug: "posts",
+          fields: TITLE,
+        },
+      ]),
+    });
+
+    expect(result.marked).toBe(1);
+    expect(result.shapeMismatch).toBe(0);
+  });
+
+  it("still refuses a row whose table is absent, before shape is consulted", async () => {
+    // Existence remains necessary. A matching shape must not promote a row
+    // whose table was never created.
+    const { result, made } = await sweep({
+      tables: [],
+      row: { slug: "posts", tableName: "dc_posts", fields: TITLE },
+      loadSnapshotsFn: loaderFor([
+        {
+          file: "0001.snapshot.json",
+          applied: true,
+          slug: "posts",
+          fields: TITLE,
+        },
+      ]),
+    });
+
+    expect(
+      made.collection.updateMigrationStatusWithVerification
+    ).not.toHaveBeenCalled();
+    expect(result.stillPending).toBe(1);
+    // Not a shape disagreement — the operator is sent to a different remedy.
+    expect(result.shapeMismatch).toBe(0);
+  });
+});

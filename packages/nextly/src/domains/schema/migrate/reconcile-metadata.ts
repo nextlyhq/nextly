@@ -49,6 +49,12 @@ import { SingleRegistryService } from "../../singles/services/single-registry-se
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 
 import { registerFromMigrations } from "./metadata-register";
+import {
+  buildShapeEvidence,
+  shapeVerdict,
+  type ShapeEvidence,
+} from "./promotion-evidence";
+import { loadSnapshots } from "./snapshot-source";
 
 /**
  * The logging surface a CALLER supplies, structural so the CLI's own context
@@ -90,6 +96,15 @@ export interface ReconcileMetadataDeps {
   logger: ReconcileLogger;
   /** Seam for tests; defaults to the real snapshot reader. */
   registerFn?: typeof registerFromMigrations;
+  /**
+   * Seam for tests; defaults to reading `migrations/meta` from disk.
+   *
+   * Replaces the file and ledger I/O ONLY. Everything the evidence depends on
+   * — later-wins resolution over applied snapshots, the hashing, and which
+   * registry gets which map — still runs, so a test cannot pass by reaching the
+   * sweep through a route production does not have.
+   */
+  loadSnapshotsFn?: typeof loadSnapshots;
 }
 
 export interface ReconcileMetadataResult {
@@ -106,6 +121,15 @@ export interface ReconcileMetadataResult {
    */
   stillPending: number;
   /**
+   * Rows held back because their shape does not match what the applied
+   * migrations produced, counted inside {@link ReconcileMetadataResult.stillPending}.
+   *
+   * Reported separately because "waiting for a table that does not exist" and
+   * "waiting for a change that has not migrated" send an operator to different
+   * places, and the single total cannot tell them apart.
+   */
+  shapeMismatch: number;
+  /**
    * Registries this pass could not read at all, by kind.
    *
    * 🔴 Reported rather than only logged, because the per-registry guard below
@@ -121,6 +145,15 @@ export interface ReconcileMetadataResult {
 /** One registry service, reduced to the two calls this needs from it. */
 interface PendingRegistry {
   kind: string;
+  /**
+   * Applied field shapes for this registry's slugs, or `undefined` when the
+   * snapshots cannot describe this kind at all.
+   *
+   * Field groups take `undefined`: snapshots carry `collections` and `singles`
+   * and nothing else, so there is no shape to compare and every field-group row
+   * falls back to the existence rule it has always used.
+   */
+  evidence: Map<string, string> | undefined;
   getPendingMigrations: () => Promise<readonly unknown[]>;
   updateMigrationStatusWithVerification: (
     slug: string,
@@ -162,9 +195,10 @@ async function markApplied(
   registry: PendingRegistry,
   adapter: DrizzleAdapter,
   logger: ReconcileLogger
-): Promise<{ marked: number; stillPending: number }> {
+): Promise<{ marked: number; stillPending: number; shapeMismatch: number }> {
   let marked = 0;
   let stillPending = 0;
+  let shapeMismatch = 0;
 
   const rows = await registry.getPendingMigrations();
   for (const row of rows) {
@@ -181,6 +215,27 @@ async function markApplied(
         stillPending += 1;
         continue;
       }
+
+      /*
+       * 🔴 Existence is necessary and not sufficient. An EDITED entity keeps
+       * its old physical table, so `tableExists` answers yes for a change that
+       * has not migrated at all — which is how a row reached `applied` while
+       * the registry described a shape the database had never had.
+       *
+       * Only a positive DISAGREEMENT holds the row back. `unknown` promotes,
+       * because nothing describes a code-first collection or a field group,
+       * and withholding on silence would reinstate the empty dashboard this
+       * sweep exists to prevent.
+       */
+      if (shapeVerdict(row, registry.evidence) === "differs") {
+        stillPending += 1;
+        shapeMismatch += 1;
+        logger.debug(
+          `Leaving ${registry.kind} "${named.slug}" pending: its table exists, but the applied migrations do not carry the shape the registry is waiting for`
+        );
+        continue;
+      }
+
       const outcome = await registry.updateMigrationStatusWithVerification(
         named.slug,
         named.tableName
@@ -200,7 +255,7 @@ async function markApplied(
     }
   }
 
-  return { marked, stillPending };
+  return { marked, stillPending, shapeMismatch };
 }
 
 /**
@@ -234,39 +289,75 @@ export async function reconcileMigrationMetadata(
    * read one source rather than two that can disagree.
    */
   const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
+
+  /*
+   * Memoized because both halves of this pass ask the ledger about the same
+   * files: registration, to decide what it may insert, and the sweep's
+   * evidence, to decide what shape the database has reached. One query per
+   * migration file rather than two, and — more usefully — one ANSWER, so the
+   * two halves cannot disagree about whether a file ran.
+   */
+  const appliedCache = new Map<string, Promise<boolean>>();
+  const isApplied = (filename: string): Promise<boolean> => {
+    const cached = appliedCache.get(filename);
+    if (cached) return cached;
+    const pending = events.isFileApplied(filename);
+    appliedCache.set(filename, pending);
+    return pending;
+  };
+
   const registered = await register({
     migrationsDir,
     adapter,
     dialect,
     logger,
-    isApplied: filename => events.isFileApplied(filename),
+    isApplied,
   });
+
+  /*
+   * Step 1b: what shape the applied migrations actually produced, per slug.
+   *
+   * Read AFTER registration so the ledger answers are already cached, and read
+   * at all because the sweep below cannot tell an edited entity from a settled
+   * one without it — the physical table is identical in both cases.
+   */
+  const load = deps.loadSnapshotsFn ?? loadSnapshots;
+  const evidence: ShapeEvidence = buildShapeEvidence(
+    await load({ migrationsDir, logger, isApplied })
+  );
 
   // Step 2: rows the registry already had, waiting on a table.
   const serviceLogger = asServiceLogger(logger);
   const registries: PendingRegistry[] = [
     {
       kind: "collection",
+      evidence: evidence.collections,
       ...bind(new CollectionRegistryService(adapter, serviceLogger)),
     },
     {
       kind: "single",
+      evidence: evidence.singles,
       ...bind(new SingleRegistryService(adapter, serviceLogger)),
     },
     {
+      // Snapshots describe collections and singles only, so a field group has
+      // no shape to compare and keeps the existence rule.
       kind: "field group",
+      evidence: undefined,
       ...bind(new FieldGroupRegistryService(adapter, serviceLogger)),
     },
   ];
 
   let marked = 0;
   let stillPending = 0;
+  let shapeMismatch = 0;
   const unreadable: string[] = [];
   for (const registry of registries) {
     try {
       const swept = await markApplied(registry, adapter, logger);
       marked += swept.marked;
       stillPending += swept.stillPending;
+      shapeMismatch += swept.shapeMismatch;
     } catch (error) {
       /*
        * 🔴 Per REGISTRY, so one that cannot be read costs only its own rows.
@@ -293,6 +384,7 @@ export async function reconcileMigrationMetadata(
     singlesRegistered: registered.singlesRegistered,
     marked,
     stillPending,
+    shapeMismatch,
     unreadable,
   };
 }
@@ -310,7 +402,10 @@ function bind(service: {
     slug: string,
     tableName: string
   ) => Promise<{ verified: boolean }>;
-}): Omit<PendingRegistry, "kind"> {
+}): Pick<
+  PendingRegistry,
+  "getPendingMigrations" | "updateMigrationStatusWithVerification"
+> {
   return {
     getPendingMigrations: () => service.getPendingMigrations(),
     updateMigrationStatusWithVerification: (slug, tableName) =>
