@@ -212,7 +212,15 @@ jobs:
           cache: pnpm
 
       - name: Install
+        id: install
         run: pnpm install --frozen-lockfile
+
+      # These three read different surfaces and answer independently, so each runs even after
+      # an earlier one has found something. On the default success() condition the first
+      # finding suppresses the rest, and a run that reports one problem while silently
+      # skipping the checks for two others is the shape that hides the second round of work.
+      # Gated on the install rather than on !cancelled() alone: without dependencies they
+      # cannot produce a verdict, only a confusing error.
 
       # The comments that predate this check are recorded in
       # scripts/comment-convention-allowlist.json with a per-file count and one
@@ -220,10 +228,19 @@ jobs:
       # than advisory, and it may only shrink: adding an entry to silence a new
       # comment is the one use it does not have.
       - name: Comment convention
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:comments
 
       - name: Docs and README claims
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:docs-claims
+
+      # The About line and topic list are repository settings, not files, so every
+      # check that reads git's index is blind to them. Reports unverifiable rather
+      # than failing when the API cannot be reached.
+      - name: Repository metadata
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:repo-metadata
 
   ci:
     name: Lint / Typecheck / Test / Build

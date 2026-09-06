@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   digestLine,
+  namesRetiredCategory,
+  packageKeywords,
   renderedProse,
   runChecks,
   splitRefAndPath,
@@ -250,17 +252,19 @@ describe("retired-category", () => {
     ).toContain("retired-category");
   });
 
-  it("fires on a published keyword", async () => {
-    expect(
-      await checksFor({
-        "packages/nextly/package.json": JSON.stringify({
-          name: "nextly",
-          version: "1.0.0",
-          description: "A content platform.",
-          keywords: ["cms", "app-framework"],
-        }),
-      })
-    ).toContain("retired-category");
+  it("leaves a published keyword to the check that owns keywords", async () => {
+    // Still caught, under one name rather than two. `retired-category` reads the
+    // description; `retired-category-keyword` reads the keywords.
+    const checks = await checksFor({
+      "packages/nextly/package.json": JSON.stringify({
+        name: "nextly",
+        version: "1.0.0",
+        description: "A content platform.",
+        keywords: ["cms", "app-framework"],
+      }),
+    });
+    expect(checks).toContain("retired-category-keyword");
+    expect(checks).not.toContain("retired-category");
   });
 
   it("does not read a heading as running into the paragraph beneath it", async () => {
@@ -555,16 +559,16 @@ describe("retired-category", () => {
   });
 
   it("reads keywords given as a bare string, which npm accepts", async () => {
-    expect(
-      await checksFor({
-        "packages/nextly/package.json": JSON.stringify({
-          name: "nextly",
-          version: "1.0.0",
-          description: "A content platform.",
-          keywords: "app-framework",
-        }),
-      })
-    ).toContain("retired-category");
+    const checks = await checksFor({
+      "packages/nextly/package.json": JSON.stringify({
+        name: "nextly",
+        version: "1.0.0",
+        description: "A content platform.",
+        keywords: "app-framework",
+      }),
+    });
+    expect(checks).toContain("retired-category-keyword");
+    expect(checks).not.toContain("retired-category");
   });
 
   it("does not decode escapes in a single-quoted yaml value, which are literal", async () => {
@@ -1101,5 +1105,205 @@ describe("a fence marker inside a comment is not a fence", () => {
           "# t\n\n```md\n## Status\n\nAlpha.\n\n## Install\n\n## Related packages\n\n## License\n",
       })
     ).toContain("readme-skeleton");
+  });
+});
+
+describe("retired-category-keyword", () => {
+  it("fires on the bare 'framework' keyword", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": JSON.stringify({
+          name: "@nextlyhq/thing",
+          keywords: ["cms", "framework"],
+        }),
+        "packages/thing/README.md": "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).toContain("retired-category-keyword");
+  });
+
+  it("fires on 'app-framework' and on the plural", async () => {
+    for (const keyword of ["app-framework", "frameworks", "App-Frameworks"]) {
+      expect(
+        await checksFor({
+          "README.md": "# nextly\n\n@nextlyhq/thing\n",
+          "packages/thing/package.json": JSON.stringify({
+            name: "@nextlyhq/thing",
+            keywords: [keyword],
+          }),
+          "packages/thing/README.md":
+            "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+        })
+      ).toContain("retired-category-keyword");
+    }
+  });
+
+  it("does not fire on keywords that merely contain the word", async () => {
+    // `page-builder` and `nextly-plugin` are keywords this must never touch, and a substring
+    // match would have taken anything hyphenated with the word along with it.
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": JSON.stringify({
+          name: "@nextlyhq/thing",
+          keywords: ["page-builder", "nextly-plugin", "framework-agnostic"],
+        }),
+        "packages/thing/README.md":
+          "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).not.toContain("retired-category-keyword");
+  });
+
+  it("does not fire on a package with no keywords at all", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": JSON.stringify({ name: "@nextlyhq/thing" }),
+        "packages/thing/README.md":
+          "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).not.toContain("retired-category-keyword");
+  });
+
+  it("fires on the bare-string form npm also accepts", async () => {
+    // `"keywords": "framework"` reaches the registry the same way the array does. Iterating
+    // the string yields single characters, none of which is a whole tag, so the check went
+    // green on the one manifest shape it exists to catch.
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": '{"name":"@nextlyhq/thing","keywords":"framework"}',
+        "packages/thing/README.md":
+          "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).toContain("retired-category-keyword");
+  });
+
+  it("fires on a comma-separated keyword string, which npm splits", async () => {
+    // The bare-string fix read `"cms, framework"` as one value, which matches no whole tag,
+    // so the published `framework` keyword still produced nothing.
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": '{"name":"@nextlyhq/thing","keywords":"cms, framework"}',
+        "packages/thing/README.md":
+          "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).toContain("retired-category-keyword");
+  });
+
+  it("does not fire on a bare-string keyword that is not the category", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": '{"name":"@nextlyhq/thing","keywords":"page-builder"}',
+        "packages/thing/README.md":
+          "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).not.toContain("retired-category-keyword");
+  });
+});
+
+describe("one classifier owns keywords", () => {
+  const manifest = keyword =>
+    ({
+      "README.md": "# nextly\n\n@nextlyhq/thing\n",
+      "packages/thing/package.json": JSON.stringify({
+        name: "@nextlyhq/thing",
+        keywords: [keyword],
+      }),
+      "packages/thing/README.md":
+        "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+    });
+
+  it("reports a keyword once, not once per overlapping check", async () => {
+    // `app-framework` matched the whole-tag pattern AND the prose pattern, so the same
+    // manifest was reported under two check names by two classifiers free to drift apart.
+    const checks = await checksFor(manifest("app-framework"));
+    expect(checks.filter(c => c === "retired-category-keyword")).toHaveLength(1);
+    expect(checks).not.toContain("retired-category");
+  });
+
+  it("still catches the category embedded in a longer keyword", async () => {
+    // The whole-tag pattern alone cannot see this one, which is why the classifier asks
+    // both questions rather than the prose check being deleted outright.
+    expect(await checksFor(manifest("nextjs-app-framework"))).toContain(
+      "retired-category-keyword"
+    );
+  });
+
+  it("still reports a description that names the category", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": JSON.stringify({
+          name: "@nextlyhq/thing",
+          description: "The app framework for Next.js.",
+        }),
+        "packages/thing/README.md":
+          "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).toContain("retired-category");
+  });
+});
+
+describe("namesRetiredCategory", () => {
+  it("answers for a whole tag and for the phrase inside one", () => {
+    for (const tag of ["framework", "frameworks", "app-framework", "nextjs-app-framework"]) {
+      expect(namesRetiredCategory(tag)).toBe(true);
+    }
+  });
+
+  it("leaves tags that merely contain the word alone", () => {
+    for (const tag of ["framework-agnostic", "page-builder", "nextly-plugin"]) {
+      expect(namesRetiredCategory(tag)).toBe(false);
+    }
+  });
+
+  it("is false for anything that is not a string", () => {
+    expect(namesRetiredCategory(undefined)).toBe(false);
+    expect(namesRetiredCategory(7)).toBe(false);
+  });
+});
+
+describe("packageKeywords", () => {
+  it("reads both manifest shapes as the same list", () => {
+    expect(packageKeywords({ keywords: ["cms", "framework"] })).toEqual(["cms", "framework"]);
+    expect(packageKeywords({ keywords: "framework" })).toEqual(["framework"]);
+  });
+
+  it("splits a comma-separated string the way npm does", () => {
+    // npm's own normalize-package-data splits on /,\s+/, so this is what the registry
+    // publishes and therefore what the guard has to read.
+    expect(packageKeywords({ keywords: "cms, framework" })).toEqual(["cms", "framework"]);
+    expect(packageKeywords({ keywords: "cms,  app-framework,  nextjs" })).toEqual([
+      "cms",
+      "app-framework",
+      "nextjs",
+    ]);
+  });
+
+  it("keeps npm's quirk: a comma with no space does not split", () => {
+    // Verified against normalize-package-data 8.0.0. Splitting here too would evaluate
+    // keywords the registry never derives, which is a different check from the one intended.
+    expect(packageKeywords({ keywords: "cms,framework" })).toEqual(["cms,framework"]);
+  });
+
+  it("drops empty entries, as npm does", () => {
+    expect(packageKeywords({ keywords: ["cms", "", "framework"] })).toEqual(["cms", "framework"]);
+  });
+
+  it("returns nothing for a manifest with no usable keywords", () => {
+    expect(packageKeywords({})).toEqual([]);
+    expect(packageKeywords(undefined)).toEqual([]);
+    expect(packageKeywords({ keywords: null })).toEqual([]);
+    expect(packageKeywords({ keywords: 7 })).toEqual([]);
+  });
+
+  it("drops non-string entries rather than passing them to a regex", () => {
+    expect(packageKeywords({ keywords: ["cms", null, 7, "framework"] })).toEqual([
+      "cms",
+      "framework",
+    ]);
   });
 });
