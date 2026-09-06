@@ -1219,6 +1219,14 @@ function relinkOne(
  *
  * Delegates rather than repeating the two passes, so the singular and the
  * plural cannot drift into disagreeing about what a copy is.
+ *
+ * It takes no {@link DomIdPolicy} because no caller of it saves: composition
+ * inlines a definition into an instance that sits in a page which may already
+ * hold the definition's own ids, which is exactly the case minting exists for.
+ * A save works on a RUN of siblings and reaches for the forest form anyway.
+ * Adding the parameter here would be offering an option nothing can use, and
+ * the first caller to pass `"keep"` would be one that ought to be asking a
+ * different question.
  */
 export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
   const { nodes, nodeIds, domIds } = reidForestWithMap([node]);

@@ -606,6 +606,25 @@ describe('the "keep" DOM id policy', () => {
     expect(nodes[1].attributes?.["aria-describedby"]).toBe(nodes[0].cssId);
   });
 
+  it("leaves a link in props pointing at the target it still names", () => {
+    // The other half of a reference, and the half that is not markup: a link's
+    // target lives in `props` as `href: "#pricing"`. The relink pass returns
+    // early on an empty map, so `"keep"` must leave this exactly as it found
+    // it — asserted rather than reasoned, because "the pass does nothing" is a
+    // property of three separate remappers and any one of them could grow a
+    // path that runs before the early return.
+    const { nodes } = reidForestWithMap(
+      [
+        node("t", { cssId: "pricing" }),
+        node("l", { props: { href: "#pricing" } }),
+      ],
+      "keep"
+    );
+
+    expect((nodes[1].props as { href: string }).href).toBe("#pricing");
+    expect(nodes[0].cssId).toBe("pricing");
+  });
+
   it("keeps re-minting the default, so a PLACING caller is unchanged", () => {
     // The default is the untested state unless it is asserted. Every caller
     // that inserts relies on it, and a flipped default would be a silent
