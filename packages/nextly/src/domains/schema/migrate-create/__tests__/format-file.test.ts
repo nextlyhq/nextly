@@ -259,3 +259,39 @@ describe("the blank template asks for an entity header", () => {
     expect(parseEntityHeaders(out).components).toEqual([]);
   });
 });
+
+/*
+ * 🔴 The remediation has to WORK. The scope marker decides whether a header is
+ * read as ownership, so a blank file that lacks it discards any slug the
+ * operator adds — the provenance gate rejecting precisely the annotation the
+ * template asks for, silently. The template therefore ships the marker, and an
+ * operator who follows it only has to name the entity.
+ */
+describe("following the blank template's instruction actually annotates the file", () => {
+  const blank = (): string =>
+    formatBlankFile(
+      "custom_thing",
+      "postgresql",
+      new Date("2026-04-29T15:45:00.123Z")
+    );
+
+  it("ships the scope marker, so an added header is read as ownership", () => {
+    // What the operator writes, following the template.
+    const annotated = `${blank()}\n-- Collections: posts\n`;
+    const parsed = parseEntityHeaders(annotated);
+
+    expect(parsed.collections).toEqual(["posts"]);
+    expect(parsed.scoped).toBe(true);
+  });
+
+  it("claims nothing until the operator names something", () => {
+    // The control, and the reason shipping the marker is not a loophole: the
+    // untouched template is still unknown scope, because "changes nothing" and
+    // "nobody said" are different facts.
+    const parsed = parseEntityHeaders(blank());
+
+    expect(parsed.collections).toEqual([]);
+    expect(parsed.singles).toEqual([]);
+    expect(parsed.components).toEqual([]);
+  });
+});

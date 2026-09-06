@@ -51,9 +51,29 @@ export const FIELD_GROUP_HEADER = "-- Field groups:";
  * both are a comma-separated list of slugs.
  *
  * Absent means "this file's scope is unknown", which is the honest reading of a
- * legacy header and of a hand-written file with no header at all.
+ * legacy header.
+ *
+ * A blank migration SHIPS with this line, and that is deliberate rather than a
+ * loophole: without it, an operator who follows the template and adds
+ * `-- Collections: posts` still has the slug discarded, because the file the
+ * guidance produced is not marked. The marker alone claims nothing — a file
+ * carrying it and naming no entity is still unknown scope, because "changes
+ * nothing" and "nobody said" stay different facts. It becomes an assertion only
+ * once the operator names something, which is when they make it.
  */
 export const SCOPED_ENTITIES_MARKER = "-- Entity scope: touched";
+
+/**
+ * The one-line instruction for annotating a hand-written migration.
+ *
+ * 🔴 Exported so the CLI's remediation and the blank template say the SAME
+ * thing. They were written separately and immediately disagreed: the template
+ * listed all three headers while the warning named only `-- Collections:`, and
+ * following the warning filed a single among collections. Guidance about a
+ * format belongs beside the format.
+ */
+export const ENTITY_HEADER_GUIDANCE =
+  "Add `-- Collections:`, `-- Singles:` or `-- Field groups:` naming what it changes";
 export const FIELD_GROUP_HEADER_PATTERN =
   /^-- (?:Field groups?|Components?):\s*(.+)$/m;
 
@@ -127,13 +147,17 @@ export function formatBlankFile(
 -- This is a blank migration file for custom SQL.
 -- Add your migration SQL below.
 --
--- If this migration changes a collection, single or field group, name it:
---   -- Collections: posts
---   -- Singles: home
---   -- Field groups: hero
+-- If this migration changes a collection, single or field group, name it by
+-- uncommenting the matching line and filling in the slug:
+--
+-- -- Collections: posts
+-- -- Singles: home
+-- -- Field groups: hero
+--
 -- \`nextly migrate\` reads those lines to know which entities are still
--- waiting on this file. Without them it cannot tell, and will record those
+-- waiting on this file. Without one it cannot tell, and will record those
 -- entities as migrated once their tables exist.
+${SCOPED_ENTITIES_MARKER}
 
 -- UP
 
