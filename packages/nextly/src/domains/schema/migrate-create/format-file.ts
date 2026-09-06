@@ -148,3 +148,41 @@ export function slugify(name: string): string {
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_|_$/g, "");
 }
+
+/**
+ * The entity slugs a migration's header names.
+ *
+ * Lives beside {@link formatMigrationFile} for the reason the field-group
+ * pattern does: a writer and a reader that each spell the format themselves are
+ * two places to change and one place to forget. Two callers read this — the
+ * migrate command when it parses a file, and the pending sweep when it asks
+ * which entities are still waiting on something.
+ *
+ * The singular spellings are accepted because files already on disk carry them.
+ */
+export interface MigrationEntityHeaders {
+  collections: string[];
+  singles: string[];
+  components: string[];
+}
+
+const COLLECTIONS_HEADER_PATTERN = /^-- Collections?:\s*(.+)$/m;
+const SINGLES_HEADER_PATTERN = /^-- Singles?:\s*(.+)$/m;
+
+/** The comma-separated slugs on one header line, or none. */
+function headerSlugs(content: string, pattern: RegExp): string[] {
+  const match = content.match(pattern);
+  if (!match?.[1]) return [];
+  return match[1]
+    .split(",")
+    .map(value => value.trim())
+    .filter(value => value.length > 0);
+}
+
+export function parseEntityHeaders(content: string): MigrationEntityHeaders {
+  return {
+    collections: headerSlugs(content, COLLECTIONS_HEADER_PATTERN),
+    singles: headerSlugs(content, SINGLES_HEADER_PATTERN),
+    components: headerSlugs(content, FIELD_GROUP_HEADER_PATTERN),
+  };
+}

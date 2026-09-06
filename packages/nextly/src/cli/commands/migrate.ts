@@ -56,7 +56,7 @@ import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
-import { FIELD_GROUP_HEADER_PATTERN } from "../../domains/schema/migrate-create/format-file";
+import { parseEntityHeaders } from "../../domains/schema/migrate-create/format-file";
 import {
   EMPTY_SNAPSHOT,
   parseSnapshotFile,
@@ -464,7 +464,7 @@ export interface MigrateCoreResult {
     singlesRegistered: number;
     marked: number;
     stillPending: number;
-    shapeMismatch: number;
+    awaitingMigration: number;
     unreadable: string[];
   };
 }
@@ -525,7 +525,7 @@ function reportMetadataOutcome(
   metadata: MigrateCoreResult["metadata"],
   logger: CommandContext["logger"]
 ): void {
-  const { marked, stillPending, shapeMismatch, unreadable } = metadata;
+  const { marked, stillPending, awaitingMigration, unreadable } = metadata;
 
   if (unreadable.length > 0) {
     // Not a count of rows: this is "the sweep could not look". Reported
@@ -550,15 +550,15 @@ function reportMetadataOutcome(
    * not yet run, or has been edited since. One combined count says "something
    * is owed" and leaves them to guess which.
    */
-  const awaitingTable = stillPending - shapeMismatch;
+  const awaitingTable = stillPending - awaitingMigration;
   if (awaitingTable > 0) {
     logger.warn(
       `${formatCount(awaitingTable, "registry row")} still awaiting a migration.`
     );
   }
-  if (shapeMismatch > 0) {
+  if (awaitingMigration > 0) {
     logger.warn(
-      `${formatCount(shapeMismatch, "registry row")} awaiting a schema change that has not been applied. ` +
+      `${formatCount(awaitingMigration, "registry row")} awaiting a migration that has not been applied. ` +
         `Run \`nextly migrate:create\` if the change has no migration yet.`
     );
   }
@@ -579,7 +579,7 @@ export async function migrateCore(
     singlesRegistered: 0,
     marked: 0,
     stillPending: 0,
-    shapeMismatch: 0,
+    awaitingMigration: 0,
     unreadable: [] as string[],
   };
 
@@ -955,29 +955,7 @@ function parseMigrationFile(
   const checksumMatch = content.match(/^-- Checksum:\s*([a-f0-9]+)/m);
   const originalChecksum = checksumMatch?.[1];
 
-  const collectionsMatch = content.match(/^-- Collections?:\s*(.+)$/m);
-  const collections = collectionsMatch
-    ? collectionsMatch[1]
-        .split(",")
-        .map(c => c.trim())
-        .filter(c => c.length > 0)
-    : [];
-
-  const singlesMatch = content.match(/^-- Singles?:\s*(.+)$/m);
-  const singles = singlesMatch
-    ? singlesMatch[1]
-        .split(",")
-        .map(s => s.trim())
-        .filter(s => s.length > 0)
-    : [];
-
-  const componentsMatch = content.match(FIELD_GROUP_HEADER_PATTERN);
-  const components = componentsMatch
-    ? componentsMatch[1]
-        .split(",")
-        .map(c => c.trim())
-        .filter(c => c.length > 0)
-    : [];
+  const { collections, singles, components } = parseEntityHeaders(content);
 
   const timestampMatch = name.match(/^(\d{8}_\d{6})/);
   const timestamp = timestampMatch?.[1] ?? name;

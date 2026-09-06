@@ -289,39 +289,24 @@ describe("reconcileMigrationMetadata", () => {
  * change that has not migrated, and the sweep used to promote it. The registry
  * then advertises a shape the database has never had.
  */
-describe("reconcileMigrationMetadata weighs the shape, not only the table", () => {
-  const TITLE = [{ name: "title", type: "text" }];
-  const TITLE_BODY = [
-    { name: "title", type: "text" },
-    { name: "body", type: "richText" },
-  ];
-
-  /** A loader seam standing in for `migrations/meta` plus the ledger. */
-  function loaderFor(
-    entries: {
-      file: string;
-      applied: boolean;
-      slug: string;
-      fields: unknown[];
-    }[]
-  ) {
-    return async () =>
-      entries.map(e => ({
-        file: e.file,
-        applied: e.applied,
-        snapshot: {
-          collections: [
-            { slug: e.slug, tableName: `dc_${e.slug}`, fields: e.fields },
-          ],
-          singles: [],
-        },
-      })) as never;
+describe("reconcileMigrationMetadata holds a row an unapplied migration names", () => {
+  /** Stands in for reading the migration headers and the applied ledger. */
+  function awaitingFn(opts: {
+    collections?: string[];
+    singles?: string[];
+    components?: string[];
+  }) {
+    return async () => ({
+      collections: new Set(opts.collections ?? []),
+      singles: new Set(opts.singles ?? []),
+      components: new Set(opts.components ?? []),
+    });
   }
 
   async function sweep(opts: {
     tables: string[];
     row: Record<string, unknown>;
-    loadSnapshotsFn?: unknown;
+    awaiting: ReturnType<typeof awaitingFn>;
   }) {
     vi.resetModules();
     const made = mockRegistries([opts.row]);
@@ -337,115 +322,86 @@ describe("reconcileMigrationMetadata weighs the shape, not only the table", () =
         collectionsRegistered: 0,
         singlesRegistered: 0,
       })) as never,
-      ...(opts.loadSnapshotsFn
-        ? { loadSnapshotsFn: opts.loadSnapshotsFn as never }
-        : {}),
+      readPendingEntitiesFn: opts.awaiting as never,
     });
     return { result, made };
   }
 
-  it("leaves an edited row pending when the applied migrations lack its shape", async () => {
+  it("leaves an edited row pending while a migration naming it is unapplied", async () => {
     const { result, made } = await sweep({
       // The old table still stands, which is exactly why existence cannot decide.
       tables: ["dc_posts"],
-      row: { slug: "posts", tableName: "dc_posts", fields: TITLE_BODY },
-      loadSnapshotsFn: loaderFor([
-        {
-          file: "0001.snapshot.json",
-          applied: true,
-          slug: "posts",
-          fields: TITLE,
-        },
-        // Generated for the edit, not yet run.
-        {
-          file: "0002.snapshot.json",
-          applied: false,
-          slug: "posts",
-          fields: TITLE_BODY,
-        },
-      ]),
+      row: { slug: "posts", tableName: "dc_posts" },
+      awaiting: awaitingFn({ collections: ["posts"] }),
     });
 
     expect(
       made.collection.updateMigrationStatusWithVerification
     ).not.toHaveBeenCalled();
     expect(result.marked).toBe(0);
-    expect(result.shapeMismatch).toBe(1);
+    expect(result.awaitingMigration).toBe(1);
     // Counted inside the total rather than beside it, so the two agree.
     expect(result.stillPending).toBe(1);
   });
 
-  it("promotes the same row once that migration is applied", async () => {
+  it("promotes the same row once nothing names it any more", async () => {
     // The control. Without it, an implementation that withheld EVERY row would
     // satisfy the case above — and withholding every row is the empty-dashboard
     // defect this sweep exists to prevent.
     const { result, made } = await sweep({
       tables: ["dc_posts"],
-      row: { slug: "posts", tableName: "dc_posts", fields: TITLE_BODY },
-      loadSnapshotsFn: loaderFor([
-        {
-          file: "0001.snapshot.json",
-          applied: true,
-          slug: "posts",
-          fields: TITLE,
-        },
-        {
-          file: "0002.snapshot.json",
-          applied: true,
-          slug: "posts",
-          fields: TITLE_BODY,
-        },
-      ]),
+      row: { slug: "posts", tableName: "dc_posts" },
+      awaiting: awaitingFn({}),
     });
 
     expect(
       made.collection.updateMigrationStatusWithVerification
     ).toHaveBeenCalledWith("posts", "dc_posts");
     expect(result.marked).toBe(1);
-    expect(result.shapeMismatch).toBe(0);
+    expect(result.awaitingMigration).toBe(0);
   });
 
-  it("promotes a row no snapshot describes, rather than withholding it", async () => {
-    // A code-first collection, or an install predating snapshots. Silence is
-    // not disagreement: treating it as one empties dashboards that work today.
+  it("promotes a row no migration header names, rather than withholding it", async () => {
+    // A code-first collection, or an install whose migrations predate scoped
+    // headers. Silence is not disagreement.
     const { result } = await sweep({
       tables: ["dc_authors"],
-      row: { slug: "authors", tableName: "dc_authors", fields: TITLE },
-      loadSnapshotsFn: loaderFor([
-        {
-          file: "0001.snapshot.json",
-          applied: true,
-          slug: "posts",
-          fields: TITLE,
-        },
-      ]),
+      row: { slug: "authors", tableName: "dc_authors" },
+      awaiting: awaitingFn({ collections: ["posts"] }),
     });
 
     expect(result.marked).toBe(1);
-    expect(result.shapeMismatch).toBe(0);
+    expect(result.awaitingMigration).toBe(0);
   });
 
-  it("still refuses a row whose table is absent, before shape is consulted", async () => {
-    // Existence remains necessary. A matching shape must not promote a row
-    // whose table was never created.
+  it("judges each kind against its own names", async () => {
+    // A collection and a single can share a slug in a snapshot header without
+    // being the same entity; holding a collection back because a SINGLE of
+    // that name is pending would be wrong.
+    const { result } = await sweep({
+      tables: ["dc_posts"],
+      row: { slug: "posts", tableName: "dc_posts" },
+      awaiting: awaitingFn({ singles: ["posts"] }),
+    });
+
+    expect(result.marked).toBe(1);
+    expect(result.awaitingMigration).toBe(0);
+  });
+
+  it("still refuses a row whose table is absent, before headers are consulted", async () => {
+    // Existence remains necessary. Nothing naming the slug must not promote a
+    // row whose table was never created.
     const { result, made } = await sweep({
       tables: [],
-      row: { slug: "posts", tableName: "dc_posts", fields: TITLE },
-      loadSnapshotsFn: loaderFor([
-        {
-          file: "0001.snapshot.json",
-          applied: true,
-          slug: "posts",
-          fields: TITLE,
-        },
-      ]),
+      row: { slug: "posts", tableName: "dc_posts" },
+      awaiting: awaitingFn({}),
     });
 
     expect(
       made.collection.updateMigrationStatusWithVerification
     ).not.toHaveBeenCalled();
     expect(result.stillPending).toBe(1);
-    // Not a shape disagreement — the operator is sent to a different remedy.
-    expect(result.shapeMismatch).toBe(0);
+    // Not an outstanding migration — the operator is sent to a different remedy.
+    expect(result.awaitingMigration).toBe(0);
   });
 });
