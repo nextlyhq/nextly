@@ -1214,8 +1214,16 @@ describe("a caller-sized exposure costs a refusal, not a traversal", () => {
     } catch (error) {
       threw = error;
     }
+
+    // Not a native error, which is the property this test was written for.
     expect(threw).toBeUndefined();
-    expect(result?.problem).toBeUndefined();
+    // And refused, which it was not when this test was first written. An own
+    // `map` is a non-index key on an array, and `JSON.stringify` writes an
+    // array by position — so the key is silently lost and the list does not
+    // round-trip. The op layer refuses such a list outright, and asking that
+    // rule here rather than only avoiding `map` is what closed the accessor
+    // case beside it.
+    expect(result?.problem).toBe("invalid-exposure");
   });
 
   it("indexes the envelope under the HOST's node cap, not its own", () => {
@@ -1448,5 +1456,116 @@ describe("the request is read once, so two passes cannot disagree", () => {
         anyParent
       ).problem
     ).toBe("ambiguous-exposure");
+  });
+});
+
+describe("what a definition may not be", () => {
+  it("refuses one that would exceed the caller's byte cap", () => {
+    // An exposure only ever makes a document bigger, so a page that fits can
+    // become a definition that does not — and `documentRefusal` answers whether
+    // a document can be EDITED, which is a different question from whether it
+    // fits.
+    const doc = page([node("a")]);
+    const limits = {
+      ...DEFAULT_LIMITS,
+      maxBytes: JSON.stringify(doc).length + 10,
+    };
+
+    expect(
+      planSaveAsComponent(
+        doc,
+        ["a"],
+        componentTarget,
+        {
+          properties: [
+            {
+              id: "p1",
+              label: "A label long enough to carry it over the cap",
+              nodeId: "a",
+              propPath: "text",
+              type: "text" as const,
+            },
+          ],
+        },
+        anyParent,
+        limits
+      ).problem
+    ).toBe("exceeds-limits");
+  });
+
+  it("refuses one that would contain an instance of itself", () => {
+    // The selection can already hold an instance of the component about to be
+    // created — a dangling one on the page. The resolver classifies that as a
+    // cycle and leaves it unresolved, so a conversion whose dry run succeeded
+    // replaces visible content with a broken placeholder.
+    const doc = page([
+      {
+        id: "i1",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: "def-1" },
+      },
+    ]);
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["i1"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent
+      ).problem
+    ).toBe("self-reference");
+
+    // The control: converting it under a DIFFERENT id is fine, so the refusal
+    // is about the self-reference rather than about instances in a selection.
+    expect(
+      planConvertToComponent(
+        doc,
+        ["i1"],
+        componentTarget,
+        "def-2",
+        {},
+        anyParent
+      ).problem
+    ).toBeUndefined();
+  });
+
+  it("refuses an exposure list whose indices are accessors", () => {
+    // A genuine array, with entries that would be well formed, that computes
+    // them. Neither the array check nor the entry guards see it, and reading
+    // one index runs the caller's code — while a getter that appends extends
+    // `length` underneath the loop the cap is supposed to hold.
+    //
+    // Refused rather than carried to the validator: carrying works for a value
+    // the envelope check can READ, and this one explodes wherever it is first
+    // touched, which only moves the failure into validation.
+    const computed: unknown[] = [];
+    Object.defineProperty(computed, "0", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        throw new Error("read me and find out");
+      },
+    });
+    Object.defineProperty(computed, "length", { value: 1, writable: true });
+
+    let threw: unknown;
+    let result;
+    try {
+      result = planSaveAsComponent(
+        cardPage(),
+        ["card"],
+        componentTarget,
+        { properties: computed } as never,
+        anyParent
+      );
+    } catch (error) {
+      threw = error;
+    }
+
+    expect(threw).toBeUndefined();
+    expect(result?.problem).toBe("invalid-exposure");
   });
 });

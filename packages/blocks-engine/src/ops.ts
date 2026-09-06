@@ -2407,6 +2407,31 @@ export function documentRefusal(document: unknown): string | undefined {
 }
 
 /**
+ * Why this list cannot be treated as stored data, or `undefined`.
+ *
+ * Published for the reason the other refusals here are: a planner reads lists a
+ * caller supplied, and reading one whose INDICES are accessors runs that
+ * caller's code — a throwing getter escaping as a native error where the module
+ * promises a refusal, and a getter that appends extending `length` underneath
+ * the loop that is supposed to be bounded by it.
+ *
+ * Neither the array type nor a shadowed-method check answers this: the value
+ * can be a genuine array, with well-formed entries, and still compute them.
+ */
+export function listRefusal(
+  list: unknown,
+  subject: string
+): string | undefined {
+  try {
+    assertListIsData(list, subject);
+    return undefined;
+  } catch (error) {
+    if (error instanceof OpError) return error.message;
+    throw error;
+  }
+}
+
+/**
  * Why removing this subtree would be refused, or `undefined`.
  *
  * Published for the reason {@link nodeShapeRefusal} and {@link positionRefusal}

@@ -35,6 +35,7 @@ import type {
 } from "./document";
 import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import type { DocumentLimits } from "./limits";
+import { surveyDocument } from "./measure-bytes";
 import {
   canBeRoot,
   canNest,
@@ -46,6 +47,7 @@ import {
 import {
   applyOps,
   documentRefusal,
+  listRefusal,
   forestRefusal,
   lockedWithin,
   nodeShapeRefusal,
@@ -56,6 +58,7 @@ import {
 } from "./ops";
 import { patternDigest } from "./pattern-digest";
 import { isPlainRecord } from "./plain-record";
+import { componentIdsIn } from "./resolve-instances";
 import { boundedOwnKeys, defineEntry } from "./safe-record";
 import { contiguousRun, type RunProblem } from "./sibling-run";
 import {
@@ -218,7 +221,16 @@ export type PlanProblem =
    * their exposure: the page is at its ceiling, and what has to change is the
    * page or the ceiling.
    */
-  | "exceeds-limits";
+  | "exceeds-limits"
+  /**
+   * The definition would contain an instance of itself.
+   *
+   * Its own cause because nothing about the selection or the exposure is
+   * malformed: the run being converted already referenced the component about
+   * to be created, and the author has to remove that instance or create the
+   * component under a different id.
+   */
+  | "self-reference";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -918,6 +930,16 @@ export function planConvertToComponent<TFields>(
   const definition = componentDocument(saved, exposure, limits);
   if (definition.problem !== undefined) return definition;
 
+  // A definition holding an instance of ITSELF. The selection can already
+  // contain one — a dangling `def-1` on the page, converted while creating
+  // `def-1` — and the resolver classifies that as a cycle and leaves it
+  // unresolved, so a conversion whose dry run succeeded replaces visible
+  // content with a broken placeholder. Asked through the resolver's own
+  // published index, not a walk of this module's own.
+  if (componentIdsIn(definition.document.nodes).includes(componentId)) {
+    return { problem: "self-reference" };
+  }
+
   const replaced = replaceOps(document, saved, componentId, nesting, limits);
   if (replaced.problem !== undefined) return replaced;
 
@@ -977,6 +999,12 @@ function componentDocument(
   // judges is the id the mapper stores.
   const read = readExposure(asked);
 
+  // A collection nothing may read is refused HERE rather than handed on. The
+  // envelope check is what names what is wrong with a value this cannot map —
+  // but only for a value it can itself read, and an array with an accessor
+  // index explodes wherever it is first touched.
+  if (unreadable(read)) return { problem: "invalid-exposure" };
+
   const ambiguous = ambiguousNomination(saved.selected, read);
   if (ambiguous !== undefined) return ambiguous;
 
@@ -1003,9 +1031,7 @@ function componentDocument(
   // make the whole document unstorable: an option carrying a `BigInt` survives
   // the envelope check, which reads `value` and `label`, and JSON cannot write
   // it. The plan would report success and the create would fail on save.
-  return documentRefusal(definition) === undefined
-    ? { document: definition }
-    : { problem: "unusable-document" };
+  return definitionRefusal(definition, limits) ?? { document: definition };
 }
 
 /**
@@ -1063,7 +1089,17 @@ interface ReadExposure {
 type ReadCollection =
   | { readonly kind: "absent" }
   | { readonly kind: "read"; readonly entries: readonly unknown[] }
-  | { readonly kind: "carried"; readonly value: unknown };
+  | { readonly kind: "carried"; readonly value: unknown }
+  /**
+   * A collection nothing may read — not this module, and not the validator.
+   *
+   * Distinct from `"carried"`, which hands a value on for the envelope check to
+   * refuse in its own words. That only works for a value the check can READ: an
+   * array whose indices are accessors explodes wherever it is first touched, so
+   * carrying it moves the explosion into validation instead of preventing it.
+   * Measured exactly that way.
+   */
+  | { readonly kind: "unreadable" };
 
 /**
  * The same three states for the slot MAP, whose keys are the exposure ids.
@@ -1076,7 +1112,8 @@ type ReadCollection =
 type ReadMap =
   | { readonly kind: "absent" }
   | { readonly kind: "read"; readonly slots: Record<string, unknown> }
-  | { readonly kind: "carried"; readonly value: unknown };
+  | { readonly kind: "carried"; readonly value: unknown }
+  | { readonly kind: "unreadable" };
 
 function readExposure(exposure: ComponentExposure): ReadExposure {
   const named: string[] = [];
@@ -1104,6 +1141,16 @@ function readEntries(
 ): ReadCollection {
   if (value === undefined) return { kind: "absent" };
   if (!Array.isArray(value)) return { kind: "carried", value };
+  // The list is DATA before a single index of it is read. An index can be an
+  // accessor even on a genuine array whose entries are all well formed, so
+  // neither the array check above nor the entry guards below see it — and
+  // reading one runs the caller's code: a throwing getter escapes as a native
+  // error, and one that appends extends `length` underneath the very bound that
+  // is supposed to hold this loop. Carried for the validator to refuse, which
+  // is what happens to every value this cannot read.
+  if (listRefusal(value, "an exposure list") !== undefined) {
+    return { kind: "unreadable" };
+  }
   if (value.length > MAX_ENVELOPE_ENTRIES) return { kind: "carried", value };
   const entries: unknown[] = [];
   for (let index = 0; index < value.length; index += 1) {
@@ -1115,7 +1162,11 @@ function readEntries(
 /** A nested list as the envelope should hold it, read or carried. */
 function nestedValue(collection: ReadCollection): unknown {
   if (collection.kind === "absent") return undefined;
-  return collection.kind === "read" ? collection.entries : collection.value;
+  if (collection.kind === "read") return collection.entries;
+  // An unreadable nested list becomes an empty one rather than travelling into
+  // the envelope: it is a list nothing may touch, and the entry holding it is
+  // refused by the caller of this read anyway.
+  return collection.kind === "carried" ? collection.value : [];
 }
 
 /** The slot map, bounded to its own keys; anything else verbatim. */
@@ -1204,6 +1255,44 @@ function ambiguousNomination(
   return undefined;
 }
 
+/** Whether either collection is one nothing may read. */
+function unreadable(read: ReadExposure): boolean {
+  return (
+    read.properties.kind === "unreadable" || read.slots.kind === "unreadable"
+  );
+}
+
+/**
+ * Why the completed definition could not be stored, or `undefined`.
+ *
+ * Two questions the envelope check does not answer, asked of the document WITH
+ * its envelope on.
+ *
+ * Whether it can be stored at all — `savedPatternDocument` asks that of the
+ * tree, before there is an envelope, and the envelope is caller-supplied, so a
+ * field the envelope check does not read can still make the whole document
+ * unwritable.
+ *
+ * And whether it FITS. An exposure only ever makes a document bigger, so a page
+ * inside the caller's caps can become a definition that is not — and being
+ * editable is a different question from being small enough. Measured through
+ * the survey the publish gate uses, so the two cannot come to disagree about
+ * the size of one document.
+ */
+function definitionRefusal(
+  definition: ComponentDocument,
+  limits: DocumentLimits
+): PlanRefusal | undefined {
+  if (documentRefusal(definition) !== undefined) {
+    return { problem: "unusable-document" };
+  }
+  const survey = surveyDocument(definition, limits);
+  if (survey.tooLarge || survey.tooDeep || survey.tooManyNodes) {
+    return { problem: "exceeds-limits" };
+  }
+  return undefined;
+}
+
 /**
  * The nominated properties, re-aimed at the stored tree.
  *
@@ -1217,7 +1306,9 @@ function exposedProperties(
   nodeIds: ReadonlyMap<string, string>
 ): { exposed?: ExposedProperty[] } {
   const properties = read.properties;
-  if (properties.kind === "absent") return {};
+  if (properties.kind === "absent" || properties.kind === "unreadable") {
+    return {};
+  }
   if (properties.kind === "carried") {
     return { exposed: properties.value as ExposedProperty[] };
   }
@@ -1244,7 +1335,9 @@ function exposedSlots(
   nodeIds: ReadonlyMap<string, string>
 ): { slots?: Record<string, ExposedSlot> } {
   const requested = read.slots;
-  if (requested.kind === "absent") return {};
+  if (requested.kind === "absent" || requested.kind === "unreadable") {
+    return {};
+  }
   if (requested.kind === "carried") {
     return { slots: requested.value as Record<string, ExposedSlot> };
   }
