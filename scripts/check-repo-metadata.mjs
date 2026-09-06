@@ -100,6 +100,37 @@ function authHeaders(env = process.env) {
 
 const TRANSIENT_ATTEMPTS = 3;
 
+/**
+ * The longest this will wait before giving up on a transient failure.
+ *
+ * A primary rate limit can reset an hour out. Sleeping through that would hold a runner open
+ * for an hour to answer one question, so past this the honest report is that the run could not
+ * verify the metadata, which the scheduled run then treats as a failure.
+ */
+const MAX_RETRY_WAIT_MS = 60_000;
+
+/**
+ * How long to wait before retrying, preferring the interval GitHub named.
+ *
+ * A secondary rate limit answers with `retry-after` and a primary one with the epoch second
+ * the quota resets. Reading those headers to decide the failure is transient and then waiting
+ * an arbitrary second anyway burns every attempt inside a window GitHub already said would not
+ * clear — the retries are spent, and a scheduled run files an issue for a limit that had a
+ * published recovery time.
+ */
+export function retryDelayMs(headers, attempt, now = Date.now()) {
+  const retryAfter = Number(headers?.get?.("retry-after"));
+  if (Number.isFinite(retryAfter) && retryAfter > 0) return retryAfter * 1000;
+
+  const reset = Number(headers?.get?.("x-ratelimit-reset"));
+  if (Number.isFinite(reset) && reset > 0) {
+    const wait = reset * 1000 - now;
+    if (wait > 0) return wait;
+  }
+
+  return attempt * 1000;
+}
+
 export async function fetchRepoMetadata(owner = OWNER, repo = REPO, { fetchImpl = fetch, env = process.env, delay = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
   let lastError;
   for (let attempt = 1; attempt <= TRANSIENT_ATTEMPTS; attempt += 1) {
@@ -109,11 +140,19 @@ export async function fetchRepoMetadata(owner = OWNER, repo = REPO, { fetchImpl 
       });
       if (response.ok) {
         const body = await response.json();
-        return { description: body.description ?? "", topics: body.topics ?? [] };
+        return {
+          description: body.description ?? "",
+          topics: body.topics ?? [],
+          // Carried so strictness can ask whether this run is on the branch whose manifest
+          // the About line is supposed to match. Reading it from the same response keeps it
+          // from being a second, separately-wrong answer to "what is the default branch".
+          defaultBranch: body.default_branch ?? null,
+        };
       }
       const error = new Error(`GitHub API returned ${response.status} for ${owner}/${repo}`);
       error.permanent = isPermanentStatus(response.status, response.headers);
       if (error.permanent) throw error;
+      error.retryIn = retryDelayMs(response.headers, attempt);
       lastError = error;
     } catch (error) {
       if (error.permanent) throw error;
@@ -121,7 +160,12 @@ export async function fetchRepoMetadata(owner = OWNER, repo = REPO, { fetchImpl 
     }
     // Retried because a single blip should not file an issue. A permanent status never
     // reaches here, so this never delays the answer that matters.
-    if (attempt < TRANSIENT_ATTEMPTS) await delay(attempt * 1000);
+    if (attempt >= TRANSIENT_ATTEMPTS) break;
+    const wait = lastError.retryIn ?? attempt * 1000;
+    // Nothing is gained by sleeping through a window longer than this run should live;
+    // stopping now reports the same answer sooner.
+    if (wait > MAX_RETRY_WAIT_MS) break;
+    await delay(wait);
   }
   throw lastError;
 }
@@ -136,11 +180,24 @@ export async function fetchRepoMetadata(owner = OWNER, repo = REPO, { fetchImpl 
  * correct change teaches people to wave it through, so drift is advisory on a pull request and
  * blocking everywhere the setting can actually be brought back into line.
  *
+ * The event alone does not identify those places. A manual dispatch can run against any branch,
+ * and a branch that legitimately moved the package description is in exactly the position a
+ * pull request is: compared against one global value it has not landed yet. So the question is
+ * which ref is checked out, not which event fired — the About line is only required to match
+ * the manifest on the branch it was written from.
+ *
+ * With no ref at all this is a laptop, where someone ran the check deliberately and should get
+ * the strict answer.
+ *
  * The category checks are unconditional. Those are absolute claims about what the project is,
  * not a comparison against a value the branch is allowed to move.
  */
-export function strictDescriptionMatch(env = process.env) {
-  return env.GITHUB_EVENT_NAME !== "pull_request";
+export function strictDescriptionMatch(env = process.env, defaultBranch = null) {
+  if (env.GITHUB_EVENT_NAME === "pull_request") return false;
+  const ref = env.GITHUB_REF_NAME;
+  if (!ref) return true;
+  if (!defaultBranch) return true; // unknown: keep the stricter answer
+  return ref === defaultBranch;
 }
 
 export function checkRepoMetadata({ metadata, expectedDescription, strictDescription = true }) {
@@ -233,7 +290,7 @@ if (invokedDirectly) {
   const { findings } = checkRepoMetadata({
     metadata,
     expectedDescription,
-    strictDescription: strictDescriptionMatch(),
+    strictDescription: strictDescriptionMatch(process.env, metadata.defaultBranch),
   });
 
   const advisory = findings.filter(finding => finding.advisory);
@@ -242,7 +299,8 @@ if (invokedDirectly) {
   for (const finding of advisory) {
     console.warn(`repo metadata: ${finding.check}: ${finding.message}`);
     console.warn(
-      `  Not failing this run: the About line is a repository setting a pull request cannot change.\n`
+      `  Not failing this run: the About line is one global repository setting, and this ref ` +
+        `has not landed on the default branch yet.\n`
     );
   }
 

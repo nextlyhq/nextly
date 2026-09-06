@@ -4,6 +4,7 @@ import {
   checkRepoMetadata,
   fetchRepoMetadata,
   isPermanentStatus,
+  retryDelayMs,
   strictDescriptionMatch,
   verificationRequired,
 } from "./check-repo-metadata.mjs";
@@ -195,14 +196,85 @@ describe("drift is advisory where it cannot be acted on", () => {
 });
 
 describe("strictDescriptionMatch", () => {
-  it("is lenient only on a pull request", () => {
-    expect(strictDescriptionMatch({ GITHUB_EVENT_NAME: "pull_request" })).toBe(false);
+  it("is lenient on a pull request whatever the ref says", () => {
+    expect(
+      strictDescriptionMatch(
+        { GITHUB_EVENT_NAME: "pull_request", GITHUB_REF_NAME: "main" },
+        "main"
+      )
+    ).toBe(false);
   });
 
-  it("is strict on a schedule, a push, and on a laptop with no event at all", () => {
-    expect(strictDescriptionMatch({ GITHUB_EVENT_NAME: "schedule" })).toBe(true);
-    expect(strictDescriptionMatch({ GITHUB_EVENT_NAME: "push" })).toBe(true);
-    expect(strictDescriptionMatch({})).toBe(true);
+  it("is strict on the default branch, where the setting can be brought into line", () => {
+    expect(
+      strictDescriptionMatch({ GITHUB_EVENT_NAME: "schedule", GITHUB_REF_NAME: "main" }, "main")
+    ).toBe(true);
+    expect(
+      strictDescriptionMatch({ GITHUB_EVENT_NAME: "push", GITHUB_REF_NAME: "main" }, "main")
+    ).toBe(true);
+  });
+
+  it("is lenient on a manual run against a branch that has not landed", () => {
+    // A dispatch can target any ref. A branch that legitimately moved the package
+    // description is in the same position a pull request is, and failing it would file an
+    // issue for a mismatch that is expected.
+    expect(
+      strictDescriptionMatch(
+        { GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_REF_NAME: "task/rename" },
+        "main"
+      )
+    ).toBe(false);
+    expect(
+      strictDescriptionMatch(
+        { GITHUB_EVENT_NAME: "schedule", GITHUB_REF_NAME: "task/rename" },
+        "main"
+      )
+    ).toBe(false);
+  });
+
+  it("is strict on a laptop, where someone ran the check deliberately", () => {
+    expect(strictDescriptionMatch({}, "main")).toBe(true);
+  });
+
+  it("keeps the stricter answer when the default branch is unknown", () => {
+    expect(strictDescriptionMatch({ GITHUB_REF_NAME: "main" }, null)).toBe(true);
+  });
+});
+
+describe("retryDelayMs", () => {
+  const headers = entries => ({ get: name => entries[name] ?? null });
+
+  it("waits the interval a secondary limit named", () => {
+    expect(retryDelayMs(headers({ "retry-after": "60" }), 1)).toBe(60_000);
+  });
+
+  it("waits until a primary limit resets", () => {
+    const now = 1_000_000_000_000;
+    const reset = String(now / 1000 + 45);
+    expect(retryDelayMs(headers({ "x-ratelimit-reset": reset }), 1, now)).toBe(45_000);
+  });
+
+  it("prefers retry-after when both are present", () => {
+    const now = 1_000_000_000_000;
+    expect(
+      retryDelayMs(
+        headers({ "retry-after": "5", "x-ratelimit-reset": String(now / 1000 + 900) }),
+        1,
+        now
+      )
+    ).toBe(5_000);
+  });
+
+  it("backs off on its own when GitHub named no interval", () => {
+    expect(retryDelayMs(headers({}), 1)).toBe(1_000);
+    expect(retryDelayMs(undefined, 2)).toBe(2_000);
+  });
+
+  it("ignores a reset already in the past", () => {
+    const now = 1_000_000_000_000;
+    expect(retryDelayMs(headers({ "x-ratelimit-reset": String(now / 1000 - 10) }), 3, now)).toBe(
+      3_000
+    );
   });
 });
 
@@ -310,7 +382,7 @@ describe("fetchRepoMetadata", () => {
       delay: noWait,
     });
     expect(calls).toBe(2);
-    expect(metadata).toEqual({ description: "d", topics: ["cms"] });
+    expect(metadata).toEqual({ description: "d", topics: ["cms"], defaultBranch: null });
   });
 
   it("does not retry a permanent failure", async () => {
@@ -327,6 +399,56 @@ describe("fetchRepoMetadata", () => {
       })
     ).rejects.toMatchObject({ permanent: true });
     expect(calls).toBe(1);
+  });
+
+  it("sleeps for the interval GitHub named rather than its own backoff", async () => {
+    // Reading retry-after to classify the failure and then waiting a second anyway spends
+    // every attempt inside a window GitHub already said would not clear.
+    const waits = [];
+    let calls = 0;
+    await fetchRepoMetadata("o", "r", {
+      fetchImpl: async () => {
+        calls += 1;
+        return calls === 1
+          ? bad(403, { "retry-after": "30" })
+          : ok({ description: "d", topics: [] });
+      },
+      env: {},
+      delay: async ms => {
+        waits.push(ms);
+      },
+    });
+    expect(waits).toEqual([30_000]);
+  });
+
+  it("stops rather than sleeping through a window longer than the run should live", async () => {
+    // An hour-long primary limit is not something to hold a runner open for; the honest
+    // report is that this run could not verify the metadata.
+    let calls = 0;
+    const waits = [];
+    await expect(
+      fetchRepoMetadata("o", "r", {
+        fetchImpl: async () => {
+          calls += 1;
+          return bad(403, { "retry-after": "3600" });
+        },
+        env: {},
+        delay: async ms => {
+          waits.push(ms);
+        },
+      })
+    ).rejects.toMatchObject({ permanent: false });
+    expect(calls).toBe(1);
+    expect(waits).toEqual([]);
+  });
+
+  it("carries the default branch, so strictness has a ref to compare against", async () => {
+    const metadata = await fetchRepoMetadata("o", "r", {
+      fetchImpl: async () => ok({ description: "d", topics: [], default_branch: "main" }),
+      env: {},
+      delay: noWait,
+    });
+    expect(metadata.defaultBranch).toBe("main");
   });
 
   it("gives up after the last attempt and reports the failure as transient", async () => {
