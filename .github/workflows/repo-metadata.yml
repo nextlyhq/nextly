@@ -63,8 +63,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # Its own label, matching the one-per-concern convention the repository already
+          # uses (ci-dep-audit-failure, ci-lighthouse-failure). Sharing the package-smoke
+          # label would have been read by that workflow's reporter, which takes the first
+          # open issue carrying it: a metadata issue standing open would have swallowed
+          # every package-smoke report and suppressed its own tracking issue entirely.
           existing=$(gh issue list --repo "${{ github.repository }}" \
-            --label ci-nightly-failure --state open --json number,title \
+            --label ci-metadata-failure --state open --json number,title \
             --jq '[.[] | select(.title == "Repository metadata no longer matches the category")][0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "${{ github.repository }}" \
@@ -75,6 +80,6 @@ jobs:
             body=$(printf 'The scheduled repository-metadata check failed. Run: %s\n\nEither the GitHub About line or the topic list no longer agrees with the category, or the run could not read them at all. The logs say which.\n\nThese are repository settings rather than files, so no file check can see them and nothing in a commit can fix them. Fix them in Settings, or with:\n\n```\ngh repo edit nextlyhq/nextly --description "..." --add-topic ... --remove-topic ...\n```' "$RUN_URL")
             gh issue create --repo "${{ github.repository }}" \
               --title "Repository metadata no longer matches the category" \
-              --label ci-nightly-failure \
+              --label ci-metadata-failure \
               --body "$body"
           fi
