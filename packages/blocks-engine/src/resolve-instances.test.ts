@@ -1547,6 +1547,38 @@ describe("a node that spells a DOM id twice and renders one", () => {
     expect(nodes[1]!.attributes!["aria-describedby"]).toBe("hero");
   });
 
+  it("reads the bag once, so a value that changes cannot split the two", () => {
+    // A bag entry can be a getter or a Proxy trap that answers differently each
+    // time. Deriving the rendered id from one reading and rewriting from a
+    // second let them disagree: `hero` reached the reference table while
+    // `other` stayed on the element. Survives a prototype of exactly
+    // `Object.prototype`, so neither earlier guard catches it.
+    let reads = 0;
+    const shifting: Record<string, unknown> = {};
+    Object.defineProperty(shifting, "id", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return reads === 1 ? "hero" : "other";
+      },
+    });
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        stored(node("d1") as ResolvedBlockNode, { attributes: shifting }),
+        node("d2", { attributes: { "aria-describedby": "hero" } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    // The invariant, whichever value won: no reference names an id that is not
+    // on the element it points at.
+    expect(nodes[1]!.attributes!["aria-describedby"]).toBe(
+      nodes[0]!.attributes!.id
+    );
+  });
+
   it("still scopes a cssId when the bag beside it is unreadable", () => {
     // The boundary: a string `cssId` shadows the bag, so the rendered id does
     // not depend on reading it. Refusing to scope here would leave two

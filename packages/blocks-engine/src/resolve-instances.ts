@@ -1854,12 +1854,10 @@ function applyScopedDomIds(
   // rendered id and its scoped replacement; only a node relying on an
   // unreadable bag now scopes nothing, which is the honest answer for an
   // address this cannot rewrite.
-  const names = isPlainRecord(scoped.attributes)
-    ? boundedOwnKeys(scoped.attributes, MAX_ENVELOPE_ENTRIES)
-    : null;
+  const bag = snapshotAttributes(scoped.attributes);
   const rendered = renderedDomId({
     cssId: scoped.cssId,
-    attributes: names === null ? undefined : scoped.attributes,
+    attributes: bag ?? undefined,
   });
   const minted =
     rendered === undefined ? undefined : scopedDomId(rendered, scoped.id, ctx);
@@ -1869,13 +1867,42 @@ function applyScopedDomIds(
   if (minted !== undefined && typeof scoped.cssId === "string") {
     scoped.cssId = minted;
   }
-  if (names === null) return;
-  scoped.attributes = attributesWithScopedId(
-    scoped.attributes as Record<string, unknown>,
-    names,
-    rendered,
-    minted
-  );
+  if (bag === null) return;
+  scoped.attributes = attributesWithScopedId(bag, rendered, minted);
+}
+
+/**
+ * The attribute bag as DATA: bounded, own string entries, read exactly once.
+ *
+ * A bag is a stored record in the ordinary case and an arbitrary object in the
+ * hostile one, where a value can be a getter or a Proxy trap that answers
+ * differently each time it is asked. Deriving the rendered id from one reading
+ * and rewriting from a second let the two disagree: the id `hero` was published
+ * to the reference table while `other` stayed on the element, so every
+ * `aria-describedby="hero"` was retargeted at an id nothing renders — the same
+ * failure this module set out to close, by a route that survives a bag whose
+ * prototype is exactly `Object.prototype`.
+ *
+ * So the bag is read once, into a plain record, and both answers come from that
+ * snapshot. `null` for a bag this cannot use at all — not a plain record, or
+ * past the envelope cap — which is also what keeps the read bounded, since
+ * {@link renderedDomId} mirrors the renderer and reads every key it is given.
+ *
+ * Non-string values are dropped rather than carried, matching what the rewrite
+ * already emitted: the bag it produces has only ever held strings.
+ */
+function snapshotAttributes(
+  attributes: unknown
+): Record<string, string> | null {
+  if (!isPlainRecord(attributes)) return null;
+  const names = boundedOwnKeys(attributes, MAX_ENVELOPE_ENTRIES);
+  if (names === null) return null;
+  const snapshot: Record<string, string> = {};
+  for (const name of names) {
+    const value = ownEntry(attributes, name);
+    if (typeof value === "string") defineEntry(snapshot, name, value);
+  }
+  return snapshot;
 }
 
 /**
@@ -1900,9 +1927,9 @@ function scopedDomId(
 /**
  * The attribute bag with the RENDERED id replaced.
  *
- * Takes the names its caller already measured rather than reading the bag a
- * second time: two readings of one record can disagree, and the first is the
- * one the rendered id was derived from.
+ * Takes the SNAPSHOT its caller already read, never the stored bag: two
+ * readings of one record can disagree, and the rendered id was derived from the
+ * first — see {@link snapshotAttributes}.
  *
  * A SHADOWED id is left verbatim. It puts nothing on the page, so it cannot
  * collide with another instance of the same definition, and it is a value the
@@ -1916,15 +1943,12 @@ function scopedDomId(
  * to a single address.
  */
 function attributesWithScopedId(
-  attributes: Record<string, unknown>,
-  names: readonly string[],
+  snapshot: Record<string, string>,
   rendered: string | undefined,
   minted: string | undefined
 ): Record<string, string> {
   const next: Record<string, string> = {};
-  for (const name of names) {
-    const value = ownEntry(attributes, name);
-    if (typeof value !== "string") continue;
+  for (const [name, value] of Object.entries(snapshot)) {
     // Case-insensitively, because HTML attribute names are: a stored `ID` and
     // a stored `id` address the same thing to a browser.
     const isRenderedId =
