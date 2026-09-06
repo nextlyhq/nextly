@@ -119,6 +119,45 @@ export interface RegisterFromMigrationsOptions {
   dialect: SupportedDialect;
 
   /**
+   * Whether the migration a snapshot belongs to has actually been applied.
+   *
+   * 🔴 Registration inserts entities as `applied`, so without this it asserts
+   * something it has not checked. Every `*.snapshot.json` in the directory is
+   * read and merged, including snapshots for migrations a `--step N` run has
+   * not reached — and those entities are then exposed as applied while their
+   * tables may not exist, beyond the reach of the pending sweep that would
+   * otherwise repair them, because they are no longer pending.
+   *
+   * Called with the LEDGER filename, which is the migration group's `.sql`
+   * name rather than a dialect variant: `runFileMigrations` records
+   * `0001_x.sql` whether it executed `0001_x.sql` or `0001_x.mysql.sql`, and
+   * the snapshot beside it is `meta/0001_x.snapshot.json`.
+   *
+   * 🔴 Answering it decides a SLUG, not a file. A slug is registered only when
+   * the newest snapshot describing it is applied, because that snapshot is the
+   * shape registration would write. Deciding per file instead registers the
+   * newest APPLIED shape of a slug whose later migration is still pending, and
+   * nothing ever revisits it: {@link registerCollection} and
+   * {@link registerSingle} insert once and return early forever after, so the
+   * row keeps the intermediate shape after the later migration lands.
+   *
+   * Withholding the row until its shape settles is the opposite trade from the
+   * localized-companion provisioning in the migrate command, which skips
+   * wholesale while anything is pending. That rule exists because provisioning
+   * early makes a later migration's unconditional `CREATE TABLE` fail — a hard
+   * collision with no equivalent here, where the only cost of registering an
+   * entity whose migrations have all run is nothing at all. So this withholds
+   * per slug rather than per run, and an entity settled by the migrations that
+   * did apply is registered normally.
+   *
+   * OPTIONAL, and omitting it means "register everything". That is correct for
+   * the dev boot path, which applies every pending migration immediately
+   * before registering, so no unapplied snapshot can exist for it to skip. Any
+   * caller that registers WITHOUT having just applied everything must pass it.
+   */
+  isApplied?: (ledgerFilename: string) => Promise<boolean>;
+
+  /**
    * Logger for output
    */
   logger?: {
@@ -130,44 +169,118 @@ export interface RegisterFromMigrationsOptions {
 }
 
 /**
+ * One snapshot file, with whether the migration it belongs to has run.
+ *
+ * The flag travels WITH the snapshot rather than filtering the list, because
+ * the decision it feeds is per slug: a slug's newest snapshot decides whether
+ * it may be registered, and finding that snapshot means looking at unapplied
+ * ones too. See {@link RegisterFromMigrationsOptions.isApplied}.
+ */
+interface LoadedSnapshot {
+  file: string;
+  snapshot: MigrationSnapshot;
+  applied: boolean;
+}
+
+/**
  * Read all migration snapshot files from the migrations/meta directory
  */
 async function readSnapshotFiles(
   migrationsDir: string,
-  logger?: { warn?: (msg: string) => void }
-): Promise<MigrationSnapshot[]> {
+  logger?: { warn?: (msg: string) => void; debug?: (msg: string) => void },
+  isApplied?: (ledgerFilename: string) => Promise<boolean>
+): Promise<LoadedSnapshot[]> {
   const metaDir = resolve(migrationsDir, "meta");
 
+  let files: string[];
   try {
-    const files = await readdir(metaDir);
-    // Sort files lexicographically to ensure deterministic "later snapshot wins" behavior
-    const snapshotFiles = files
-      .filter(f => f.endsWith(".snapshot.json"))
-      .sort();
-
-    if (snapshotFiles.length === 0) {
-      return [];
-    }
-
-    const snapshots: MigrationSnapshot[] = [];
-
-    for (const file of snapshotFiles) {
-      try {
-        const filePath = join(metaDir, file);
-        const content = await readFile(filePath, "utf-8");
-        const snapshot = JSON.parse(content) as MigrationSnapshot;
-        snapshots.push(snapshot);
-      } catch (err) {
-        // Skip invalid snapshot files but continue processing others
-        logger?.warn?.(`Could not read snapshot file ${file}: ${String(err)}`);
-      }
-    }
-
-    return snapshots;
-  } catch (_err) {
+    files = await readdir(metaDir);
+  } catch {
     // Meta directory doesn't exist or isn't readable
     return [];
   }
+
+  // Sort files lexicographically to ensure deterministic "later snapshot wins" behavior
+  const snapshotFiles = files.filter(f => f.endsWith(".snapshot.json")).sort();
+
+  if (snapshotFiles.length === 0) {
+    return [];
+  }
+
+  const loaded: LoadedSnapshot[] = [];
+
+  for (const file of snapshotFiles) {
+    /*
+     * 🔴 The ledger read sits OUTSIDE the parse guard below, and outside the
+     * directory guard above. Both exist for a file that cannot be read, and a
+     * ledger that cannot be queried is neither: it fails identically for every
+     * snapshot, so swallowing it drops the whole set and returns the empty
+     * list that means "nothing to register". The caller then reports an
+     * up-to-date database while none of the metadata was written. Left to
+     * throw, it reaches the phase-level handler, which records the pass as
+     * unreadable and tells the operator to run `nextly migrate` again.
+     */
+    let applied = true;
+    if (isApplied) {
+      // `X.snapshot.json` pairs with the migration group `X.sql`, which is
+      // the name the ledger records for every dialect variant.
+      const ledgerFilename = `${file.replace(/\.snapshot\.json$/, "")}.sql`;
+      applied = await isApplied(ledgerFilename);
+    }
+
+    try {
+      const filePath = join(metaDir, file);
+      const content = await readFile(filePath, "utf-8");
+      const snapshot = JSON.parse(content) as MigrationSnapshot;
+      loaded.push({ file, snapshot, applied });
+    } catch (err) {
+      // Skip invalid snapshot files but continue processing others
+      logger?.warn?.(`Could not read snapshot file ${file}: ${String(err)}`);
+    }
+  }
+
+  return loaded;
+}
+
+/**
+ * The newest entry per slug, dropped when the snapshot it came from has not
+ * been applied.
+ *
+ * 🔴 The drop is decided on the WINNER, after later-wins resolution, not on
+ * each entry as it is read. A slug described by an applied snapshot and again
+ * by a pending one is withheld entirely: registration inserts once and never
+ * revisits a row, so writing the earlier shape now is writing it permanently.
+ */
+function newestApplied<T extends { slug: string }>(
+  loaded: LoadedSnapshot[],
+  entriesOf: (snapshot: MigrationSnapshot) => T[] | undefined,
+  logger?: { debug?: (msg: string) => void }
+): T[] {
+  const winners = new Map<
+    string,
+    { entry: T; applied: boolean; file: string }
+  >();
+
+  for (const { snapshot, applied, file } of loaded) {
+    for (const entry of entriesOf(snapshot) ?? []) {
+      if (entry.slug) {
+        winners.set(entry.slug, { entry, applied, file });
+      }
+    }
+  }
+
+  const registrable: T[] = [];
+  for (const [slug, winner] of winners) {
+    if (!winner.applied) {
+      logger?.debug?.(
+        `[Migration Metadata] Not registering "${slug}": its newest snapshot ${winner.file} has not been applied`
+      );
+      continue;
+    }
+    registrable.push(winner.entry);
+  }
+
+  return registrable;
 }
 
 /**
@@ -175,36 +288,20 @@ async function readSnapshotFiles(
  * Later snapshots override earlier ones for the same slug
  */
 function mergeCollections(
-  snapshots: MigrationSnapshot[]
+  loaded: LoadedSnapshot[],
+  logger?: { debug?: (msg: string) => void }
 ): SnapshotCollection[] {
-  const collectionMap = new Map<string, SnapshotCollection>();
-
-  for (const snapshot of snapshots) {
-    for (const collection of snapshot.collections ?? []) {
-      if (collection.slug) {
-        collectionMap.set(collection.slug, collection);
-      }
-    }
-  }
-
-  return Array.from(collectionMap.values());
+  return newestApplied(loaded, s => s.collections, logger);
 }
 
 /**
  * Merge singles from multiple snapshots
  */
-function mergeSingles(snapshots: MigrationSnapshot[]): SnapshotSingle[] {
-  const singleMap = new Map<string, SnapshotSingle>();
-
-  for (const snapshot of snapshots) {
-    for (const single of snapshot.singles ?? []) {
-      if (single.slug) {
-        singleMap.set(single.slug, single);
-      }
-    }
-  }
-
-  return Array.from(singleMap.values());
+function mergeSingles(
+  loaded: LoadedSnapshot[],
+  logger?: { debug?: (msg: string) => void }
+): SnapshotSingle[] {
+  return newestApplied(loaded, s => s.singles, logger);
 }
 
 /**
@@ -402,7 +499,11 @@ export async function registerFromMigrations(
   const typedAdapter = adapter as DrizzleAdapter;
 
   // Step 1: Read all snapshot files
-  const snapshots = await readSnapshotFiles(migrationsDir, logger);
+  const snapshots = await readSnapshotFiles(
+    migrationsDir,
+    logger,
+    options.isApplied
+  );
 
   if (snapshots.length === 0) {
     logger.debug?.("[Migration Metadata] No snapshot files found");
@@ -414,8 +515,8 @@ export async function registerFromMigrations(
   );
 
   // Step 2: Merge collections and singles from all snapshots
-  const collections = mergeCollections(snapshots);
-  const singles = mergeSingles(snapshots);
+  const collections = mergeCollections(snapshots, logger);
+  const singles = mergeSingles(snapshots, logger);
 
   // Step 3: Register each collection
   let collectionsRegistered = 0;

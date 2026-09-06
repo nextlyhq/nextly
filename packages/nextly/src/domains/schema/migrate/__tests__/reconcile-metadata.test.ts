@@ -25,6 +25,11 @@ const silent = {
 function adapterWith(tables: string[]) {
   return {
     tableExists: vi.fn(async (name: string) => tables.includes(name)),
+    // The sweep builds a `SchemaEventsRepository` to prove a snapshot's
+    // migration ran before registration may claim `applied`. These cases stub
+    // `registerFn`, so the repository is constructed and never queried — but
+    // constructing it is what needs a Drizzle handle.
+    getDrizzle: () => ({}),
   } as never;
 }
 
