@@ -29,7 +29,7 @@ import {
   MAX_ENVELOPE_ENTRIES,
 } from "./limits";
 import type { DocumentLimits } from "./limits";
-import { surveyDocument } from "./measure-bytes";
+import { boundedLimit, surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
 import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
@@ -1804,7 +1804,14 @@ export function componentEnvelopeIssues(
   validateComponentEnvelope(
     doc,
     Array.isArray(doc.nodes) ? doc.nodes : [],
-    limits.maxNodes,
+    // Through the SAME rule the survey applies, because a bound that is not a
+    // number is not a bound: every comparison against `NaN` in the walk is
+    // false, so the index is built over the whole forest and a dangling pointer
+    // is reported as sound — with the resource bound gone as well as the
+    // verdict wrong. `validateDocument`, the gate this predicts, refuses those
+    // limits outright, so accepting them here is the dry run disagreeing with
+    // the thing it exists to foresee.
+    boundedLimit(limits.maxNodes, "maxNodes", "componentEnvelopeIssues"),
     issues
   );
   return issues;

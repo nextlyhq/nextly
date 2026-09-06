@@ -2751,6 +2751,62 @@ describe("componentEnvelopeIssues reads a stored value defensively", () => {
   });
 });
 
+describe("componentEnvelopeIssues holds itself to a real bound", () => {
+  it.each([
+    ["NaN", Number.NaN],
+    ["undefined", undefined],
+    ["a string", "500"],
+  ])("refuses %s as a node cap, as the survey does", (_name, maxNodes) => {
+    // A bound that is not a number is not a bound: every comparison against it
+    // in the walk is false, so the index is built over the whole forest and a
+    // dangling pointer is reported as sound — with the resource bound gone as
+    // well as the verdict wrong.
+    const doc = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "a", type: "core/text", version: 1, props: {} }],
+      exposed: [
+        { id: "p", label: "L", nodeId: "ghost", propPath: "t", type: "text" },
+      ],
+    } as unknown as BlockDocument;
+
+    expect(() =>
+      componentEnvelopeIssues(doc, {
+        ...DEFAULT_LIMITS,
+        maxNodes: maxNodes as number,
+      })
+    ).toThrow(RangeError);
+
+    // The gate this predicts refuses the same limits, which is why refusing is
+    // the answer rather than falling back to a default: the two must not
+    // disagree about what counts as a bound.
+    expect(() =>
+      validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        limits: { ...DEFAULT_LIMITS, maxNodes: maxNodes as number },
+      })
+    ).toThrow(RangeError);
+  });
+
+  it("still answers for a sound cap", () => {
+    // The control: without it, a helper that threw for every limit would pass
+    // every assertion above.
+    const doc = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "a", type: "core/text", version: 1, props: {} }],
+      exposed: [
+        { id: "p", label: "L", nodeId: "ghost", propPath: "t", type: "text" },
+      ],
+    } as unknown as BlockDocument;
+
+    expect(componentEnvelopeIssues(doc).map(i => i.code)).toContain(
+      "exposed-node-missing"
+    );
+  });
+});
+
 describe("validate and compile agree on which breakpoints a site defines", () => {
   // The validate-then-compile contract. A caller runs `validate()` and, seeing
   // no issue, stores the document; the compiler then drops a definition

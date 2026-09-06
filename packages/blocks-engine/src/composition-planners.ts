@@ -44,6 +44,7 @@ import {
   type NestingVerdict,
 } from "./nesting";
 import {
+  applyOps,
   documentRefusal,
   forestRefusal,
   lockedWithin,
@@ -209,7 +210,15 @@ export type PlanProblem =
    * malformed — the pointer resolves, to one of two nodes that answered to the
    * name — so the author's remedy is to pick a node rather than to fix a field.
    */
-  | "ambiguous-exposure";
+  | "ambiguous-exposure"
+  /**
+   * Applying the plan would put the page past a limit the caller set.
+   *
+   * Its own cause because the remedy is neither the author's selection nor
+   * their exposure: the page is at its ceiling, and what has to change is the
+   * page or the ceiling.
+   */
+  | "exceeds-limits";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -909,7 +918,7 @@ export function planConvertToComponent<TFields>(
   const definition = componentDocument(saved, exposure, limits);
   if (definition.problem !== undefined) return definition;
 
-  const replaced = replaceOps(document, saved, componentId, nesting);
+  const replaced = replaceOps(document, saved, componentId, nesting, limits);
   if (replaced.problem !== undefined) return replaced;
 
   return {
@@ -982,9 +991,17 @@ function componentDocument(
   // is given the host's limits; a dry run using its own would refuse a
   // component the apply would publish, which is the direction nobody can debug.
   const issues = componentEnvelopeIssues(definition, limits);
-  return issues.length === 0
+  if (issues.length > 0) return { problem: "invalid-exposure", issues };
+
+  // The stored-document rule, asked of the definition WITH its envelope on.
+  // `savedPatternDocument` asks it of the tree, before there is an envelope —
+  // and the envelope is caller-supplied, so a field this cannot judge can still
+  // make the whole document unstorable: an option carrying a `BigInt` survives
+  // the envelope check, which reads `value` and `label`, and JSON cannot write
+  // it. The plan would report success and the create would fail on save.
+  return documentRefusal(definition) === undefined
     ? { document: definition }
-    : { problem: "invalid-exposure", issues };
+    : { problem: "unusable-document" };
 }
 
 /**
@@ -1105,6 +1122,22 @@ function exposedProperties(
 }
 
 /**
+ * A slot's allow-list, copied by index and bounded.
+ *
+ * A spread invokes `Symbol.iterator`, which is inherited and therefore the
+ * caller's to shadow — throwing where this module promises a refusal, on an
+ * array whose entries are all well formed. The same reason the properties list
+ * is not read through `map`. Bounded for the reason {@link clonedOptions} is:
+ * nothing outside an entry bounds a list nested inside it.
+ */
+function copiedAllow(allow: readonly unknown[]): ExposedSlot["allow"] {
+  if (allow.length > MAX_ENVELOPE_ENTRIES) return allow as ExposedSlot["allow"];
+  const copied: string[] = [];
+  for (let i = 0; i < allow.length; i += 1) copied.push(allow[i] as string);
+  return copied;
+}
+
+/**
  * The option records, copied one level deep and read by index.
  *
  * By index for the reason {@link exposedProperties} gives: `map` is the
@@ -1115,6 +1148,13 @@ function exposedProperties(
 function clonedOptions(
   options: readonly unknown[]
 ): ExposedProperty["options"] {
+  // The cap, before the copy. A nested list sits INSIDE an entry the outer cap
+  // already admitted, so nothing else bounds it — and the envelope check
+  // refuses an over-cap list in one step, which makes copying every entry first
+  // exactly the work that cap exists to refuse.
+  if (options.length > MAX_ENVELOPE_ENTRIES) {
+    return options as ExposedProperty["options"];
+  }
   const copied: { value: string; label: string }[] = [];
   for (let i = 0; i < options.length; i += 1) {
     const option = options[i];
@@ -1202,7 +1242,7 @@ function exposedSlots(
               ? {}
               : {
                   allow: Array.isArray(one.allow)
-                    ? [...one.allow]
+                    ? copiedAllow(one.allow)
                     : (one.allow as ExposedSlot["allow"]),
                 }),
           }
@@ -1242,7 +1282,8 @@ function replaceOps(
   document: BlockDocument,
   saved: PlannedSave,
   componentId: string,
-  nesting: NestingSource
+  nesting: NestingSource,
+  limits: DocumentLimits
 ): RestampOps | PlanRefusal {
   // Everything `applyOp` asks BEFORE it looks at an op — the envelope, then the
   // whole forest, because it walks every node before applying anything. A
@@ -1286,14 +1327,30 @@ function replaceOps(
   );
   if (placement !== undefined) return placement;
 
-  return {
-    ops: [
-      ...saved.selected.map(
-        (root): BuilderOp => ({ kind: "remove", id: root.id })
-      ),
-      { kind: "insert", node: instance, at: position.at },
-    ],
-  };
+  const ops: BuilderOp[] = [
+    ...saved.selected.map(
+      (root): BuilderOp => ({ kind: "remove", id: root.id })
+    ),
+    { kind: "insert", node: instance, at: position.at },
+  ];
+
+  // The BYTE cap, asked of the apply, because the apply is the only place that
+  // can answer it. `nodeShapeRefusal` says so in as many words: `assertFitsCaps`
+  // measures the document a node is going INTO, so a subtree with no
+  // destination cannot be judged against it. A run replaced by a larger
+  // instance can cross a cap the page was inside, and the plan would be handed
+  // over with its library row already written.
+  //
+  // Applied to a copy rather than re-derived: `applyOps` is pure, and a second
+  // reading of the same rule is one more thing that can come to disagree with
+  // the run it predicts.
+  try {
+    applyOps(document, ops, limits);
+  } catch {
+    return { problem: "exceeds-limits" };
+  }
+
+  return { ops };
 }
 
 /**

@@ -1264,3 +1264,129 @@ describe("a caller-sized exposure costs a refusal, not a traversal", () => {
     );
   });
 });
+
+describe("what the plan promises about the page it will edit", () => {
+  it("refuses a replacement that would push the page past its byte cap", () => {
+    // Only the APPLY can answer this: `assertFitsCaps` measures the document a
+    // node is going into, so a subtree with no destination cannot be judged
+    // against it — which `nodeShapeRefusal` says in as many words. A run
+    // replaced by a LARGER instance crosses a cap the page was inside.
+    const doc = page([node("a")]);
+    const limits = {
+      ...DEFAULT_LIMITS,
+      maxBytes: JSON.stringify(doc).length,
+    };
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["a"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent,
+        limits
+      ).problem
+    ).toBe("exceeds-limits");
+
+    // The other direction of the dry-run contract: the apply refuses it too.
+    expect(() =>
+      applyOps(
+        doc,
+        [
+          { kind: "remove", id: "a" },
+          {
+            kind: "insert",
+            node: {
+              id: "i1",
+              type: COMPONENT_INSTANCE_TYPE,
+              version: 1,
+              props: { componentId: "def-1" },
+            },
+            at: { index: 0 },
+          },
+        ],
+        limits
+      )
+    ).toThrow();
+  });
+
+  it("refuses a definition JSON could not write, envelope included", () => {
+    // The envelope is caller-supplied and the envelope check reads only `value`
+    // and `label`, so an option carrying a `BigInt` passes it and makes the
+    // whole document unstorable. The tree was already asked this question
+    // before it had an envelope; the completed definition is asked it again.
+    const plan = planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      exposeText("headline", {
+        type: "select",
+        options: [{ value: "x", label: "X", metadata: 1n }],
+      }) as never,
+      anyParent
+    );
+
+    expect(plan.problem).toBe("unusable-document");
+  });
+});
+
+describe("a list nested inside an exposure is bounded too", () => {
+  it("does not copy an over-cap options list", () => {
+    // Nothing outside the entry bounds a list inside it: the outer cap already
+    // admitted this single nomination.
+    let reads = 0;
+    const options: unknown[] = [];
+    for (let i = 0; i <= MAX_ENVELOPE_ENTRIES; i += 1) {
+      const option: Record<string, unknown> = { value: `v${String(i)}` };
+      Object.defineProperty(option, "label", {
+        enumerable: true,
+        get() {
+          reads += 1;
+          return "L";
+        },
+      });
+      options.push(option);
+    }
+
+    const plan = planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      exposeText("headline", { type: "select", options }) as never,
+      anyParent
+    );
+
+    expect(plan.problem).toBe("invalid-exposure");
+    expect(reads).toBe(0);
+  });
+
+  it("copies an allow-list without invoking its iterator", () => {
+    // A spread runs `Symbol.iterator`, which is inherited and so the caller's
+    // to shadow — on an array whose entries are all well formed, which is why
+    // the entry guards cannot see it.
+    const allow: unknown[] = ["core/box"];
+    Object.defineProperty(allow, Symbol.iterator, { value: "not a function" });
+
+    let threw: unknown;
+    let plan;
+    try {
+      plan = planSaveAsComponent(
+        page([node("card", {}, { children: [] })]),
+        ["card"],
+        componentTarget,
+        {
+          slots: {
+            body: { label: "B", nodeId: "card", slot: "children", allow },
+          },
+        } as never,
+        anyParent
+      );
+    } catch (error) {
+      threw = error;
+    }
+
+    expect(threw).toBeUndefined();
+    expect(plan?.problem).toBeUndefined();
+  });
+});
