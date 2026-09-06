@@ -334,15 +334,11 @@ interface SavableRun {
  * that crash into a cause, which is why the insert path asks it before copying
  * too.
  *
- * The duplicate-DOM-id question is asked of the SELECTION and not of the page.
- * A page may legitimately spell one id twice elsewhere — that is a warning
- * under the forgiving validation pages are saved with, not a refusal — and it
- * is no reason to stop an author saving a run that does not. What is refused is
- * a run carrying the duplicate INTO a pattern, where insert would meet it.
- *
- * Refused rather than repaired, for the reason {@link duplicateDomIdRefusal}
- * gives: renaming one of the pair silently changes which element an anchor
- * reaches, and nothing here knows which of them the author meant.
+ * The duplicate-DOM-id question is NOT asked here. It belongs to the document
+ * this becomes rather than to the selection, because restoring an id an insert
+ * renamed can create a collision the selection did not have — see
+ * {@link savedPatternDocument}. Asking both places would be one question with
+ * two answers.
  */
 function savableRun(
   document: BlockDocument,
@@ -355,7 +351,6 @@ function savableRun(
   const selected = result.run.places.map(place => place.node);
   const refusal =
     shapeRefusal(selected) ??
-    duplicateDomIdRefusal(selected) ??
     placementRefusal(selected, { kind: "root" }, nesting) ??
     internalNestingRefusal(selected, nesting);
   return refusal ?? { selected };
@@ -416,6 +411,17 @@ function savedPatternDocument(
       reidForestWithMap(restoreAuthoredDomIds(selected), "keep").nodes
     ),
   };
+  // Asked of what is STORED, and this one has to be. Restoring an id an insert
+  // renamed can CREATE a collision the selection did not have: a page holding
+  // `hero` beside a copy renamed to `hero-<suffix>` has two distinct ids, and
+  // saving both restores the copy to `hero`. Checking the selection passes, and
+  // the row it stores is one every insert refuses.
+  //
+  // Restoring can only ever create a duplicate, never resolve one, so asking
+  // here rather than there is strictly stronger.
+  const duplicate = duplicateDomIdRefusal(stored.nodes);
+  if (duplicate !== undefined) return duplicate;
+
   // Asked of what is STORED, not of the page it came from. Only some of the
   // source envelope travels: `formatVersion` is carried, and a page holding one
   // the apply does not accept would produce a pattern refused as

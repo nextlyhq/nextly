@@ -932,6 +932,39 @@ describe("save → insert → save-over, through applyOps", () => {
     expect((back[1].props as { href?: string }).href).toBe("#hero");
   });
 
+  it("refuses when RESTORING an id would create a duplicate", () => {
+    // The page holds `hero` beside a copy an insert renamed to `hero-<suffix>`
+    // — two distinct ids, so the selection has no collision. Restoring the copy
+    // turns them into two `hero`s, and the row that stores is one every insert
+    // refuses. The question therefore belongs to the document this becomes, not
+    // to the selection it came from.
+    const stored = seed(page([node("a", { cssId: "hero" })]), ["a"]).stored;
+    const destination = page([node("d", { cssId: "hero" })]);
+    const insert = planned(
+      planInsertPattern(destination, stored, { index: 1 }, anyParent)
+    );
+    const placed = applyOps(destination, insert.pageOps).document;
+
+    expect(placed.nodes.map(x => x.cssId)).toEqual([
+      "hero",
+      placed.nodes[1].cssId,
+    ]);
+    expect(placed.nodes[1].cssId).not.toBe("hero");
+
+    const both = [placed.nodes[0].id, placed.nodes[1].id];
+    expect(
+      planUpdatePatternFromSelection(placed, both, target, anyParent).problem
+    ).toBe("duplicate-dom-id");
+    expect(
+      planSaveAsPattern(
+        placed,
+        both,
+        { collection: "patterns", fields: {} },
+        anyParent
+      ).problem
+    ).toBe("duplicate-dom-id");
+  });
+
   it("leaves an id the author renamed by hand", () => {
     // The control, and the reason this undoes a MINT rather than any suffix:
     // an author who renames a block's id means it, and only a suffix derived
