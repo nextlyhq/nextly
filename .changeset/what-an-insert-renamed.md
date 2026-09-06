@@ -47,3 +47,10 @@ id, and content from a script or an import may name anchors that way on purpose.
 Nothing to migrate. A record written before this field existed carries no rename
 map, which says exactly what an empty one says — restore nothing — so an older
 document behaves as it does today.
+
+A component definition can also be duplicated. Its exposed properties and slot
+regions are pointers INTO its tree, so a copy that re-identifies the nodes
+without re-aiming them loads, renders, shows its properties in the inspector,
+and fails its own publish gate with one error per exposure. Exposed ids are kept,
+because variant presets are keyed by them; DOM ids are kept, because the
+duplicate is a document of its own.

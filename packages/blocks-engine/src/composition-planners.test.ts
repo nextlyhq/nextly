@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   planConvertToComponent,
+  planDuplicateComponent,
   planInsertPattern,
   planSaveAsComponent,
   planSaveAsPattern,
@@ -25,6 +26,7 @@ import { applyOps } from "./ops";
 import type { BuilderOp } from "./ops";
 import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import type { DocumentLimits } from "./limits";
+import { componentEnvelopeIssues } from "./validation";
 import { patternDigest } from "./pattern-digest";
 import { walkNodes } from "./tree";
 
@@ -1727,5 +1729,151 @@ describe("an insert records what it renamed, and a save puts it back", () => {
         anyParent
       ).problem
     ).toBe("duplicate-dom-id");
+  });
+});
+
+describe("duplicating a component definition", () => {
+  /** A definition exposing a property and a slot, both pointing into its tree. */
+  function definitionWith(extra: Partial<ComponentDocument> = {}) {
+    return {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component" as const,
+      nodes: [
+        node(
+          "card",
+          { props: { mark: "card" }, cssId: "hero" },
+          {
+            children: [
+              node("headline", { props: { mark: "headline", text: "Hi" } }),
+            ],
+          }
+        ),
+      ],
+      exposed: [
+        {
+          id: "p1",
+          label: "Headline",
+          nodeId: "headline",
+          propPath: "text",
+          type: "text" as const,
+        },
+      ],
+      slots: { body: { label: "Body", nodeId: "card", slot: "children" } },
+      variants: { compact: { label: "Compact", overrides: { p1: "Short" } } },
+      ...extra,
+    } satisfies ComponentDocument;
+  }
+
+  const dup = (source: BlockDocument) =>
+    planDuplicateComponent(source, componentTarget, undefined);
+
+  it("re-aims every pointer at the COPY, so the duplicate can be published", () => {
+    // The defect this planner is written around: re-identifying without
+    // rewriting the pointers yields a definition that loads, renders, offers
+    // its properties in the inspector, and fails its own publish gate with one
+    // error per exposure.
+    const source = definitionWith();
+    const copy = definition(dup(source));
+
+    const copiedHeadline = marked(copy.nodes, "headline");
+    const copiedCard = marked(copy.nodes, "card");
+
+    expect(copy.exposed?.[0]?.nodeId).toBe(copiedHeadline.id);
+    expect(copy.slots?.body?.nodeId).toBe(copiedCard.id);
+    // The property that matters, asked of the gate rather than of the ids.
+    expect(componentEnvelopeIssues(copy)).toEqual([]);
+  });
+
+  it("gives the copy its own node ids", () => {
+    const source = definitionWith();
+    const copy = definition(dup(source));
+
+    expect(idsIn(copy.nodes)).not.toContain("card");
+    expect(idsIn(copy.nodes)).not.toContain("headline");
+  });
+
+  it("keeps the exposed ids, because variants are keyed by them", () => {
+    // Re-minting would demand a second rewrite of every variant's keys and buy
+    // nothing: a fresh duplicate has no instances, and an exposed id is scoped
+    // to its own document.
+    const copy = definition(dup(definitionWith()));
+
+    expect(copy.exposed?.[0]?.id).toBe("p1");
+    expect(copy.variants?.compact?.overrides).toEqual({ p1: "Short" });
+  });
+
+  it("keeps the DOM ids", () => {
+    // A duplicate is a document of its OWN rather than a copy placed beside the
+    // original, so there is nothing to collide with — and composition mints
+    // per-instance ids when it inlines a definition.
+    expect(marked(definition(dup(definitionWith())).nodes, "card").cssId).toBe(
+      "hero"
+    );
+  });
+
+  it("touches no page", () => {
+    expect(dup(definitionWith()).pageOps).toEqual([]);
+  });
+
+  it("refuses a document that is not a component", () => {
+    // A pattern duplicated through here would be stored as a component and
+    // refused by the collection it landed in, having reported success.
+    expect(dup(page([node("a")])).problem).toBe("not-a-component");
+  });
+
+  it("refuses a source JSON could not write", () => {
+    const unwritable = definitionWith() as unknown as Record<string, unknown>;
+    unwritable.settings = { custom: 1n };
+
+    expect(dup(unwritable as unknown as BlockDocument).problem).toBe(
+      "unusable-document"
+    );
+  });
+
+  it("refuses a source whose envelope COMPUTES itself", () => {
+    // The reason the source is asked before anything reads it. Reading an
+    // accessor gives a value, so nothing throws and the copy comes out plain —
+    // meaning the duplicate would pass every later check while the row it came
+    // from is one the store cannot write. Asking first refuses the broken
+    // source instead of quietly minting a sound copy of it.
+    const computed = definitionWith() as unknown as Record<string, unknown>;
+    Object.defineProperty(computed, "exposed", {
+      enumerable: true,
+      get() {
+        return [
+          {
+            id: "p1",
+            label: "L",
+            nodeId: "headline",
+            propPath: "text",
+            type: "text",
+          },
+        ];
+      },
+    });
+
+    expect(dup(computed as unknown as BlockDocument).problem).toBe(
+      "unusable-document"
+    );
+  });
+
+  it("reports a source whose envelope was already broken", () => {
+    // Asked of what is STORED, so a definition that was already dangling is
+    // reported rather than silently duplicated into a second broken row.
+    const broken = definitionWith({
+      exposed: [
+        {
+          id: "p1",
+          label: "L",
+          nodeId: "gone",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    });
+
+    const plan = dup(broken);
+    expect(plan.problem).toBe("invalid-exposure");
+    expect(plan.issues?.map(i => i.code)).toContain("exposed-node-missing");
   });
 });

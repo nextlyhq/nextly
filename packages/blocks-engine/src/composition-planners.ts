@@ -23,7 +23,11 @@
  *
  * @module composition-planners
  */
-import { COMPONENT_INSTANCE_TYPE, renderedDomId } from "./document";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  isComponentDocument,
+  renderedDomId,
+} from "./document";
 import type {
   BlockDocument,
   BlockNode,
@@ -230,7 +234,9 @@ export type PlanProblem =
    * to be created, and the author has to remove that instance or create the
    * component under a different id.
    */
-  | "self-reference";
+  | "self-reference"
+  /** The document handed over is not a component definition. */
+  | "not-a-component";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -960,6 +966,113 @@ export function planConvertToComponent<TFields>(
     },
     pageOps: replaced.ops,
   };
+}
+
+/**
+ * Duplicate a component definition into a library row of its own.
+ *
+ * **The envelope is re-aimed, not merely carried.** A definition is not only a
+ * tree: `exposed` and `slots` are POINTERS into it, and a duplicate re-identifies
+ * every node. Copying the pointers across unchanged produces a document that
+ * loads, renders, shows its properties in the inspector — and fails its own
+ * publish gate with one error per exposure, because strict validation refuses a
+ * pointer at a node the document does not contain. The design's one line for
+ * this planner does not reach that; `reidForestWithMap` returns `nodeIds` for
+ * exactly this purpose.
+ *
+ * **Exposed ids are KEPT.** Variant presets are keyed by them, so re-minting
+ * would demand a second rewrite of every variant's keys and buy nothing: a fresh
+ * duplicate has no instances, and an exposed id is scoped to its own document,
+ * so two definitions sharing one is not a collision.
+ *
+ * **DOM ids are KEPT**, for the reason a saved pattern keeps them: the duplicate
+ * is a document of its OWN rather than a copy placed beside the original, so
+ * there is nothing to collide with. Composition mints per-instance ids when it
+ * inlines a definition, so two definitions carrying one `cssId` never put two of
+ * them on a page.
+ *
+ * **The SOURCE is asked one question first.** `documentRefusal` refuses a
+ * document JSON cannot write, and it reads the whole document — the envelope
+ * included. That is what makes every field below safe to read once: a stored row
+ * whose `exposed` is an accessor, or whose entries are computed, is refused
+ * before anything walks it. A caller-supplied REQUEST has no such rule and has
+ * to be read into data first; a stored document does, and asking it is cheaper
+ * and more honest than restating it.
+ */
+export function planDuplicateComponent<TFields>(
+  definition: BlockDocument,
+  target: LibraryTarget<TFields>,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): PlanResult<TFields> {
+  // The KIND, before anything is read as an envelope. A pattern duplicated
+  // through here would be stored as a component and refused by the collection
+  // it landed in, having reported success.
+  if (!isComponentDocument(definition)) return { problem: "not-a-component" };
+  if (documentRefusal(definition) !== undefined) {
+    return { problem: "unusable-document" };
+  }
+
+  const source: ComponentDocument = definition;
+  const copied = reidForestWithMap([...source.nodes], "keep");
+  const duplicate = {
+    ...source,
+    kind: "component" as const,
+    nodes: copied.nodes,
+    ...aimedExposed(source.exposed, copied.nodeIds),
+    ...aimedSlotMap(source.slots, copied.nodeIds),
+  } satisfies ComponentDocument;
+
+  const issues = componentEnvelopeIssues(duplicate, limits);
+  if (issues.length > 0) return { problem: "invalid-exposure", issues };
+
+  return (
+    definitionRefusal(duplicate, limits) ?? {
+      create: {
+        collection: target.collection,
+        document: duplicate,
+        fields: target.fields,
+      },
+      pageOps: [],
+    }
+  );
+}
+
+/**
+ * A definition's exposed list, re-aimed at the copy.
+ *
+ * Bounded and shape-guarded on the same terms a nomination is, because a stored
+ * row is untrusted in the same ways — but read ONCE without a snapshot pass,
+ * since `documentRefusal` has already refused a document whose fields compute
+ * themselves. What is left is plain data that may still be the wrong shape, and
+ * anything this cannot re-aim is carried for the envelope check to name.
+ */
+function aimedExposed(
+  exposed: unknown,
+  nodeIds: ReadonlyMap<string, string>
+): { exposed?: ExposedProperty[] } {
+  if (exposed === undefined) return {};
+  if (!Array.isArray(exposed) || exposed.length > MAX_ENVELOPE_ENTRIES) {
+    return { exposed: exposed as ExposedProperty[] };
+  }
+  const aimed: ExposedProperty[] = [];
+  for (const one of exposed) aimed.push(aimedProperty(one, nodeIds));
+  return { exposed: aimed };
+}
+
+/** A definition's slot map, re-aimed at the copy, on the same terms. */
+function aimedSlotMap(
+  slots: unknown,
+  nodeIds: ReadonlyMap<string, string>
+): { slots?: Record<string, ExposedSlot> } {
+  if (slots === undefined) return {};
+  if (!isPlainRecord(slots)) {
+    return { slots: slots as Record<string, ExposedSlot> };
+  }
+  const names = boundedOwnKeys(slots, MAX_ENVELOPE_ENTRIES);
+  if (names === null) return { slots: slots as Record<string, ExposedSlot> };
+  const aimed: Record<string, ExposedSlot> = {};
+  for (const id of names) defineEntry(aimed, id, aimedSlot(slots[id], nodeIds));
+  return { slots: aimed };
 }
 
 /** The definition a component save would store, or why it could not. */
