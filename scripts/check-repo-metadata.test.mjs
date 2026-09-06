@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { checkRepoMetadata } from "./check-repo-metadata.mjs";
+import { checkRepoMetadata, isPermanentStatus } from "./check-repo-metadata.mjs";
 
 /**
  * Metadata is injected rather than fetched. The network is not the subject, and a test that
@@ -19,6 +19,14 @@ const goodTopics = [
 ];
 
 const run = (metadata, expectedDescription = GOOD_DESCRIPTION) =>
+  checkRepoMetadata({ metadata, expectedDescription }).findings.map(f => f.check);
+
+/**
+ * The same call with no default for the description, because `run`'s default is applied to an
+ * explicit `undefined` — which silently substituted a valid description into the very tests
+ * written to prove an absent one is caught.
+ */
+const runWithDescription = (metadata, expectedDescription) =>
   checkRepoMetadata({ metadata, expectedDescription }).findings.map(f => f.check);
 
 describe("about-retired-category", () => {
@@ -68,6 +76,26 @@ describe("topics", () => {
     ).toContain("topic-forbidden");
   });
 
+  it("fires on the plural spellings a hand-written list missed", () => {
+    // The forbidden topics used to be listed here rather than derived from the shared tag
+    // pattern, and the list held only the singular forms — so these two passed a check that
+    // rejects the very same strings as npm keywords.
+    for (const topic of ["frameworks", "app-frameworks", "App-Framework"]) {
+      expect(run({ description: GOOD_DESCRIPTION, topics: [...goodTopics, topic] })).toContain(
+        "topic-forbidden"
+      );
+    }
+  });
+
+  it("does not fire on topics that merely contain the word", () => {
+    expect(
+      run({
+        description: GOOD_DESCRIPTION,
+        topics: [...goodTopics, "framework-agnostic", "page-builder"],
+      })
+    ).not.toContain("topic-forbidden");
+  });
+
   it("fires once per missing required topic, naming which", () => {
     const { findings } = checkRepoMetadata({
       metadata: { description: GOOD_DESCRIPTION, topics: ["cms", "nextjs"] },
@@ -81,6 +109,55 @@ describe("topics", () => {
 
   it("passes clean metadata with nothing to report", () => {
     expect(run({ description: GOOD_DESCRIPTION, topics: goodTopics })).toHaveLength(0);
+  });
+});
+
+describe("description-source-missing", () => {
+  it("fires when the package has no description to compare against", () => {
+    for (const expected of [undefined, "", "   "]) {
+      expect(
+        runWithDescription({ description: "anything at all", topics: goodTopics }, expected)
+      ).toContain("description-source-missing");
+    }
+  });
+
+  it("reports the missing source rather than a drift it cannot judge", () => {
+    // Reporting both would state a mismatch against a value that does not exist.
+    const checks = runWithDescription(
+      { description: "anything at all", topics: goodTopics },
+      undefined
+    );
+    expect(checks).not.toContain("about-matches-package");
+  });
+
+  it("does not fire when the package has a description", () => {
+    expect(run({ description: GOOD_DESCRIPTION, topics: goodTopics })).not.toContain(
+      "description-source-missing"
+    );
+  });
+});
+
+describe("isPermanentStatus", () => {
+  it("treats a repository that cannot be read as permanent", () => {
+    // A stale OWNER or a renamed repository returns 404, and calling that transient would
+    // leave the check green forever without examining any metadata.
+    expect(isPermanentStatus(404)).toBe(true);
+    expect(isPermanentStatus(401)).toBe(true);
+    expect(isPermanentStatus(410)).toBe(true);
+  });
+
+  it("treats rate limiting and server errors as transient", () => {
+    // An unauthenticated call from CI hits the rate limit routinely, and it says nothing
+    // about the metadata.
+    expect(isPermanentStatus(403)).toBe(false);
+    expect(isPermanentStatus(429)).toBe(false);
+    expect(isPermanentStatus(500)).toBe(false);
+    expect(isPermanentStatus(502)).toBe(false);
+  });
+
+  it("does not call a success permanent", () => {
+    expect(isPermanentStatus(200)).toBe(false);
+    expect(isPermanentStatus(304)).toBe(false);
   });
 });
 

@@ -100,6 +100,32 @@ export const CATEGORY_SURFACES = [
 export const RETIRED_CATEGORY = /\bapp(?:-|\s+)frameworks?\b/i;
 
 /**
+ * The same category, as a whole tag rather than a phrase in prose.
+ *
+ * npm keywords and GitHub topics are both single tokens on a surface people search, and both
+ * were left carrying `framework` after the prose was cleared. The word is the one the whole
+ * repositioning turned on: it could mean an application framework, a UI framework or a backend
+ * framework, which made it the least informative word available.
+ *
+ * `RETIRED_CATEGORY` cannot serve here — it requires the `app` prefix, so a bare `framework`
+ * tag would pass. Anchored rather than substring-matched: `page-builder` and `nextly-plugin`
+ * are tags this must never touch.
+ */
+export const RETIRED_CATEGORY_TAG = /^(?:app-)?frameworks?$/i;
+
+/**
+ * npm accepts a bare string where `keywords` expects an array, and both forms reach the
+ * registry. Spreading the string form yields single characters, which match no whole tag, so
+ * the two readers of this field return different answers unless they share one normalisation.
+ */
+export function packageKeywords(manifest) {
+  const keywords = manifest?.keywords;
+  if (typeof keywords === "string") return [keywords];
+  if (!Array.isArray(keywords)) return [];
+  return keywords.filter(value => typeof value === "string");
+}
+
+/**
  * A document reduced to what a reader is shown.
  *
  * `renderedProse` drops fenced examples and commented-out blocks. This drops
@@ -654,24 +680,10 @@ export function renderedProse(markdown) {
   );
 }
 
-/**
- * A published package's keywords are a category claim, on the surface people search.
- *
- * The GitHub topic list forbids `framework` and `app-framework` for the reason the whole
- * repositioning turned on: the word could mean an application framework, a UI framework or a
- * backend framework, which made it the least informative word available. npm keywords are the
- * same kind of surface and were left carrying it after the topic was cleared, so the rule is
- * applied to both rather than to whichever one someone remembered.
- *
- * Matched whole, not as a substring: `page-builder` and `nextly-plugin` are keywords this must
- * never touch.
- */
-const RETIRED_KEYWORD = /^(?:app-)?frameworks?$/i;
-
 function retiredKeywords(repoRoot, packages, findings) {
   for (const pkg of packages) {
-    for (const keyword of pkg.json?.keywords ?? []) {
-      if (!RETIRED_KEYWORD.test(keyword)) continue;
+    for (const keyword of packageKeywords(pkg.json)) {
+      if (!RETIRED_CATEGORY_TAG.test(keyword)) continue;
       findings.push({
         check: "retired-category-keyword",
         file: relative(repoRoot, join(pkg.dir, "package.json")),
@@ -835,13 +847,9 @@ export async function runChecks({
     const rel = relative(repoRoot, join(pkg.dir, "package.json")).split(sep).join("/");
     // Each field on its own. Joined, a description ending in "app" and a keyword
     // "framework" would read as the phrase that neither of them contains.
-    // npm accepts a bare string where the array is expected, and spreading one
-    // would compare the pattern against single characters.
-    const keywords = pkg.json.keywords;
-    const published = [
-      pkg.json.description,
-      ...(typeof keywords === "string" ? [keywords] : (keywords ?? [])),
-    ].filter(value => typeof value === "string");
+    const published = [pkg.json.description, ...packageKeywords(pkg.json)].filter(
+      value => typeof value === "string"
+    );
     const claim = published.find(
       value => RETIRED_CATEGORY.test(value) && !categoryExempt(rel, value)
     );

@@ -23,19 +23,20 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { RETIRED_CATEGORY } from "./check-docs-claims.mjs";
+import { RETIRED_CATEGORY, RETIRED_CATEGORY_TAG } from "./check-docs-claims.mjs";
 
 const OWNER = "nextlyhq";
 const REPO = "nextly";
 
 /**
- * Topics that describe the retired category, and topics the search descriptor commits to.
+ * Topics the search descriptor commits to.
  *
- * `framework` sits in the forbidden list beside `app-framework` because it is the word the
- * whole repositioning turned on: it could mean an application framework, a UI framework or a
- * backend framework, which is why it was the least informative word available in the title tag.
+ * There is no matching list of forbidden ones. A GitHub topic is the same kind of whole tag as
+ * an npm keyword, so which topics name the retired category is decided by the shared
+ * `RETIRED_CATEGORY_TAG` pattern. Listing them here instead would be a second copy of the
+ * definition, free to disagree with the first — and it did: the list held only the singular
+ * spellings, so `frameworks` and `app-frameworks` passed a check that rejects them as keywords.
  */
-const FORBIDDEN_TOPICS = ["app-framework", "framework"];
 const REQUIRED_TOPICS = [
   "cms",
   "headless-cms",
@@ -47,6 +48,22 @@ const REQUIRED_TOPICS = [
 /** The package whose description the About line must match. The root manifest has none. */
 const DESCRIPTION_SOURCE = "packages/nextly/package.json";
 
+/**
+ * Whether an HTTP status means the configured repository cannot be read, as opposed to a
+ * moment when GitHub could not answer.
+ *
+ * The distinction is the whole value of the unverifiable result. Rate limiting is the common
+ * outcome of an unauthenticated call from CI and says nothing about the metadata, so it stays
+ * unverifiable. A 404 is the opposite: it is what a renamed repository or a stale `OWNER`
+ * returns, and treating it as transient would leave this check green for as long as the
+ * mistake lasted, examining no metadata at all.
+ */
+export function isPermanentStatus(status) {
+  if (status === 403 || status === 429) return false; // rate limited, not unreadable
+  if (status >= 500) return false; // GitHub's side, and it recovers
+  return status >= 400;
+}
+
 export async function fetchRepoMetadata(owner = OWNER, repo = REPO) {
   // Unauthenticated on purpose: the repository is public, so this needs no token and runs the
   // same way on a laptop and in CI. A token would make the check pass locally for someone whose
@@ -55,7 +72,9 @@ export async function fetchRepoMetadata(owner = OWNER, repo = REPO) {
     headers: { accept: "application/vnd.github+json" },
   });
   if (!response.ok) {
-    throw new Error(`GitHub API returned ${response.status}`);
+    const error = new Error(`GitHub API returned ${response.status} for ${owner}/${repo}`);
+    error.permanent = isPermanentStatus(response.status);
+    throw error;
   }
   const body = await response.json();
   return { description: body.description ?? "", topics: body.topics ?? [] };
@@ -72,7 +91,18 @@ export function checkRepoMetadata({ metadata, expectedDescription }) {
     });
   }
 
-  if (expectedDescription && description !== expectedDescription) {
+  // Guarding the comparison on a truthy `expectedDescription` would disable it entirely the
+  // day the source manifest lost its description, letting any About line pass. The About line
+  // is only as trustworthy as the thing it is compared against, so an absent source is itself
+  // the finding.
+  if (typeof expectedDescription !== "string" || expectedDescription.trim() === "") {
+    findings.push({
+      check: "description-source-missing",
+      message:
+        `${DESCRIPTION_SOURCE} has no description, so there is nothing for the GitHub About ` +
+        `line to be checked against`,
+    });
+  } else if (description !== expectedDescription) {
     findings.push({
       check: "about-matches-package",
       message:
@@ -81,13 +111,12 @@ export function checkRepoMetadata({ metadata, expectedDescription }) {
     });
   }
 
-  for (const topic of FORBIDDEN_TOPICS) {
-    if (topics.includes(topic)) {
-      findings.push({
-        check: "topic-forbidden",
-        message: `the topic "${topic}" describes the retired category and should be removed`,
-      });
-    }
+  for (const topic of topics) {
+    if (!RETIRED_CATEGORY_TAG.test(topic)) continue;
+    findings.push({
+      check: "topic-forbidden",
+      message: `the topic "${topic}" names the retired category and should be removed`,
+    });
   }
 
   for (const topic of REQUIRED_TOPICS) {
@@ -106,16 +135,28 @@ const invokedDirectly =
   process.argv[1] && process.argv[1].endsWith("check-repo-metadata.mjs");
 
 if (invokedDirectly) {
-  const expectedDescription = JSON.parse(
+  // No `?? ""`: an absent description must stay absent so `description-source-missing` fires
+  // rather than being compared as an empty string.
+  const { description: expectedDescription } = JSON.parse(
     readFileSync(join(process.cwd(), DESCRIPTION_SOURCE), "utf-8")
-  ).description;
+  );
 
   let metadata;
   try {
     metadata = await fetchRepoMetadata();
   } catch (error) {
-    // Unverifiable, not failed. An unreachable API says nothing about the metadata, and a check
-    // that goes red when the network is down teaches people to wave this one through.
+    if (error.permanent) {
+      console.error(
+        `\nrepo metadata: ${OWNER}/${REPO} could not be read (${error.message})\n\n` +
+          `This status does not recover on its own. Either the repository was renamed or made ` +
+          `private and the constants in this script are stale, or it can no longer be read ` +
+          `without a token.\n`
+      );
+      process.exit(1);
+    }
+    // Unverifiable, not failed. A rate limit or an unreachable API says nothing about the
+    // metadata, and a check that goes red when the network is down teaches people to wave this
+    // one through.
     console.warn(
       `repo metadata: could not be read (${error.message}). Not counted as a failure.`
     );

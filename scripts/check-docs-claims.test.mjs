@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   digestLine,
+  packageKeywords,
   renderedProse,
   runChecks,
   splitRefAndPath,
@@ -1159,5 +1160,51 @@ describe("retired-category-keyword", () => {
           "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
       })
     ).not.toContain("retired-category-keyword");
+  });
+
+  it("fires on the bare-string form npm also accepts", async () => {
+    // `"keywords": "framework"` reaches the registry the same way the array does. Iterating
+    // the string yields single characters, none of which is a whole tag, so the check went
+    // green on the one manifest shape it exists to catch.
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": '{"name":"@nextlyhq/thing","keywords":"framework"}',
+        "packages/thing/README.md":
+          "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).toContain("retired-category-keyword");
+  });
+
+  it("does not fire on a bare-string keyword that is not the category", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": '{"name":"@nextlyhq/thing","keywords":"page-builder"}',
+        "packages/thing/README.md":
+          "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).not.toContain("retired-category-keyword");
+  });
+});
+
+describe("packageKeywords", () => {
+  it("reads both manifest shapes as the same list", () => {
+    expect(packageKeywords({ keywords: ["cms", "framework"] })).toEqual(["cms", "framework"]);
+    expect(packageKeywords({ keywords: "framework" })).toEqual(["framework"]);
+  });
+
+  it("returns nothing for a manifest with no usable keywords", () => {
+    expect(packageKeywords({})).toEqual([]);
+    expect(packageKeywords(undefined)).toEqual([]);
+    expect(packageKeywords({ keywords: null })).toEqual([]);
+    expect(packageKeywords({ keywords: 7 })).toEqual([]);
+  });
+
+  it("drops non-string entries rather than passing them to a regex", () => {
+    expect(packageKeywords({ keywords: ["cms", null, 7, "framework"] })).toEqual([
+      "cms",
+      "framework",
+    ]);
   });
 });
