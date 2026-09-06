@@ -253,17 +253,49 @@ export async function generateMigration(
   const downSqlStatements = inverseOps.map(op => generateSQL(op, args.dialect));
 
   // 7b. Append UI metadata-row upserts for any touched UI-built table (§4.12.7).
+  const touched = new Set(operations.map(operationTableName));
   if (args.metadataUpserts && args.metadataUpserts.length > 0) {
-    const touched = new Set(operations.map(operationTableName));
     for (const m of args.metadataUpserts) {
       if (touched.has(m.tableName)) sqlStatements.push(m.sql);
     }
   }
 
-  // 8. Compose file content + write both files.
-  const collectionSlugs = args.collections.map(c => c.slug).sort();
-  const singleSlugs = args.singles.map(c => c.slug).sort();
-  const componentSlugs = args.components.map(c => c.slug).sort();
+  /*
+   * 8. Compose file content + write both files.
+   *
+   * 🔴 The entity headers name what this migration CHANGES, not everything the
+   * config describes. The header is the only per-file record of which entities
+   * a migration carries, and `migrate` reads it to decide whether a registry
+   * row is still waiting on something — a header listing the whole manifest
+   * makes every migration look like it touches every entity, which answers that
+   * question the same way for all of them and so answers it for none.
+   *
+   * A companion table counts as its entity's own change, so an operation on
+   * `dc_posts_locales` names `posts`.
+   *
+   * That does NOT cover a localization ENABLE. Those are planned separately and
+   * emitted as their own companion `.sql` files rather than as operations here,
+   * so `touched` is empty for them and the header names nothing — measured: a
+   * localize-only run produces a migration with an empty `-- UP`. The prefix
+   * match reaches a later ALTER on an existing companion and not that first
+   * transition.
+   */
+  const namesTouched = (entity: MinimalConfigEntity): boolean =>
+    touched.has(entity.tableName) ||
+    [...touched].some(name => name.startsWith(`${entity.tableName}_`));
+
+  const collectionSlugs = args.collections
+    .filter(namesTouched)
+    .map(c => c.slug)
+    .sort();
+  const singleSlugs = args.singles
+    .filter(namesTouched)
+    .map(c => c.slug)
+    .sort();
+  const componentSlugs = args.components
+    .filter(namesTouched)
+    .map(c => c.slug)
+    .sort();
   const sqlContent = formatMigrationFile({
     name: args.name,
     dialect: args.dialect,

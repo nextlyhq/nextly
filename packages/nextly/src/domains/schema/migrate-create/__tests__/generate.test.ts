@@ -1028,3 +1028,57 @@ describe("applyRenameDecisions (rename collapsing)", () => {
     expect(out[1].type).toBe("rename_column");
   });
 });
+
+/*
+ * 🔴 The entity header is the only per-file record of which entities a
+ * migration carries, and `migrate` reads it to decide whether a registry row is
+ * still waiting on something. Written from the whole config, every migration
+ * claims every entity — which answers that question identically for all of them
+ * and so answers it for none.
+ */
+describe("the entity header names what the migration changes", () => {
+  let migrationsDir: string;
+
+  beforeEach(async () => {
+    migrationsDir = await mkdtemp(join(tmpdir(), "nextly-header-scope-"));
+  });
+
+  const AUTHORS: MinimalConfigEntity = {
+    slug: "authors",
+    tableName: "dc_authors",
+    fields: [{ name: "description", type: "text", required: true }],
+  };
+
+  it("omits a collection this migration does not touch", async () => {
+    // Both exist in the config; only `posts` is new, so only `posts` is
+    // waiting on this file.
+    await generateMigration({
+      name: "create_authors",
+      dialect: "postgresql",
+      migrationsDir,
+      collections: [AUTHORS],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+    });
+
+    const second = await generateMigration({
+      name: "create_posts",
+      dialect: "postgresql",
+      migrationsDir,
+      collections: [AUTHORS, POSTS_V1],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: new Date("2026-04-29T15:46:00.123Z"),
+    });
+
+    expect(second).not.toBeNull();
+    const sql = await readFile(second!.sqlPath, "utf-8");
+    // The control: the entity it DOES carry is still named, so this cannot
+    // pass by emitting no header at all.
+    expect(sql).toContain("-- Collections: posts");
+    expect(sql).not.toContain("authors");
+  });
+});
