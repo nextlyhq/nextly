@@ -22,6 +22,24 @@ function invalid(doc: unknown): BlockDocument {
 }
 
 /** A site breakpoint set the fixtures validate against. */
+/**
+ * A text node the renderer prunes, restricted to one audience.
+ *
+ * Named so each fixture using it reads as "these two share an anchor" rather
+ * than restating what a condition envelope looks like, which is not what those
+ * fixtures are about.
+ */
+function gatedText(id: string, cssId: string, tier: string): BlockNode {
+  return {
+    id,
+    type: "core/text",
+    version: 1,
+    props: {},
+    cssId,
+    visibility: { conditions: [[{ field: "tier", op: "eq", value: tier }]] },
+  };
+}
+
 export const FIXTURE_BREAKPOINTS: BreakpointSet = {
   viewport: [
     { id: "base", label: "Desktop" },
@@ -578,26 +596,8 @@ export const VALIDATION_FIXTURES: ValidationFixture[] = [
         // The case gating exists for: personalised variants of one section,
         // each carrying the same anchor, with exactly one ever served. The
         // renderer prunes both before markup, so the page holds neither.
-        {
-          id: "n1",
-          type: "core/text",
-          version: 1,
-          props: {},
-          cssId: "hero",
-          visibility: {
-            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
-          },
-        },
-        {
-          id: "n2",
-          type: "core/text",
-          version: 1,
-          props: {},
-          cssId: "hero",
-          visibility: {
-            conditions: [[{ field: "tier", op: "eq", value: "free" }]],
-          },
-        },
+        gatedText("n1", "hero", "pro"),
+        gatedText("n2", "hero", "free"),
       ],
     },
     expected: [],
@@ -609,16 +609,7 @@ export const VALIDATION_FIXTURES: ValidationFixture[] = [
       formatVersion: 1,
       kind: "page",
       nodes: [
-        {
-          id: "n1",
-          type: "core/text",
-          version: 1,
-          props: {},
-          cssId: "hero",
-          visibility: {
-            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
-          },
-        },
+        gatedText("n1", "hero", "pro"),
         { id: "n2", type: "core/text", version: 1, props: {}, cssId: "hero" },
         { id: "n3", type: "core/text", version: 1, props: {}, cssId: "hero" },
       ],
