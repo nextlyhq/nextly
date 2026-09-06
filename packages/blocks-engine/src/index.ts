@@ -111,6 +111,11 @@ export {
   makeNode,
   expandSlotDefaults,
   walkNodes,
+  // The one forest rewrite. A caller changing a field across a stored tree
+  // needs its three learned behaviours — a cycle entry dropped, a malformed
+  // entry passed through, a malformed slot preserved — and writing a second
+  // traversal inherits none of them.
+  mapForest,
   findNode,
   locateNode,
   insertNode,
@@ -133,6 +138,10 @@ export {
   // helpers still has to know which attributes carry an id.
   ID_REFERENCE_ATTRIBUTES,
   remapIdReferences,
+  // And what such a value IS, once its separators are gone. A consumer that
+  // fingerprints or compares copied content has to tokenise it exactly where
+  // the remapper does, and a `split` of their own agrees only until one moves.
+  idReferenceTokens,
   duplicateNode,
   updateNode,
 } from "./tree";
@@ -170,10 +179,12 @@ export type {
 // create and the ops the page needs. Split from the doing so the caller can put
 // both writes in one unit of work and roll the create back — and so the dry run
 // and the real run are the same function rather than two that agree for now.
+export { patternDigest } from "./pattern-digest";
 export { planInsertPattern, planSaveAsPattern } from "./composition-planners";
 export type {
   CompositionPlan,
   InsertTarget,
+  StoredPattern,
   PlacementTarget,
   PatternTarget,
   PlanProblem,
@@ -187,6 +198,11 @@ export type {
 // style compiler stops: a class applied to a node the compiler styled but the
 // counter never reached is absent from the record a safe-delete check reads,
 // and absence there is indistinguishable from "not used".
+// The one answer to whether a stored value is a whole provenance record. A
+// consumer holding `BlockOrigin` and no way to check one has to write the check
+// again, and a second spelling of it admits records this package refuses.
+export { isBlockOrigin } from "./document";
+
 export { selectNodes } from "./select-nodes";
 export type {
   NodeSelection,

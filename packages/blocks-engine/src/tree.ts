@@ -731,8 +731,14 @@ function queueSlotRebuilds(
  * would let any unrelated edit silently destroy stored content that a caller
  * may still need to read or repair, which is a worse outcome than the throw it
  * replaced: the throw was loud and lost nothing.
+ *
+ * Published because those three are exactly what a caller rewriting one field
+ * across a stored forest gets wrong, and each was learned here rather than
+ * guessed. A planner stripping a lock or a provenance record wrote its own walk
+ * and inherited none of them; the rule is that a forest rewrite is this
+ * function with a different `fn`, not a new traversal.
  */
-function mapForest(
+export function mapForest(
   nodes: BlockNode[],
   fn: (node: BlockNode) => BlockNode
 ): BlockNode[] {
@@ -1251,6 +1257,23 @@ export const ID_REFERENCE_ATTRIBUTES: readonly string[] = [
 const ID_REFERENCE_SET = new Set(ID_REFERENCE_ATTRIBUTES);
 
 /**
+ * An IDREFS value as its tokens, with the separators gone.
+ *
+ * The single statement of what such a value MEANS: a list of ids, where runs of
+ * whitespace are one separator and a leading or trailing one is nothing. Every
+ * parser reads `"hero   label"` and `"hero label"` as the same two references,
+ * and {@link remapIdReferences} writes both back as the second.
+ *
+ * Published because a second reader now depends on that being true rather than
+ * merely doing the same thing: a fingerprint of what a copy carries has to
+ * normalise exactly where the copier normalises, and a parallel `split`
+ * elsewhere would agree until one of them changed.
+ */
+export function idReferenceTokens(value: string): string[] {
+  return value.split(/\s+/).filter(token => token !== "");
+}
+
+/**
  * Point a node's id REFERENCES at wherever those ids ended up.
  *
  * Applied as a second pass, after every id has been minted, and that ordering
@@ -1282,11 +1305,10 @@ export function remapIdReferences(
       defineEntry(next, name, value as string);
       continue;
     }
-    // Split on whitespace so an IDREFS list is rewritten token by token; the
-    // separator is normalised to one space, which is what every parser reads
-    // the original as anyway.
-    const tokens = value.split(/\s+/).filter(token => token !== "");
-    const mapped = tokens.map(token => domIds.get(token) ?? token);
+    // Token by token, through the one spelling of what an IDREFS list IS.
+    const mapped = idReferenceTokens(value).map(
+      token => domIds.get(token) ?? token
+    );
     const rewritten = mapped.join(" ");
     if (rewritten !== value) changed = true;
     defineEntry(next, name, rewritten);
