@@ -22,6 +22,7 @@ import { COMPONENT_INSTANCE_TYPE, DOCUMENT_FORMAT_VERSION } from "./document";
 import type { BlockDocument, BlockNode, ComponentDocument } from "./document";
 import { applyOps } from "./ops";
 import type { BuilderOp } from "./ops";
+import { MAX_ENVELOPE_ENTRIES } from "./limits";
 import { walkNodes } from "./tree";
 
 function node(
@@ -1048,5 +1049,113 @@ describe("a convert refuses everything its ops would meet", () => {
       ).problem
     ).toBe("duplicate-destination");
     expect(() => applyOps(doc, [{ kind: "remove", id: "a" }])).toThrow();
+  });
+});
+
+describe("the exposure request itself is judged before its fields", () => {
+  const plan = (exposure: unknown) =>
+    planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      exposure as never,
+      anyParent
+    );
+
+  it.each([
+    ["null", null],
+    ["a string", "bad"],
+    ["an array", []],
+    ["a number", 3],
+  ])("refuses %s as the whole request", (_name, exposure) => {
+    // `null` threw; a string and an array answered `undefined` to both field
+    // reads and were taken for "expose nothing", which reports success for a
+    // request nobody could honour.
+    let threw: unknown;
+    let result;
+    try {
+      result = plan(exposure);
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeUndefined();
+    expect(result?.problem).toBe("invalid-exposure");
+  });
+
+  it("still treats an absent request as exposing nothing", () => {
+    // The one value that SAYS so, rather than failing to say anything.
+    const stored = definition(plan(undefined));
+    expect("exposed" in stored).toBe(false);
+  });
+
+  it("carries a malformed options value to the validator", () => {
+    // Omitting it turned a refusal into a success: the envelope check rejects a
+    // present `options` on anything but a select, and one that is not a list.
+    const result = plan({
+      properties: [{ ...exposeText("headline").properties[0], options: "bad" }],
+    });
+    expect(result.problem).toBe("invalid-exposure");
+    expect(result.issues?.map(i => i.code)).toContain(
+      "exposed-options-invalid"
+    );
+  });
+
+  it("carries a malformed slot allow-list to the validator", () => {
+    // Dropping it left an unrestricted slot the planner then reported as fine.
+    const result = plan({
+      slots: {
+        body: { label: "Body", nodeId: "card", slot: "children", allow: "bad" },
+      },
+    });
+    expect(result.problem).toBe("invalid-exposure");
+  });
+
+  it("refuses an over-cap properties list WITHOUT reading its entries", () => {
+    // The refusal alone does not discriminate: mapping the list first and then
+    // letting `eachBounded` reject it reaches the same answer, having done
+    // exactly the work the cap exists to refuse. So the entries count their own
+    // reads, and the assertion is that none happened.
+    let reads = 0;
+    const many = Array.from({ length: MAX_ENVELOPE_ENTRIES + 1 }, (_, i) => {
+      const entry: Record<string, unknown> = {
+        label: "L",
+        nodeId: "headline",
+        propPath: "text",
+        type: "text",
+      };
+      Object.defineProperty(entry, "id", {
+        enumerable: true,
+        get() {
+          reads += 1;
+          return `p${String(i)}`;
+        },
+      });
+      return entry;
+    });
+
+    expect(plan({ properties: many }).problem).toBe("invalid-exposure");
+    expect(reads).toBe(0);
+  });
+
+  it("refuses an over-cap slot map WITHOUT reading its entries", () => {
+    let reads = 0;
+    const slots: Record<string, unknown> = {};
+    for (let i = 0; i <= MAX_ENVELOPE_ENTRIES; i++) {
+      const entry: Record<string, unknown> = {
+        nodeId: "card",
+        slot: "children",
+      };
+      Object.defineProperty(entry, "label", {
+        enumerable: true,
+        get() {
+          reads += 1;
+          return "S";
+        },
+      });
+      slots[`s${String(i)}`] = entry;
+    }
+
+    expect(plan({ slots }).problem).toBe("invalid-exposure");
+    expect(reads).toBe(0);
   });
 });

@@ -1793,10 +1793,16 @@ export function componentEnvelopeIssues(
   doc: BlockDocument,
   limits: DocumentLimits = DEFAULT_LIMITS
 ): ValidationIssue[] {
-  if (doc.kind !== "component") return [];
+  // The DOCUMENT, before its kind is read off it. This is a published entry
+  // point whose own docblock names a stored row as an input, and a row can be
+  // `null` or a string — where dereferencing `.kind` throws a native error out
+  // of a function that promises a list. Whether such a document is READABLE at
+  // all is `validateDocument`'s question and a planner asks it separately; this
+  // one answers only about an envelope, and an unreadable document has none.
+  if (!isPlainRecord(doc) || doc.kind !== "component") return [];
   const issues: ValidationIssue[] = [];
   validateComponentEnvelope(
-    doc as unknown as Record<string, unknown>,
+    doc,
     Array.isArray(doc.nodes) ? doc.nodes : [],
     limits.maxNodes,
     issues

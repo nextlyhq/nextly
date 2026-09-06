@@ -21,7 +21,12 @@ import type { NestingSource } from "./nesting";
 import type { BlockTypeLookup } from "./validation";
 import { compilePageCss } from "./style/compile-page";
 import { measureBytes } from "./measure-bytes";
-import { ISSUE_CODES, validate, validateDocument } from "./validation";
+import {
+  ISSUE_CODES,
+  componentEnvelopeIssues,
+  validate,
+  validateDocument,
+} from "./validation";
 
 function lookup(types: string[]): BlockTypeLookup {
   const set = new Set(types);
@@ -2719,6 +2724,30 @@ describe("an unstorable document does not have its values parsed", () => {
     // shape long before its style values matter. The exposure that closes is
     // the parsing of whatever the getter returns, not the single invocation.
     expect(reads).toBeGreaterThan(0);
+  });
+});
+
+describe("componentEnvelopeIssues reads a stored value defensively", () => {
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["a string", "bad"],
+    ["a number", 3],
+  ])("answers rather than throwing for %s", (_name, doc) => {
+    // A published entry point whose own docblock names a stored row as an
+    // input, and a row can be any of these. Dereferencing `.kind` took a native
+    // error out of a function that promises a list.
+    let threw: unknown;
+    let issues;
+    try {
+      issues = componentEnvelopeIssues(doc as never);
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeUndefined();
+    // Whether such a document is READABLE is `validateDocument`'s question; an
+    // unreadable one simply has no envelope to be wrong about.
+    expect(issues).toEqual([]);
   });
 });
 

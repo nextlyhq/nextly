@@ -33,6 +33,7 @@ import type {
   ExposedPropertyType,
   ExposedSlot,
 } from "./document";
+import { MAX_ENVELOPE_ENTRIES } from "./limits";
 import {
   canBeRoot,
   canNest,
@@ -53,7 +54,7 @@ import {
 } from "./ops";
 import { patternDigest } from "./pattern-digest";
 import { isPlainRecord } from "./plain-record";
-import { defineEntry } from "./safe-record";
+import { boundedOwnKeys, defineEntry } from "./safe-record";
 import { contiguousRun, type RunProblem } from "./sibling-run";
 import {
   findNode,
@@ -945,14 +946,28 @@ function componentDocument(
   saved: PlannedSave,
   exposure: ComponentExposure
 ): SavedComponent | PlanRefusal {
-  const ambiguous = ambiguousNomination(saved.selected, exposure);
+  // The CONTAINER, before either field is read off it. The guards below judge
+  // the fields and their entries; none of them can be reached at all if the
+  // request itself is not a record — `null` throws, and a string or an array
+  // answers `undefined` to both reads and is silently taken for "expose
+  // nothing", which reports success for a request nobody could honour.
+  //
+  // `undefined` is the exception and means exactly that: a caller with nothing
+  // to expose. It is the one value that says so rather than failing to say
+  // anything.
+  if (exposure !== undefined && !isPlainRecord(exposure)) {
+    return { problem: "invalid-exposure" };
+  }
+  const asked: ComponentExposure = exposure ?? {};
+
+  const ambiguous = ambiguousNomination(saved.selected, asked);
   if (ambiguous !== undefined) return ambiguous;
 
   const definition: ComponentDocument = {
     ...saved.stored,
     kind: "component",
-    ...exposedProperties(exposure.properties, saved.nodeIds),
-    ...exposedSlots(exposure.slots, saved.nodeIds),
+    ...exposedProperties(asked.properties, saved.nodeIds),
+    ...exposedSlots(asked.slots, saved.nodeIds),
   };
 
   const issues = componentEnvelopeIssues(definition);
@@ -1045,6 +1060,12 @@ function exposedProperties(
     return { exposed: requested as unknown as ExposedProperty[] };
   }
   if (requested.length === 0) return {};
+  // The validator's own cap, applied BEFORE the mapping. `eachBounded` refuses
+  // a list past it in one step; cloning every entry first does the work the cap
+  // exists to refuse, on a list a decoded input controls the length of.
+  if (requested.length > MAX_ENVELOPE_ENTRIES) {
+    return { exposed: requested };
+  }
   return {
     exposed: requested.map(one =>
       // Per ENTRY, for the same reason. A `null` or a primitive in the list is
@@ -1072,13 +1093,20 @@ function mappedProperty(
     // alone leaves every option object shared with the caller's request, so
     // editing a label after planning silently edits the document the plan says
     // it would store — an alias a test that only appends to the list cannot see.
-    ...(Array.isArray(one.options)
-      ? {
-          options: one.options.map(option =>
-            isPlainRecord(option) ? { ...option } : option
-          ),
-        }
-      : {}),
+    //
+    // A value that is not a list is CARRIED rather than dropped, on the same
+    // terms as the nomination that holds it: the validator refuses a present
+    // `options` on anything but a select, and one that is not an array, so
+    // omitting it here turns a refusal into a success.
+    ...(one.options === undefined
+      ? {}
+      : {
+          options: Array.isArray(one.options)
+            ? one.options.map(option =>
+                isPlainRecord(option) ? { ...option } : option
+              )
+            : one.options,
+        }),
   };
 }
 
@@ -1091,11 +1119,17 @@ function exposedSlots(
   if (!isPlainRecord(requested)) {
     return { slots: requested };
   }
-  // Own keys only. A record reached from a published entry point may inherit
-  // one, and a key that is not the caller's own is a region no author asked
-  // for — while `structuredClone` and object spreads copy neither, so the guard
-  // and the writer would otherwise disagree about the same field.
-  const named = Object.keys(requested);
+  // Own keys only, and BOUNDED, for the two reasons those are separate rules.
+  // A record reached from a published entry point may inherit a key, and a key
+  // that is not the caller's own is a region no author asked for — while
+  // `structuredClone` and object spreads copy neither, so the guard and the
+  // writer would otherwise disagree about the same field. And materialising
+  // every key of a caller-sized record does the work the validator's cap exists
+  // to refuse in one step.
+  const named = boundedOwnKeys(requested, MAX_ENVELOPE_ENTRIES);
+  if (named === null) {
+    return { slots: requested };
+  }
   if (named.length === 0) return {};
   const slots: Record<string, ExposedSlot> = {};
   for (const id of named) {
@@ -1113,7 +1147,16 @@ function exposedSlots(
             label: one.label,
             nodeId: storedId(one.nodeId, nodeIds),
             slot: one.slot,
-            ...(Array.isArray(one.allow) ? { allow: [...one.allow] } : {}),
+            // Carried when it is not a list, not dropped: the validator refuses
+            // a present non-array allow-list, and dropping it leaves an
+            // unrestricted slot the planner then reports as fine.
+            ...(one.allow === undefined
+              ? {}
+              : {
+                  allow: Array.isArray(one.allow)
+                    ? [...one.allow]
+                    : (one.allow as ExposedSlot["allow"]),
+                }),
           }
         : (one as unknown as ExposedSlot)
     );
