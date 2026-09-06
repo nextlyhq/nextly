@@ -1815,6 +1815,52 @@ describe("duplicating a component definition", () => {
     expect(dup(definitionWith()).pageOps).toEqual([]);
   });
 
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["a string", "row"],
+    ["a number", 3],
+  ])("answers rather than throwing for %s", (_name, row) => {
+    // A published entry point handed a STORED ROW, and a row can be any of
+    // these — where reading `.kind` off it takes a native error out of a
+    // function that promises a refusal.
+    let threw: unknown;
+    let result;
+    try {
+      result = planDuplicateComponent(
+        row as unknown as BlockDocument,
+        componentTarget
+      );
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeUndefined();
+    expect(result?.problem).toBe("not-a-component");
+  });
+
+  it.each([
+    ["a null among the nodes", [node("a"), null as unknown as BlockNode]],
+    [
+      "a null nested in a slot",
+      [node("a", {}, { children: [null as unknown as BlockNode] })],
+    ],
+  ])("refuses %s", (_name, nodes) => {
+    // `documentRefusal` reads the envelope and the `nodes` array, not the
+    // entries inside it — so without the forest check beside it these were
+    // copied into a duplicate that PLANNED SUCCESSFULLY and then could not be
+    // published, since strict validation is this collection's gate. Every other
+    // planner here pairs the two refusals; this one now does too.
+    const broken = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component" as const,
+      nodes,
+    } as unknown as BlockDocument;
+
+    expect(planDuplicateComponent(broken, componentTarget).problem).toBe(
+      "unusable-document"
+    );
+  });
+
   it("refuses a document that is not a component", () => {
     // A pattern duplicated through here would be stored as a component and
     // refused by the collection it landed in, having reported success.

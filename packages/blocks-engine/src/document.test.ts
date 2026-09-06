@@ -324,9 +324,9 @@ describe("a provenance record's rename map", () => {
     ["not a record", "pricing"],
     ["an array", ["pricing"]],
     ["null", null],
-    ["a non-string original", { pricing: 3 }],
-    ["an empty original", { pricing: "" }],
-    ["an empty current id", { "": "pricing" }],
+    ["a non-string current id", { pricing: 3 }],
+    ["an empty current id", { pricing: "" }],
+    ["an empty original", { "": "pricing" }],
   ])("refuses %s", (_name, renamed) => {
     // A half-record is read as "these are the originals" and puts back an id
     // that was never there, which is worse than having no record at all — the
@@ -336,7 +336,11 @@ describe("a provenance record's rename map", () => {
 
   it("ignores a rename map on a component record", () => {
     // That arm severs a link deliberately and restores nothing, so it has no
-    // such field; an extra member is not what makes a record whole.
-    expect(isBlockOrigin({ from: "component", id: "c1" })).toBe(true);
+    // such field; an extra member is not what makes a record whole. The map is
+    // PRESENT in the input, and malformed — without that this would prove only
+    // that the component arm accepts a record with no map at all.
+    expect(
+      isBlockOrigin({ from: "component", id: "c1", renamed: "nonsense" })
+    ).toBe(true);
   });
 });

@@ -1004,11 +1004,24 @@ export function planDuplicateComponent<TFields>(
   target: LibraryTarget<TFields>,
   limits: DocumentLimits = DEFAULT_LIMITS
 ): PlanResult<TFields> {
+  // The CONTAINER, before its kind is read off it. This is a published entry
+  // point handed a stored row, and a row can be `null` — where reading `.kind`
+  // takes a native error out of a function that promises a refusal.
+  if (!isPlainRecord(definition)) return { problem: "not-a-component" };
   // The KIND, before anything is read as an envelope. A pattern duplicated
   // through here would be stored as a component and refused by the collection
   // it landed in, having reported success.
   if (!isComponentDocument(definition)) return { problem: "not-a-component" };
-  if (documentRefusal(definition) !== undefined) {
+  // The envelope AND the forest, paired as every other planner in this module
+  // pairs them. `documentRefusal` reads the envelope and the `nodes` array —
+  // not the entries inside it — so a `null` among the nodes, or nested in a
+  // slot, is copied without complaint into a duplicate that plans successfully
+  // and then cannot be published, since strict validation is the gate for this
+  // collection and refuses the node it holds.
+  if (
+    documentRefusal(definition) !== undefined ||
+    forestRefusal(definition.nodes) !== undefined
+  ) {
     return { problem: "unusable-document" };
   }
 
