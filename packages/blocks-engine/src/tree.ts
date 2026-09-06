@@ -1238,13 +1238,14 @@ function relinkOne(
  * Delegates rather than repeating the two passes, so the singular and the
  * plural cannot drift into disagreeing about what a copy is.
  *
- * It takes no {@link DomIdPolicy} because no caller of it saves: composition
- * inlines a definition into an instance that sits in a page which may already
- * hold the definition's own ids, which is exactly the case minting exists for.
- * A save works on a RUN of siblings and reaches for the forest form anyway.
- * Adding the parameter here would be offering an option nothing can use, and
- * the first caller to pass `"keep"` would be one that ought to be asking a
- * different question.
+ * It takes no {@link DomIdPolicy}, and the honest reason is that nothing in the
+ * product calls this. Measured: every occurrence outside this file is a test,
+ * the package entry, or a comment in `resolve-instances.ts` citing it as an
+ * analogy — composition keeps a `domIds` memo of its own and re-identifies to
+ * deterministic scoped ids rather than random ones, and a save works on a RUN
+ * of siblings and reaches for the forest form. Adding the parameter would be
+ * offering an option to nobody. Whether a published helper with no caller
+ * should stay is a separate question from this one.
  */
 export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
   const { nodes, nodeIds, domIds } = reidForestWithMap([node]);
