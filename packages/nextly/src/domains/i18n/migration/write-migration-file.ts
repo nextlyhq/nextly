@@ -64,6 +64,10 @@ export function writeLocalizationMigrationFile(
   const header =
     `-- Migration: ${baseName}\n` +
     `-- Collections: ${spec.collection}\n` +
+    // Scoped by construction, like the companion writer: this file is about
+    // one entity. Without the marker its header is read as unknown scope, and
+    // a reader cannot tell it from a legacy file that names the whole config.
+    `${SCOPED_ENTITIES_MARKER}\n` +
     `${LOCALIZATION_MIGRATION_MARKER} ${opts.direction} (i18n)\n`;
   const content = `${header}\n-- UP\n${up}\n\n-- DOWN\n${down}\n`;
 

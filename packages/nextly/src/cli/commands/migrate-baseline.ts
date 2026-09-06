@@ -540,6 +540,9 @@ export async function baselineCore(
         components: [],
         hasUserExt: false,
         now,
+        // The entity arrays above are empty because this caller does not
+        // compute them, not because the migration changes nothing.
+        entitiesAreScoped: false,
       });
 
       await mkdir(migrationsDir, { recursive: true });

@@ -326,3 +326,68 @@ describe("the shared remediation is sufficient for a legacy file too", () => {
     expect(parsed.collections).toEqual(["posts"]);
   });
 });
+
+/*
+ * 🔴 The marker counts only as its own line. A substring test reads the
+ * marker's own guidance sentence as provenance — and the blank template prints
+ * that sentence — so a file whose real marker was removed still answered
+ * `scoped`, and the test guarding the marker could not fail either way.
+ */
+describe("the scope marker is recognised as a header line, not as text", () => {
+  it("does not read the guidance sentence as a declaration", () => {
+    // Exactly the shape that defeated the substring test: the marker named
+    // inside prose, with no standalone header line.
+    const prose = `-- Migration: x\n-- ${ENTITY_HEADER_GUIDANCE}\n\n-- UP\nSELECT 1;`;
+
+    expect(prose).toContain(SCOPED_ENTITIES_MARKER);
+    expect(parseEntityHeaders(prose).scoped).toBe(false);
+  });
+
+  it("does not read the marker inside SQL as a declaration", () => {
+    const inSql = `-- Migration: x\n\n-- UP\nINSERT INTO t VALUES ('${SCOPED_ENTITIES_MARKER}');`;
+
+    expect(parseEntityHeaders(inSql).scoped).toBe(false);
+  });
+
+  it("reads a standalone marker line as a declaration", () => {
+    // The control: without it, a parser that always answered false would
+    // satisfy both cases above.
+    const declared = `-- Migration: x\n${SCOPED_ENTITIES_MARKER}\n\n-- UP\nSELECT 1;`;
+
+    expect(parseEntityHeaders(declared).scoped).toBe(true);
+  });
+});
+
+/*
+ * 🔴 A caller that does not compute the entity arrays must not publish a
+ * declaration about them. `migrate-baseline` passes all three empty while its
+ * SQL adopts existing tables, so a marker there would say "scoped, and it
+ * changes nothing" about a migration that creates the whole schema.
+ */
+describe("a caller can decline to declare scope", () => {
+  const base = {
+    name: "m",
+    dialect: "postgresql" as const,
+    sqlStatements: ["SELECT 1"],
+    downSqlStatements: [],
+    collections: [],
+    singles: [],
+    components: [],
+    hasUserExt: false,
+    now: new Date("2026-04-29T15:45:00.123Z"),
+  };
+
+  it("omits the marker when the caller says the arrays are not scoped", () => {
+    const out = formatMigrationFile({ ...base, entitiesAreScoped: false });
+
+    expect(parseEntityHeaders(out).scoped).toBe(false);
+  });
+
+  it("writes it for a caller that computed them, even when none were touched", () => {
+    // "Changes no entity" and "nobody recorded what this changes" stay
+    // different facts, and only the marker separates them.
+    const out = formatMigrationFile(base);
+
+    expect(parseEntityHeaders(out).scoped).toBe(true);
+  });
+});

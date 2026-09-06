@@ -281,6 +281,15 @@ export async function generateMigration(
    * A localization transition is not covered by THIS header and does not need
    * to be: those are emitted as their own companion `.sql` files, which carry
    * their own header naming the entity by kind.
+   *
+   * 🔴 An entity REMOVED from the config cannot be named, because the filter
+   * runs over the config as it is now and the entity is no longer in it — so a
+   * migration that drops its table declares scope and omits the entity whose
+   * table it drops. Naming it needs the previous entity manifest, which no
+   * caller passes; the previous SNAPSHOT holds tables, not slugs, so the
+   * mapping is not recoverable here. The consequence is under-naming, which
+   * leaves such a row promoted as it was before rather than withheld — the
+   * cheap direction, and the reason this is recorded rather than guessed at.
    */
   const namesTouched = (entity: MinimalConfigEntity): boolean =>
     touched.has(entity.tableName);

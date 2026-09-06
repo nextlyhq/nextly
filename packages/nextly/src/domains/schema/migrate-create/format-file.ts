@@ -64,6 +64,17 @@ export const FIELD_GROUP_HEADER = "-- Field groups:";
 export const SCOPED_ENTITIES_MARKER = "-- Entity scope: touched";
 
 /**
+ * The marker as a HEADER LINE, which is the only form that counts.
+ *
+ * 🔴 A substring test reads the marker's own guidance sentence as provenance —
+ * and the blank template prints that sentence — so a file whose real marker was
+ * removed still answered `scoped`. That is not only a wrong answer: it made the
+ * test guarding the marker unable to fail, because the text it searched for was
+ * present either way.
+ */
+const SCOPED_ENTITIES_PATTERN = /^-- Entity scope: touched$/m;
+
+/**
  * The one-line instruction for annotating a hand-written migration.
  *
  * 🔴 Exported so the CLI's remediation and the blank template say the SAME
@@ -71,6 +82,13 @@ export const SCOPED_ENTITIES_MARKER = "-- Entity scope: touched";
  * listed all three headers while the warning named only `-- Collections:`, and
  * following the warning filed a single among collections. Guidance about a
  * format belongs beside the format.
+ *
+ * 🔴 Distinguishes hand-written from generated, because the files this is
+ * shown for are not all alike and the same edit is safe on one and destructive
+ * on the other. `writeSnapshot` records a SHA-256 of the `.sql` in its paired
+ * snapshot and `verifyMigrationHash` compares them, so annotating a GENERATED
+ * migration after the fact invalidates its own integrity record. The blank
+ * path writes no snapshot, so a hand-written file has nothing to invalidate.
  *
  * 🔴 Names the MARKER as well as the header, because the files this is shown
  * for are not all alike. A new blank migration ships the marker, so naming the
@@ -80,8 +98,11 @@ export const SCOPED_ENTITIES_MARKER = "-- Entity scope: touched";
  * remediation is shown for both, so it has to be sufficient for both.
  */
 export const ENTITY_HEADER_GUIDANCE =
-  "Add `-- Collections:`, `-- Singles:` or `-- Field groups:` naming what it changes, " +
-  `plus \`${SCOPED_ENTITIES_MARKER}\` if the file does not already carry it`;
+  "In a hand-written migration, add `-- Collections:`, `-- Singles:` or " +
+  "`-- Field groups:` naming what it changes, plus " +
+  `\`${SCOPED_ENTITIES_MARKER}\` if it is not already there. ` +
+  "A generated migration's `.sql` is hashed by its paired snapshot, so leave " +
+  "that one alone — its entities keep the behaviour they had before";
 export const FIELD_GROUP_HEADER_PATTERN =
   /^-- (?:Field groups?|Components?):\s*(.+)$/m;
 
@@ -103,6 +124,17 @@ export interface FormatArgs {
   components: string[];
   /** True if this migration includes user_ext changes. */
   hasUserExt: boolean;
+  /**
+   * Whether the entity arrays name what this migration CHANGES.
+   *
+   * 🔴 False for a caller that does not compute them, and `migrate-baseline`
+   * is one: it passes all three arrays empty while its SQL adopts existing
+   * tables. Stamping the marker there would publish "scoped, and it changes
+   * nothing" about a migration that creates the whole schema — a false
+   * declaration, and worse than none, because a reader can tell an absent
+   * declaration from a wrong one only if wrong ones are never written.
+   */
+  entitiesAreScoped?: boolean;
   /** Override generated-at timestamp for tests; default = `new Date()`. */
   now?: Date;
 }
@@ -120,9 +152,11 @@ export function formatMigrationFile(args: FormatArgs): string {
       ? `${FIELD_GROUP_HEADER} ${args.components.join(", ")}\n`
       : "";
   const userExtLine = args.hasUserExt ? "-- UserExt: user_ext\n" : "";
-  // Written whether or not any entity is named: a migration that changes no
-  // entity is a different fact from one whose scope nobody recorded.
-  const scopeLine = `${SCOPED_ENTITIES_MARKER}\n`;
+  // Written whether or not any entity is NAMED: a migration that changes no
+  // entity is a different fact from one whose scope nobody recorded. Withheld
+  // when the caller says it did not compute the arrays at all.
+  const scopeLine =
+    args.entitiesAreScoped === false ? "" : `${SCOPED_ENTITIES_MARKER}\n`;
   // Each statement gets a trailing `;`. splitSqlStatements in migrate.ts
   // splits on `;` so statements MUST be terminated.
   const body = args.sqlStatements.map(s => `${s};`).join("\n\n");
@@ -249,7 +283,7 @@ export function parseEntityHeaders(content: string): MigrationEntityHeaders {
     collections: headerSlugs(content, COLLECTIONS_HEADER_PATTERN),
     singles: headerSlugs(content, SINGLES_HEADER_PATTERN),
     components: headerSlugs(content, FIELD_GROUP_HEADER_PATTERN),
-    scoped: content.includes(SCOPED_ENTITIES_MARKER),
+    scoped: SCOPED_ENTITIES_PATTERN.test(content),
   };
 }
 
