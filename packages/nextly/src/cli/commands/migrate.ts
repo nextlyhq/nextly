@@ -56,7 +56,10 @@ import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
-import { parseEntityHeaders } from "../../domains/schema/migrate-create/format-file";
+import {
+  ENTITY_HEADER_GUIDANCE,
+  parseEntityHeaders,
+} from "../../domains/schema/migrate-create/format-file";
 import {
   EMPTY_SNAPSHOT,
   parseSnapshotFile,
@@ -338,30 +341,11 @@ export async function runMigrate(
        * so reporting only `applied` let a run announce a current database while
        * registry work it had just measured was still owed.
        */
-      const { marked, stillPending, unreadable } = metadata;
-      if (unreadable.length > 0) {
-        // Not a count of rows: this is "the sweep could not look". Reported
-        // separately because zero repaired and zero readable are the same
-        // number and opposite facts.
-        logger.warn(
-          `Could not read the ${unreadable.join(", ")} registry, so migration ` +
-            `status was not reconciled. The tables are in place; re-run \`nextly migrate\`.`
-        );
-      }
-      if (marked > 0) {
-        logger.success(
-          `${formatCount(marked, "registry row")} recorded as applied.`
-        );
-      }
-      if (stillPending > 0) {
-        logger.warn(
-          `${formatCount(stillPending, "registry row")} still awaiting a migration.`
-        );
-      }
+      reportMetadataOutcome(metadata, logger);
 
       logger.success(
         applied === 0
-          ? stillPending > 0 || unreadable.length > 0
+          ? metadata.stillPending > 0 || metadata.unreadable.length > 0
             ? "No migration files to apply."
             : "Nothing to migrate. Database is up to date."
           : `${formatCount(applied, "migration")} applied.`
@@ -483,6 +467,8 @@ export interface MigrateCoreResult {
     singlesRegistered: number;
     marked: number;
     stillPending: number;
+    awaitingMigration: number;
+    unscopedMigrations: string[];
     unreadable: string[];
   };
 }
@@ -530,6 +516,82 @@ export function installRegistryResolver(
   return schemaRegistry;
 }
 
+/**
+ * Say what Phase 3 did, and what it could not do.
+ *
+ * Extracted from the command body because the reporting is four independent
+ * decisions about one result — could the registries be read, what was recorded,
+ * what is waiting for a migration to exist, what is waiting for one to run —
+ * and interleaving them with the migrate flow made both harder to follow than
+ * either is alone.
+ */
+function reportMetadataOutcome(
+  metadata: MigrateCoreResult["metadata"],
+  logger: CommandContext["logger"]
+): void {
+  const {
+    marked,
+    stillPending,
+    awaitingMigration,
+    unscopedMigrations,
+    unreadable,
+  } = metadata;
+
+  if (unreadable.length > 0) {
+    // Not a count of rows: this is "the sweep could not look". Reported
+    // separately because zero repaired and zero readable are the same
+    // number and opposite facts.
+    logger.warn(
+      `Could not read the ${unreadable.join(", ")} registry, so migration ` +
+        `status was not reconciled. The tables are in place; re-run \`nextly migrate\`.`
+    );
+  }
+
+  if (marked > 0) {
+    logger.success(
+      `${formatCount(marked, "registry row")} recorded as applied.`
+    );
+  }
+
+  /*
+   * Split, because the two causes send an operator to different places. A row
+   * whose table is absent is waiting for a migration to be GENERATED; a row
+   * whose shape disagrees with the applied migrations has one generated and
+   * not yet run, or has been edited since. One combined count says "something
+   * is owed" and leaves them to guess which.
+   */
+  if (unscopedMigrations.length > 0) {
+    /*
+     * Named, because the remedy is to add one line to those files. Silence here
+     * would leave an operator with rows recorded as migrated by a rule that
+     * could not see the migration that changes them.
+     */
+    logger.warn(
+      `${formatCount(unscopedMigrations.length, "pending migration")} name no collection, single or field group, ` +
+        `so registry rows were recorded from their tables alone: ${unscopedMigrations.join(", ")}. ` +
+        // Taken from the formatter rather than restated, because a remediation
+        // that drifts from the format tells an operator to do something that
+        // does not work — which is exactly how this line came to name only
+        // `-- Collections:` while the template named all three.
+        `${ENTITY_HEADER_GUIDANCE}.`
+    );
+  }
+
+  const awaitingTable = stillPending - awaitingMigration;
+  if (awaitingTable > 0) {
+    logger.warn(
+      `${formatCount(awaitingTable, "registry row")} still awaiting a migration. ` +
+        `Run \`nextly migrate:create\` if the change has no migration yet.`
+    );
+  }
+  if (awaitingMigration > 0) {
+    logger.warn(
+      `${formatCount(awaitingMigration, "registry row")} awaiting a migration that has not been applied. ` +
+        `Run \`nextly migrate\` without --step to apply it.`
+    );
+  }
+}
+
 export async function migrateCore(
   deps: MigrateCoreDeps
 ): Promise<MigrateCoreResult> {
@@ -545,6 +607,8 @@ export async function migrateCore(
     singlesRegistered: 0,
     marked: 0,
     stillPending: 0,
+    awaitingMigration: 0,
+    unscopedMigrations: [] as string[],
     unreadable: [] as string[],
   };
 

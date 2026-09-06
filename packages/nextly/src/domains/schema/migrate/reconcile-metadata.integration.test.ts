@@ -14,7 +14,14 @@
  * separately (as `nextly migrate` applies it), and nothing ever reconciles the
  * two because the only writer sits behind `NODE_ENV === "development"`.
  */
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { SchemaEventsRepository } from "../events/schema-events-repository";
+import { SCOPED_ENTITIES_MARKER } from "../migrate-create/format-file";
 
 import {
   createTestDatabase,
@@ -61,6 +68,7 @@ const TABLE = {
   posts: "dc_reconcile_meta_posts",
   drafts: "dc_reconcile_meta_drafts",
   pages: "dc_reconcile_meta_pages",
+  edited: "dc_reconcile_meta_edited",
 } as const;
 
 /**
@@ -77,6 +85,7 @@ const SLUG = {
   posts: "reconcile_meta_posts",
   drafts: "reconcile_meta_drafts",
   pages: "reconcile_meta_pages",
+  edited: "reconcile_meta_edited",
 } as const;
 
 const DIALECTS: Dialect[] = ["sqlite", "postgresql", "mysql"];
@@ -125,6 +134,32 @@ describe.each(DIALECTS.filter(configured))(
        * a TEXT `session_token` inside a key, which MySQL refuses without a key
        * length. That limitation predates this suite.
        */
+      /*
+       * The ledger, provisioned on its own and only when absent.
+       *
+       * 🔴 Separate from the `reconcileCore` guard below, and not folded into
+       * it. That guard asks about `dynamic_collections`, which the shared
+       * Postgres container already has from whichever suite ran first — so the
+       * push is skipped and `nextly_schema_events` is never created, which is
+       * a table only the shape evidence needs. Widening the guard to run the
+       * whole core push whenever the ledger is missing would rewrite core
+       * tables underneath every other suite; the production DDL helper creates
+       * exactly the one table and nothing else.
+       */
+      if (!(await testDb.adapter.tableExists("nextly_schema_events"))) {
+        const { getSchemaEventsDdl } = await import(
+          "../events/schema-events-ddl"
+        );
+        for (const stmt of getSchemaEventsDdl(
+          testDb.adapter.dialect as never
+        )) {
+          // Unguarded: a ledger that cannot be created makes every shape
+          // verdict `unknown`, which would leave the test passing for a reason
+          // that has nothing to do with the code it names.
+          await testDb.adapter.executeQuery(stmt);
+        }
+      }
+
       if (!(await testDb.adapter.tableExists("dynamic_collections"))) {
         await reconcileCore({
           db: testDb.adapter.getDrizzle(),
@@ -145,7 +180,11 @@ describe.each(DIALECTS.filter(configured))(
       }
       await testDb?.adapter
         .executeQuery(
-          `DELETE FROM dynamic_collections WHERE slug IN ('${SLUG.posts}','${SLUG.drafts}','${SLUG.pages}')`
+          // Derived from SLUG rather than listed again: a name added to the
+          // map above must not be able to outlive the run that created it.
+          `DELETE FROM dynamic_collections WHERE slug IN (${Object.values(SLUG)
+            .map(v => `'${v}'`)
+            .join(",")})`
         )
         .catch(() => {});
       // Guarded: when `beforeEach` throws (an unreachable database, say),
@@ -299,6 +338,88 @@ describe.each(DIALECTS.filter(configured))(
       // Nothing left pending to mark, and the row is still applied.
       expect(second.marked).toBe(0);
       expect(await statusOf(SLUG.pages)).toBe("applied");
+    });
+
+    /*
+     * 🔴 The case table existence cannot answer, end to end on a real database
+     * with a real ledger. An edited entity keeps its old physical table, so the
+     * existence check that governs every other test here says yes — and the row
+     * must still be held back until the migration carrying its change has run.
+     *
+     * The migration is a real `.sql` file with a real entity header, and the
+     * ledger rows go in through `recordStart`/`markApplied`, the same calls
+     * `reconcileFile` makes — so the evidence this reads is the evidence
+     * production writes.
+     */
+    it("holds a row an unapplied migration names, then promotes it", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "nextly-reconcile-header-"));
+      writeFileSync(
+        join(dir, "0002_edit_posts.sql"),
+        [
+          "-- Migration: edit_posts",
+          `-- Collections: ${SLUG.edited}`,
+          // Written the way `migrate:create` writes it. Without the marker the
+          // header is read as unknown scope, the row is promoted, and this test
+          // asserts against a path it never reaches.
+          SCOPED_ENTITIES_MARKER,
+          "-- Dialect: SQLite",
+          "",
+          "-- UP",
+          `ALTER TABLE ${TABLE.edited} ADD COLUMN body text;`,
+          "",
+          "-- DOWN",
+          "-- (none)",
+        ].join("\n")
+      );
+
+      const events = new SchemaEventsRepository(
+        testDb.adapter.getDrizzle(),
+        testDb.adapter.dialect as never
+      );
+      const record = async (filename: string): Promise<void> => {
+        const id = await events.recordStart({
+          eventType: "file_apply",
+          source: "cli-migrate",
+          filename,
+        });
+        await events.markApplied(id, { uniqueFilename: filename });
+      };
+
+      try {
+        await pendingCollection(SLUG.edited, TABLE.edited);
+        await createStandInTable(TABLE.edited);
+
+        const held = await reconcileMigrationMetadata({
+          adapter: testDb.adapter as never,
+          dialect: testDb.adapter.dialect as never,
+          migrationsDir: dir,
+          logger: silent,
+        });
+
+        // The table exists, so the OLD rule would have promoted it here.
+        expect(await testDb.adapter.tableExists(TABLE.edited)).toBe(true);
+        expect(held.awaitingMigration).toBeGreaterThanOrEqual(1);
+        expect(await statusOf(SLUG.edited)).toBe("pending");
+
+        // Now that migration runs.
+        await record("0002_edit_posts.sql");
+        const promoted = await reconcileMigrationMetadata({
+          adapter: testDb.adapter as never,
+          dialect: testDb.adapter.dialect as never,
+          migrationsDir: dir,
+          logger: silent,
+        });
+
+        expect(promoted.awaitingMigration).toBe(0);
+        expect(await statusOf(SLUG.edited)).toBe("applied");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        await testDb.adapter
+          .executeQuery(
+            `DELETE FROM nextly_schema_events WHERE filename = '0002_edit_posts.sql'`
+          )
+          .catch(() => {});
+      }
     });
   }
 );
