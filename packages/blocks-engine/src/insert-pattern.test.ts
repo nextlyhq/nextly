@@ -58,6 +58,11 @@ const stored = (document: BlockDocument): StoredPattern => ({
 
 const anyParent = { parentsOf: () => undefined };
 
+/** A node the renderer prunes: an author restricted it to a segment. */
+const gated = {
+  conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+} as unknown as BlockNode["visibility"];
+
 /** Every id in a forest. */
 function idsIn(nodes: BlockNode[]): string[] {
   const out: string[] = [];
@@ -744,6 +749,66 @@ describe("which DOM ids an insert steers around", () => {
       op.kind === "insert" ? [op.node] : []
     );
     expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).not.toBe("hero");
+  });
+
+  it("does not steer around an id only a CONDITION-GATED node carries", () => {
+    // The renderer prunes a gated node before markup, so its id reaches nobody.
+    // Gating exists for personalised variants of one section, each carrying the
+    // same anchor with exactly one served — counting them all renames an
+    // incoming pattern to avoid every variant of an id only one of which is
+    // ever on the page.
+    const plan = planInsertPattern(
+      page([node("g", { visibility: gated, cssId: "hero" })]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).toBe("hero");
+  });
+
+  it("prunes the gated node's DESCENDANTS too", () => {
+    // Gating removes a whole subtree, so a child's id does not reach the page
+    // either. Asking `isConditionGated` of each node alone would see an
+    // ungated child and count it.
+    const plan = planInsertPattern(
+      page([
+        node(
+          "g",
+          { visibility: gated },
+          { main: [node("kid", { cssId: "hero" })] }
+        ),
+      ]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).toBe("hero");
+  });
+
+  it("still steers around an id on an UNGATED node", () => {
+    // The control. "Skip every node" satisfies both tests above and puts two
+    // elements answering to one id on the page.
+    const plan = planInsertPattern(
+      page([node("plain", { cssId: "hero" })]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
     expect(placed[0].cssId).not.toBe("hero");
   });
 

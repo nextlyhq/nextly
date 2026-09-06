@@ -2801,3 +2801,76 @@ describe("validate and compile agree on which breakpoints a site defines", () =>
     expect(seen.emitted).toBe(true);
   });
 });
+
+describe("a bag validation has already refused is never enumerated", () => {
+  it("does not run an accessor the document supplied", () => {
+    // `Object.entries` invokes a getter. A throwing one would escape
+    // `validate()` as a native error rather than an issue, and a
+    // side-effecting one would execute the document's own code inside the
+    // check deciding whether to trust it.
+    let ran = false;
+    const bag = Object.create(
+      {},
+      {
+        id: {
+          enumerable: true,
+          get() {
+            ran = true;
+            throw new Error("a document should not get to run this");
+          },
+        },
+      }
+    ) as Record<string, string>;
+
+    const doc = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/text", version: 1, props: {}, attributes: bag },
+      ],
+    } as unknown as BlockDocument;
+
+    expect(() =>
+      validateDocument(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      })
+    ).not.toThrow();
+    expect(ran).toBe(false);
+    // And it is still REPORTED, rather than quietly skipped.
+    expect(
+      validateDocument(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      }).issues.some(issue => issue.code === "invalid-attributes")
+    ).toBe(true);
+  });
+
+  it("still registers the cssId of a node whose bag it refused", () => {
+    // The control for the fallback. With the bag unreadable `cssId` is the only
+    // place an id can come from, and dropping it would lose a real duplicate.
+    const bag = Object.create({}, { id: { enumerable: true, get: () => "x" } });
+    const doc = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          cssId: "hero",
+          attributes: bag,
+        },
+        { id: "n2", type: "core/text", version: 1, props: {}, cssId: "hero" },
+      ],
+    } as unknown as BlockDocument;
+
+    expect(
+      validateDocument(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      }).issues.some(issue => issue.code === "duplicate-dom-id")
+    ).toBe(true);
+  });
+});

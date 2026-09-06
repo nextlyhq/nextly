@@ -1067,7 +1067,24 @@ function validateDomIds(
   // Skipping only the spellings that are EQUAL, as this did, catches the
   // narrowest case of that and leaves the rest — and it left a save that these
   // planners permit producing a pattern this gate then refuses.
-  const rendered = renderedDomId(node);
+  //
+  // A bag `validateAttributes` has already refused is one this walk must not
+  // ENUMERATE. `Object.entries` runs an accessor, so a throwing getter would
+  // escape `validate()` as a native error instead of an issue, and a
+  // side-effecting one would execute the document's own code inside the check
+  // deciding whether to trust it.
+  //
+  // The fallback is not a second copy of which spelling wins: with the bag
+  // unreadable, `cssId` is the only place an id can come from, and a string
+  // `cssId` shadows the bag anyway. The node is already reported as
+  // `invalid-attributes`, so nothing about it is being passed as sound.
+  const readable =
+    node.attributes === undefined || isPlainRecord(node.attributes);
+  const rendered = readable
+    ? renderedDomId(node)
+    : typeof node.cssId === "string" && node.cssId !== ""
+      ? node.cssId
+      : undefined;
   if (rendered !== undefined)
     report(rendered, domIdPointer(node, path, rendered));
 }

@@ -45,6 +45,7 @@ import {
 import { patternDigest } from "./pattern-digest";
 import { contiguousRun, type RunProblem } from "./sibling-run";
 import { findNode, mapForest, reidForestWithMap, walkNodes } from "./tree";
+import { isConditionGated } from "./visibility";
 
 /** A library row a planner asks the caller to create. */
 export interface PlannedCreate<TFields> {
@@ -1035,12 +1036,25 @@ function takenDomIds(
 /**
  * Every DOM id the destination actually RENDERS.
  *
- * Not every id it stores. A node carrying `cssId: "actual"` beside
- * `attributes.id: "hero"` emits only `actual`, so treating `hero` as taken made
- * an inserted pattern rename itself away from a string the page never puts on
- * screen — renaming authored content to avoid a collision that cannot happen.
- * {@link renderedDomId} is the one rule for which of the two a node emits, and
- * it folds attribute names because HTML does.
+ * Not every id it stores, and there are two ways a stored id does not reach the
+ * page. A node carrying `cssId: "actual"` beside `attributes.id: "hero"` emits
+ * only `actual` — {@link renderedDomId} is the one rule for which of the two a
+ * node emits, and it folds attribute names because HTML does. And a
+ * CONDITION-GATED node is pruned with its whole subtree before markup, so its
+ * ids reach nobody: gating exists for personalised variants of one section,
+ * each carrying the same anchor with exactly one served, so counting them all
+ * would rename an incoming pattern to avoid every variant of an id only one of
+ * which is ever on the page.
+ *
+ * Both are the same mistake — treating a stored id as a rendered one — and both
+ * cost the same thing: authored content renamed to avoid a collision that
+ * cannot happen. `isConditionGated` is the engine's own predicate, which the
+ * renderer, the style compiler and the editor's attribute panel already share;
+ * a fourth reading of it would be a fourth way to disagree.
+ *
+ * What this cannot decide is the day an evaluator arrives and two gated nodes
+ * both match. That belongs to the evaluator, not to a scan with no conditions
+ * to read.
  *
  * A later edit CAN un-shadow the bag — clearing that `cssId` makes `hero`
  * render — and this cannot prevent that, any more than it can prevent an author
@@ -1048,7 +1062,18 @@ function takenDomIds(
  */
 function domIdsIn(nodes: BlockNode[]): Set<string> {
   const taken = new Set<string>();
-  walkNodes(nodes, node => {
+  // Gated status is INHERITED, so it is carried down rather than asked of each
+  // node alone: the renderer prunes a gated node's whole subtree, so a `cssId`
+  // on a child of one never reaches the page either. Computed through the
+  // shared walk, which visits a parent before its children and hands the parent
+  // to each visit — a hand-rolled traversal here would have to re-learn what
+  // that one already knows about a malformed entry and a malformed slot.
+  const gated = new Map<BlockNode, boolean>();
+  walkNodes(nodes, (node, parent) => {
+    const inherited = parent !== undefined && gated.get(parent) === true;
+    const hidden = inherited || isConditionGated(node);
+    gated.set(node, hidden);
+    if (hidden) return;
     const id = renderedDomId(node);
     if (id !== undefined) taken.add(id);
   });
