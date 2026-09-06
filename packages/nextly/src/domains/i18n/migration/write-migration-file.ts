@@ -1,6 +1,11 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import {
+  entityHeaderLine,
+  SCOPED_ENTITIES_MARKER,
+} from "../../schema/migrate-create/format-file";
+
 import { buildLocalizationDownSql } from "./generate-down";
 import { buildLocalizationUpSql } from "./generate-up";
 import { formatLocalizationIntent } from "./migration-intent";
@@ -116,7 +121,12 @@ export function writeCompanionMigrationFile(
   // when the target database has already come part of the way.
   const header =
     `-- Migration: ${baseName}\n` +
-    `-- Collections: ${spec.collection}\n` +
+    // Named by KIND. A single or a field group filed under `-- Collections:`
+    // is read into the wrong set, and the sweep that asks whether this entity
+    // is still waiting looks in its own kind's set and finds nothing.
+    `${entityHeaderLine(opts.entity, spec.collection)}\n` +
+    // Scoped by construction: a companion file is about one entity.
+    `${SCOPED_ENTITIES_MARKER}\n` +
     `${LOCALIZATION_MIGRATION_MARKER} companion (${opts.kind}) (i18n)\n` +
     `${formatLocalizationIntent({ kind: opts.kind, entity: opts.entity, spec })}\n`;
   const content = `${header}\n-- UP\n${opts.upSql}\n\n-- DOWN\n${opts.downSql}\n`;

@@ -20,6 +20,7 @@ import {
   type MinimalConfigEntity,
 } from "../generate";
 import { buildInverseOperations } from "../down-generator";
+import { parseEntityHeaders } from "../format-file";
 import { writeSnapshot } from "../snapshot-io";
 
 const NOW = new Date("2026-04-29T15:45:00.123Z");
@@ -1026,5 +1027,107 @@ describe("applyRenameDecisions (rename collapsing)", () => {
     expect(out).toHaveLength(2);
     expect(out[0].type).toBe("add_table");
     expect(out[1].type).toBe("rename_column");
+  });
+});
+
+/*
+ * 🔴 The entity header is the only per-file record of which entities a
+ * migration carries, and `migrate` reads it to decide whether a registry row is
+ * still waiting on something. Written from the whole config, every migration
+ * claims every entity — which answers that question identically for all of them
+ * and so answers it for none.
+ */
+describe("the entity header names what the migration changes", () => {
+  let migrationsDir: string;
+
+  beforeEach(async () => {
+    migrationsDir = await mkdtemp(join(tmpdir(), "nextly-header-scope-"));
+  });
+
+  const AUTHORS: MinimalConfigEntity = {
+    slug: "authors",
+    tableName: "dc_authors",
+    fields: [{ name: "description", type: "text", required: true }],
+  };
+
+  /*
+   * 🔴 A prefix match looks like it also catches companion tables and catches
+   * unrelated entities instead. `dc_posts_archive` shares the `dc_posts_`
+   * prefix with `dc_posts`, so editing the archive would name `posts` too — and
+   * naming an entity holds its dashboard back until this migration runs.
+   */
+  it("does not name an entity whose table is merely a prefix of the touched one", async () => {
+    const ARCHIVE: MinimalConfigEntity = {
+      slug: "posts-archive",
+      tableName: "dc_posts_archive",
+      fields: [{ name: "description", type: "text", required: true }],
+    };
+
+    await generateMigration({
+      name: "create_posts",
+      dialect: "postgresql",
+      migrationsDir,
+      collections: [POSTS_V1],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+    });
+
+    const second = await generateMigration({
+      name: "create_archive",
+      dialect: "postgresql",
+      migrationsDir,
+      collections: [POSTS_V1, ARCHIVE],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: new Date("2026-04-29T15:48:00.123Z"),
+    });
+
+    expect(second).not.toBeNull();
+    const sql = await readFile(second!.sqlPath, "utf-8");
+    // Parsed rather than pattern-matched: with the prefix match restored the
+    // line reads `-- Collections: posts, posts-archive`, which a regex anchored
+    // on the whole line fails to match either way — an assertion that cannot
+    // tell the two implementations apart.
+    const named = parseEntityHeaders(sql).collections;
+    // The control: the entity it DOES carry is named.
+    expect(named).toContain("posts-archive");
+    // And its prefix-sharing neighbour is not.
+    expect(named).not.toContain("posts");
+  });
+
+  it("omits a collection this migration does not touch", async () => {
+    // Both exist in the config; only `posts` is new, so only `posts` is
+    // waiting on this file.
+    await generateMigration({
+      name: "create_authors",
+      dialect: "postgresql",
+      migrationsDir,
+      collections: [AUTHORS],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+    });
+
+    const second = await generateMigration({
+      name: "create_posts",
+      dialect: "postgresql",
+      migrationsDir,
+      collections: [AUTHORS, POSTS_V1],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: new Date("2026-04-29T15:46:00.123Z"),
+    });
+
+    expect(second).not.toBeNull();
+    const sql = await readFile(second!.sqlPath, "utf-8");
+    // The control: the entity it DOES carry is still named, so this cannot
+    // pass by emitting no header at all.
+    expect(sql).toContain("-- Collections: posts");
+    expect(sql).not.toContain("authors");
   });
 });
