@@ -11,7 +11,12 @@ import { spawn } from "node:child_process";
 // Imported rather than taken from the global scope: this file lints under a
 // config that supplies `setTimeout` and not `clearTimeout`, and a timer that is
 // set but never cleared keeps the worker alive after the case has passed.
-import { clearTimeout, setTimeout } from "node:timers";
+import {
+  clearInterval,
+  clearTimeout,
+  setInterval,
+  setTimeout,
+} from "node:timers";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -54,8 +59,28 @@ const CHILD_TIMEOUT_MS = 60_000;
 const STDERR_TAIL_BYTES = 16_384;
 const COMPILE_TIMEOUT_MS = CHILD_TIMEOUT_MS + 30_000;
 
-/** Run the CLI, killing the whole process tree if it outlives its budget. */
-function compile(args, cwd, timeoutMs = CHILD_TIMEOUT_MS) {
+/**
+ * How long to wait for `armWhen` before giving up on the child ever starting.
+ *
+ * Generous, because it bounds a process start on a shared runner rather than any
+ * work: exceeding it means the child never came up at all, which is a different
+ * failure from the one the budget below is measuring.
+ */
+const ARM_TIMEOUT_MS = 20_000;
+
+/**
+ * Run the CLI, killing the whole process tree if it outlives its budget.
+ *
+ * `armWhen` decides when the budget STARTS. Without it the clock runs from
+ * `spawn`, which is right for a compile — the whole point there is how long the
+ * work takes. It is wrong for a caller whose budget is meant to interrupt a
+ * child that is already running, because the clock then covers the process
+ * start as well: the budget has to be large enough to boot Node on the slowest
+ * machine that will ever run it, and any number chosen for that is a race the
+ * runner can lose. Given a predicate, the budget is armed only once it holds,
+ * so it measures the child's life rather than its startup.
+ */
+function compile(args, cwd, timeoutMs = CHILD_TIMEOUT_MS, { armWhen } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, {
       cwd,
@@ -70,22 +95,58 @@ function compile(args, cwd, timeoutMs = CHILD_TIMEOUT_MS) {
     child.stderr.on("data", chunk => {
       stderr = (stderr + chunk).slice(-STDERR_TAIL_BYTES);
     });
-    const timer = setTimeout(() => {
-      // The negative pid addresses the GROUP. Wrapped because the group is gone
-      // already when the child exits between the timer firing and this call.
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch {
-        /* already gone */
-      }
-      reject(new Error(`compile exceeded ${String(timeoutMs)}ms`));
-    }, timeoutMs);
-    child.on("error", error => {
+    let timer;
+    let armPoll;
+    let armDeadline;
+    const stopTimers = () => {
       clearTimeout(timer);
+      clearInterval(armPoll);
+      clearTimeout(armDeadline);
+    };
+    const startBudget = () => {
+      timer = setTimeout(() => {
+        // The negative pid addresses the GROUP. Wrapped because the group is gone
+        // already when the child exits between the timer firing and this call.
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+        reject(new Error(`compile exceeded ${String(timeoutMs)}ms`));
+      }, timeoutMs);
+    };
+    if (armWhen) {
+      armPoll = setInterval(() => {
+        if (!armWhen()) return;
+        clearInterval(armPoll);
+        clearTimeout(armDeadline);
+        startBudget();
+      }, 5);
+      // Distinct from the budget, and says so: a child that never signals it
+      // started has failed differently from one that ran too long, and reporting
+      // the second for the first sends a reader to the wrong question.
+      armDeadline = setTimeout(() => {
+        stopTimers();
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+        reject(
+          new Error(
+            `child never signalled it had started within ${String(ARM_TIMEOUT_MS)}ms`
+          )
+        );
+      }, ARM_TIMEOUT_MS);
+    } else {
+      startBudget();
+    }
+    child.on("error", error => {
+      stopTimers();
       reject(error);
     });
     child.on("exit", code => {
-      clearTimeout(timer);
+      stopTimers();
       if (code === 0) resolve();
       else reject(new Error(`exited ${String(code)}: ${stderr}`));
     });
@@ -139,6 +200,12 @@ describe("the compile timeout", () => {
   // The child outlives its bound by enough that a surviving process would
   // certainly have finished before the assertion, and no longer.
   const CHILD_SLEEP_MS = 3_000;
+  // Measured from the moment the nested child reports itself started, not from
+  // the spawn. Two cold Node starts precede that report — the wrapper's and the
+  // child's — and on an idle laptop they take 37-39ms while a loaded CI runner
+  // exceeded this whole bound. Racing them made the must-be-found assertion
+  // below fail on correct code, which is the worst direction for a check to
+  // fail in: it teaches a reader that a red here means nothing.
   const BOUND_MS = 500;
 
   /*
@@ -174,12 +241,14 @@ describe("the compile timeout", () => {
             String(CHILD_SLEEP_MS),
           ],
           ROOT,
-          BOUND_MS
+          BOUND_MS,
+          { armWhen: () => fs.existsSync(started) }
         )
       ).rejects.toThrow(/exceeded/);
 
       // Must-be-found: the nested child really ran, so its absence below is a
-      // kill rather than a fixture that never started.
+      // kill rather than a fixture that never started. `armWhen` already waited
+      // for this, so it now records that the wait worked rather than racing it.
       expect(
         fs.existsSync(started),
         "the nested child never started, so this case proves nothing about killing it"
