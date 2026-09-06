@@ -45,7 +45,10 @@ import {
   discoverMigrationGroups,
   selectVariant,
 } from "../../../cli/utils/migration-discovery";
-import { parseEntityHeaders } from "../migrate-create/format-file";
+import {
+  parseEntityHeaders,
+  type MigrationEntityHeaders,
+} from "../migrate-create/format-file";
 
 import type { IsAppliedFn } from "./snapshot-source";
 
@@ -118,6 +121,47 @@ export function noPendingEntities(): PendingEntities {
  * belongs to the file that will actually run rather than to a sibling that
  * happens to sort first.
  */
+/** Whether a header named no entity of any kind. */
+function namesNothing(named: MigrationEntityHeaders): boolean {
+  return (
+    named.collections.length === 0 &&
+    named.singles.length === 0 &&
+    named.components.length === 0
+  );
+}
+
+/** Fold one migration's named entities into the running set, by kind. */
+function absorb(pending: PendingEntities, named: MigrationEntityHeaders): void {
+  for (const slug of named.collections) pending.collections.add(slug);
+  for (const slug of named.singles) pending.singles.add(slug);
+  for (const slug of named.components) pending.components.add(slug);
+}
+
+/**
+ * The entities one migration file names, or `undefined` when it cannot be read.
+ *
+ * 🔴 An unreadable file is left OUT rather than treated as naming everything.
+ * Naming everything would hold every pending row back on a file nobody can
+ * open, which costs an operator their dashboards for a reason nothing on screen
+ * explains; leaving it out restores the previous behaviour for those rows and
+ * nothing worse.
+ */
+async function namedEntitiesIn(
+  migrationsDir: string,
+  file: string,
+  logger?: { warn?: (msg: string) => void }
+): Promise<MigrationEntityHeaders | undefined> {
+  try {
+    const content = await readFile(join(migrationsDir, file), "utf-8");
+    return parseEntityHeaders(content);
+  } catch (err) {
+    logger?.warn?.(
+      `Could not read migration ${file} while checking what is still pending: ${String(err)}`
+    );
+    return undefined;
+  }
+}
+
 export async function readPendingEntities(
   options: PendingEntitiesOptions
 ): Promise<PendingEntities> {
@@ -127,43 +171,22 @@ export async function readPendingEntities(
   const groups = await discoverMigrationGroups(migrationsDir);
 
   for (const [baseName, group] of groups) {
-    const ledgerFilename = `${baseName}.sql`;
-    if (await isApplied(ledgerFilename)) continue;
+    if (await isApplied(`${baseName}.sql`)) continue;
 
     // The same chooser the apply path uses, so the header read here belongs
     // to the file that will really be executed.
     const file = selectVariant(group.variants, dialect);
     if (!file) continue;
 
-    let content: string;
-    try {
-      content = await readFile(join(migrationsDir, file), "utf-8");
-    } catch (err) {
-      /*
-       * A migration whose file cannot be read is left out rather than treated
-       * as naming everything. Naming everything would hold every pending row
-       * back on an unreadable file, which costs an operator their dashboards
-       * for a reason nothing on screen explains; leaving it out restores the
-       * previous behaviour for those rows and nothing worse.
-       */
-      logger?.warn?.(
-        `Could not read migration ${file} while checking what is still pending: ${String(err)}`
-      );
-      continue;
-    }
+    const named = await namedEntitiesIn(migrationsDir, file, logger);
+    if (!named) continue;
 
-    const named = parseEntityHeaders(content);
-    if (
-      named.collections.length === 0 &&
-      named.singles.length === 0 &&
-      named.components.length === 0
-    ) {
+    if (namesNothing(named)) {
       pending.unscoped.push(file);
       continue;
     }
-    for (const slug of named.collections) pending.collections.add(slug);
-    for (const slug of named.singles) pending.singles.add(slug);
-    for (const slug of named.components) pending.components.add(slug);
+
+    absorb(pending, named);
   }
 
   return pending;
