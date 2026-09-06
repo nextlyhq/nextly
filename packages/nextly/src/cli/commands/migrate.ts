@@ -56,7 +56,7 @@ import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
-import { FIELD_GROUP_HEADER_PATTERN } from "../../domains/schema/migrate-create/format-file";
+import { parseEntityHeaders } from "../../domains/schema/migrate-create/format-file";
 import {
   EMPTY_SNAPSHOT,
   parseSnapshotFile,
@@ -920,29 +920,7 @@ function parseMigrationFile(
   const checksumMatch = content.match(/^-- Checksum:\s*([a-f0-9]+)/m);
   const originalChecksum = checksumMatch?.[1];
 
-  const collectionsMatch = content.match(/^-- Collections?:\s*(.+)$/m);
-  const collections = collectionsMatch
-    ? collectionsMatch[1]
-        .split(",")
-        .map(c => c.trim())
-        .filter(c => c.length > 0)
-    : [];
-
-  const singlesMatch = content.match(/^-- Singles?:\s*(.+)$/m);
-  const singles = singlesMatch
-    ? singlesMatch[1]
-        .split(",")
-        .map(s => s.trim())
-        .filter(s => s.length > 0)
-    : [];
-
-  const componentsMatch = content.match(FIELD_GROUP_HEADER_PATTERN);
-  const components = componentsMatch
-    ? componentsMatch[1]
-        .split(",")
-        .map(c => c.trim())
-        .filter(c => c.length > 0)
-    : [];
+  const { collections, singles, components } = parseEntityHeaders(content);
 
   const timestampMatch = name.match(/^(\d{8}_\d{6})/);
   const timestamp = timestampMatch?.[1] ?? name;
