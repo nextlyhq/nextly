@@ -1235,7 +1235,88 @@ function relinkOne(
   ) {
     return copy;
   }
-  return { ...copy, attributes, props, bindings };
+  // Spread CONDITIONALLY. `{ ...copy, bindings }` writes the key even when the
+  // value is `undefined`, and a key holding `undefined` is a value JSON cannot
+  // carry — `applyOp` refuses the whole insert for it. An ordinary node has no
+  // `bindings`, so any copy that relinked anything at all produced an op group
+  // the apply then rejected, and the planner's dry run promised an insert that
+  // could not happen.
+  return {
+    ...copy,
+    ...(attributes === undefined ? {} : { attributes }),
+    ...(props === undefined ? {} : { props }),
+    ...(bindings === undefined ? {} : { bindings }),
+  };
+}
+
+/**
+ * A forest with every collision-minted DOM id restored to what it was called,
+ * and every reference to one following it back.
+ *
+ * The inverse of what {@link reidForestWithMap} does under `avoid`, and it runs
+ * in the same two passes for the same reason. Restoring only the field that
+ * DEFINES an id leaves a link, an `aria-labelledby` or a bound fallback naming
+ * the minted value, which no node then renders — the copy comes back with its
+ * anchors pointing at nothing, which is worse than leaving the rename alone.
+ *
+ * The map is built from the nodes themselves: {@link unmintDomId} recovers the
+ * original because the suffix was derived from the node's own id, so nothing
+ * has to have been stored when the copy was made.
+ */
+export function restoreAuthoredDomIds(
+  roots: readonly BlockNode[]
+): BlockNode[] {
+  const restored = new Map<string, string>();
+  const defined = mapForest([...roots], node => {
+    const next = restoreDefiningIds(node, restored);
+    return next;
+  });
+  if (restored.size === 0) return defined;
+  return mapForest(defined, copy => relinkOne(copy, restored));
+}
+
+/** One node's own id fields, un-minted, recording each value that moved. */
+function restoreDefiningIds(
+  node: BlockNode,
+  restored: Map<string, string>
+): BlockNode {
+  const take = (value: string): string | undefined => {
+    const original = unmintDomId(value, node.id);
+    if (original === undefined) return undefined;
+    restored.set(value, original);
+    return original;
+  };
+  const cssId =
+    typeof node.cssId === "string" && node.cssId !== ""
+      ? take(node.cssId)
+      : undefined;
+  const attributes = restoredAttributeIds(node, take);
+  if (cssId === undefined && attributes === undefined) return node;
+  return {
+    ...node,
+    ...(cssId === undefined ? {} : { cssId }),
+    ...(attributes === undefined ? {} : { attributes }),
+  };
+}
+
+/** The attribute bag with a minted `id` restored, or `undefined` if unchanged. */
+function restoredAttributeIds(
+  node: BlockNode,
+  take: (value: string) => string | undefined
+): Record<string, string> | undefined {
+  const attributes: unknown = node.attributes;
+  if (!isPlainRecord(attributes)) return undefined;
+  let changed = false;
+  const next: Record<string, string> = {};
+  for (const [name, value] of Object.entries(attributes)) {
+    const original =
+      name.toLowerCase() === "id" && typeof value === "string" && value !== ""
+        ? take(value)
+        : undefined;
+    if (original !== undefined) changed = true;
+    defineEntry(next, name, original ?? (value as string));
+  }
+  return changed ? next : undefined;
 }
 
 /**
@@ -1425,23 +1506,6 @@ export function remapIdReferences(
 }
 
 /**
- * A replacement DOM id, derived from the original.
- *
- * The suffix comes from the node's NEW id, so the same original inside two
- * copies of one pattern produces two different replacements — which is the
- * collision the remap exists to avoid. Trimmed to keep the result readable in a
- * URL fragment; the full node id is not needed for uniqueness within a subtree
- * that has exactly one node per new id.
- *
- * Exported because a second copier now exists. Composition inlines one
- * definition into every instance of it, which duplicates the definition's
- * `cssId` and `attributes.id` exactly as pattern insert duplicates a subtree's
- * — and a document may legitimately hold both, so the two must agree on what a
- * replacement looks like or one page carries two spellings of the same rule.
- * The COPY policy is shared; the id policy is not, because these ids are
- * derived and `reidSubtree`'s are random.
- */
-/**
  * Every node inside a subtree the renderer will prune, by identity.
  *
  * Gating is INHERITED: `pruneHiddenNodes` drops a gated node with everything
@@ -1497,6 +1561,23 @@ export function unmintDomId(value: string, nodeId: string): string | undefined {
   return original === "" ? undefined : original;
 }
 
+/**
+ * A replacement DOM id, derived from the original.
+ *
+ * The suffix comes from the node's NEW id, so the same original inside two
+ * copies of one pattern produces two different replacements — which is the
+ * collision the remap exists to avoid. Trimmed to keep the result readable in a
+ * URL fragment; the full node id is not needed for uniqueness within a subtree
+ * that has exactly one node per new id.
+ *
+ * Exported because a second copier now exists. Composition inlines one
+ * definition into every instance of it, which duplicates the definition's
+ * `cssId` and `attributes.id` exactly as pattern insert duplicates a subtree's
+ * — and a document may legitimately hold both, so the two must agree on what a
+ * replacement looks like or one page carries two spellings of the same rule.
+ * The COPY policy is shared; the id policy is not, because these ids are
+ * derived and `reidSubtree`'s are random.
+ */
 export function mintDomId(original: string, newNodeId: string): string {
   return `${original}-${newNodeId.replace(/-/g, "").slice(0, 8)}`;
 }

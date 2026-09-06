@@ -2361,23 +2361,6 @@ function assertNodeId(id: string, verb: string): void {
  * honoured at the node and defeated one level up.
  */
 /**
- * Why this DOCUMENT could not be edited at all, or `undefined`.
- *
- * The third of these asking forms, and the broadest: it covers everything
- * `applyOp` checks before it looks at the op — the envelope being a record, its
- * keys being ones JSON carries, `nodes` being an array, the envelope's values
- * being serializable, `formatVersion` and `kind` being owned and known.
- *
- * A planner needs it because a stored destination can fail any of those and a
- * plan built against one advertises an edit that throws. Checking a single
- * field instead — the format version, say — closes the case that is easy to
- * imagine and leaves the ones that are not: a page whose `kind` was written by
- * a newer version, or one carrying a `BigInt` in an envelope field.
- *
- * Reported rather than thrown, and never re-implemented: the assertion is the
- * rule, and a second predicate spelling of it would agree only until one moved.
- */
-/**
  * Why the op layer would refuse this FOREST, or `undefined`.
  *
  * The companion to {@link documentRefusal}, and needed beside it because that
@@ -2404,6 +2387,23 @@ export function forestRefusal(nodes: unknown): string | undefined {
   }
 }
 
+/**
+ * Why this DOCUMENT could not be edited at all, or `undefined`.
+ *
+ * The third of these asking forms, and the broadest: it covers everything
+ * `applyOp` checks before it looks at the op — the envelope being a record, its
+ * keys being ones JSON carries, `nodes` being an array, the envelope's values
+ * being serializable, `formatVersion` and `kind` being owned and known.
+ *
+ * A planner needs it because a stored destination can fail any of those and a
+ * plan built against one advertises an edit that throws. Checking a single
+ * field instead — the format version, say — closes the case that is easy to
+ * imagine and leaves the ones that are not: a page whose `kind` was written by
+ * a newer version, or one carrying a `BigInt` in an envelope field.
+ *
+ * Reported rather than thrown, and never re-implemented: the assertion is the
+ * rule, and a second predicate spelling of it would agree only until one moved.
+ */
 export function documentRefusal(document: unknown): string | undefined {
   try {
     assertEditableDocument(document as BlockDocument);

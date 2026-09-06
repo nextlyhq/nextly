@@ -890,6 +890,48 @@ describe("save → insert → save-over, through applyOps", () => {
     );
   });
 
+  it("applies cleanly and brings references back with the id", () => {
+    // Two things this pins that reading the op payloads could not.
+    //
+    // The group must APPLY: a relinked node was being rebuilt with
+    // `bindings: undefined` written explicitly, which is a value JSON cannot
+    // carry, so `applyOps` refused the whole insert. Every earlier end-to-end
+    // test here read the insert payloads instead of applying them, and passed
+    // against a plan the apply rejects.
+    //
+    // And the save back must restore the reference as well as the target.
+    // Undoing the rename on the field that DEFINES the id, and leaving the
+    // link naming the minted value, returns a pattern whose anchor reaches
+    // nothing.
+    const source = page([
+      node("t", { cssId: "hero" }),
+      node("l", { props: { href: "#hero" } }),
+    ]);
+    const { stored } = seed(source, ["t", "l"]);
+
+    const destination = page([node("d", { cssId: "hero" })]);
+    const insert = planned(
+      planInsertPattern(destination, stored, { index: 1 }, anyParent)
+    );
+    const placed = applyOps(destination, insert.pageOps).document;
+
+    const anchor = placed.nodes[1];
+    const link = placed.nodes[2];
+    expect(anchor.cssId).not.toBe("hero");
+    expect((link.props as { href?: string }).href).toBe(`#${anchor.cssId}`);
+
+    const over = planUpdatePatternFromSelection(
+      placed,
+      [anchor.id, link.id],
+      target,
+      anyParent
+    );
+    const back = over.update?.document.nodes ?? [];
+
+    expect(back[0].cssId).toBe("hero");
+    expect((back[1].props as { href?: string }).href).toBe("#hero");
+  });
+
   it("leaves an id the author renamed by hand", () => {
     // The control, and the reason this undoes a MINT rather than any suffix:
     // an author who renames a block's id means it, and only a suffix derived

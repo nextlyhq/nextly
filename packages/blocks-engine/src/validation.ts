@@ -50,7 +50,8 @@ import {
   validateStyleValues,
 } from "./style/validate-style-value";
 import type { ReadyStyleIssueBudget } from "./style/validate-style-value";
-import { hiddenSubtreeNodes, walkNodes } from "./tree";
+import { walkNodes } from "./tree";
+import { isConditionGated } from "./visibility";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
 export type IssueSeverity = "error" | "warning";
@@ -502,9 +503,7 @@ export function validateDocument(
     unknownSeverity,
     seenIds: new Map<string, string>(),
     seenDomIds: new Map<string, string>(),
-    hiddenNodes: hiddenSubtreeNodes(
-      Array.isArray(rawDoc.nodes) ? (rawDoc.nodes as BlockNode[]) : []
-    ),
+
     skipValueParsing: overLimits,
     styleBudget,
   };
@@ -540,6 +539,16 @@ export function validateDocument(
     node: BlockNode;
     path: string;
     placement: Placement;
+    /**
+     * True when an ancestor is condition-gated, so the renderer prunes this
+     * node with it.
+     *
+     * Carried DOWN the queue rather than precomputed over the raw forest.
+     * A separate walk would read every node's `visibility` and `slots` outside
+     * this loop, which is the one place bounded by `maxNodes` — so an oversized
+     * document would be traversed in full by the check meant to be capped.
+     */
+    hidden: boolean;
   }> = [];
   for (
     let i = 0;
@@ -550,11 +559,20 @@ export function validateDocument(
       node: doc.nodes[i],
       path: pointer("/nodes", i),
       placement: { at: "root" },
+      hidden: false,
     });
   }
   for (let i = 0; i < queue.length && i < survey.limits.maxNodes; i++) {
-    const { node, path, placement } = queue[i];
-    validateNode(node, path, nodeState);
+    const { node, path, placement, hidden } = queue[i];
+    // Asked HERE rather than in a pass of its own, so the read is inside the
+    // budget and happens on a node this loop has reached. Gating is inherited,
+    // because the renderer prunes a gated node's whole subtree.
+    // `isPlainRecord` first: this walk accepts whatever the database returned,
+    // and a `null` among the nodes reaches here. Reading `visibility` off one
+    // throws, where the contract is an issue rather than an exception — the
+    // same guard the slot walk below already applies.
+    const gated = hidden || (isPlainRecord(node) && isConditionGated(node));
+    validateNode(node, path, nodeState, gated);
     checkNesting(node, path, placement, nodeState);
     if (isPlainRecord(node) && isPlainRecord(node.slots)) {
       // The container's placement for every child beneath it, read once.
@@ -590,6 +608,7 @@ export function validateDocument(
               node: children[c],
               path: pointer(slotPath, c),
               placement: childPlacement,
+              hidden: gated,
             });
           }
         }
@@ -917,13 +936,7 @@ interface NodeCheckState {
   seenIds: Map<string, string>;
   /** Non-empty DOM ids seen so far (from `cssId` or `attributes.id`) → pointer. */
   seenDomIds: Map<string, string>;
-  /**
-   * Nodes inside a subtree the renderer prunes, so their ids reach no page.
-   *
-   * Computed once for the document rather than asked per node, because gating
-   * is inherited: an ungated child of a gated parent is pruned with it.
-   */
-  hiddenNodes: ReadonlySet<BlockNode>;
+
   /** Shared across the whole document, so the limit is not per node. */
   styleBudget: ReadyStyleIssueBudget;
   /**
@@ -939,7 +952,8 @@ interface NodeCheckState {
 function validateNode(
   node: BlockNode,
   path: string,
-  state: NodeCheckState
+  state: NodeCheckState,
+  hidden: boolean
 ): void {
   const { issues } = state;
   if (!isPlainRecord(node)) {
@@ -1032,7 +1046,7 @@ function validateNode(
   validateVisibility(node, path, state);
   validateBindings(node, path, issues);
   validateComponentInstance(node, path, issues);
-  validateDomIds(node, path, state);
+  validateDomIds(node, path, state, hidden);
 }
 
 /**
@@ -1044,7 +1058,8 @@ function validateNode(
 function validateDomIds(
   node: BlockNode,
   path: string,
-  state: NodeCheckState
+  state: NodeCheckState,
+  hidden: boolean
 ): void {
   const report = (domId: string, at: string): void => {
     const firstAt = state.seenDomIds.get(domId);
@@ -1098,7 +1113,7 @@ function validateDomIds(
   // What this cannot decide is the day an evaluator arrives and two gated nodes
   // both match. That belongs to the evaluator, which alone can read the
   // conditions; nothing here has them.
-  if (state.hiddenNodes.has(node)) return;
+  if (hidden) return;
 
   const readable =
     node.attributes === undefined || isPlainRecord(node.attributes);

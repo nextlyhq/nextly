@@ -2874,3 +2874,42 @@ describe("a bag validation has already refused is never enumerated", () => {
     ).toBe(true);
   });
 });
+
+describe("the gating read stays inside the node budget", () => {
+  it("does not touch a node beyond maxNodes", () => {
+    // The check that decides whether a node is pruned reads `visibility`. Doing
+    // that in a pass of its own walked the whole forest, outside the one loop
+    // bounded by `maxNodes` — so an oversized document was traversed in full by
+    // a check the cap exists to stop.
+    //
+    // Observable because a getter is observable: the node carrying it sits past
+    // the cap, so a bounded walk never reads it.
+    let readPastTheCap = false;
+    const beyond = { id: "n3", type: "core/text", version: 1, props: {} };
+    Object.defineProperty(beyond, "visibility", {
+      enumerable: true,
+      get() {
+        readPastTheCap = true;
+        return undefined;
+      },
+    });
+
+    const doc = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/text", version: 1, props: {} },
+        { id: "n2", type: "core/text", version: 1, props: {} },
+        beyond,
+      ],
+    } as unknown as BlockDocument;
+
+    validateDocument(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      limits: { ...DEFAULT_LIMITS, maxNodes: 2 },
+    });
+
+    expect(readPastTheCap).toBe(false);
+  });
+});

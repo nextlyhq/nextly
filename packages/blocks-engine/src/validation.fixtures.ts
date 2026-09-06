@@ -603,6 +603,38 @@ export const VALIDATION_FIXTURES: ValidationFixture[] = [
     expected: [],
   },
   {
+    name: "a gated node's CHILD is pruned with it, so its id is free",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+          slots: {
+            children: [
+              {
+                id: "n2",
+                type: "core/text",
+                version: 1,
+                props: {},
+                cssId: "hero",
+              },
+            ],
+          },
+        },
+        { id: "n3", type: "core/text", version: 1, props: {}, cssId: "hero" },
+      ],
+    },
+    expected: [],
+  },
+  {
     name: "a gated node does not shield a VISIBLE duplicate",
     mode: "strict",
     doc: {

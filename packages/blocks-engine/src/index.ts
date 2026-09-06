@@ -136,6 +136,10 @@ export {
   // the copy's own node id. A save reads it to undo a rename an insert made to
   // avoid a collision, so the library keeps the id its author typed.
   unmintDomId,
+  // And the whole-forest form of it, which relinks the references too: undoing
+  // a rename on the field that DEFINES an id leaves every link to it naming a
+  // value nothing renders.
+  restoreAuthoredDomIds,
   // Which nodes the renderer prunes, inherited down the subtree. Published
   // because "is this id actually on the page" is asked by the planners, the
   // copier and the editor's attribute panel, and three readings of it is three
