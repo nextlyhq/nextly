@@ -546,3 +546,187 @@ describe("a bound link's fallback follows the copy", () => {
     expect(bound.text.fallback).toBe("#pricing");
   });
 });
+
+describe('the "keep" DOM id policy', () => {
+  /**
+   * Minting exists so a copy placed BESIDE its original does not emit a
+   * duplicate HTML id. `"keep"` is for the caller that is not doing that: a run
+   * lifted out of a page to become a document of its own. Nothing there is
+   * placed next to anything, and an insert renames only what its own
+   * destination already holds.
+   */
+  it("carries a cssId and an attributes.id across verbatim", () => {
+    const [copy] = reidForestWithMap(
+      [node("a", { cssId: "hero", attributes: { id: "hero-alt" } })],
+      "keep"
+    ).nodes;
+
+    expect(copy.cssId).toBe("hero");
+    expect(copy.attributes?.id).toBe("hero-alt");
+  });
+
+  it("still mints fresh NODE ids, which is the part a save does need", () => {
+    // The two are separate questions and only one of them changes. A node id
+    // is how every index in this system addresses a node, so two stored
+    // documents claiming one cannot both be described; a DOM id is authored
+    // content that means something to a reader.
+    const { nodes, nodeIds } = reidForestWithMap(
+      [node("a", { cssId: "hero" }, [node("kid")])],
+      "keep"
+    );
+
+    const ids = allNodes(nodes[0]).map(n => n.id);
+    expect(ids).not.toContain("a");
+    expect(ids).not.toContain("kid");
+    expect(nodeIds.get("a")).toBe(nodes[0].id);
+  });
+
+  it("records no DOM id as moved, because none did", () => {
+    // An empty map is the honest record and it is load-bearing: a caller
+    // checking this map against a destination would otherwise report a
+    // collision on an id it is not introducing.
+    const { domIds } = reidForestWithMap(
+      [node("a", { cssId: "hero" })],
+      "keep"
+    );
+
+    expect(domIds.size).toBe(0);
+  });
+
+  it("leaves a reference pointing at the id it still names", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("a", { cssId: "pricing" }),
+        node("b", { attributes: { "aria-describedby": "pricing" } }),
+      ],
+      "keep"
+    );
+
+    // The property, not the mechanism: the pointer reaches the copy's own
+    // target. Here it does so because neither string moved.
+    expect(nodes[1].attributes?.["aria-describedby"]).toBe(nodes[0].cssId);
+  });
+
+  it("leaves a link in props pointing at the target it still names", () => {
+    // The other half of a reference, and the half that is not markup: a link's
+    // target lives in `props` as `href: "#pricing"`. The relink pass returns
+    // early on an empty map, so `"keep"` must leave this exactly as it found
+    // it — asserted rather than reasoned, because "the pass does nothing" is a
+    // property of three separate remappers and any one of them could grow a
+    // path that runs before the early return.
+    const { nodes } = reidForestWithMap(
+      [
+        node("t", { cssId: "pricing" }),
+        node("l", { props: { href: "#pricing" } }),
+      ],
+      "keep"
+    );
+
+    expect((nodes[1].props as { href: string }).href).toBe("#pricing");
+    expect(nodes[0].cssId).toBe("pricing");
+  });
+
+  it("keeps re-minting the default, so a PLACING caller is unchanged", () => {
+    // The default is the untested state unless it is asserted. Every caller
+    // that inserts relies on it, and a flipped default would be a silent
+    // duplicate-id bug on a rendered page rather than a failing call.
+    const [copy] = reidForestWithMap([node("a", { cssId: "hero" })]).nodes;
+
+    expect(copy.cssId).not.toBe("hero");
+    expect(copy.cssId?.startsWith("hero-")).toBe(true);
+  });
+});
+
+describe('the "avoid" DOM id policy', () => {
+  it("mints an id the destination holds, and keeps one it does not", () => {
+    // Both in ONE copy, so the test cannot pass by treating the policy as a
+    // whole-forest switch: the decision is per id.
+    const { nodes } = reidForestWithMap(
+      [node("a", { cssId: "taken" }), node("b", { cssId: "free" })],
+      { avoid: new Set(["taken"]) }
+    );
+
+    expect(nodes[0].cssId).not.toBe("taken");
+    expect(nodes[0].cssId?.startsWith("taken-")).toBe(true);
+    expect(nodes[1].cssId).toBe("free");
+  });
+
+  it("records only the id that moved", () => {
+    const { domIds } = reidForestWithMap(
+      [node("a", { cssId: "taken" }), node("b", { cssId: "free" })],
+      { avoid: new Set(["taken"]) }
+    );
+
+    // `free` is absent because it did not move. A caller checking this map
+    // against its destination is asking which ids this copy INTRODUCES, and an
+    // identity entry would answer that wrongly.
+    expect([...domIds.keys()]).toEqual(["taken"]);
+  });
+
+  it("follows a reference to the id it moved, and leaves the other alone", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("a", { cssId: "taken" }),
+        node("b", { cssId: "free" }),
+        node("p", {
+          attributes: { "aria-describedby": "taken" },
+          props: { href: "#free" },
+        }),
+      ],
+      { avoid: new Set(["taken"]) }
+    );
+
+    expect(nodes[2].attributes?.["aria-describedby"]).toBe(nodes[0].cssId);
+    expect((nodes[2].props as { href: string }).href).toBe("#free");
+  });
+
+  it("mints nothing when the destination holds none of them", () => {
+    const { nodes, domIds } = reidForestWithMap(
+      [node("a", { cssId: "hero", attributes: { id: "hero-alt" } })],
+      { avoid: new Set<string>() }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+    expect(nodes[0].attributes?.id).toBe("hero-alt");
+    expect(domIds.size).toBe(0);
+  });
+});
+
+describe("only the id a node RENDERS may be reminted", () => {
+  it("leaves a shadowed attribute id alone, and the references to it", () => {
+    // The node renders `actual`; its `attributes.id: "hero"` is overwritten and
+    // never reaches the page. Minting it would be worse than pointless — the
+    // relink pass rewrites every reference to it, so a link deliberately
+    // reaching an element in the DESTINATION ends up naming a minted id that
+    // nothing renders at all.
+    const { nodes, domIds } = reidForestWithMap(
+      [
+        node("a", {
+          cssId: "actual",
+          attributes: { id: "hero", "aria-describedby": "hero" },
+        }),
+      ],
+      { avoid: new Set(["hero", "actual"]) }
+    );
+
+    expect(nodes[0].attributes?.id).toBe("hero");
+    expect(nodes[0].attributes?.["aria-describedby"]).toBe("hero");
+    expect([...domIds.keys()]).toEqual(["actual"]);
+    // The rendered one DID move, which is the control: "never remap anything"
+    // passes every assertion above.
+    expect(nodes[0].cssId).not.toBe("actual");
+  });
+
+  it("moves both spellings together when they carry the same value", () => {
+    // One original maps to one replacement, so a node spelling one id through
+    // both fields still spells a single id after the copy — rather than half of
+    // it moving and the node rendering one id while its bag names another.
+    const { nodes } = reidForestWithMap(
+      [node("a", { cssId: "hero", attributes: { id: "hero" } })],
+      { avoid: new Set(["hero"]) }
+    );
+
+    expect(nodes[0].cssId).not.toBe("hero");
+    expect(nodes[0].attributes?.id).toBe(nodes[0].cssId);
+  });
+});

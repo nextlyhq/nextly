@@ -2801,3 +2801,115 @@ describe("validate and compile agree on which breakpoints a site defines", () =>
     expect(seen.emitted).toBe(true);
   });
 });
+
+describe("a bag validation has already refused is never enumerated", () => {
+  it("does not run an accessor the document supplied", () => {
+    // `Object.entries` invokes a getter. A throwing one would escape
+    // `validate()` as a native error rather than an issue, and a
+    // side-effecting one would execute the document's own code inside the
+    // check deciding whether to trust it.
+    let ran = false;
+    const bag = Object.create(
+      {},
+      {
+        id: {
+          enumerable: true,
+          get() {
+            ran = true;
+            throw new Error("a document should not get to run this");
+          },
+        },
+      }
+    ) as Record<string, string>;
+
+    const doc = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/text", version: 1, props: {}, attributes: bag },
+      ],
+    } as unknown as BlockDocument;
+
+    expect(() =>
+      validateDocument(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      })
+    ).not.toThrow();
+    expect(ran).toBe(false);
+    // And it is still REPORTED, rather than quietly skipped.
+    expect(
+      validateDocument(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      }).issues.some(issue => issue.code === "invalid-attributes")
+    ).toBe(true);
+  });
+
+  it("still registers the cssId of a node whose bag it refused", () => {
+    // The control for the fallback. With the bag unreadable `cssId` is the only
+    // place an id can come from, and dropping it would lose a real duplicate.
+    const bag = Object.create({}, { id: { enumerable: true, get: () => "x" } });
+    const doc = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          cssId: "hero",
+          attributes: bag,
+        },
+        { id: "n2", type: "core/text", version: 1, props: {}, cssId: "hero" },
+      ],
+    } as unknown as BlockDocument;
+
+    expect(
+      validateDocument(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      }).issues.some(issue => issue.code === "duplicate-dom-id")
+    ).toBe(true);
+  });
+});
+
+describe("the gating read stays inside the node budget", () => {
+  it("does not touch a node beyond maxNodes", () => {
+    // The check that decides whether a node is pruned reads `visibility`. Doing
+    // that in a pass of its own walked the whole forest, outside the one loop
+    // bounded by `maxNodes` — so an oversized document was traversed in full by
+    // a check the cap exists to stop.
+    //
+    // Observable because a getter is observable: the node carrying it sits past
+    // the cap, so a bounded walk never reads it.
+    let readPastTheCap = false;
+    const beyond = { id: "n3", type: "core/text", version: 1, props: {} };
+    Object.defineProperty(beyond, "visibility", {
+      enumerable: true,
+      get() {
+        readPastTheCap = true;
+        return undefined;
+      },
+    });
+
+    const doc = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/text", version: 1, props: {} },
+        { id: "n2", type: "core/text", version: 1, props: {} },
+        beyond,
+      ],
+    } as unknown as BlockDocument;
+
+    validateDocument(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      limits: { ...DEFAULT_LIMITS, maxNodes: 2 },
+    });
+
+    expect(readPastTheCap).toBe(false);
+  });
+});

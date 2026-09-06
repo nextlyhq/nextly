@@ -20,6 +20,7 @@ import {
   STYLE_STATES,
   isBindingSource,
   isBlockType,
+  renderedDomId,
 } from "./document";
 import { describeValue, pointer } from "./issue-text";
 import {
@@ -50,6 +51,7 @@ import {
 } from "./style/validate-style-value";
 import type { ReadyStyleIssueBudget } from "./style/validate-style-value";
 import { walkNodes } from "./tree";
+import { isConditionGated } from "./visibility";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
 export type IssueSeverity = "error" | "warning";
@@ -501,6 +503,7 @@ export function validateDocument(
     unknownSeverity,
     seenIds: new Map<string, string>(),
     seenDomIds: new Map<string, string>(),
+
     skipValueParsing: overLimits,
     styleBudget,
   };
@@ -536,6 +539,16 @@ export function validateDocument(
     node: BlockNode;
     path: string;
     placement: Placement;
+    /**
+     * True when an ancestor is condition-gated, so the renderer prunes this
+     * node with it.
+     *
+     * Carried DOWN the queue rather than precomputed over the raw forest.
+     * A separate walk would read every node's `visibility` and `slots` outside
+     * this loop, which is the one place bounded by `maxNodes` — so an oversized
+     * document would be traversed in full by the check meant to be capped.
+     */
+    hidden: boolean;
   }> = [];
   for (
     let i = 0;
@@ -546,11 +559,20 @@ export function validateDocument(
       node: doc.nodes[i],
       path: pointer("/nodes", i),
       placement: { at: "root" },
+      hidden: false,
     });
   }
   for (let i = 0; i < queue.length && i < survey.limits.maxNodes; i++) {
-    const { node, path, placement } = queue[i];
-    validateNode(node, path, nodeState);
+    const { node, path, placement, hidden } = queue[i];
+    // Asked HERE rather than in a pass of its own, so the read is inside the
+    // budget and happens on a node this loop has reached. Gating is inherited,
+    // because the renderer prunes a gated node's whole subtree.
+    // `isPlainRecord` first: this walk accepts whatever the database returned,
+    // and a `null` among the nodes reaches here. Reading `visibility` off one
+    // throws, where the contract is an issue rather than an exception — the
+    // same guard the slot walk below already applies.
+    const gated = hidden || (isPlainRecord(node) && isConditionGated(node));
+    validateNode(node, path, nodeState, gated);
     checkNesting(node, path, placement, nodeState);
     if (isPlainRecord(node) && isPlainRecord(node.slots)) {
       // The container's placement for every child beneath it, read once.
@@ -586,6 +608,7 @@ export function validateDocument(
               node: children[c],
               path: pointer(slotPath, c),
               placement: childPlacement,
+              hidden: gated,
             });
           }
         }
@@ -913,6 +936,7 @@ interface NodeCheckState {
   seenIds: Map<string, string>;
   /** Non-empty DOM ids seen so far (from `cssId` or `attributes.id`) → pointer. */
   seenDomIds: Map<string, string>;
+
   /** Shared across the whole document, so the limit is not per node. */
   styleBudget: ReadyStyleIssueBudget;
   /**
@@ -928,7 +952,8 @@ interface NodeCheckState {
 function validateNode(
   node: BlockNode,
   path: string,
-  state: NodeCheckState
+  state: NodeCheckState,
+  hidden: boolean
 ): void {
   const { issues } = state;
   if (!isPlainRecord(node)) {
@@ -1021,7 +1046,7 @@ function validateNode(
   validateVisibility(node, path, state);
   validateBindings(node, path, issues);
   validateComponentInstance(node, path, issues);
-  validateDomIds(node, path, state);
+  validateDomIds(node, path, state, hidden);
 }
 
 /**
@@ -1033,7 +1058,8 @@ function validateNode(
 function validateDomIds(
   node: BlockNode,
   path: string,
-  state: NodeCheckState
+  state: NodeCheckState,
+  hidden: boolean
 ): void {
   const report = (domId: string, at: string): void => {
     const firstAt = state.seenDomIds.get(domId);
@@ -1056,20 +1082,68 @@ function validateDomIds(
       severity: "error",
       message: "A node cssId must be a string.",
     });
-  } else if (typeof node.cssId === "string" && node.cssId.length > 0) {
-    report(node.cssId, pointer(path, "cssId"));
   }
+  // ONE id per node, through the rule the renderer follows and the composition
+  // planners ask. A node can spell an id twice and emits one, so counting both
+  // reported a collision the page cannot have: a node carrying `cssId:
+  // "actual"` beside `attributes.id: "hero"` renders only `actual`, and
+  // registering `hero` made an unrelated node's real `hero` a duplicate.
+  //
+  // Skipping only the spellings that are EQUAL, as this did, catches the
+  // narrowest case of that and leaves the rest — and it left a save that these
+  // planners permit producing a pattern this gate then refuses.
+  //
+  // A bag `validateAttributes` has already refused is one this walk must not
+  // ENUMERATE. `Object.entries` runs an accessor, so a throwing getter would
+  // escape `validate()` as a native error instead of an issue, and a
+  // side-effecting one would execute the document's own code inside the check
+  // deciding whether to trust it.
+  //
+  // The fallback is not a second copy of which spelling wins: with the bag
+  // unreadable, `cssId` is the only place an id can come from, and a string
+  // `cssId` shadows the bag anyway. The node is already reported as
+  // `invalid-attributes`, so nothing about it is being passed as sound.
+  // A node the renderer prunes emits no id, so it can collide with nothing.
+  // This is the case gating exists for: personalised variants of one section,
+  // each carrying the same anchor, with exactly one ever served — and reporting
+  // them as duplicates blocked publishing a page the planners now let an author
+  // save. The gate and the planners have to agree, or a save produces a pattern
+  // that cannot be published.
+  //
+  // What this cannot decide is the day an evaluator arrives and two gated nodes
+  // both match. That belongs to the evaluator, which alone can read the
+  // conditions; nothing here has them.
+  if (hidden) return;
+
+  const readable =
+    node.attributes === undefined || isPlainRecord(node.attributes);
+  const rendered = readable
+    ? renderedDomId(node)
+    : typeof node.cssId === "string" && node.cssId !== ""
+      ? node.cssId
+      : undefined;
+  if (rendered !== undefined)
+    report(rendered, domIdPointer(node, path, rendered));
+}
+
+/**
+ * Where the id a node renders is written, for the issue to point at.
+ *
+ * Derived from the VALUE {@link renderedDomId} chose rather than by asking
+ * which field wins a second time: a second reading of that rule is one that can
+ * disagree with the first, and then an issue names a field that is not the one
+ * carrying the id.
+ */
+function domIdPointer(node: BlockNode, path: string, rendered: string): string {
+  if (node.cssId === rendered) return pointer(path, "cssId");
   if (isPlainRecord(node.attributes)) {
-    for (const [key, value] of Object.entries(node.attributes)) {
-      if (key.toLowerCase() === "id" && typeof value === "string" && value) {
-        // One node setting the same id through both `cssId` and `attributes.id`
-        // renders a single id, so it must not be reported as colliding with
-        // itself; only a second NODE claiming the id is a duplicate.
-        if (value === node.cssId) continue;
-        report(value, pointer(pointer(path, "attributes"), key));
-      }
+    let key: string | undefined;
+    for (const [name, value] of Object.entries(node.attributes)) {
+      if (name.toLowerCase() === "id" && value === rendered) key = name;
     }
+    if (key !== undefined) return pointer(pointer(path, "attributes"), key);
   }
+  return pointer(path, "cssId");
 }
 
 function validateSlots(

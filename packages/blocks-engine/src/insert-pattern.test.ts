@@ -58,6 +58,11 @@ const stored = (document: BlockDocument): StoredPattern => ({
 
 const anyParent = { parentsOf: () => undefined };
 
+/** A node the renderer prunes: an author restricted it to a segment. */
+const gated = {
+  conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+} as unknown as BlockNode["visibility"];
+
 /** Every id in a forest. */
 function idsIn(nodes: BlockNode[]): string[] {
   const out: string[] = [];
@@ -593,5 +598,284 @@ describe("the refusals are the op layer's, not invented", () => {
         },
       ] as never)
     ).toThrow();
+  });
+});
+
+describe("the destination's whole forest, not only its envelope", () => {
+  it("refuses a destination holding a malformed node anywhere", () => {
+    // Nowhere near the insertion point, and still fatal: the apply walks every
+    // node before it applies anything, so a plan that checked only the envelope
+    // reported success and threw.
+    const odd = {
+      ...page([node("a")]),
+      nodes: [node("a"), null],
+    } as unknown as BlockDocument;
+
+    expect(
+      planInsertPattern(odd, pattern([node("p1")]), { index: 1 }, anyParent)
+        .problem
+    ).toBe("unusable-document");
+  });
+
+  it("still accepts a well-formed destination", () => {
+    // The over-exclusion control: a forest check that refuses everything
+    // satisfies the test above and breaks every insert.
+    expect(
+      planInsertPattern(
+        page([node("a")]),
+        pattern([node("p1")]),
+        { index: 1 },
+        anyParent
+      ).problem
+    ).toBeUndefined();
+  });
+});
+
+describe("which DOM ids an insert steers around", () => {
+  it("keeps an id the destination does not hold", () => {
+    // A DOM id is authored content — it appears in a URL fragment, a
+    // stylesheet and the attribute panel — so it is rewritten only when
+    // keeping it would put two elements on one page answering to one id.
+    const plan = planInsertPattern(
+      page([node("a")]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).toBe("hero");
+  });
+
+  it("mints one the destination DOES hold", () => {
+    const plan = planInsertPattern(
+      page([node("a", { cssId: "hero" })]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).not.toBe("hero");
+    expect(placed[0].cssId?.startsWith("hero-")).toBe(true);
+  });
+
+  it("does not steer around an id the destination SHADOWS", () => {
+    // The destination node carries `cssId: "actual"` beside
+    // `attributes.id: "hero"`, and the renderer emits only `actual` — the
+    // modelled field overwrites the bag. Treating `hero` as taken renamed the
+    // incoming pattern to avoid a string the page never puts on screen.
+    const plan = planInsertPattern(
+      page([node("x", { cssId: "actual", attributes: { id: "hero" } })]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).toBe("hero");
+  });
+
+  it("treats an EMPTY cssId as shadowing the bag, because the renderer does", () => {
+    // The renderer's guard is `cssId !== undefined`, not "non-empty" — so a
+    // node carrying `cssId: ""` beside `attributes.id: "hero"` emits `id=""`
+    // and never `hero`. The destination therefore does not hold `hero`, and
+    // steering around it would rename authored content for nothing.
+    //
+    // This case is the whole difference between reading `cssId` as "wins when
+    // non-empty" and as "wins when present". A rule written the first way
+    // passes every other test in this file.
+    const plan = planInsertPattern(
+      page([node("x", { cssId: "", attributes: { id: "hero" } })]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).toBe("hero");
+  });
+
+  it("steers around a bag id whose non-string cssId does NOT shadow it", () => {
+    // The renderer normalises a non-string `cssId` to undefined and only then
+    // decides whether to overwrite, so this destination node renders `hero`.
+    // Reading any present `cssId` as shadowing left `hero` out of the avoided
+    // set and put two elements answering to it on the page.
+    const destination = page([
+      {
+        ...node("x"),
+        cssId: null,
+        attributes: { id: "hero" },
+      } as unknown as BlockNode,
+    ]);
+
+    const plan = planInsertPattern(
+      destination,
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).not.toBe("hero");
+  });
+
+  it("DOES steer around an attribute id nothing shadows", () => {
+    // The control. Without it, "ignore the attribute bag entirely" passes the
+    // test above and reintroduces the duplicate-id bug the bag can cause.
+    const plan = planInsertPattern(
+      page([node("x", { attributes: { id: "hero" } })]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).not.toBe("hero");
+  });
+
+  it("does not steer around an id only a CONDITION-GATED node carries", () => {
+    // The renderer prunes a gated node before markup, so its id reaches nobody.
+    // Gating exists for personalised variants of one section, each carrying the
+    // same anchor with exactly one served — counting them all renames an
+    // incoming pattern to avoid every variant of an id only one of which is
+    // ever on the page.
+    const plan = planInsertPattern(
+      page([node("g", { visibility: gated, cssId: "hero" })]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).toBe("hero");
+  });
+
+  it("prunes the gated node's DESCENDANTS too", () => {
+    // Gating removes a whole subtree, so a child's id does not reach the page
+    // either. Asking `isConditionGated` of each node alone would see an
+    // ungated child and count it.
+    const plan = planInsertPattern(
+      page([
+        node(
+          "g",
+          { visibility: gated },
+          { main: [node("kid", { cssId: "hero" })] }
+        ),
+      ]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).toBe("hero");
+  });
+
+  it("still steers around an id on an UNGATED node", () => {
+    // The control. "Skip every node" satisfies both tests above and puts two
+    // elements answering to one id on the page.
+    const plan = planInsertPattern(
+      page([node("plain", { cssId: "hero" })]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed[0].cssId).not.toBe("hero");
+  });
+
+  it("does not rename an id inside a GATED subtree of the pattern", () => {
+    // The pattern's `hero` sits on a node the renderer prunes, so it puts
+    // nothing on the page — and a visible sibling's `#hero` was therefore
+    // aiming at the DESTINATION's hero. Renaming the hidden one and following
+    // every reference to it leaves that link on an id nothing owns, which is
+    // strictly worse than before the copy.
+    const plan = planInsertPattern(
+      page([node("d", { cssId: "hero" })]),
+      pattern([
+        node("g", { visibility: gated, cssId: "hero" }),
+        node("v", { props: { href: "#hero" } }),
+      ]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(2);
+    expect(placed[0].cssId).toBe("hero");
+    expect((placed[1].props as { href?: string }).href).toBe("#hero");
+  });
+
+  it("DOES rename a visible one, and follows the reference", () => {
+    // The control. "Never rename anything" satisfies the test above and puts
+    // two elements answering to one id on the page.
+    const plan = planInsertPattern(
+      page([node("d", { cssId: "hero" })]),
+      pattern([
+        node("g", { cssId: "hero" }),
+        node("v", { props: { href: "#hero" } }),
+      ]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed[0].cssId).not.toBe("hero");
+    expect((placed[1].props as { href?: string }).href).toBe(
+      `#${placed[0].cssId}`
+    );
+  });
+
+  it("does not mint against ids the document target is about to DELETE", () => {
+    // The `"document"` target replaces the root forest, so the page's own ids
+    // are not ids the copy lands among. Steering around them would rename a
+    // full-page pattern's blocks to avoid content being removed in the same
+    // group — and this is "start from a pattern", the flow where an author is
+    // most likely to have named things and least likely to expect them
+    // renamed.
+    const plan = planInsertPattern(
+      page([node("old", { cssId: "hero" })]),
+      pattern([node("p1", { cssId: "hero" })]),
+      "document",
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).toBe("hero");
   });
 });

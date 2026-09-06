@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { planSaveAsPattern } from "./composition-planners";
+import { planInsertPattern, planSaveAsPattern } from "./composition-planners";
 import { DOCUMENT_FORMAT_VERSION } from "./document";
 import type { BlockDocument, BlockNode } from "./document";
 import { walkNodes } from "./tree";
@@ -162,12 +162,65 @@ describe("a reference that crosses from one root to the next", () => {
     const copiedTarget = marked(stored ?? [], "target");
     const copiedPointer = marked(stored ?? [], "pointer");
 
-    // The id moved...
-    expect(copiedTarget.cssId).not.toBe("pricing");
-    // ...and the reference moved with it, ACROSS the root boundary.
+    // Asserted against the stored target's OWN id rather than against a
+    // literal, which is the property and not the mechanism: whatever a save
+    // does with a DOM id, a reference crossing the root boundary has to land
+    // on the node the pattern carries. Written the other way — "the id
+    // changed" — this passed for a save that re-minted and would have had to
+    // be rewritten to let one that does not through, without the property it
+    // guards ever having moved.
     expect(copiedPointer.attributes?.["aria-describedby"]).toBe(
       copiedTarget.cssId
     );
+    // And the target is in the SAVED forest, so the reference reaches
+    // something: an assertion that two fields agree is satisfied by both being
+    // undefined.
+    expect(copiedTarget.cssId).toBeTypeOf("string");
+  });
+
+  it("still reaches it after the pattern is inserted somewhere else", () => {
+    // The end-to-end form, which is what an author sees. Saving and inserting
+    // each rewrite references, and the pair is where a copy silently loses its
+    // accessible name — invisible to everyone not using assistive technology.
+    const doc = page([
+      node("a", { cssId: "pricing", props: { mark: "target" } }),
+      node("b", {
+        props: { mark: "pointer" },
+        attributes: { "aria-describedby": "pricing" },
+      }),
+    ]);
+
+    const stored = planSaveAsPattern(doc, ["a", "b"], target, anyParent).create
+      ?.document;
+    // Into a page that ALREADY holds `pricing`, which is the case minting
+    // exists for. Inserting into an empty page mints nothing now — correctly,
+    // since a DOM id is authored content and there is nothing to collide with
+    // — so an empty destination could not tell a working remap from no remap.
+    const destination = page([node("existing", { cssId: "pricing" })]);
+    const insert = planInsertPattern(
+      destination,
+      { id: "hero-pattern", document: stored as BlockDocument },
+      { index: 1 },
+      anyParent
+    );
+    expect(insert.problem).toBeUndefined();
+    const placed = (insert.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    // Guarded, because `flatMap` over an empty list makes every assertion
+    // below vacuous: `marked` would throw, but only after the test had stopped
+    // testing what it names.
+    expect(placed).toHaveLength(2);
+
+    const placedTarget = marked(placed, "target");
+    const placedPointer = marked(placed, "pointer");
+
+    expect(placedPointer.attributes?.["aria-describedby"]).toBe(
+      placedTarget.cssId
+    );
+    // The INSERT is where the id moves, because here the destination DOES
+    // already hold it.
+    expect(placedTarget.cssId).not.toBe("pricing");
   });
 });
 
@@ -184,11 +237,36 @@ describe("a link inside the saved run still reaches its own target", () => {
     const copiedTarget = marked(stored, "target");
     const copiedLink = marked(stored, "link");
 
-    // The id moved, so a stored `#pricing` would address nothing at all — and
-    // insert cannot repair it later, because its own map is keyed by the id
-    // this copy already renamed.
-    expect(copiedTarget.cssId).not.toBe("pricing");
     expect(copiedLink.props?.href).toBe(`#${copiedTarget.cssId}`);
+  });
+
+  it("still reaches it after the pattern is inserted somewhere else", () => {
+    const doc = page([
+      node("t", { cssId: "pricing", props: { mark: "target" } }),
+      node("l", { props: { mark: "link", href: "#pricing" } }),
+    ]);
+
+    const stored = planSaveAsPattern(doc, ["t", "l"], target, anyParent).create
+      ?.document;
+    const destination = page([node("existing", { cssId: "pricing" })]);
+    const insert = planInsertPattern(
+      destination,
+      { id: "hero-pattern", document: stored as BlockDocument },
+      { index: 1 },
+      anyParent
+    );
+    expect(insert.problem).toBeUndefined();
+    const placed = (insert.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    // Guarded, because `flatMap` over an empty list makes every assertion
+    // below vacuous: `marked` would throw, but only after the test had stopped
+    // testing what it names.
+    expect(placed).toHaveLength(2);
+
+    const placedTarget = marked(placed, "target");
+    expect(marked(placed, "link").props?.href).toBe(`#${placedTarget.cssId}`);
+    expect(placedTarget.cssId).not.toBe("pricing");
   });
 });
 

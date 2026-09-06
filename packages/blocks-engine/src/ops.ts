@@ -2353,13 +2353,32 @@ function assertNodeId(id: string, verb: string): void {
 }
 
 /**
- * The id of a locked node anywhere in a subtree, or `undefined` if there is none.
+ * Why the op layer would refuse this FOREST, or `undefined`.
  *
- * The whole subtree and not just its root, because removing a container removes
- * everything under it. A check that read only the node an op addresses would let
- * an author delete a locked block by deleting the column it sits in — the lock
- * honoured at the node and defeated one level up.
+ * The companion to {@link documentRefusal}, and needed beside it because that
+ * one reads the envelope: its keys, its values, its format and its kind. It
+ * says nothing about the nodes, and `applyOp` walks the whole forest before it
+ * applies anything — so a document with a malformed entry the planner never
+ * selected passes the envelope check, produces a plan, and throws on apply.
+ *
+ * That is the dry run disagreeing with the run it predicts, in the direction
+ * that costs most: a composition action creates its library row first, so the
+ * refusal lands after the write it cannot take back.
+ *
+ * Walked rather than sampled, because the fault can be anywhere: a `null` among
+ * the roots, a node inside its own slots, a field that is a getter rather than
+ * stored.
  */
+export function forestRefusal(nodes: unknown): string | undefined {
+  try {
+    assertForestEntries(nodes as BlockNode[]);
+    return undefined;
+  } catch (error) {
+    if (error instanceof OpError) return error.message;
+    throw error;
+  }
+}
+
 /**
  * Why this DOCUMENT could not be edited at all, or `undefined`.
  *
@@ -2466,6 +2485,11 @@ export function positionRefusal(
  * A planner that could not ask would report a plan the apply then throws on,
  * which is exactly the gap between a dry run and a real run that planning
  * separately exists to close.
+ *
+ * The whole subtree and not just its root, because removing a container removes
+ * everything under it. A check that read only the node an op addresses would
+ * let an author delete a locked block by deleting the column it sits in — the
+ * lock honoured at the node and defeated one level up.
  */
 export function lockedWithin(node: BlockNode): string | undefined {
   let found: string | undefined;
