@@ -11,9 +11,19 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { planInsertPattern, planSaveAsPattern } from "./composition-planners";
-import { DOCUMENT_FORMAT_VERSION } from "./document";
-import type { BlockDocument, BlockNode } from "./document";
+import {
+  planConvertToComponent,
+  planInsertPattern,
+  planSaveAsComponent,
+  planSaveAsPattern,
+} from "./composition-planners";
+import type { PlanResult, PlannedCreate } from "./composition-planners";
+import { COMPONENT_INSTANCE_TYPE, DOCUMENT_FORMAT_VERSION } from "./document";
+import type { BlockDocument, BlockNode, ComponentDocument } from "./document";
+import { applyOps } from "./ops";
+import type { BuilderOp } from "./ops";
+import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
+import type { DocumentLimits } from "./limits";
 import { walkNodes } from "./tree";
 
 function node(
@@ -437,5 +447,1125 @@ describe("what it refuses, and why", () => {
       planSaveAsPattern(page([node("a")]), ["a", "ghost"], target, anyParent)
         .problem
     ).toBe("unknown");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Components
+// ---------------------------------------------------------------------------
+
+const componentTarget = {
+  collection: "components",
+  fields: { title: "Card", slug: "card" },
+};
+
+/**
+ * The row a plan proposes, or a failure naming the cause.
+ *
+ * A helper rather than a non-null assertion, so a test that stops planning for
+ * a reason nobody predicted says which reason instead of reporting that
+ * `undefined` has no `document`.
+ */
+function created<T>(plan: PlanResult<T>): PlannedCreate<T> {
+  if (plan.create === undefined) {
+    throw new Error(`no plan: ${String(plan.problem)}`);
+  }
+  return plan.create;
+}
+
+/** The definition a component plan would store. */
+function definition<T>(plan: PlanResult<T>): ComponentDocument {
+  return created(plan).document as ComponentDocument;
+}
+
+/** The page ops a plan proposes, or a failure naming the cause. */
+function pageOps<T>(plan: PlanResult<T>): readonly BuilderOp[] {
+  if (plan.pageOps === undefined) {
+    throw new Error(`no plan: ${String(plan.problem)}`);
+  }
+  return plan.pageOps;
+}
+
+/**
+ * A forest with every id replaced by its position in the walk.
+ *
+ * Two saves of one selection mint different node ids by design, so comparing
+ * them byte-for-byte would fail on the one difference that is supposed to be
+ * there. Normalising the ids leaves every other difference visible, which is
+ * what "the same document" has to mean here.
+ */
+function shapeOf(nodes: BlockNode[]): string {
+  const order = new Map<string, number>();
+  walkNodes(nodes, n => order.set(n.id, order.size));
+  return JSON.stringify(nodes, (key, value) =>
+    key === "id" && typeof value === "string"
+      ? (order.get(value) ?? value)
+      : value
+  );
+}
+
+/** A page whose selected card holds a headline the author might expose. */
+function cardPage(): BlockDocument {
+  return page([
+    node("outside", { props: { mark: "outside", text: "elsewhere" } }),
+    node(
+      "card",
+      { props: { mark: "card" } },
+      {
+        children: [
+          node("headline", { props: { mark: "headline", text: "Hi" } }),
+        ],
+      }
+    ),
+  ]);
+}
+
+/** One nominated text property, pointing wherever the test says. */
+function exposeText(nodeId: string, extra: Record<string, unknown> = {}) {
+  return {
+    properties: [
+      {
+        id: "p1",
+        label: "Headline",
+        nodeId,
+        propPath: "text",
+        type: "text" as const,
+        ...extra,
+      },
+    ],
+  };
+}
+
+describe("an exposed pointer follows the copy", () => {
+  it("re-aims nodeId at the STORED node, and that node is there", () => {
+    const stored = definition(
+      planSaveAsComponent(
+        cardPage(),
+        ["card"],
+        componentTarget,
+        exposeText("headline"),
+        anyParent
+      )
+    );
+
+    const headline = marked(stored.nodes, "headline");
+    expect(stored.exposed?.[0]?.nodeId).toBe(headline.id);
+    // The pointer resolving is the property that matters; the id merely
+    // differing from the page's would also be true of a random string.
+    expect(idsIn(stored.nodes)).toContain(stored.exposed?.[0]?.nodeId);
+    expect(stored.exposed?.[0]?.nodeId).not.toBe("headline");
+  });
+
+  it("re-aims a slot region the same way", () => {
+    const stored = definition(
+      planSaveAsComponent(
+        cardPage(),
+        ["card"],
+        componentTarget,
+        {
+          slots: { body: { label: "Body", nodeId: "card", slot: "children" } },
+        },
+        anyParent
+      )
+    );
+
+    expect(stored.slots?.body?.nodeId).toBe(marked(stored.nodes, "card").id);
+    expect(idsIn(stored.nodes)).toContain(stored.slots?.body?.nodeId);
+  });
+
+  it("refuses a nomination naming a node OUTSIDE the selection", () => {
+    const plan = planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      exposeText("outside"),
+      anyParent
+    );
+
+    expect(plan.problem).toBe("invalid-exposure");
+    expect(plan.issues?.map(one => one.code)).toContain("exposed-node-missing");
+    expect(plan.issues?.[0]?.path).toContain("/exposed/0");
+  });
+
+  it("does not alias the options array it was handed", () => {
+    const options = [{ value: "a", label: "A" }];
+    const stored = definition(
+      planSaveAsComponent(
+        cardPage(),
+        ["card"],
+        componentTarget,
+        exposeText("headline", { type: "select", options }),
+        anyParent
+      )
+    );
+
+    options.push({ value: "b", label: "B" });
+    expect(stored.exposed?.[0]?.options).toHaveLength(1);
+  });
+});
+
+describe("the envelope is judged by the rule that will publish it", () => {
+  const refusalFor = (properties: unknown[]) =>
+    planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      { properties } as never,
+      anyParent
+    );
+
+  it("refuses two exposures sharing one id", () => {
+    const one = exposeText("headline").properties[0];
+    const plan = refusalFor([one, { ...one, label: "Second" }]);
+    expect(plan.problem).toBe("invalid-exposure");
+    expect(plan.issues?.map(i => i.code)).toContain("exposed-duplicate-id");
+  });
+
+  it("refuses options on something that is not a select", () => {
+    const plan = refusalFor([
+      {
+        ...exposeText("headline").properties[0],
+        options: [{ value: "a", label: "A" }],
+      },
+    ]);
+    expect(plan.issues?.map(i => i.code)).toContain("exposed-options-invalid");
+  });
+
+  it("refuses a select with no options", () => {
+    const plan = refusalFor([
+      { ...exposeText("headline").properties[0], type: "select" },
+    ]);
+    expect(plan.issues?.map(i => i.code)).toContain("exposed-options-invalid");
+  });
+
+  it("refuses a type outside the vocabulary", () => {
+    const plan = refusalFor([
+      { ...exposeText("headline").properties[0], type: "colour" },
+    ]);
+    expect(plan.issues?.map(i => i.code)).toContain("exposed-property-invalid");
+  });
+
+  it("refuses a prop path that is not a path", () => {
+    const plan = refusalFor([
+      { ...exposeText("headline").properties[0], propPath: "text..deep" },
+    ]);
+    expect(plan.issues?.map(i => i.code)).toContain("exposed-path-invalid");
+  });
+
+  it("refuses a slot the node it points at does not declare", () => {
+    const plan = planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      { slots: { body: { label: "Body", nodeId: "card", slot: "footer" } } },
+      anyParent
+    );
+    expect(plan.issues?.map(i => i.code)).toContain("exposed-slot-missing");
+  });
+});
+
+describe("what a saved component is", () => {
+  it("is the tree a pattern save stores, under a component kind", () => {
+    const doc = cardPage();
+    const asPattern = created(
+      planSaveAsPattern(doc, ["card"], target, anyParent)
+    ).document;
+    const asComponent = definition(
+      planSaveAsComponent(doc, ["card"], componentTarget, {}, anyParent)
+    );
+
+    expect(shapeOf(asComponent.nodes)).toBe(shapeOf(asPattern.nodes));
+    expect(asComponent.kind).toBe("component");
+    expect(asComponent.formatVersion).toBe(doc.formatVersion);
+  });
+
+  it("declares no exposed field when nothing was nominated", () => {
+    const stored = definition(
+      planSaveAsComponent(cardPage(), ["card"], componentTarget, {}, anyParent)
+    );
+    // Absence is what the contract already reads as "exposes none", so writing
+    // an empty array would make two saves of one selection differ by whether
+    // the caller passed a list it had not filled.
+    expect("exposed" in stored).toBe(false);
+    expect("slots" in stored).toBe(false);
+  });
+
+  it("declares no exposed field for an EMPTY nomination either", () => {
+    // The separate case, because absent and empty arrive by different routes: a
+    // surface that builds the list from the author's ticks passes `[]` when
+    // they tick nothing, and a stored `[]` would make that save differ from one
+    // where the surface passed nothing at all.
+    const stored = definition(
+      planSaveAsComponent(
+        cardPage(),
+        ["card"],
+        componentTarget,
+        { properties: [], slots: {} },
+        anyParent
+      )
+    );
+    expect("exposed" in stored).toBe(false);
+    expect("slots" in stored).toBe(false);
+  });
+
+  it("leaves the page alone", () => {
+    expect(
+      planSaveAsComponent(cardPage(), ["card"], componentTarget, {}, anyParent)
+        .pageOps
+    ).toEqual([]);
+  });
+
+  it("refuses what a pattern save refuses about the selection", () => {
+    const doc = page([node("a"), node("b"), node("c")]);
+    expect(
+      planSaveAsComponent(doc, ["a", "c"], componentTarget, {}, anyParent)
+        .problem
+    ).toBe("gap");
+  });
+});
+
+describe("converting a run into an instance", () => {
+  it("removes the run and puts one instance where it stood", () => {
+    const doc = page([node("a"), node("b"), node("c")]);
+    const plan = planConvertToComponent(
+      doc,
+      ["a", "b"],
+      componentTarget,
+      "def-1",
+      {},
+      anyParent
+    );
+
+    expect(pageOps(plan).map(op => op.kind)).toEqual([
+      "remove",
+      "remove",
+      "insert",
+    ]);
+
+    // The plan IS the dry run, so the ops it proposes have to apply.
+    const after = applyOps(doc, pageOps(plan)).document;
+    expect(after.nodes.map(n => n.type)).toEqual([
+      COMPONENT_INSTANCE_TYPE,
+      "core/box",
+    ]);
+    expect(after.nodes[0]?.props?.componentId).toBe("def-1");
+  });
+
+  it("puts the instance back inside the container the run sat in", () => {
+    const doc = page([
+      node("wrap", {}, { children: [node("a"), node("b"), node("c")] }),
+    ]);
+    const plan = planConvertToComponent(
+      doc,
+      ["b"],
+      componentTarget,
+      "def-1",
+      {},
+      anyParent
+    );
+
+    const after = applyOps(doc, pageOps(plan)).document;
+    expect(after.nodes[0]?.slots?.children.map(n => n.type)).toEqual([
+      "core/box",
+      COMPONENT_INSTANCE_TYPE,
+      "core/box",
+    ]);
+  });
+
+  it("appends when the run ended the list", () => {
+    const doc = page([node("a"), node("b"), node("c")]);
+    const plan = planConvertToComponent(
+      doc,
+      ["b", "c"],
+      componentTarget,
+      "def-1",
+      {},
+      anyParent
+    );
+
+    const after = applyOps(doc, pageOps(plan)).document;
+    expect(after.nodes.map(n => n.type)).toEqual([
+      "core/box",
+      COMPONENT_INSTANCE_TYPE,
+    ]);
+  });
+
+  it("stores the definition a plain component save would store", () => {
+    const doc = cardPage();
+    const saved = definition(
+      planSaveAsComponent(
+        doc,
+        ["card"],
+        componentTarget,
+        exposeText("headline"),
+        anyParent
+      )
+    );
+    const converted = definition(
+      planConvertToComponent(
+        doc,
+        ["card"],
+        componentTarget,
+        "def-1",
+        exposeText("headline"),
+        anyParent
+      )
+    );
+
+    expect(shapeOf(converted.nodes)).toBe(shapeOf(saved.nodes));
+    expect(converted.exposed?.[0]?.nodeId).toBe(
+      marked(converted.nodes, "headline").id
+    );
+  });
+
+  it("names the row the instance points at", () => {
+    const plan = planConvertToComponent(
+      page([node("a")]),
+      ["a"],
+      componentTarget,
+      "def-1",
+      {},
+      anyParent
+    );
+    expect(created(plan).id).toBe("def-1");
+  });
+
+  it("refuses a component id that names nothing", () => {
+    const doc = page([node("a")]);
+    expect(
+      planConvertToComponent(doc, ["a"], componentTarget, "", {}, anyParent)
+        .problem
+    ).toBe("invalid-source");
+    expect(
+      planConvertToComponent(
+        doc,
+        ["a"],
+        componentTarget,
+        undefined as unknown as string,
+        {},
+        anyParent
+      ).problem
+    ).toBe("invalid-source");
+  });
+
+  it("refuses a selected root the document holds twice", () => {
+    // `remove` addresses by id and could not say which node it meant. The
+    // duplicate is reachable from a page nothing validated, and it sits where
+    // the selection does NOT: a nested copy of a top-level id, which
+    // `contiguousRun` resolves to one node without complaint.
+    const doc = page([
+      node("dup"),
+      node("other", {}, { children: [node("dup")] }),
+    ]);
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["dup"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent
+      ).problem
+    ).toBe("duplicate-destination");
+    expect(() => applyOps(doc, [{ kind: "remove", id: "dup" }])).toThrow();
+  });
+
+  it("refuses a locked block, which is what the remove would do", () => {
+    const doc = page([node("a", { locked: true })]);
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["a"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent
+      ).problem
+    ).toBe("destination-locked");
+    // The other direction of the dry-run contract: the refusal is the apply's
+    // own, not a rule this module invented that the apply does not share.
+    expect(() => applyOps(doc, [{ kind: "remove", id: "a" }])).toThrow();
+  });
+
+  it("asks the nesting rule about the INSTANCE, not about what it replaces", () => {
+    const instanceNeedsSection = {
+      parentsOf: (type: string) =>
+        type === COMPONENT_INSTANCE_TYPE ? ["core/section"] : undefined,
+    };
+    const doc = page([node("a")]);
+
+    // The run itself is unrestricted, so the SAVE half is happy.
+    expect(
+      planSaveAsComponent(doc, ["a"], componentTarget, {}, instanceNeedsSection)
+        .problem
+    ).toBeUndefined();
+    // The instance going back is not.
+    const plan = planConvertToComponent(
+      doc,
+      ["a"],
+      componentTarget,
+      "def-1",
+      {},
+      instanceNeedsSection
+    );
+    expect(plan.problem).toBe("restricted-at-root");
+    expect(plan.permitted).toEqual(["core/section"]);
+  });
+});
+
+describe("a nomination this cannot read is refused, never dropped or dereferenced", () => {
+  const plan = (exposure: unknown) =>
+    planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      exposure as never,
+      anyParent
+    );
+
+  it("refuses a properties value that is not a list", () => {
+    // Normalising it to absent reported SUCCESS for a nomination the caller
+    // made and this could not read.
+    const result = plan({ properties: "bad" });
+    expect(result.problem).toBe("invalid-exposure");
+    expect(result.issues?.map(i => i.code)).toContain(
+      "component-envelope-invalid"
+    );
+  });
+
+  it("refuses a null entry instead of throwing on it", () => {
+    let threw: unknown;
+    let result;
+    try {
+      result = plan({ properties: [null] });
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeUndefined();
+    expect(result?.problem).toBe("invalid-exposure");
+  });
+
+  it("refuses a slots value that is not a record", () => {
+    expect(plan({ slots: "bad" }).problem).toBe("invalid-exposure");
+  });
+
+  it("does not run a prototype setter for a __proto__ slot key", () => {
+    // Assigning to it invokes the inherited setter rather than creating a
+    // property, so the slot the author asked for vanishes and the result gains
+    // a prototype — making the validator refuse what it accepts when the same
+    // document is stored directly.
+    const result = plan({
+      slots: { __proto__: { label: "B", nodeId: "card", slot: "children" } },
+    });
+    expect(result.problem).toBe("invalid-exposure");
+  });
+
+  it("copies each option RECORD, not only the list", () => {
+    // The weaker test — pushing a new element — stays green while every option
+    // object is still shared with the caller's request.
+    const options = [{ value: "a", label: "A" }];
+    const stored = definition(
+      planSaveAsComponent(
+        cardPage(),
+        ["card"],
+        componentTarget,
+        exposeText("headline", { type: "select", options }),
+        anyParent
+      )
+    );
+
+    options[0]!.label = "MUTATED";
+    expect(stored.exposed?.[0]?.options?.[0]?.label).toBe("A");
+  });
+
+  it("refuses a nomination naming an id the selection holds twice", () => {
+    // The map is keyed on the ORIGINAL id, so the second node's mapping
+    // replaces the first — and the pointer lands on whichever came last. It
+    // resolves, so the envelope check passes and every instance override then
+    // edits a block the author did not choose.
+    const doc = page([
+      node(
+        "wrap",
+        {},
+        {
+          children: [
+            node("dup", { props: { mark: "first" } }),
+            node("dup", { props: { mark: "second" } }),
+          ],
+        }
+      ),
+    ]);
+
+    expect(
+      planSaveAsComponent(
+        doc,
+        ["wrap"],
+        componentTarget,
+        exposeText("dup"),
+        anyParent
+      ).problem
+    ).toBe("ambiguous-exposure");
+  });
+});
+
+describe("a convert refuses everything its ops would meet", () => {
+  it("refuses when a sibling the author never selected is malformed", () => {
+    // `applyOps` walks the WHOLE forest before applying anything, so a plan
+    // that ignores an unselected malformed node succeeds and then throws on its
+    // first op — after the library row has been written.
+    const doc = page([node("a"), null as unknown as BlockNode]);
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["a"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent
+      ).problem
+    ).toBe("unusable-document");
+    expect(() => applyOps(doc, [{ kind: "remove", id: "a" }])).toThrow();
+  });
+
+  it("refuses a duplicate id on a DESCENDANT, not just on the root", () => {
+    // `remove` refuses when any id inside the subtree it takes occurs twice in
+    // the document, because its inverse could not put that subtree back. A
+    // root-only check passes this and the apply throws.
+    const doc = page([
+      node("a", {}, { children: [node("dup")] }),
+      node("other", {}, { children: [node("dup")] }),
+    ]);
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["a"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent
+      ).problem
+    ).toBe("duplicate-destination");
+    expect(() => applyOps(doc, [{ kind: "remove", id: "a" }])).toThrow();
+  });
+});
+
+describe("the exposure request itself is judged before its fields", () => {
+  const plan = (exposure: unknown) =>
+    planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      exposure as never,
+      anyParent
+    );
+
+  it.each([
+    ["null", null],
+    ["a string", "bad"],
+    ["an array", []],
+    ["a number", 3],
+  ])("refuses %s as the whole request", (_name, exposure) => {
+    // `null` threw; a string and an array answered `undefined` to both field
+    // reads and were taken for "expose nothing", which reports success for a
+    // request nobody could honour.
+    let threw: unknown;
+    let result;
+    try {
+      result = plan(exposure);
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeUndefined();
+    expect(result?.problem).toBe("invalid-exposure");
+  });
+
+  it("still treats an absent request as exposing nothing", () => {
+    // The one value that SAYS so, rather than failing to say anything.
+    const stored = definition(plan(undefined));
+    expect("exposed" in stored).toBe(false);
+  });
+
+  it("carries a malformed options value to the validator", () => {
+    // Omitting it turned a refusal into a success: the envelope check rejects a
+    // present `options` on anything but a select, and one that is not a list.
+    const result = plan({
+      properties: [{ ...exposeText("headline").properties[0], options: "bad" }],
+    });
+    expect(result.problem).toBe("invalid-exposure");
+    expect(result.issues?.map(i => i.code)).toContain(
+      "exposed-options-invalid"
+    );
+  });
+
+  it("carries a malformed slot allow-list to the validator", () => {
+    // Dropping it left an unrestricted slot the planner then reported as fine.
+    const result = plan({
+      slots: {
+        body: { label: "Body", nodeId: "card", slot: "children", allow: "bad" },
+      },
+    });
+    expect(result.problem).toBe("invalid-exposure");
+  });
+
+  it("refuses an over-cap properties list WITHOUT reading its entries", () => {
+    // The refusal alone does not discriminate: mapping the list first and then
+    // letting `eachBounded` reject it reaches the same answer, having done
+    // exactly the work the cap exists to refuse. So the entries count their own
+    // reads, and the assertion is that none happened.
+    let reads = 0;
+    const many = Array.from({ length: MAX_ENVELOPE_ENTRIES + 1 }, (_, i) => {
+      const entry: Record<string, unknown> = {
+        label: "L",
+        nodeId: "headline",
+        propPath: "text",
+        type: "text",
+      };
+      Object.defineProperty(entry, "id", {
+        enumerable: true,
+        get() {
+          reads += 1;
+          return `p${String(i)}`;
+        },
+      });
+      return entry;
+    });
+
+    expect(plan({ properties: many }).problem).toBe("invalid-exposure");
+    expect(reads).toBe(0);
+  });
+
+  it("refuses an over-cap slot map WITHOUT reading its entries", () => {
+    let reads = 0;
+    const slots: Record<string, unknown> = {};
+    for (let i = 0; i <= MAX_ENVELOPE_ENTRIES; i++) {
+      const entry: Record<string, unknown> = {
+        nodeId: "card",
+        slot: "children",
+      };
+      Object.defineProperty(entry, "label", {
+        enumerable: true,
+        get() {
+          reads += 1;
+          return "S";
+        },
+      });
+      slots[`s${String(i)}`] = entry;
+    }
+
+    expect(plan({ slots }).problem).toBe("invalid-exposure");
+    expect(reads).toBe(0);
+  });
+});
+
+describe("a caller-sized exposure costs a refusal, not a traversal", () => {
+  const plan = (exposure: unknown, limits?: DocumentLimits) =>
+    planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      exposure as never,
+      anyParent,
+      limits
+    );
+
+  it("does not read an over-cap list while checking for ambiguity", () => {
+    // The ambiguity pass runs BEFORE the mappers, so their caps do not cover
+    // it — and an over-cap list is refused by the envelope check whatever this
+    // pass concludes, which makes reading it work the cap exists to refuse.
+    let reads = 0;
+    const many = Array.from({ length: MAX_ENVELOPE_ENTRIES + 1 }, (_, i) => {
+      const entry: Record<string, unknown> = {
+        id: `p${String(i)}`,
+        label: "L",
+        propPath: "text",
+        type: "text",
+      };
+      Object.defineProperty(entry, "nodeId", {
+        enumerable: true,
+        get() {
+          reads += 1;
+          return "headline";
+        },
+      });
+      return entry;
+    });
+
+    expect(plan({ properties: many }).problem).toBe("invalid-exposure");
+    expect(reads).toBe(0);
+  });
+
+  it("refuses an array whose `map` the caller shadowed", () => {
+    // The entries and the array type are both valid here; only the inherited
+    // method is shadowed, so none of the entry guards sees anything wrong.
+    const shadowed: unknown[] = [exposeText("headline").properties[0]];
+    Object.defineProperty(shadowed, "map", {
+      value: "not a function",
+      enumerable: true,
+    });
+
+    let threw: unknown;
+    let result;
+    try {
+      result = plan({ properties: shadowed });
+    } catch (error) {
+      threw = error;
+    }
+
+    // Not a native error, which is the property this test was written for.
+    expect(threw).toBeUndefined();
+    // And refused, which it was not when this test was first written. An own
+    // `map` is a non-index key on an array, and `JSON.stringify` writes an
+    // array by position — so the key is silently lost and the list does not
+    // round-trip. The op layer refuses such a list outright, and asking that
+    // rule here rather than only avoiding `map` is what closed the accessor
+    // case beside it.
+    expect(result?.problem).toBe("invalid-exposure");
+  });
+
+  it("indexes the envelope under the HOST's node cap, not its own", () => {
+    // A host may raise `maxNodes`, and strict validation — the gate this dry
+    // run predicts — is given the host's limits. Indexing under the default
+    // leaves a large definition's later nodes outside the index, so a sound
+    // exposure is reported as pointing at nothing and the planner refuses a
+    // component the apply would publish.
+    const children: BlockNode[] = [];
+    for (let i = 0; i < 5200; i += 1) children.push(node(`k${String(i)}`));
+    const doc = page([node("root", {}, { children })]);
+    const exposure = {
+      properties: [
+        {
+          id: "p1",
+          label: "L",
+          nodeId: "k5100",
+          propPath: "text",
+          type: "text" as const,
+        },
+      ],
+    };
+
+    const raised = planSaveAsComponent(
+      doc,
+      ["root"],
+      componentTarget,
+      exposure,
+      anyParent,
+      { ...DEFAULT_LIMITS, maxNodes: 6000 }
+    );
+    expect(raised.problem).toBeUndefined();
+
+    // The control: under the DEFAULT cap the same definition is refused, so
+    // the assertion above is about the limit being threaded rather than about
+    // the pointer happening to resolve.
+    const defaulted = planSaveAsComponent(
+      doc,
+      ["root"],
+      componentTarget,
+      exposure,
+      anyParent
+    );
+    expect(defaulted.issues?.map(i => i.code)).toContain(
+      "exposed-node-missing"
+    );
+  });
+});
+
+describe("what the plan promises about the page it will edit", () => {
+  it("refuses a replacement that would push the page past its byte cap", () => {
+    // Only the APPLY can answer this: `assertFitsCaps` measures the document a
+    // node is going into, so a subtree with no destination cannot be judged
+    // against it — which `nodeShapeRefusal` says in as many words. A run
+    // replaced by a LARGER instance crosses a cap the page was inside.
+    const doc = page([node("a")]);
+    const limits = {
+      ...DEFAULT_LIMITS,
+      maxBytes: JSON.stringify(doc).length,
+    };
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["a"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent,
+        limits
+      ).problem
+    ).toBe("exceeds-limits");
+
+    // The other direction of the dry-run contract: the apply refuses it too.
+    expect(() =>
+      applyOps(
+        doc,
+        [
+          { kind: "remove", id: "a" },
+          {
+            kind: "insert",
+            node: {
+              id: "i1",
+              type: COMPONENT_INSTANCE_TYPE,
+              version: 1,
+              props: { componentId: "def-1" },
+            },
+            at: { index: 0 },
+          },
+        ],
+        limits
+      )
+    ).toThrow();
+  });
+
+  it("refuses a definition JSON could not write, envelope included", () => {
+    // The envelope is caller-supplied and the envelope check reads only `value`
+    // and `label`, so an option carrying a `BigInt` passes it and makes the
+    // whole document unstorable. The tree was already asked this question
+    // before it had an envelope; the completed definition is asked it again.
+    const plan = planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      exposeText("headline", {
+        type: "select",
+        options: [{ value: "x", label: "X", metadata: 1n }],
+      }) as never,
+      anyParent
+    );
+
+    expect(plan.problem).toBe("unusable-document");
+  });
+});
+
+describe("a list nested inside an exposure is bounded too", () => {
+  it("does not copy an over-cap options list", () => {
+    // Nothing outside the entry bounds a list inside it: the outer cap already
+    // admitted this single nomination.
+    let reads = 0;
+    const options: unknown[] = [];
+    for (let i = 0; i <= MAX_ENVELOPE_ENTRIES; i += 1) {
+      const option: Record<string, unknown> = { value: `v${String(i)}` };
+      Object.defineProperty(option, "label", {
+        enumerable: true,
+        get() {
+          reads += 1;
+          return "L";
+        },
+      });
+      options.push(option);
+    }
+
+    const plan = planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      exposeText("headline", { type: "select", options }) as never,
+      anyParent
+    );
+
+    expect(plan.problem).toBe("invalid-exposure");
+    expect(reads).toBe(0);
+  });
+
+  it("copies an allow-list without invoking its iterator", () => {
+    // A spread runs `Symbol.iterator`, which is inherited and so the caller's
+    // to shadow — on an array whose entries are all well formed, which is why
+    // the entry guards cannot see it.
+    const allow: unknown[] = ["core/box"];
+    Object.defineProperty(allow, Symbol.iterator, { value: "not a function" });
+
+    let threw: unknown;
+    let plan;
+    try {
+      plan = planSaveAsComponent(
+        page([node("card", {}, { children: [] })]),
+        ["card"],
+        componentTarget,
+        {
+          slots: {
+            body: { label: "B", nodeId: "card", slot: "children", allow },
+          },
+        } as never,
+        anyParent
+      );
+    } catch (error) {
+      threw = error;
+    }
+
+    expect(threw).toBeUndefined();
+    expect(plan?.problem).toBeUndefined();
+  });
+});
+
+describe("the request is read once, so two passes cannot disagree", () => {
+  /** A nomination whose `nodeId` answers differently on each read. */
+  function shiftingNomination(values: readonly string[]) {
+    let reads = 0;
+    const entry: Record<string, unknown> = {
+      id: "p1",
+      label: "L",
+      propPath: "text",
+      type: "text",
+    };
+    Object.defineProperty(entry, "nodeId", {
+      enumerable: true,
+      get() {
+        const value = values[Math.min(reads, values.length - 1)]!;
+        reads += 1;
+        return value;
+      },
+    });
+    return { entry, reads: () => reads };
+  }
+
+  it("reads a nominated nodeId exactly once", () => {
+    const { entry, reads } = shiftingNomination(["headline"]);
+
+    planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      { properties: [entry] } as never,
+      anyParent
+    );
+
+    // Three reads before this: twice while collecting ids for the ambiguity
+    // guard, once again in the mapper. A value that shifts between them let the
+    // guard clear one id while the mapper stored another.
+    expect(reads()).toBe(1);
+  });
+
+  it("judges the id it will store, not one it saw on the way", () => {
+    // The selection holds `dup` twice, so a nomination naming it must refuse.
+    // Reading three times let a getter show the guard a safe id and the mapper
+    // the ambiguous one — the plan succeeding, the pointer resolving, and every
+    // instance override editing a node the author never chose.
+    const doc = page([
+      node("wrap", {}, { children: [node("safe"), node("dup"), node("dup")] }),
+    ]);
+    const { entry } = shiftingNomination(["dup", "safe", "safe"]);
+
+    expect(
+      planSaveAsComponent(
+        doc,
+        ["wrap"],
+        componentTarget,
+        { properties: [entry] } as never,
+        anyParent
+      ).problem
+    ).toBe("ambiguous-exposure");
+  });
+});
+
+describe("what a definition may not be", () => {
+  it("refuses one that would exceed the caller's byte cap", () => {
+    // An exposure only ever makes a document bigger, so a page that fits can
+    // become a definition that does not — and `documentRefusal` answers whether
+    // a document can be EDITED, which is a different question from whether it
+    // fits.
+    const doc = page([node("a")]);
+    const limits = {
+      ...DEFAULT_LIMITS,
+      maxBytes: JSON.stringify(doc).length + 10,
+    };
+
+    expect(
+      planSaveAsComponent(
+        doc,
+        ["a"],
+        componentTarget,
+        {
+          properties: [
+            {
+              id: "p1",
+              label: "A label long enough to carry it over the cap",
+              nodeId: "a",
+              propPath: "text",
+              type: "text" as const,
+            },
+          ],
+        },
+        anyParent,
+        limits
+      ).problem
+    ).toBe("exceeds-limits");
+  });
+
+  it("refuses one that would contain an instance of itself", () => {
+    // The selection can already hold an instance of the component about to be
+    // created — a dangling one on the page. The resolver classifies that as a
+    // cycle and leaves it unresolved, so a conversion whose dry run succeeded
+    // replaces visible content with a broken placeholder.
+    const doc = page([
+      {
+        id: "i1",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: "def-1" },
+      },
+    ]);
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["i1"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent
+      ).problem
+    ).toBe("self-reference");
+
+    // The control: converting it under a DIFFERENT id is fine, so the refusal
+    // is about the self-reference rather than about instances in a selection.
+    expect(
+      planConvertToComponent(
+        doc,
+        ["i1"],
+        componentTarget,
+        "def-2",
+        {},
+        anyParent
+      ).problem
+    ).toBeUndefined();
+  });
+
+  it("refuses an exposure list whose indices are accessors", () => {
+    // A genuine array, with entries that would be well formed, that computes
+    // them. Neither the array check nor the entry guards see it, and reading
+    // one index runs the caller's code — while a getter that appends extends
+    // `length` underneath the loop the cap is supposed to hold.
+    //
+    // Refused rather than carried to the validator: carrying works for a value
+    // the envelope check can READ, and this one explodes wherever it is first
+    // touched, which only moves the failure into validation.
+    const computed: unknown[] = [];
+    Object.defineProperty(computed, "0", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        throw new Error("read me and find out");
+      },
+    });
+    Object.defineProperty(computed, "length", { value: 1, writable: true });
+
+    let threw: unknown;
+    let result;
+    try {
+      result = planSaveAsComponent(
+        cardPage(),
+        ["card"],
+        componentTarget,
+        { properties: computed } as never,
+        anyParent
+      );
+    } catch (error) {
+      threw = error;
+    }
+
+    expect(threw).toBeUndefined();
+    expect(result?.problem).toBe("invalid-exposure");
   });
 });

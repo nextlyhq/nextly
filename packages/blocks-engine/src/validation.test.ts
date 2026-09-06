@@ -21,7 +21,12 @@ import type { NestingSource } from "./nesting";
 import type { BlockTypeLookup } from "./validation";
 import { compilePageCss } from "./style/compile-page";
 import { measureBytes } from "./measure-bytes";
-import { ISSUE_CODES, validate, validateDocument } from "./validation";
+import {
+  ISSUE_CODES,
+  componentEnvelopeIssues,
+  validate,
+  validateDocument,
+} from "./validation";
 
 function lookup(types: string[]): BlockTypeLookup {
   const set = new Set(types);
@@ -2719,6 +2724,86 @@ describe("an unstorable document does not have its values parsed", () => {
     // shape long before its style values matter. The exposure that closes is
     // the parsing of whatever the getter returns, not the single invocation.
     expect(reads).toBeGreaterThan(0);
+  });
+});
+
+describe("componentEnvelopeIssues reads a stored value defensively", () => {
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["a string", "bad"],
+    ["a number", 3],
+  ])("answers rather than throwing for %s", (_name, doc) => {
+    // A published entry point whose own docblock names a stored row as an
+    // input, and a row can be any of these. Dereferencing `.kind` took a native
+    // error out of a function that promises a list.
+    let threw: unknown;
+    let issues;
+    try {
+      issues = componentEnvelopeIssues(doc as never);
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeUndefined();
+    // Whether such a document is READABLE is `validateDocument`'s question; an
+    // unreadable one simply has no envelope to be wrong about.
+    expect(issues).toEqual([]);
+  });
+});
+
+describe("componentEnvelopeIssues holds itself to a real bound", () => {
+  it.each([
+    ["NaN", Number.NaN],
+    ["undefined", undefined],
+    ["a string", "500"],
+  ])("refuses %s as a node cap, as the survey does", (_name, maxNodes) => {
+    // A bound that is not a number is not a bound: every comparison against it
+    // in the walk is false, so the index is built over the whole forest and a
+    // dangling pointer is reported as sound — with the resource bound gone as
+    // well as the verdict wrong.
+    const doc = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "a", type: "core/text", version: 1, props: {} }],
+      exposed: [
+        { id: "p", label: "L", nodeId: "ghost", propPath: "t", type: "text" },
+      ],
+    } as unknown as BlockDocument;
+
+    expect(() =>
+      componentEnvelopeIssues(doc, {
+        ...DEFAULT_LIMITS,
+        maxNodes: maxNodes as number,
+      })
+    ).toThrow(RangeError);
+
+    // The gate this predicts refuses the same limits, which is why refusing is
+    // the answer rather than falling back to a default: the two must not
+    // disagree about what counts as a bound.
+    expect(() =>
+      validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        limits: { ...DEFAULT_LIMITS, maxNodes: maxNodes as number },
+      })
+    ).toThrow(RangeError);
+  });
+
+  it("still answers for a sound cap", () => {
+    // The control: without it, a helper that threw for every limit would pass
+    // every assertion above.
+    const doc = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "a", type: "core/text", version: 1, props: {} }],
+      exposed: [
+        { id: "p", label: "L", nodeId: "ghost", propPath: "t", type: "text" },
+      ],
+    } as unknown as BlockDocument;
+
+    expect(componentEnvelopeIssues(doc).map(i => i.code)).toContain(
+      "exposed-node-missing"
+    );
   });
 });
 

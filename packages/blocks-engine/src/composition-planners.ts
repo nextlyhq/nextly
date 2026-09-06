@@ -23,8 +23,19 @@
  *
  * @module composition-planners
  */
-import { renderedDomId } from "./document";
-import type { BlockDocument, BlockNode, BlockOrigin } from "./document";
+import { COMPONENT_INSTANCE_TYPE, renderedDomId } from "./document";
+import type {
+  BlockDocument,
+  BlockNode,
+  BlockOrigin,
+  ComponentDocument,
+  ExposedProperty,
+  ExposedPropertyType,
+  ExposedSlot,
+} from "./document";
+import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
+import type { DocumentLimits } from "./limits";
+import { surveyDocument } from "./measure-bytes";
 import {
   canBeRoot,
   canNest,
@@ -34,23 +45,32 @@ import {
   type NestingVerdict,
 } from "./nesting";
 import {
+  applyOps,
   documentRefusal,
+  listRefusal,
   forestRefusal,
   lockedWithin,
   nodeShapeRefusal,
   positionRefusal,
+  subtreeRemovalRefusal,
   type BuilderOp,
   type OpPosition,
 } from "./ops";
 import { patternDigest } from "./pattern-digest";
+import { isPlainRecord } from "./plain-record";
+import { componentIdsIn } from "./resolve-instances";
+import { boundedOwnKeys, defineEntry } from "./safe-record";
 import { contiguousRun, type RunProblem } from "./sibling-run";
 import {
   findNode,
   hiddenSubtreeNodes,
   mapForest,
+  newId,
   reidForestWithMap,
   walkNodes,
 } from "./tree";
+import { componentEnvelopeIssues } from "./validation";
+import type { ValidationIssue } from "./validation";
 
 /** A library row a planner asks the caller to create. */
 export interface PlannedCreate<TFields> {
@@ -63,6 +83,22 @@ export interface PlannedCreate<TFields> {
    * collection exists that it cannot see.
    */
   readonly collection: string;
+  /**
+   * The id to create it under, when the page ops already name it.
+   *
+   * Absent for a save that only fills the library: nothing points at the row,
+   * so whichever id the collection assigns is the right one. Present for a
+   * CONVERT, where the instance left on the page carries the definition's id
+   * in its props — the ops and the row have to agree, and the only moment they
+   * can be made to is before either is written. So the caller decides the id
+   * and the plan echoes it back, rather than the plan minting one in a format
+   * it cannot know the collection accepts.
+   *
+   * Not a nullable id standing in for the create/overwrite distinction, which
+   * {@link CompositionPlan.update} exists to keep separate: this says WHERE,
+   * never WHETHER.
+   */
+  readonly id?: string;
   /** The document to store, with its own ids. */
   readonly document: BlockDocument;
   /** The collection's own metadata fields, passed through untouched. */
@@ -117,6 +153,7 @@ export interface CompositionPlan<TFields> {
   // Declared on the success member too, so a caller reads either field off the
   // union without narrowing first and cannot read a refusal's detail off a plan.
   readonly permitted?: undefined;
+  readonly issues?: undefined;
 }
 
 /**
@@ -159,7 +196,41 @@ export type PlanProblem =
   /** One of the documents cannot be edited at all, whatever the ops say. */
   | "unusable-document"
   /** The pattern was handed over without an identity to record. */
-  | "invalid-source";
+  | "invalid-source"
+  /**
+   * The exposure nominated would not survive the definition's publish gate.
+   *
+   * Its own cause rather than folded into `"unusable-document"`, because the
+   * two have opposite remedies: an unusable document is refused whatever the
+   * author does next, where this names a property they nominated and can
+   * withdraw. {@link PlanRefusal.issues} carries which one.
+   */
+  | "invalid-exposure"
+  /**
+   * A nomination names a node id the selection holds more than once.
+   *
+   * Told apart from `"invalid-exposure"` because nothing about the envelope is
+   * malformed — the pointer resolves, to one of two nodes that answered to the
+   * name — so the author's remedy is to pick a node rather than to fix a field.
+   */
+  | "ambiguous-exposure"
+  /**
+   * Applying the plan would put the page past a limit the caller set.
+   *
+   * Its own cause because the remedy is neither the author's selection nor
+   * their exposure: the page is at its ceiling, and what has to change is the
+   * page or the ceiling.
+   */
+  | "exceeds-limits"
+  /**
+   * The definition would contain an instance of itself.
+   *
+   * Its own cause because nothing about the selection or the exposure is
+   * malformed: the run being converted already referenced the component about
+   * to be created, and the author has to remove that instance or create the
+   * component under a different id.
+   */
+  | "self-reference";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -172,6 +243,16 @@ export interface PlanRefusal {
    * `NestingVerdict` carries it.
    */
   readonly permitted?: readonly string[];
+  /**
+   * For `"invalid-exposure"`: what the envelope check said, unabridged.
+   *
+   * The issues rather than a count or a first cause, because the surface that
+   * asked for this plan is the one holding the list of properties the author
+   * nominated, and each issue carries the `/exposed/<i>` path that names which.
+   * Reporting "the exposure is invalid" would send them back to re-check every
+   * one of them.
+   */
+  readonly issues?: readonly ValidationIssue[];
   readonly create?: undefined;
   readonly update?: undefined;
   readonly pageOps?: undefined;
@@ -179,8 +260,15 @@ export interface PlanRefusal {
 
 export type PlanResult<TFields> = CompositionPlan<TFields> | PlanRefusal;
 
-/** Where a saved selection is stored, in the caller's vocabulary. */
-export interface PatternTarget<TFields> {
+/**
+ * Where a saved selection is stored, in the caller's vocabulary.
+ *
+ * One type for all three library kinds rather than one per planner. A pattern,
+ * a component and a layout are stored the same way — a collection slug and
+ * whatever metadata that collection declares — so three identical interfaces
+ * would be three things to keep in step for a distinction none of them draws.
+ */
+export interface LibraryTarget<TFields> {
   readonly collection: string;
   readonly fields: TFields;
 }
@@ -234,7 +322,7 @@ export interface PatternUpdateTarget {
 export function planSaveAsPattern<TFields>(
   document: BlockDocument,
   selectedIds: readonly string[],
-  target: PatternTarget<TFields>,
+  target: LibraryTarget<TFields>,
   nesting: NestingSource
 ): PlanResult<TFields> {
   const saved = plannedSave(document, selectedIds, nesting);
@@ -254,6 +342,10 @@ export function planSaveAsPattern<TFields>(
 interface PlannedSave {
   readonly selected: readonly BlockNode[];
   readonly stored: BlockDocument;
+  /** Page node id to stored node id — see {@link SavedPattern.nodeIds}. */
+  readonly nodeIds: ReadonlyMap<string, string>;
+  /** Where the run sat, for a planner that must put something back there. */
+  readonly at: RunPlacement;
   readonly problem?: undefined;
   readonly permitted?: undefined;
 }
@@ -280,12 +372,32 @@ function plannedSave(
   const stored = savedPatternDocument(document, run.selected);
   if (stored.problem !== undefined) return stored;
 
-  return { selected: run.selected, stored: stored.document };
+  return {
+    selected: run.selected,
+    stored: stored.document,
+    nodeIds: stored.nodeIds,
+    at: run.at,
+  };
 }
 
 /** The pattern document a save would store, or why it could not. */
 interface SavedPattern {
   readonly document: BlockDocument;
+  /**
+   * Each selected node's id ON THE PAGE, mapped to the id it was stored under.
+   *
+   * Carried rather than discarded because a caller that points INTO the
+   * selection — a component definition exposing one of its nodes' props — names
+   * those nodes in the page's vocabulary, and the save re-mints every one of
+   * them. Without the map a pointer that was correct when it was nominated
+   * names a pre-copy id the stored document does not contain: a definition that
+   * loads, renders, offers the property in the inspector, and writes overrides
+   * that resolve to nothing.
+   *
+   * Empty of DOM ids on purpose. Those are KEPT by this save, so there is no
+   * remapping to publish — see {@link savedPatternDocument}.
+   */
+  readonly nodeIds: ReadonlyMap<string, string>;
   readonly problem?: undefined;
   readonly permitted?: undefined;
 }
@@ -293,8 +405,27 @@ interface SavedPattern {
 /** A selection that may be lifted into a document of its own. */
 interface SavableRun {
   readonly selected: readonly BlockNode[];
+  readonly at: RunPlacement;
   readonly problem?: undefined;
   readonly permitted?: undefined;
+}
+
+/**
+ * Where a run sat in the document it was selected from.
+ *
+ * Reported as the run gave it — the two container fields independently
+ * optional — rather than as an {@link OpPosition}, which ties them together.
+ * Narrowing here would mean deciding what a half-set container MEANS at the
+ * point that has the least to go on, and the honest answer is that it is not a
+ * position at all. {@link replaceOps} refuses it as one.
+ */
+interface RunPlacement {
+  /** The node whose slot held the run, absent at the top level. */
+  readonly parentId?: string;
+  /** The slot within that parent, absent at the top level. */
+  readonly slot?: string;
+  /** The index of the run's FIRST node in that sibling list. */
+  readonly index: number;
 }
 
 /**
@@ -351,7 +482,21 @@ function savableRun(
     shapeRefusal(selected) ??
     placementRefusal(selected, { kind: "root" }, nesting) ??
     internalNestingRefusal(selected, nesting);
-  return refusal ?? { selected };
+  if (refusal !== undefined) return refusal;
+
+  // Read off the run rather than searched for again. A second lookup of one id
+  // can answer differently from the first, which is the mistake this module has
+  // already made once — and `places` is sorted, so the first entry is the one
+  // an insert has to land on.
+  const { parentId, slot } = result.run;
+  return {
+    selected,
+    at: {
+      ...(parentId === undefined ? {} : { parentId }),
+      ...(slot === undefined ? {} : { slot }),
+      index: result.run.places[0].index,
+    },
+  };
 }
 
 /**
@@ -409,10 +554,13 @@ function savedPatternDocument(
   document: BlockDocument,
   selected: readonly BlockNode[]
 ): SavedPattern | PlanRefusal {
+  const copied = reidForestWithMap([...selected], "keep");
   const stored: BlockDocument = {
     formatVersion: document.formatVersion,
     kind: "pattern",
-    nodes: withoutOrigin(reidForestWithMap([...selected], "keep").nodes),
+    // Through the shared forest rewrite, which preserves every id it was given
+    // — so the map `reidForestWithMap` returned still describes these nodes.
+    nodes: withoutOrigin(copied.nodes),
   };
   // Asked of what is STORED rather than of the selection, for the reason the
   // envelope question below is: the stored document is what an insert will
@@ -428,7 +576,7 @@ function savedPatternDocument(
   // Judging the source would refuse that second case for nothing, which is the
   // difference between asking about the thing and asking about its origin.
   return documentRefusal(stored) === undefined
-    ? { document: stored }
+    ? { document: stored, nodeIds: copied.nodeIds }
     : { problem: "unusable-document" };
 }
 
@@ -571,23 +719,823 @@ function restampOps(
     return { problem: "unusable-document" };
   }
 
-  const ops: BuilderOp[] = [];
-  for (const root of stale) {
-    // `update` addresses a node by id and refuses one the document holds
-    // twice, because it could not say which node the patch was meant for.
-    // Asked only of the roots actually addressed: a duplicate elsewhere in the
-    // page is not something these ops would meet, and refusing on it would
-    // block a save the apply would have accepted.
-    if (countById(document.nodes, root.id) > 1) {
-      return { problem: "duplicate-destination" };
-    }
-    ops.push({
+  // Of the roots actually addressed, which for this planner is the stale ones:
+  // a duplicate elsewhere in the page is not something these ops would meet.
+  const ambiguous = ambiguousRootRefusal(document, stale);
+  if (ambiguous !== undefined) return ambiguous;
+
+  return {
+    ops: stale.map(root => ({
       kind: "update",
       id: root.id,
       patch: { origin: { from: "pattern", id: patternId, digest } },
-    });
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Components — a selection saved as a LINKED definition
+// ---------------------------------------------------------------------------
+
+/**
+ * One property of the saved definition an instance will be allowed to override.
+ *
+ * Named in the PAGE's vocabulary: `nodeId` is a node id as it stands in the
+ * document being saved from, because that is the only id the surface that
+ * nominated it has ever seen. The save re-mints every one of them, and the
+ * planner re-aims the pointer — see {@link SavedPattern.nodeIds}.
+ *
+ * ## Why the caller nominates these and the planner does not derive them
+ *
+ * Which of a block's props is a headline and which is a spacing knob is a
+ * property of that block's DEFINITION, and the engine cannot read one: a
+ * planner is pure and holds no registry, by ruling, so the vocabulary it would
+ * have to classify by is not reachable from here. The same boundary already
+ * stops this module synthesising an `assets` index and stops the envelope
+ * validator resolving a `propPath` against a schema.
+ *
+ * That is a division of labour rather than a limitation. The surface doing the
+ * nominating has the registry, and it also has the author — and every
+ * comparable tool measured (Webflow, Figma, Framer, Builder.io, WordPress
+ * synced patterns) makes the author confirm each editable field rather than
+ * committing silently. A pre-selection is a suggestion to review; the planner's
+ * job is to say whether the reviewed answer will survive being stored.
+ */
+export interface RequestedProperty {
+  /** The stable slug instances will key their overrides by. */
+  readonly id: string;
+  /** What the inspector will call it. */
+  readonly label: string;
+  /** A node id in the SOURCE document, inside the selection. */
+  readonly nodeId: string;
+  /** Dot path into that node's props, in the binding-path grammar. */
+  readonly propPath: string;
+  readonly type: ExposedPropertyType;
+  /** The choices, for `select` only. */
+  readonly options?: readonly { value: string; label: string }[];
+}
+
+/**
+ * A region of the saved definition an instance will be allowed to fill.
+ *
+ * `nodeId` is a SOURCE document id, on the same terms as
+ * {@link RequestedProperty.nodeId}. No `id` field: the key of
+ * {@link ComponentExposure.slots} is the id, for the reason {@link ExposedSlot}
+ * gives — one spelling makes a disagreement between key and field
+ * unrepresentable rather than merely detectable.
+ */
+export interface RequestedSlot {
+  readonly label: string;
+  readonly nodeId: string;
+  /** Which of that node's slots. */
+  readonly slot: string;
+  /** Block types the slot accepts; unset accepts whatever the container does. */
+  readonly allow?: readonly string[];
+}
+
+/** What the author chose to leave editable on the component being saved. */
+export interface ComponentExposure {
+  readonly properties?: readonly RequestedProperty[];
+  readonly slots?: Readonly<Record<string, RequestedSlot>>;
+}
+
+/**
+ * Save a contiguous run of blocks as a component DEFINITION.
+ *
+ * **The page is not touched**, exactly as {@link planSaveAsPattern} does not
+ * touch it: this fills the library and leaves the original blocks where they
+ * are. Replacing them with an instance is {@link planConvertToComponent}, and
+ * the difference between the two is that one line of ops and nothing else.
+ *
+ * **The tree it stores is byte-for-byte the tree a pattern save would store**
+ * from the same selection — one builder, {@link savedPatternDocument}, for the
+ * reason given there. A component is that document plus an envelope and a
+ * `kind`, not a second way of copying a selection.
+ *
+ * ## The envelope is where the ids stop matching
+ *
+ * `exposed` and `slots` are POINTERS into the tree, and the save re-mints every
+ * node id in it. A pointer copied across unchanged names a pre-copy id the
+ * stored document does not contain — and that definition loads, renders, and
+ * offers the property in the inspector, where editing it writes an override
+ * that resolves to nothing. The failure surfaces on every instance in the site
+ * as "my change did nothing", far from the save that caused it.
+ *
+ * So each pointer is re-aimed through the map the copy returned. A nomination
+ * naming a node OUTSIDE the selection has no entry in that map and is carried
+ * across untouched, which the envelope check then reports for exactly what it
+ * is. That is deliberate: minting a fresh id makes the collision impossible, so
+ * a surviving page id cannot be mistaken for a stored one, and the rule that
+ * says whether a pointer resolves stays in one place instead of two.
+ *
+ * ## What it refuses
+ *
+ * Everything {@link planSaveAsPattern} refuses about the selection, through the
+ * same call — plus everything the definition's own publish gate would refuse
+ * about the envelope, asked as {@link componentEnvelopeIssues} rather than
+ * re-implemented: a pointer at a node that is not there, two exposures sharing
+ * an id, a prop path that is not a path, options on something that is not a
+ * `select` and a `select` without them, a slot the node does not declare, and a
+ * type outside the vocabulary. Strict validation is the publish gate for this
+ * collection, so a definition that fails it is one an author could save and
+ * never publish; refusing here happens while they still have the selection in
+ * front of them.
+ */
+export function planSaveAsComponent<TFields>(
+  document: BlockDocument,
+  selectedIds: readonly string[],
+  target: LibraryTarget<TFields>,
+  exposure: ComponentExposure,
+  nesting: NestingSource,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): PlanResult<TFields> {
+  const saved = plannedSave(document, selectedIds, nesting);
+  if (saved.problem !== undefined) return saved;
+
+  const definition = componentDocument(saved, exposure, limits);
+  if (definition.problem !== undefined) return definition;
+
+  return {
+    create: {
+      collection: target.collection,
+      document: definition.document,
+      fields: target.fields,
+    },
+    pageOps: [],
+  };
+}
+
+/**
+ * Save a run as a component AND replace it on the page with one instance.
+ *
+ * {@link planSaveAsComponent} plus the ops that take the run out and put a
+ * linked instance where it stood. Built here beside it rather than in a second
+ * module, because the two have to agree about what was stored and where it came
+ * from, and a save whose replacement is written somewhere else is a round trip
+ * nothing tests end to end.
+ *
+ * ## The definition's id comes from the caller
+ *
+ * The instance carries the definition's id in its props, so the ops and the row
+ * they point at have to agree — and the only moment they can be made to is
+ * before either is written. A planner cannot mint one: the id format belongs to
+ * the collection the row lands in, which the engine cannot see. So the caller
+ * decides it, the ops name it, and {@link PlannedCreate.id} echoes it back so
+ * the plan is executable without its caller having to remember what it passed.
+ *
+ * A caller that creates the row under a DIFFERENT id has built an instance
+ * pointing at nothing. That is the one failure this shape cannot refuse, and it
+ * is refusable by construction on the other side: the create and the ops are
+ * one unit of work, and the id is an input to both.
+ *
+ * ## Ops, in this order
+ *
+ * Every selected root is removed, then one instance is inserted at the index
+ * the first of them held. The run is contiguous and sorted, so after the
+ * removes that index is where the run began — including when the run ended the
+ * list, where it is an append.
+ *
+ * ## What it refuses that the save alone does not
+ *
+ * The plan IS the dry run, so every refusal these ops would meet is made here:
+ * a locked block on the page, which `remove` refuses for a reason no re-ordering
+ * of the group can satisfy; a selected root the document holds twice, which
+ * `remove` refuses because it could not say which it meant; a container that is
+ * gone or duplicated; and a slot whose own rules will not take a component
+ * instance. The nesting question is asked of the INSTANCE rather than of the
+ * blocks it replaces — they are not the node going in, and a slot that accepted
+ * a heading need not accept a component.
+ */
+export function planConvertToComponent<TFields>(
+  document: BlockDocument,
+  selectedIds: readonly string[],
+  target: LibraryTarget<TFields>,
+  componentId: string,
+  exposure: ComponentExposure,
+  nesting: NestingSource,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): PlanResult<TFields> {
+  // Before anything is built on it, at runtime as well as in the type, for the
+  // reason the save-over checks its target id: this is a published entry point
+  // and the value reaching it comes from a JavaScript caller as often as from a
+  // typed one. An empty id yields an instance that references nothing, and no
+  // later stage looks at it again.
+  if (typeof componentId !== "string" || componentId === "") {
+    return { problem: "invalid-source" };
   }
+
+  const saved = plannedSave(document, selectedIds, nesting);
+  if (saved.problem !== undefined) return saved;
+
+  const definition = componentDocument(saved, exposure, limits);
+  if (definition.problem !== undefined) return definition;
+
+  // A definition holding an instance of ITSELF. The selection can already
+  // contain one — a dangling `def-1` on the page, converted while creating
+  // `def-1` — and the resolver classifies that as a cycle and leaves it
+  // unresolved, so a conversion whose dry run succeeded replaces visible
+  // content with a broken placeholder. Asked through the resolver's own
+  // published index, not a walk of this module's own.
+  if (componentIdsIn(definition.document.nodes).includes(componentId)) {
+    return { problem: "self-reference" };
+  }
+
+  const replaced = replaceOps(document, saved, componentId, nesting, limits);
+  if (replaced.problem !== undefined) return replaced;
+
+  return {
+    create: {
+      collection: target.collection,
+      id: componentId,
+      document: definition.document,
+      fields: target.fields,
+    },
+    pageOps: replaced.ops,
+  };
+}
+
+/** The definition a component save would store, or why it could not. */
+interface SavedComponent {
+  readonly document: ComponentDocument;
+  readonly problem?: undefined;
+  readonly permitted?: undefined;
+  readonly issues?: undefined;
+}
+
+/**
+ * The saved tree, plus the envelope the author nominated, re-aimed and checked.
+ *
+ * ONE implementation, called by both component planners, for the reason
+ * {@link savedPatternDocument} is: save and convert must produce the identical
+ * definition from the identical selection, and two builders that agreed today
+ * would diverge the day one of them moved.
+ *
+ * The envelope is checked on what is STORED rather than on what was nominated.
+ * Only some of a nomination travels — the pointer is re-aimed and the rest is
+ * carried verbatim — so judging the request would answer about a document
+ * nobody stores. The same distinction {@link savedPatternDocument} draws, and
+ * it has caught a defect on each side of it.
+ */
+function componentDocument(
+  saved: PlannedSave,
+  exposure: ComponentExposure,
+  limits: DocumentLimits
+): SavedComponent | PlanRefusal {
+  // The CONTAINER, before either field is read off it. The guards below judge
+  // the fields and their entries; none of them can be reached at all if the
+  // request itself is not a record — `null` throws, and a string or an array
+  // answers `undefined` to both reads and is silently taken for "expose
+  // nothing", which reports success for a request nobody could honour.
+  //
+  // `undefined` is the exception and means exactly that: a caller with nothing
+  // to expose. It is the one value that says so rather than failing to say
+  // anything.
+  if (exposure !== undefined && !isPlainRecord(exposure)) {
+    return { problem: "invalid-exposure" };
+  }
+  const asked: ComponentExposure = exposure ?? {};
+
+  // ONCE, before either pass. Both work from the result, so the id the guard
+  // judges is the id the mapper stores.
+  const read = readExposure(asked);
+
+  // A collection nothing may read is refused HERE rather than handed on. The
+  // envelope check is what names what is wrong with a value this cannot map —
+  // but only for a value it can itself read, and an array with an accessor
+  // index explodes wherever it is first touched.
+  if (unreadable(read)) return { problem: "invalid-exposure" };
+
+  const ambiguous = ambiguousNomination(saved.selected, read);
+  if (ambiguous !== undefined) return ambiguous;
+
+  const definition: ComponentDocument = {
+    ...saved.stored,
+    kind: "component",
+    ...exposedProperties(read, saved.nodeIds),
+    ...exposedSlots(read, saved.nodeIds),
+  };
+
+  // The HOST's limits, not this module's default. The envelope check indexes
+  // the forest under whatever node cap it is given, and a host that raised
+  // `maxNodes` can hold a definition larger than the default — whose later
+  // nodes then fall outside a default-sized index, so its exposures are
+  // reported as pointing at nothing. Strict validation, the gate this predicts,
+  // is given the host's limits; a dry run using its own would refuse a
+  // component the apply would publish, which is the direction nobody can debug.
+  const issues = componentEnvelopeIssues(definition, limits);
+  if (issues.length > 0) return { problem: "invalid-exposure", issues };
+
+  // The stored-document rule, asked of the definition WITH its envelope on.
+  // `savedPatternDocument` asks it of the tree, before there is an envelope —
+  // and the envelope is caller-supplied, so a field this cannot judge can still
+  // make the whole document unstorable: an option carrying a `BigInt` survives
+  // the envelope check, which reads `value` and `label`, and JSON cannot write
+  // it. The plan would report success and the create would fail on save.
+  return definitionRefusal(definition, limits) ?? { document: definition };
+}
+
+/**
+ * The exposure request, read ONCE into plain data.
+ *
+ * Every value this module will use is taken here and never asked for again.
+ * That is the whole point: a request reaching a published entry point may hold
+ * accessors, and until this pass runs nothing about it is data. Reading a field
+ * where it is needed meant reading it several times — and a value that answers
+ * differently on each read makes two passes disagree about the same nomination.
+ *
+ * Measured before this existed: `nodeId` was read three times, twice by the
+ * ambiguity guard and once by the mapper. A getter answering `safe` twice and
+ * then `dup` walked past the guard and stored the ambiguous pointer the guard
+ * exists to refuse — the plan reporting success, the pointer resolving, and
+ * every instance override editing a node the author never chose.
+ *
+ * It is also the one place a bound belongs. Each collection was bounded
+ * wherever it happened to be traversed, which is three chances to add a fourth
+ * traversal and forget.
+ *
+ * SHAPE-PRESERVING, not shape-correcting. A value this cannot read is carried
+ * across exactly as given, because the envelope check is what says what is
+ * wrong with it, in the vocabulary the publish gate already uses. Normalising
+ * here would answer for a document nobody stores.
+ */
+interface ReadExposure {
+  /** The nominated properties. */
+  readonly properties: ReadCollection;
+  /** The nominated slot regions. */
+  readonly slots: ReadMap;
+  /**
+   * Every source node id the read entries name.
+   *
+   * Collected DURING the read rather than by a later pass over the result, and
+   * that is what makes the bound hold: a collection carried verbatim because it
+   * is over-cap or unreadable was never traversed, so it names nothing here and
+   * a second pass cannot go looking. A separate walk would have to re-apply the
+   * same bound, which is a second place to add a traversal and forget.
+   */
+  readonly named: readonly string[];
+}
+
+/**
+ * A collection this module READ, one it is CARRYING, or one that is absent.
+ *
+ * Three states with three names rather than one value standing for all of them,
+ * for the reason {@link PlacementTarget} gives about nullable parents: a
+ * collection carried verbatim — past the cap, or the wrong shape — is still an
+ * array as often as not, so anything reading it as "the entries" walks exactly
+ * what the cap refused. Measured twice while writing this. Only `"read"` holds
+ * entries, so only entries can be mapped, and the mistake stops being
+ * representable rather than merely being fixed.
+ */
+type ReadCollection =
+  | { readonly kind: "absent" }
+  | { readonly kind: "read"; readonly entries: readonly unknown[] }
+  | { readonly kind: "carried"; readonly value: unknown }
+  /**
+   * A collection nothing may read — not this module, and not the validator.
+   *
+   * Distinct from `"carried"`, which hands a value on for the envelope check to
+   * refuse in its own words. That only works for a value the check can READ: an
+   * array whose indices are accessors explodes wherever it is first touched, so
+   * carrying it moves the explosion into validation instead of preventing it.
+   * Measured exactly that way.
+   */
+  | { readonly kind: "unreadable" };
+
+/**
+ * The same three states for the slot MAP, whose keys are the exposure ids.
+ *
+ * Its own type rather than a list's, because the two are not interchangeable
+ * and one type covering both is how the carried case came to be walked as
+ * entries in the first place: a map read successfully is not a list of entries,
+ * and a map carried verbatim must not be read at all.
+ */
+type ReadMap =
+  | { readonly kind: "absent" }
+  | { readonly kind: "read"; readonly slots: Record<string, unknown> }
+  | { readonly kind: "carried"; readonly value: unknown }
+  | { readonly kind: "unreadable" };
+
+function readExposure(exposure: ComponentExposure): ReadExposure {
+  const named: string[] = [];
+  return {
+    properties: readEntries(exposure.properties, one =>
+      readProperty(one, named)
+    ),
+    slots: readSlotMap(exposure.slots, named),
+    named,
+  };
+}
+
+/**
+ * A list of entries, bounded and read by index; anything else verbatim.
+ *
+ * By index because `map` and `Symbol.iterator` are inherited members a caller
+ * may shadow, which throws where this module promises a refusal — on a list
+ * whose entries are all well formed. Bounded because the envelope check refuses
+ * an over-cap list in one step, so reading it first is precisely the work that
+ * cap exists to refuse; the over-cap value is handed on for that refusal.
+ */
+function readEntries(
+  value: unknown,
+  read: (one: unknown) => unknown
+): ReadCollection {
+  if (value === undefined) return { kind: "absent" };
+  if (!Array.isArray(value)) return { kind: "carried", value };
+  // The list is DATA before a single index of it is read. An index can be an
+  // accessor even on a genuine array whose entries are all well formed, so
+  // neither the array check above nor the entry guards below see it — and
+  // reading one runs the caller's code: a throwing getter escapes as a native
+  // error, and one that appends extends `length` underneath the very bound that
+  // is supposed to hold this loop. Carried for the validator to refuse, which
+  // is what happens to every value this cannot read.
+  if (listRefusal(value, "an exposure list") !== undefined) {
+    return { kind: "unreadable" };
+  }
+  if (value.length > MAX_ENVELOPE_ENTRIES) return { kind: "carried", value };
+  const entries: unknown[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    entries.push(read(value[index]));
+  }
+  return { kind: "read", entries };
+}
+
+/** A nested list as the envelope should hold it, read or carried. */
+function nestedValue(collection: ReadCollection): unknown {
+  if (collection.kind === "absent") return undefined;
+  if (collection.kind === "read") return collection.entries;
+  // An unreadable nested list becomes an empty one rather than travelling into
+  // the envelope: it is a list nothing may touch, and the entry holding it is
+  // refused by the caller of this read anyway.
+  return collection.kind === "carried" ? collection.value : [];
+}
+
+/** The slot map, bounded to its own keys; anything else verbatim. */
+function readSlotMap(value: unknown, named: string[]): ReadMap {
+  if (value === undefined) return { kind: "absent" };
+  if (!isPlainRecord(value)) return { kind: "carried", value };
+  const names = boundedOwnKeys(value, MAX_ENVELOPE_ENTRIES);
+  if (names === null) return { kind: "carried", value };
+  const slots: Record<string, unknown> = {};
+  // DEFINED rather than assigned: a stored record may carry an own `__proto__`,
+  // and assigning to it runs the inherited setter instead of making a property.
+  for (const name of names) {
+    defineEntry(slots, name, readSlot(value[name], named));
+  }
+  return { kind: "read", slots };
+}
+
+/** One nominated property, each field taken exactly once. */
+function readProperty(one: unknown, named: string[]): unknown {
+  if (!isPlainRecord(one)) return one;
+  const nodeId = one.nodeId;
+  if (typeof nodeId === "string") named.push(nodeId);
+  const options = one.options;
+  return {
+    id: one.id,
+    label: one.label,
+    nodeId,
+    propPath: one.propPath,
+    type: one.type,
+    ...(options === undefined
+      ? {}
+      : { options: nestedValue(readEntries(options, readOption)) }),
+  };
+}
+
+/** One `select` option, copied so the caller cannot edit the plan afterwards. */
+function readOption(one: unknown): unknown {
+  return isPlainRecord(one) ? { ...one } : one;
+}
+
+/** One nominated slot region, each field taken exactly once. */
+function readSlot(one: unknown, named: string[]): unknown {
+  if (!isPlainRecord(one)) return one;
+  const nodeId = one.nodeId;
+  if (typeof nodeId === "string") named.push(nodeId);
+  const allow = one.allow;
+  return {
+    label: one.label,
+    nodeId,
+    slot: one.slot,
+    ...(allow === undefined
+      ? {}
+      : { allow: nestedValue(readEntries(allow, entry => entry)) }),
+  };
+}
+
+/**
+ * A nomination naming a source id the selection holds TWICE.
+ *
+ * The save re-mints ids one per node, but the map it returns is keyed on the
+ * ORIGINAL id — so two nodes sharing one lose the first mapping to the second,
+ * and a pointer re-aimed through it lands on whichever copy came last. The
+ * stored document is well formed and the envelope check passes, because the
+ * pointer does resolve; it simply resolves to a node the author did not choose,
+ * and every instance override then edits the wrong block.
+ *
+ * Refused rather than resolved, because the nomination is genuinely ambiguous:
+ * two nodes answered to the name the author gave, and nothing here can know
+ * which was meant. The same stance `"duplicate-destination"` takes elsewhere.
+ *
+ * Only the ids actually NOMINATED. A duplicate somewhere else in the selection
+ * is a property of the page, which is saved under forgiving validation and may
+ * legitimately hold one — refusing on it would reject a component whose every
+ * exposure is unambiguous.
+ *
+ * Asked of the READ request, so the id it judges is the id that will be stored.
+ */
+function ambiguousNomination(
+  selected: readonly BlockNode[],
+  read: ReadExposure
+): PlanRefusal | undefined {
+  const roots = [...selected];
+  for (const id of read.named) {
+    if (countById(roots, id) > 1) return { problem: "ambiguous-exposure" };
+  }
+  return undefined;
+}
+
+/** Whether either collection is one nothing may read. */
+function unreadable(read: ReadExposure): boolean {
+  return (
+    read.properties.kind === "unreadable" || read.slots.kind === "unreadable"
+  );
+}
+
+/**
+ * Why the completed definition could not be stored, or `undefined`.
+ *
+ * Two questions the envelope check does not answer, asked of the document WITH
+ * its envelope on.
+ *
+ * Whether it can be stored at all — `savedPatternDocument` asks that of the
+ * tree, before there is an envelope, and the envelope is caller-supplied, so a
+ * field the envelope check does not read can still make the whole document
+ * unwritable.
+ *
+ * And whether it FITS. An exposure only ever makes a document bigger, so a page
+ * inside the caller's caps can become a definition that is not — and being
+ * editable is a different question from being small enough. Measured through
+ * the survey the publish gate uses, so the two cannot come to disagree about
+ * the size of one document.
+ */
+function definitionRefusal(
+  definition: ComponentDocument,
+  limits: DocumentLimits
+): PlanRefusal | undefined {
+  if (documentRefusal(definition) !== undefined) {
+    return { problem: "unusable-document" };
+  }
+  const survey = surveyDocument(definition, limits);
+  if (survey.tooLarge || survey.tooDeep || survey.tooManyNodes) {
+    return { problem: "exceeds-limits" };
+  }
+  return undefined;
+}
+
+/**
+ * The nominated properties, re-aimed at the stored tree.
+ *
+ * Absent rather than an empty array when nothing was nominated, matching what
+ * {@link ComponentDocument.exposed} says absence means. Writing `[]` would
+ * store a field to say what its absence already says, and make two saves of one
+ * selection differ by whether the caller passed a list it had not filled.
+ */
+function exposedProperties(
+  read: ReadExposure,
+  nodeIds: ReadonlyMap<string, string>
+): { exposed?: ExposedProperty[] } {
+  const properties = read.properties;
+  if (properties.kind === "absent" || properties.kind === "unreadable") {
+    return {};
+  }
+  if (properties.kind === "carried") {
+    return { exposed: properties.value as ExposedProperty[] };
+  }
+  if (properties.entries.length === 0) return {};
+  const exposed: ExposedProperty[] = [];
+  for (const one of properties.entries) {
+    exposed.push(aimedProperty(one, nodeIds));
+  }
+  return { exposed };
+}
+
+/** One read property, with its pointer moved onto the stored node. */
+function aimedProperty(
+  one: unknown,
+  nodeIds: ReadonlyMap<string, string>
+): ExposedProperty {
+  if (!isPlainRecord(one)) return one as ExposedProperty;
+  return { ...one, nodeId: storedId(one.nodeId, nodeIds) } as ExposedProperty;
+}
+
+/** The nominated slot regions, re-aimed, on the same terms as the properties. */
+function exposedSlots(
+  read: ReadExposure,
+  nodeIds: ReadonlyMap<string, string>
+): { slots?: Record<string, ExposedSlot> } {
+  const requested = read.slots;
+  if (requested.kind === "absent" || requested.kind === "unreadable") {
+    return {};
+  }
+  if (requested.kind === "carried") {
+    return { slots: requested.value as Record<string, ExposedSlot> };
+  }
+  const names = Object.keys(requested.slots);
+  if (names.length === 0) return {};
+  const slots: Record<string, ExposedSlot> = {};
+  for (const id of names) {
+    defineEntry(slots, id, aimedSlot(requested.slots[id], nodeIds));
+  }
+  return { slots };
+}
+
+/** One read slot, with its pointer moved onto the stored node. */
+function aimedSlot(
+  one: unknown,
+  nodeIds: ReadonlyMap<string, string>
+): ExposedSlot {
+  if (!isPlainRecord(one)) return one as ExposedSlot;
+  return { ...one, nodeId: storedId(one.nodeId, nodeIds) } as ExposedSlot;
+}
+
+/**
+ * A source node id, as the stored document spells it.
+ *
+ * An id with no entry in the map is returned UNCHANGED rather than dropped or
+ * replaced. It names a node outside the selection, and leaving it makes the
+ * envelope check report it as the dangling pointer it is — one rule, asked
+ * once, in the module that owns it. Dropping it would silently discard a
+ * property the author nominated and tell them the save succeeded.
+ *
+ * It cannot collide with a real stored id by accident: the save mints fresh
+ * ones, so a surviving source id is never one of them.
+ */
+function storedId(
+  sourceId: unknown,
+  nodeIds: ReadonlyMap<string, string>
+): unknown {
+  if (typeof sourceId !== "string") return sourceId;
+  return nodeIds.get(sourceId) ?? sourceId;
+}
+
+/**
+ * Take the run off the page and put one instance where it stood.
+ *
+ * Asked of the document as it stands BEFORE the removes, which is what the ops
+ * will meet: the container has to exist and be unambiguous when the group is
+ * applied, and the group is applied to this document.
+ */
+function replaceOps(
+  document: BlockDocument,
+  saved: PlannedSave,
+  componentId: string,
+  nesting: NestingSource,
+  limits: DocumentLimits
+): RestampOps | PlanRefusal {
+  // Everything `applyOp` asks BEFORE it looks at an op — the envelope, then the
+  // whole forest, because it walks every node before applying anything. A
+  // malformed sibling the author never selected refuses the first remove of a
+  // group whose library row has already been written, which is the rollback the
+  // plan/apply split exists to avoid. Asked exactly as {@link restampOps} asks
+  // it, since both planners emit ops against the same document.
+  if (
+    documentRefusal(document) !== undefined ||
+    forestRefusal(document.nodes) !== undefined
+  ) {
+    return { problem: "unusable-document" };
+  }
+
+  const refusal =
+    lockRefusal(saved.selected) ?? removableRefusal(document, saved.selected);
+  if (refusal !== undefined) return refusal;
+
+  const position = replacementPosition(saved.at);
+  if (position.problem !== undefined) return position;
+
+  const instance: BlockNode = {
+    id: newId(),
+    type: COMPONENT_INSTANCE_TYPE,
+    version: 1,
+    props: { componentId },
+  };
+
+  // The insert path's own resolution, rather than a second reading of the same
+  // position: it asks the op layer whether the position names anywhere, finds
+  // the container once, and hands back the parent TYPE the nesting rule needs.
+  const destination = destinationOf(document, position.at);
+  if (destination.problem !== undefined) return destination;
+
+  // Asked of the INSTANCE, not of the blocks it replaces. They are not the node
+  // going in, and a slot that accepted a heading need not accept a component.
+  const placement = placementRefusal(
+    [instance],
+    destination.place.where,
+    nesting
+  );
+  if (placement !== undefined) return placement;
+
+  const ops: BuilderOp[] = [
+    ...saved.selected.map(
+      (root): BuilderOp => ({ kind: "remove", id: root.id })
+    ),
+    { kind: "insert", node: instance, at: position.at },
+  ];
+
+  // The BYTE cap, asked of the apply, because the apply is the only place that
+  // can answer it. `nodeShapeRefusal` says so in as many words: `assertFitsCaps`
+  // measures the document a node is going INTO, so a subtree with no
+  // destination cannot be judged against it. A run replaced by a larger
+  // instance can cross a cap the page was inside, and the plan would be handed
+  // over with its library row already written.
+  //
+  // Applied to a copy rather than re-derived: `applyOps` is pure, and a second
+  // reading of the same rule is one more thing that can come to disagree with
+  // the run it predicts.
+  try {
+    applyOps(document, ops, limits);
+  } catch {
+    return { problem: "exceeds-limits" };
+  }
+
   return { ops };
+}
+
+/**
+ * A selected root this document will not let a `remove` take.
+ *
+ * The op layer's own rule rather than a count of the root's id, and the two are
+ * not the same question: `remove` refuses when ANY id inside the subtree it
+ * takes occurs more than once in the document, because the inverse it records
+ * could not put that subtree back. A root can be unique while a node three
+ * levels down collides with something across the page — and the plan then
+ * succeeds, the library row is written, and the first op throws.
+ */
+function removableRefusal(
+  document: BlockDocument,
+  roots: readonly BlockNode[]
+): PlanRefusal | undefined {
+  for (const root of roots) {
+    if (subtreeRemovalRefusal(document.nodes, root) !== undefined) {
+      return { problem: "duplicate-destination" };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A root the ops are about to ADDRESS that the document holds twice.
+ *
+ * `update` and `remove` both address a node by id and both refuse one the
+ * document holds twice, because neither could say which node was meant — and a
+ * selection can be built against a document nothing validated.
+ *
+ * Takes the roots rather than reading the selection, because the two planners
+ * address different subsets of it and the rule is about what is ADDRESSED. A
+ * save-over touches only the roots whose provenance it repairs; a convert
+ * removes every one of them. Asking about the whole selection would refuse a
+ * save-over the apply would have accepted, on a duplicate its ops never reach.
+ *
+ * The destination side of the same question is {@link destinationOf}, which
+ * asks it about a container.
+ */
+function ambiguousRootRefusal(
+  document: BlockDocument,
+  roots: readonly BlockNode[]
+): PlanRefusal | undefined {
+  for (const root of roots) {
+    if (countById(document.nodes, root.id) > 1) {
+      return { problem: "duplicate-destination" };
+    }
+  }
+  return undefined;
+}
+
+/** Where the replacement goes, or why the run names nowhere to put it. */
+interface ReplacementPosition {
+  readonly at: OpPosition;
+  readonly problem?: undefined;
+  readonly permitted?: undefined;
+  readonly issues?: undefined;
+}
+
+/**
+ * The run's own place, as the position an op would put something back at.
+ *
+ * The narrowing {@link RunPlacement} deliberately does not do, in the one place
+ * that has to commit to an answer. `contiguousRun` sets the two container
+ * fields together or leaves both, so a parent named without its slot is a shape
+ * it does not emit — but the fields are independently optional in its result,
+ * and guessing which half to believe would either move a block to the top level
+ * or address a slot nobody named. Refused as what it is instead, through the
+ * cause `applyOp` would give the position it cannot be built into.
+ */
+function replacementPosition(
+  at: RunPlacement
+): ReplacementPosition | PlanRefusal {
+  if (at.parentId === undefined) return { at: { index: at.index } };
+  if (at.slot === undefined) return { problem: "invalid-position" };
+  return { at: { parentId: at.parentId, slot: at.slot, index: at.index } };
 }
 
 /**
