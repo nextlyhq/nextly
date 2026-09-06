@@ -812,6 +812,52 @@ describe("which DOM ids an insert steers around", () => {
     expect(placed[0].cssId).not.toBe("hero");
   });
 
+  it("does not rename an id inside a GATED subtree of the pattern", () => {
+    // The pattern's `hero` sits on a node the renderer prunes, so it puts
+    // nothing on the page — and a visible sibling's `#hero` was therefore
+    // aiming at the DESTINATION's hero. Renaming the hidden one and following
+    // every reference to it leaves that link on an id nothing owns, which is
+    // strictly worse than before the copy.
+    const plan = planInsertPattern(
+      page([node("d", { cssId: "hero" })]),
+      pattern([
+        node("g", { visibility: gated, cssId: "hero" }),
+        node("v", { props: { href: "#hero" } }),
+      ]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(2);
+    expect(placed[0].cssId).toBe("hero");
+    expect((placed[1].props as { href?: string }).href).toBe("#hero");
+  });
+
+  it("DOES rename a visible one, and follows the reference", () => {
+    // The control. "Never rename anything" satisfies the test above and puts
+    // two elements answering to one id on the page.
+    const plan = planInsertPattern(
+      page([node("d", { cssId: "hero" })]),
+      pattern([
+        node("g", { cssId: "hero" }),
+        node("v", { props: { href: "#hero" } }),
+      ]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed[0].cssId).not.toBe("hero");
+    expect((placed[1].props as { href?: string }).href).toBe(
+      `#${placed[0].cssId}`
+    );
+  });
+
   it("does not mint against ids the document target is about to DELETE", () => {
     // The `"document"` target replaces the root forest, so the page's own ids
     // are not ids the copy lands among. Steering around them would rename a

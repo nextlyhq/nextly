@@ -89,6 +89,7 @@ import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
 import { isUsableSlotName } from "./registry";
 import { defineEntry, ownEntry } from "./safe-record";
+import { isConditionGated } from "./visibility";
 
 /** Stable unique node id. `crypto.randomUUID` exists in Node ≥ 20 and browsers. */
 export function newId(): string {
@@ -1176,8 +1177,13 @@ export function reidForestWithMap(
   const nodeIds = new Map<string, string>();
   const domIds = new Map<string, string>();
 
+  // A node the renderer prunes puts NO id on the page, so none of its ids may
+  // be rewritten: renaming one and following every reference to it leaves a
+  // visible sibling's `#hero` pointing at a minted id nothing owns, where
+  // before it reached the destination's own `hero`.
+  const hidden = hiddenSubtreeNodes(nodes);
   const rebuilt = mapForest(nodes, original =>
-    reidOneKeepingReferences(original, nodeIds, domIds, domIdPolicy)
+    reidOneKeepingReferences(original, nodeIds, domIds, domIdPolicy, hidden)
   );
   // A SECOND pass, because a node may reference an id defined on a node the
   // first had not reached yet. Without it a copied `aria-labelledby` points at
@@ -1257,7 +1263,8 @@ function reidOneKeepingReferences(
   node: BlockNode,
   nodeIds: Map<string, string>,
   domIds: Map<string, string>,
-  domIdPolicy: DomIdPolicy
+  domIdPolicy: DomIdPolicy,
+  hidden: ReadonlySet<BlockNode>
 ): BlockNode {
   const { slots, ...own } = node;
   const copy: BlockNode = { ...structuredClone(own), id: newId() };
@@ -1288,7 +1295,7 @@ function reidOneKeepingReferences(
   // at all. Both spellings move together when they carry the same value, since
   // the memo maps one original to one replacement — so the node still spells a
   // single id afterwards.
-  const rendered = renderedDomId(node);
+  const rendered = hidden.has(node) ? undefined : renderedDomId(node);
   const moves = (value: string): boolean =>
     value === rendered &&
     (domIdPolicy === "remint" ||
@@ -1434,6 +1441,62 @@ export function remapIdReferences(
  * The COPY policy is shared; the id policy is not, because these ids are
  * derived and `reidSubtree`'s are random.
  */
+/**
+ * Every node inside a subtree the renderer will prune, by identity.
+ *
+ * Gating is INHERITED: `pruneHiddenNodes` drops a gated node with everything
+ * under it, so an ungated child of a gated parent does not reach the page
+ * either. Asking `isConditionGated` of each node alone answers about that child
+ * and gets it wrong.
+ *
+ * Shared, because two different questions need the same answer and got it
+ * separately once already — which DOM ids a document has in use, and which of a
+ * copy's ids may be rewritten. When those disagree, a copy renames an id nobody
+ * renders and every reference to it follows the rename to nothing.
+ *
+ * Keyed on identity rather than on `id`, because a malformed document can spell
+ * one id on two nodes and this is asked of the objects being walked.
+ */
+export function hiddenSubtreeNodes(
+  nodes: readonly BlockNode[]
+): ReadonlySet<BlockNode> {
+  const hidden = new Set<BlockNode>();
+  const seen = new Map<BlockNode, boolean>();
+  walkNodes([...nodes], (node, parent) => {
+    const inherited = parent !== undefined && seen.get(parent) === true;
+    const gated = inherited || isConditionGated(node);
+    seen.set(node, gated);
+    if (gated) hidden.add(node);
+  });
+  return hidden;
+}
+
+/**
+ * The original a minted DOM id was derived from, or `undefined`.
+ *
+ * The exact inverse of {@link mintDomId}, and it exists because the mint is
+ * reversible: the suffix comes from the copy's OWN node id, so a node carrying
+ * both tells you what it was called before. Nothing has to be stored for it.
+ *
+ * It is needed on the way back. A pattern placed beside a page that already
+ * renders its id is legitimately renamed — that is the collision the rename is
+ * for — but saving that copy back over the pattern would write the renamed
+ * value into the library, moving the pattern's content fingerprint and
+ * reporting every OTHER copy stale for an edit the author never made.
+ *
+ * A false positive needs an author to have typed an id ending in the first
+ * eight characters of that very node's id, which is the same coincidence the
+ * minting retry is bounded against and is not worth storing a map to avoid.
+ */
+export function unmintDomId(value: string, nodeId: string): string | undefined {
+  const suffix = `-${nodeId.replace(/-/g, "").slice(0, 8)}`;
+  if (!value.endsWith(suffix)) return undefined;
+  const original = value.slice(0, -suffix.length);
+  // An empty original is not one: `mintDomId` is only ever handed a non-empty
+  // id, so a value that is nothing but the suffix was authored that way.
+  return original === "" ? undefined : original;
+}
+
 export function mintDomId(original: string, newNodeId: string): string {
   return `${original}-${newNodeId.replace(/-/g, "").slice(0, 8)}`;
 }

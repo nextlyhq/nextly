@@ -43,9 +43,17 @@ import {
   type OpPosition,
 } from "./ops";
 import { patternDigest } from "./pattern-digest";
+import { isPlainRecord } from "./plain-record";
+import { defineEntry } from "./safe-record";
 import { contiguousRun, type RunProblem } from "./sibling-run";
-import { findNode, mapForest, reidForestWithMap, walkNodes } from "./tree";
-import { isConditionGated } from "./visibility";
+import {
+  findNode,
+  hiddenSubtreeNodes,
+  mapForest,
+  reidForestWithMap,
+  unmintDomId,
+  walkNodes,
+} from "./tree";
 
 /** A library row a planner asks the caller to create. */
 export interface PlannedCreate<TFields> {
@@ -402,7 +410,11 @@ function savedPatternDocument(
   const stored: BlockDocument = {
     formatVersion: document.formatVersion,
     kind: "pattern",
-    nodes: withoutOrigin(reidForestWithMap([...selected], "keep").nodes),
+    // Un-minted BEFORE re-identifying, because the suffix is derived from the
+    // node id the copy carries NOW and re-identifying replaces it.
+    nodes: withoutOrigin(
+      reidForestWithMap(withAuthoredDomIds(selected), "keep").nodes
+    ),
   };
   // Asked of what is STORED, not of the page it came from. Only some of the
   // source envelope travels: `formatVersion` is carried, and a page holding one
@@ -1094,22 +1106,20 @@ function domIdsIn(nodes: BlockNode[]): Set<string> {
  * traversal would have to re-learn what that one knows about a malformed entry
  * and a malformed slot.
  *
- * It does NOT yet exclude a subtree the renderer replaces with a placeholder,
- * which is the third way a stored id fails to render:
- * `finding:pb6-avoid-set-counts-placeholder-node-ids` carries the measurement
- * and the reason — the predicate lives in `blocks-react` and needs the block
- * registry, which no planner is handed.
+ * A third way a stored id fails to render is NOT excluded here: a subtree the
+ * renderer replaces with a placeholder. Deciding that needs the installed
+ * blocks and their versions, and a planner is handed only a nesting lookup —
+ * so an id on a block the page cannot draw still counts as taken, and an
+ * incoming pattern is renamed to avoid it. The cost is one renamed id on a page
+ * that already contains a block it cannot draw.
  */
 function walkRenderedIds(
   nodes: readonly BlockNode[],
   fn: (id: string) => void
 ): void {
-  const gated = new Map<BlockNode, boolean>();
-  walkNodes([...nodes], (node, parent) => {
-    const inherited = parent !== undefined && gated.get(parent) === true;
-    const hidden = inherited || isConditionGated(node);
-    gated.set(node, hidden);
-    if (hidden) return;
+  const hidden = hiddenSubtreeNodes(nodes);
+  walkNodes([...nodes], node => {
+    if (hidden.has(node)) return;
     const id = renderedDomId(node);
     if (id !== undefined) fn(id);
   });
@@ -1198,6 +1208,58 @@ function withoutLocks(roots: readonly BlockNode[]): UnlockedForest {
     return rest;
   });
   return { nodes, lockedIds };
+}
+
+/**
+ * The forest with a collision rename undone.
+ *
+ * Placing a pattern beside a page that already renders one of its ids renames
+ * that id — the collision it exists for. Saving that copy straight back over
+ * the pattern would then write the renamed value into the library, moving the
+ * pattern's fingerprint and reporting every OTHER copy stale for an edit
+ * nobody made. The rename is legitimate; carrying it back is not.
+ *
+ * Reversible without storing anything, because the suffix is derived from the
+ * copy's own node id — see {@link unmintDomId}. Applied to whichever spelling
+ * carries it, so a node that renames through the attribute bag is restored too.
+ *
+ * It only ever removes a suffix a copy of THIS node could have been given, so
+ * an id an author typed is left alone unless they happened to type one ending
+ * in the first eight characters of that very node's id.
+ */
+function withAuthoredDomIds(roots: readonly BlockNode[]): BlockNode[] {
+  return mapForest([...roots], node => {
+    const restoredCss =
+      typeof node.cssId === "string" && node.cssId !== ""
+        ? unmintDomId(node.cssId, node.id)
+        : undefined;
+    const attributes = restoredAttributeIds(node);
+    if (restoredCss === undefined && attributes === undefined) return node;
+    return {
+      ...node,
+      ...(restoredCss === undefined ? {} : { cssId: restoredCss }),
+      ...(attributes === undefined ? {} : { attributes }),
+    };
+  });
+}
+
+/** The attribute bag with a minted `id` restored, or `undefined` if unchanged. */
+function restoredAttributeIds(
+  node: BlockNode
+): Record<string, string> | undefined {
+  const attributes: unknown = node.attributes;
+  if (!isPlainRecord(attributes)) return undefined;
+  let changed = false;
+  const next: Record<string, string> = {};
+  for (const [name, value] of Object.entries(attributes)) {
+    const restored =
+      name.toLowerCase() === "id" && typeof value === "string" && value !== ""
+        ? unmintDomId(value, node.id)
+        : undefined;
+    if (restored !== undefined) changed = true;
+    defineEntry(next, name, restored ?? (value as string));
+  }
+  return changed ? next : undefined;
 }
 
 /**

@@ -132,6 +132,15 @@ export {
   // apply it — pattern insert and component composition — and a page may hold
   // the output of both, so a second spelling would put two ids on one target.
   mintDomId,
+  // The inverse of the mint, which is possible because the suffix comes from
+  // the copy's own node id. A save reads it to undo a rename an insert made to
+  // avoid a collision, so the library keeps the id its author typed.
+  unmintDomId,
+  // Which nodes the renderer prunes, inherited down the subtree. Published
+  // because "is this id actually on the page" is asked by the planners, the
+  // copier and the editor's attribute panel, and three readings of it is three
+  // ways to disagree.
+  hiddenSubtreeNodes,
   // And the other half of it: an id that MOVED leaves every reference to it
   // pointing at nothing, and `aria-labelledby` resolving to nothing is an
   // element losing its accessible name in silence. Published as data and as a

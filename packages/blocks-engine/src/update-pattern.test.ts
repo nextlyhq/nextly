@@ -863,6 +863,58 @@ describe("save → insert → save-over, through applyOps", () => {
     expect(plan.update?.document.nodes[0].cssId).toBe("hero");
   });
 
+  it("restores an id the insert renamed to avoid a real collision", () => {
+    // The rename is correct — the page already rendered `hero` — but carrying
+    // it back into the library would move the pattern's fingerprint and report
+    // every OTHER copy stale for an edit nobody made.
+    const stored = seed(page([node("a", { cssId: "hero" })]), ["a"]).stored;
+    const destination = page([node("d", { cssId: "hero" })]);
+    const insert = planned(
+      planInsertPattern(destination, stored, { index: 1 }, anyParent)
+    );
+    const placed = applyOps(destination, insert.pageOps).document;
+    const copy = placed.nodes[1];
+
+    expect(copy.cssId).not.toBe("hero");
+
+    const over = planUpdatePatternFromSelection(
+      placed,
+      [copy.id],
+      target,
+      anyParent
+    );
+
+    expect(over.update?.document.nodes[0].cssId).toBe("hero");
+    expect(patternDigest(over.update?.document.nodes ?? [])).toBe(
+      patternDigest(stored.document.nodes)
+    );
+  });
+
+  it("leaves an id the author renamed by hand", () => {
+    // The control, and the reason this undoes a MINT rather than any suffix:
+    // an author who renames a block's id means it, and only a suffix derived
+    // from that node's OWN id could have come from a copy.
+    //
+    // Both ids here are hyphenated on purpose. A rule that stripped whatever
+    // followed the last hyphen would leave `hero` for the second one and pass
+    // a test using an unhyphenated name — which is what an earlier version of
+    // this control did, and it could not fail.
+    const placed = page([
+      node("n1", { cssId: "banner" }),
+      node("n2", { cssId: "hero-banner" }),
+    ]);
+
+    const over = planUpdatePatternFromSelection(
+      placed,
+      ["n1", "n2"],
+      target,
+      anyParent
+    );
+
+    expect(over.update?.document.nodes[0].cssId).toBe("banner");
+    expect(over.update?.document.nodes[1].cssId).toBe("hero-banner");
+  });
+
   it("does not grow the authored id, however many cycles it goes round", () => {
     // It grew by nine characters per cycle before: `hero`, `hero-3ee4a0d4`,
     // `hero-3ee4a0d4-fb48e67c`, with no bound. Run over four cycles rather
