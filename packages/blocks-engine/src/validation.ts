@@ -1757,6 +1757,54 @@ function validateComponentEnvelope(
 }
 
 /**
+ * The issues a component definition's ENVELOPE would be refused for, alone.
+ *
+ * The same walk {@link validateDocument} runs for a `kind: "component"`
+ * document, published so a planner can ask it before it proposes storing one.
+ *
+ * Narrow deliberately, and the narrowness is what makes it reachable from a
+ * planner at all. Full validation needs a breakpoint set, and a planner has
+ * none: breakpoints are the host's configuration and a plan is pure. The
+ * envelope rules need none of it — they resolve pointers against the
+ * document's own forest and nothing else, which is why this question can be
+ * asked in isolation where the style and class ones cannot.
+ *
+ * The alternative is a planner that re-implements "does this pointer resolve",
+ * and one rule spelled twice is the failure this package keeps paying for: the
+ * two readings agree until one moves, and the one that moves is the one nobody
+ * is looking at. A dry run that disagrees with the gate it predicts is worse
+ * than no dry run, because it is believed.
+ *
+ * Every issue it can return is an `error` in both modes — a dangling pointer
+ * is a broken reference to this document's own tree rather than a value a
+ * future build understands — so a caller may read a non-empty result as a
+ * refusal without inspecting severities.
+ *
+ * Empty for a document that is not a component, matching where the per-kind
+ * rules run: a pattern has no envelope to be wrong about, and answering
+ * otherwise would make "no issues" mean two different things.
+ *
+ * The node array is read defensively because this is a published entry point
+ * and the value reaching it comes from a stored row as often as from a typed
+ * caller. A corrupt forest is reported by the main walk; refusing to index it
+ * here would throw where this module promises to answer.
+ */
+export function componentEnvelopeIssues(
+  doc: BlockDocument,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): ValidationIssue[] {
+  if (doc.kind !== "component") return [];
+  const issues: ValidationIssue[] = [];
+  validateComponentEnvelope(
+    doc as unknown as Record<string, unknown>,
+    Array.isArray(doc.nodes) ? doc.nodes : [],
+    limits.maxNodes,
+    issues
+  );
+  return issues;
+}
+
+/**
  * The `exposed` list, returning the ids it declared.
  *
  * The ids are the return value because the variants below address them: a

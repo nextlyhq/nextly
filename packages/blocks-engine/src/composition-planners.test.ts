@@ -11,9 +11,17 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { planInsertPattern, planSaveAsPattern } from "./composition-planners";
-import { DOCUMENT_FORMAT_VERSION } from "./document";
-import type { BlockDocument, BlockNode } from "./document";
+import {
+  planConvertToComponent,
+  planInsertPattern,
+  planSaveAsComponent,
+  planSaveAsPattern,
+} from "./composition-planners";
+import type { PlanResult, PlannedCreate } from "./composition-planners";
+import { COMPONENT_INSTANCE_TYPE, DOCUMENT_FORMAT_VERSION } from "./document";
+import type { BlockDocument, BlockNode, ComponentDocument } from "./document";
+import { applyOps } from "./ops";
+import type { BuilderOp } from "./ops";
 import { walkNodes } from "./tree";
 
 function node(
@@ -437,5 +445,470 @@ describe("what it refuses, and why", () => {
       planSaveAsPattern(page([node("a")]), ["a", "ghost"], target, anyParent)
         .problem
     ).toBe("unknown");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Components
+// ---------------------------------------------------------------------------
+
+const componentTarget = {
+  collection: "components",
+  fields: { title: "Card", slug: "card" },
+};
+
+/**
+ * The row a plan proposes, or a failure naming the cause.
+ *
+ * A helper rather than a non-null assertion, so a test that stops planning for
+ * a reason nobody predicted says which reason instead of reporting that
+ * `undefined` has no `document`.
+ */
+function created<T>(plan: PlanResult<T>): PlannedCreate<T> {
+  if (plan.create === undefined) {
+    throw new Error(`no plan: ${String(plan.problem)}`);
+  }
+  return plan.create;
+}
+
+/** The definition a component plan would store. */
+function definition<T>(plan: PlanResult<T>): ComponentDocument {
+  return created(plan).document as ComponentDocument;
+}
+
+/** The page ops a plan proposes, or a failure naming the cause. */
+function pageOps<T>(plan: PlanResult<T>): readonly BuilderOp[] {
+  if (plan.pageOps === undefined) {
+    throw new Error(`no plan: ${String(plan.problem)}`);
+  }
+  return plan.pageOps;
+}
+
+/**
+ * A forest with every id replaced by its position in the walk.
+ *
+ * Two saves of one selection mint different node ids by design, so comparing
+ * them byte-for-byte would fail on the one difference that is supposed to be
+ * there. Normalising the ids leaves every other difference visible, which is
+ * what "the same document" has to mean here.
+ */
+function shapeOf(nodes: BlockNode[]): string {
+  const order = new Map<string, number>();
+  walkNodes(nodes, n => order.set(n.id, order.size));
+  return JSON.stringify(nodes, (key, value) =>
+    key === "id" && typeof value === "string"
+      ? (order.get(value) ?? value)
+      : value
+  );
+}
+
+/** A page whose selected card holds a headline the author might expose. */
+function cardPage(): BlockDocument {
+  return page([
+    node("outside", { props: { mark: "outside", text: "elsewhere" } }),
+    node(
+      "card",
+      { props: { mark: "card" } },
+      {
+        children: [
+          node("headline", { props: { mark: "headline", text: "Hi" } }),
+        ],
+      }
+    ),
+  ]);
+}
+
+/** One nominated text property, pointing wherever the test says. */
+function exposeText(nodeId: string, extra: Record<string, unknown> = {}) {
+  return {
+    properties: [
+      {
+        id: "p1",
+        label: "Headline",
+        nodeId,
+        propPath: "text",
+        type: "text" as const,
+        ...extra,
+      },
+    ],
+  };
+}
+
+describe("an exposed pointer follows the copy", () => {
+  it("re-aims nodeId at the STORED node, and that node is there", () => {
+    const stored = definition(
+      planSaveAsComponent(
+        cardPage(),
+        ["card"],
+        componentTarget,
+        exposeText("headline"),
+        anyParent
+      )
+    );
+
+    const headline = marked(stored.nodes, "headline");
+    expect(stored.exposed?.[0]?.nodeId).toBe(headline.id);
+    // The pointer resolving is the property that matters; the id merely
+    // differing from the page's would also be true of a random string.
+    expect(idsIn(stored.nodes)).toContain(stored.exposed?.[0]?.nodeId);
+    expect(stored.exposed?.[0]?.nodeId).not.toBe("headline");
+  });
+
+  it("re-aims a slot region the same way", () => {
+    const stored = definition(
+      planSaveAsComponent(
+        cardPage(),
+        ["card"],
+        componentTarget,
+        {
+          slots: { body: { label: "Body", nodeId: "card", slot: "children" } },
+        },
+        anyParent
+      )
+    );
+
+    expect(stored.slots?.body?.nodeId).toBe(marked(stored.nodes, "card").id);
+    expect(idsIn(stored.nodes)).toContain(stored.slots?.body?.nodeId);
+  });
+
+  it("refuses a nomination naming a node OUTSIDE the selection", () => {
+    const plan = planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      exposeText("outside"),
+      anyParent
+    );
+
+    expect(plan.problem).toBe("invalid-exposure");
+    expect(plan.issues?.map(one => one.code)).toContain("exposed-node-missing");
+    expect(plan.issues?.[0]?.path).toContain("/exposed/0");
+  });
+
+  it("does not alias the options array it was handed", () => {
+    const options = [{ value: "a", label: "A" }];
+    const stored = definition(
+      planSaveAsComponent(
+        cardPage(),
+        ["card"],
+        componentTarget,
+        exposeText("headline", { type: "select", options }),
+        anyParent
+      )
+    );
+
+    options.push({ value: "b", label: "B" });
+    expect(stored.exposed?.[0]?.options).toHaveLength(1);
+  });
+});
+
+describe("the envelope is judged by the rule that will publish it", () => {
+  const refusalFor = (properties: unknown[]) =>
+    planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      { properties } as never,
+      anyParent
+    );
+
+  it("refuses two exposures sharing one id", () => {
+    const one = exposeText("headline").properties[0];
+    const plan = refusalFor([one, { ...one, label: "Second" }]);
+    expect(plan.problem).toBe("invalid-exposure");
+    expect(plan.issues?.map(i => i.code)).toContain("exposed-duplicate-id");
+  });
+
+  it("refuses options on something that is not a select", () => {
+    const plan = refusalFor([
+      {
+        ...exposeText("headline").properties[0],
+        options: [{ value: "a", label: "A" }],
+      },
+    ]);
+    expect(plan.issues?.map(i => i.code)).toContain("exposed-options-invalid");
+  });
+
+  it("refuses a select with no options", () => {
+    const plan = refusalFor([
+      { ...exposeText("headline").properties[0], type: "select" },
+    ]);
+    expect(plan.issues?.map(i => i.code)).toContain("exposed-options-invalid");
+  });
+
+  it("refuses a type outside the vocabulary", () => {
+    const plan = refusalFor([
+      { ...exposeText("headline").properties[0], type: "colour" },
+    ]);
+    expect(plan.issues?.map(i => i.code)).toContain("exposed-property-invalid");
+  });
+
+  it("refuses a prop path that is not a path", () => {
+    const plan = refusalFor([
+      { ...exposeText("headline").properties[0], propPath: "text..deep" },
+    ]);
+    expect(plan.issues?.map(i => i.code)).toContain("exposed-path-invalid");
+  });
+
+  it("refuses a slot the node it points at does not declare", () => {
+    const plan = planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      { slots: { body: { label: "Body", nodeId: "card", slot: "footer" } } },
+      anyParent
+    );
+    expect(plan.issues?.map(i => i.code)).toContain("exposed-slot-missing");
+  });
+});
+
+describe("what a saved component is", () => {
+  it("is the tree a pattern save stores, under a component kind", () => {
+    const doc = cardPage();
+    const asPattern = created(
+      planSaveAsPattern(doc, ["card"], target, anyParent)
+    ).document;
+    const asComponent = definition(
+      planSaveAsComponent(doc, ["card"], componentTarget, {}, anyParent)
+    );
+
+    expect(shapeOf(asComponent.nodes)).toBe(shapeOf(asPattern.nodes));
+    expect(asComponent.kind).toBe("component");
+    expect(asComponent.formatVersion).toBe(doc.formatVersion);
+  });
+
+  it("declares no exposed field when nothing was nominated", () => {
+    const stored = definition(
+      planSaveAsComponent(cardPage(), ["card"], componentTarget, {}, anyParent)
+    );
+    // Absence is what the contract already reads as "exposes none", so writing
+    // an empty array would make two saves of one selection differ by whether
+    // the caller passed a list it had not filled.
+    expect("exposed" in stored).toBe(false);
+    expect("slots" in stored).toBe(false);
+  });
+
+  it("declares no exposed field for an EMPTY nomination either", () => {
+    // The separate case, because absent and empty arrive by different routes: a
+    // surface that builds the list from the author's ticks passes `[]` when
+    // they tick nothing, and a stored `[]` would make that save differ from one
+    // where the surface passed nothing at all.
+    const stored = definition(
+      planSaveAsComponent(
+        cardPage(),
+        ["card"],
+        componentTarget,
+        { properties: [], slots: {} },
+        anyParent
+      )
+    );
+    expect("exposed" in stored).toBe(false);
+    expect("slots" in stored).toBe(false);
+  });
+
+  it("leaves the page alone", () => {
+    expect(
+      planSaveAsComponent(cardPage(), ["card"], componentTarget, {}, anyParent)
+        .pageOps
+    ).toEqual([]);
+  });
+
+  it("refuses what a pattern save refuses about the selection", () => {
+    const doc = page([node("a"), node("b"), node("c")]);
+    expect(
+      planSaveAsComponent(doc, ["a", "c"], componentTarget, {}, anyParent)
+        .problem
+    ).toBe("gap");
+  });
+});
+
+describe("converting a run into an instance", () => {
+  it("removes the run and puts one instance where it stood", () => {
+    const doc = page([node("a"), node("b"), node("c")]);
+    const plan = planConvertToComponent(
+      doc,
+      ["a", "b"],
+      componentTarget,
+      "def-1",
+      {},
+      anyParent
+    );
+
+    expect(pageOps(plan).map(op => op.kind)).toEqual([
+      "remove",
+      "remove",
+      "insert",
+    ]);
+
+    // The plan IS the dry run, so the ops it proposes have to apply.
+    const after = applyOps(doc, pageOps(plan)).document;
+    expect(after.nodes.map(n => n.type)).toEqual([
+      COMPONENT_INSTANCE_TYPE,
+      "core/box",
+    ]);
+    expect(after.nodes[0]?.props?.componentId).toBe("def-1");
+  });
+
+  it("puts the instance back inside the container the run sat in", () => {
+    const doc = page([
+      node("wrap", {}, { children: [node("a"), node("b"), node("c")] }),
+    ]);
+    const plan = planConvertToComponent(
+      doc,
+      ["b"],
+      componentTarget,
+      "def-1",
+      {},
+      anyParent
+    );
+
+    const after = applyOps(doc, pageOps(plan)).document;
+    expect(after.nodes[0]?.slots?.children.map(n => n.type)).toEqual([
+      "core/box",
+      COMPONENT_INSTANCE_TYPE,
+      "core/box",
+    ]);
+  });
+
+  it("appends when the run ended the list", () => {
+    const doc = page([node("a"), node("b"), node("c")]);
+    const plan = planConvertToComponent(
+      doc,
+      ["b", "c"],
+      componentTarget,
+      "def-1",
+      {},
+      anyParent
+    );
+
+    const after = applyOps(doc, pageOps(plan)).document;
+    expect(after.nodes.map(n => n.type)).toEqual([
+      "core/box",
+      COMPONENT_INSTANCE_TYPE,
+    ]);
+  });
+
+  it("stores the definition a plain component save would store", () => {
+    const doc = cardPage();
+    const saved = definition(
+      planSaveAsComponent(
+        doc,
+        ["card"],
+        componentTarget,
+        exposeText("headline"),
+        anyParent
+      )
+    );
+    const converted = definition(
+      planConvertToComponent(
+        doc,
+        ["card"],
+        componentTarget,
+        "def-1",
+        exposeText("headline"),
+        anyParent
+      )
+    );
+
+    expect(shapeOf(converted.nodes)).toBe(shapeOf(saved.nodes));
+    expect(converted.exposed?.[0]?.nodeId).toBe(
+      marked(converted.nodes, "headline").id
+    );
+  });
+
+  it("names the row the instance points at", () => {
+    const plan = planConvertToComponent(
+      page([node("a")]),
+      ["a"],
+      componentTarget,
+      "def-1",
+      {},
+      anyParent
+    );
+    expect(created(plan).id).toBe("def-1");
+  });
+
+  it("refuses a component id that names nothing", () => {
+    const doc = page([node("a")]);
+    expect(
+      planConvertToComponent(doc, ["a"], componentTarget, "", {}, anyParent)
+        .problem
+    ).toBe("invalid-source");
+    expect(
+      planConvertToComponent(
+        doc,
+        ["a"],
+        componentTarget,
+        undefined as unknown as string,
+        {},
+        anyParent
+      ).problem
+    ).toBe("invalid-source");
+  });
+
+  it("refuses a selected root the document holds twice", () => {
+    // `remove` addresses by id and could not say which node it meant. The
+    // duplicate is reachable from a page nothing validated, and it sits where
+    // the selection does NOT: a nested copy of a top-level id, which
+    // `contiguousRun` resolves to one node without complaint.
+    const doc = page([
+      node("dup"),
+      node("other", {}, { children: [node("dup")] }),
+    ]);
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["dup"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent
+      ).problem
+    ).toBe("duplicate-destination");
+    expect(() => applyOps(doc, [{ kind: "remove", id: "dup" }])).toThrow();
+  });
+
+  it("refuses a locked block, which is what the remove would do", () => {
+    const doc = page([node("a", { locked: true })]);
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["a"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent
+      ).problem
+    ).toBe("destination-locked");
+    // The other direction of the dry-run contract: the refusal is the apply's
+    // own, not a rule this module invented that the apply does not share.
+    expect(() => applyOps(doc, [{ kind: "remove", id: "a" }])).toThrow();
+  });
+
+  it("asks the nesting rule about the INSTANCE, not about what it replaces", () => {
+    const instanceNeedsSection = {
+      parentsOf: (type: string) =>
+        type === COMPONENT_INSTANCE_TYPE ? ["core/section"] : undefined,
+    };
+    const doc = page([node("a")]);
+
+    // The run itself is unrestricted, so the SAVE half is happy.
+    expect(
+      planSaveAsComponent(doc, ["a"], componentTarget, {}, instanceNeedsSection)
+        .problem
+    ).toBeUndefined();
+    // The instance going back is not.
+    const plan = planConvertToComponent(
+      doc,
+      ["a"],
+      componentTarget,
+      "def-1",
+      {},
+      instanceNeedsSection
+    );
+    expect(plan.problem).toBe("restricted-at-root");
+    expect(plan.permitted).toEqual(["core/section"]);
   });
 });

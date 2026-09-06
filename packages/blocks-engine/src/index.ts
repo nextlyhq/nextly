@@ -187,22 +187,27 @@ export type {
 // and the real run are the same function rather than two that agree for now.
 export { patternDigest } from "./pattern-digest";
 export {
+  planConvertToComponent,
   planInsertPattern,
+  planSaveAsComponent,
   planSaveAsPattern,
   planUpdatePatternFromSelection,
 } from "./composition-planners";
 export type {
+  ComponentExposure,
   CompositionPlan,
   InsertTarget,
   StoredPattern,
   PlacementTarget,
-  PatternTarget,
+  LibraryTarget,
   PlanProblem,
   PlanRefusal,
   PlanResult,
   PlannedCreate,
   PlannedUpdate,
   PatternUpdateTarget,
+  RequestedProperty,
+  RequestedSlot,
 } from "./composition-planners";
 
 // The node selection every reader of a stored document shares. Public because
@@ -274,6 +279,7 @@ export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
 // contract that then drifts from the first.
 export type { ByteMeasurement } from "./measure-bytes";
 export {
+  componentEnvelopeIssues,
   validate,
   validateDocument,
   ISSUE_CODES,
