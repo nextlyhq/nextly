@@ -488,17 +488,6 @@ export function planUpdatePatternFromSelection(
   // none. Everything `applyOp` checks before it looks at an op — the
   // envelope's keys, its values, its format and its kind — is a way a plan can
   // be built against a document that cannot be edited at all.
-  if (
-    documentRefusal(document) !== undefined ||
-    // And the forest, not only the envelope: `applyOp` walks every node before
-    // it applies anything, so a malformed sibling the author did not select
-    // refuses the update this plan promises — after the library row has been
-    // written, which is the order that cannot be taken back.
-    forestRefusal(document.nodes) !== undefined
-  ) {
-    return { problem: "unusable-document" };
-  }
-
   const saved = plannedSave(document, selectedIds, nesting);
   if (saved.problem !== undefined) return saved;
 
@@ -540,11 +529,33 @@ function restampOps(
   patternId: string,
   digest: string
 ): RestampOps | PlanRefusal {
-  const ops: BuilderOp[] = [];
-  for (const root of selected) {
+  // Decided WITHOUT reading the document, so a plan that turns out to edit
+  // nothing never has to be right about a page it will not touch.
+  const stale = selected.filter(root => {
     const origin = root.origin;
-    if (origin === undefined || origin.from !== "pattern") continue;
-    if (origin.id !== patternId || origin.digest === digest) continue;
+    if (origin === undefined || origin.from !== "pattern") return false;
+    return origin.id === patternId && origin.digest !== digest;
+  });
+  // A group with NO ops is not applied: `applyOps` runs no preflight for it,
+  // neither the envelope nor the forest. So the destination has to be editable
+  // only when something is going to be applied to it — and a save-over of a
+  // clean selection still writes its library row on a page holding a malformed
+  // sibling somewhere, which is a save the apply would never have refused.
+  if (stale.length === 0) return { ops: [] };
+
+  // Everything `applyOp` asks before it looks at an op. The envelope, and then
+  // the whole forest, because it walks every node before applying anything —
+  // so a malformed sibling the author never selected refuses the update this
+  // plan promises, after the library row has been written.
+  if (
+    documentRefusal(document) !== undefined ||
+    forestRefusal(document.nodes) !== undefined
+  ) {
+    return { problem: "unusable-document" };
+  }
+
+  const ops: BuilderOp[] = [];
+  for (const root of stale) {
     // `update` addresses a node by id and refuses one the document holds
     // twice, because it could not say which node the patch was meant for.
     // Asked only of the roots actually addressed: a duplicate elsewhere in the

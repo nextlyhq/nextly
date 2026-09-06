@@ -20,6 +20,7 @@ import {
   STYLE_STATES,
   isBindingSource,
   isBlockType,
+  renderedDomId,
 } from "./document";
 import { describeValue, pointer } from "./issue-text";
 import {
@@ -1056,20 +1057,39 @@ function validateDomIds(
       severity: "error",
       message: "A node cssId must be a string.",
     });
-  } else if (typeof node.cssId === "string" && node.cssId.length > 0) {
-    report(node.cssId, pointer(path, "cssId"));
   }
+  // ONE id per node, through the rule the renderer follows and the composition
+  // planners ask. A node can spell an id twice and emits one, so counting both
+  // reported a collision the page cannot have: a node carrying `cssId:
+  // "actual"` beside `attributes.id: "hero"` renders only `actual`, and
+  // registering `hero` made an unrelated node's real `hero` a duplicate.
+  //
+  // Skipping only the spellings that are EQUAL, as this did, catches the
+  // narrowest case of that and leaves the rest — and it left a save that these
+  // planners permit producing a pattern this gate then refuses.
+  const rendered = renderedDomId(node);
+  if (rendered !== undefined)
+    report(rendered, domIdPointer(node, path, rendered));
+}
+
+/**
+ * Where the id a node renders is written, for the issue to point at.
+ *
+ * Derived from the VALUE {@link renderedDomId} chose rather than by asking
+ * which field wins a second time: a second reading of that rule is one that can
+ * disagree with the first, and then an issue names a field that is not the one
+ * carrying the id.
+ */
+function domIdPointer(node: BlockNode, path: string, rendered: string): string {
+  if (node.cssId === rendered) return pointer(path, "cssId");
   if (isPlainRecord(node.attributes)) {
-    for (const [key, value] of Object.entries(node.attributes)) {
-      if (key.toLowerCase() === "id" && typeof value === "string" && value) {
-        // One node setting the same id through both `cssId` and `attributes.id`
-        // renders a single id, so it must not be reported as colliding with
-        // itself; only a second NODE claiming the id is a duplicate.
-        if (value === node.cssId) continue;
-        report(value, pointer(pointer(path, "attributes"), key));
-      }
+    let key: string | undefined;
+    for (const [name, value] of Object.entries(node.attributes)) {
+      if (name.toLowerCase() === "id" && value === rendered) key = name;
     }
+    if (key !== undefined) return pointer(pointer(path, "attributes"), key);
   }
+  return pointer(path, "cssId");
 }
 
 function validateSlots(

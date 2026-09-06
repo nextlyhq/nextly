@@ -569,6 +569,28 @@ export const VALIDATION_FIXTURES: ValidationFixture[] = [
     expected: [{ path: "/nodes/1/cssId", code: "duplicate-dom-id" }],
   },
   {
+    name: "a SHADOWED attributes id does not collide with another node's",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        // Renders `actual`: the modelled field overwrites the bag, so `hero`
+        // never reaches the page and cannot collide with anything.
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          cssId: "actual",
+          attributes: { id: "hero" },
+        },
+        { id: "n2", type: "core/text", version: 1, props: {}, cssId: "hero" },
+      ],
+    },
+    expected: [],
+  },
+  {
     name: "a cssId colliding with an attributes id is a duplicate DOM id",
     mode: "strict",
     doc: {

@@ -373,8 +373,13 @@ describe("planUpdatePatternFromSelection: what it refuses", () => {
     // `applyOp` asks about the whole envelope before it looks at an op, so a
     // plan built against one it will not edit is a dry run that disagrees with
     // the run it predicts.
+    //
+    // The root carries a STALE record, so this plan emits an update. Without
+    // one it emits nothing, `applyOps` runs no preflight at all, and there is
+    // no refusal to predict — a selection with nothing to restamp still saves
+    // over the pattern from a page this planner will not touch.
     const document = {
-      ...page([node("a")]),
+      ...page([node("a", { origin: from("stale") })]),
       kind: "spreadsheet",
     } as unknown as BlockDocument;
 
@@ -386,6 +391,27 @@ describe("planUpdatePatternFromSelection: what it refuses", () => {
     );
 
     expect(plan.problem).toBe("unusable-document");
+  });
+
+  it("saves over from an unusable page when it would touch nothing", () => {
+    // The other side of the two tests around it. An empty op group is never
+    // applied — `applyOps` runs no preflight for it — so there is nothing for
+    // the plan to be wrong about, and refusing here would block a save the
+    // apply would have accepted. The library row it writes is checked on its
+    // own, where the format version that actually travels is judged.
+    const document = {
+      ...page([node("a")]),
+      nodes: [node("a"), null],
+    } as unknown as BlockDocument;
+
+    const plan = planUpdatePatternFromSelection(
+      document,
+      ["a"],
+      target,
+      anyParent
+    );
+    expect(plan.problem).toBeUndefined();
+    expect(plan.pageOps).toEqual([]);
   });
 
   it("refuses a malformed node the author did not select", () => {
