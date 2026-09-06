@@ -553,13 +553,14 @@ function reportMetadataOutcome(
   const awaitingTable = stillPending - awaitingMigration;
   if (awaitingTable > 0) {
     logger.warn(
-      `${formatCount(awaitingTable, "registry row")} still awaiting a migration.`
+      `${formatCount(awaitingTable, "registry row")} still awaiting a migration. ` +
+        `Run \`nextly migrate:create\` if the change has no migration yet.`
     );
   }
   if (awaitingMigration > 0) {
     logger.warn(
       `${formatCount(awaitingMigration, "registry row")} awaiting a migration that has not been applied. ` +
-        `Run \`nextly migrate:create\` if the change has no migration yet.`
+        `Run \`nextly migrate\` without --step to apply it.`
     );
   }
 }

@@ -212,20 +212,18 @@ async function markApplied(
     }
 
     try {
-      if (!(await adapter.tableExists(named.tableName))) {
-        stillPending += 1;
-        continue;
-      }
-
       /*
-       * 🔴 Existence is necessary and not sufficient. An EDITED entity keeps
-       * its old physical table, so `tableExists` answers yes for a change that
-       * has not migrated at all — which is how a row reached `applied` while
-       * the registry described a shape the database had never had.
+       * 🔴 Asked BEFORE the database, and the order is what makes the counts
+       * mean anything. A `--step` run can leave a generated CREATE unapplied,
+       * so the row is both named by an outstanding migration and missing its
+       * table; deciding on the table first files it under "no migration exists
+       * yet" and sends the operator to `migrate:create` for a file that is
+       * already sitting in the repository. Both orders withhold the row — only
+       * one of them says why correctly.
        *
        * Only a slug an unapplied migration NAMES is held back. A row nothing
-       * names promotes as before, because withholding on silence would empty
-       * the dashboards this sweep exists to fill.
+       * names falls through to the existence rule, because withholding on
+       * silence would empty the dashboards this sweep exists to fill.
        */
       if (isAwaitingMigration(row, registry.awaiting)) {
         stillPending += 1;
@@ -233,6 +231,16 @@ async function markApplied(
         logger.debug(
           `Leaving ${registry.kind} "${named.slug}" pending: a migration naming it has not been applied`
         );
+        continue;
+      }
+
+      /*
+       * Existence is necessary and not sufficient. An EDITED entity keeps its
+       * old physical table, so this answers yes for a change that has not
+       * migrated at all — which is why the header check above exists.
+       */
+      if (!(await adapter.tableExists(named.tableName))) {
+        stillPending += 1;
         continue;
       }
 
@@ -328,7 +336,7 @@ export async function reconcileMigrationMetadata(
   const load = deps.readPendingEntitiesFn ?? readPendingEntities;
   let awaiting: PendingEntities;
   try {
-    awaiting = await load({ migrationsDir, isApplied, logger });
+    awaiting = await load({ migrationsDir, dialect, isApplied, logger });
   } catch (error) {
     awaiting = noPendingEntities();
     logger.warn(

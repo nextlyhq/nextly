@@ -39,13 +39,28 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { discoverMigrationGroups } from "../../../cli/utils/migration-discovery";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
+import {
+  discoverMigrationGroups,
+  selectVariant,
+} from "../../../cli/utils/migration-discovery";
 import { parseEntityHeaders } from "../migrate-create/format-file";
 
 import type { IsAppliedFn } from "./snapshot-source";
 
 export interface PendingEntitiesOptions {
   migrationsDir: string;
+  /**
+   * The dialect whose variant will actually be executed.
+   *
+   * 🔴 Passed so this reads the SAME file `runFileMigrations` will run.
+   * A group can hold a base file and a dialect override with different
+   * headers — a legacy base beside a newly annotated `.mysql.sql`, say — and
+   * reading the base there names no slug, so the row is promoted while the
+   * file that will really run is still outstanding.
+   */
+  dialect?: SupportedDialect;
   isApplied: IsAppliedFn;
   logger?: { warn?: (msg: string) => void; debug?: (msg: string) => void };
 }
@@ -82,14 +97,14 @@ export function noPendingEntities(): PendingEntities {
  * variant would report a migration that ran as outstanding, and hold every
  * entity it names back forever.
  *
- * The header is read from the BASE variant when there is one, because the
- * dialect variants of one migration describe the same entities and the base is
- * the file the ledger is keyed on.
+ * The VARIANT is chosen the way the apply path chooses it, so the header read
+ * belongs to the file that will actually run rather than to a sibling that
+ * happens to sort first.
  */
 export async function readPendingEntities(
   options: PendingEntitiesOptions
 ): Promise<PendingEntities> {
-  const { migrationsDir, isApplied, logger } = options;
+  const { migrationsDir, dialect, isApplied, logger } = options;
   const pending = noPendingEntities();
 
   const groups = await discoverMigrationGroups(migrationsDir);
@@ -98,13 +113,14 @@ export async function readPendingEntities(
     const ledgerFilename = `${baseName}.sql`;
     if (await isApplied(ledgerFilename)) continue;
 
-    const variant =
-      group.variants.find(v => v.dialect === undefined) ?? group.variants[0];
-    if (!variant) continue;
+    // The same chooser the apply path uses, so the header read here belongs
+    // to the file that will really be executed.
+    const file = selectVariant(group.variants, dialect);
+    if (!file) continue;
 
     let content: string;
     try {
-      content = await readFile(join(migrationsDir, variant.file), "utf-8");
+      content = await readFile(join(migrationsDir, file), "utf-8");
     } catch (err) {
       /*
        * A migration whose file cannot be read is left out rather than treated
@@ -114,7 +130,7 @@ export async function readPendingEntities(
        * previous behaviour for those rows and nothing worse.
        */
       logger?.warn?.(
-        `Could not read migration ${variant.file} while checking what is still pending: ${String(err)}`
+        `Could not read migration ${file} while checking what is still pending: ${String(err)}`
       );
       continue;
     }

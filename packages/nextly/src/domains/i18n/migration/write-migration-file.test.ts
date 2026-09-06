@@ -151,18 +151,16 @@ describe("declared intent in the written header", () => {
  * field group may share a slug, so the kind is the only thing separating them.
  */
 describe("the companion header names the entity by its kind", () => {
-  const spec = {
+  // Derived from the spec this file already uses, so a required field added to
+  // CompanionMigrationSpec cannot leave this one silently behind.
+  const sharedSlugSpec: CompanionMigrationSpec = {
+    ...spec,
     collection: "shared_slug",
-    companionTable: "dc_shared_slug_locales",
-    parentTable: "dc_shared_slug",
-    parentIdType: "TEXT" as const,
-    columns: [{ name: "body", kind: "text" as const }],
-    columnsOnMain: ["body"],
   };
 
   function headerFor(entity: "collection" | "single" | "fieldGroup"): string {
     const dir = mkdtempSync(join(tmpdir(), "nextly-companion-kind-"));
-    const path = writeCompanionMigrationFile(dir, spec, {
+    const path = writeCompanionMigrationFile(dir, sharedSlugSpec, {
       kind: "create-only",
       entity,
       upSql: "SELECT 1;",

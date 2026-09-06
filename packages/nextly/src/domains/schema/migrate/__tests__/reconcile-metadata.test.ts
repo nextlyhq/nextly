@@ -388,7 +388,28 @@ describe("reconcileMigrationMetadata holds a row an unapplied migration names", 
     expect(result.awaitingMigration).toBe(0);
   });
 
-  it("still refuses a row whose table is absent, before headers are consulted", async () => {
+  /*
+   * 🔴 A `--step` run can leave a generated CREATE unapplied, so the row is
+   * BOTH named by an outstanding migration and missing its table. Deciding on
+   * the table first files it under "no migration exists yet" and sends the
+   * operator to `migrate:create` for a file already sitting in the repository.
+   * Both orders withhold the row; only one reports why correctly.
+   */
+  it("counts a named row with no table as awaiting its migration", async () => {
+    const { result, made } = await sweep({
+      tables: [],
+      row: { slug: "posts", tableName: "dc_posts" },
+      awaiting: awaitingFn({ collections: ["posts"] }),
+    });
+
+    expect(
+      made.collection.updateMigrationStatusWithVerification
+    ).not.toHaveBeenCalled();
+    expect(result.stillPending).toBe(1);
+    expect(result.awaitingMigration).toBe(1);
+  });
+
+  it("still refuses an UNNAMED row whose table is absent", async () => {
     // Existence remains necessary. Nothing naming the slug must not promote a
     // row whose table was never created.
     const { result, made } = await sweep({
