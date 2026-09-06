@@ -425,9 +425,9 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // How the plugin names itself wherever the admin lists it. Without this
       // the dashboard section and the plugins list fall back to `meta.name`,
       // which is the raw package specifier — `@nextlyhq/plugin-page-builder`
-      // shown where the form builder shows "Forms". The icon matches the Pages
-      // menu entry this plugin contributes, so one feature is not drawn two
-      // different ways in the same sidebar.
+      // shown where the form builder shows "Forms". `Layout` is the feature's
+      // own mark rather than any one menu entry's, so the plugins list and the
+      // sidebar heading draw the same feature the same way.
       appearance: { icon: "Layout", label: "Page Builder" },
       description:
         "Build pages visually from blocks with drag-and-drop editing",
@@ -584,26 +584,40 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
               },
             }
           : {}),
+        // The three LIBRARIES, and no link to Pages.
+        //
+        // Pages is an ordinary collection that happens to declare a `blocks`
+        // field — a title, a slug and the document — and the Collections
+        // listing already offers it, because it is not hidden and claims no
+        // sidebar group. A second entry here was the same screen named twice.
+        //
+        // It is also a claim the code does not support. The page builder is a
+        // FIELD TYPE, so any collection may declare it and a Single may too;
+        // nothing in the engine, the builder or this package knows the slug
+        // `pages`. A menu promising "the page builder lives here, and it means
+        // Pages" gets less true the moment a second collection declares the
+        // field, and nothing would ever add that one.
+        //
+        // So content sits with content, and this menu holds what is genuinely
+        // global: the pieces pages are built FROM. An author already switches
+        // page from inside the editor, whose left rail carries a Pages panel —
+        // which is where that job belongs, since it is done while building
+        // rather than while deciding what to build.
+        //
         // Each entry names the permission that makes its screen reachable, so
         // a role without it is not offered a link into a list it would be
-        // refused. Pages carries none for the same reason it always has: it is
-        // the plugin's front door, and a reader who cannot read pages has
-        // nothing to do here at all.
-        //
-        // They sit beside Pages rather than under a section of their own. The
-        // sidebar's section vocabulary is a closed list in core with no design
-        // entry, so grouping them would mean widening that list — a change to
-        // the admin's navigation model, which is a larger question than where
-        // three links go.
-        //
-        // Each of the three names its `collection`, so a host that renames one
+        // refused, and each names its `collection`, so a host that renames one
         // gets a link to the collection it actually registered and a gate on
         // the permission that slug actually seeds. Spelling either literally
         // would strand the link and hide the item from the readers who can
-        // open the list. Pages names none, keeping the destination and the
-        // absent gate it has always had.
+        // open the list.
+        //
+        // They sit under this plugin's own heading rather than a section of
+        // their own: the sidebar's section vocabulary is a closed list in core
+        // with no design entry, so grouping them elsewhere would mean widening
+        // that list — a change to the admin's navigation model, and a larger
+        // question than where three links go.
         menu: [
-          { label: "Pages", to: "/admin/collections/pages", icon: "Layout" },
           {
             label: "Patterns",
             collection: PATTERNS_SLUG,
