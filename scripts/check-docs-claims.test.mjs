@@ -1266,6 +1266,152 @@ describe("namesRetiredCategory", () => {
   });
 });
 
+describe("documented-key-prefix", () => {
+  const SOURCE = "packages/nextly/src/domains/auth/services/api-key-service.ts";
+  const tree = (docs, declaration = 'const KEY_PREFIX = "nx_live_";') => ({
+    "README.md": "# nextly\n\n@nextlyhq/thing\n",
+    [SOURCE]: `${declaration}\nexport function make() { return KEY_PREFIX; }\n`,
+    ...docs,
+  });
+
+  it("fires on a bearer example using another vendor's prefix", async () => {
+    // The real defect: four examples said `sk_`, which is Stripe's.
+    expect(
+      await checksFor(tree({ "docs/guides/authentication.mdx": "Use `Authorization: Bearer sk_...`\n" }))
+    ).toContain("documented-key-prefix");
+  });
+
+  it("accepts the prefix the source declares", async () => {
+    expect(
+      await checksFor(tree({ "docs/guides/authentication.mdx": "Use `Authorization: Bearer nx_live_...`\n" }))
+    ).not.toContain("documented-key-prefix");
+  });
+
+  it("reads the prefix from source rather than assuming it", async () => {
+    // Change the declaration and the same docs page becomes wrong. Without this
+    // the check could be passing on a hardcoded copy of the prefix.
+    expect(
+      await checksFor(
+        tree(
+          { "docs/guides/authentication.mdx": "Use `Authorization: Bearer nx_live_...`\n" },
+          'const KEY_PREFIX = "nx_prod_";'
+        )
+      )
+    ).toContain("documented-key-prefix");
+  });
+
+  it("leaves placeholders alone", async () => {
+    // `Bearer <key>` is something a reader substitutes, not a format claim.
+    expect(
+      await checksFor(
+        tree({ "docs/api-reference/rest-api.mdx": "Send `Authorization: Bearer <key>` or `Bearer <token>`.\n" })
+      )
+    ).not.toContain("documented-key-prefix");
+  });
+
+  it("refuses when the declaration cannot be found, rather than passing", async () => {
+    // Renaming or moving the constant must not silently leave the docs unchecked.
+    const checks = await checksFor(
+      tree(
+        { "docs/guides/authentication.mdx": "Use `Authorization: Bearer sk_...`\n" },
+        'const SOMETHING_ELSE = "nx_live_";'
+      )
+    );
+    expect(checks).toContain("key-prefix-undeclared");
+    expect(checks).not.toContain("documented-key-prefix");
+  });
+
+  it("is not fooled by a longer name that ends in the same word", async () => {
+    // `OTHER_KEY_PREFIX` is a different constant. The word boundary is what keeps
+    // it out, and without this test a looser pattern would read it as a second
+    // declaration and refuse on a perfectly good file.
+    expect(
+      await checksFor(
+        tree(
+          { "docs/guides/authentication.mdx": "Use `Authorization: Bearer nx_live_...`\n" },
+          'const OTHER_KEY_PREFIX = "sk_";\nconst KEY_PREFIX = "nx_live_";'
+        )
+      )
+    ).not.toContain("key-prefix-undeclared");
+  });
+
+  it("refuses when a second occurrence makes the value ambiguous", async () => {
+    // A comment showing the old format is the realistic way this happens, and it
+    // is exactly the case where guessing which one is live would be wrong.
+    const checks = await checksFor(
+      tree(
+        { "docs/guides/authentication.mdx": "Use `Authorization: Bearer nx_live_...`\n" },
+        '// Was KEY_PREFIX = "sk_" before the rename.\nconst KEY_PREFIX = "nx_live_";'
+      )
+    );
+    expect(checks).toContain("key-prefix-undeclared");
+  });
+
+  it("refuses when the declaring file is not tracked at all", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "docs/guides/authentication.mdx": "Use `Authorization: Bearer sk_...`\n",
+      })
+    ).toContain("key-prefix-source-missing");
+  });
+
+  it("reports another service's token unless a line is exempted", async () => {
+    // Ownership cannot be read off a credential. An earlier version skipped any
+    // recognised vendor prefix, which meant a Stripe-shaped token in the Nextly
+    // auth guide was silently treated as a Stripe example rather than a
+    // regression, while other pages kept the examined count above zero.
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx":
+            "Use Authorization: Bearer sk_test_EXAMPLE\n",
+        }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("matches the scheme whatever its casing", async () => {
+    // A lowercase scheme reached no comparison at all, and other pages kept the
+    // examined count above zero, so CI stayed green on a wrong prefix.
+    for (const scheme of ["bearer", "BEARER", "BeArEr"]) {
+      expect(
+        await checksFor(
+          tree({
+            "docs/guides/authentication.mdx":
+              "Use Authorization: " + scheme + " sk_EXAMPLE\n",
+          }),
+        ),
+      ).toContain("documented-key-prefix");
+    }
+  });
+
+  it("refuses when it examined no example at all", async () => {
+    // The population assertion. Without it a docs tree that moved, was renamed,
+    // or stopped using this syntax leaves the loop with nothing to judge and the
+    // check reports clean having looked at nothing.
+    expect(await checksFor(tree({}))).toContain("key-prefix-unexamined");
+  });
+
+  it("does not refuse once a real example is present", async () => {
+    expect(
+      await checksFor(tree({ "docs/guides/authentication.mdx": "Use `Authorization: Bearer nx_live_...`\n" }))
+    ).not.toContain("key-prefix-unexamined");
+  });
+
+  it("only reads docs, not every tracked file", async () => {
+    // A changelog or a test fixture quoting an old key is not a documentation claim.
+    expect(
+      await checksFor(
+        tree({
+          "CHANGELOG.md": "fixed `Authorization: Bearer sk_...` handling\n",
+          "docs/guides/authentication.mdx": "Use `Authorization: Bearer nx_live_...`\n",
+        })
+      )
+    ).not.toContain("documented-key-prefix");
+  });
+});
+
 describe("packageKeywords", () => {
   it("reads both manifest shapes as the same list", () => {
     expect(packageKeywords({ keywords: ["cms", "framework"] })).toEqual(["cms", "framework"]);

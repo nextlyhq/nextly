@@ -718,6 +718,128 @@ function retiredKeywords(repoRoot, packages, findings) {
   }
 }
 
+/** Where the API key prefix is declared. One file, so a moved declaration is a refusal. */
+const KEY_PREFIX_SOURCE = "packages/nextly/src/domains/auth/services/api-key-service.ts";
+const KEY_PREFIX_DECLARATION = /\bKEY_PREFIX\s*=\s*"([^"]+)"/g;
+
+/**
+ * A bearer example naming a concrete key rather than a placeholder.
+ *
+ * `Bearer <key>` and `Bearer <token>` are left alone: those are something a reader substitutes,
+ * not a claim about the format.
+ */
+const BEARER_EXAMPLE = /Bearer\s+([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*)/gi;
+
+
+/**
+ * The documented API key prefix, compared against the one the service issues.
+ *
+ * Four bearer examples said `sk_`, which is another vendor's prefix, and one file used the real
+ * prefix in a code sample and the wrong one in the sentence describing the header a few lines
+ * away. Nothing catches this at runtime: a key is looked up by hash, so a wrong prefix is an
+ * ordinary authentication failure with no hint that the format was the problem. The docs are
+ * also the source of `llms-full.txt`, so the wrong format reached coding agents too.
+ *
+ * The prefix is READ from the service rather than restated here. Two copies of "what a key looks
+ * like" is how the docs and the code came apart in the first place.
+ *
+ * This lives here rather than in a vitest suite in `packages/nextly` for two reasons, both
+ * measured: that package is not in the CI `Test` step's filter list, so the suite ran in no job
+ * at all; and `packages/nextly/turbo.json` names a single docs file as an external input, so a
+ * change to any other docs page leaves the task hash unmoved and turbo replays the previous
+ * pass. This script runs in the `comments` job, which is deliberately not gated on the inert
+ * decision, so it runs on a docs-only commit, which is exactly when this regresses.
+ */
+function documentedKeyPrefix(repoRoot, tracked, findings, isExempt) {
+  if (!tracked.includes(KEY_PREFIX_SOURCE)) {
+    findings.push({
+      check: "key-prefix-source-missing",
+      file: KEY_PREFIX_SOURCE,
+      line: null,
+      message: "the file declaring the API key prefix is not tracked, so the docs cannot be checked against it",
+    });
+    return;
+  }
+
+  let source;
+  try {
+    source = readFileSync(join(repoRoot, KEY_PREFIX_SOURCE), "utf-8");
+  } catch {
+    findings.push({
+      check: "key-prefix-source-missing",
+      file: KEY_PREFIX_SOURCE,
+      line: null,
+      message: "could not be read, so the documented key prefix has nothing to be compared against",
+    });
+    return;
+  }
+
+  // Fails closed. If the declaration is renamed, moved or duplicated, this refuses rather than
+  // quietly checking the docs against nothing.
+  const declarations = [...source.matchAll(KEY_PREFIX_DECLARATION)];
+  if (declarations.length !== 1) {
+    findings.push({
+      check: "key-prefix-undeclared",
+      file: KEY_PREFIX_SOURCE,
+      line: null,
+      message: `expected exactly one KEY_PREFIX declaration to read, found ${String(declarations.length)}`,
+    });
+    return;
+  }
+  const prefix = declarations[0][1];
+
+  // Counted so the scan can prove it looked at something. A docs tree that moved, changed
+  // extension, or stopped using the syntax this matches would otherwise leave the loop with
+  // nothing to judge and the check reporting clean.
+  let examined = 0;
+
+  for (const rel of tracked) {
+    if (!rel.startsWith("docs/") || !rel.endsWith(".mdx")) continue;
+    let text;
+    try {
+      text = readFileSync(join(repoRoot, rel), "utf-8");
+    } catch {
+      continue; // unreadable-manifest already reports a file the index names and disk lacks
+    }
+    const lines = text.split("\n");
+    for (let index = 0; index < lines.length; index++) {
+      for (const [, token] of lines[index].matchAll(BEARER_EXAMPLE)) {
+        examined += 1;
+        if (token.startsWith(prefix)) continue;
+        // A page legitimately documenting another service's credential is
+        // exempted per line, in the allowlist, the same way every other check
+        // here handles a true statement it would otherwise report.
+        //
+        // NOT by recognising the vendor's prefix, which was the first attempt:
+        // ownership cannot be read off a credential. `Bearer sk_test_...` in
+        // `guides/authentication.mdx` is a Nextly regression and looks exactly
+        // like a Stripe example, so skipping by prefix put a hole through the
+        // middle of the check it belongs to.
+        if (isExempt(rel, lines[index])) continue;
+        findings.push({
+          check: "documented-key-prefix",
+          file: rel,
+          line: index + 1,
+          message: `documents \`Bearer ${token}\`; keys are issued with the prefix "${prefix}"`,
+        });
+      }
+    }
+  }
+
+  // An absence check with an empty population is satisfied by everything. Reaching here having
+  // judged no example means the docs moved, were renamed, or stopped using a syntax this
+  // recognises, and every one of those should be looked at rather than reported as clean.
+  if (examined === 0) {
+    findings.push({
+      check: "key-prefix-unexamined",
+      file: "docs/",
+      line: null,
+      message:
+        "no API key example was found to check, so this reported clean without examining anything",
+    });
+  }
+}
+
 function readmeSkeleton(repoRoot, packages, findings) {
   for (const pkg of packages) {
     const readme = join(pkg.dir, "README.md");
@@ -976,6 +1098,7 @@ export async function runChecks({
 
   readmeSkeleton(repoRoot, packages, findings);
   retiredKeywords(repoRoot, packages, findings);
+  documentedKeyPrefix(repoRoot, tracked, findings, exemption("documented-key-prefix"));
   internalLinks(repoRoot, tracked, findings);
   metaReachability(repoRoot, tracked, findings);
 
