@@ -566,7 +566,12 @@ function reportMetadataOutcome(
     logger.warn(
       `${formatCount(unscopedMigrations.length, "pending migration")} name no collection, single or field group, ` +
         `so registry rows were recorded from their tables alone: ${unscopedMigrations.join(", ")}. ` +
-        `Add a \`-- Collections:\` line naming what each one changes.`
+        // All three named, because the header a slug is written under decides
+        // which set it lands in. A single labelled `-- Collections:` is filed
+        // among collections, its own kind's set stays empty, and the row it
+        // was meant to hold back is promoted anyway — the remediation
+        // reproducing the defect it exists to close.
+        `Add \`-- Collections:\`, \`-- Singles:\` or \`-- Field groups:\` to each, naming what it changes.`
     );
   }
 
