@@ -735,8 +735,15 @@ const KEY_PREFIX_DECLARATION = /^[ \t]*(?:export[ \t]+)?const[ \t]+KEY_PREFIX[ \
  * A bearer example naming a concrete key rather than a placeholder.
  *
  * `Bearer <key>` and `Bearer <token>` are left alone: those are something a reader substitutes,
- * not a claim about the format. The scheme is matched case-insensitively, and `\s+` spans a
- * newline so an example wrapped after the scheme is still one example.
+ * not a claim about the format. `\s+` spans a newline so an example wrapped after the scheme is
+ * still one example.
+ *
+ * The SCHEME is matched case-insensitively because RFC 7235 makes it so: `bearer` is a valid
+ * HTTP request. The CREDENTIAL is compared case-sensitively, and the two are not the same
+ * decision. A key is authenticated by `sha256` of the whole string, so `NX_LIVE_...` hashes to
+ * something else and can never match a stored key. Documentation showing it teaches a header
+ * that cannot work, which is exactly what this check is for, so it is reported rather than
+ * excused.
  */
 const BEARER_EXAMPLE = /Bearer\s+([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*)/gi;
 

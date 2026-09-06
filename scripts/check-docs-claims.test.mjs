@@ -1425,6 +1425,22 @@ describe("documented-key-prefix", () => {
     }
   });
 
+  it("reports a credential whose case does not match what is issued", async () => {
+    // The scheme is case-insensitive and the credential is not, and conflating
+    // them would excuse a real defect. A key is authenticated by sha256 of the
+    // whole string, so NX_LIVE_ hashes to something else and can never match a
+    // stored key. Documentation showing it teaches a header that cannot work.
+    for (const token of ["NX_LIVE_EXAMPLE", "Nx_Live_EXAMPLE"]) {
+      expect(
+        await checksFor(
+          tree({
+            "docs/guides/authentication.mdx": "Use Authorization: Bearer " + token + "\n",
+          }),
+        ),
+      ).toContain("documented-key-prefix");
+    }
+  });
+
   it("covers prose outside docs/, such as ARCHITECTURE.md", async () => {
     // The first scope named one directory. ARCHITECTURE.md publishes a bearer
     // example too, and was unguarded.
