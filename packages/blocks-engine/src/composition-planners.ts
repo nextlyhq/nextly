@@ -61,10 +61,43 @@ export interface PlannedCreate<TFields> {
   readonly fields: TFields;
 }
 
+/**
+ * A library row a planner asks the caller to OVERWRITE.
+ *
+ * The document only. A save-over replaces a pattern's tree with the selection
+ * that was saved onto it, and the row's metadata — its name, its description,
+ * whatever the collection declares — belongs to the library entry rather than
+ * to the run. Carrying `fields` here would make "update from selection" also
+ * rename the pattern, silently, from whatever the caller happened to pass.
+ *
+ * The collection slug is the caller's, echoed back for the reason
+ * {@link PlannedCreate} gives: the composition stores belong to the
+ * page-builder plugin, and an engine naming one would assert a collection
+ * exists that it cannot see.
+ */
+export interface PlannedUpdate {
+  readonly collection: string;
+  /** The entry to overwrite. */
+  readonly id: string;
+  /** The document to store in its place. */
+  readonly document: BlockDocument;
+}
+
 /** What a composition action would create, and what it would do to the page. */
 export interface CompositionPlan<TFields> {
   /** The row to create, absent for an action that only edits the page. */
   readonly create?: PlannedCreate<TFields>;
+  /**
+   * The row to overwrite, absent for an action that creates one or none.
+   *
+   * A separate field rather than a `create` carrying an optional id, because
+   * the two are different writes with different failure modes — a create can
+   * be rolled back by deleting what it made, where an overwrite can only be
+   * rolled back by something that read the prior document first. A caller
+   * sequencing the unit of work has to tell them apart, and a nullable id is
+   * the shape that lets it forget to.
+   */
+  readonly update?: PlannedUpdate;
   /**
    * The edits to apply to the page, in order, as one atomic group.
    *
@@ -132,6 +165,7 @@ export interface PlanRefusal {
    */
   readonly permitted?: readonly string[];
   readonly create?: undefined;
+  readonly update?: undefined;
   readonly pageOps?: undefined;
 }
 
@@ -144,6 +178,22 @@ export interface PatternTarget<TFields> {
 }
 
 /**
+ * Which stored pattern a save-over replaces, in the caller's vocabulary.
+ *
+ * No fields, and no document. Not fields, because the row's metadata is not
+ * the run's to rewrite — see {@link PlannedUpdate}. Not the document, because
+ * a save-over reads nothing of what is being replaced: it writes the selection
+ * over it, and the digest it records is taken from what it stores. Asking for
+ * the prior document would invite a caller to pass one fetched at a different
+ * moment than the write lands.
+ */
+export interface PatternUpdateTarget {
+  readonly collection: string;
+  /** The pattern entry to overwrite. */
+  readonly id: string;
+}
+
+/**
  * Save a contiguous run of blocks as a pattern.
  *
  * **The page is not touched.** A pattern is copy-on-insert and keeps no link
@@ -151,22 +201,10 @@ export interface PatternTarget<TFields> {
  * `pageOps` is empty, and that is the whole behavioural difference from
  * `planConvertToComponent`, which replaces the run with a linked instance.
  *
- * **The copy gets fresh ids.** It would render correctly without them, because
- * insert re-identifies anyway; storing the page's ids would still be wrong. A
- * node id is how everything in this system addresses a node — styles, locale
- * overlays, the class-usage record, editor history — so two stored documents
- * claiming one id makes any index keyed on it unable to say which node it
- * describes. Re-identifying at SAVE removes the ambiguity where it is created
- * rather than relying on every later reader to disambiguate.
- *
- * The roots are re-identified TOGETHER: see {@link reidForestWithMap} for why
- * doing them one at a time silently breaks a reference that crosses from one
- * root to the next.
- *
- * **`settings` is not copied.** Document settings are page-scoped by
- * definition — a background with no owning node, and the document's custom CSS
- * — so a pattern that carried them would repaint every page it was inserted
- * into. Node styles live on the nodes and travel with them.
+ * **What it stores** — fresh ids, no inherited provenance, no `settings`, and
+ * the source document's format version — is
+ * {@link savedPatternDocument}, shared with the save-over planner so the two
+ * cannot produce different documents from one selection.
  *
  * **`assets` is not synthesised.** The media index describes a whole document,
  * and which prop of a block holds a media id is a property of that block's
@@ -180,35 +218,237 @@ export function planSaveAsPattern<TFields>(
   target: PatternTarget<TFields>,
   nesting: NestingSource
 ): PlanResult<TFields> {
-  const result = contiguousRun(document.nodes, selectedIds);
-  if (result.run === undefined) return { problem: result.problem };
-
-  const selected = result.run.places.map(place => place.node);
-  // Saving LIFTS the run out, so its blocks become document roots — the same
-  // question an insert asks, asked of the same rule.
-  const refusal = placementRefusal(selected, { kind: "root" }, nesting);
-  if (refusal !== undefined) return refusal;
+  const run = savableRun(document, selectedIds, nesting);
+  if (run.problem !== undefined) return run;
+  const selected = run.selected;
 
   return {
     create: {
       collection: target.collection,
-      document: {
-        // The SOURCE document's version, not the current one. These nodes are
-        // written in the format the page holds them in, and a pattern that
-        // claimed the newest version would tell the migrator there is nothing
-        // to do — so an old page's blocks would be stored as if already
-        // migrated and never brought forward.
-        formatVersion: document.formatVersion,
-        kind: "pattern",
-        // Re-identified, then stripped of any provenance the selection
-        // inherited: these nodes came from the page, not from wherever the
-        // page's nodes came from.
-        nodes: withoutOrigin(reidForestWithMap(selected).nodes),
-      },
+      document: savedPatternDocument(document, selected),
       fields: target.fields,
     },
     pageOps: [],
   };
+}
+
+/** A selection that may be lifted into a document of its own. */
+interface SavableRun {
+  readonly selected: readonly BlockNode[];
+  readonly problem?: undefined;
+  readonly permitted?: undefined;
+}
+
+/**
+ * The one question every SAVE asks of a selection.
+ *
+ * Both save planners ask it and they must ask it identically: an author who can
+ * save a run as a new pattern must be able to save the same run over an
+ * existing one, and a rule spelled twice is a rule that will eventually differ
+ * between the two menu items sitting next to each other.
+ *
+ * Two clauses. The blocks must be one contiguous run of siblings — the cause
+ * comes back from {@link contiguousRun} unchanged, so the sentence an author
+ * reads is composed once per surface rather than once per planner. And saving
+ * LIFTS that run out, so its blocks become the ROOTS of a new document, which a
+ * block declaring the parents it may sit in cannot be.
+ */
+function savableRun(
+  document: BlockDocument,
+  selectedIds: readonly string[],
+  nesting: NestingSource
+): SavableRun | PlanRefusal {
+  const result = contiguousRun(document.nodes, selectedIds);
+  if (result.run === undefined) return { problem: result.problem };
+
+  const selected = result.run.places.map(place => place.node);
+  const refusal = placementRefusal(selected, { kind: "root" }, nesting);
+  return refusal ?? { selected };
+}
+
+/**
+ * The pattern document a selection becomes, for every planner that stores one.
+ *
+ * ONE implementation, because save-as and save-over must produce the identical
+ * document from the identical selection. They do not merely resemble each
+ * other: an author inserts a pattern, edits it, and saves it back over the
+ * source, and the digest that says whether the copy is in sync is taken over
+ * what this returns. Two builders that agreed today would make that comparison
+ * report a change nobody made the day one of them moved.
+ *
+ * **The SOURCE document's format version, not the current one.** These nodes
+ * are written in the format the page holds them in, and a pattern that claimed
+ * the newest version would tell the migrator there is nothing to do — so an old
+ * page's blocks would be stored as if already migrated and never brought
+ * forward.
+ *
+ * **Fresh ids.** A node id is how everything in this system addresses a node —
+ * styles, locale overlays, the class-usage record, editor history — so two
+ * stored documents claiming one id makes any index keyed on it unable to say
+ * which node it describes. The roots are re-identified TOGETHER: see
+ * {@link reidForestWithMap} for why doing them one at a time silently breaks a
+ * reference that crosses from one root to the next.
+ *
+ * **DOM ids are KEPT.** A saved run becomes a document of its own rather than a
+ * copy placed beside its original, so there is no collision to avoid — and
+ * insert re-mints anyway. Minting here would store a `hero-3ee4a0d4` no author
+ * wrote, make two saves of one selection differ so any content fingerprint
+ * reported a change nobody made, and grow the id by nine characters on every
+ * save-insert-save cycle without bound. `reidForestWithMap` takes the policy
+ * that says which, and its `DomIdPolicy` carries the measurements.
+ *
+ * **No inherited provenance.** These nodes came from the page, not from
+ * wherever the page's nodes came from.
+ *
+ * **No `settings`.** Document settings are page-scoped by definition — a
+ * background with no owning node, and the document's custom CSS — so a pattern
+ * that carried them would repaint every page it was inserted into. Node styles
+ * live on the nodes and travel with them.
+ */
+function savedPatternDocument(
+  document: BlockDocument,
+  selected: readonly BlockNode[]
+): BlockDocument {
+  return {
+    formatVersion: document.formatVersion,
+    kind: "pattern",
+    nodes: withoutOrigin(reidForestWithMap([...selected], "keep").nodes),
+  };
+}
+
+/**
+ * Save a contiguous run over an EXISTING pattern.
+ *
+ * The pattern's tree becomes this selection; the library row keeps its own
+ * metadata. It exists because the alternative is what every pattern library
+ * without it turns into — `hero`, `hero-v2`, `hero-v2-final` — which the design
+ * cites as Elementor's eight-year-old request. Only the tree is replaced: the
+ * row's name and description belong to the library entry, not to the run, so
+ * {@link PlannedUpdate} carries no fields for a caller to overwrite them with.
+ *
+ * **The document it stores is byte-for-byte what `planSaveAsPattern` would
+ * store** from the same selection — one builder, for the reason
+ * {@link savedPatternDocument} gives.
+ *
+ * ## Why this one touches the page, where saving a NEW pattern does not
+ *
+ * The commonest path here is insert, tweak, save back. Those roots carry an
+ * `origin` naming this pattern and the digest they were copied at, and this
+ * write moves the digest — so a run that is now byte-identical to the pattern
+ * would report itself out of date against content it just defined. A staleness
+ * signal that fires without cause is worse than none, because it teaches
+ * authors to dismiss the one that means something.
+ *
+ * So the plan REPAIRS the record its own write would otherwise falsify, and
+ * mints none:
+ *
+ * - a selected root already naming THIS pattern is re-stamped with the new
+ *   digest, and ends in sync. Figma's `push changes to main component` leaves
+ *   the pushing instance with nothing to reset for the same reason;
+ * - a root naming a DIFFERENT pattern keeps naming it. It did come from there,
+ *   and overwriting the record would attribute the copy to a pattern it has
+ *   nothing to do with — see {@link withOrigin};
+ * - a root with no record does not gain one. Nothing copied it from anywhere,
+ *   and a record invented here would be a claim about history that is false.
+ *   What that gives up is real: an author who draws a run from scratch and
+ *   saves it over a pattern gets no in-sync record for it. That is the
+ *   conservative direction, and the alternative writes something untrue.
+ *
+ * Only ROOTS, matching where {@link withOrigin} puts the record. A descendant
+ * carrying one was a separate copy nested inside this content, and re-stamping
+ * it would claim the pattern's whole tree is what that child came from.
+ *
+ * ## What it refuses
+ *
+ * The plan IS the dry run, so every refusal the ops it emits would meet is
+ * made here: an envelope `applyOp` will not edit at all, and an addressed id
+ * the document holds twice, which `update` refuses because it could not say
+ * which node it meant. The selection's own refusals are the ones saving a new
+ * pattern makes — the run must be contiguous, and its blocks become document
+ * roots, so a block that declares which parents it may sit in cannot be one.
+ */
+export function planUpdatePatternFromSelection(
+  document: BlockDocument,
+  selectedIds: readonly string[],
+  target: PatternUpdateTarget,
+  nesting: NestingSource
+): PlanResult<never> {
+  // The identity BEFORE anything is built on it, at runtime as well as in the
+  // type: this is a published entry point and the value reaching it comes from
+  // a JavaScript caller or a stored row as often as from a typed one. An id
+  // that is not a non-empty string is one `isBlockOrigin` refuses, so the plan
+  // would succeed and the update it emits would throw.
+  if (typeof target.id !== "string" || target.id === "") {
+    return { problem: "invalid-source" };
+  }
+
+  // Asked because this planner EMITS ops, where saving a new pattern emits
+  // none. Everything `applyOp` checks before it looks at an op — the
+  // envelope's keys, its values, its format and its kind — is a way a plan can
+  // be built against a document that cannot be edited at all.
+  if (documentRefusal(document) !== undefined) {
+    return { problem: "unusable-document" };
+  }
+
+  const run = savableRun(document, selectedIds, nesting);
+  if (run.problem !== undefined) return run;
+  const selected = run.selected;
+
+  const stored = savedPatternDocument(document, selected);
+  // Over what is STORED, not over the selection as it sits on the page. The
+  // digest excludes a ROOT's origin but keeps one deeper down, and the stored
+  // copy has every origin stripped — so hashing the selection would produce a
+  // number no later insert of this pattern could reproduce.
+  const digest = patternDigest(stored.nodes);
+
+  const pageOps = restampOps(document, selected, target.id, digest);
+  if (pageOps.problem !== undefined) return pageOps;
+
+  return {
+    update: { collection: target.collection, id: target.id, document: stored },
+    pageOps: pageOps.ops,
+  };
+}
+
+/** The updates that bring the saved-over run back in sync, or why they cannot. */
+interface RestampOps {
+  readonly ops: readonly BuilderOp[];
+  readonly problem?: undefined;
+}
+
+/**
+ * One `update` per selected root whose provenance record this write falsifies.
+ *
+ * A root already at the new digest gets nothing. The op would be a literal
+ * no-op, and emitting it would still cost an entry in the author's history —
+ * an undo step that visibly does nothing is a worse answer than no step.
+ */
+function restampOps(
+  document: BlockDocument,
+  selected: readonly BlockNode[],
+  patternId: string,
+  digest: string
+): RestampOps | PlanRefusal {
+  const ops: BuilderOp[] = [];
+  for (const root of selected) {
+    const origin = root.origin;
+    if (origin === undefined || origin.from !== "pattern") continue;
+    if (origin.id !== patternId || origin.digest === digest) continue;
+    // `update` addresses a node by id and refuses one the document holds
+    // twice, because it could not say which node the patch was meant for.
+    // Asked only of the roots actually addressed: a duplicate elsewhere in the
+    // page is not something these ops would meet, and refusing on it would
+    // block a save the apply would have accepted.
+    if (countById(document.nodes, root.id) > 1) {
+      return { problem: "duplicate-destination" };
+    }
+    ops.push({
+      kind: "update",
+      id: root.id,
+      patch: { origin: { from: "pattern", id: patternId, digest } },
+    });
+  }
+  return { ops };
 }
 
 /**

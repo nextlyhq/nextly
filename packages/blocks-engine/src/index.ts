@@ -127,6 +127,7 @@ export {
   // pattern is a run of siblings, and re-identifying its roots one at a time
   // leaves a reference that crosses between them pointing at the original.
   reidForestWithMap,
+  type DomIdPolicy,
   // The one rule for what a copied DOM id becomes. Public because two copiers
   // apply it — pattern insert and component composition — and a page may hold
   // the output of both, so a second spelling would put two ids on one target.
@@ -180,7 +181,11 @@ export type {
 // both writes in one unit of work and roll the create back — and so the dry run
 // and the real run are the same function rather than two that agree for now.
 export { patternDigest } from "./pattern-digest";
-export { planInsertPattern, planSaveAsPattern } from "./composition-planners";
+export {
+  planInsertPattern,
+  planSaveAsPattern,
+  planUpdatePatternFromSelection,
+} from "./composition-planners";
 export type {
   CompositionPlan,
   InsertTarget,
@@ -191,6 +196,8 @@ export type {
   PlanRefusal,
   PlanResult,
   PlannedCreate,
+  PlannedUpdate,
+  PatternUpdateTarget,
 } from "./composition-planners";
 
 // The node selection every reader of a stored document shares. Public because

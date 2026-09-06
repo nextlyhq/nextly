@@ -546,3 +546,73 @@ describe("a bound link's fallback follows the copy", () => {
     expect(bound.text.fallback).toBe("#pricing");
   });
 });
+
+describe('the "keep" DOM id policy', () => {
+  /**
+   * Minting exists so a copy placed BESIDE its original does not emit a
+   * duplicate HTML id. `"keep"` is for the caller that is not doing that: a run
+   * lifted out of a page to become a document of its own. Nothing there is
+   * placed next to anything, and insert re-mints later anyway.
+   */
+  it("carries a cssId and an attributes.id across verbatim", () => {
+    const [copy] = reidForestWithMap(
+      [node("a", { cssId: "hero", attributes: { id: "hero-alt" } })],
+      "keep"
+    ).nodes;
+
+    expect(copy.cssId).toBe("hero");
+    expect(copy.attributes?.id).toBe("hero-alt");
+  });
+
+  it("still mints fresh NODE ids, which is the part a save does need", () => {
+    // The two are separate questions and only one of them changes. A node id
+    // is how every index in this system addresses a node, so two stored
+    // documents claiming one cannot both be described; a DOM id is authored
+    // content that means something to a reader.
+    const { nodes, nodeIds } = reidForestWithMap(
+      [node("a", { cssId: "hero" }, [node("kid")])],
+      "keep"
+    );
+
+    const ids = allNodes(nodes[0]).map(n => n.id);
+    expect(ids).not.toContain("a");
+    expect(ids).not.toContain("kid");
+    expect(nodeIds.get("a")).toBe(nodes[0].id);
+  });
+
+  it("records no DOM id as moved, because none did", () => {
+    // An empty map is the honest record and it is load-bearing: a caller
+    // checking this map against a destination would otherwise report a
+    // collision on an id it is not introducing.
+    const { domIds } = reidForestWithMap(
+      [node("a", { cssId: "hero" })],
+      "keep"
+    );
+
+    expect(domIds.size).toBe(0);
+  });
+
+  it("leaves a reference pointing at the id it still names", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("a", { cssId: "pricing" }),
+        node("b", { attributes: { "aria-describedby": "pricing" } }),
+      ],
+      "keep"
+    );
+
+    // The property, not the mechanism: the pointer reaches the copy's own
+    // target. Here it does so because neither string moved.
+    expect(nodes[1].attributes?.["aria-describedby"]).toBe(nodes[0].cssId);
+  });
+
+  it("keeps re-minting the default, so a PLACING caller is unchanged", () => {
+    // The default is the untested state unless it is asserted. Every caller
+    // that inserts relies on it, and a flipped default would be a silent
+    // duplicate-id bug on a rendered page rather than a failing call.
+    const [copy] = reidForestWithMap([node("a", { cssId: "hero" })]).nodes;
+
+    expect(copy.cssId).not.toBe("hero");
+    expect(copy.cssId?.startsWith("hero-")).toBe(true);
+  });
+});

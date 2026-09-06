@@ -1065,13 +1065,34 @@ export interface ReidentifiedSubtree {
   domIds: ReadonlyMap<string, string>;
 }
 
+/**
+ * What a re-identification does with the DOM ids it copies.
+ *
+ * Two words rather than a boolean, because the call site is where this is read
+ * and `true` at a call site says nothing about which way it points.
+ *
+ * - `"remint"` — derive a fresh id from each original and follow every
+ *   reference to it. For a copy that lands in a document that may already hold
+ *   the original, which is every INSERT.
+ * - `"keep"` — carry the ids across verbatim and record none as moved. For a
+ *   run being lifted into a document of its own, which is every SAVE.
+ */
+export type DomIdPolicy = "remint" | "keep";
+
 /** A re-identified FOREST, and the two maps describing what moved. */
 export interface ReidentifiedForest {
   /** The rebuilt roots, in the order they were given. */
   nodes: BlockNode[];
   /** Every node's old id → its new one, across every root. */
   nodeIds: ReadonlyMap<string, string>;
-  /** Every DOM id the forest carried → its replacement, across every root. */
+  /**
+   * Every DOM id the forest carried → its replacement, across every root.
+   *
+   * EMPTY under {@link DomIdPolicy} `"keep"`, which is the honest record rather
+   * than an omission: nothing moved, so nothing needs following. A caller
+   * checking this map against a destination is asking which ids this copy
+   * introduces, and identity entries would answer that question wrongly.
+   */
   domIds: ReadonlyMap<string, string>;
 }
 
@@ -1079,10 +1100,11 @@ export interface ReidentifiedForest {
  * Deep-clone a FOREST with fresh ids, KEEPING its internal references usable.
  *
  * The same rebuild as {@link reidSubtree}, differing in what happens to a DOM
- * id: dropped there, minted afresh here and recorded. Two copies of one pattern
- * on a page must not emit the same HTML `id`, and a copy's internal anchor must
- * still reach its own target — remapping is the only answer that satisfies
- * both.
+ * id: dropped there, and here either minted afresh and recorded or carried
+ * across untouched, as {@link DomIdPolicy} says. Dropping is the one answer
+ * neither caller can use. Two copies of one pattern on a page must not emit the
+ * same HTML `id`, and a copy's internal anchor must still reach its own target
+ * — and an id that is simply gone satisfies neither.
  *
  * The minted id is DERIVED from the original (`pricing` becomes
  * `pricing-<suffix>`) rather than freshly random, because it is a value authors
@@ -1106,13 +1128,38 @@ export interface ReidentifiedForest {
  * it is going into — this function is given a forest and cannot see anything
  * else. A caller inserting into a page it can read should check
  * {@link ReidentifiedForest.domIds} against that page.
+ *
+ * ## Minting is for a copy that lands BESIDE its original
+ *
+ * That is the whole reason for it, and `"keep"` is for the caller it is not
+ * true of: a run lifted out of a page to become a document of its OWN. Nothing
+ * there is placed next to anything, so there is no collision to avoid — and
+ * minting anyway is not merely unnecessary, it is wrong in three ways that were
+ * measured rather than argued.
+ *
+ * A DOM id is authored content: someone typed `hero`, and it appears in a URL
+ * fragment, a stylesheet and the attribute panel. Storing `hero-3ee4a0d4` puts
+ * a value in the library that no author wrote and every author sees.
+ *
+ * It is not idempotent. Save the same selection twice and the two stored copies
+ * differ, so anything fingerprinting content — `patternDigest` keeps `cssId`
+ * deliberately, because a copy derives from it — reports a change nobody made.
+ * A staleness signal that fires without cause teaches authors to dismiss the
+ * one that means something.
+ *
+ * And it accumulates. Save, insert, save over the source, insert again: the id
+ * grew by nine characters every cycle, `hero` to
+ * `hero-3ee4a0d4-fb48e67c-1118df3b` and on, with no bound.
  */
-export function reidForestWithMap(nodes: BlockNode[]): ReidentifiedForest {
+export function reidForestWithMap(
+  nodes: BlockNode[],
+  domIdPolicy: DomIdPolicy = "remint"
+): ReidentifiedForest {
   const nodeIds = new Map<string, string>();
   const domIds = new Map<string, string>();
 
   const rebuilt = mapForest(nodes, original =>
-    reidOneKeepingReferences(original, nodeIds, domIds)
+    reidOneKeepingReferences(original, nodeIds, domIds, domIdPolicy)
   );
   // A SECOND pass, because a node may reference an id defined on a node the
   // first had not reached yet. Without it a copied `aria-labelledby` points at
@@ -1182,7 +1229,8 @@ export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
 function reidOneKeepingReferences(
   node: BlockNode,
   nodeIds: Map<string, string>,
-  domIds: Map<string, string>
+  domIds: Map<string, string>,
+  domIdPolicy: DomIdPolicy
 ): BlockNode {
   const { slots, ...own } = node;
   const copy: BlockNode = { ...structuredClone(own), id: newId() };
@@ -1200,10 +1248,19 @@ function reidOneKeepingReferences(
     return minted;
   };
 
-  if (typeof copy.cssId === "string" && copy.cssId !== "") {
+  // `"keep"` leaves `domIds` EMPTY, which is the honest record: nothing moved,
+  // so the relink pass that follows has nothing to rewrite and every reference
+  // still names the id it named. Returning identity entries instead would say
+  // the same thing less clearly and make a caller checking the map against a
+  // destination report collisions with ids it is not introducing.
+  if (
+    domIdPolicy === "remint" &&
+    typeof copy.cssId === "string" &&
+    copy.cssId !== ""
+  ) {
     copy.cssId = remap(copy.cssId);
   }
-  if (copy.attributes) {
+  if (domIdPolicy === "remint" && copy.attributes) {
     copy.attributes = Object.fromEntries(
       Object.entries(copy.attributes).map(([key, value]) =>
         key.toLowerCase() === "id" && typeof value === "string" && value !== ""
