@@ -1071,13 +1071,30 @@ export interface ReidentifiedSubtree {
  * Two words rather than a boolean, because the call site is where this is read
  * and `true` at a call site says nothing about which way it points.
  *
- * - `"remint"` — derive a fresh id from each original and follow every
- *   reference to it. For a copy that lands in a document that may already hold
- *   the original, which is every INSERT.
- * - `"keep"` — carry the ids across verbatim and record none as moved. For a
- *   run being lifted into a document of its own, which is every SAVE.
+ * - `{ avoid }` — mint only the ids the destination ALREADY holds, and carry
+ *   the rest verbatim. For an INSERT, which is the only caller that can name
+ *   what it is landing among.
+ * - `"keep"` — carry every id across and record none as moved. For a run being
+ *   lifted into a document of its OWN, which is every SAVE: nothing is placed
+ *   beside anything, so nothing can collide.
+ * - `"remint"` — mint every id unconditionally. For a copier that cannot see
+ *   its destination, which is composition inlining a definition into an
+ *   instance without reading the host.
+ *
+ * A DOM id is authored content — someone typed `hero`, and it appears in a URL
+ * fragment, a stylesheet and the attribute panel — so it is rewritten only when
+ * keeping it would put two elements on a page answering to one id. `{ avoid }`
+ * exists because `"remint"` was doing it always: inserting into a page holding
+ * no `hero` still produced `hero-e75f55fb`, and feeding that back through a
+ * save grew the id by nine characters every cycle without bound.
  */
-export type DomIdPolicy = "remint" | "keep";
+export type DomIdPolicy =
+  | "remint"
+  | "keep"
+  | {
+      /** The DOM ids the destination already carries, folded as HTML folds them. */
+      readonly avoid: ReadonlySet<string>;
+    };
 
 /** A re-identified FOREST, and the two maps describing what moved. */
 export interface ReidentifiedForest {
@@ -1131,11 +1148,12 @@ export interface ReidentifiedForest {
  *
  * ## Minting is for a copy that lands BESIDE its original
  *
- * That is the whole reason for it, and `"keep"` is for the caller it is not
- * true of: a run lifted out of a page to become a document of its OWN. Nothing
- * there is placed next to anything, so there is no collision to avoid — and
- * minting anyway is not merely unnecessary, it is wrong in three ways that were
- * measured rather than argued.
+ * That is the whole reason for it, so what a caller answers is which ids its
+ * destination already holds. `"keep"` is for the one landing among nothing: a
+ * run lifted out of a page to become a document of its OWN. `{ avoid }` is for
+ * one that can name what is there. Minting where neither says to is not merely
+ * unnecessary, it is wrong in three ways that were measured rather than
+ * argued.
  *
  * A DOM id is authored content: someone typed `hero`, and it appears in a URL
  * fragment, a stylesheet and the attribute panel. Storing `hero-3ee4a0d4` puts
@@ -1256,22 +1274,29 @@ function reidOneKeepingReferences(
     return minted;
   };
 
-  // `"keep"` leaves `domIds` EMPTY, which is the honest record: nothing moved,
-  // so the relink pass that follows has nothing to rewrite and every reference
-  // still names the id it named. Returning identity entries instead would say
-  // the same thing less clearly and make a caller checking the map against a
-  // destination report collisions with ids it is not introducing.
+  // An id that is NOT minted contributes no entry to `domIds`, which is the
+  // honest record: nothing moved, so the relink pass that follows has nothing
+  // to rewrite and every reference still names the id it named. Identity
+  // entries would say the same thing less clearly and make a caller checking
+  // the map against its destination report collisions it is not introducing.
+  const moves = (value: string): boolean =>
+    domIdPolicy === "remint" ||
+    (domIdPolicy !== "keep" && domIdPolicy.avoid.has(value));
+
   if (
-    domIdPolicy === "remint" &&
     typeof copy.cssId === "string" &&
-    copy.cssId !== ""
+    copy.cssId !== "" &&
+    moves(copy.cssId)
   ) {
     copy.cssId = remap(copy.cssId);
   }
-  if (domIdPolicy === "remint" && copy.attributes) {
+  if (copy.attributes) {
     copy.attributes = Object.fromEntries(
       Object.entries(copy.attributes).map(([key, value]) =>
-        key.toLowerCase() === "id" && typeof value === "string" && value !== ""
+        key.toLowerCase() === "id" &&
+        typeof value === "string" &&
+        value !== "" &&
+        moves(value)
           ? [key, remap(value)]
           : [key, value]
       )

@@ -461,6 +461,69 @@ describe("planUpdatePatternFromSelection: what it refuses", () => {
   });
 });
 
+describe("what a save refuses on the INSERT's behalf", () => {
+  // A page is stored under forgiving validation and the rules move underneath
+  // it, so a run that renders today can hold a node no insert would carry.
+  // Saving it without complaint produces a library row `planInsertPattern`
+  // refuses everywhere — visible, unplaceable, and silent about why until an
+  // author tries. Both save planners ask, because both produce that row.
+
+  it("refuses a node whose SHAPE the op layer would not carry", () => {
+    const document = page([{ ...node("a"), version: 0 } as BlockNode]);
+
+    expect(
+      planUpdatePatternFromSelection(document, ["a"], target, anyParent).problem
+    ).toBe("invalid-node");
+    expect(
+      planSaveAsPattern(
+        document,
+        ["a"],
+        { collection: "patterns", fields: {} },
+        anyParent
+      ).problem
+    ).toBe("invalid-node");
+  });
+
+  it("refuses a DESCENDANT whose parent rule narrowed after the page was written", () => {
+    // Legal at the root and illegal inside: the roots pass `canBeRoot`, and a
+    // check that stopped there would store a pattern that insert refuses
+    // during its own internal-nesting pass.
+    const document = page([
+      node("box", {}, { main: [node("col", { type: "core/column" })] }),
+    ]);
+
+    expect(
+      planUpdatePatternFromSelection(document, ["box"], target, columnsOnly)
+        .problem
+    ).toBe("wrong-parent");
+    expect(
+      planSaveAsPattern(
+        document,
+        ["box"],
+        { collection: "patterns", fields: {} },
+        columnsOnly
+      ).problem
+    ).toBe("wrong-parent");
+  });
+
+  it("still saves a run whose descendants are legal", () => {
+    // The over-exclusion control. Refusing anything carrying a slot would
+    // satisfy both tests above and break every ordinary save.
+    const document = page([
+      node(
+        "cols",
+        { type: "core/columns" },
+        { main: [node("col", { type: "core/column" })] }
+      ),
+    ]);
+
+    expect(
+      planUpdatePatternFromSelection(document, ["cols"], target, columnsOnly)
+        .problem
+    ).toBeUndefined();
+  });
+});
+
 describe("save → insert → save-over, through applyOps", () => {
   /** Save a run as a new pattern, then insert it into an empty page. */
   function seed(
@@ -568,41 +631,57 @@ describe("save → insert → save-over, through applyOps", () => {
     expect(landed.nodes[0].locked).toBe(true);
   });
 
-  it("stores the same document however many times it is saved over", () => {
-    // Idempotence of the SAVE, which is what makes a digest usable at all: two
-    // saves of one selection have to agree, or every copy of the pattern reads
-    // as stale after a save-over that changed nothing.
-    //
-    // It is the save half of that property. The insert half is NOT closed —
-    // `planInsertPattern` re-mints a DOM id unconditionally rather than only
-    // when the destination already holds it, so a placed copy's `hero` comes
-    // back as `hero-<suffix>` and saving THAT over the pattern does move the
-    // digest. Measured, filed as
-    // `finding:pb6-insert-remints-a-dom-id-the-destination-does-not-hold`, and
-    // deliberately not asserted here: a test pinning today's answer would have
-    // to be deleted by the fix rather than turning green for it.
+  it("saving an unedited copy back over the pattern moves NOTHING", () => {
+    // The whole round trip, and the property the digest exists to have: place a
+    // pattern, save the untouched copy straight back, and the pattern's content
+    // is where it was — so no other copy is told to look at a change nobody
+    // made. A staleness signal that fires without cause is worse than none,
+    // because it teaches authors to dismiss the one that means something.
     const source = page([
       node("a", { cssId: "hero" }, { main: [node("kid")] }),
     ]);
-    const { placed } = seed(source, ["a"]);
+    const { stored, placed } = seed(source, ["a"]);
 
-    const first = planUpdatePatternFromSelection(
-      placed,
-      [placed.nodes[0].id],
-      target,
-      anyParent
-    );
-    const second = planUpdatePatternFromSelection(
+    const plan = planUpdatePatternFromSelection(
       placed,
       [placed.nodes[0].id],
       target,
       anyParent
     );
 
-    expect(patternDigest(first.update?.document.nodes ?? [])).toBe(
-      patternDigest(second.update?.document.nodes ?? [])
+    expect(patternDigest(plan.update?.document.nodes ?? [])).toBe(
+      patternDigest(stored.document.nodes)
     );
-    // And the authored id is what is stored, not something minted over it.
-    expect(first.update?.document.nodes[0].cssId).toBe(placed.nodes[0].cssId);
+    // And the authored id survived the trip rather than gaining a suffix.
+    expect(plan.update?.document.nodes[0].cssId).toBe("hero");
+  });
+
+  it("does not grow the authored id, however many cycles it goes round", () => {
+    // It grew by nine characters per cycle before: `hero`, `hero-3ee4a0d4`,
+    // `hero-3ee4a0d4-fb48e67c`, with no bound. Run over four cycles rather
+    // than one, because a single trip can be right while the composition of
+    // two is not — which is the whole reason this file tests round trips.
+    let current = page([node("a", { cssId: "hero" })]);
+    let row = seed(current, ["a"]).stored;
+
+    for (let cycle = 0; cycle < 4; cycle += 1) {
+      const insert = planned(
+        planInsertPattern(page([]), row, { index: 0 }, anyParent)
+      );
+      current = applyOps(page([]), insert.pageOps).document;
+      const over = planUpdatePatternFromSelection(
+        current,
+        [current.nodes[0].id],
+        target,
+        anyParent
+      );
+      row = {
+        id: PATTERN_ID,
+        document: over.update?.document as BlockDocument,
+      };
+    }
+
+    expect(row.document.nodes[0].cssId).toBe("hero");
+    expect(current.nodes[0].cssId).toBe("hero");
   });
 });

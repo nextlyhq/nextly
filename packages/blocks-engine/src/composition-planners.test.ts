@@ -192,10 +192,15 @@ describe("a reference that crosses from one root to the next", () => {
 
     const stored = planSaveAsPattern(doc, ["a", "b"], target, anyParent).create
       ?.document;
+    // Into a page that ALREADY holds `pricing`, which is the case minting
+    // exists for. Inserting into an empty page mints nothing now — correctly,
+    // since a DOM id is authored content and there is nothing to collide with
+    // — so an empty destination could not tell a working remap from no remap.
+    const destination = page([node("existing", { cssId: "pricing" })]);
     const insert = planInsertPattern(
-      page([]),
+      destination,
       { id: "hero-pattern", document: stored as BlockDocument },
-      { index: 0 },
+      { index: 1 },
       anyParent
     );
     expect(insert.problem).toBeUndefined();
@@ -213,8 +218,8 @@ describe("a reference that crosses from one root to the next", () => {
     expect(placedPointer.attributes?.["aria-describedby"]).toBe(
       placedTarget.cssId
     );
-    // The INSERT is where the id must move: this copy lands in a document that
-    // may already hold the original.
+    // The INSERT is where the id moves, because here the destination DOES
+    // already hold it.
     expect(placedTarget.cssId).not.toBe("pricing");
   });
 });
@@ -243,10 +248,11 @@ describe("a link inside the saved run still reaches its own target", () => {
 
     const stored = planSaveAsPattern(doc, ["t", "l"], target, anyParent).create
       ?.document;
+    const destination = page([node("existing", { cssId: "pricing" })]);
     const insert = planInsertPattern(
-      page([]),
+      destination,
       { id: "hero-pattern", document: stored as BlockDocument },
-      { index: 0 },
+      { index: 1 },
       anyParent
     );
     expect(insert.problem).toBeUndefined();

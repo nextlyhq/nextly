@@ -595,3 +595,60 @@ describe("the refusals are the op layer's, not invented", () => {
     ).toThrow();
   });
 });
+
+describe("which DOM ids an insert steers around", () => {
+  it("keeps an id the destination does not hold", () => {
+    // A DOM id is authored content — it appears in a URL fragment, a
+    // stylesheet and the attribute panel — so it is rewritten only when
+    // keeping it would put two elements on one page answering to one id.
+    const plan = planInsertPattern(
+      page([node("a")]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).toBe("hero");
+  });
+
+  it("mints one the destination DOES hold", () => {
+    const plan = planInsertPattern(
+      page([node("a", { cssId: "hero" })]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).not.toBe("hero");
+    expect(placed[0].cssId?.startsWith("hero-")).toBe(true);
+  });
+
+  it("does not mint against ids the document target is about to DELETE", () => {
+    // The `"document"` target replaces the root forest, so the page's own ids
+    // are not ids the copy lands among. Steering around them would rename a
+    // full-page pattern's blocks to avoid content being removed in the same
+    // group — and this is "start from a pattern", the flow where an author is
+    // most likely to have named things and least likely to expect them
+    // renamed.
+    const plan = planInsertPattern(
+      page([node("old", { cssId: "hero" })]),
+      pattern([node("p1", { cssId: "hero" })]),
+      "document",
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).toBe("hero");
+  });
+});

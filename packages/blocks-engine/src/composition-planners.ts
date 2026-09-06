@@ -247,11 +247,33 @@ interface SavableRun {
  * existing one, and a rule spelled twice is a rule that will eventually differ
  * between the two menu items sitting next to each other.
  *
- * Two clauses. The blocks must be one contiguous run of siblings — the cause
- * comes back from {@link contiguousRun} unchanged, so the sentence an author
- * reads is composed once per surface rather than once per planner. And saving
- * LIFTS that run out, so its blocks become the ROOTS of a new document, which a
- * block declaring the parents it may sit in cannot be.
+ * The blocks must be one contiguous run of siblings — the cause comes back from
+ * {@link contiguousRun} unchanged, so the sentence an author reads is composed
+ * once per surface rather than once per planner. And saving LIFTS that run out,
+ * so its blocks become the ROOTS of a new document, which a block declaring the
+ * parents it may sit in cannot be.
+ *
+ * ## It also asks what INSERT will ask of the result
+ *
+ * A page is stored under forgiving validation and the rules move underneath it,
+ * so a run that renders today can hold a node no insert would carry: one whose
+ * shape the op layer refuses, or a descendant whose parent or slot rule
+ * narrowed after the page was written. Saving such a run without complaint
+ * produces a library row that `planInsertPattern` then refuses EVERYWHERE — an
+ * entry an author can see, cannot place, and gets no reason for until they try.
+ *
+ * That failure has happened once already in this module, between save and
+ * insert, and it is invisible in either planner read alone: each answers
+ * correctly about the document it was handed. So the save asks the questions
+ * the insert will ask, of the same shared rules, and refuses at the point where
+ * the author still has the selection in front of them.
+ *
+ * The shape check is also what keeps this function from THROWING. Copying a
+ * selection runs `structuredClone`, which raises a native `DOMException` on a
+ * value JSON cannot carry — a function that reached `props` from an in-process
+ * caller — rather than the refusal this module promises. Asking first turns
+ * that crash into a cause, which is why the insert path asks it before copying
+ * too.
  */
 function savableRun(
   document: BlockDocument,
@@ -262,7 +284,10 @@ function savableRun(
   if (result.run === undefined) return { problem: result.problem };
 
   const selected = result.run.places.map(place => place.node);
-  const refusal = placementRefusal(selected, { kind: "root" }, nesting);
+  const refusal =
+    shapeRefusal(selected) ??
+    placementRefusal(selected, { kind: "root" }, nesting) ??
+    internalNestingRefusal(selected, nesting);
   return refusal ?? { selected };
 }
 
@@ -290,11 +315,12 @@ function savableRun(
  * reference that crosses from one root to the next.
  *
  * **DOM ids are KEPT.** A saved run becomes a document of its own rather than a
- * copy placed beside its original, so there is no collision to avoid — and
- * insert re-mints anyway. Minting here would store a `hero-3ee4a0d4` no author
- * wrote, make two saves of one selection differ so any content fingerprint
- * reported a change nobody made, and grow the id by nine characters on every
- * save-insert-save cycle without bound. `reidForestWithMap` takes the policy
+ * copy placed beside its original, so there is no collision to avoid — and an
+ * insert renames only what its own destination already holds. Minting here
+ * would store a `hero-3ee4a0d4` no author wrote, make two saves of one
+ * selection differ so any content fingerprint reported a change nobody made,
+ * and grow the id by nine characters on every save-insert-save cycle without
+ * bound. `reidForestWithMap` takes the policy
  * that says which, and its `DomIdPolicy` carries the measurements.
  *
  * **No inherited provenance.** These nodes came from the page, not from
@@ -609,7 +635,7 @@ export function planInsertPattern(
   const destination = destinationOf(document, target);
   if (destination.problem !== undefined) return destination;
 
-  const copy = freshCopy(pattern.document.nodes, document);
+  const copy = freshCopy(pattern.document.nodes, takenDomIds(document, target));
   if (copy.problem !== undefined) return copy;
 
   // Recorded on the way in, and OVERWRITTEN rather than filled in where absent:
@@ -859,12 +885,12 @@ interface FreshCopy {
 /**
  * How many times a fresh set of ids may be minted before giving up.
  *
- * `reidForestWithMap` guarantees its DOM ids are unique WITHIN the copy and
- * says so — it is handed a forest and cannot see the page. A minted id is
- * derived from a fresh random node id, so colliding with one the destination
- * already carries needs that exact string to be there already; minting again
- * draws different ids, so one retry all but settles it and three is a bound
- * rather than an expectation.
+ * The copier is TOLD what the destination holds — that is what
+ * {@link DomIdPolicy}'s `avoid` set is — and it mints only against that set, so
+ * a collision here means a MINTED id landed on one the page already carried.
+ * A minted id is derived from a fresh random node id, so that needs the exact
+ * string to be there already; minting again draws different ids, so one retry
+ * all but settles it and three is a bound rather than an expectation.
  *
  * Checked rather than assumed because the alternative is the failure this
  * module keeps finding: two elements sharing a DOM id, an anchor resolving to
@@ -886,15 +912,31 @@ const MAX_ID_MINTING_ATTEMPTS = 3;
 
 function freshCopy(
   roots: BlockNode[],
-  document: BlockDocument
+  taken: ReadonlySet<string>
 ): FreshCopy | PlanRefusal {
-  const taken = domIdsIn(document.nodes);
   for (let attempt = 0; attempt < MAX_ID_MINTING_ATTEMPTS; attempt += 1) {
-    const minted = reidForestWithMap(roots);
+    const minted = reidForestWithMap(roots, { avoid: taken });
     const clash = [...minted.domIds.values()].some(id => taken.has(id));
     if (!clash) return { nodes: minted.nodes };
   }
   return { problem: "dom-id-collision" };
+}
+
+/**
+ * The DOM ids the insert has to steer around.
+ *
+ * EMPTY for the `"document"` target, and that is the point rather than an
+ * oversight: that target REMOVES every root before it inserts, so the ids on
+ * the page are not ids the copy will land among. Passing them would mint
+ * against content that is about to be deleted — and the `"document"` target is
+ * "start from a pattern" on an empty document, the one flow where an author is
+ * most likely to have named things and least likely to expect them renamed.
+ */
+function takenDomIds(
+  document: BlockDocument,
+  target: InsertTarget
+): ReadonlySet<string> {
+  return target === "document" ? new Set<string>() : domIdsIn(document.nodes);
 }
 
 /**

@@ -552,7 +552,8 @@ describe('the "keep" DOM id policy', () => {
    * Minting exists so a copy placed BESIDE its original does not emit a
    * duplicate HTML id. `"keep"` is for the caller that is not doing that: a run
    * lifted out of a page to become a document of its own. Nothing there is
-   * placed next to anything, and insert re-mints later anyway.
+   * placed next to anything, and an insert renames only what its own
+   * destination already holds.
    */
   it("carries a cssId and an attributes.id across verbatim", () => {
     const [copy] = reidForestWithMap(
@@ -633,5 +634,60 @@ describe('the "keep" DOM id policy', () => {
 
     expect(copy.cssId).not.toBe("hero");
     expect(copy.cssId?.startsWith("hero-")).toBe(true);
+  });
+});
+
+describe('the "avoid" DOM id policy', () => {
+  it("mints an id the destination holds, and keeps one it does not", () => {
+    // Both in ONE copy, so the test cannot pass by treating the policy as a
+    // whole-forest switch: the decision is per id.
+    const { nodes } = reidForestWithMap(
+      [node("a", { cssId: "taken" }), node("b", { cssId: "free" })],
+      { avoid: new Set(["taken"]) }
+    );
+
+    expect(nodes[0].cssId).not.toBe("taken");
+    expect(nodes[0].cssId?.startsWith("taken-")).toBe(true);
+    expect(nodes[1].cssId).toBe("free");
+  });
+
+  it("records only the id that moved", () => {
+    const { domIds } = reidForestWithMap(
+      [node("a", { cssId: "taken" }), node("b", { cssId: "free" })],
+      { avoid: new Set(["taken"]) }
+    );
+
+    // `free` is absent because it did not move. A caller checking this map
+    // against its destination is asking which ids this copy INTRODUCES, and an
+    // identity entry would answer that wrongly.
+    expect([...domIds.keys()]).toEqual(["taken"]);
+  });
+
+  it("follows a reference to the id it moved, and leaves the other alone", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("a", { cssId: "taken" }),
+        node("b", { cssId: "free" }),
+        node("p", {
+          attributes: { "aria-describedby": "taken" },
+          props: { href: "#free" },
+        }),
+      ],
+      { avoid: new Set(["taken"]) }
+    );
+
+    expect(nodes[2].attributes?.["aria-describedby"]).toBe(nodes[0].cssId);
+    expect((nodes[2].props as { href: string }).href).toBe("#free");
+  });
+
+  it("mints nothing when the destination holds none of them", () => {
+    const { nodes, domIds } = reidForestWithMap(
+      [node("a", { cssId: "hero", attributes: { id: "hero-alt" } })],
+      { avoid: new Set<string>() }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+    expect(nodes[0].attributes?.id).toBe("hero-alt");
+    expect(domIds.size).toBe(0);
   });
 });
