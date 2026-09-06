@@ -56,18 +56,21 @@ const DESCRIPTION_SOURCE = "packages/nextly/package.json";
  * repository or a stale `OWNER` returns, and treating it as transient would leave this check
  * green for as long as the mistake lasted, examining no metadata at all.
  *
- * 403 is the ambiguous one, and the headers are what resolve it: GitHub returns 403 both for
- * rate limiting, which recovers, and for a repository this credential may not read, which does
- * not. Reading only the status would classify a permanent refusal as a moment to try again.
+ * 403 is the ambiguous one, and it is read as transient. GitHub returns it both for rate
+ * limiting, which recovers, and for a repository this credential may not read, which does not
+ * — and its own guidance documents a secondary limit that identifies itself with NEITHER
+ * `retry-after` nor an exhausted quota, to be retried after at least a minute. So the headers
+ * cannot separate the two cases, and the choice is which way to be wrong.
+ *
+ * Transient is the safer error here, because the two costs are not symmetric. A permanent
+ * refusal read as transient is retried and then reported by the run that must verify, which
+ * fails on an unreadable API whatever the reason — the alarm still sounds, with a less
+ * specific message. A recoverable limit read as permanent files an issue immediately for
+ * something that would have cleared on its own, and an alarm that cries wolf is worse than
+ * none.
  */
-export function isPermanentStatus(status, headers) {
-  if (status === 429) return false;
-  if (status === 403) {
-    const remaining = headers?.get?.("x-ratelimit-remaining");
-    const retryAfter = headers?.get?.("retry-after");
-    // Primary limit exhausts the quota; a secondary limit answers with retry-after instead.
-    return !(remaining === "0" || retryAfter);
-  }
+export function isPermanentStatus(status) {
+  if (status === 403 || status === 429) return false; // rate limited, or indistinguishable from it
   if (status >= 500) return false; // GitHub's side, and it recovers
   return status >= 400;
 }
@@ -118,7 +121,7 @@ const MAX_RETRY_WAIT_MS = 60_000;
  * clear — the retries are spent, and a scheduled run files an issue for a limit that had a
  * published recovery time.
  */
-export function retryDelayMs(headers, attempt, now = Date.now()) {
+export function retryDelayMs({ headers, attempt, status, now = Date.now() } = {}) {
   const retryAfter = Number(headers?.get?.("retry-after"));
   if (Number.isFinite(retryAfter) && retryAfter > 0) return retryAfter * 1000;
 
@@ -127,6 +130,11 @@ export function retryDelayMs(headers, attempt, now = Date.now()) {
     const wait = reset * 1000 - now;
     if (wait > 0) return wait;
   }
+
+  // GitHub's documented fallback for a secondary limit that named no interval: wait at least
+  // a minute. Its own backoff below is for failures that are not a limit at all, and a second
+  // is far too soon for one that is.
+  if (status === 403) return 60_000;
 
   return attempt * 1000;
 }
@@ -150,9 +158,9 @@ export async function fetchRepoMetadata(owner = OWNER, repo = REPO, { fetchImpl 
         };
       }
       const error = new Error(`GitHub API returned ${response.status} for ${owner}/${repo}`);
-      error.permanent = isPermanentStatus(response.status, response.headers);
+      error.permanent = isPermanentStatus(response.status);
       if (error.permanent) throw error;
-      error.retryIn = retryDelayMs(response.headers, attempt);
+      error.retryIn = retryDelayMs({ headers: response.headers, attempt, status: response.status });
       lastError = error;
     } catch (error) {
       if (error.permanent) throw error;
@@ -274,7 +282,9 @@ if (invokedDirectly) {
               `made private and the constants in this script are stale, or it can no longer ` +
               `be read without a token.\n`
             : `This run exists to observe the About line and the topics, and it examined ` +
-              `neither, so it cannot report a pass. Re-run it once the API is reachable.\n`)
+              `neither, so it cannot report a pass. Usually a rate limit, which clears on ` +
+              `its own. If it repeats, check that the repository is still readable by this ` +
+              `token — a 403 from a repository made private looks the same from here.\n`)
       );
       process.exit(1);
     }

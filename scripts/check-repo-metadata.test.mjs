@@ -245,36 +245,50 @@ describe("retryDelayMs", () => {
   const headers = entries => ({ get: name => entries[name] ?? null });
 
   it("waits the interval a secondary limit named", () => {
-    expect(retryDelayMs(headers({ "retry-after": "60" }), 1)).toBe(60_000);
+    expect(retryDelayMs({ headers: headers({ "retry-after": "60" }), attempt: 1 })).toBe(60_000);
   });
 
   it("waits until a primary limit resets", () => {
     const now = 1_000_000_000_000;
     const reset = String(now / 1000 + 45);
-    expect(retryDelayMs(headers({ "x-ratelimit-reset": reset }), 1, now)).toBe(45_000);
+    expect(
+      retryDelayMs({ headers: headers({ "x-ratelimit-reset": reset }), attempt: 1, now })
+    ).toBe(45_000);
   });
 
   it("prefers retry-after when both are present", () => {
     const now = 1_000_000_000_000;
     expect(
-      retryDelayMs(
-        headers({ "retry-after": "5", "x-ratelimit-reset": String(now / 1000 + 900) }),
-        1,
-        now
-      )
+      retryDelayMs({
+        headers: headers({ "retry-after": "5", "x-ratelimit-reset": String(now / 1000 + 900) }),
+        attempt: 1,
+        now,
+      })
     ).toBe(5_000);
   });
 
-  it("backs off on its own when GitHub named no interval", () => {
-    expect(retryDelayMs(headers({}), 1)).toBe(1_000);
-    expect(retryDelayMs(undefined, 2)).toBe(2_000);
+  it("waits GitHub's documented minute for a 403 that named no interval", () => {
+    // Its own backoff is for failures that are not a limit at all; a second is far too soon
+    // for a secondary limit that identified itself with neither header.
+    expect(retryDelayMs({ headers: headers({}), attempt: 1, status: 403 })).toBe(60_000);
+    expect(retryDelayMs({ attempt: 1, status: 403 })).toBe(60_000);
+  });
+
+  it("backs off on its own when GitHub named no interval and it is not a limit", () => {
+    expect(retryDelayMs({ headers: headers({}), attempt: 1, status: 503 })).toBe(1_000);
+    expect(retryDelayMs({ attempt: 2, status: 503 })).toBe(2_000);
   });
 
   it("ignores a reset already in the past", () => {
     const now = 1_000_000_000_000;
-    expect(retryDelayMs(headers({ "x-ratelimit-reset": String(now / 1000 - 10) }), 3, now)).toBe(
-      3_000
-    );
+    expect(
+      retryDelayMs({
+        headers: headers({ "x-ratelimit-reset": String(now / 1000 - 10) }),
+        attempt: 3,
+        status: 503,
+        now,
+      })
+    ).toBe(3_000);
   });
 });
 
@@ -289,8 +303,8 @@ describe("isPermanentStatus", () => {
 
   it("treats rate limiting and server errors as transient", () => {
     // An unauthenticated call from CI hits the rate limit routinely, and it says nothing
-    // about the metadata. 403 is not in this list: it means two different things and the
-    // headers are what separate them, which the "403 is two different answers" suite covers.
+    // about the metadata.
+    expect(isPermanentStatus(403)).toBe(false);
     expect(isPermanentStatus(429)).toBe(false);
     expect(isPermanentStatus(500)).toBe(false);
     expect(isPermanentStatus(502)).toBe(false);
@@ -302,7 +316,7 @@ describe("isPermanentStatus", () => {
   });
 });
 
-describe("403 is two different answers", () => {
+describe("403 is read as transient", () => {
   const headers = entries => ({ get: name => entries[name] ?? null });
 
   it("is transient when the quota is exhausted", () => {
@@ -313,13 +327,18 @@ describe("403 is two different answers", () => {
     expect(isPermanentStatus(403, headers({ "retry-after": "60" }))).toBe(false);
   });
 
-  it("is permanent when the credential simply may not read the repository", () => {
-    // Reading the status alone would call this a moment to try again, forever.
-    expect(isPermanentStatus(403, headers({ "x-ratelimit-remaining": "4999" }))).toBe(true);
+  it("is transient when NEITHER header identifies it", () => {
+    // GitHub documents a secondary limit carrying no retry-after and a nonzero remaining
+    // quota. Reading that as a permission failure files an issue for a limit that clears.
+    expect(isPermanentStatus(403, headers({ "x-ratelimit-remaining": "4999" }))).toBe(false);
+    expect(isPermanentStatus(403, undefined)).toBe(false);
   });
 
-  it("is permanent when there are no headers to consult", () => {
-    expect(isPermanentStatus(403, undefined)).toBe(true);
+  it("still calls the statuses that cannot recover permanent", () => {
+    // A repository this credential may not read answers 403 too, and nothing separates it
+    // from a limit — but 404 and 401 are unambiguous and must not be retried forever.
+    expect(isPermanentStatus(404)).toBe(true);
+    expect(isPermanentStatus(401)).toBe(true);
   });
 });
 
