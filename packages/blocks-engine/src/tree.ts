@@ -1095,6 +1095,24 @@ export type DomIdPolicy =
   | {
       /** The DOM ids the destination already carries, folded as HTML folds them. */
       readonly avoid: ReadonlySet<string>;
+    }
+  | {
+      /**
+       * DOM ids to put BACK, as they are now → as they were, keeping the rest.
+       *
+       * The inverse of what an `avoid` copy recorded. An insert renames an id
+       * only because the page it landed on already held that name, so the new
+       * one is a fact about that page rather than anything the author wrote —
+       * and a copy saved back out of the page carries it into a library where
+       * it means nothing, and grows another suffix on every insert-save cycle.
+       *
+       * A map rather than a re-mint, because the original cannot be derived
+       * from the current value: a minted id is the authored one plus a suffix
+       * drawn from a node id, and content from a script or an import may name
+       * its anchors that way deliberately. Only the copy that did the renaming
+       * knows, which is why it records it.
+       */
+      readonly restore: ReadonlyMap<string, string>;
     };
 
 /** A re-identified FOREST, and the two maps describing what moved. */
@@ -1270,6 +1288,52 @@ export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
 }
 
 /** One node, re-identified, with its DOM id remapped rather than removed. */
+/**
+ * What a moving DOM id becomes: the recorded original, or a minted one.
+ *
+ * Both answers go through the caller's memo, so a subtree spelling one id on
+ * two nodes still maps both to a single replacement and a reference to it still
+ * reaches one target.
+ *
+ * A `restore` policy that does not name this id falls back to minting, which
+ * cannot happen through {@link movesUnder} — that only lets an id move when the
+ * map holds it — and is the safe answer rather than returning the id unchanged,
+ * which would be a copy silently keeping an id it was told to move.
+ */
+function replacementFor(
+  value: string,
+  nodeId: string,
+  policy: DomIdPolicy
+): string {
+  if (typeof policy === "object" && "restore" in policy) {
+    return policy.restore.get(value) ?? mintDomId(value, nodeId);
+  }
+  return mintDomId(value, nodeId);
+}
+
+/**
+ * Whether the id this node RENDERS changes under the policy it was given.
+ *
+ * Only the rendered one is ever a candidate — a node can spell two and emits
+ * one, and moving the shadowed spelling makes the relink pass rewrite every
+ * reference to an id nothing renders.
+ *
+ * Its own function because the copier it serves is at the complexity the gate
+ * allows, and because the four policies read as one question here rather than
+ * as a condition threaded through two rewrite sites.
+ */
+function movesUnder(
+  value: string,
+  rendered: string | undefined,
+  policy: DomIdPolicy
+): boolean {
+  if (value !== rendered) return false;
+  if (policy === "remint") return true;
+  if (policy === "keep") return false;
+  if ("restore" in policy) return policy.restore.has(value);
+  return policy.avoid.has(value);
+}
+
 function reidOneKeepingReferences(
   node: BlockNode,
   nodeIds: Map<string, string>,
@@ -1288,9 +1352,9 @@ function reidOneKeepingReferences(
   const remap = (value: string): string => {
     const existing = domIds.get(value);
     if (existing !== undefined) return existing;
-    const minted = mintDomId(value, copy.id);
-    domIds.set(value, minted);
-    return minted;
+    const replacement = replacementFor(value, copy.id, domIdPolicy);
+    domIds.set(value, replacement);
+    return replacement;
   };
 
   // An id that is NOT minted contributes no entry to `domIds`, which is the
@@ -1308,9 +1372,7 @@ function reidOneKeepingReferences(
   // single id afterwards.
   const rendered = hidden.has(node) ? undefined : renderedDomId(node);
   const moves = (value: string): boolean =>
-    value === rendered &&
-    (domIdPolicy === "remint" ||
-      (domIdPolicy !== "keep" && domIdPolicy.avoid.has(value)));
+    movesUnder(value, rendered, domIdPolicy);
 
   if (
     typeof copy.cssId === "string" &&

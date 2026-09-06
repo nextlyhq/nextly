@@ -9,7 +9,7 @@
  * a framework.
  */
 import { isPlainRecord } from "./plain-record";
-import { ownEntry } from "./safe-record";
+import { ownEntry, ownKeys } from "./safe-record";
 
 /**
  * Engine document-format version. Bumped only when the envelope shape itself
@@ -197,6 +197,30 @@ export type BlockOrigin =
        * bumps a version and leaves a digest alone.
        */
       readonly digest: string;
+      /**
+       * The DOM ids this copy had to rename, as the source spells them → as
+       * this copy does.
+       *
+       * An insert renames an id only because the page already held that name,
+       * so the replacement is a fact about the destination rather than anything
+       * the author wrote. Recording it is what lets a copy saved back out of the
+       * page be stored under the names the source uses — without it, the
+       * pattern's own fingerprint moves on a save that changed nothing, every
+       * other copy reports itself stale, and the id grows another suffix on each
+       * insert-save cycle.
+       *
+       * Recorded rather than derived, because the original cannot be recovered
+       * from the current value: a minted id is the authored one plus a suffix
+       * taken from a node id, and content from a script or an import may name
+       * anchors that way on purpose. That was measured — an authored
+       * `hero-12345678` on node `12345678-…` was silently rewritten to `hero`.
+       *
+       * ABSENT means nothing to put back, which is also what a record written
+       * before this field existed says. The two are the same answer for every
+       * reader — restore nothing — so an older document needs no migration and
+       * behaves exactly as it does today.
+       */
+      readonly renamed?: Readonly<Record<string, string>>;
     }
   | {
       /** Detached from a component, severing the link deliberately. */
@@ -227,7 +251,30 @@ export function isBlockOrigin(value: unknown): value is BlockOrigin {
   if (from === "component") return true;
   if (from !== "pattern") return false;
   const digest = ownEntry(value, "digest");
-  return typeof digest === "string" && digest !== "";
+  if (typeof digest !== "string" || digest === "") return false;
+  return isRenameRecord(ownEntry(value, "renamed"));
+}
+
+/**
+ * Whether a rename record is one a later reader could act on.
+ *
+ * Absent is valid and means nothing was renamed. Present and malformed is not:
+ * a half-record would be read as "these are the originals" and put an id back
+ * that was never there, which is worse than having no record — the same reason
+ * {@link isBlockOrigin} refuses a pattern origin without a digest.
+ *
+ * Own entries only, and every one a non-empty string on both sides. An empty id
+ * is not an id, and an entry mapping to one would erase the id it restores.
+ */
+function isRenameRecord(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isPlainRecord(value)) return false;
+  for (const name of ownKeys(value)) {
+    if (name === "") return false;
+    const was = ownEntry(value, name);
+    if (typeof was !== "string" || was === "") return false;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
