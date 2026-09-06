@@ -631,6 +631,65 @@ describe("which DOM ids an insert steers around", () => {
     expect(placed[0].cssId?.startsWith("hero-")).toBe(true);
   });
 
+  it("does not steer around an id the destination SHADOWS", () => {
+    // The destination node carries `cssId: "actual"` beside
+    // `attributes.id: "hero"`, and the renderer emits only `actual` — the
+    // modelled field overwrites the bag. Treating `hero` as taken renamed the
+    // incoming pattern to avoid a string the page never puts on screen.
+    const plan = planInsertPattern(
+      page([node("x", { cssId: "actual", attributes: { id: "hero" } })]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).toBe("hero");
+  });
+
+  it("treats an EMPTY cssId as shadowing the bag, because the renderer does", () => {
+    // The renderer's guard is `cssId !== undefined`, not "non-empty" — so a
+    // node carrying `cssId: ""` beside `attributes.id: "hero"` emits `id=""`
+    // and never `hero`. The destination therefore does not hold `hero`, and
+    // steering around it would rename authored content for nothing.
+    //
+    // This case is the whole difference between reading `cssId` as "wins when
+    // non-empty" and as "wins when present". A rule written the first way
+    // passes every other test in this file.
+    const plan = planInsertPattern(
+      page([node("x", { cssId: "", attributes: { id: "hero" } })]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).toBe("hero");
+  });
+
+  it("DOES steer around an attribute id nothing shadows", () => {
+    // The control. Without it, "ignore the attribute bag entirely" passes the
+    // test above and reintroduces the duplicate-id bug the bag can cause.
+    const plan = planInsertPattern(
+      page([node("x", { attributes: { id: "hero" } })]),
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).not.toBe("hero");
+  });
+
   it("does not mint against ids the document target is about to DELETE", () => {
     // The `"document"` target replaces the root forest, so the page's own ids
     // are not ids the copy lands among. Steering around them would rename a

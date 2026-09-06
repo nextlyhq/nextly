@@ -23,6 +23,7 @@
  *
  * @module composition-planners
  */
+import { renderedDomId } from "./document";
 import type { BlockDocument, BlockNode, BlockOrigin } from "./document";
 import {
   canBeRoot,
@@ -913,26 +914,19 @@ function duplicateDomIdRefusal(
   let repeated = false;
   walkNodes([...roots], node => {
     if (repeated) return;
-    for (const id of domIdsOf(node)) {
-      if (seen.has(id)) {
-        repeated = true;
-        return;
-      }
-      seen.add(id);
+    // ONE id per node, through the shared rule. Reading `cssId` and the
+    // attribute bag as two ids made a node spelling one id through both look
+    // like it collided with itself — which `validateDomIds` explicitly does not
+    // report, and rightly: the renderer emits a single id for it.
+    const id = renderedDomId(node);
+    if (id === undefined) return;
+    if (seen.has(id)) {
+      repeated = true;
+      return;
     }
+    seen.add(id);
   });
   return repeated ? { problem: "duplicate-dom-id" } : undefined;
-}
-
-/** Every DOM id one node carries, from either spelling. */
-function domIdsOf(node: BlockNode): string[] {
-  const ids: string[] = [];
-  if (typeof node.cssId === "string" && node.cssId !== "") ids.push(node.cssId);
-  for (const [name, value] of Object.entries(node.attributes ?? {})) {
-    if (name.toLowerCase() !== "id") continue;
-    if (typeof value === "string" && value !== "") ids.push(value);
-  }
-  return ids;
 }
 
 /**
@@ -1016,30 +1010,24 @@ function takenDomIds(
 }
 
 /**
- * Every DOM id the destination already carries, from either spelling.
+ * Every DOM id the destination actually RENDERS.
  *
- * Attribute names are FOLDED. HTML attribute names are case-insensitive, and
- * the copier that mints replacements folds them too, so a destination storing
- * `ID` is holding a DOM id as surely as one storing `id` — and an exact-case
- * read here would not see it. Unreachable in a test for the reason
- * {@link MAX_ID_MINTING_ATTEMPTS} gives, and correct for a reason that does not
- * depend on being reachable: this set is a claim about what the page holds, and
- * a claim that is wrong about half the spellings is wrong.
+ * Not every id it stores. A node carrying `cssId: "actual"` beside
+ * `attributes.id: "hero"` emits only `actual`, so treating `hero` as taken made
+ * an inserted pattern rename itself away from a string the page never puts on
+ * screen — renaming authored content to avoid a collision that cannot happen.
+ * {@link renderedDomId} is the one rule for which of the two a node emits, and
+ * it folds attribute names because HTML does.
+ *
+ * A later edit CAN un-shadow the bag — clearing that `cssId` makes `hero`
+ * render — and this cannot prevent that, any more than it can prevent an author
+ * typing a duplicate afterwards. Validation reports it when it happens.
  */
 function domIdsIn(nodes: BlockNode[]): Set<string> {
   const taken = new Set<string>();
   walkNodes(nodes, node => {
-    if (typeof node.cssId === "string" && node.cssId !== "")
-      taken.add(node.cssId);
-    // FOLDED, because HTML attribute names are case-insensitive and the copier
-    // that mints replacements folds them too (`key.toLowerCase() === "id"`). An
-    // exact-case read here would miss a destination storing `ID`, and the miss
-    // is silent: the collision check passes and the page ends up with two
-    // elements answering to one id.
-    for (const [name, value] of Object.entries(node.attributes ?? {})) {
-      if (name.toLowerCase() !== "id") continue;
-      if (typeof value === "string" && value !== "") taken.add(value);
-    }
+    const id = renderedDomId(node);
+    if (id !== undefined) taken.add(id);
   });
   return taken;
 }

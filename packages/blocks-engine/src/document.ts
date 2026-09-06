@@ -762,6 +762,47 @@ export type ExposedPropertyType = (typeof EXPOSED_PROPERTY_TYPES)[number];
  * correctly on its own, and an instance that overrides nothing is identical to
  * the definition.
  */
+/**
+ * The single HTML `id` a node actually renders, or `undefined` for none.
+ *
+ * A node can SPELL a DOM id two ways — the modelled `cssId` and the
+ * `attributes` escape hatch — and it emits at most ONE. The renderer assigns
+ * the bag first and then overwrites with the modelled field
+ * (`block-boundary.tsx`: "The modelled field wins over an attribute of the same
+ * name"), so a node carrying `cssId: "actual"` beside `attributes.id: "hero"`
+ * puts `actual` on the page and never `hero`.
+ *
+ * Published because reading the two fields independently is wrong in both
+ * directions, and both were live:
+ *
+ * - counting them as two ids made one node look like it collided with ITSELF,
+ *   so a run spelling one id through both fields was refused as a duplicate —
+ *   which `validateDomIds` explicitly does not do (`value === node.cssId` is
+ *   skipped there);
+ * - counting a SHADOWED attribute id as taken made a copy rename itself to
+ *   avoid a string the destination never emits.
+ *
+ * An empty or non-string `cssId` still shadows — the renderer's guard is
+ * `!== undefined` — but emits nothing an anchor, a label or a selector can
+ * reach, so the node contributes no id rather than the bag's.
+ */
+export function renderedDomId(node: BlockNode): string | undefined {
+  if (node.cssId !== undefined) {
+    return typeof node.cssId === "string" && node.cssId !== ""
+      ? node.cssId
+      : undefined;
+  }
+  if (!isPlainRecord(node.attributes)) return undefined;
+  // FOLDED, because HTML attribute names are case-insensitive. Last one wins,
+  // which is the order the renderer's own assignment loop leaves behind.
+  let found: string | undefined;
+  for (const [name, value] of Object.entries(node.attributes)) {
+    if (name.toLowerCase() !== "id") continue;
+    if (typeof value === "string" && value !== "") found = value;
+  }
+  return found;
+}
+
 export interface ExposedProperty {
   /**
    * Stable slug, minted once.

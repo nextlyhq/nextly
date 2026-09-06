@@ -533,6 +533,44 @@ describe("what a save refuses on the INSERT's behalf", () => {
     ).toBe("duplicate-dom-id");
   });
 
+  it("accepts a node spelling ONE id through both of its fields", () => {
+    // A node emits at most one HTML id: the renderer assigns the attribute bag
+    // and then overwrites with `cssId`. Counting the two spellings separately
+    // made this node look like it collided with itself — and `validateDomIds`
+    // explicitly does not report it, so the save was refusing a selection the
+    // document model accepts.
+    const document = page([
+      node("a", { cssId: "hero", attributes: { id: "hero" } }),
+    ]);
+
+    expect(
+      planUpdatePatternFromSelection(document, ["a"], target, anyParent).problem
+    ).toBeUndefined();
+    expect(
+      planSaveAsPattern(
+        document,
+        ["a"],
+        { collection: "patterns", fields: {} },
+        anyParent
+      ).problem
+    ).toBeUndefined();
+  });
+
+  it("still refuses when the two nodes disagree about which id is theirs", () => {
+    // The control for the case above: two DIFFERENT nodes reaching one id is
+    // the duplicate that matters, and folding a node's own two spellings must
+    // not fold that away too.
+    const document = page([
+      node("a", { attributes: { ID: "hero" } }),
+      node("b", { cssId: "hero" }),
+    ]);
+
+    expect(
+      planUpdatePatternFromSelection(document, ["a", "b"], target, anyParent)
+        .problem
+    ).toBe("duplicate-dom-id");
+  });
+
   it("saves a run when the duplicate is elsewhere on the PAGE", () => {
     // Asked of the selection, not the document. A page may legitimately spell
     // one id twice somewhere the author is not saving, and refusing on that

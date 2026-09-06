@@ -209,6 +209,11 @@ export type {
 // consumer holding `BlockOrigin` and no way to check one has to write the check
 // again, and a second spelling of it admits records this package refuses.
 export { isBlockOrigin } from "./document";
+// The one rule for which DOM id a node actually renders. A node can spell one
+// two ways and emits at most one, so anything asking "what ids are on this
+// page" — a planner steering an insert around collisions, a duplicate check —
+// has to ask this rather than read the two fields independently.
+export { renderedDomId } from "./document";
 
 export { selectNodes } from "./select-nodes";
 export type {
