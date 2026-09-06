@@ -201,10 +201,21 @@ export interface PatternUpdateTarget {
  * `pageOps` is empty, and that is the whole behavioural difference from
  * `planConvertToComponent`, which replaces the run with a linked instance.
  *
- * **What it stores** — fresh ids, no inherited provenance, no `settings`, and
- * the source document's format version — is
+ * **What it stores** — fresh ids, kept DOM ids, no inherited provenance, no
+ * `settings`, and the source document's format version — is
  * {@link savedPatternDocument}, shared with the save-over planner so the two
  * cannot produce different documents from one selection.
+ *
+ * **It refuses what INSERTING the result would refuse.** A selection that is
+ * not one contiguous run, a block that may not be a document root, a node
+ * whose shape the op layer will not carry, a descendant nested somewhere the
+ * rules no longer allow, one DOM id spelled on two of the run's own nodes, and
+ * a format version no apply accepts. Each of those can sit in a page that
+ * renders, because pages are saved under forgiving validation and the rules
+ * move underneath them — and each would otherwise become a library entry an
+ * author can see, cannot place anywhere, and gets no reason for until they
+ * try. {@link savableRun} carries the reasoning; the causes arrive on
+ * {@link PlanRefusal}.
  *
  * **`assets` is not synthesised.** The media index describes a whole document,
  * and which prop of a block holds a media id is a property of that block's
@@ -449,9 +460,12 @@ function savedPatternDocument(
  * The plan IS the dry run, so every refusal the ops it emits would meet is
  * made here: an envelope `applyOp` will not edit at all, and an addressed id
  * the document holds twice, which `update` refuses because it could not say
- * which node it meant. The selection's own refusals are the ones saving a new
- * pattern makes — the run must be contiguous, and its blocks become document
- * roots, so a block that declares which parents it may sit in cannot be one.
+ * which node it meant.
+ *
+ * Everything it refuses about the SELECTION is what {@link planSaveAsPattern}
+ * refuses, through the same call — listed there rather than repeated here,
+ * because a second enumeration is a second thing to keep true and this one had
+ * already fallen two behind before anyone read it.
  */
 export function planUpdatePatternFromSelection(
   document: BlockDocument,
