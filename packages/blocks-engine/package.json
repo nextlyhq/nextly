@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/blocks-engine",
-  "version": "0.0.2-alpha.62",
+  "version": "0.0.2-alpha.63",
   "description": "Nextly blocks engine — the runtime-free document model, tree operations, validation, and block-definition contracts behind the Nextly page builder.",
   "license": "MIT",
   "repository": {

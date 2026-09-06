@@ -281,3 +281,148 @@ describe("reconcileMigrationMetadata", () => {
     expect(result.unreadable).toEqual([]);
   });
 });
+
+/*
+ * 🔴 The half table existence cannot answer. When a collection is edited in
+ * the Schema Builder the row gets the NEW fields and goes back to `pending`
+ * while the physical table is untouched — so `tableExists` says yes for a
+ * change that has not migrated, and the sweep used to promote it. The registry
+ * then advertises a shape the database has never had.
+ */
+describe("reconcileMigrationMetadata holds a row an unapplied migration names", () => {
+  /** Stands in for reading the migration headers and the applied ledger. */
+  function awaitingFn(opts: {
+    collections?: string[];
+    singles?: string[];
+    components?: string[];
+  }) {
+    return async () => ({
+      collections: new Set(opts.collections ?? []),
+      singles: new Set(opts.singles ?? []),
+      components: new Set(opts.components ?? []),
+    });
+  }
+
+  async function sweep(opts: {
+    tables: string[];
+    row: Record<string, unknown>;
+    awaiting: ReturnType<typeof awaitingFn>;
+  }) {
+    vi.resetModules();
+    const made = mockRegistries([opts.row]);
+    const { reconcileMigrationMetadata: fresh } = await import(
+      "../reconcile-metadata"
+    );
+    const result = await fresh({
+      adapter: adapterWith(opts.tables),
+      dialect: "sqlite",
+      migrationsDir: "/tmp/migrations",
+      logger: silent,
+      registerFn: (async () => ({
+        collectionsRegistered: 0,
+        singlesRegistered: 0,
+      })) as never,
+      readPendingEntitiesFn: opts.awaiting as never,
+    });
+    return { result, made };
+  }
+
+  it("leaves an edited row pending while a migration naming it is unapplied", async () => {
+    const { result, made } = await sweep({
+      // The old table still stands, which is exactly why existence cannot decide.
+      tables: ["dc_posts"],
+      row: { slug: "posts", tableName: "dc_posts" },
+      awaiting: awaitingFn({ collections: ["posts"] }),
+    });
+
+    expect(
+      made.collection.updateMigrationStatusWithVerification
+    ).not.toHaveBeenCalled();
+    expect(result.marked).toBe(0);
+    expect(result.awaitingMigration).toBe(1);
+    // Counted inside the total rather than beside it, so the two agree.
+    expect(result.stillPending).toBe(1);
+  });
+
+  it("promotes the same row once nothing names it any more", async () => {
+    // The control. Without it, an implementation that withheld EVERY row would
+    // satisfy the case above — and withholding every row is the empty-dashboard
+    // defect this sweep exists to prevent.
+    const { result, made } = await sweep({
+      tables: ["dc_posts"],
+      row: { slug: "posts", tableName: "dc_posts" },
+      awaiting: awaitingFn({}),
+    });
+
+    expect(
+      made.collection.updateMigrationStatusWithVerification
+    ).toHaveBeenCalledWith("posts", "dc_posts");
+    expect(result.marked).toBe(1);
+    expect(result.awaitingMigration).toBe(0);
+  });
+
+  it("promotes a row no migration header names, rather than withholding it", async () => {
+    // A code-first collection, or an install whose migrations predate scoped
+    // headers. Silence is not disagreement.
+    const { result } = await sweep({
+      tables: ["dc_authors"],
+      row: { slug: "authors", tableName: "dc_authors" },
+      awaiting: awaitingFn({ collections: ["posts"] }),
+    });
+
+    expect(result.marked).toBe(1);
+    expect(result.awaitingMigration).toBe(0);
+  });
+
+  it("judges each kind against its own names", async () => {
+    // A collection and a single can share a slug in a snapshot header without
+    // being the same entity; holding a collection back because a SINGLE of
+    // that name is pending would be wrong.
+    const { result } = await sweep({
+      tables: ["dc_posts"],
+      row: { slug: "posts", tableName: "dc_posts" },
+      awaiting: awaitingFn({ singles: ["posts"] }),
+    });
+
+    expect(result.marked).toBe(1);
+    expect(result.awaitingMigration).toBe(0);
+  });
+
+  /*
+   * 🔴 A `--step` run can leave a generated CREATE unapplied, so the row is
+   * BOTH named by an outstanding migration and missing its table. Deciding on
+   * the table first files it under "no migration exists yet" and sends the
+   * operator to `migrate:create` for a file already sitting in the repository.
+   * Both orders withhold the row; only one reports why correctly.
+   */
+  it("counts a named row with no table as awaiting its migration", async () => {
+    const { result, made } = await sweep({
+      tables: [],
+      row: { slug: "posts", tableName: "dc_posts" },
+      awaiting: awaitingFn({ collections: ["posts"] }),
+    });
+
+    expect(
+      made.collection.updateMigrationStatusWithVerification
+    ).not.toHaveBeenCalled();
+    expect(result.stillPending).toBe(1);
+    expect(result.awaitingMigration).toBe(1);
+  });
+
+  it("still refuses an UNNAMED row whose table is absent", async () => {
+    // Existence remains necessary. Nothing naming the slug must not promote a
+    // row whose table was never created.
+    const { result, made } = await sweep({
+      tables: [],
+      row: { slug: "posts", tableName: "dc_posts" },
+      awaiting: awaitingFn({}),
+    });
+
+    expect(
+      made.collection.updateMigrationStatusWithVerification
+    ).not.toHaveBeenCalled();
+    expect(result.stillPending).toBe(1);
+    // Not an outstanding migration — the operator is sent to a different remedy.
+    expect(result.awaitingMigration).toBe(0);
+  });
+});
