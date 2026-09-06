@@ -1443,6 +1443,90 @@ describe("resolveComponentInstances bounds", () => {
   });
 });
 
+describe("a node that spells a DOM id twice and renders one", () => {
+  it("leaves a SHADOWED attribute id alone, and every reference to it", () => {
+    // The measured reproduction. `cssId` shadows the bag, so this node renders
+    // `actual` and never `hero` — and `hero` was therefore a reference to an
+    // element in the HOST, which resolved before composition. Scoping it points
+    // it at an id nothing renders, which is strictly worse than leaving it.
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        node("d1", {
+          cssId: "actual",
+          attributes: { id: "hero", "aria-describedby": "hero" },
+        }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[0]!.cssId).toContain("actual");
+    expect(nodes[0]!.cssId).not.toBe("actual");
+    expect(nodes[0]!.attributes!.id).toBe("hero");
+    expect(nodes[0]!.attributes!["aria-describedby"]).toBe("hero");
+  });
+
+  it("moves both spellings together when they carry one value", () => {
+    // Nothing is shadowed here: the two spell the SAME id, so the node renders
+    // it and both have to arrive at one replacement, or the copy answers to two
+    // addresses where the original answered to one.
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        node("d1", { cssId: "signup", attributes: { id: "signup" } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[0]!.attributes!.id).toBe(nodes[0]!.cssId);
+    expect(nodes[0]!.cssId).not.toBe("signup");
+  });
+
+  it("scopes an id the node carries ONLY in its attribute bag", () => {
+    // Nothing shadows it, so this bag id is what the node renders — and two
+    // instances of one definition would otherwise both put it on the page.
+    const doc = page([instance("i1", "hero"), instance("i2", "hero")]);
+    const definitions = defs({
+      hero: component([
+        node("d1", { attributes: { id: "hero", "aria-describedby": "hero" } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[0]!.attributes!.id).not.toBe("hero");
+    expect(nodes[0]!.attributes!.id).toContain("hero");
+    expect(nodes[0]!.attributes!.id).not.toBe(nodes[1]!.attributes!.id);
+    // And the reference inside the definition follows it, since the id it named
+    // IS the one this node renders.
+    expect(nodes[0]!.attributes!["aria-describedby"]).toBe(
+      nodes[0]!.attributes!.id
+    );
+  });
+
+  it("scopes nothing for a node that renders no id at all", () => {
+    // An empty `cssId` still SHADOWS, so this node emits no usable id — and a
+    // bag value nothing renders must not reach the memo that rewrites
+    // references, for the reason the shadowed case above gives.
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        stored(node("d1") as ResolvedBlockNode, {
+          cssId: "",
+          attributes: { id: "hero", "aria-describedby": "hero" },
+        }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[0]!.attributes!.id).toBe("hero");
+    expect(nodes[0]!.attributes!["aria-describedby"]).toBe("hero");
+  });
+});
+
 describe("resolveComponentInstances defensive reads and references", () => {
   it("rewrites an IDREF attribute to the id it now points at", () => {
     const doc = page([instance("i1", "hero"), instance("i2", "hero")]);

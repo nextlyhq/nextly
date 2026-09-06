@@ -48,6 +48,7 @@ import {
   COMPONENT_INSTANCE_TYPE,
   isComponentDocument,
   isUnsetOverride,
+  renderedDomId,
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
@@ -1837,31 +1838,80 @@ function applyScopedDomIds(
   scoped: ResolvedBlockNode,
   ctx: InlineContext
 ): void {
-  const remap = (value: string): string => {
-    const existing = ctx.domIds.get(value);
-    if (existing !== undefined) return existing;
-    const minted = claimDomId(ctx.run, mintDomId(value, scoped.id));
-    ctx.domIds.set(value, minted);
-    return minted;
-  };
+  // ONE id per node, through the published rule, because a node SPELLS a DOM
+  // id two ways and emits at most one of them. Asking the two spellings
+  // independently mints a scoped id for a value nothing renders and — since
+  // this memo is what rewrites references — retargets every reference to it.
+  const rendered = renderedDomId(scoped);
+  const minted =
+    rendered === undefined ? undefined : scopedDomId(rendered, scoped.id, ctx);
 
-  if (typeof scoped.cssId === "string" && scoped.cssId !== "") {
-    scoped.cssId = remap(scoped.cssId);
+  // Only when it is a string is `cssId` the id this node renders, which is
+  // exactly when `renderedDomId` answered with it.
+  if (minted !== undefined && typeof scoped.cssId === "string") {
+    scoped.cssId = minted;
   }
-  if (!isPlainRecord(scoped.attributes)) return;
-  const names = boundedOwnKeys(scoped.attributes, MAX_ENVELOPE_ENTRIES);
-  if (names === null) return;
+  const next = attributesWithScopedId(scoped.attributes, rendered, minted);
+  if (next !== undefined) scoped.attributes = next;
+}
+
+/**
+ * The per-instance replacement for one of a definition's DOM ids.
+ *
+ * Memoized on the ORIGINAL value, so a definition spelling one id on two nodes
+ * still addresses one target after composition — and so the reference pass
+ * downstream can look up what a given id became.
+ */
+function scopedDomId(
+  value: string,
+  nodeId: string,
+  ctx: InlineContext
+): string {
+  const existing = ctx.domIds.get(value);
+  if (existing !== undefined) return existing;
+  const minted = claimDomId(ctx.run, mintDomId(value, nodeId));
+  ctx.domIds.set(value, minted);
+  return minted;
+}
+
+/**
+ * The attribute bag with the RENDERED id replaced, or `undefined` to leave the
+ * stored one alone.
+ *
+ * `undefined` rather than an empty record for a bag this cannot read: returning
+ * `{}` would delete a node's attributes during a render, which is a rewrite of
+ * stored content rather than a refusal to scope it.
+ *
+ * A SHADOWED id is left verbatim. It puts nothing on the page, so it cannot
+ * collide with another instance of the same definition, and it is a value the
+ * definition may still reference: a `hero` shadowed inside a definition was
+ * naming an element in the HOST, where it resolved. Minting a scoped id for it
+ * breaks that reference and aims it at nothing, which is strictly worse than
+ * leaving it.
+ *
+ * A document that spells ONE id both ways is unaffected: both spellings equal
+ * `rendered`, so both receive the same replacement and the copy keeps answering
+ * to a single address.
+ */
+function attributesWithScopedId(
+  attributes: unknown,
+  rendered: string | undefined,
+  minted: string | undefined
+): Record<string, string> | undefined {
+  if (!isPlainRecord(attributes)) return undefined;
+  const names = boundedOwnKeys(attributes, MAX_ENVELOPE_ENTRIES);
+  if (names === null) return undefined;
   const next: Record<string, string> = {};
   for (const name of names) {
-    const value = ownEntry(scoped.attributes, name);
+    const value = ownEntry(attributes, name);
     if (typeof value !== "string") continue;
     // Case-insensitively, because HTML attribute names are: a stored `ID` and
-    // a stored `id` address the same thing to a browser, and remapping only
-    // the lowercase spelling leaves the other duplicated.
-    const isId = name.toLowerCase() === "id" && value !== "";
-    defineEntry(next, name, isId ? remap(value) : value);
+    // a stored `id` address the same thing to a browser.
+    const isRenderedId =
+      minted !== undefined && name.toLowerCase() === "id" && value === rendered;
+    defineEntry(next, name, isRenderedId ? minted : value);
   }
-  scoped.attributes = next;
+  return next;
 }
 
 /**
