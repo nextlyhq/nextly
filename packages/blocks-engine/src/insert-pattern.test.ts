@@ -596,6 +596,36 @@ describe("the refusals are the op layer's, not invented", () => {
   });
 });
 
+describe("the destination's whole forest, not only its envelope", () => {
+  it("refuses a destination holding a malformed node anywhere", () => {
+    // Nowhere near the insertion point, and still fatal: the apply walks every
+    // node before it applies anything, so a plan that checked only the envelope
+    // reported success and threw.
+    const odd = {
+      ...page([node("a")]),
+      nodes: [node("a"), null],
+    } as unknown as BlockDocument;
+
+    expect(
+      planInsertPattern(odd, pattern([node("p1")]), { index: 1 }, anyParent)
+        .problem
+    ).toBe("unusable-document");
+  });
+
+  it("still accepts a well-formed destination", () => {
+    // The over-exclusion control: a forest check that refuses everything
+    // satisfies the test above and breaks every insert.
+    expect(
+      planInsertPattern(
+        page([node("a")]),
+        pattern([node("p1")]),
+        { index: 1 },
+        anyParent
+      ).problem
+    ).toBeUndefined();
+  });
+});
+
 describe("which DOM ids an insert steers around", () => {
   it("keeps an id the destination does not hold", () => {
     // A DOM id is authored content — it appears in a URL fragment, a

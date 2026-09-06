@@ -755,14 +755,6 @@ export const EXPOSED_PROPERTY_TYPES = [
 export type ExposedPropertyType = (typeof EXPOSED_PROPERTY_TYPES)[number];
 
 /**
- * One property of a definition that an instance may override.
- *
- * A POINTER into the definition's own tree, not a copy of the value. The value
- * lives on the node where the author designed it, so the definition renders
- * correctly on its own, and an instance that overrides nothing is identical to
- * the definition.
- */
-/**
  * The single HTML `id` a node actually renders, or `undefined` for none.
  *
  * A node can SPELL a DOM id two ways — the modelled `cssId` and the
@@ -805,12 +797,22 @@ export function renderedDomId(node: BlockNode): string | undefined {
  * one: a surface asking whether an empty bag id would SHADOW something has to
  * ask about the bag alone.
  *
- * Shape-checked, because callers walk stored nodes and a document can hold
- * whatever the database returned; `Object.entries(null)` throws, and the
- * renderer treats a malformed bag as absent.
+ * Shape-checked the way the RENDERER checks, which is looser than this module's
+ * usual `isPlainRecord`: it does `Object.entries(attributes)` on any non-array
+ * object and emits what it finds, so a class instance or an object with a
+ * custom prototype and an own `id` puts that id on the page. Narrowing to a
+ * plain record here reported no id for such a node, and an insert then kept an
+ * incoming id the destination was already rendering.
+ *
+ * The narrow rule is right where it is used — validation asks what SURVIVES
+ * JSON, and a `Date` or a `Map` does not — but this question is "what does the
+ * renderer emit right now", and the answer has to be the renderer's.
+ *
+ * `Object.entries(null)` throws and an array is not a bag, so both are absent.
  */
 export function renderedDomIdIn(attributes: unknown): string | undefined {
-  if (!isPlainRecord(attributes)) return undefined;
+  if (typeof attributes !== "object" || attributes === null) return undefined;
+  if (Array.isArray(attributes)) return undefined;
   let found: string | undefined;
   for (const [name, value] of Object.entries(attributes)) {
     if (name.toLowerCase() !== "id") continue;
@@ -819,6 +821,14 @@ export function renderedDomIdIn(attributes: unknown): string | undefined {
   return found;
 }
 
+/**
+ * One property of a definition that an instance may override.
+ *
+ * A POINTER into the definition's own tree, not a copy of the value. The value
+ * lives on the node where the author designed it, so the definition renders
+ * correctly on its own, and an instance that overrides nothing is identical to
+ * the definition.
+ */
 export interface ExposedProperty {
   /**
    * Stable slug, minted once.

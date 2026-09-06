@@ -35,6 +35,7 @@ import {
 } from "./nesting";
 import {
   documentRefusal,
+  forestRefusal,
   lockedWithin,
   nodeShapeRefusal,
   positionRefusal,
@@ -487,7 +488,14 @@ export function planUpdatePatternFromSelection(
   // none. Everything `applyOp` checks before it looks at an op — the
   // envelope's keys, its values, its format and its kind — is a way a plan can
   // be built against a document that cannot be edited at all.
-  if (documentRefusal(document) !== undefined) {
+  if (
+    documentRefusal(document) !== undefined ||
+    // And the forest, not only the envelope: `applyOp` walks every node before
+    // it applies anything, so a malformed sibling the author did not select
+    // refuses the update this plan promises — after the library row has been
+    // written, which is the order that cannot be taken back.
+    forestRefusal(document.nodes) !== undefined
+  ) {
     return { problem: "unusable-document" };
   }
 
@@ -764,7 +772,11 @@ function storedRefusal(
   // against a destination that cannot be edited at all.
   if (
     documentRefusal(document) !== undefined ||
-    documentRefusal(pattern) !== undefined
+    documentRefusal(pattern) !== undefined ||
+    // The DESTINATION's whole forest, because `applyOp` walks it before it
+    // applies anything — so a malformed entry nowhere near the insertion point
+    // still refuses the op this plan promises.
+    forestRefusal(document.nodes) !== undefined
   ) {
     return { problem: "unusable-document" };
   }

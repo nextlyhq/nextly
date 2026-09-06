@@ -727,6 +727,7 @@ export {
   // And the document-level rule the apply runs before it looks at the op, so a
   // plan is never built against a destination that cannot be edited at all.
   documentRefusal,
+  forestRefusal,
   lockedWithin,
   // And the shape rule for what an insert will carry, for the same reason.
   nodeShapeRefusal,

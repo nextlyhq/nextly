@@ -275,6 +275,20 @@ describe("renderedDomId: which of a node's two spellings reaches the page", () =
     );
   });
 
+  it("reads a bag the RENDERER would read, not only a plain record", () => {
+    // The renderer does `Object.entries(attributes)` on any non-array object,
+    // so a class instance with an own `id` puts that id on the page. Narrowing
+    // to a plain record reported no id, and an insert then kept an incoming id
+    // the destination was already rendering.
+    class Bag {
+      id = "hero";
+    }
+    expect(renderedDomId(bare({ attributes: new Bag() }))).toBe("hero");
+    // Still absent for the shapes the renderer treats as absent.
+    expect(renderedDomIdIn(null)).toBeUndefined();
+    expect(renderedDomIdIn(["id"])).toBeUndefined();
+  });
+
   it("asks the bag alone the same way", () => {
     // The narrower question a surface asks when it needs to know whether an
     // empty bag id would SHADOW something.

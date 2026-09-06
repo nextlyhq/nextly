@@ -2377,6 +2377,33 @@ function assertNodeId(id: string, verb: string): void {
  * Reported rather than thrown, and never re-implemented: the assertion is the
  * rule, and a second predicate spelling of it would agree only until one moved.
  */
+/**
+ * Why the op layer would refuse this FOREST, or `undefined`.
+ *
+ * The companion to {@link documentRefusal}, and needed beside it because that
+ * one reads the envelope: its keys, its values, its format and its kind. It
+ * says nothing about the nodes, and `applyOp` walks the whole forest before it
+ * applies anything — so a document with a malformed entry the planner never
+ * selected passes the envelope check, produces a plan, and throws on apply.
+ *
+ * That is the dry run disagreeing with the run it predicts, in the direction
+ * that costs most: a composition action creates its library row first, so the
+ * refusal lands after the write it cannot take back.
+ *
+ * Walked rather than sampled, because the fault can be anywhere: a `null` among
+ * the roots, a node inside its own slots, a field that is a getter rather than
+ * stored.
+ */
+export function forestRefusal(nodes: unknown): string | undefined {
+  try {
+    assertForestEntries(nodes as BlockNode[]);
+    return undefined;
+  } catch (error) {
+    if (error instanceof OpError) return error.message;
+    throw error;
+  }
+}
+
 export function documentRefusal(document: unknown): string | undefined {
   try {
     assertEditableDocument(document as BlockDocument);

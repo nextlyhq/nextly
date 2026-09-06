@@ -388,6 +388,21 @@ describe("planUpdatePatternFromSelection: what it refuses", () => {
     expect(plan.problem).toBe("unusable-document");
   });
 
+  it("refuses a malformed node the author did not select", () => {
+    // `applyOp` walks the WHOLE forest before it applies anything, so a plan
+    // that checks only the envelope and the selection promises an update the
+    // apply will refuse — after the library row has been written, which is the
+    // order that cannot be taken back.
+    const document = {
+      ...page([node("a", { origin: from("stale") })]),
+      nodes: [node("a", { origin: from("stale") }), null],
+    } as unknown as BlockDocument;
+
+    expect(
+      planUpdatePatternFromSelection(document, ["a"], target, anyParent).problem
+    ).toBe("unusable-document");
+  });
+
   it("passes the run's own cause through unchanged", () => {
     const document = page([node("a"), node("b"), node("c")]);
 
