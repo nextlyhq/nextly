@@ -23,7 +23,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { RETIRED_CATEGORY, RETIRED_CATEGORY_TAG } from "./check-docs-claims.mjs";
+import { RETIRED_CATEGORY, namesRetiredCategory } from "./check-docs-claims.mjs";
 
 const OWNER = "nextlyhq";
 const REPO = "nextly";
@@ -31,9 +31,9 @@ const REPO = "nextly";
 /**
  * Topics the search descriptor commits to.
  *
- * There is no matching list of forbidden ones. A GitHub topic is the same kind of whole tag as
- * an npm keyword, so which topics name the retired category is decided by the shared
- * `RETIRED_CATEGORY_TAG` pattern. Listing them here instead would be a second copy of the
+ * There is no matching list of forbidden ones. A GitHub topic is the same kind of tag as an
+ * npm keyword, so which topics name the retired category is decided by the shared
+ * `namesRetiredCategory` classifier. Listing them here instead would be a second copy of the
  * definition, free to disagree with the first — and it did: the list held only the singular
  * spellings, so `frameworks` and `app-frameworks` passed a check that rejects them as keywords.
  */
@@ -80,7 +80,24 @@ export async function fetchRepoMetadata(owner = OWNER, repo = REPO) {
   return { description: body.description ?? "", topics: body.topics ?? [] };
 }
 
-export function checkRepoMetadata({ metadata, expectedDescription }) {
+/**
+ * Whether the About line must match the package description exactly, or only be reported.
+ *
+ * The About line is one global repository setting, and a pull request cannot change it. A PR
+ * that legitimately edits the package description would otherwise be unmergeable until someone
+ * edited the live setting first — which would then fail every other open PR still carrying the
+ * old description, and is impossible for a fork author regardless. A check that goes red on a
+ * correct change teaches people to wave it through, so drift is advisory on a pull request and
+ * blocking everywhere the setting can actually be brought back into line.
+ *
+ * The category checks are unconditional. Those are absolute claims about what the project is,
+ * not a comparison against a value the branch is allowed to move.
+ */
+export function strictDescriptionMatch(env = process.env) {
+  return env.GITHUB_EVENT_NAME !== "pull_request";
+}
+
+export function checkRepoMetadata({ metadata, expectedDescription, strictDescription = true }) {
   const findings = [];
   const { description, topics } = metadata;
 
@@ -105,6 +122,7 @@ export function checkRepoMetadata({ metadata, expectedDescription }) {
   } else if (description !== expectedDescription) {
     findings.push({
       check: "about-matches-package",
+      advisory: !strictDescription,
       message:
         `the GitHub About line differs from ${DESCRIPTION_SOURCE}. ` +
         `About: "${description}" — package: "${expectedDescription}"`,
@@ -112,7 +130,7 @@ export function checkRepoMetadata({ metadata, expectedDescription }) {
   }
 
   for (const topic of topics) {
-    if (!RETIRED_CATEGORY_TAG.test(topic)) continue;
+    if (!namesRetiredCategory(topic)) continue;
     findings.push({
       check: "topic-forbidden",
       message: `the topic "${topic}" names the retired category and should be removed`,
@@ -163,15 +181,29 @@ if (invokedDirectly) {
     process.exit(0);
   }
 
-  const { findings } = checkRepoMetadata({ metadata, expectedDescription });
+  const { findings } = checkRepoMetadata({
+    metadata,
+    expectedDescription,
+    strictDescription: strictDescriptionMatch(),
+  });
 
-  if (findings.length === 0) {
+  const advisory = findings.filter(finding => finding.advisory);
+  const blocking = findings.filter(finding => !finding.advisory);
+
+  for (const finding of advisory) {
+    console.warn(`repo metadata: ${finding.check}: ${finding.message}`);
+    console.warn(
+      `  Not failing this run: the About line is a repository setting a pull request cannot change.\n`
+    );
+  }
+
+  if (blocking.length === 0) {
     console.log("repo metadata: About line and topics agree with the category.");
     process.exit(0);
   }
 
-  console.error(`\nrepo metadata: ${findings.length} finding(s)\n`);
-  for (const finding of findings) {
+  console.error(`\nrepo metadata: ${blocking.length} finding(s)\n`);
+  for (const finding of blocking) {
     console.error(`  ${finding.check}: ${finding.message}`);
   }
   console.error(

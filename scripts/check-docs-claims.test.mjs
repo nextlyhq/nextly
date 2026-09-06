@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   digestLine,
+  namesRetiredCategory,
   packageKeywords,
   renderedProse,
   runChecks,
@@ -251,17 +252,19 @@ describe("retired-category", () => {
     ).toContain("retired-category");
   });
 
-  it("fires on a published keyword", async () => {
-    expect(
-      await checksFor({
-        "packages/nextly/package.json": JSON.stringify({
-          name: "nextly",
-          version: "1.0.0",
-          description: "A content platform.",
-          keywords: ["cms", "app-framework"],
-        }),
-      })
-    ).toContain("retired-category");
+  it("leaves a published keyword to the check that owns keywords", async () => {
+    // Still caught, under one name rather than two. `retired-category` reads the
+    // description; `retired-category-keyword` reads the keywords.
+    const checks = await checksFor({
+      "packages/nextly/package.json": JSON.stringify({
+        name: "nextly",
+        version: "1.0.0",
+        description: "A content platform.",
+        keywords: ["cms", "app-framework"],
+      }),
+    });
+    expect(checks).toContain("retired-category-keyword");
+    expect(checks).not.toContain("retired-category");
   });
 
   it("does not read a heading as running into the paragraph beneath it", async () => {
@@ -556,16 +559,16 @@ describe("retired-category", () => {
   });
 
   it("reads keywords given as a bare string, which npm accepts", async () => {
-    expect(
-      await checksFor({
-        "packages/nextly/package.json": JSON.stringify({
-          name: "nextly",
-          version: "1.0.0",
-          description: "A content platform.",
-          keywords: "app-framework",
-        }),
-      })
-    ).toContain("retired-category");
+    const checks = await checksFor({
+      "packages/nextly/package.json": JSON.stringify({
+        name: "nextly",
+        version: "1.0.0",
+        description: "A content platform.",
+        keywords: "app-framework",
+      }),
+    });
+    expect(checks).toContain("retired-category-keyword");
+    expect(checks).not.toContain("retired-category");
   });
 
   it("does not decode escapes in a single-quoted yaml value, which are literal", async () => {
@@ -1185,6 +1188,68 @@ describe("retired-category-keyword", () => {
           "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
       })
     ).not.toContain("retired-category-keyword");
+  });
+});
+
+describe("one classifier owns keywords", () => {
+  const manifest = keyword =>
+    ({
+      "README.md": "# nextly\n\n@nextlyhq/thing\n",
+      "packages/thing/package.json": JSON.stringify({
+        name: "@nextlyhq/thing",
+        keywords: [keyword],
+      }),
+      "packages/thing/README.md":
+        "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+    });
+
+  it("reports a keyword once, not once per overlapping check", async () => {
+    // `app-framework` matched the whole-tag pattern AND the prose pattern, so the same
+    // manifest was reported under two check names by two classifiers free to drift apart.
+    const checks = await checksFor(manifest("app-framework"));
+    expect(checks.filter(c => c === "retired-category-keyword")).toHaveLength(1);
+    expect(checks).not.toContain("retired-category");
+  });
+
+  it("still catches the category embedded in a longer keyword", async () => {
+    // The whole-tag pattern alone cannot see this one, which is why the classifier asks
+    // both questions rather than the prose check being deleted outright.
+    expect(await checksFor(manifest("nextjs-app-framework"))).toContain(
+      "retired-category-keyword"
+    );
+  });
+
+  it("still reports a description that names the category", async () => {
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": JSON.stringify({
+          name: "@nextlyhq/thing",
+          description: "The app framework for Next.js.",
+        }),
+        "packages/thing/README.md":
+          "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).toContain("retired-category");
+  });
+});
+
+describe("namesRetiredCategory", () => {
+  it("answers for a whole tag and for the phrase inside one", () => {
+    for (const tag of ["framework", "frameworks", "app-framework", "nextjs-app-framework"]) {
+      expect(namesRetiredCategory(tag)).toBe(true);
+    }
+  });
+
+  it("leaves tags that merely contain the word alone", () => {
+    for (const tag of ["framework-agnostic", "page-builder", "nextly-plugin"]) {
+      expect(namesRetiredCategory(tag)).toBe(false);
+    }
+  });
+
+  it("is false for anything that is not a string", () => {
+    expect(namesRetiredCategory(undefined)).toBe(false);
+    expect(namesRetiredCategory(7)).toBe(false);
   });
 });
 

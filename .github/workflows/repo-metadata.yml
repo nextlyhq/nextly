@@ -1,0 +1,75 @@
+name: Repository metadata
+
+# The About line and the topic list are repository settings, not files. Editing either
+# creates no push and no pull request, so a workflow triggered by code alone can never
+# observe the surface it guards: someone can set the About line back to the retired
+# category and every recorded run stays green until the next unrelated commit. That is
+# how the retired category survived in the About line while all six file surfaces were
+# clean. A schedule is the only trigger that sees a change a settings edit produced.
+#
+# The check in ci.yml stays. It gives fast feedback when the package description moves;
+# this one watches the setting itself.
+on:
+  schedule:
+    # Daily. The settings change rarely and a stale About line is a slow problem, so
+    # this trades detection latency for not spending a run per hour on an API call.
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    name: About line and topics
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version-file: .nvmrc
+
+      # No install. Both scripts import nothing outside Node's builtins, and a
+      # dependency tree this job does not need is a way for it to fail for a
+      # reason that has nothing to do with the metadata.
+      - name: Repository metadata
+        run: node scripts/check-repo-metadata.mjs
+
+  report:
+    name: File an issue on failure
+    needs: metadata
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The only job that writes anything, so it is the only one holding the
+    # permission to.
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Create or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          existing=$(gh issue list --repo "${{ github.repository }}" \
+            --label ci-nightly-failure --state open --json number,title \
+            --jq '[.[] | select(.title == "Repository metadata no longer matches the category")][0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "${{ github.repository }}" \
+              --body "Repository metadata check failed again: $RUN_URL"
+          else
+            # printf keeps the multi-line body inside this YAML block scalar;
+            # a raw multi-line string here would dedent and break the file.
+            body=$(printf 'The scheduled repository-metadata check failed. Run: %s\n\nThe GitHub About line or the topic list no longer agrees with the category. These are repository settings rather than files, so no file check can see them and nothing in a commit can fix them.\n\nFix them in Settings, or with:\n\n```\ngh repo edit nextlyhq/nextly --description "..." --add-topic ... --remove-topic ...\n```' "$RUN_URL")
+            gh issue create --repo "${{ github.repository }}" \
+              --title "Repository metadata no longer matches the category" \
+              --label ci-nightly-failure \
+              --body "$body"
+          fi

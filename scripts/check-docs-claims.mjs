@@ -114,6 +114,20 @@ export const RETIRED_CATEGORY = /\bapp(?:-|\s+)frameworks?\b/i;
 export const RETIRED_CATEGORY_TAG = /^(?:app-)?frameworks?$/i;
 
 /**
+ * The single answer to "does this tag name the retired category", for every tag surface.
+ *
+ * A tag can carry the category two ways, and one pattern cannot see both: as the whole tag
+ * (`framework`), or with the phrase embedded in a longer one (`nextjs-app-framework`). Two
+ * checks used to answer this for npm keywords — the prose check matched the phrase, the
+ * keyword check matched the whole tag — so a keyword like `app-framework` was reported twice
+ * under two names, and their patterns were free to drift apart. This is now the only answer,
+ * shared by npm keywords and GitHub topics.
+ */
+export function namesRetiredCategory(tag) {
+  return typeof tag === "string" && (RETIRED_CATEGORY_TAG.test(tag) || RETIRED_CATEGORY.test(tag));
+}
+
+/**
  * npm accepts a bare string where `keywords` expects an array, and both forms reach the
  * registry. Spreading the string form yields single characters, which match no whole tag, so
  * the two readers of this field return different answers unless they share one normalisation.
@@ -683,7 +697,7 @@ export function renderedProse(markdown) {
 function retiredKeywords(repoRoot, packages, findings) {
   for (const pkg of packages) {
     for (const keyword of packageKeywords(pkg.json)) {
-      if (!RETIRED_CATEGORY_TAG.test(keyword)) continue;
+      if (!namesRetiredCategory(keyword)) continue;
       findings.push({
         check: "retired-category-keyword",
         file: relative(repoRoot, join(pkg.dir, "package.json")),
@@ -835,25 +849,21 @@ export async function runChecks({
     }
   }
 
-  // A published description and its keywords are read on npm rather than here,
-  // and say the same thing about the same product, so they are category surfaces
-  // too. A keyword is the searchable one: it is how the category is found rather
-  // than how it is stated.
+  // A published description is read on npm rather than here and says the same
+  // thing about the same product, so it is a category surface too.
+  //
+  // Keywords are deliberately not read here. `retired-category-keyword` owns
+  // them, and one field answered by two checks reports the same manifest twice
+  // under two names while letting the two patterns drift apart.
   //
   // Taken from the list `publishedPackages` already parsed. Enumerating the
   // manifests again here would be a second answer to "which packages ship",
   // free to disagree with the first.
   for (const pkg of packages) {
     const rel = relative(repoRoot, join(pkg.dir, "package.json")).split(sep).join("/");
-    // Each field on its own. Joined, a description ending in "app" and a keyword
-    // "framework" would read as the phrase that neither of them contains.
-    const published = [pkg.json.description, ...packageKeywords(pkg.json)].filter(
-      value => typeof value === "string"
-    );
-    const claim = published.find(
-      value => RETIRED_CATEGORY.test(value) && !categoryExempt(rel, value)
-    );
-    if (claim === undefined) continue;
+    const { description } = pkg.json;
+    if (typeof description !== "string") continue;
+    if (!RETIRED_CATEGORY.test(description) || categoryExempt(rel, description)) continue;
     findings.push({
       check: "retired-category",
       file: rel,

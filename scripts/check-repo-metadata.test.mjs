@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { checkRepoMetadata, isPermanentStatus } from "./check-repo-metadata.mjs";
+import {
+  checkRepoMetadata,
+  isPermanentStatus,
+  strictDescriptionMatch,
+} from "./check-repo-metadata.mjs";
 
 /**
  * Metadata is injected rather than fetched. The network is not the subject, and a test that
@@ -87,6 +91,14 @@ describe("topics", () => {
     }
   });
 
+  it("fires on a topic with the category embedded in a longer tag", () => {
+    // Topics share the classifier with npm keywords, so this is caught for the same
+    // reason `nextjs-app-framework` is caught as a keyword.
+    expect(
+      run({ description: GOOD_DESCRIPTION, topics: [...goodTopics, "nextjs-app-framework"] })
+    ).toContain("topic-forbidden");
+  });
+
   it("does not fire on topics that merely contain the word", () => {
     expect(
       run({
@@ -134,6 +146,61 @@ describe("description-source-missing", () => {
     expect(run({ description: GOOD_DESCRIPTION, topics: goodTopics })).not.toContain(
       "description-source-missing"
     );
+  });
+});
+
+describe("drift is advisory where it cannot be acted on", () => {
+  const drifted = { description: "Something else entirely.", topics: goodTopics };
+  const findingsFor = strictDescription =>
+    checkRepoMetadata({
+      metadata: drifted,
+      expectedDescription: GOOD_DESCRIPTION,
+      strictDescription,
+    }).findings;
+
+  it("marks a description mismatch advisory when the setting cannot be changed", () => {
+    // A pull request cannot edit one global repository setting, and a fork author cannot
+    // edit it at all. Failing their build on it would be a red on a correct change.
+    const drift = findingsFor(false).find(f => f.check === "about-matches-package");
+    expect(drift.advisory).toBe(true);
+  });
+
+  it("blocks on the same mismatch where the setting can be brought into line", () => {
+    const drift = findingsFor(true).find(f => f.check === "about-matches-package");
+    expect(drift.advisory).toBeFalsy();
+  });
+
+  it("never makes a category finding advisory", () => {
+    // These are absolute claims about what the project is, not a comparison against a
+    // value the branch is allowed to move, so a pull request does not get a pass on them.
+    const { findings } = checkRepoMetadata({
+      metadata: { description: "The app framework for Next.js.", topics: ["framework"] },
+      expectedDescription: GOOD_DESCRIPTION,
+      strictDescription: false,
+    });
+    const category = findings.filter(f => f.check !== "about-matches-package");
+    expect(category.length).toBeGreaterThan(0);
+    expect(category.every(f => !f.advisory)).toBe(true);
+  });
+
+  it("blocks by default, so a caller that forgets the flag gets the strict answer", () => {
+    const drift = checkRepoMetadata({
+      metadata: drifted,
+      expectedDescription: GOOD_DESCRIPTION,
+    }).findings.find(f => f.check === "about-matches-package");
+    expect(drift.advisory).toBeFalsy();
+  });
+});
+
+describe("strictDescriptionMatch", () => {
+  it("is lenient only on a pull request", () => {
+    expect(strictDescriptionMatch({ GITHUB_EVENT_NAME: "pull_request" })).toBe(false);
+  });
+
+  it("is strict on a schedule, a push, and on a laptop with no event at all", () => {
+    expect(strictDescriptionMatch({ GITHUB_EVENT_NAME: "schedule" })).toBe(true);
+    expect(strictDescriptionMatch({ GITHUB_EVENT_NAME: "push" })).toBe(true);
+    expect(strictDescriptionMatch({})).toBe(true);
   });
 });
 
