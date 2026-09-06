@@ -49,6 +49,12 @@ import { SingleRegistryService } from "../../singles/services/single-registry-se
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 
 import { registerFromMigrations } from "./metadata-register";
+import {
+  isAwaitingMigration,
+  noPendingEntities,
+  readPendingEntities,
+  type PendingEntities,
+} from "./pending-entities";
 
 /**
  * The logging surface a CALLER supplies, structural so the CLI's own context
@@ -90,6 +96,14 @@ export interface ReconcileMetadataDeps {
   logger: ReconcileLogger;
   /** Seam for tests; defaults to the real snapshot reader. */
   registerFn?: typeof registerFromMigrations;
+  /**
+   * Seam for tests; defaults to reading the migration headers from disk.
+   *
+   * Replaces the file and ledger I/O ONLY. Which registry gets which set, and
+   * how a row is judged against it, still run — so a test cannot pass by
+   * reaching the sweep through a route production does not have.
+   */
+  readPendingEntitiesFn?: typeof readPendingEntities;
 }
 
 export interface ReconcileMetadataResult {
@@ -106,6 +120,20 @@ export interface ReconcileMetadataResult {
    */
   stillPending: number;
   /**
+   * Rows held back because a migration naming them has not run, counted inside
+   * {@link ReconcileMetadataResult.stillPending}.
+   *
+   * Reported separately because "waiting for a migration that does not exist
+   * yet" and "waiting for one already generated" send an operator to different
+   * places, and a single total cannot tell them apart.
+   */
+  awaitingMigration: number;
+  /**
+   * Unapplied migrations naming no entity, so nothing could be judged against
+   * them. Rows were promoted on table existence alone.
+   */
+  unscopedMigrations: string[];
+  /**
    * Registries this pass could not read at all, by kind.
    *
    * 🔴 Reported rather than only logged, because the per-registry guard below
@@ -121,6 +149,13 @@ export interface ReconcileMetadataResult {
 /** One registry service, reduced to the two calls this needs from it. */
 interface PendingRegistry {
   kind: string;
+  /**
+   * Slugs of this kind that an unapplied migration names.
+   *
+   * Empty means nothing is outstanding for this kind, which promotes exactly as
+   * the existence rule alone used to.
+   */
+  awaiting: Set<string>;
   getPendingMigrations: () => Promise<readonly unknown[]>;
   updateMigrationStatusWithVerification: (
     slug: string,
@@ -162,9 +197,14 @@ async function markApplied(
   registry: PendingRegistry,
   adapter: DrizzleAdapter,
   logger: ReconcileLogger
-): Promise<{ marked: number; stillPending: number }> {
+): Promise<{
+  marked: number;
+  stillPending: number;
+  awaitingMigration: number;
+}> {
   let marked = 0;
   let stillPending = 0;
+  let awaitingMigration = 0;
 
   const rows = await registry.getPendingMigrations();
   for (const row of rows) {
@@ -177,10 +217,38 @@ async function markApplied(
     }
 
     try {
+      /*
+       * 🔴 Asked BEFORE the database, and the order is what makes the counts
+       * mean anything. A `--step` run can leave a generated CREATE unapplied,
+       * so the row is both named by an outstanding migration and missing its
+       * table; deciding on the table first files it under "no migration exists
+       * yet" and sends the operator to `migrate:create` for a file that is
+       * already sitting in the repository. Both orders withhold the row — only
+       * one of them says why correctly.
+       *
+       * Only a slug an unapplied migration NAMES is held back. A row nothing
+       * names falls through to the existence rule, because withholding on
+       * silence would empty the dashboards this sweep exists to fill.
+       */
+      if (isAwaitingMigration(row, registry.awaiting)) {
+        stillPending += 1;
+        awaitingMigration += 1;
+        logger.debug(
+          `Leaving ${registry.kind} "${named.slug}" pending: a migration naming it has not been applied`
+        );
+        continue;
+      }
+
+      /*
+       * Existence is necessary and not sufficient. An EDITED entity keeps its
+       * old physical table, so this answers yes for a change that has not
+       * migrated at all — which is why the header check above exists.
+       */
       if (!(await adapter.tableExists(named.tableName))) {
         stillPending += 1;
         continue;
       }
+
       const outcome = await registry.updateMigrationStatusWithVerification(
         named.slug,
         named.tableName
@@ -200,7 +268,7 @@ async function markApplied(
     }
   }
 
-  return { marked, stillPending };
+  return { marked, stillPending, awaitingMigration };
 }
 
 /**
@@ -234,39 +302,87 @@ export async function reconcileMigrationMetadata(
    * read one source rather than two that can disagree.
    */
   const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
+
+  /*
+   * Memoized because both halves of this pass ask the ledger about the same
+   * files: registration, to decide what it may insert, and the sweep's
+   * evidence, to decide what shape the database has reached. One query per
+   * migration file rather than two, and — more usefully — one ANSWER, so the
+   * two halves cannot disagree about whether a file ran.
+   */
+  const appliedCache = new Map<string, Promise<boolean>>();
+  const isApplied = (filename: string): Promise<boolean> => {
+    const cached = appliedCache.get(filename);
+    if (cached) return cached;
+    const pending = events.isFileApplied(filename);
+    appliedCache.set(filename, pending);
+    return pending;
+  };
+
   const registered = await register({
     migrationsDir,
     adapter,
     dialect,
     logger,
-    isApplied: filename => events.isFileApplied(filename),
+    isApplied,
   });
+
+  /*
+   * Step 1b: which entities an unapplied migration still names.
+   *
+   * Read AFTER registration so the ledger answers are already cached, and read
+   * at all because the sweep below cannot tell an edited entity from a settled
+   * one without it — the physical table is identical in both cases.
+   *
+   * A failure here is not allowed to fail the pass: with nothing outstanding
+   * recorded, every row falls back to the existence rule, which is the
+   * behaviour that shipped before this check existed.
+   */
+  const load = deps.readPendingEntitiesFn ?? readPendingEntities;
+  let awaiting: PendingEntities;
+  try {
+    awaiting = await load({ migrationsDir, dialect, isApplied, logger });
+  } catch (error) {
+    awaiting = noPendingEntities();
+    logger.warn(
+      `Could not read which migrations are still pending, so registry rows were promoted on table existence alone: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
 
   // Step 2: rows the registry already had, waiting on a table.
   const serviceLogger = asServiceLogger(logger);
   const registries: PendingRegistry[] = [
     {
       kind: "collection",
+      awaiting: awaiting.collections,
       ...bind(new CollectionRegistryService(adapter, serviceLogger)),
     },
     {
       kind: "single",
+      awaiting: awaiting.singles,
       ...bind(new SingleRegistryService(adapter, serviceLogger)),
     },
     {
+      // The header names field groups too, so all three kinds are judged by
+      // the same rule.
       kind: "field group",
+      awaiting: awaiting.components,
       ...bind(new FieldGroupRegistryService(adapter, serviceLogger)),
     },
   ];
 
   let marked = 0;
   let stillPending = 0;
+  let awaitingMigration = 0;
   const unreadable: string[] = [];
   for (const registry of registries) {
     try {
       const swept = await markApplied(registry, adapter, logger);
       marked += swept.marked;
       stillPending += swept.stillPending;
+      awaitingMigration += swept.awaitingMigration;
     } catch (error) {
       /*
        * 🔴 Per REGISTRY, so one that cannot be read costs only its own rows.
@@ -293,6 +409,8 @@ export async function reconcileMigrationMetadata(
     singlesRegistered: registered.singlesRegistered,
     marked,
     stillPending,
+    awaitingMigration,
+    unscopedMigrations: awaiting.unscoped,
     unreadable,
   };
 }
@@ -310,7 +428,10 @@ function bind(service: {
     slug: string,
     tableName: string
   ) => Promise<{ verified: boolean }>;
-}): Omit<PendingRegistry, "kind"> {
+}): Pick<
+  PendingRegistry,
+  "getPendingMigrations" | "updateMigrationStatusWithVerification"
+> {
   return {
     getPendingMigrations: () => service.getPendingMigrations(),
     updateMigrationStatusWithVerification: (slug, tableName) =>

@@ -16,8 +16,6 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
-import { resolve, join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -38,6 +36,14 @@ import type { SingleAdminOptions } from "../../../config";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import { simplePluralize } from "../../../shared/lib/pluralization";
 
+import {
+  loadSnapshots,
+  newestApplied,
+  type LoadedSnapshot,
+  type SnapshotCollection,
+  type SnapshotSingle,
+} from "./snapshot-source";
+
 /**
  * Minimal Drizzle database interface for the operations needed in metadata registration.
  * Provides type safety for getDrizzle calls without relying on dialect-specific types.
@@ -55,49 +61,16 @@ interface DrizzleDatabase {
   };
 }
 
-/**
- * Collection definition from migration snapshot
+/*
+ * The snapshot shapes and the reader that produces them live in
+ * `snapshot-source`, because the pending sweep asks the same directory the same
+ * question. Re-exported here so existing importers of this module keep working.
  */
-export interface SnapshotCollection {
-  slug: string;
-  tableName: string;
-  labels?: {
-    singular?: string;
-    plural?: string;
-  };
-  description?: string;
-  fields: unknown[];
-  admin?: unknown;
-  dbName?: string;
-  status?: boolean;
-  timestamps?: boolean;
-}
-
-/**
- * Single definition from migration snapshot
- */
-export interface SnapshotSingle {
-  slug: string;
-  tableName: string;
-  labels?: {
-    singular?: string;
-    plural?: string;
-  };
-  description?: string;
-  fields: unknown[];
-  admin?: unknown;
-  dbName?: string;
-  status?: boolean;
-}
-
-/**
- * Migration snapshot file structure
- */
-export interface MigrationSnapshot {
-  version?: number;
-  collections?: SnapshotCollection[];
-  singles?: SnapshotSingle[];
-}
+export type {
+  SnapshotCollection,
+  SnapshotSingle,
+  MigrationSnapshot,
+} from "./snapshot-source";
 
 /**
  * Options for registering collections from migrations
@@ -166,121 +139,6 @@ export interface RegisterFromMigrationsOptions {
     error?: (msg: string) => void;
     debug?: (msg: string) => void;
   };
-}
-
-/**
- * One snapshot file, with whether the migration it belongs to has run.
- *
- * The flag travels WITH the snapshot rather than filtering the list, because
- * the decision it feeds is per slug: a slug's newest snapshot decides whether
- * it may be registered, and finding that snapshot means looking at unapplied
- * ones too. See {@link RegisterFromMigrationsOptions.isApplied}.
- */
-interface LoadedSnapshot {
-  file: string;
-  snapshot: MigrationSnapshot;
-  applied: boolean;
-}
-
-/**
- * Read all migration snapshot files from the migrations/meta directory
- */
-async function readSnapshotFiles(
-  migrationsDir: string,
-  logger?: { warn?: (msg: string) => void; debug?: (msg: string) => void },
-  isApplied?: (ledgerFilename: string) => Promise<boolean>
-): Promise<LoadedSnapshot[]> {
-  const metaDir = resolve(migrationsDir, "meta");
-
-  let files: string[];
-  try {
-    files = await readdir(metaDir);
-  } catch {
-    // Meta directory doesn't exist or isn't readable
-    return [];
-  }
-
-  // Sort files lexicographically to ensure deterministic "later snapshot wins" behavior
-  const snapshotFiles = files.filter(f => f.endsWith(".snapshot.json")).sort();
-
-  if (snapshotFiles.length === 0) {
-    return [];
-  }
-
-  const loaded: LoadedSnapshot[] = [];
-
-  for (const file of snapshotFiles) {
-    /*
-     * 🔴 The ledger read sits OUTSIDE the parse guard below, and outside the
-     * directory guard above. Both exist for a file that cannot be read, and a
-     * ledger that cannot be queried is neither: it fails identically for every
-     * snapshot, so swallowing it drops the whole set and returns the empty
-     * list that means "nothing to register". The caller then reports an
-     * up-to-date database while none of the metadata was written. Left to
-     * throw, it reaches the phase-level handler, which records the pass as
-     * unreadable and tells the operator to run `nextly migrate` again.
-     */
-    let applied = true;
-    if (isApplied) {
-      // `X.snapshot.json` pairs with the migration group `X.sql`, which is
-      // the name the ledger records for every dialect variant.
-      const ledgerFilename = `${file.replace(/\.snapshot\.json$/, "")}.sql`;
-      applied = await isApplied(ledgerFilename);
-    }
-
-    try {
-      const filePath = join(metaDir, file);
-      const content = await readFile(filePath, "utf-8");
-      const snapshot = JSON.parse(content) as MigrationSnapshot;
-      loaded.push({ file, snapshot, applied });
-    } catch (err) {
-      // Skip invalid snapshot files but continue processing others
-      logger?.warn?.(`Could not read snapshot file ${file}: ${String(err)}`);
-    }
-  }
-
-  return loaded;
-}
-
-/**
- * The newest entry per slug, dropped when the snapshot it came from has not
- * been applied.
- *
- * 🔴 The drop is decided on the WINNER, after later-wins resolution, not on
- * each entry as it is read. A slug described by an applied snapshot and again
- * by a pending one is withheld entirely: registration inserts once and never
- * revisits a row, so writing the earlier shape now is writing it permanently.
- */
-function newestApplied<T extends { slug: string }>(
-  loaded: LoadedSnapshot[],
-  entriesOf: (snapshot: MigrationSnapshot) => T[] | undefined,
-  logger?: { debug?: (msg: string) => void }
-): T[] {
-  const winners = new Map<
-    string,
-    { entry: T; applied: boolean; file: string }
-  >();
-
-  for (const { snapshot, applied, file } of loaded) {
-    for (const entry of entriesOf(snapshot) ?? []) {
-      if (entry.slug) {
-        winners.set(entry.slug, { entry, applied, file });
-      }
-    }
-  }
-
-  const registrable: T[] = [];
-  for (const [slug, winner] of winners) {
-    if (!winner.applied) {
-      logger?.debug?.(
-        `[Migration Metadata] Not registering "${slug}": its newest snapshot ${winner.file} has not been applied`
-      );
-      continue;
-    }
-    registrable.push(winner.entry);
-  }
-
-  return registrable;
 }
 
 /**
@@ -487,6 +345,51 @@ async function registerSingle(
  *
  * @param options - Registration options
  */
+/**
+ * Insert each entity of one kind, counting what was new.
+ *
+ * The two kinds are registered by identical logic — skip a reserved name, try
+ * the insert, keep going past a failure — so it is written once and given the
+ * insert to call. Two copies agreeing today is how one of them later stops
+ * skipping reserved names, or stops surviving a failed row, without anything
+ * saying so.
+ */
+async function registerEach<T extends { slug: string }>(
+  entries: T[],
+  kind: "collection" | "single",
+  insert: (entry: T) => Promise<boolean>,
+  logger: NonNullable<RegisterFromMigrationsOptions["logger"]>
+): Promise<number> {
+  let registered = 0;
+
+  for (const entry of entries) {
+    // A snapshot can carry a name that has since become reserved (a system
+    // resource). Registering it would recreate the permission collision the
+    // create/rename paths now refuse, so it is skipped rather than replayed.
+    // Skipped, not thrown: this runs at boot, and one stale snapshot entry must
+    // not take the whole application down.
+    if (isReservedResourceSlug(entry.slug)) {
+      logger.warn?.(
+        `[Migration Metadata] Skipping ${kind} "${entry.slug}": the name is reserved by Nextly and must be renamed.`
+      );
+      continue;
+    }
+
+    try {
+      if (await insert(entry)) registered += 1;
+      logger.debug?.(`[Migration Metadata] Registered ${kind}: ${entry.slug}`);
+    } catch (err) {
+      // Per entity: one row that cannot be written must not cost the rest
+      // their registration.
+      logger.warn?.(
+        `[Migration Metadata] Failed to register ${kind} ${entry.slug}: ${String(err)}`
+      );
+    }
+  }
+
+  return registered;
+}
+
 export async function registerFromMigrations(
   options: RegisterFromMigrationsOptions
 ): Promise<{
@@ -499,11 +402,11 @@ export async function registerFromMigrations(
   const typedAdapter = adapter as DrizzleAdapter;
 
   // Step 1: Read all snapshot files
-  const snapshots = await readSnapshotFiles(
+  const snapshots = await loadSnapshots({
     migrationsDir,
     logger,
-    options.isApplied
-  );
+    isApplied: options.isApplied,
+  });
 
   if (snapshots.length === 0) {
     logger.debug?.("[Migration Metadata] No snapshot files found");
@@ -518,58 +421,19 @@ export async function registerFromMigrations(
   const collections = mergeCollections(snapshots, logger);
   const singles = mergeSingles(snapshots, logger);
 
-  // Step 3: Register each collection
-  let collectionsRegistered = 0;
-  for (const collection of collections) {
-    // A snapshot can carry a name that has since become reserved (a system
-    // resource). Registering it would recreate the permission collision the
-    // create/rename paths now refuse, so it is skipped rather than replayed.
-    // Skipped, not thrown: this runs at boot, and one stale snapshot entry must
-    // not take the whole application down.
-    if (isReservedResourceSlug(collection.slug)) {
-      logger.warn?.(
-        `[Migration Metadata] Skipping collection "${collection.slug}": the name is reserved by Nextly and must be renamed.`
-      );
-      continue;
-    }
-    try {
-      const inserted = await registerCollection(
-        typedAdapter,
-        dialect,
-        collection
-      );
-      if (inserted) collectionsRegistered++;
-      logger.debug?.(
-        `[Migration Metadata] Registered collection: ${collection.slug}`
-      );
-    } catch (err) {
-      logger.warn?.(
-        `[Migration Metadata] Failed to register collection ${collection.slug}: ${String(err)}`
-      );
-    }
-  }
-
-  // Step 4: Register each single
-  let singlesRegistered = 0;
-  for (const single of singles) {
-    // Same as collections: a reserved name in a snapshot is skipped, not
-    // replayed, so it cannot recreate the permission collision.
-    if (isReservedResourceSlug(single.slug)) {
-      logger.warn?.(
-        `[Migration Metadata] Skipping single "${single.slug}": the name is reserved by Nextly and must be renamed.`
-      );
-      continue;
-    }
-    try {
-      const inserted = await registerSingle(typedAdapter, dialect, single);
-      if (inserted) singlesRegistered++;
-      logger.debug?.(`[Migration Metadata] Registered single: ${single.slug}`);
-    } catch (err) {
-      logger.warn?.(
-        `[Migration Metadata] Failed to register single ${single.slug}: ${String(err)}`
-      );
-    }
-  }
+  // Step 3: Register each entity, by kind.
+  const collectionsRegistered = await registerEach(
+    collections,
+    "collection",
+    entry => registerCollection(typedAdapter, dialect, entry),
+    logger
+  );
+  const singlesRegistered = await registerEach(
+    singles,
+    "single",
+    entry => registerSingle(typedAdapter, dialect, entry),
+    logger
+  );
 
   if (collectionsRegistered > 0 || singlesRegistered > 0) {
     logger.info?.(

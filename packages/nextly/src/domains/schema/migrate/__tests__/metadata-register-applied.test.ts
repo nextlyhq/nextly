@@ -258,3 +258,87 @@ describe("registerFromMigrations honours the applied ledger", () => {
     expect(result.collectionsRegistered).toBe(1);
   });
 });
+
+/*
+ * The two behaviours registration performs identically for both kinds. They
+ * share one implementation, so they are asserted for both kinds: a helper that
+ * quietly stopped applying to singles would otherwise look exactly like one
+ * that still did.
+ */
+describe("registration skips a reserved name and survives a failed row", () => {
+  /** An adapter whose inserts can be made to fail for a chosen slug. */
+  function failingOn(badSlug: string | null) {
+    const inserted: string[] = [];
+    return {
+      inserted,
+      adapter: {
+        getDrizzle: () => ({
+          select: () => ({
+            from: () => ({ where: () => ({ limit: async () => [] }) }),
+          }),
+          insert: () => ({
+            values: async (row: { slug?: string }) => {
+              if (row?.slug === badSlug) throw new Error("row is locked");
+              if (row?.slug) inserted.push(row.slug);
+            },
+          }),
+        }),
+      } as never,
+    };
+  }
+
+  it("skips a slug reserved by Nextly, for collections AND singles", async () => {
+    // "users" is a system resource; registering it would recreate the
+    // permission collision the create and rename paths refuse.
+    writeFileSync(
+      join(dir, "meta", "0001_reserved.snapshot.json"),
+      JSON.stringify({
+        collections: [{ slug: "users", tableName: "dc_users", fields: [] }],
+        singles: [{ slug: "settings", tableName: "ds_settings", fields: [] }],
+      })
+    );
+    const warnings: string[] = [];
+    const { adapter, inserted } = failingOn(null);
+
+    const result = await registerFromMigrations({
+      migrationsDir: dir,
+      adapter,
+      dialect: "sqlite",
+      logger: { warn: (m: string) => warnings.push(m), debug: () => {} },
+      isApplied: async () => true,
+    });
+
+    expect(inserted).toEqual([]);
+    expect(result.collectionsRegistered).toBe(0);
+    expect(result.singlesRegistered).toBe(0);
+    // Warned rather than silent, and named, so an operator can rename it.
+    expect(warnings.join("\n")).toContain("users");
+    expect(warnings.join("\n")).toContain("settings");
+  });
+
+  it("keeps registering after one entity fails to insert", async () => {
+    writeFileSync(
+      join(dir, "meta", "0001_two.snapshot.json"),
+      JSON.stringify({
+        collections: [
+          { slug: "alpha", tableName: "dc_alpha", fields: [] },
+          { slug: "beta", tableName: "dc_beta", fields: [] },
+        ],
+        singles: [],
+      })
+    );
+    const { adapter, inserted } = failingOn("alpha");
+
+    const result = await registerFromMigrations({
+      migrationsDir: dir,
+      adapter,
+      dialect: "sqlite",
+      logger: { warn: () => {}, debug: () => {} },
+      isApplied: async () => true,
+    });
+
+    // One failure costs ONE entity its row, not the rest of the pass.
+    expect(inserted).toEqual(["beta"]);
+    expect(result.collectionsRegistered).toBe(1);
+  });
+});
