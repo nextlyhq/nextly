@@ -1179,6 +1179,19 @@ describe("retired-category-keyword", () => {
     ).toContain("retired-category-keyword");
   });
 
+  it("fires on a comma-separated keyword string, which npm splits", async () => {
+    // The bare-string fix read `"cms, framework"` as one value, which matches no whole tag,
+    // so the published `framework` keyword still produced nothing.
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        "packages/thing/package.json": '{"name":"@nextlyhq/thing","keywords":"cms, framework"}',
+        "packages/thing/README.md":
+          "# t\n\nin alpha\n\n## Install\n\n## Related packages\n\n## License\n",
+      })
+    ).toContain("retired-category-keyword");
+  });
+
   it("does not fire on a bare-string keyword that is not the category", async () => {
     expect(
       await checksFor({
@@ -1257,6 +1270,27 @@ describe("packageKeywords", () => {
   it("reads both manifest shapes as the same list", () => {
     expect(packageKeywords({ keywords: ["cms", "framework"] })).toEqual(["cms", "framework"]);
     expect(packageKeywords({ keywords: "framework" })).toEqual(["framework"]);
+  });
+
+  it("splits a comma-separated string the way npm does", () => {
+    // npm's own normalize-package-data splits on /,\s+/, so this is what the registry
+    // publishes and therefore what the guard has to read.
+    expect(packageKeywords({ keywords: "cms, framework" })).toEqual(["cms", "framework"]);
+    expect(packageKeywords({ keywords: "cms,  app-framework,  nextjs" })).toEqual([
+      "cms",
+      "app-framework",
+      "nextjs",
+    ]);
+  });
+
+  it("keeps npm's quirk: a comma with no space does not split", () => {
+    // Verified against normalize-package-data 8.0.0. Splitting here too would evaluate
+    // keywords the registry never derives, which is a different check from the one intended.
+    expect(packageKeywords({ keywords: "cms,framework" })).toEqual(["cms,framework"]);
+  });
+
+  it("drops empty entries, as npm does", () => {
+    expect(packageKeywords({ keywords: ["cms", "", "framework"] })).toEqual(["cms", "framework"]);
   });
 
   it("returns nothing for a manifest with no usable keywords", () => {

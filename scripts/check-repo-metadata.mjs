@@ -52,32 +52,78 @@ const DESCRIPTION_SOURCE = "packages/nextly/package.json";
  * Whether an HTTP status means the configured repository cannot be read, as opposed to a
  * moment when GitHub could not answer.
  *
- * The distinction is the whole value of the unverifiable result. Rate limiting is the common
- * outcome of an unauthenticated call from CI and says nothing about the metadata, so it stays
- * unverifiable. A 404 is the opposite: it is what a renamed repository or a stale `OWNER`
- * returns, and treating it as transient would leave this check green for as long as the
- * mistake lasted, examining no metadata at all.
+ * The distinction is the whole value of the unverifiable result. A 404 is what a renamed
+ * repository or a stale `OWNER` returns, and treating it as transient would leave this check
+ * green for as long as the mistake lasted, examining no metadata at all.
+ *
+ * 403 is the ambiguous one, and the headers are what resolve it: GitHub returns 403 both for
+ * rate limiting, which recovers, and for a repository this credential may not read, which does
+ * not. Reading only the status would classify a permanent refusal as a moment to try again.
  */
-export function isPermanentStatus(status) {
-  if (status === 403 || status === 429) return false; // rate limited, not unreadable
+export function isPermanentStatus(status, headers) {
+  if (status === 429) return false;
+  if (status === 403) {
+    const remaining = headers?.get?.("x-ratelimit-remaining");
+    const retryAfter = headers?.get?.("retry-after");
+    // Primary limit exhausts the quota; a secondary limit answers with retry-after instead.
+    return !(remaining === "0" || retryAfter);
+  }
   if (status >= 500) return false; // GitHub's side, and it recovers
   return status >= 400;
 }
 
-export async function fetchRepoMetadata(owner = OWNER, repo = REPO) {
-  // Unauthenticated on purpose: the repository is public, so this needs no token and runs the
-  // same way on a laptop and in CI. A token would make the check pass locally for someone whose
-  // gh is logged in and fail in an environment that has none.
-  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
-    headers: { accept: "application/vnd.github+json" },
-  });
-  if (!response.ok) {
-    const error = new Error(`GitHub API returned ${response.status} for ${owner}/${repo}`);
-    error.permanent = isPermanentStatus(response.status);
-    throw error;
+/**
+ * Whether an unreadable API must fail the run rather than report itself unverifiable.
+ *
+ * The scheduled run exists only to observe a setting no file check can see, so a scheduled
+ * run that examined nothing did not do the one thing it is for, and reporting success would
+ * make it indistinguishable from a clean pass. Everywhere else the softer result is right: a
+ * check that goes red because a laptop is offline teaches people to wave this one through.
+ */
+export function verificationRequired(env = process.env) {
+  return env.GITHUB_EVENT_NAME === "schedule" || env.GITHUB_EVENT_NAME === "workflow_dispatch";
+}
+
+/**
+ * The token is used when one is offered and the call is unauthenticated otherwise.
+ *
+ * The repository is public, so no token is needed to read this and a laptop should not have to
+ * hold one. But an unauthenticated caller gets 60 requests an hour shared across everything on
+ * that IP, and a runner that exhausts it turns this check into a silent pass — the result is
+ * "unverifiable", which is not a failure, so the run goes green having examined nothing. A
+ * workflow token raises the ceiling far above anything this job could reach.
+ */
+function authHeaders(env = process.env) {
+  const token = env.GITHUB_TOKEN || env.GH_TOKEN;
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
+
+const TRANSIENT_ATTEMPTS = 3;
+
+export async function fetchRepoMetadata(owner = OWNER, repo = REPO, { fetchImpl = fetch, env = process.env, delay = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= TRANSIENT_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetchImpl(`https://api.github.com/repos/${owner}/${repo}`, {
+        headers: { accept: "application/vnd.github+json", ...authHeaders(env) },
+      });
+      if (response.ok) {
+        const body = await response.json();
+        return { description: body.description ?? "", topics: body.topics ?? [] };
+      }
+      const error = new Error(`GitHub API returned ${response.status} for ${owner}/${repo}`);
+      error.permanent = isPermanentStatus(response.status, response.headers);
+      if (error.permanent) throw error;
+      lastError = error;
+    } catch (error) {
+      if (error.permanent) throw error;
+      lastError = error;
+    }
+    // Retried because a single blip should not file an issue. A permanent status never
+    // reaches here, so this never delays the answer that matters.
+    if (attempt < TRANSIENT_ATTEMPTS) await delay(attempt * 1000);
   }
-  const body = await response.json();
-  return { description: body.description ?? "", topics: body.topics ?? [] };
+  throw lastError;
 }
 
 /**
@@ -163,12 +209,15 @@ if (invokedDirectly) {
   try {
     metadata = await fetchRepoMetadata();
   } catch (error) {
-    if (error.permanent) {
+    if (error.permanent || verificationRequired()) {
       console.error(
         `\nrepo metadata: ${OWNER}/${REPO} could not be read (${error.message})\n\n` +
-          `This status does not recover on its own. Either the repository was renamed or made ` +
-          `private and the constants in this script are stale, or it can no longer be read ` +
-          `without a token.\n`
+          (error.permanent
+            ? `This status does not recover on its own. Either the repository was renamed or ` +
+              `made private and the constants in this script are stale, or it can no longer ` +
+              `be read without a token.\n`
+            : `This run exists to observe the About line and the topics, and it examined ` +
+              `neither, so it cannot report a pass. Re-run it once the API is reachable.\n`)
       );
       process.exit(1);
     }

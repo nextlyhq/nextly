@@ -128,15 +128,25 @@ export function namesRetiredCategory(tag) {
 }
 
 /**
+ * The keywords npm derives from a manifest, which is not always the keywords it was given.
+ *
  * npm accepts a bare string where `keywords` expects an array, and both forms reach the
- * registry. Spreading the string form yields single characters, which match no whole tag, so
- * the two readers of this field return different answers unless they share one normalisation.
+ * registry. Reading the string form as one value, or spreading it into characters, both
+ * answer a different question from the one the npm page shows.
+ *
+ * The split mirrors `fixKeywordsField` in npm's own `normalize-package-data` (verified
+ * against 8.0.0), including its quirk: the separator is a comma followed by whitespace, so
+ * `"cms, framework"` is two keywords and `"cms,framework"` stays one. Matching the quirk is
+ * the point — the guard has to evaluate what the registry publishes, not a tidier reading of
+ * it. Empty and non-string entries are dropped there too.
  */
+const NPM_KEYWORD_SEPARATOR = /,\s+/;
+
 export function packageKeywords(manifest) {
   const keywords = manifest?.keywords;
-  if (typeof keywords === "string") return [keywords];
-  if (!Array.isArray(keywords)) return [];
-  return keywords.filter(value => typeof value === "string");
+  const list = typeof keywords === "string" ? keywords.split(NPM_KEYWORD_SEPARATOR) : keywords;
+  if (!Array.isArray(list)) return [];
+  return list.filter(value => typeof value === "string" && value !== "");
 }
 
 /**

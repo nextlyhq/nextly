@@ -39,6 +39,11 @@ jobs:
       # dependency tree this job does not need is a way for it to fail for a
       # reason that has nothing to do with the metadata.
       - name: Repository metadata
+        env:
+          # An unauthenticated call gets 60 requests an hour shared across the whole runner
+          # IP. Exhausting it makes this job green having examined nothing, which is the one
+          # outcome it must never produce. The check still runs tokenless on a laptop.
+          GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/check-repo-metadata.mjs
 
   report:
@@ -67,7 +72,7 @@ jobs:
           else
             # printf keeps the multi-line body inside this YAML block scalar;
             # a raw multi-line string here would dedent and break the file.
-            body=$(printf 'The scheduled repository-metadata check failed. Run: %s\n\nThe GitHub About line or the topic list no longer agrees with the category. These are repository settings rather than files, so no file check can see them and nothing in a commit can fix them.\n\nFix them in Settings, or with:\n\n```\ngh repo edit nextlyhq/nextly --description "..." --add-topic ... --remove-topic ...\n```' "$RUN_URL")
+            body=$(printf 'The scheduled repository-metadata check failed. Run: %s\n\nEither the GitHub About line or the topic list no longer agrees with the category, or the run could not read them at all. The logs say which.\n\nThese are repository settings rather than files, so no file check can see them and nothing in a commit can fix them. Fix them in Settings, or with:\n\n```\ngh repo edit nextlyhq/nextly --description "..." --add-topic ... --remove-topic ...\n```' "$RUN_URL")
             gh issue create --repo "${{ github.repository }}" \
               --title "Repository metadata no longer matches the category" \
               --label ci-nightly-failure \

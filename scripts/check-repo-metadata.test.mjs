@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   checkRepoMetadata,
+  fetchRepoMetadata,
   isPermanentStatus,
   strictDescriptionMatch,
+  verificationRequired,
 } from "./check-repo-metadata.mjs";
 
 /**
@@ -215,8 +217,8 @@ describe("isPermanentStatus", () => {
 
   it("treats rate limiting and server errors as transient", () => {
     // An unauthenticated call from CI hits the rate limit routinely, and it says nothing
-    // about the metadata.
-    expect(isPermanentStatus(403)).toBe(false);
+    // about the metadata. 403 is not in this list: it means two different things and the
+    // headers are what separate them, which the "403 is two different answers" suite covers.
     expect(isPermanentStatus(429)).toBe(false);
     expect(isPermanentStatus(500)).toBe(false);
     expect(isPermanentStatus(502)).toBe(false);
@@ -225,6 +227,121 @@ describe("isPermanentStatus", () => {
   it("does not call a success permanent", () => {
     expect(isPermanentStatus(200)).toBe(false);
     expect(isPermanentStatus(304)).toBe(false);
+  });
+});
+
+describe("403 is two different answers", () => {
+  const headers = entries => ({ get: name => entries[name] ?? null });
+
+  it("is transient when the quota is exhausted", () => {
+    expect(isPermanentStatus(403, headers({ "x-ratelimit-remaining": "0" }))).toBe(false);
+  });
+
+  it("is transient when a secondary limit asks us to wait", () => {
+    expect(isPermanentStatus(403, headers({ "retry-after": "60" }))).toBe(false);
+  });
+
+  it("is permanent when the credential simply may not read the repository", () => {
+    // Reading the status alone would call this a moment to try again, forever.
+    expect(isPermanentStatus(403, headers({ "x-ratelimit-remaining": "4999" }))).toBe(true);
+  });
+
+  it("is permanent when there are no headers to consult", () => {
+    expect(isPermanentStatus(403, undefined)).toBe(true);
+  });
+});
+
+describe("verificationRequired", () => {
+  it("is true for the runs whose only purpose is to observe the setting", () => {
+    expect(verificationRequired({ GITHUB_EVENT_NAME: "schedule" })).toBe(true);
+    expect(verificationRequired({ GITHUB_EVENT_NAME: "workflow_dispatch" })).toBe(true);
+  });
+
+  it("is false where an unreachable API should not turn the run red", () => {
+    expect(verificationRequired({ GITHUB_EVENT_NAME: "pull_request" })).toBe(false);
+    expect(verificationRequired({ GITHUB_EVENT_NAME: "push" })).toBe(false);
+    expect(verificationRequired({})).toBe(false);
+  });
+});
+
+describe("fetchRepoMetadata", () => {
+  const ok = body => ({ ok: true, json: async () => body });
+  const bad = (status, entries = {}) => ({
+    ok: false,
+    status,
+    headers: { get: name => entries[name] ?? null },
+  });
+  const noWait = async () => {};
+
+  it("sends the token when one is offered", async () => {
+    let seen;
+    await fetchRepoMetadata("o", "r", {
+      fetchImpl: async (_url, init) => {
+        seen = init.headers;
+        return ok({ description: "d", topics: [] });
+      },
+      env: { GITHUB_TOKEN: "t0ken" },
+      delay: noWait,
+    });
+    expect(seen.authorization).toBe("Bearer t0ken");
+  });
+
+  it("stays unauthenticated when there is no token, so a laptop needs none", async () => {
+    let seen;
+    await fetchRepoMetadata("o", "r", {
+      fetchImpl: async (_url, init) => {
+        seen = init.headers;
+        return ok({ description: "d", topics: [] });
+      },
+      env: {},
+      delay: noWait,
+    });
+    expect(seen.authorization).toBeUndefined();
+  });
+
+  it("retries a transient failure and succeeds", async () => {
+    let calls = 0;
+    const metadata = await fetchRepoMetadata("o", "r", {
+      fetchImpl: async () => {
+        calls += 1;
+        return calls === 1 ? bad(503) : ok({ description: "d", topics: ["cms"] });
+      },
+      env: {},
+      delay: noWait,
+    });
+    expect(calls).toBe(2);
+    expect(metadata).toEqual({ description: "d", topics: ["cms"] });
+  });
+
+  it("does not retry a permanent failure", async () => {
+    // A 404 is the same answer every time, and retrying it only delays the report.
+    let calls = 0;
+    await expect(
+      fetchRepoMetadata("o", "r", {
+        fetchImpl: async () => {
+          calls += 1;
+          return bad(404);
+        },
+        env: {},
+        delay: noWait,
+      })
+    ).rejects.toMatchObject({ permanent: true });
+    expect(calls).toBe(1);
+  });
+
+  it("gives up after the last attempt and reports the failure as transient", async () => {
+    let calls = 0;
+    await expect(
+      fetchRepoMetadata("o", "r", {
+        fetchImpl: async () => {
+          calls += 1;
+          return bad(403, { "x-ratelimit-remaining": "0" });
+        },
+        env: {},
+        delay: noWait,
+      })
+    ).rejects.toMatchObject({ permanent: false });
+    expect(calls).toBe(3);
   });
 });
 
