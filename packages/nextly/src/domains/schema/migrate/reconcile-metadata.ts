@@ -46,6 +46,7 @@ import type { SupportedDialect } from "../../../types/database";
 import { CollectionRegistryService } from "../../collections/services/collection-registry-service";
 import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
+import { SchemaEventsRepository } from "../events/schema-events-repository";
 
 import { registerFromMigrations } from "./metadata-register";
 
@@ -217,14 +218,28 @@ export async function reconcileMigrationMetadata(
   const { adapter, dialect, migrationsDir, logger } = deps;
   const register = deps.registerFn ?? registerFromMigrations;
 
-  // Step 1: rows the snapshots describe that the registry does not have yet.
-  // These are inserted already `applied`, because the migration that carries
-  // their DDL is the one that just ran.
+  /*
+   * Step 1: rows the snapshots describe that the registry does not have yet.
+   *
+   * 🔴 Registration inserts them as `applied`, so it is given the evidence for
+   * that claim rather than asserting it. Every `*.snapshot.json` in the
+   * directory is otherwise read and merged, including snapshots belonging to
+   * migrations a `--step N` run never reached -- and those entities are then
+   * exposed as applied while their tables may not exist, out of reach of the
+   * sweep below, which only looks at rows that are still pending.
+   *
+   * The ledger is the evidence: `nextly_schema_events` records a `file_apply`
+   * per migration, and `isFileApplied` is the same query `runFileMigrations`
+   * already uses to decide what is outstanding — so registration and execution
+   * read one source rather than two that can disagree.
+   */
+  const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
   const registered = await register({
     migrationsDir,
     adapter,
     dialect,
     logger,
+    isApplied: filename => events.isFileApplied(filename),
   });
 
   // Step 2: rows the registry already had, waiting on a table.
