@@ -2407,6 +2407,34 @@ export function documentRefusal(document: unknown): string | undefined {
 }
 
 /**
+ * Why removing this subtree would be refused, or `undefined`.
+ *
+ * Published for the reason {@link nodeShapeRefusal} and {@link positionRefusal}
+ * are: a planner that emits a `remove` has to know whether the apply will take
+ * it, and the rule is not the one a caller would guess. `remove` refuses when
+ * any id ANYWHERE IN THE SUBTREE it is about to take occurs more than once in
+ * the document — not merely when the root's own id does — because the inverse
+ * it records could not put that subtree back.
+ *
+ * A planner checking only the root passes a selection whose deep child shares an
+ * id with a node elsewhere on the page, and the apply then throws on the first
+ * op of a group whose library row has already been written. That is the failure
+ * the plan/apply split exists to prevent.
+ */
+export function subtreeRemovalRefusal(
+  nodes: BlockNode[],
+  root: BlockNode
+): string | undefined {
+  try {
+    assertSubtreeIdsAreUnique(nodes, root, "remove");
+    return undefined;
+  } catch (error) {
+    if (error instanceof OpError) return error.message;
+    throw error;
+  }
+}
+
+/**
  * Why this node would be refused as an insert's subtree, or `undefined`.
  *
  * The companion to {@link positionRefusal} and published for the same reason: a

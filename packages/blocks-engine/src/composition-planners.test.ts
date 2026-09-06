@@ -912,3 +912,141 @@ describe("converting a run into an instance", () => {
     expect(plan.permitted).toEqual(["core/section"]);
   });
 });
+
+describe("a nomination this cannot read is refused, never dropped or dereferenced", () => {
+  const plan = (exposure: unknown) =>
+    planSaveAsComponent(
+      cardPage(),
+      ["card"],
+      componentTarget,
+      exposure as never,
+      anyParent
+    );
+
+  it("refuses a properties value that is not a list", () => {
+    // Normalising it to absent reported SUCCESS for a nomination the caller
+    // made and this could not read.
+    const result = plan({ properties: "bad" });
+    expect(result.problem).toBe("invalid-exposure");
+    expect(result.issues?.map(i => i.code)).toContain(
+      "component-envelope-invalid"
+    );
+  });
+
+  it("refuses a null entry instead of throwing on it", () => {
+    let threw: unknown;
+    let result;
+    try {
+      result = plan({ properties: [null] });
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeUndefined();
+    expect(result?.problem).toBe("invalid-exposure");
+  });
+
+  it("refuses a slots value that is not a record", () => {
+    expect(plan({ slots: "bad" }).problem).toBe("invalid-exposure");
+  });
+
+  it("does not run a prototype setter for a __proto__ slot key", () => {
+    // Assigning to it invokes the inherited setter rather than creating a
+    // property, so the slot the author asked for vanishes and the result gains
+    // a prototype — making the validator refuse what it accepts when the same
+    // document is stored directly.
+    const result = plan({
+      slots: { __proto__: { label: "B", nodeId: "card", slot: "children" } },
+    });
+    expect(result.problem).toBe("invalid-exposure");
+  });
+
+  it("copies each option RECORD, not only the list", () => {
+    // The weaker test — pushing a new element — stays green while every option
+    // object is still shared with the caller's request.
+    const options = [{ value: "a", label: "A" }];
+    const stored = definition(
+      planSaveAsComponent(
+        cardPage(),
+        ["card"],
+        componentTarget,
+        exposeText("headline", { type: "select", options }),
+        anyParent
+      )
+    );
+
+    options[0]!.label = "MUTATED";
+    expect(stored.exposed?.[0]?.options?.[0]?.label).toBe("A");
+  });
+
+  it("refuses a nomination naming an id the selection holds twice", () => {
+    // The map is keyed on the ORIGINAL id, so the second node's mapping
+    // replaces the first — and the pointer lands on whichever came last. It
+    // resolves, so the envelope check passes and every instance override then
+    // edits a block the author did not choose.
+    const doc = page([
+      node(
+        "wrap",
+        {},
+        {
+          children: [
+            node("dup", { props: { mark: "first" } }),
+            node("dup", { props: { mark: "second" } }),
+          ],
+        }
+      ),
+    ]);
+
+    expect(
+      planSaveAsComponent(
+        doc,
+        ["wrap"],
+        componentTarget,
+        exposeText("dup"),
+        anyParent
+      ).problem
+    ).toBe("ambiguous-exposure");
+  });
+});
+
+describe("a convert refuses everything its ops would meet", () => {
+  it("refuses when a sibling the author never selected is malformed", () => {
+    // `applyOps` walks the WHOLE forest before applying anything, so a plan
+    // that ignores an unselected malformed node succeeds and then throws on its
+    // first op — after the library row has been written.
+    const doc = page([node("a"), null as unknown as BlockNode]);
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["a"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent
+      ).problem
+    ).toBe("unusable-document");
+    expect(() => applyOps(doc, [{ kind: "remove", id: "a" }])).toThrow();
+  });
+
+  it("refuses a duplicate id on a DESCENDANT, not just on the root", () => {
+    // `remove` refuses when any id inside the subtree it takes occurs twice in
+    // the document, because its inverse could not put that subtree back. A
+    // root-only check passes this and the apply throws.
+    const doc = page([
+      node("a", {}, { children: [node("dup")] }),
+      node("other", {}, { children: [node("dup")] }),
+    ]);
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["a"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent
+      ).problem
+    ).toBe("duplicate-destination");
+    expect(() => applyOps(doc, [{ kind: "remove", id: "a" }])).toThrow();
+  });
+});

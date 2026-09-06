@@ -746,6 +746,7 @@ export {
   // The apply's own position rule, asked without applying: a planner that
   // wrote its own copy would agree until one of the two moved.
   positionRefusal,
+  subtreeRemovalRefusal,
   positionOf,
   sameStoredValue,
   sameStyleValue,

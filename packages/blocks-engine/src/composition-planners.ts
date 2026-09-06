@@ -47,10 +47,13 @@ import {
   lockedWithin,
   nodeShapeRefusal,
   positionRefusal,
+  subtreeRemovalRefusal,
   type BuilderOp,
   type OpPosition,
 } from "./ops";
 import { patternDigest } from "./pattern-digest";
+import { isPlainRecord } from "./plain-record";
+import { defineEntry } from "./safe-record";
 import { contiguousRun, type RunProblem } from "./sibling-run";
 import {
   findNode,
@@ -196,7 +199,15 @@ export type PlanProblem =
    * author does next, where this names a property they nominated and can
    * withdraw. {@link PlanRefusal.issues} carries which one.
    */
-  | "invalid-exposure";
+  | "invalid-exposure"
+  /**
+   * A nomination names a node id the selection holds more than once.
+   *
+   * Told apart from `"invalid-exposure"` because nothing about the envelope is
+   * malformed — the pointer resolves, to one of two nodes that answered to the
+   * name — so the author's remedy is to pick a node rather than to fix a field.
+   */
+  | "ambiguous-exposure";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -934,6 +945,9 @@ function componentDocument(
   saved: PlannedSave,
   exposure: ComponentExposure
 ): SavedComponent | PlanRefusal {
+  const ambiguous = ambiguousNomination(saved.selected, exposure);
+  if (ambiguous !== undefined) return ambiguous;
+
   const definition: ComponentDocument = {
     ...saved.stored,
     kind: "component",
@@ -945,6 +959,65 @@ function componentDocument(
   return issues.length === 0
     ? { document: definition }
     : { problem: "invalid-exposure", issues };
+}
+
+/**
+ * A nomination naming a source id the selection holds TWICE.
+ *
+ * The save re-mints ids one per node, but the map it returns is keyed on the
+ * ORIGINAL id — so two nodes sharing one lose the first mapping to the second,
+ * and a pointer re-aimed through it lands on whichever copy came last. The
+ * stored document is well formed and the envelope check passes, because the
+ * pointer does resolve; it simply resolves to a node the author did not choose,
+ * and every instance override then edits the wrong block.
+ *
+ * Refused rather than resolved, because the nomination is genuinely ambiguous:
+ * two nodes answered to the name the author gave, and nothing here can know
+ * which was meant. The same stance `"duplicate-destination"` takes elsewhere.
+ *
+ * Only the ids actually NOMINATED. A duplicate somewhere else in the selection
+ * is a property of the page, which is saved under forgiving validation and may
+ * legitimately hold one — refusing on it would reject a component whose every
+ * exposure is unambiguous.
+ */
+function ambiguousNomination(
+  selected: readonly BlockNode[],
+  exposure: ComponentExposure
+): PlanRefusal | undefined {
+  const roots = [...selected];
+  for (const id of nominatedIds(exposure)) {
+    if (countById(roots, id) > 1) return { problem: "ambiguous-exposure" };
+  }
+  return undefined;
+}
+
+/**
+ * Every source node id a nomination points at, properties and slots alike.
+ *
+ * Both halves, because both are pointers and both are re-aimed through the same
+ * map — a slot region naming an ambiguous id lands on the wrong container just
+ * as a property does. Anything it cannot read a `nodeId` from is skipped rather
+ * than reported: an entry that malformed is refused by the envelope check,
+ * which says what is wrong with it in its own words.
+ */
+function nominatedIds(exposure: ComponentExposure): string[] {
+  const named: string[] = [];
+  if (Array.isArray(exposure.properties)) {
+    for (const one of exposure.properties) collectNodeId(one, named);
+  }
+  if (isPlainRecord(exposure.slots)) {
+    for (const id of Object.keys(exposure.slots)) {
+      collectNodeId(exposure.slots[id], named);
+    }
+  }
+  return named;
+}
+
+/** The `nodeId` this entry names, when it names one readable as a string. */
+function collectNodeId(one: unknown, into: string[]): void {
+  if (isPlainRecord(one) && typeof one.nodeId === "string") {
+    into.push(one.nodeId);
+  }
 }
 
 /**
@@ -963,18 +1036,49 @@ function exposedProperties(
   requested: readonly RequestedProperty[] | undefined,
   nodeIds: ReadonlyMap<string, string>
 ): { exposed?: ExposedProperty[] } {
-  if (!Array.isArray(requested) || requested.length === 0) return {};
+  if (requested === undefined) return {};
+  // A value that is not a list is CARRIED, not normalised away. Dropping it
+  // reports success for a nomination the caller made and this could not read,
+  // where handing it on lets `checkExposedList` refuse it in the words it
+  // already has — the same reason {@link storedId} keeps an id it cannot map.
+  if (!Array.isArray(requested)) {
+    return { exposed: requested as unknown as ExposedProperty[] };
+  }
+  if (requested.length === 0) return {};
   return {
-    exposed: requested.map(one => ({
-      id: one.id,
-      label: one.label,
-      nodeId: storedId(one.nodeId, nodeIds),
-      propPath: one.propPath,
-      type: one.type,
-      // Copied rather than aliased: the stored document must not share an array
-      // with the caller's request, which the caller is free to go on editing.
-      ...(Array.isArray(one.options) ? { options: [...one.options] } : {}),
-    })),
+    exposed: requested.map(one =>
+      // Per ENTRY, for the same reason. A `null` or a primitive in the list is
+      // not something this can re-aim, and reading `one.id` off it throws where
+      // the module promises a refusal.
+      isPlainRecord(one)
+        ? mappedProperty(one as unknown as RequestedProperty, nodeIds)
+        : one
+    ),
+  };
+}
+
+/** One nominated property, re-aimed at the stored tree. */
+function mappedProperty(
+  one: RequestedProperty,
+  nodeIds: ReadonlyMap<string, string>
+): ExposedProperty {
+  return {
+    id: one.id,
+    label: one.label,
+    nodeId: storedId(one.nodeId, nodeIds),
+    propPath: one.propPath,
+    type: one.type,
+    // Copied to a DEPTH of one record, not just the array. Cloning the list
+    // alone leaves every option object shared with the caller's request, so
+    // editing a label after planning silently edits the document the plan says
+    // it would store — an alias a test that only appends to the list cannot see.
+    ...(Array.isArray(one.options)
+      ? {
+          options: one.options.map(option =>
+            isPlainRecord(option) ? { ...option } : option
+          ),
+        }
+      : {}),
   };
 }
 
@@ -983,7 +1087,10 @@ function exposedSlots(
   requested: Readonly<Record<string, RequestedSlot>> | undefined,
   nodeIds: ReadonlyMap<string, string>
 ): { slots?: Record<string, ExposedSlot> } {
-  if (requested === null || typeof requested !== "object") return {};
+  if (requested === undefined) return {};
+  if (!isPlainRecord(requested)) {
+    return { slots: requested };
+  }
   // Own keys only. A record reached from a published entry point may inherit
   // one, and a key that is not the caller's own is a region no author asked
   // for — while `structuredClone` and object spreads copy neither, so the guard
@@ -993,13 +1100,23 @@ function exposedSlots(
   const slots: Record<string, ExposedSlot> = {};
   for (const id of named) {
     const one = requested[id];
-    if (one === null || typeof one !== "object") continue;
-    slots[id] = {
-      label: one.label,
-      nodeId: storedId(one.nodeId, nodeIds),
-      slot: one.slot,
-      ...(Array.isArray(one.allow) ? { allow: [...one.allow] } : {}),
-    };
+    // DEFINED rather than assigned. A stored record may carry an own
+    // `__proto__` key, and assigning to it runs the inherited setter instead of
+    // creating a property — so the slot the author asked for disappears and the
+    // result gains a prototype, making the validator refuse a nomination it
+    // accepts when the same document is stored directly.
+    defineEntry(
+      slots,
+      id,
+      isPlainRecord(one)
+        ? {
+            label: one.label,
+            nodeId: storedId(one.nodeId, nodeIds),
+            slot: one.slot,
+            ...(Array.isArray(one.allow) ? { allow: [...one.allow] } : {}),
+          }
+        : (one as unknown as ExposedSlot)
+    );
   }
   return { slots };
 }
@@ -1036,9 +1153,21 @@ function replaceOps(
   componentId: string,
   nesting: NestingSource
 ): RestampOps | PlanRefusal {
+  // Everything `applyOp` asks BEFORE it looks at an op — the envelope, then the
+  // whole forest, because it walks every node before applying anything. A
+  // malformed sibling the author never selected refuses the first remove of a
+  // group whose library row has already been written, which is the rollback the
+  // plan/apply split exists to avoid. Asked exactly as {@link restampOps} asks
+  // it, since both planners emit ops against the same document.
+  if (
+    documentRefusal(document) !== undefined ||
+    forestRefusal(document.nodes) !== undefined
+  ) {
+    return { problem: "unusable-document" };
+  }
+
   const refusal =
-    lockRefusal(saved.selected) ??
-    ambiguousRootRefusal(document, saved.selected);
+    lockRefusal(saved.selected) ?? removableRefusal(document, saved.selected);
   if (refusal !== undefined) return refusal;
 
   const position = replacementPosition(saved.at);
@@ -1074,6 +1203,28 @@ function replaceOps(
       { kind: "insert", node: instance, at: position.at },
     ],
   };
+}
+
+/**
+ * A selected root this document will not let a `remove` take.
+ *
+ * The op layer's own rule rather than a count of the root's id, and the two are
+ * not the same question: `remove` refuses when ANY id inside the subtree it
+ * takes occurs more than once in the document, because the inverse it records
+ * could not put that subtree back. A root can be unique while a node three
+ * levels down collides with something across the page — and the plan then
+ * succeeds, the library row is written, and the first op throws.
+ */
+function removableRefusal(
+  document: BlockDocument,
+  roots: readonly BlockNode[]
+): PlanRefusal | undefined {
+  for (const root of roots) {
+    if (subtreeRemovalRefusal(document.nodes, root) !== undefined) {
+      return { problem: "duplicate-destination" };
+    }
+  }
+  return undefined;
 }
 
 /**

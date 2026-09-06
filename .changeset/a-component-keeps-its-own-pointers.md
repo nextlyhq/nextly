@@ -47,3 +47,13 @@ of them.
 
 `PatternTarget` is now `LibraryTarget`: one type for all three library kinds,
 since a pattern, a component and a layout are stored the same way.
+
+A convert now refuses everything its own ops would be refused for, including a
+malformed node the author never selected and an id duplicated on a descendant of
+what it removes — `remove` rejects the whole subtree in that case, because the
+inverse it records could not put it back. That rule is published as
+`subtreeRemovalRefusal`, alongside the other refusals a planner has to be able
+to ask.
+
+A nomination naming a node id the selection holds twice is refused rather than
+silently re-aimed at whichever copy came last.
