@@ -119,6 +119,28 @@ export interface RegisterFromMigrationsOptions {
   dialect: SupportedDialect;
 
   /**
+   * Whether the migration a snapshot belongs to has actually been applied.
+   *
+   * 🔴 Registration inserts entities as `applied`, so without this it asserts
+   * something it has not checked. Every `*.snapshot.json` in the directory is
+   * read and merged, including snapshots for migrations a `--step N` run has
+   * not reached — and those entities are then exposed as applied while their
+   * tables may not exist, beyond the reach of the pending sweep that would
+   * otherwise repair them, because they are no longer pending.
+   *
+   * Called with the LEDGER filename, which is the migration group's `.sql`
+   * name rather than a dialect variant: `runFileMigrations` records
+   * `0001_x.sql` whether it executed `0001_x.sql` or `0001_x.mysql.sql`, and
+   * the snapshot beside it is `meta/0001_x.snapshot.json`.
+   *
+   * OPTIONAL, and omitting it means "register everything". That is correct for
+   * the dev boot path, which applies every pending migration immediately
+   * before registering, so no unapplied snapshot can exist for it to skip. Any
+   * caller that registers WITHOUT having just applied everything must pass it.
+   */
+  isApplied?: (ledgerFilename: string) => Promise<boolean>;
+
+  /**
    * Logger for output
    */
   logger?: {
@@ -134,7 +156,8 @@ export interface RegisterFromMigrationsOptions {
  */
 async function readSnapshotFiles(
   migrationsDir: string,
-  logger?: { warn?: (msg: string) => void }
+  logger?: { warn?: (msg: string) => void; debug?: (msg: string) => void },
+  isApplied?: (ledgerFilename: string) => Promise<boolean>
 ): Promise<MigrationSnapshot[]> {
   const metaDir = resolve(migrationsDir, "meta");
 
@@ -153,6 +176,17 @@ async function readSnapshotFiles(
 
     for (const file of snapshotFiles) {
       try {
+        if (isApplied) {
+          // `X.snapshot.json` pairs with the migration group `X.sql`, which is
+          // the name the ledger records for every dialect variant.
+          const ledgerFilename = `${file.replace(/\.snapshot\.json$/, "")}.sql`;
+          if (!(await isApplied(ledgerFilename))) {
+            logger?.debug?.(
+              `[Migration Metadata] Skipping ${file}: ${ledgerFilename} has not been applied`
+            );
+            continue;
+          }
+        }
         const filePath = join(metaDir, file);
         const content = await readFile(filePath, "utf-8");
         const snapshot = JSON.parse(content) as MigrationSnapshot;
@@ -402,7 +436,11 @@ export async function registerFromMigrations(
   const typedAdapter = adapter as DrizzleAdapter;
 
   // Step 1: Read all snapshot files
-  const snapshots = await readSnapshotFiles(migrationsDir, logger);
+  const snapshots = await readSnapshotFiles(
+    migrationsDir,
+    logger,
+    options.isApplied
+  );
 
   if (snapshots.length === 0) {
     logger.debug?.("[Migration Metadata] No snapshot files found");
