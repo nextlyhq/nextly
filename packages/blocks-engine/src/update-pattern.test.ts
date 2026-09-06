@@ -863,46 +863,16 @@ describe("save → insert → save-over, through applyOps", () => {
     expect(plan.update?.document.nodes[0].cssId).toBe("hero");
   });
 
-  it("restores an id the insert renamed to avoid a real collision", () => {
-    // The rename is correct — the page already rendered `hero` — but carrying
-    // it back into the library would move the pattern's fingerprint and report
-    // every OTHER copy stale for an edit nobody made.
-    const stored = seed(page([node("a", { cssId: "hero" })]), ["a"]).stored;
-    const destination = page([node("d", { cssId: "hero" })]);
-    const insert = planned(
-      planInsertPattern(destination, stored, { index: 1 }, anyParent)
-    );
-    const placed = applyOps(destination, insert.pageOps).document;
-    const copy = placed.nodes[1];
-
-    expect(copy.cssId).not.toBe("hero");
-
-    const over = planUpdatePatternFromSelection(
-      placed,
-      [copy.id],
-      target,
-      anyParent
-    );
-
-    expect(over.update?.document.nodes[0].cssId).toBe("hero");
-    expect(patternDigest(over.update?.document.nodes ?? [])).toBe(
-      patternDigest(stored.document.nodes)
-    );
-  });
-
-  it("applies cleanly and brings references back with the id", () => {
-    // Two things this pins that reading the op payloads could not.
+  it("emits an op group the apply accepts when it renames an id", () => {
+    // `relinkOne` rebuilt a node as `{ ...copy, attributes, props, bindings }`.
+    // An ordinary node has no `bindings`, and that spread WRITES the key
+    // holding `undefined`, which `applyOp` refuses. It only fires once
+    // something has been relinked, so every insert that actually renamed a DOM
+    // id emitted a group the apply then rejected.
     //
-    // The group must APPLY: a relinked node was being rebuilt with
-    // `bindings: undefined` written explicitly, which is a value JSON cannot
-    // carry, so `applyOps` refused the whole insert. Every earlier end-to-end
-    // test here read the insert payloads instead of applying them, and passed
-    // against a plan the apply rejects.
-    //
-    // And the save back must restore the reference as well as the target.
-    // Undoing the rename on the field that DEFINES the id, and leaving the
-    // link naming the minted value, returns a pattern whose anchor reaches
-    // nothing.
+    // Applying the group is the whole point: reading the insert payloads out of
+    // the plan cannot see a group the apply refuses, which is how three tests
+    // here passed against a plan that could not run.
     const source = page([
       node("t", { cssId: "hero" }),
       node("l", { props: { href: "#hero" } }),
@@ -916,78 +886,12 @@ describe("save → insert → save-over, through applyOps", () => {
     const placed = applyOps(destination, insert.pageOps).document;
 
     const anchor = placed.nodes[1];
-    const link = placed.nodes[2];
     expect(anchor.cssId).not.toBe("hero");
-    expect((link.props as { href?: string }).href).toBe(`#${anchor.cssId}`);
-
-    const over = planUpdatePatternFromSelection(
-      placed,
-      [anchor.id, link.id],
-      target,
-      anyParent
+    // And the reference followed the rename, so the link still reaches its own
+    // target rather than the destination's.
+    expect((placed.nodes[2].props as { href?: string }).href).toBe(
+      `#${anchor.cssId}`
     );
-    const back = over.update?.document.nodes ?? [];
-
-    expect(back[0].cssId).toBe("hero");
-    expect((back[1].props as { href?: string }).href).toBe("#hero");
-  });
-
-  it("refuses when RESTORING an id would create a duplicate", () => {
-    // The page holds `hero` beside a copy an insert renamed to `hero-<suffix>`
-    // — two distinct ids, so the selection has no collision. Restoring the copy
-    // turns them into two `hero`s, and the row that stores is one every insert
-    // refuses. The question therefore belongs to the document this becomes, not
-    // to the selection it came from.
-    const stored = seed(page([node("a", { cssId: "hero" })]), ["a"]).stored;
-    const destination = page([node("d", { cssId: "hero" })]);
-    const insert = planned(
-      planInsertPattern(destination, stored, { index: 1 }, anyParent)
-    );
-    const placed = applyOps(destination, insert.pageOps).document;
-
-    expect(placed.nodes.map(x => x.cssId)).toEqual([
-      "hero",
-      placed.nodes[1].cssId,
-    ]);
-    expect(placed.nodes[1].cssId).not.toBe("hero");
-
-    const both = [placed.nodes[0].id, placed.nodes[1].id];
-    expect(
-      planUpdatePatternFromSelection(placed, both, target, anyParent).problem
-    ).toBe("duplicate-dom-id");
-    expect(
-      planSaveAsPattern(
-        placed,
-        both,
-        { collection: "patterns", fields: {} },
-        anyParent
-      ).problem
-    ).toBe("duplicate-dom-id");
-  });
-
-  it("leaves an id the author renamed by hand", () => {
-    // The control, and the reason this undoes a MINT rather than any suffix:
-    // an author who renames a block's id means it, and only a suffix derived
-    // from that node's OWN id could have come from a copy.
-    //
-    // Both ids here are hyphenated on purpose. A rule that stripped whatever
-    // followed the last hyphen would leave `hero` for the second one and pass
-    // a test using an unhyphenated name — which is what an earlier version of
-    // this control did, and it could not fail.
-    const placed = page([
-      node("n1", { cssId: "banner" }),
-      node("n2", { cssId: "hero-banner" }),
-    ]);
-
-    const over = planUpdatePatternFromSelection(
-      placed,
-      ["n1", "n2"],
-      target,
-      anyParent
-    );
-
-    expect(over.update?.document.nodes[0].cssId).toBe("banner");
-    expect(over.update?.document.nodes[1].cssId).toBe("hero-banner");
   });
 
   it("does not grow the authored id, however many cycles it goes round", () => {

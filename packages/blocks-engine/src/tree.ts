@@ -1250,76 +1250,6 @@ function relinkOne(
 }
 
 /**
- * A forest with every collision-minted DOM id restored to what it was called,
- * and every reference to one following it back.
- *
- * The inverse of what {@link reidForestWithMap} does under `avoid`, and it runs
- * in the same two passes for the same reason. Restoring only the field that
- * DEFINES an id leaves a link, an `aria-labelledby` or a bound fallback naming
- * the minted value, which no node then renders — the copy comes back with its
- * anchors pointing at nothing, which is worse than leaving the rename alone.
- *
- * The map is built from the nodes themselves: {@link unmintDomId} recovers the
- * original because the suffix was derived from the node's own id, so nothing
- * has to have been stored when the copy was made.
- */
-export function restoreAuthoredDomIds(
-  roots: readonly BlockNode[]
-): BlockNode[] {
-  const restored = new Map<string, string>();
-  const defined = mapForest([...roots], node => {
-    const next = restoreDefiningIds(node, restored);
-    return next;
-  });
-  if (restored.size === 0) return defined;
-  return mapForest(defined, copy => relinkOne(copy, restored));
-}
-
-/** One node's own id fields, un-minted, recording each value that moved. */
-function restoreDefiningIds(
-  node: BlockNode,
-  restored: Map<string, string>
-): BlockNode {
-  const take = (value: string): string | undefined => {
-    const original = unmintDomId(value, node.id);
-    if (original === undefined) return undefined;
-    restored.set(value, original);
-    return original;
-  };
-  const cssId =
-    typeof node.cssId === "string" && node.cssId !== ""
-      ? take(node.cssId)
-      : undefined;
-  const attributes = restoredAttributeIds(node, take);
-  if (cssId === undefined && attributes === undefined) return node;
-  return {
-    ...node,
-    ...(cssId === undefined ? {} : { cssId }),
-    ...(attributes === undefined ? {} : { attributes }),
-  };
-}
-
-/** The attribute bag with a minted `id` restored, or `undefined` if unchanged. */
-function restoredAttributeIds(
-  node: BlockNode,
-  take: (value: string) => string | undefined
-): Record<string, string> | undefined {
-  const attributes: unknown = node.attributes;
-  if (!isPlainRecord(attributes)) return undefined;
-  let changed = false;
-  const next: Record<string, string> = {};
-  for (const [name, value] of Object.entries(attributes)) {
-    const original =
-      name.toLowerCase() === "id" && typeof value === "string" && value !== ""
-        ? take(value)
-        : undefined;
-    if (original !== undefined) changed = true;
-    defineEntry(next, name, original ?? (value as string));
-  }
-  return changed ? next : undefined;
-}
-
-/**
  * One subtree, re-identified — {@link reidForestWithMap} for a single root.
  *
  * Delegates rather than repeating the two passes, so the singular and the
@@ -1533,32 +1463,6 @@ export function hiddenSubtreeNodes(
     if (gated) hidden.add(node);
   });
   return hidden;
-}
-
-/**
- * The original a minted DOM id was derived from, or `undefined`.
- *
- * The exact inverse of {@link mintDomId}, and it exists because the mint is
- * reversible: the suffix comes from the copy's OWN node id, so a node carrying
- * both tells you what it was called before. Nothing has to be stored for it.
- *
- * It is needed on the way back. A pattern placed beside a page that already
- * renders its id is legitimately renamed — that is the collision the rename is
- * for — but saving that copy back over the pattern would write the renamed
- * value into the library, moving the pattern's content fingerprint and
- * reporting every OTHER copy stale for an edit the author never made.
- *
- * A false positive needs an author to have typed an id ending in the first
- * eight characters of that very node's id, which is the same coincidence the
- * minting retry is bounded against and is not worth storing a map to avoid.
- */
-export function unmintDomId(value: string, nodeId: string): string | undefined {
-  const suffix = `-${nodeId.replace(/-/g, "").slice(0, 8)}`;
-  if (!value.endsWith(suffix)) return undefined;
-  const original = value.slice(0, -suffix.length);
-  // An empty original is not one: `mintDomId` is only ever handed a non-empty
-  // id, so a value that is nothing but the suffix was authored that way.
-  return original === "" ? undefined : original;
 }
 
 /**

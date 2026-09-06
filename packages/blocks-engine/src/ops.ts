@@ -2353,14 +2353,6 @@ function assertNodeId(id: string, verb: string): void {
 }
 
 /**
- * The id of a locked node anywhere in a subtree, or `undefined` if there is none.
- *
- * The whole subtree and not just its root, because removing a container removes
- * everything under it. A check that read only the node an op addresses would let
- * an author delete a locked block by deleting the column it sits in — the lock
- * honoured at the node and defeated one level up.
- */
-/**
  * Why the op layer would refuse this FOREST, or `undefined`.
  *
  * The companion to {@link documentRefusal}, and needed beside it because that
@@ -2493,6 +2485,11 @@ export function positionRefusal(
  * A planner that could not ask would report a plan the apply then throws on,
  * which is exactly the gap between a dry run and a real run that planning
  * separately exists to close.
+ *
+ * The whole subtree and not just its root, because removing a container removes
+ * everything under it. A check that read only the node an op addresses would
+ * let an author delete a locked block by deleting the column it sits in — the
+ * lock honoured at the node and defeated one level up.
  */
 export function lockedWithin(node: BlockNode): string | undefined {
   let found: string | undefined;

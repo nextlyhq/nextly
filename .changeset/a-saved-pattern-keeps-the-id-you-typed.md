@@ -47,6 +47,12 @@ different documents, so anything fingerprinting a pattern's content reported a
 change nobody made. And the suffixes accumulated: saving, inserting and saving
 the copy back grew the id by nine characters each time round, with no bound.
 
+One thing this does not do: if a block's id had to be changed when the pattern
+was placed, saving that copy back over the pattern keeps the changed name. Undoing
+it would mean guessing which names were changed from how they look, and a page
+built by a script or an import can legitimately name things the same way — so the
+guess would quietly rewrite an id somebody meant, along with the links to it.
+
 Saving a selection over an existing pattern is now planned as well, so a
 library does not fill up with `hero-v2` and `hero-v2-final`. It replaces the
 pattern's content and leaves the row's own name and description alone, and it
