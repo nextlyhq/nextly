@@ -186,3 +186,30 @@ export function parseEntityHeaders(content: string): MigrationEntityHeaders {
     components: headerSlugs(content, FIELD_GROUP_HEADER_PATTERN),
   };
 }
+
+/**
+ * The header line naming ONE entity, chosen by its kind.
+ *
+ * 🔴 Here rather than at the call site because the kind decides which bucket a
+ * reader puts the slug in, and a writer that always says `-- Collections:`
+ * files a single or a field group under the wrong one. The sweep then looks in
+ * its own kind's set, finds nothing, and promotes a row whose migration has not
+ * run — the exact failure the header exists to prevent, reintroduced by the
+ * writer rather than the reader.
+ *
+ * Kept beside {@link parseEntityHeaders} and {@link formatMigrationFile} so the
+ * three spellings of this format stay in one file.
+ */
+export function entityHeaderLine(
+  kind: "collection" | "single" | "fieldGroup",
+  slug: string
+): string {
+  switch (kind) {
+    case "single":
+      return `-- Singles: ${slug}`;
+    case "fieldGroup":
+      return `${FIELD_GROUP_HEADER} ${slug}`;
+    case "collection":
+      return `-- Collections: ${slug}`;
+  }
+}

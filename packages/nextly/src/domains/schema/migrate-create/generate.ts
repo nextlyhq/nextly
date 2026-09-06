@@ -273,12 +273,11 @@ export async function generateMigration(
    * A companion table counts as its entity's own change, so an operation on
    * `dc_posts_locales` names `posts`.
    *
-   * That does NOT cover a localization ENABLE. Those are planned separately and
-   * emitted as their own companion `.sql` files rather than as operations here,
-   * so `touched` is empty for them and the header names nothing — measured: a
-   * localize-only run produces a migration with an empty `-- UP`. The prefix
-   * match reaches a later ALTER on an existing companion and not that first
-   * transition.
+   * A localization ENABLE is not covered by THIS header, and does not need to
+   * be: those transitions are emitted as their own companion `.sql` files,
+   * which carry their own header naming the entity by kind. What this file
+   * produces for a localize-only run is a migration with an empty `-- UP`, and
+   * naming an entity there would claim a change it does not carry.
    */
   const namesTouched = (entity: MinimalConfigEntity): boolean =>
     touched.has(entity.tableName) ||

@@ -141,3 +141,53 @@ describe("declared intent in the written header", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+/*
+ * 🔴 The header files the entity under a KIND, and the sweep that decides
+ * whether a registry row is still waiting reads one set per kind. A single or a
+ * field group written as `-- Collections:` lands in the collections set, its own
+ * kind's set stays empty, and the row is promoted to `applied` before the
+ * companion table its migration creates exists. A collection, a single and a
+ * field group may share a slug, so the kind is the only thing separating them.
+ */
+describe("the companion header names the entity by its kind", () => {
+  const spec = {
+    collection: "shared_slug",
+    companionTable: "dc_shared_slug_locales",
+    parentTable: "dc_shared_slug",
+    parentIdType: "TEXT" as const,
+    columns: [{ name: "body", kind: "text" as const }],
+    columnsOnMain: ["body"],
+  };
+
+  function headerFor(entity: "collection" | "single" | "fieldGroup"): string {
+    const dir = mkdtempSync(join(tmpdir(), "nextly-companion-kind-"));
+    const path = writeCompanionMigrationFile(dir, spec, {
+      kind: "create-only",
+      entity,
+      upSql: "SELECT 1;",
+      downSql: "SELECT 1;",
+      now: new Date("2026-08-02T00:00:00.000Z"),
+    });
+    return readFileSync(path, "utf-8");
+  }
+
+  it("files a single under Singles, not Collections", () => {
+    const content = headerFor("single");
+    expect(content).toContain("-- Singles: shared_slug");
+    expect(content).not.toContain("-- Collections:");
+  });
+
+  it("files a field group under Field groups, not Collections", () => {
+    const content = headerFor("fieldGroup");
+    expect(content).toContain("-- Field groups: shared_slug");
+    expect(content).not.toContain("-- Collections:");
+  });
+
+  it("still files a collection under Collections", () => {
+    // The control: without it, a writer that emitted no entity header at all
+    // would satisfy both exclusions above.
+    const content = headerFor("collection");
+    expect(content).toContain("-- Collections: shared_slug");
+  });
+});
