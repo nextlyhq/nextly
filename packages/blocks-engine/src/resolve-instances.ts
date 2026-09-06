@@ -48,6 +48,7 @@ import {
   COMPONENT_INSTANCE_TYPE,
   isComponentDocument,
   isUnsetOverride,
+  renderedDomId,
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
@@ -1823,45 +1824,138 @@ function scopeNode(
 /**
  * Give this copy of the definition its own DOM ids.
  *
- * One definition inlined into two instances publishes its `cssId` and its
- * `id` attribute twice, which is a duplicate HTML id — so an anchor, a
- * `<label for>` or an id selector reaches whichever instance the browser
- * happens to find first. Node ids are already scoped; these are the other
- * addresses a document carries and they were being spread through untouched.
+ * One definition inlined into two instances publishes its `cssId` and its `id`
+ * attribute twice, which is a duplicate HTML id — so an anchor, a `<label for>`
+ * or an id selector reaches whichever instance the browser happens to find
+ * first. Node ids are already scoped; these are the other addresses a document
+ * carries and they were being spread through untouched.
  *
- * `mintDomId` rather than a rule of its own: pattern insert solves exactly
- * this when it copies a subtree, a page may hold the output of both, and two
+ * `mintDomId` rather than a rule of its own: pattern insert solves exactly this
+ * when it copies a subtree, a page may hold the output of both, and two
  * spellings of one replacement would put two ids on one target.
  */
 function applyScopedDomIds(
   scoped: ResolvedBlockNode,
   ctx: InlineContext
 ): void {
-  const remap = (value: string): string => {
-    const existing = ctx.domIds.get(value);
-    if (existing !== undefined) return existing;
-    const minted = claimDomId(ctx.run, mintDomId(value, scoped.id));
-    ctx.domIds.set(value, minted);
-    return minted;
-  };
+  // The bag is measured BEFORE the rendered id is asked for, and the answer is
+  // asked of what this can actually rewrite.
+  //
+  // `renderedDomId` mirrors the renderer, so it accepts shapes the rewrite
+  // below refuses — a custom prototype, or a bag past the envelope cap — and it
+  // reads every key to do so. Asking it first therefore did two wrong things at
+  // once on a malformed definition: it published a mapping for an id that then
+  // STAYED on the element, retargeting every reference to an id nothing
+  // renders; and it did that reading unbounded, once per instance, defeating
+  // the cap this walk is otherwise held to.
+  //
+  // Handing it the bag only when the bag is usable makes the two agree. A
+  // string `cssId` shadows the bag anyway, so a node with one still gets its
+  // rendered id and its scoped replacement; only a node relying on an
+  // unreadable bag now scopes nothing, which is the honest answer for an
+  // address this cannot rewrite.
+  const bag = snapshotAttributes(scoped.attributes);
+  const rendered = renderedDomId({
+    cssId: scoped.cssId,
+    attributes: bag ?? undefined,
+  });
+  const minted =
+    rendered === undefined ? undefined : scopedDomId(rendered, scoped.id, ctx);
 
-  if (typeof scoped.cssId === "string" && scoped.cssId !== "") {
-    scoped.cssId = remap(scoped.cssId);
+  // Only when it is a string is `cssId` the id this node renders, which is
+  // exactly when `renderedDomId` answered with it.
+  if (minted !== undefined && typeof scoped.cssId === "string") {
+    scoped.cssId = minted;
   }
-  if (!isPlainRecord(scoped.attributes)) return;
-  const names = boundedOwnKeys(scoped.attributes, MAX_ENVELOPE_ENTRIES);
-  if (names === null) return;
-  const next: Record<string, string> = {};
+  if (bag === null) return;
+  scoped.attributes = attributesWithScopedId(bag, rendered, minted);
+}
+
+/**
+ * The attribute bag as DATA: bounded, own string entries, read exactly once.
+ *
+ * A bag is a stored record in the ordinary case and an arbitrary object in the
+ * hostile one, where a value can be a getter or a Proxy trap that answers
+ * differently each time it is asked. Deriving the rendered id from one reading
+ * and rewriting from a second let the two disagree: the id `hero` was published
+ * to the reference table while `other` stayed on the element, so every
+ * `aria-describedby="hero"` was retargeted at an id nothing renders — the same
+ * failure this module set out to close, by a route that survives a bag whose
+ * prototype is exactly `Object.prototype`.
+ *
+ * So the bag is read once, into a plain record, and both answers come from that
+ * snapshot. `null` for a bag this cannot use at all — not a plain record, or
+ * past the envelope cap — which is also what keeps the read bounded, since
+ * {@link renderedDomId} mirrors the renderer and reads every key it is given.
+ *
+ * Non-string values are dropped rather than carried, matching what the rewrite
+ * already emitted: the bag it produces has only ever held strings.
+ */
+function snapshotAttributes(
+  attributes: unknown
+): Record<string, string> | null {
+  if (!isPlainRecord(attributes)) return null;
+  const names = boundedOwnKeys(attributes, MAX_ENVELOPE_ENTRIES);
+  if (names === null) return null;
+  const snapshot: Record<string, string> = {};
   for (const name of names) {
-    const value = ownEntry(scoped.attributes, name);
-    if (typeof value !== "string") continue;
-    // Case-insensitively, because HTML attribute names are: a stored `ID` and
-    // a stored `id` address the same thing to a browser, and remapping only
-    // the lowercase spelling leaves the other duplicated.
-    const isId = name.toLowerCase() === "id" && value !== "";
-    defineEntry(next, name, isId ? remap(value) : value);
+    const value = ownEntry(attributes, name);
+    if (typeof value === "string") defineEntry(snapshot, name, value);
   }
-  scoped.attributes = next;
+  return snapshot;
+}
+
+/**
+ * The per-instance replacement for one of a definition's DOM ids.
+ *
+ * Memoized on the ORIGINAL value, so a definition spelling one id on two nodes
+ * still addresses one target after composition — and so the reference pass
+ * downstream can look up what a given id became.
+ */
+function scopedDomId(
+  value: string,
+  nodeId: string,
+  ctx: InlineContext
+): string {
+  const existing = ctx.domIds.get(value);
+  if (existing !== undefined) return existing;
+  const minted = claimDomId(ctx.run, mintDomId(value, nodeId));
+  ctx.domIds.set(value, minted);
+  return minted;
+}
+
+/**
+ * The attribute bag with the RENDERED id replaced.
+ *
+ * Takes the SNAPSHOT its caller already read, never the stored bag: two
+ * readings of one record can disagree, and the rendered id was derived from the
+ * first — see {@link snapshotAttributes}.
+ *
+ * A SHADOWED id is left verbatim. It puts nothing on the page, so it cannot
+ * collide with another instance of the same definition, and it is a value the
+ * definition may still reference: a `hero` shadowed inside a definition was
+ * naming an element in the HOST, where it resolved. Minting a scoped id for it
+ * breaks that reference and aims it at nothing, which is strictly worse than
+ * leaving it.
+ *
+ * A document that spells ONE id both ways is unaffected: both spellings equal
+ * `rendered`, so both receive the same replacement and the copy keeps answering
+ * to a single address.
+ */
+function attributesWithScopedId(
+  snapshot: Record<string, string>,
+  rendered: string | undefined,
+  minted: string | undefined
+): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const [name, value] of Object.entries(snapshot)) {
+    // Case-insensitively, because HTML attribute names are: a stored `ID` and
+    // a stored `id` address the same thing to a browser.
+    const isRenderedId =
+      minted !== undefined && name.toLowerCase() === "id" && value === rendered;
+    defineEntry(next, name, isRenderedId ? minted : value);
+  }
+  return next;
 }
 
 /**

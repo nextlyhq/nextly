@@ -779,7 +779,10 @@ export type ExposedPropertyType = (typeof EXPOSED_PROPERTY_TYPES)[number];
  * - reading "any present `cssId`" instead of "a string" hid a bag id that does
  *   render, and left two elements answering to one id.
  */
-export function renderedDomId(node: BlockNode): string | undefined {
+export function renderedDomId(node: {
+  readonly cssId?: unknown;
+  readonly attributes?: unknown;
+}): string | undefined {
   const modelled = typeof node.cssId === "string" ? node.cssId : undefined;
   const rendered = modelled ?? renderedDomIdIn(node.attributes);
   return rendered === "" ? undefined : rendered;
@@ -809,6 +812,13 @@ export function renderedDomId(node: BlockNode): string | undefined {
  * renderer emit right now", and the answer has to be the renderer's.
  *
  * `Object.entries(null)` throws and an array is not a bag, so both are absent.
+ *
+ * UNBOUNDED, deliberately, because the renderer it mirrors is: every key is
+ * assigned. A caller that must not do work proportional to a bag it has not
+ * measured should bound the bag first and hand only a measured one to
+ * {@link renderedDomId} — reading a cap into this would make it answer
+ * differently from the renderer for exactly the documents where the answer
+ * matters.
  */
 export function renderedDomIdIn(attributes: unknown): string | undefined {
   if (typeof attributes !== "object" || attributes === null) return undefined;
