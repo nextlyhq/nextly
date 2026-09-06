@@ -44,3 +44,9 @@ Only the id a node actually renders is scoped now, through the same published
 rule the pattern copier uses. Two spellings carrying one value still move
 together to one replacement, so a document that spelled its id both ways keeps
 answering to a single address.
+
+The bag is also measured before the rendered id is derived from it. The rule
+mirrors the renderer, so it accepts shapes the rewrite refuses and reads every
+key to do so — which on a malformed definition published a mapping for an id
+that then stayed on the element, and did the reading unbounded once per
+instance.

@@ -1824,25 +1824,43 @@ function scopeNode(
 /**
  * Give this copy of the definition its own DOM ids.
  *
- * One definition inlined into two instances publishes its `cssId` and its
- * `id` attribute twice, which is a duplicate HTML id — so an anchor, a
- * `<label for>` or an id selector reaches whichever instance the browser
- * happens to find first. Node ids are already scoped; these are the other
- * addresses a document carries and they were being spread through untouched.
+ * One definition inlined into two instances publishes its `cssId` and its `id`
+ * attribute twice, which is a duplicate HTML id — so an anchor, a `<label for>`
+ * or an id selector reaches whichever instance the browser happens to find
+ * first. Node ids are already scoped; these are the other addresses a document
+ * carries and they were being spread through untouched.
  *
- * `mintDomId` rather than a rule of its own: pattern insert solves exactly
- * this when it copies a subtree, a page may hold the output of both, and two
+ * `mintDomId` rather than a rule of its own: pattern insert solves exactly this
+ * when it copies a subtree, a page may hold the output of both, and two
  * spellings of one replacement would put two ids on one target.
  */
 function applyScopedDomIds(
   scoped: ResolvedBlockNode,
   ctx: InlineContext
 ): void {
-  // ONE id per node, through the published rule, because a node SPELLS a DOM
-  // id two ways and emits at most one of them. Asking the two spellings
-  // independently mints a scoped id for a value nothing renders and — since
-  // this memo is what rewrites references — retargets every reference to it.
-  const rendered = renderedDomId(scoped);
+  // The bag is measured BEFORE the rendered id is asked for, and the answer is
+  // asked of what this can actually rewrite.
+  //
+  // `renderedDomId` mirrors the renderer, so it accepts shapes the rewrite
+  // below refuses — a custom prototype, or a bag past the envelope cap — and it
+  // reads every key to do so. Asking it first therefore did two wrong things at
+  // once on a malformed definition: it published a mapping for an id that then
+  // STAYED on the element, retargeting every reference to an id nothing
+  // renders; and it did that reading unbounded, once per instance, defeating
+  // the cap this walk is otherwise held to.
+  //
+  // Handing it the bag only when the bag is usable makes the two agree. A
+  // string `cssId` shadows the bag anyway, so a node with one still gets its
+  // rendered id and its scoped replacement; only a node relying on an
+  // unreadable bag now scopes nothing, which is the honest answer for an
+  // address this cannot rewrite.
+  const names = isPlainRecord(scoped.attributes)
+    ? boundedOwnKeys(scoped.attributes, MAX_ENVELOPE_ENTRIES)
+    : null;
+  const rendered = renderedDomId({
+    cssId: scoped.cssId,
+    attributes: names === null ? undefined : scoped.attributes,
+  });
   const minted =
     rendered === undefined ? undefined : scopedDomId(rendered, scoped.id, ctx);
 
@@ -1851,8 +1869,13 @@ function applyScopedDomIds(
   if (minted !== undefined && typeof scoped.cssId === "string") {
     scoped.cssId = minted;
   }
-  const next = attributesWithScopedId(scoped.attributes, rendered, minted);
-  if (next !== undefined) scoped.attributes = next;
+  if (names === null) return;
+  scoped.attributes = attributesWithScopedId(
+    scoped.attributes as Record<string, unknown>,
+    names,
+    rendered,
+    minted
+  );
 }
 
 /**
@@ -1875,12 +1898,11 @@ function scopedDomId(
 }
 
 /**
- * The attribute bag with the RENDERED id replaced, or `undefined` to leave the
- * stored one alone.
+ * The attribute bag with the RENDERED id replaced.
  *
- * `undefined` rather than an empty record for a bag this cannot read: returning
- * `{}` would delete a node's attributes during a render, which is a rewrite of
- * stored content rather than a refusal to scope it.
+ * Takes the names its caller already measured rather than reading the bag a
+ * second time: two readings of one record can disagree, and the first is the
+ * one the rendered id was derived from.
  *
  * A SHADOWED id is left verbatim. It puts nothing on the page, so it cannot
  * collide with another instance of the same definition, and it is a value the
@@ -1894,13 +1916,11 @@ function scopedDomId(
  * to a single address.
  */
 function attributesWithScopedId(
-  attributes: unknown,
+  attributes: Record<string, unknown>,
+  names: readonly string[],
   rendered: string | undefined,
   minted: string | undefined
-): Record<string, string> | undefined {
-  if (!isPlainRecord(attributes)) return undefined;
-  const names = boundedOwnKeys(attributes, MAX_ENVELOPE_ENTRIES);
-  if (names === null) return undefined;
+): Record<string, string> {
   const next: Record<string, string> = {};
   for (const name of names) {
     const value = ownEntry(attributes, name);

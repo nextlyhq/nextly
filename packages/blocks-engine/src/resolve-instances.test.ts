@@ -1506,6 +1506,69 @@ describe("a node that spells a DOM id twice and renders one", () => {
     );
   });
 
+  it("publishes no mapping for a bag it cannot rewrite", () => {
+    // `renderedDomId` mirrors the RENDERER, which emits an own `id` off any
+    // non-array object — including one with a custom prototype. The rewrite
+    // below is narrower. Asking the wide rule first published `hero -> minted`
+    // while the element kept `hero`, so a sibling reference was retargeted at
+    // an id nothing renders: strictly worse than leaving it.
+    const bag = Object.create({ inherited: true }) as Record<string, unknown>;
+    bag.id = "hero";
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        stored(node("d1") as ResolvedBlockNode, { attributes: bag }),
+        node("d2", { attributes: { "aria-describedby": "hero" } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[1]!.attributes!["aria-describedby"]).toBe("hero");
+  });
+
+  it("publishes no mapping for a bag past the envelope cap", () => {
+    // Same failure by the other route, and it is also where the unbounded read
+    // was: deriving the rendered id walked every key of a bag the resolver had
+    // not measured, once per instance.
+    const wide: Record<string, unknown> = { id: "hero" };
+    for (let i = 0; i <= MAX_ENVELOPE_ENTRIES; i++)
+      wide[`data-${String(i)}`] = "x";
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        stored(node("d1") as ResolvedBlockNode, { attributes: wide }),
+        node("d2", { attributes: { "aria-describedby": "hero" } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[1]!.attributes!["aria-describedby"]).toBe("hero");
+  });
+
+  it("still scopes a cssId when the bag beside it is unreadable", () => {
+    // The boundary: a string `cssId` shadows the bag, so the rendered id does
+    // not depend on reading it. Refusing to scope here would leave two
+    // instances answering to one address.
+    const bag = Object.create({ inherited: true }) as Record<string, unknown>;
+    bag.id = "hero";
+    const doc = page([instance("i1", "hero"), instance("i2", "hero")]);
+    const definitions = defs({
+      hero: component([
+        stored(node("d1") as ResolvedBlockNode, {
+          cssId: "actual",
+          attributes: bag,
+        }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[0]!.cssId).toContain("actual");
+    expect(nodes[0]!.cssId).not.toBe(nodes[1]!.cssId);
+  });
+
   it("scopes nothing for a node that renders no id at all", () => {
     // An empty `cssId` still SHADOWS, so this node emits no usable id — and a
     // bag value nothing renders must not reach the memo that rewrites
