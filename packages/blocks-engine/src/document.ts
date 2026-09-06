@@ -782,15 +782,18 @@ export type ExposedPropertyType = (typeof EXPOSED_PROPERTY_TYPES)[number];
  * - counting a SHADOWED attribute id as taken made a copy rename itself to
  *   avoid a string the destination never emits.
  *
- * An empty or non-string `cssId` still shadows — the renderer's guard is
- * `!== undefined` — but emits nothing an anchor, a label or a selector can
- * reach, so the node contributes no id rather than the bag's.
+ * Only a STRING `cssId` shadows, the empty string included. The renderer reads
+ * it as `typeof node.cssId === "string" ? node.cssId : undefined` and then
+ * overwrites the bag only when that is not `undefined` — so `cssId: ""` shadows
+ * and emits `id=""`, which no anchor, label or selector can reach, while
+ * `cssId: null` is normalised away and the bag's id is what renders. Reading
+ * "present" instead of "a string" there costs a real duplicate: the destination
+ * emits `hero` through its bag, this reports no id, and an inserted pattern
+ * spelling `hero` is left alone to collide with it.
  */
 export function renderedDomId(node: BlockNode): string | undefined {
-  if (node.cssId !== undefined) {
-    return typeof node.cssId === "string" && node.cssId !== ""
-      ? node.cssId
-      : undefined;
+  if (typeof node.cssId === "string") {
+    return node.cssId === "" ? undefined : node.cssId;
   }
   if (!isPlainRecord(node.attributes)) return undefined;
   // FOLDED, because HTML attribute names are case-insensitive. Last one wins,

@@ -691,3 +691,42 @@ describe('the "avoid" DOM id policy', () => {
     expect(domIds.size).toBe(0);
   });
 });
+
+describe("only the id a node RENDERS may be reminted", () => {
+  it("leaves a shadowed attribute id alone, and the references to it", () => {
+    // The node renders `actual`; its `attributes.id: "hero"` is overwritten and
+    // never reaches the page. Minting it would be worse than pointless — the
+    // relink pass rewrites every reference to it, so a link deliberately
+    // reaching an element in the DESTINATION ends up naming a minted id that
+    // nothing renders at all.
+    const { nodes, domIds } = reidForestWithMap(
+      [
+        node("a", {
+          cssId: "actual",
+          attributes: { id: "hero", "aria-describedby": "hero" },
+        }),
+      ],
+      { avoid: new Set(["hero", "actual"]) }
+    );
+
+    expect(nodes[0].attributes?.id).toBe("hero");
+    expect(nodes[0].attributes?.["aria-describedby"]).toBe("hero");
+    expect([...domIds.keys()]).toEqual(["actual"]);
+    // The rendered one DID move, which is the control: "never remap anything"
+    // passes every assertion above.
+    expect(nodes[0].cssId).not.toBe("actual");
+  });
+
+  it("moves both spellings together when they carry the same value", () => {
+    // One original maps to one replacement, so a node spelling one id through
+    // both fields still spells a single id after the copy — rather than half of
+    // it moving and the node rendering one id while its bag names another.
+    const { nodes } = reidForestWithMap(
+      [node("a", { cssId: "hero", attributes: { id: "hero" } })],
+      { avoid: new Set(["hero"]) }
+    );
+
+    expect(nodes[0].cssId).not.toBe("hero");
+    expect(nodes[0].attributes?.id).toBe(nodes[0].cssId);
+  });
+});

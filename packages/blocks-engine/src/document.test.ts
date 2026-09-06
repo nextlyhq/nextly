@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import * as entry from "./index";
 
-import type { BlockDocument } from "./document";
+import type { BlockDocument, BlockNode } from "./document";
+import { renderedDomId } from "./document";
 import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
@@ -212,5 +213,52 @@ describe("the block-type predicate", () => {
     expect(`core/${"a".repeat(entry.MAX_BLOCK_TYPE_LENGTH - 4)}`).toHaveLength(
       entry.MAX_BLOCK_TYPE_LENGTH + 1
     );
+  });
+});
+
+describe("renderedDomId: which of a node's two spellings reaches the page", () => {
+  const bare = (extra: Record<string, unknown>) =>
+    ({
+      id: "n",
+      type: "core/box",
+      version: 1,
+      props: {},
+      ...extra,
+    }) as BlockNode;
+
+  it("prefers a non-empty cssId, which overwrites the bag", () => {
+    expect(
+      renderedDomId(bare({ cssId: "actual", attributes: { id: "hero" } }))
+    ).toBe("actual");
+  });
+
+  it("treats an EMPTY string cssId as shadowing, emitting nothing reachable", () => {
+    // The renderer sets `id=""`, which no anchor, label or selector reaches —
+    // and the bag's value is overwritten, so it does not render either.
+    expect(
+      renderedDomId(bare({ cssId: "", attributes: { id: "hero" } }))
+    ).toBeUndefined();
+  });
+
+  it("lets the bag through when cssId is NOT a string", () => {
+    // The renderer normalises a non-string cssId to undefined
+    // (`typeof node.cssId === "string" ? node.cssId : undefined`) and only then
+    // decides whether to overwrite — so the bag is what renders. Reading this
+    // as "any cssId shadows" costs a real duplicate id on the page.
+    expect(
+      renderedDomId(bare({ cssId: null, attributes: { id: "hero" } }))
+    ).toBe("hero");
+    expect(renderedDomId(bare({ cssId: 7, attributes: { id: "hero" } }))).toBe(
+      "hero"
+    );
+  });
+
+  it("folds the attribute name, because HTML does", () => {
+    expect(renderedDomId(bare({ attributes: { ID: "hero" } }))).toBe("hero");
+  });
+
+  it("reports none when the node spells none", () => {
+    expect(renderedDomId(bare({}))).toBeUndefined();
+    expect(renderedDomId(bare({ attributes: { id: "" } }))).toBeUndefined();
   });
 });

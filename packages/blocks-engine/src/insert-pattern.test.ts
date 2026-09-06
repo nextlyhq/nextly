@@ -673,6 +673,33 @@ describe("which DOM ids an insert steers around", () => {
     expect(placed[0].cssId).toBe("hero");
   });
 
+  it("steers around a bag id whose non-string cssId does NOT shadow it", () => {
+    // The renderer normalises a non-string `cssId` to undefined and only then
+    // decides whether to overwrite, so this destination node renders `hero`.
+    // Reading any present `cssId` as shadowing left `hero` out of the avoided
+    // set and put two elements answering to it on the page.
+    const destination = page([
+      {
+        ...node("x"),
+        cssId: null,
+        attributes: { id: "hero" },
+      } as unknown as BlockNode,
+    ]);
+
+    const plan = planInsertPattern(
+      destination,
+      pattern([node("p1", { cssId: "hero" })]),
+      { index: 1 },
+      anyParent
+    );
+
+    const placed = (plan.pageOps ?? []).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(1);
+    expect(placed[0].cssId).not.toBe("hero");
+  });
+
   it("DOES steer around an attribute id nothing shadows", () => {
     // The control. Without it, "ignore the attribute bag entirely" passes the
     // test above and reintroduces the duplicate-id bug the bag can cause.

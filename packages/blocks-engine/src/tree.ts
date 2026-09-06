@@ -79,8 +79,8 @@
  * own.
  */
 import type { SlotSpec } from "./block";
-import { isBlockType } from "./document";
 import type { BlockNode } from "./document";
+import { isBlockType, renderedDomId } from "./document";
 import { walkForest } from "./forest-walk";
 import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import { MAX_DEPTH, MAX_NODES } from "./limits";
@@ -1280,9 +1280,19 @@ function reidOneKeepingReferences(
   // to rewrite and every reference still names the id it named. Identity
   // entries would say the same thing less clearly and make a caller checking
   // the map against its destination report collisions it is not introducing.
+  //
+  // Only the id this node RENDERS is a candidate. A node can spell two and
+  // emits one, and minting the shadowed spelling is worse than pointless: the
+  // relink pass then rewrites every reference to it, so a link that deliberately
+  // reached an element in the DESTINATION now names a minted id nothing renders
+  // at all. Both spellings move together when they carry the same value, since
+  // the memo maps one original to one replacement — so the node still spells a
+  // single id afterwards.
+  const rendered = renderedDomId(node);
   const moves = (value: string): boolean =>
-    domIdPolicy === "remint" ||
-    (domIdPolicy !== "keep" && domIdPolicy.avoid.has(value));
+    value === rendered &&
+    (domIdPolicy === "remint" ||
+      (domIdPolicy !== "keep" && domIdPolicy.avoid.has(value)));
 
   if (
     typeof copy.cssId === "string" &&
