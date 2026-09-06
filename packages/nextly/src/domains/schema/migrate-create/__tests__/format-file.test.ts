@@ -3,9 +3,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ENTITY_HEADER_GUIDANCE,
   FIELD_GROUP_HEADER_PATTERN,
   formatBlankFile,
   parseEntityHeaders,
+  SCOPED_ENTITIES_MARKER,
   formatMigrationFile,
   formatTimestamp,
   slugify,
@@ -293,5 +295,34 @@ describe("following the blank template's instruction actually annotates the file
     expect(parsed.collections).toEqual([]);
     expect(parsed.singles).toEqual([]);
     expect(parsed.components).toEqual([]);
+  });
+});
+
+/*
+ * 🔴 One remediation is shown for two different files, so it has to work on
+ * both. A new blank migration ships the marker and only needs the entity named;
+ * a migration generated before headers were scoped has headers and NO marker,
+ * and adding another header to it changes nothing — the names stay discarded.
+ */
+describe("the shared remediation is sufficient for a legacy file too", () => {
+  it("names the marker as well as the headers", () => {
+    expect(ENTITY_HEADER_GUIDANCE).toContain(SCOPED_ENTITIES_MARKER);
+    expect(ENTITY_HEADER_GUIDANCE).toContain("-- Collections:");
+    expect(ENTITY_HEADER_GUIDANCE).toContain("-- Singles:");
+    expect(ENTITY_HEADER_GUIDANCE).toContain("-- Field groups:");
+  });
+
+  it("following it on a legacy file makes its names count", () => {
+    // A file generated before headers were scoped: names, no marker.
+    const legacy =
+      "-- Migration: old\n-- Collections: posts\n\n-- UP\nSELECT 1;";
+    expect(parseEntityHeaders(legacy).scoped).toBe(false);
+
+    // What the remediation asks the operator to add.
+    const repaired = `${legacy}\n${SCOPED_ENTITIES_MARKER}\n`;
+    const parsed = parseEntityHeaders(repaired);
+
+    expect(parsed.scoped).toBe(true);
+    expect(parsed.collections).toEqual(["posts"]);
   });
 });

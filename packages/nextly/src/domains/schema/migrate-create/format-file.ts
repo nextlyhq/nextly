@@ -71,9 +71,17 @@ export const SCOPED_ENTITIES_MARKER = "-- Entity scope: touched";
  * listed all three headers while the warning named only `-- Collections:`, and
  * following the warning filed a single among collections. Guidance about a
  * format belongs beside the format.
+ *
+ * 🔴 Names the MARKER as well as the header, because the files this is shown
+ * for are not all alike. A new blank migration ships the marker, so naming the
+ * entity is enough; a migration generated before headers were scoped has
+ * headers and no marker, and adding another header to it changes nothing —
+ * `scoped` stays false and the names are discarded exactly as before. One
+ * remediation is shown for both, so it has to be sufficient for both.
  */
 export const ENTITY_HEADER_GUIDANCE =
-  "Add `-- Collections:`, `-- Singles:` or `-- Field groups:` naming what it changes";
+  "Add `-- Collections:`, `-- Singles:` or `-- Field groups:` naming what it changes, " +
+  `plus \`${SCOPED_ENTITIES_MARKER}\` if the file does not already carry it`;
 export const FIELD_GROUP_HEADER_PATTERN =
   /^-- (?:Field groups?|Components?):\s*(.+)$/m;
 
