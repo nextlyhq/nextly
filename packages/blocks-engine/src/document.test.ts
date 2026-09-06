@@ -6,6 +6,7 @@ import type { BlockDocument, BlockNode } from "./document";
 import { renderedDomId, renderedDomIdIn } from "./document";
 import {
   COMPONENT_INSTANCE_TYPE,
+  isBlockOrigin,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   isComponentInstance,
@@ -301,5 +302,41 @@ describe("renderedDomId: which of a node's two spellings reaches the page", () =
   it("reports none when the node spells none", () => {
     expect(renderedDomId(bare({}))).toBeUndefined();
     expect(renderedDomId(bare({ attributes: { id: "" } }))).toBeUndefined();
+  });
+});
+
+describe("a provenance record's rename map", () => {
+  const base = { from: "pattern" as const, id: "p1", digest: "d1" };
+
+  it("accepts a record with no rename map", () => {
+    // The migration path, and the control for every refusal below: a record
+    // written before this field existed is still whole.
+    expect(isBlockOrigin(base)).toBe(true);
+  });
+
+  it("accepts a well-formed map", () => {
+    expect(
+      isBlockOrigin({ ...base, renamed: { pricing: "pricing-a1b2" } })
+    ).toBe(true);
+  });
+
+  it.each([
+    ["not a record", "pricing"],
+    ["an array", ["pricing"]],
+    ["null", null],
+    ["a non-string original", { pricing: 3 }],
+    ["an empty original", { pricing: "" }],
+    ["an empty current id", { "": "pricing" }],
+  ])("refuses %s", (_name, renamed) => {
+    // A half-record is read as "these are the originals" and puts back an id
+    // that was never there, which is worse than having no record at all — the
+    // same reason a pattern origin without a digest is refused.
+    expect(isBlockOrigin({ ...base, renamed })).toBe(false);
+  });
+
+  it("ignores a rename map on a component record", () => {
+    // That arm severs a link deliberately and restores nothing, so it has no
+    // such field; an extra member is not what makes a record whole.
+    expect(isBlockOrigin({ from: "component", id: "c1" })).toBe(true);
   });
 });

@@ -554,7 +554,15 @@ function savedPatternDocument(
   document: BlockDocument,
   selected: readonly BlockNode[]
 ): SavedPattern | PlanRefusal {
-  const copied = reidForestWithMap([...selected], "keep");
+  // KEEP every id, except the ones an insert renamed to fit this page: those
+  // go back to what the source calls them. The two are one policy rather than a
+  // second pass, so node ids are minted once and the map this returns still
+  // describes the document it comes with.
+  const restore = restoredDomIds(selected);
+  const copied = reidForestWithMap(
+    [...selected],
+    restore.size === 0 ? "keep" : { restore }
+  );
   const stored: BlockDocument = {
     formatVersion: document.formatVersion,
     kind: "pattern",
@@ -1703,11 +1711,14 @@ export function planInsertPattern(
   // a root can arrive carrying a record from an earlier copy. The digest is
   // taken from the pattern as it stands now, so a later reader can tell whether
   // the source has moved on since this copy was made.
-  const marked = withOrigin(copy.nodes, {
-    from: "pattern",
-    id: pattern.id,
-    digest: patternDigest(pattern.document.nodes),
-  });
+  const marked = withOrigin(
+    copy.nodes,
+    insertOrigin(
+      pattern.id,
+      patternDigest(pattern.document.nodes),
+      copy.renamed
+    )
+  );
 
   const refusal =
     placementRefusal(marked, destination.place.where, nesting) ??
@@ -1928,6 +1939,11 @@ function lockRefusal(roots: readonly BlockNode[]): PlanRefusal | undefined {
 
 /** A re-identified copy, or the reason one could not be made. */
 interface FreshCopy {
+  /**
+   * Each DOM id the copy had to change, as the source spells it → as the copy
+   * does. Empty when the destination held none of them.
+   */
+  readonly renamed: ReadonlyMap<string, string>;
   readonly nodes: BlockNode[];
   readonly problem?: undefined;
 }
@@ -1983,7 +1999,7 @@ function freshCopy(
     const clash =
       [...minted.domIds.values()].some(id => taken.has(id)) ||
       duplicateDomIdRefusal(minted.nodes) !== undefined;
-    if (!clash) return { nodes: minted.nodes };
+    if (!clash) return { nodes: minted.nodes, renamed: minted.domIds };
   }
   return { problem: "dom-id-collision" };
 }
@@ -2194,4 +2210,56 @@ function withOrigin(
   origin: BlockOrigin
 ): BlockNode[] {
   return roots.map(root => ({ ...root, origin }));
+}
+
+/**
+ * The provenance record an insert writes, carrying what it had to rename.
+ *
+ * `renamed` is omitted when nothing moved rather than written empty, matching
+ * every other "absent means none" field in this contract — and making a copy
+ * that renamed nothing byte-identical to one taken before this was recorded.
+ */
+function insertOrigin(
+  patternId: string,
+  digest: string,
+  renamed: ReadonlyMap<string, string>
+): BlockOrigin {
+  return {
+    from: "pattern",
+    id: patternId,
+    digest,
+    ...(renamed.size === 0 ? {} : { renamed: Object.fromEntries(renamed) }),
+  };
+}
+
+/**
+ * The DOM ids a saved run should be stored under, as it spells them → as its
+ * source does.
+ *
+ * Built from the roots' own provenance, so a run assembled from two different
+ * inserts restores each half against the pattern it came from. A root with no
+ * record contributes nothing and keeps every id it carries: nothing renamed it,
+ * so there is nothing to put back.
+ *
+ * INVERTED from the record, which reads source → copy because that is the
+ * direction an insert renames in.
+ *
+ * Two copies of ONE pattern in a single selection can both restore to the same
+ * id, and the save then refuses as `"duplicate-dom-id"`. That is the honest
+ * answer: the run really does hold two elements the source names identically,
+ * and storing them under their minted names would put two ids nobody wrote into
+ * a library, each to be suffixed again on the next insert.
+ */
+function restoredDomIds(
+  selected: readonly BlockNode[]
+): ReadonlyMap<string, string> {
+  const restore = new Map<string, string>();
+  for (const root of selected) {
+    const origin = root.origin;
+    if (origin === undefined || origin.from !== "pattern") continue;
+    const renamed = origin.renamed;
+    if (renamed === undefined) continue;
+    for (const [was, now] of Object.entries(renamed)) restore.set(now, was);
+  }
+  return restore;
 }

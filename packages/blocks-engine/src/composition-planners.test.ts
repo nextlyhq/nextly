@@ -16,6 +16,7 @@ import {
   planInsertPattern,
   planSaveAsComponent,
   planSaveAsPattern,
+  planUpdatePatternFromSelection,
 } from "./composition-planners";
 import type { PlanResult, PlannedCreate } from "./composition-planners";
 import { COMPONENT_INSTANCE_TYPE, DOCUMENT_FORMAT_VERSION } from "./document";
@@ -24,6 +25,7 @@ import { applyOps } from "./ops";
 import type { BuilderOp } from "./ops";
 import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import type { DocumentLimits } from "./limits";
+import { patternDigest } from "./pattern-digest";
 import { walkNodes } from "./tree";
 
 function node(
@@ -1567,5 +1569,163 @@ describe("what a definition may not be", () => {
 
     expect(threw).toBeUndefined();
     expect(result?.problem).toBe("invalid-exposure");
+  });
+});
+
+describe("an insert records what it renamed, and a save puts it back", () => {
+  /** A pattern whose only node is named `pricing`, plus a link to it. */
+  function heroPattern(): BlockDocument {
+    const authored = page([
+      node("t", { cssId: "pricing", props: { mark: "target" } }),
+      node("l", {
+        props: { mark: "link" },
+        attributes: { "aria-describedby": "pricing" },
+      }),
+    ]);
+    return created(planSaveAsPattern(authored, ["t", "l"], target, anyParent))
+      .document;
+  }
+
+  /** Insert it into a page that already holds `pricing`, forcing a rename. */
+  function insertedInto(stored: BlockDocument) {
+    const destination = page([node("existing", { cssId: "pricing" })]);
+    const insert = planInsertPattern(
+      destination,
+      { id: "hero-pattern", document: stored },
+      { index: 1 },
+      anyParent
+    );
+    const placed = pageOps(insert).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(2);
+    return {
+      destination: applyOps(destination, pageOps(insert)).document,
+      placed,
+    };
+  }
+
+  it("records the rename on the inserted root, source id to copy id", () => {
+    const { placed } = insertedInto(heroPattern());
+    const renamedTarget = marked(placed, "target");
+
+    // It really did rename: the destination already held `pricing`.
+    expect(renamedTarget.cssId).not.toBe("pricing");
+    expect(renamedTarget.cssId).toContain("pricing");
+
+    const origin = renamedTarget.origin;
+    expect(origin?.from).toBe("pattern");
+    expect(origin?.from === "pattern" ? origin.renamed : undefined).toEqual({
+      pricing: renamedTarget.cssId,
+    });
+  });
+
+  it("records nothing when nothing was renamed", () => {
+    // Absent rather than empty, so a copy that renamed nothing is identical to
+    // one taken before this was recorded.
+    const insert = planInsertPattern(
+      page([node("other", { cssId: "elsewhere" })]),
+      { id: "hero-pattern", document: heroPattern() },
+      { index: 1 },
+      anyParent
+    );
+    const placed = pageOps(insert).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    const origin = marked(placed, "target").origin;
+
+    expect(origin?.from === "pattern" ? "renamed" in origin : true).toBe(false);
+  });
+
+  it("ROUND TRIP: saving the copy back stores the source's own ids", () => {
+    // The property neither planner has on its own. The insert renames to fit
+    // the page; the save puts it back — so a copy edited and saved over its own
+    // pattern is stored under the names the pattern uses, its digest does not
+    // move, and every other copy of that pattern stays in sync.
+    const stored = heroPattern();
+    const { destination, placed } = insertedInto(stored);
+    const ids = placed.map(one => one.id);
+
+    const saved = planUpdatePatternFromSelection(
+      destination,
+      ids,
+      { collection: "patterns", id: "hero-pattern" },
+      anyParent
+    );
+
+    const rewritten = saved.update?.document;
+    expect(rewritten).toBeDefined();
+
+    const savedTarget = marked(rewritten!.nodes, "target");
+    const savedLink = marked(rewritten!.nodes, "link");
+
+    // The authored id, not the one minted to fit that one page.
+    expect(savedTarget.cssId).toBe("pricing");
+    // And the reference followed it, which is the half a value-only fix misses.
+    expect(savedLink.attributes?.["aria-describedby"]).toBe("pricing");
+
+    // The whole point: the pattern's fingerprint has not moved, so no other
+    // copy is told it is stale for an edit nobody made.
+    expect(patternDigest(rewritten!.nodes)).toBe(patternDigest(stored.nodes));
+  });
+
+  it("leaves a copy with no record exactly as it is", () => {
+    // The migration path: a root inserted before this field existed carries no
+    // record, which says the same thing an empty one does — restore nothing.
+    const stored = heroPattern();
+    const { destination, placed } = insertedInto(stored);
+    const withoutRecord = page(
+      applyOps(destination, []).document.nodes.map(one =>
+        one.origin?.from === "pattern"
+          ? {
+              ...one,
+              origin: {
+                from: "pattern" as const,
+                id: one.origin.id,
+                digest: one.origin.digest,
+              },
+            }
+          : one
+      )
+    );
+
+    const saved = planUpdatePatternFromSelection(
+      withoutRecord,
+      placed.map(one => one.id),
+      { collection: "patterns", id: "hero-pattern" },
+      anyParent
+    );
+
+    // Unchanged: the minted id is stored, exactly as it was before this change.
+    expect(marked(saved.update!.document.nodes, "target").cssId).not.toBe(
+      "pricing"
+    );
+  });
+
+  it("refuses two copies of one pattern that restore to the same id", () => {
+    // Honest rather than convenient: the run really does hold two elements the
+    // source names identically, and storing them under their minted names would
+    // put two ids nobody wrote into the library, each suffixed again next time.
+    const stored = heroPattern();
+    const first = insertedInto(stored);
+    const second = planInsertPattern(
+      first.destination,
+      { id: "hero-pattern", document: stored },
+      { index: 3 },
+      anyParent
+    );
+    const page2 = applyOps(first.destination, pageOps(second)).document;
+    const everyId = page2.nodes
+      .filter(one => one.origin !== undefined)
+      .map(one => one.id);
+
+    expect(
+      planUpdatePatternFromSelection(
+        page2,
+        everyId,
+        { collection: "patterns", id: "hero-pattern" },
+        anyParent
+      ).problem
+    ).toBe("duplicate-dom-id");
   });
 });
