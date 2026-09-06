@@ -54,5 +54,9 @@ brings the run it was saved from back into sync — without it, blocks that had
 just defined a pattern would report themselves out of date against it.
 
 Saving a selection also now refuses what inserting it would refuse: a block the
-editor could not place, or one nested somewhere the rules no longer allow. A
-pattern that cannot be inserted anywhere is worse than a save that says why.
+editor could not place, one nested somewhere the rules no longer allow, two
+blocks sharing a single HTML `id`, or a page written in a format this version
+does not accept. Pages are saved forgivingly and the rules move underneath
+them, so each of those could be sitting in a page that renders — and saving one
+produced a library entry that could be seen, could not be placed anywhere, and
+said nothing about why until someone tried.

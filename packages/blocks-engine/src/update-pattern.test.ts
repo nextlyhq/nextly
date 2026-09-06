@@ -506,6 +506,87 @@ describe("what a save refuses on the INSERT's behalf", () => {
     ).toBe("wrong-parent");
   });
 
+  it("refuses a run that spells one DOM id on two of its own nodes", () => {
+    // Pages are saved under forgiving validation, so a duplicate `cssId` is a
+    // warning and the page exists. Carried into a pattern it becomes a row
+    // `planInsertPattern` refuses as `duplicate-dom-id` — the same unplaceable
+    // row by a third route.
+    //
+    // Refused rather than repaired: renaming one of the pair changes which
+    // element an anchor reaches, and nothing here knows which the author meant.
+    const document = page([
+      node("a", { cssId: "hero" }),
+      node("b", { cssId: "hero" }),
+    ]);
+
+    expect(
+      planUpdatePatternFromSelection(document, ["a", "b"], target, anyParent)
+        .problem
+    ).toBe("duplicate-dom-id");
+    expect(
+      planSaveAsPattern(
+        document,
+        ["a", "b"],
+        { collection: "patterns", fields: {} },
+        anyParent
+      ).problem
+    ).toBe("duplicate-dom-id");
+  });
+
+  it("saves a run when the duplicate is elsewhere on the PAGE", () => {
+    // Asked of the selection, not the document. A page may legitimately spell
+    // one id twice somewhere the author is not saving, and refusing on that
+    // would block a save whose result inserts perfectly well.
+    const document = page([
+      node("a", { cssId: "unique" }),
+      node("x", { cssId: "twice" }),
+      node("y", { cssId: "twice" }),
+    ]);
+
+    expect(
+      planUpdatePatternFromSelection(document, ["a"], target, anyParent).problem
+    ).toBeUndefined();
+  });
+
+  it("refuses when the format version it would STORE is one no apply accepts", () => {
+    // `formatVersion` is the part of the source envelope that travels, so a
+    // page carrying one the op layer will not edit produces a pattern every
+    // insert refuses as `unusable-document`.
+    const document = {
+      ...page([node("a")]),
+      formatVersion: 99,
+    } as unknown as BlockDocument;
+
+    expect(
+      planSaveAsPattern(
+        document,
+        ["a"],
+        { collection: "patterns", fields: {} },
+        anyParent
+      ).problem
+    ).toBe("unusable-document");
+  });
+
+  it("saves from a document whose own KIND does not travel", () => {
+    // The over-exclusion control, and the reason the question is asked of what
+    // is stored rather than of the source. `kind` is written by the save, so a
+    // source whose own kind is unreadable still yields a good pattern —
+    // judging the source would refuse this for nothing.
+    const document = {
+      ...page([node("a")]),
+      kind: "spreadsheet",
+    } as unknown as BlockDocument;
+
+    const plan = planSaveAsPattern(
+      document,
+      ["a"],
+      { collection: "patterns", fields: {} },
+      anyParent
+    );
+    expect(plan.problem).toBeUndefined();
+    expect(plan.create?.document.kind).toBe("pattern");
+  });
+
   it("still saves a run whose descendants are legal", () => {
     // The over-exclusion control. Refusing anything carrying a slot would
     // satisfy both tests above and break every ordinary save.

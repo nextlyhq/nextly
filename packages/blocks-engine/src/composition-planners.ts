@@ -218,18 +218,57 @@ export function planSaveAsPattern<TFields>(
   target: PatternTarget<TFields>,
   nesting: NestingSource
 ): PlanResult<TFields> {
-  const run = savableRun(document, selectedIds, nesting);
-  if (run.problem !== undefined) return run;
-  const selected = run.selected;
+  const saved = plannedSave(document, selectedIds, nesting);
+  if (saved.problem !== undefined) return saved;
 
   return {
     create: {
       collection: target.collection,
-      document: savedPatternDocument(document, selected),
+      document: saved.stored,
       fields: target.fields,
     },
     pageOps: [],
   };
+}
+
+/** A selection, validated, and the pattern document it becomes. */
+interface PlannedSave {
+  readonly selected: readonly BlockNode[];
+  readonly stored: BlockDocument;
+  readonly problem?: undefined;
+  readonly permitted?: undefined;
+}
+
+/**
+ * Everything a SAVE decides before it knows which kind of save it is.
+ *
+ * Both planners call only this. They differ in what they do with the answer —
+ * one asks for a row to be created, the other for one to be replaced and the
+ * page's provenance repaired — and in nothing before it. Keeping the shared
+ * part a single call rather than a pair of them is what stops the two drifting
+ * a step apart: an ordering, or one question asked in one place, is exactly the
+ * kind of difference that survives review because each planner reads correctly
+ * on its own.
+ */
+function plannedSave(
+  document: BlockDocument,
+  selectedIds: readonly string[],
+  nesting: NestingSource
+): PlannedSave | PlanRefusal {
+  const run = savableRun(document, selectedIds, nesting);
+  if (run.problem !== undefined) return run;
+
+  const stored = savedPatternDocument(document, run.selected);
+  if (stored.problem !== undefined) return stored;
+
+  return { selected: run.selected, stored: stored.document };
+}
+
+/** The pattern document a save would store, or why it could not. */
+interface SavedPattern {
+  readonly document: BlockDocument;
+  readonly problem?: undefined;
+  readonly permitted?: undefined;
 }
 
 /** A selection that may be lifted into a document of its own. */
@@ -274,6 +313,16 @@ interface SavableRun {
  * caller — rather than the refusal this module promises. Asking first turns
  * that crash into a cause, which is why the insert path asks it before copying
  * too.
+ *
+ * The duplicate-DOM-id question is asked of the SELECTION and not of the page.
+ * A page may legitimately spell one id twice elsewhere — that is a warning
+ * under the forgiving validation pages are saved with, not a refusal — and it
+ * is no reason to stop an author saving a run that does not. What is refused is
+ * a run carrying the duplicate INTO a pattern, where insert would meet it.
+ *
+ * Refused rather than repaired, for the reason {@link duplicateDomIdRefusal}
+ * gives: renaming one of the pair silently changes which element an anchor
+ * reaches, and nothing here knows which of them the author meant.
  */
 function savableRun(
   document: BlockDocument,
@@ -286,6 +335,7 @@ function savableRun(
   const selected = result.run.places.map(place => place.node);
   const refusal =
     shapeRefusal(selected) ??
+    duplicateDomIdRefusal(selected) ??
     placementRefusal(selected, { kind: "root" }, nesting) ??
     internalNestingRefusal(selected, nesting);
   return refusal ?? { selected };
@@ -334,12 +384,22 @@ function savableRun(
 function savedPatternDocument(
   document: BlockDocument,
   selected: readonly BlockNode[]
-): BlockDocument {
-  return {
+): SavedPattern | PlanRefusal {
+  const stored: BlockDocument = {
     formatVersion: document.formatVersion,
     kind: "pattern",
     nodes: withoutOrigin(reidForestWithMap([...selected], "keep").nodes),
   };
+  // Asked of what is STORED, not of the page it came from. Only some of the
+  // source envelope travels: `formatVersion` is carried, and a page holding one
+  // the apply does not accept would produce a pattern refused as
+  // `unusable-document` by every insert — while `kind` is written here, so a
+  // source whose own kind is unreadable still yields a perfectly good pattern.
+  // Judging the source would refuse that second case for nothing, which is the
+  // difference between asking about the thing and asking about its origin.
+  return documentRefusal(stored) === undefined
+    ? { document: stored }
+    : { problem: "unusable-document" };
 }
 
 /**
@@ -416,22 +476,24 @@ export function planUpdatePatternFromSelection(
     return { problem: "unusable-document" };
   }
 
-  const run = savableRun(document, selectedIds, nesting);
-  if (run.problem !== undefined) return run;
-  const selected = run.selected;
+  const saved = plannedSave(document, selectedIds, nesting);
+  if (saved.problem !== undefined) return saved;
 
-  const stored = savedPatternDocument(document, selected);
   // Over what is STORED, not over the selection as it sits on the page. The
   // digest excludes a ROOT's origin but keeps one deeper down, and the stored
   // copy has every origin stripped — so hashing the selection would produce a
   // number no later insert of this pattern could reproduce.
-  const digest = patternDigest(stored.nodes);
+  const digest = patternDigest(saved.stored.nodes);
 
-  const pageOps = restampOps(document, selected, target.id, digest);
+  const pageOps = restampOps(document, saved.selected, target.id, digest);
   if (pageOps.problem !== undefined) return pageOps;
 
   return {
-    update: { collection: target.collection, id: target.id, document: stored },
+    update: {
+      collection: target.collection,
+      id: target.id,
+      document: saved.stored,
+    },
     pageOps: pageOps.ops,
   };
 }
