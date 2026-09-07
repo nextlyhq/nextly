@@ -4,6 +4,7 @@
  * @module domains/document-lock
  */
 
+export { DocumentLockService } from "./document-lock-service";
 export {
   acquireDocumentLock,
   readDocumentLock,

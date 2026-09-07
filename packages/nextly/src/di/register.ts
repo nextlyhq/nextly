@@ -207,6 +207,7 @@ import {
   registerRevalidationServices,
   registerSingleServices,
   registerUserServices,
+  registerDocumentLockServices,
   registerVersionServices,
   registerWebhookServices,
   resetWidgetRegistries,
@@ -1105,6 +1106,7 @@ export async function registerServices(
   registerMediaServices(ctx);
   registerMetaServices(ctx);
   registerSingleServices(ctx);
+  registerDocumentLockServices(ctx);
   registerVersionServices(ctx);
   registerWebhookServices(ctx);
   // LAST of the domain registrations, because the job registry is where every
