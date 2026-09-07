@@ -34,7 +34,7 @@ import { boundedLimit, surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
 import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
-import { isPlainRecord } from "./plain-record";
+import { definitelyNotARecord, isPlainRecord } from "./plain-record";
 import { boundedOwnKeys } from "./safe-record";
 import type { TokenKind } from "./style/catalog-types";
 import { breakpointContexts } from "./style/compile-page";
@@ -364,6 +364,25 @@ export function validate(
   return validateDocument(doc, ctx).issues;
 }
 
+/**
+ * The one issue both root readings report.
+ *
+ * Two places decide a root is not a document — the coarse test before the
+ * caller's settings are read, and the envelope's fuller reading after the
+ * survey — and they say the same thing for the same reason. Written twice, the
+ * two copies agree until someone improves the sentence in one of them, and an
+ * author then reads a different message depending on which shape their document
+ * happens to be broken in.
+ */
+function invalidDocumentIssue(): ValidationIssue {
+  return {
+    path: "",
+    code: "invalid-document",
+    severity: "error",
+    message: "The document must be an object.",
+  };
+}
+
 export function validateDocument(
   doc: BlockDocument,
   ctx: ValidationContext
@@ -382,6 +401,23 @@ export function validateDocument(
   });
   const unknownSeverity: IssueSeverity =
     ctx.mode === "strict" ? "error" : "warning";
+
+  // A root that is not even a candidate for a record — `null`, a primitive, an
+  // array — is refused before ANYTHING else is inspected, the caller's own
+  // settings included. Reading an adversarial breakpoint set on behalf of a
+  // document that was never going to be validated runs unrelated hostile input
+  // for nothing.
+  //
+  // The THROW-FREE reading of the same question the envelope asks in full.
+  // `isPlainRecord` settles it by asking for the prototype, which a hostile root
+  // refuses — exactly the case the readability gate below exists for — so it
+  // cannot run before the survey has had its say. `definitelyNotARecord` never
+  // accepts what its fuller half would refuse, so refusing early here can only
+  // ever agree with the envelope, and the two cannot drift apart.
+  if (definitelyNotARecord(doc)) {
+    issues.push(invalidDocumentIssue());
+    return { issues, survey };
+  }
 
   // The SITE's own breakpoints, before anything about the document is decided.
   // They come from the caller's settings rather than from the document, so a
@@ -523,12 +559,7 @@ function documentEnvelope(
   // untrusted, while `doc` keeps its declared type for the typed helper calls.
   const rawDoc: unknown = doc;
   if (!isPlainRecord(rawDoc)) {
-    issues.push({
-      path: "",
-      code: "invalid-document",
-      severity: "error",
-      message: "The document must be an object.",
-    });
+    issues.push(invalidDocumentIssue());
     return { stop: true };
   }
 
