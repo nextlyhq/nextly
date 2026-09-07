@@ -33,6 +33,7 @@ import type {
   BlockDocument,
   BlockNode,
   BlockOrigin,
+  Condition,
   ComponentDocument,
   ExposedProperty,
   ExposedPropertyType,
@@ -81,6 +82,7 @@ import {
 } from "./tree";
 import { componentEnvelopeIssues } from "./validation";
 import type { ValidationIssue } from "./validation";
+import { isConditionGated } from "./visibility";
 
 /** A library row a planner asks the caller to create. */
 export interface PlannedCreate<TFields> {
@@ -2403,17 +2405,11 @@ export function planDetach(
     return { problem: "unusable-document" };
   }
 
-  // What the page will hold when this lands: everything outside the instance,
-  // AND the supplied slot content, which is restored into the result rather
-  // than copied and so keeps the ids it already has. Leaving it out let a
-  // definition id collide with one of the author's own after restoration —
-  // legal on the page today, because the definition's is rendered scoped — and
-  // the group was then refused with a cause about size.
   const inlined = detachedRoots(
     document,
     located.node,
     definitions,
-    domIdsIn([...remaining.nodes, ...suppliedContent(located.node)]),
+    remaining.nodes,
     limits
   );
   if (inlined.problem !== undefined) return inlined;
@@ -2450,6 +2446,80 @@ export function planDetach(
   }
 
   return { pageOps: ops };
+}
+
+/** One instance resolved into the nodes it renders, or why it could not be. */
+interface ResolvedDefinition {
+  readonly nodes: BlockNode[];
+  readonly renamedDomIds: ReadonlyMap<string, string>;
+  readonly problem?: undefined;
+  readonly permitted?: undefined;
+}
+
+/**
+ * Inline ONE instance through the renderer's own resolver, and judge the result.
+ *
+ * Its own function so the caller stays inside the complexity the gate allows,
+ * and because everything here is about getting a trustworthy forest OUT of the
+ * resolver — what happens to its ids afterwards is a separate question.
+ */
+function resolvedDefinition(
+  document: BlockDocument,
+  instance: BlockNode,
+  componentId: string,
+  definitions: DefinitionsById,
+  limits: DocumentLimits
+): ResolvedDefinition | PlanRefusal {
+  // The page's OWN envelope, with only this instance in it. Built from the
+  // document rather than assembled, so the resolver reads the format version
+  // and settings the page actually carries.
+  const probe: BlockDocument = {
+    ...document,
+    nodes: [instance],
+  };
+  const resolved = resolveComponentInstances(probe, definitions, {
+    maxComposedDepth: 1,
+    limits,
+  });
+  // The instance itself left standing means there is nothing to inline: the
+  // definition is missing, unpublished, or refused. Detaching to nothing would
+  // delete the author's section.
+  if (resolved.unresolved.some(one => one.componentId === componentId)) {
+    return { problem: "not-a-component" };
+  }
+
+  // TWO passes of the one copier, because two different things are being
+  // undone and each has its own policy.
+  //
+  // First the resolver's own scoping. It mints a `cx-` suffixed DOM id per
+  // composed node so two instances of a component do not collide on the page —
+  // a render-time digest, and `resolveComponentInstances` now says what each
+  // one came from. Persisting it would store a machine id where the author
+  // wrote `card-anchor`, and it would go stale the moment the definition
+  // renamed its own anchor.
+  //
+  // Then the page. With the authored ids back, `{avoid}` renames one only where
+  // the page really holds that name — the rule `planInsertPattern` was fixed to
+  // follow, after unconditional re-minting was found to grow a suffix on every
+  // cycle. Asking both of a single policy would need a fifth `DomIdPolicy` arm;
+  // asking the same published copier twice needs none.
+  // Before the copy, because copying is itself a step that can fail: a stored
+  // definition reaching this module from an in-process caller can hold a value
+  // JSON cannot carry — a function in `props` — and `structuredClone` throws a
+  // native `DataCloneError` out of a function that promises a refusal. The
+  // shape rule catches the same node and turns the crash into a cause, which is
+  // what `storedRefusal` does for the pattern paths.
+  const inlinedNodes = withoutResolverMarkers(resolved.document.nodes);
+  if (forestRefusal(inlinedNodes) !== undefined) {
+    return { problem: "unusable-document" };
+  }
+  // The NODE contract separately, and reported as itself: a forest of plain
+  // storable records is not yet a forest of nodes this engine would carry, and
+  // `"invalid-node"` is what every other planner calls that — an author whose
+  // definition holds a legacy node gets the same cause whichever road they took.
+  const shape = shapeRefusal(inlinedNodes);
+  if (shape !== undefined) return shape;
+  return { nodes: inlinedNodes, renamedDomIds: resolved.renamedDomIds };
 }
 
 /** An instance found on the page, with the position it holds. */
@@ -2522,7 +2592,7 @@ function detachedRoots(
   document: BlockDocument,
   instance: BlockNode,
   definitions: DefinitionsById,
-  taken: ReadonlySet<string>,
+  remaining: readonly BlockNode[],
   limits: DocumentLimits
 ): DetachedRoots | PlanRefusal {
   const componentId = instance.props?.componentId;
@@ -2545,61 +2615,59 @@ function detachedRoots(
   // than merged: two condition sets combine as a cross product of their groups,
   // and quietly rewriting an author's visibility rules is not something a
   // detach should do.
-  const gate = instance.visibility;
+  //
+  // The CONDITIONS only. `devices` lives in the same envelope and is explicitly
+  // NOT a gate — per-breakpoint hiding is CSS on a node that is always served —
+  // and the resolver already carries it onto the roots itself, under a rule
+  // about which direction may propagate. Lifting the whole envelope threw that
+  // merge away and then refused every responsive instance whose definition
+  // styled its own breakpoints.
+  const gate = conditionGate(instance);
   const held = suppliedSlots(instance);
-  // The page's OWN envelope, with only this instance in it. Built from the
-  // document rather than assembled, so the resolver reads the format version
-  // and settings the page actually carries.
-  const probe: BlockDocument = {
-    ...document,
-    nodes: [ungated({ ...instance, slots: held.slots })],
-  };
-  const resolved = resolveComponentInstances(probe, definitions, {
-    maxComposedDepth: 1,
-    limits,
-  });
-  // The instance itself left standing means there is nothing to inline: the
-  // definition is missing, unpublished, or refused. Detaching to nothing would
-  // delete the author's section.
-  if (resolved.unresolved.some(one => one.componentId === componentId)) {
-    return { problem: "not-a-component" };
-  }
-
-  // TWO passes of the one copier, because two different things are being
-  // undone and each has its own policy.
-  //
-  // First the resolver's own scoping. It mints a `cx-` suffixed DOM id per
-  // composed node so two instances of a component do not collide on the page —
-  // a render-time digest, and `resolveComponentInstances` now says what each
-  // one came from. Persisting it would store a machine id where the author
-  // wrote `card-anchor`, and it would go stale the moment the definition
-  // renamed its own anchor.
-  //
-  // Then the page. With the authored ids back, `{avoid}` renames one only where
-  // the page really holds that name — the rule `planInsertPattern` was fixed to
-  // follow, after unconditional re-minting was found to grow a suffix on every
-  // cycle. Asking both of a single policy would need a fifth `DomIdPolicy` arm;
-  // asking the same published copier twice needs none.
-  const authored = reidForestWithMap(
-    withoutResolverMarkers(resolved.document.nodes),
-    { restore: resolved.renamedDomIds }
+  const inlined = resolvedDefinition(
+    document,
+    withoutConditions({ ...instance, slots: held.slots }),
+    componentId,
+    definitions,
+    limits
   );
-  const copied = reidForestWithMap(authored.nodes, { avoid: taken });
+  if (inlined.problem !== undefined) return inlined;
+  const { nodes: inlinedNodes, renamedDomIds } = inlined;
+
+  const authored = reidForestWithMap(inlinedNodes, {
+    restore: renamedDomIds,
+  });
+  // What the page will actually hold: everything outside the instance, AND the
+  // supplied content resolution PLACED — restored rather than copied, so it
+  // keeps the ids it already has.
+  //
+  // Placed, not merely supplied. Content for a slot the definition does not
+  // expose is dropped by the resolver and never reaches the page, so counting
+  // its ids renamed a definition's authored anchor to avoid something that will
+  // not be there — breaking a fragment link or a selector for no collision.
+  const placed = placedContent(held, authored.nodeIds);
+  const copied = reidForestWithMap(authored.nodes, {
+    avoid: domIdsIn([...remaining, ...placed]),
+  });
   const roots = restoreSuppliedSlots(
     copied.nodes,
     held.byId,
     composed(authored.nodeIds, copied.nodeIds)
   );
-  if (gate !== undefined && roots.some(root => root.visibility !== undefined)) {
+  if (gate !== undefined && roots.some(isConditionGated)) {
     return { problem: "condition-gated" };
   }
-  return {
-    roots: roots.map(root => ({
-      ...root,
-      ...(gate === undefined ? {} : { visibility: gate }),
-      origin: { from: "component" as const, id: componentId },
-    })),
-  };
+  // Two nodes rendering ONE id. Resolution scoped both to one runtime id, and
+  // putting the authored one back gives the page a duplicate — which `applyOps`
+  // does not police and strict validation, the gate this predicts, refuses. The
+  // pattern paths already ask this; asking it here is what keeps a plan from
+  // succeeding into a page that cannot be published.
+  const stamped = roots.map(root => ({
+    ...root,
+    ...gatedWith(root, gate),
+    origin: { from: "component" as const, id: componentId },
+  }));
+  return duplicateDomIdRefusal(stamped) ?? { roots: stamped };
 }
 
 /**
@@ -2618,28 +2686,62 @@ function composed(
   return through;
 }
 
-/** The same node with any condition gate taken off. */
-function ungated(instance: BlockNode): BlockNode {
-  if (instance.visibility === undefined) return instance;
-  const copy: Record<string, unknown> = { ...instance };
-  delete copy.visibility;
-  return copy as unknown as BlockNode;
+/** The condition groups an instance is gated by, when it is gated at all. */
+function conditionGate(instance: BlockNode): Condition[][] | undefined {
+  if (!isConditionGated(instance)) return undefined;
+  const envelope = instance.visibility;
+  return isPlainRecord(envelope)
+    ? (envelope.conditions as Condition[][] | undefined)
+    : undefined;
 }
 
 /**
- * Every node an author supplied to this instance's slots, flattened.
+ * The same node with its CONDITIONS removed and the rest of its envelope kept.
  *
- * The roots only — {@link domIdsIn} walks what it is given — and read through
- * the same guards {@link suppliedSlots} reads, so the ids counted as taken are
- * exactly the nodes that will be restored.
+ * `devices` stays: it is not a gate, and the resolver merges it onto the roots
+ * under a rule of its own about which direction may propagate.
  */
-function suppliedContent(instance: BlockNode): BlockNode[] {
-  const source = instance.slots;
-  if (!isPlainRecord(source)) return [];
+function withoutConditions(instance: BlockNode): BlockNode {
+  const envelope = instance.visibility;
+  if (!isPlainRecord(envelope)) return instance;
+  const kept: Record<string, unknown> = { ...envelope };
+  delete kept.conditions;
+  return { ...instance, visibility: kept };
+}
+
+/**
+ * A root's visibility with the instance's conditions added, keeping its own.
+ *
+ * MERGED rather than assigned, because the resolver may already have put device
+ * flags here — overwriting the envelope would drop the per-breakpoint hiding it
+ * just carried over. Only reached when no root is condition-gated, so there are
+ * no conditions of its own to lose.
+ */
+function gatedWith(
+  root: BlockNode,
+  gate: Condition[][] | undefined
+): { visibility?: BlockNode["visibility"] } {
+  if (gate === undefined) return {};
+  const envelope = isPlainRecord(root.visibility) ? root.visibility : {};
+  return { visibility: { ...envelope, conditions: gate } };
+}
+
+/**
+ * The supplied content resolution actually PLACED, flattened.
+ *
+ * Keyed on the placeholder ids the copier reports landing, so this is exactly
+ * the set {@link restoreSuppliedSlots} will put back. Content for a slot the
+ * definition does not expose has no entry: the resolver dropped it, it will not
+ * reach the page, and counting its ids as taken renames an authored anchor to
+ * avoid a collision that cannot happen.
+ */
+function placedContent(
+  held: SuppliedSlots,
+  nodeIds: ReadonlyMap<string, string>
+): BlockNode[] {
   const all: BlockNode[] = [];
-  for (const name of ownKeys(source)) {
-    const content: unknown = source[name];
-    if (Array.isArray(content)) all.push(...(content as BlockNode[]));
+  for (const [placeholder, content] of held.byId) {
+    if (nodeIds.has(placeholder)) all.push(...content);
   }
   return all;
 }
@@ -2680,7 +2782,12 @@ function suppliedSlots(instance: BlockNode): SuppliedSlots {
       props: {},
     };
     byId.set(placeholder.id, content as readonly BlockNode[]);
-    slots[name] = [placeholder];
+    // `defineEntry`, never assignment. A slot literally named `__proto__` is a
+    // key a stored document may carry, and `slots[name] = …` sets the object's
+    // PROTOTYPE instead of creating that key — so the placeholder was never
+    // written, the resolver placed nothing, and the author's content was
+    // dropped without a word.
+    defineEntry(slots, name, [placeholder]);
   }
   return { slots, byId };
 }
@@ -2734,9 +2841,13 @@ function splicedNode(
   const slots: Record<string, BlockNode[]> = {};
   for (const name of ownKeys(source)) {
     const content: unknown = source[name];
-    slots[name] = Array.isArray(content)
-      ? splicedForest(content as readonly BlockNode[], placed)
-      : (content as BlockNode[]);
+    defineEntry(
+      slots,
+      name,
+      Array.isArray(content)
+        ? splicedForest(content as readonly BlockNode[], placed)
+        : (content as BlockNode[])
+    );
   }
   return { ...node, slots };
 }

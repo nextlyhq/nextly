@@ -394,6 +394,136 @@ describe("what the op group has to survive", () => {
   });
 });
 
+describe("responsive visibility is not a gate", () => {
+  it("detaches, and keeps the resolver's device merge", () => {
+    // `devices` shares the visibility envelope with `conditions` but is
+    // explicitly NOT a gate — per-breakpoint hiding is CSS on a node that is
+    // always served — and the resolver already carries it onto the roots under
+    // a rule of its own about which direction may propagate. Lifting the WHOLE
+    // envelope for the resolution threw that merge away and then refused every
+    // responsive instance whose definition styled its own breakpoints.
+    const definitions = defs({
+      card: component([
+        node("d1", {
+          props: { mark: "body" },
+          visibility: { devices: { desktop: true } },
+        }),
+      ]),
+    });
+    const doc = page([
+      instance("i1", "card", { visibility: { devices: { mobile: false } } }),
+    ]);
+
+    const result = applied(doc, planDetach(doc, "i1", definitions, anyParent));
+
+    expect(result.nodes[0]?.visibility).toEqual({
+      devices: { desktop: true, mobile: false },
+    });
+  });
+});
+
+describe("what the copy must not do to ids", () => {
+  it("keeps an authored id when only DISCARDED content would collide", () => {
+    // Content for a slot the definition does not expose is dropped by the
+    // resolver and never reaches the page. Counting its ids as taken renamed a
+    // definition's authored anchor to avoid something that will not be there,
+    // breaking a fragment link or a selector for no collision at all.
+    const definitions = defs({
+      card: component([
+        node("d1", { cssId: "anchor", props: { mark: "body" } }),
+      ]),
+    });
+    const doc = page([
+      instance("i1", "card", {
+        slots: { body: [node("orphan", { cssId: "anchor" })] },
+      }),
+    ]);
+
+    const result = applied(doc, planDetach(doc, "i1", definitions, anyParent));
+
+    expect(marked(result.nodes, "body").cssId).toBe("anchor");
+  });
+
+  it("refuses a definition that renders one id on two nodes", () => {
+    // Resolution scopes both to one runtime id; putting the authored one back
+    // gives the page a duplicate. `applyOps` does not police DOM-id uniqueness
+    // and strict validation — the gate this predicts — refuses it, so the plan
+    // would succeed into a page that can never be published.
+    const definitions = defs({
+      card: component([
+        node("d1", { cssId: "same" }),
+        node("d2", { cssId: "same" }),
+      ]),
+    });
+    const doc = page([instance("i1", "card")]);
+
+    expect(planDetach(doc, "i1", definitions, anyParent).problem).toBe(
+      "duplicate-dom-id"
+    );
+  });
+});
+
+describe("a slot name the format allows and JavaScript does not", () => {
+  const exposing = (key: string): DefinitionsById => {
+    const envelope: Record<string, unknown> = {};
+    Object.defineProperty(envelope, key, {
+      value: { label: "B", nodeId: "s1", slot: "children" },
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    return defs({
+      card: component([box("s1", [])], {
+        slots: envelope as ComponentDocument["slots"],
+      }),
+    });
+  };
+
+  const supplying = (key: string): BlockDocument => {
+    const supplied: Record<string, BlockNode[]> = {};
+    Object.defineProperty(supplied, key, {
+      value: [node("mine", { props: { mark: "m" } })],
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    return page([instance("i1", "card", { slots: supplied })]);
+  };
+
+  it("restores content from an ordinary slot", () => {
+    // The control. Without it the assertion below passes for a planner that
+    // restores nothing at all.
+    const doc = supplying("body");
+
+    const result = applied(
+      doc,
+      planDetach(doc, "i1", exposing("body"), anyParent)
+    );
+
+    expect(marked(result.nodes, "m").id).toBe("mine");
+  });
+
+  it("refuses a `__proto__` slot rather than dropping it silently", () => {
+    // Locks the OUTCOME, and it does not discriminate: such a document is
+    // refused upstream today whichever way the slots were written, so this
+    // passes with or without the fix beside it. Kept because the failure it
+    // guards against is a silent one — a future change that let this document
+    // through would produce a plan reporting success with the author's content
+    // quietly gone, and nothing else here would notice.
+    //
+    // The write itself goes through `defineEntry` regardless: `slots[name] = …`
+    // with this name sets the object's PROTOTYPE instead of creating the key,
+    // so the placeholder is never written and the resolver places nothing.
+    // `validate` calls such a document `document-lossy` and the pattern paths
+    // call it `invalid-node`.
+    const doc = supplying("__proto__");
+
+    expect(
+      planDetach(doc, "i1", exposing("__proto__"), anyParent).problem
+    ).toBe("unusable-document");
+  });
+});
+
 describe("what detach refuses", () => {
   const definitions = defs({ card: component([node("d1")]) });
 
