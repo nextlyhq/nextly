@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
+  readdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -41,20 +42,39 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * exist. Both directions were wrong, and the first is the dangerous one,
  * because a scan that sees less reports a healthier boundary.
  *
- * So the question is put to the module resolver instead, in the two forms that
- * cannot be under-read:
+ * Two instruments replace it, each complete in a dimension the other is not.
  *
- * - the entry is imported from a directory with NO `node_modules` above it, so
- *   anything reaching a runtime dependency fails to resolve. Complete by
- *   construction rather than a pattern to keep extending.
- * - the entry is imported again under a resolution hook, which reports every
- *   specifier Node actually resolved. That is the module graph itself, not a
- *   reading of what the text appears to say.
+ * **The build's own module graph.** `tsup` writes esbuild's metafile beside the
+ * bundles, recording every import edge with its KIND — including the ones
+ * nothing executes. A `import("css-tree/parser")` behind a function is a real
+ * edge to a real dependency, and no amount of loading the entry point asks the
+ * resolver for it. Authoritative because it comes from the tool that emitted
+ * the code.
+ *
+ * **The resolver.** The entry is imported from a directory with NO
+ * `node_modules` above it, so anything reaching a runtime dependency fails to
+ * resolve. That says nothing about deferred edges, and it is the only one of
+ * the two that judges the FILE rather than a record about it.
+ *
+ * Neither alone is enough, and the pairing is the point: a metafile can
+ * describe a build the files on disk are no longer from, and an import passes
+ * over every dependency it never reaches. So the metafile is checked against
+ * the bytes actually on disk, and the import is run against the real files.
  *
  * @module format-boundary.test
  */
 
 const DIST = resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist");
+const PACKAGE = dirname(DIST);
+const METAFILE = join(DIST, "metafile-esm.json");
+
+/**
+ * How long a child gets to import one entry point before it is a hang.
+ *
+ * Loading two files is milliseconds of work; a minute is the point past which
+ * no plausible amount of runner contention explains it.
+ */
+const CHILD_TIMEOUT_MS = 60_000;
 const FORMAT_ENTRY = "format.mjs";
 const ROOT_ENTRY = "index.mjs";
 
@@ -151,8 +171,22 @@ function runEntry(
       // directory holding the entry rather than from wherever vitest was run.
       cwd: from,
       env: { ...process.env, NEXTLY_RESOLVE_RECORD: record },
+      // A ceiling, because this call is SYNCHRONOUS: an entry point that opens
+      // a handle or deadlocks while initialising would otherwise block the
+      // vitest worker itself, and vitest's own per-test timeout cannot fire on
+      // a thread that is not yielding — the suite hangs where it should report.
+      // Generous, so a cold start on a loaded runner is never the cause.
+      timeout: CHILD_TIMEOUT_MS,
     }
   );
+
+  // `spawnSync` reports a timeout or a failure to start through `error` and
+  // leaves `status` null, which reads as "did not exit 0" — the right verdict
+  // for the boundary and the wrong REASON to show. Carried into the message so
+  // a hang is reported as a hang.
+  const stderr = [result.stderr ?? "", result.error?.message ?? ""]
+    .filter(part => part !== "")
+    .join("\n");
 
   const resolved = !instrumented
     ? []
@@ -161,7 +195,7 @@ function runEntry(
         .filter(line => line !== "")
         .map(line => JSON.parse(line) as { specifier: string; url: string });
 
-  return { ok: result.status === 0, stderr: result.stderr ?? "", resolved };
+  return { ok: result.status === 0, stderr, resolved };
 }
 
 const isRelative = (specifier: string) => specifier.startsWith(".");
@@ -246,31 +280,216 @@ describe("the format entry point's boundary", () => {
   });
 });
 
-describe("what the format entry point actually loads", () => {
-  it("resolves no runtime dependency", () => {
-    // The same claim asked a second way, in a place where dependencies ARE
-    // resolvable. The isolated import proves nothing external could load; this
-    // proves nothing external was even asked for, which is what would still
-    // hold if the sandbox ever stopped being isolated.
-    const run = runEntry(DIST, FORMAT_ENTRY, { instrumented: true });
+/**
+ * One output file as the build recorded it: what it weighs, and what it
+ * imports.
+ *
+ * `external` distinguishes a bare package from another emitted chunk, so
+ * following the second and collecting the first is the whole graph walk — over
+ * data the bundler produced, rather than over the text it produced.
+ */
+interface BuildOutput {
+  readonly bytes: number;
+  readonly imports?: readonly {
+    readonly path: string;
+    readonly kind: string;
+    readonly external?: boolean;
+  }[];
+}
 
-    expect(run.ok, run.stderr).toBe(true);
-    expect(externals(run)).toEqual([]);
+function buildGraph(): Record<string, BuildOutput> {
+  const raw: unknown = JSON.parse(readFileSync(METAFILE, "utf8"));
+  const outputs = (raw as { outputs?: Record<string, BuildOutput> }).outputs;
+  if (outputs === undefined) {
+    throw new Error(`${METAFILE} has no outputs; the build did not write it`);
+  }
+  return outputs;
+}
+
+/**
+ * Every emitted file an entry reaches, chunks included.
+ *
+ * The one traversal both questions below are asked of. They differ only in what
+ * they read off each file — its externals, or its bytes — and walking twice is
+ * two answers to "what does this entry reach", which drift the first time a
+ * kind of edge is treated differently in one of them.
+ */
+function reachableOutputs(
+  outputs: Record<string, BuildOutput>,
+  entry: string
+): string[] {
+  const seen = new Set<string>();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = queue.pop();
+    // An emitted chunk can reference another in a cycle, so a walk without this
+    // does not return.
+    if (file === undefined || seen.has(file)) continue;
+    seen.add(file);
+    for (const edge of outputs[file]?.imports ?? []) {
+      if (edge.external !== true) queue.push(edge.path);
+    }
+  }
+  return [...seen];
+}
+
+/**
+ * Every bare package an emitted entry reaches.
+ *
+ * Every KIND of edge counts, and that is the point of reading this rather than
+ * observing an import: `kind` is `dynamic-import` for the deferred ones, and a
+ * deferred edge to a runtime dependency is exactly as much of a dependency as
+ * an eager one — it is simply one nothing asks for until it is called.
+ */
+function buildExternals(
+  outputs: Record<string, BuildOutput>,
+  entry: string
+): string[] {
+  const externals = new Set<string>();
+  for (const file of reachableOutputs(outputs, entry)) {
+    for (const edge of outputs[file]?.imports ?? []) {
+      if (edge.external === true) externals.add(edge.path);
+    }
+  }
+  return [...externals].sort();
+}
+
+/** The bytes of every emitted file an entry reaches, chunks included. */
+function buildBytes(
+  outputs: Record<string, BuildOutput>,
+  entry: string
+): number {
+  return reachableOutputs(outputs, entry).reduce(
+    (total, file) => total + (outputs[file]?.bytes ?? 0),
+    0
+  );
+}
+
+/** The metafile's own name for an emitted file: a path from the package root. */
+const emitted = (file: string) => `dist/${file}`;
+
+describe("the walk over that graph", () => {
+  /**
+   * A graph with the three shapes the real one does not currently have.
+   *
+   * The build emits no dynamic import today and reaches its dependency
+   * straight from the entry, so every property below is invisible when asserted
+   * against `dist`: a walk that ignored deferred edges, or never followed a
+   * chunk, or summed only the entry, agrees with the correct one on this
+   * build. They would start disagreeing the day the bundle changed shape,
+   * which is the day the walk stops being watched.
+   */
+  const FIXTURE: Record<string, BuildOutput> = {
+    "dist/entry.mjs": {
+      bytes: 10,
+      imports: [
+        { path: "dist/chunk.mjs", kind: "import-statement" },
+        { path: "eager-pkg", kind: "import-statement", external: true },
+      ],
+    },
+    "dist/chunk.mjs": {
+      bytes: 100,
+      imports: [
+        { path: "deferred-pkg", kind: "dynamic-import", external: true },
+        // Back to the entry: emitted chunks do reference each other in cycles,
+        // and a walk without a seen-set does not return from this.
+        { path: "dist/entry.mjs", kind: "import-statement" },
+      ],
+    },
+  };
+
+  it("follows chunk edges to the dependencies behind them", () => {
+    expect(buildExternals(FIXTURE, "dist/entry.mjs")).toContain("deferred-pkg");
   });
 
-  it("CONTROL: the same instrument sees the root's dependency", () => {
-    // A hook that recorded nothing would report an empty external set for every
-    // entry point, including one that demonstrably pulls a parser. Matched by
-    // package rather than by exact specifier: the compiler imports
-    // `css-tree/parser` and `css-tree/walker` by subpath, so an equality check
-    // against the bare name finds nothing and the control passes for the wrong
-    // reason.
-    const run = runEntry(DIST, ROOT_ENTRY, { instrumented: true });
+  it("counts a DEFERRED edge as a dependency", () => {
+    // The property this file was rebuilt for. An import behind a function is a
+    // real edge to a real package; nothing asks the resolver for it until it is
+    // called, which is exactly why observing an import cannot see it.
+    const deferredOnly: Record<string, BuildOutput> = {
+      "dist/only.mjs": {
+        bytes: 1,
+        imports: [{ path: "lazy-pkg", kind: "dynamic-import", external: true }],
+      },
+    };
 
-    expect(run.ok, run.stderr).toBe(true);
-    expect(externals(run).map(specifier => specifier.split("/")[0])).toContain(
-      "css-tree"
+    expect(buildExternals(deferredOnly, "dist/only.mjs")).toEqual(["lazy-pkg"]);
+  });
+
+  it("sums the bytes of every chunk an entry reaches", () => {
+    expect(buildBytes(FIXTURE, "dist/entry.mjs")).toBe(110);
+  });
+
+  it("does not treat a chunk as a dependency", () => {
+    // The other direction: a relative edge is code this package emitted, and
+    // reporting it as an external would make every entry point look like it
+    // reaches something.
+    expect(buildExternals(FIXTURE, "dist/entry.mjs")).toEqual([
+      "deferred-pkg",
+      "eager-pkg",
+    ]);
+  });
+});
+
+describe("the module graph the build recorded", () => {
+  it("describes the files that are actually on disk", () => {
+    // The metafile is a RECORD of a build, and every assertion below trusts it
+    // to describe this one. A `dist` rebuilt by some path that did not write it
+    // leaves a stale graph saying whatever it said last time — which is the
+    // flattering direction, because the boundary was intact then.
+    //
+    // NOT by comparing recorded sizes against the files. Measured, they do not
+    // agree and are not meant to: esbuild records what IT emitted, and tsup
+    // rewrites both the module and its map afterwards — `dist/format.mjs` is
+    // 890 bytes in the record and 490 on disk. A guard built on that would fail
+    // on every correct build, and be removed.
+    //
+    // Two things that do hold. The record names exactly the modules that exist,
+    // so an entry point added or dropped without rewriting it is caught; and no
+    // module is NEWER than the record, so a `dist` rebuilt by some path that
+    // did not write one is caught. That second case is the one worth having,
+    // because a stale graph says whatever it said last time — which is the
+    // flattering direction, since the boundary was intact then.
+    const outputs = buildGraph();
+    const recorded = Object.keys(outputs)
+      .filter(file => file.endsWith(".mjs"))
+      .sort();
+    const onDisk = readdirSync(DIST)
+      .filter(file => file.endsWith(".mjs"))
+      .map(emitted)
+      .sort();
+
+    expect(recorded.length).toBeGreaterThan(0);
+    expect(recorded).toEqual(onDisk);
+
+    const writtenAt = statSync(METAFILE).mtimeMs;
+    for (const file of recorded) {
+      expect(statSync(join(PACKAGE, file)).mtimeMs, file).toBeLessThanOrEqual(
+        writtenAt
+      );
+    }
+  });
+
+  it("gives the format entry no runtime dependency, deferred ones included", () => {
+    // The claim the whole entry point exists for, asked of every edge rather
+    // than of the ones initialisation happens to follow.
+    const outputs = buildGraph();
+
+    expect(buildExternals(outputs, emitted(FORMAT_ENTRY))).toEqual([]);
+  });
+
+  it("CONTROL: the same walk finds the root's dependency", () => {
+    // A walk that followed nothing would report an empty external set for every
+    // entry point, including one that demonstrably bundles a parser. Matched by
+    // package, because the compiler imports `css-tree/parser` and
+    // `css-tree/walker` by subpath and an equality check against the bare name
+    // finds neither.
+    const outputs = buildGraph();
+    const packages = buildExternals(outputs, emitted(ROOT_ENTRY)).map(
+      specifier => specifier.split("/")[0]
     );
+
+    expect(packages).toContain("css-tree");
   });
 
   it("stays a small fraction of the package root", () => {
@@ -279,13 +498,9 @@ describe("what the format entry point actually loads", () => {
     // be raised until it meant nothing. What must stay true is that this entry
     // costs a small fraction of the root, which is the property consumers rely
     // on.
-    //
-    // Measured over the files the resolver REPORTED loading, so the two sides
-    // are the graphs Node built rather than two readings of the text.
-    const format = bytesOf(
-      runEntry(DIST, FORMAT_ENTRY, { instrumented: true })
-    );
-    const root = bytesOf(runEntry(DIST, ROOT_ENTRY, { instrumented: true }));
+    const outputs = buildGraph();
+    const format = buildBytes(outputs, emitted(FORMAT_ENTRY));
+    const root = buildBytes(outputs, emitted(ROOT_ENTRY));
 
     expect(format).toBeGreaterThan(0);
     expect(root).toBeGreaterThan(format * 10);
