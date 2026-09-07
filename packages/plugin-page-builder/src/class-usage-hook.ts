@@ -39,6 +39,7 @@ import {
   type ClassUsageDirectApi,
 } from "./class-usage-runtime";
 import { reconcileWrittenDocument } from "./class-usage-write";
+import { requestContextFor, writeTargetOf } from "./write-target";
 
 /**
  * The phases maintenance runs on.
@@ -59,9 +60,6 @@ const MAINTAINED_PHASES = ["afterCreate", "afterUpdate"] as const;
  * document to read and removes everything the id owned.
  */
 const FORGOTTEN_PHASES = ["afterDelete"] as const;
-
-/** How core names a Single's hooks, so a wildcard registration can tell them apart. */
-const SINGLE_HOOK_NAMESPACE = "single:";
 
 /**
  * A hook context, as core defines it.
@@ -189,7 +187,9 @@ async function forget(
   args: Parameters<typeof registerClassUsageMaintenance>[0],
   context: UnknownRecord
 ): Promise<void> {
-  const target = writeTargetOf(context, args.indexCollection);
+  const target = writeTargetOf<ClassUsageDirectApi>(context, {
+    excluded: [args.indexCollection],
+  });
   if (target === null) return;
 
   try {
@@ -232,7 +232,9 @@ async function planMaintenance(
   args: Parameters<typeof registerClassUsageMaintenance>[0],
   context: UnknownRecord
 ): Promise<Parameters<typeof reconcileWrittenDocument>[0] | null> {
-  const target = writeTargetOf(context, args.indexCollection);
+  const target = writeTargetOf<ClassUsageDirectApi>(context, {
+    excluded: [args.indexCollection],
+  });
   if (target === null) return null;
 
   const collection = (await args.ctx.services.collections.getCollection(
@@ -259,59 +261,6 @@ async function planMaintenance(
   };
 }
 
-/**
- * The three things a write must supply before anything is read, or null.
- *
- * Grouped because they share an answer — there is nothing to maintain — and
- * because all three are cheap. Doing them together keeps the registry read
- * behind every one of them.
- */
-function writeTargetOf(
-  context: UnknownRecord,
-  indexCollection: string
-): { slug: string; nextly: ClassUsageDirectApi; documentId: string } | null {
-  // A hook running inside a CALLER-OWNED transaction is handed that
-  // transaction's executor, and it runs BEFORE the caller commits. Maintenance
-  // reaches the database through the pooled Direct API, which cannot join that
-  // transaction — so on a small pool it can stall waiting for the connection
-  // the transaction is holding, and on a large one it reads a database that
-  // does not yet contain the write it was called for.
-  //
-  // Deriving rows from that read would record the document's PREVIOUS classes,
-  // or none at all for a create, and then report success. Skipping is the only
-  // honest option available: there is no post-commit hook to defer to, and the
-  // rebuild is what repairs a subject a write bypassed.
-  if (context.executor !== undefined) return null;
-
-  const slug = context.collection;
-  if (typeof slug !== "string" || slug.length === 0) return null;
-
-  // A SINGLE, not a collection. Core namespaces a Single's hooks as
-  // `single:<slug>` (`register-single-hooks.ts:59`), and a wildcard
-  // registration receives those too — including this plugin's own site-style
-  // Single, so every style save reached here.
-  //
-  // Skipped rather than adapted: the index models Single subjects, but a plugin
-  // has no supported way to READ a Single's document. The one available path
-  // creates the row when it is absent, so reconciling a Single would
-  // materialise every Single in the app as a side effect of asking about it.
-  // Singles gain maintenance when that reader exists; until then this must not
-  // hand the collection service a namespace it will answer not-found for,
-  // because that failure now raises and would report every Single save as a
-  // maintenance failure.
-  if (slug.startsWith(SINGLE_HOOK_NAMESPACE)) return null;
-  // This plugin's own index table is written BY this hook. Reconciling it would
-  // recurse: every row inserted is a create on that collection, which fires
-  // this again.
-  if (slug === indexCollection) return null;
-
-  const nextly = directApiOf(context);
-  const documentId = documentIdOf(context);
-  if (nextly === null || documentId === null) return null;
-
-  return { slug, nextly, documentId };
-}
-
 /** Say which subjects were left disagreeing with the document, and why. */
 function reportFailures(
   logger: ClassUsagePluginContext["logger"],
@@ -324,42 +273,4 @@ function reportFailures(
       { subject: failure.subject, error: failure.failure }
     );
   }
-}
-
-/** The Direct API a hook was handed, or null when it was handed none. */
-function directApiOf(context: UnknownRecord): ClassUsageDirectApi | null {
-  const req = context.req;
-  if (typeof req !== "object" || req === null) return null;
-  const nextly = (req as { nextly?: unknown }).nextly;
-  // Absent rather than broken: a hook can run on a path that supplies no Direct
-  // API, and there is no maintenance to do without one.
-  return typeof nextly === "object" && nextly !== null
-    ? (nextly as ClassUsageDirectApi)
-    : null;
-}
-
-/**
- * The written document's id, which is the `entityKey` of every row it owns.
- *
- * Read from the AFTER data, which is the record as saved. Without a usable id
- * there is no addressable subject, so the write is left unmaintained rather
- * than filed under a key nothing can reconcile.
- */
-function documentIdOf(context: UnknownRecord): string | null {
-  const data = context.data;
-  if (typeof data !== "object" || data === null) return null;
-  const id = (data as { id?: unknown }).id;
-  return typeof id === "string" && id.length > 0 ? id : null;
-}
-
-/**
- * The request context forwarded to the config read.
- *
- * Carries the acting user so the read is made as the request that triggered it
- * rather than anonymously. Reading a collection's own configuration is not the
- * privileged part — the index writes are, and those are explicitly made as the
- * system inside the store.
- */
-function requestContextFor(context: UnknownRecord): unknown {
-  return { user: context.user };
 }

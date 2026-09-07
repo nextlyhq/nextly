@@ -53,8 +53,16 @@ export function specifiersIn(source: string): string[] {
   // `import(` is matched with its parenthesis so a dynamic import is seen; the
   // bare `import "x"` alternative would not reach it, because the quote does
   // not follow the keyword directly.
+  //
+  // The capture excludes a NEWLINE because a module specifier cannot contain
+  // one, and without that this reads a false import out of ordinary code: the
+  // literal `"from"` ends with a quote, so the keyword pattern matches the word
+  // inside the string and captures everything up to the next quote — which for
+  // `ownEntry(value, "from")` followed by a comparison is a fragment of the
+  // next two lines. Excluding the newline cannot hide a real specifier and does
+  // refuse that.
   for (const match of source.matchAll(
-    /(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g
+    /(?:from|import)\s*\(?\s*['"]([^'"\n]+)['"]/g
   )) {
     found.push(match[1]!);
   }
@@ -95,6 +103,37 @@ function externalImports(files: string[]): Set<string> {
 function bytesOf(files: string[]): number {
   return files.reduce((total, file) => total + statSync(file).size, 0);
 }
+
+describe("the import scanner", () => {
+  it("does not read an import out of a string literal named like the keyword", () => {
+    // `"from"` ends in a quote, so a keyword match that allowed a newline in
+    // the specifier captured the next two lines of ordinary code and reported
+    // it as an external dependency. A module specifier has no newline in it.
+    const source = [
+      'const from = ownEntry(value, "from");',
+      'if (from === "component") return true;',
+    ].join("\n");
+
+    expect(specifiersIn(source)).toEqual([]);
+  });
+
+  it("still sees every real specifier shape", () => {
+    // The control: the narrowing must not cost a form the walk depends on.
+    const source = [
+      'import { a } from "./a";',
+      'export { b } from "./b";',
+      'import "./side-effect";',
+      'const c = await import("./c");',
+    ].join("\n");
+
+    expect(specifiersIn(source)).toEqual([
+      "./a",
+      "./b",
+      "./side-effect",
+      "./c",
+    ]);
+  });
+});
 
 describe("the format entry point's boundary", () => {
   const formatEntry = join(DIST, "format.mjs");

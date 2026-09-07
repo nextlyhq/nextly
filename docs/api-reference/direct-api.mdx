@@ -67,7 +67,7 @@ const visiblePosts = await nextly.find({
 
 ## Collections
 
-These methods hang off the `nextly` root and operate on collection entries. The shapes shown below match the canonical Phase 4 envelopes (`ListResult<T>`, `MutationResult<T>`, etc.) — verify against [`packages/nextly/src/direct-api/types/shared.ts`](https://github.com/nextlyhq/nextly/blob/dev/packages/nextly/src/direct-api/types/shared.ts) if you need the exact TypeScript definitions.
+These methods hang off the `nextly` root and operate on collection entries. The shapes shown below match the canonical Phase 4 envelopes (`ListResult<T>`, `MutationResult<T>`, etc.) — verify against [`packages/nextly/src/direct-api/types/shared.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/nextly/src/direct-api/types/shared.ts) if you need the exact TypeScript definitions.
 
 ### find
 
@@ -575,7 +575,7 @@ The Direct API also exposes typed namespaces for users, media, forms, field grou
 | `nextly.access` | Permission checks | `check`, `checkApiKey` |
 | `nextly.apiKeys` | API keys | `list`, `findByID`, `create`, `update`, `revoke` |
 
-The full TypeScript surface is generated from [`packages/nextly/src/direct-api/namespaces/`](https://github.com/nextlyhq/nextly/tree/dev/packages/nextly/src/direct-api/namespaces).
+The full TypeScript surface is generated from [`packages/nextly/src/direct-api/namespaces/`](https://github.com/nextlyhq/nextly/tree/main/packages/nextly/src/direct-api/namespaces).
 
 ## Querying
 

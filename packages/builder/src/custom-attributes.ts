@@ -17,7 +17,12 @@
  *
  * @module custom-attributes
  */
-import { isConditionGated, type BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  isConditionGated,
+  renderedDomId,
+  renderedDomIdIn,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 import {
   EDITOR_NAMESPACE,
   isAllowedAttribute,
@@ -439,7 +444,7 @@ export function domIdsTaken(
      */
     if (isConditionGated(held)) return;
     if (held.id !== exceptNodeId) {
-      const rendered = renderedIdOf(held);
+      const rendered = renderedDomId(held);
       if (rendered !== undefined) taken.add(rendered);
     }
     for (const child of childNodesOf(held)) visit(child);
@@ -449,70 +454,24 @@ export function domIdsTaken(
 }
 
 /**
- * The one id a node puts on the page, or `undefined` when it puts none.
- *
- * ONE per node, because the renderer emits one: the modelled field wins over
- * the bag. Adding both refused another block the bag's value even though that
- * id never reaches the page.
- *
- * The modelled field counts as PRESENT whenever it is a string, the empty one
- * included, because that is the renderer's test: it writes `extra.id = cssId`
- * on `cssId !== undefined`, so an empty modelled field still overwrites the bag
- * and the element renders `id=""`. Reading it as absent here recorded the bag's
- * value and refused another block an id that never renders.
- *
- * An empty id is not an id, so it takes nothing — it only stops the bag.
- */
-function renderedIdOf(node: BlockNode): string | undefined {
-  const modelled = typeof node.cssId === "string" ? node.cssId : undefined;
-  const rendered = modelled ?? renderedIdIn(node.attributes);
-  return rendered === "" ? undefined : rendered;
-}
-
-/**
  * The `id` the renderer would emit from an attribute bag, if any.
  *
- * EXPORTED so nothing asks this question a second way. The editor normalizes a
- * name it is about to write — trimming and lowercasing through `attributeKey` —
- * and that describes what this panel WOULD store, not what a stored bag holds:
- * an imported `" id "` normalizes to `id` under that rule while the renderer,
- * matching the stored name, emits nothing for it. A caller wanting to know what
- * the page shows has to ask the reading that models the page.
+ * DELEGATED to the engine, which publishes the rule both packages need. It was
+ * derived twice — here and there, independently, from the renderer — and the
+ * two authors made the same mistakes in the same order before arriving at the
+ * same answer. A rule two packages derive separately is one they will
+ * eventually derive differently, and the engine is the right home because the
+ * builder depends on it and never the reverse.
  *
- * Read case-INSENSITIVELY, because that is how the renderer reads it: HTML
- * attribute names are ASCII case-insensitive and it lowercases every key before
- * writing, so a stored `{ ID: "hero" }` renders as `id="hero"`. A scan looking
- * only at the exact key `id` misses it, and another block is then allowed to
- * take the same id — producing the collision this exists to prevent.
- *
- * The LAST variant wins, matching the renderer's own loop: it assigns each
- * lowercased key in turn, so a later one replaces an earlier one. This editor
- * never writes two spellings, but an import or a script can.
+ * Kept as a named export rather than replaced at its call sites, because what
+ * this asks is narrower than "what does this node render": `advanced-panel`
+ * needs to know whether an empty bag id would SHADOW something, which is a
+ * question about the bag alone.
  */
 export function renderedIdIn(
   attributes: Readonly<Record<string, string>> | undefined
 ): string | undefined {
-  /*
-   * Shape-checked, because this walks OTHER nodes and a stored document can
-   * hold whatever the database returned. `Object.entries(null)` throws, and
-   * one malformed node elsewhere would take down the whole tab before it
-   * rendered. The reader and the renderer both treat a malformed bag as
-   * absent; this agrees with them.
-   */
-  if (typeof attributes !== "object" || attributes === null) return undefined;
-  if (Array.isArray(attributes)) return undefined;
-  let found: string | undefined;
-  for (const [name, value] of Object.entries(attributes)) {
-    if (name.toLowerCase() !== "id") continue;
-    /*
-     * The last variant wins whatever it holds, empty included: the renderer
-     * assigns each lowercased key in turn, so a trailing `ID: ""` leaves the
-     * element with `id=""`. Skipping it here kept an earlier value and
-     * refused another block an id that does not render.
-     */
-    if (typeof value === "string") found = value;
-  }
-  return found;
+  return renderedDomIdIn(attributes);
 }
 
 /** Every node nested inside one, across all of its slots. */

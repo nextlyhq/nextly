@@ -504,6 +504,62 @@ describe("useWidgetQueries", () => {
       });
     });
 
+    /*
+     * 🔴 The column's declared KIND, which is what lets a cell be presented
+     * rather than printed. This arm rebuilds the result from named fields, so a
+     * property it does not name is discarded -- the exact way `label` was lost
+     * when the server first started describing columns, and the exact way
+     * `type` was lost again the day it was added. A renderer test cannot catch
+     * it: those hand the fields straight to the archetype and never cross this
+     * boundary.
+     */
+    it("carries the column's declared type through", async () => {
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "list",
+            items: [{ when: "2026-09-01T07:00:00.000Z" }],
+            fields: [{ name: "when", label: "Scheduled", type: "date" }],
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: {
+          op: "list",
+          items: [{ when: "2026-09-01T07:00:00.000Z" }],
+          fields: [{ name: "when", label: "Scheduled", type: "date" }],
+        },
+      });
+    });
+
+    /*
+     * An unrecognised kind degrades to an untyped column instead of refusing the
+     * result. A newer server may name a type this build has not learned, and
+     * blanking the card over it would make every future type a breaking change
+     * -- where rendering the value as text is what every column did before types
+     * existed at all.
+     */
+    it("drops an unrecognised type but keeps the column", async () => {
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "list",
+            items: [{ when: "soon" }],
+            fields: [{ name: "when", type: "duration" }],
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: {
+          op: "list",
+          items: [{ when: "soon" }],
+          fields: [{ name: "when" }],
+        },
+      });
+    });
+
     it("drops malformed column descriptions without losing the rows", async () => {
       // A malformed heading costs the columns and nothing more. The rows are
       // the answer, and refusing the whole result over its headings would turn

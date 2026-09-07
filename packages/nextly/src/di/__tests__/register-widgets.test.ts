@@ -33,6 +33,7 @@ import {
   systemResolver,
 } from "../../domains/widgets/system-sources";
 import { RELEASES_SOURCE_ID } from "../../domains/releases/releases-widget-source";
+import { VERSIONS_SOURCE_ID } from "../../domains/versions/versions-widget-source";
 import { resetWidgetRegistries } from "../registrations/register-widgets";
 
 beforeEach(() => {
@@ -74,9 +75,11 @@ describe("resetWidgetRegistries", () => {
     // empty -- core publishes its own system source in this same function, so
     // an emptiness assertion would only have held while it published none.
     expect(getSource("plugin:stripe/revenue")).toBeUndefined();
-    expect(listSources().map(source => source.id)).toEqual([
-      RELEASES_SOURCE_ID,
-    ]);
+    expect(
+      listSources()
+        .map(source => source.id)
+        .sort()
+    ).toEqual([RELEASES_SOURCE_ID, VERSIONS_SOURCE_ID].sort());
     // The proof that the clear is what made room: the same id registers again
     // without the conflict `registerSource` raises for a duplicate.
     expect(() => seedSource("plugin:stripe/revenue")).not.toThrow();
@@ -135,6 +138,27 @@ describe("resetWidgetRegistries", () => {
     resetWidgetRegistries();
     expect(() => resetWidgetRegistries()).not.toThrow();
     expect(listWidgets()).toHaveLength(CORE_WIDGETS.length);
+  });
+
+  it("leaves no core card querying a source nothing serves", () => {
+    // 🔴 A definition naming an unregistered source is a legal definition: it
+    // is refused at QUERY time, and only for the reader unlucky enough to hold
+    // the card. So renaming a source is silent on both sides -- the source and
+    // its own tests keep passing, and the card keeps naming what used to serve
+    // it. Sharing one declaration is what makes that impossible; this is what
+    // makes it CHECKED, since a future card could still spell the id by hand.
+    resetWidgetRegistries();
+
+    const queried = CORE_WIDGETS.filter(widget => widget.query).map(
+      widget => widget.query?.source
+    );
+    // The population, asserted before the verdict: with no querying card at all
+    // the loop below is vacuously satisfied, which is the shape of a check
+    // reporting on nothing.
+    expect(queried.length).toBeGreaterThan(0);
+    for (const source of queried) {
+      expect(getSource(String(source))).toBeDefined();
+    }
   });
 
   it("still refuses a genuine duplicate WITHIN one boot", () => {

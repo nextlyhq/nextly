@@ -104,6 +104,9 @@
 - name: "ci-dep-audit-failure"
   color: "b60205"
   description: "Filed automatically when the weekly dependency audit fails"
+- name: "ci-metadata-failure"
+  color: "b60205"
+  description: "Filed automatically when the scheduled repository-metadata check fails"
 
 # ── GitHub-native labels ── platform treats these specially in the UI
 - name: "good first issue"

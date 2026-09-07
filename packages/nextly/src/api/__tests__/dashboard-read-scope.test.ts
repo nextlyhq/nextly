@@ -103,9 +103,19 @@ beforeEach(() => {
   vi.clearAllMocks();
   rbac = new RBACAccessControlService();
 
-  containerHas.mockImplementation(
-    (name: string) => name === "rbacAccessControlService"
-  );
+  // 🔴 `has` must agree with what `get` resolves. A real container answers both
+  // from one registration map, so a harness reporting `has: false` for a service
+  // its `get` returns is a container that cannot exist -- and code that asks
+  // `has` before `get` (to tell an ABSENT registry from one that failed to
+  // construct) then reads this install as having no content at all.
+  const resolvable = new Set([
+    "rbacAccessControlService",
+    "collectionRegistryService",
+    "singleRegistryService",
+    "dashboardService",
+    "activityLogService",
+  ]);
+  containerHas.mockImplementation((name: string) => resolvable.has(name));
   containerGet.mockImplementation((name: string) => {
     switch (name) {
       case "rbacAccessControlService":

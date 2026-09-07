@@ -3,14 +3,11 @@
   "pages": [
     "deployment",
     "production-migrations",
-    "field-group-storage-migration",
     "authentication",
     "media-storage",
     "email",
     "draft-published-status",
-    "draft-preview",
     "isr-caching",
-    "webhook-retention",
     "routing-and-seo"
   ]
 }

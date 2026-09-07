@@ -44,8 +44,10 @@ describe("page-builder admin identity", () => {
     // the placement assertion above mean anything: standalone placement is
     // only a duplication when something is already listed. Which entries
     // those are is not this test's question — asserting the whole list here
-    // made adding a screen look like a change to the plugin's identity.
+    // made adding a screen look like a change to the plugin's identity, and a
+    // line naming one of them did the same thing more quietly. Which sources
+    // offer which screen is asserted in `composition-stores.test.ts`, where
+    // the navigation reasoning lives.
     expect(menu.length).toBeGreaterThan(0);
-    expect(menu.map(item => item.label)).toContain("Pages");
   });
 });

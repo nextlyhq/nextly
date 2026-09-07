@@ -17,6 +17,7 @@ import { pageBuilder } from "../plugin";
 import { LAYOUT_AREAS } from "./areas";
 import { COMPONENTS_SLUG, componentsCollection } from "./components";
 import { LAYOUTS_SLUG, layoutsCollection } from "./layouts";
+import { pagesCollection } from "./pages";
 import { PATTERNS_SLUG, patternsCollection } from "./patterns";
 
 /** A field as the collection config carries it, before any narrowing. */
@@ -302,6 +303,58 @@ describe("exactly one navigation source claims each store", () => {
       expect(menu.filter(item => item.collection === slug)).toHaveLength(1);
     }
   );
+});
+
+describe("exactly one navigation source claims Pages", () => {
+  // Pages is the case the store assertions above do not cover, and it was the
+  // one being listed twice. It is an ordinary collection that happens to
+  // declare a `blocks` field, so the Collections listing is where it belongs —
+  // with the rest of an author's content — and this plugin's menu holds the
+  // pieces pages are built FROM.
+  //
+  // Asserted as the OUTCOME, for the reason the store block gives: the levers
+  // are three separate settings and satisfying any two of them still shows the
+  // author one screen under two names.
+  it("is offered by the Collections listing", () => {
+    const collection = pagesCollection() as {
+      admin?: { hidden?: boolean; sidebarGroup?: string };
+    };
+
+    // `isInCollectionsSection` admits a collection that is not hidden and
+    // claims no sidebar group. Both halves, since either one would exclude it.
+    expect(collection.admin?.hidden).not.toBe(true);
+    expect(collection.admin?.sidebarGroup).toBeUndefined();
+  });
+
+  it("is not also offered by the plugin-collection nav", () => {
+    const collection = pagesCollection() as { admin?: { isPlugin?: boolean } };
+    expect(collection.admin?.isPlugin).toBeUndefined();
+  });
+
+  it("is not also offered by this plugin's own menu", () => {
+    const menu = (pageBuilder().contributes?.admin?.menu ?? []) as {
+      label?: string;
+      to?: string;
+      collection?: string;
+    }[];
+
+    expect(
+      menu.filter(
+        item =>
+          item.collection === "pages" ||
+          item.to === "/admin/collections/pages" ||
+          item.label === "Pages"
+      )
+    ).toEqual([]);
+
+    // The control. Without it an empty menu — or one this test could not read
+    // — satisfies the assertion above while saying nothing.
+    expect(menu.map(item => item.collection)).toEqual([
+      PATTERNS_SLUG,
+      COMPONENTS_SLUG,
+      LAYOUTS_SLUG,
+    ]);
+  });
 });
 
 describe("a Layout row names no variant", () => {

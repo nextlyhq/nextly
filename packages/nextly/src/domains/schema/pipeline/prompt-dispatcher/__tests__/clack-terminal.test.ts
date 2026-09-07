@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  ClassifierEvent,
   RenameCandidate,
   ResolutionKind,
 } from "../../pushschema-pipeline-interfaces";
@@ -119,6 +120,93 @@ describe("ClackTerminalPromptDispatcher - non-TTY", () => {
         channel: "terminal",
       })
     ).rejects.toThrow(TTYRequiredError);
+  });
+
+  it("names how many candidates it did not list", async () => {
+    // The message exists to say what the operator would have been asked to approve. A
+    // list of three beside a count of ten, with nothing marking the gap, reads as the
+    // whole list — so the omission has to be stated, not implied by arithmetic.
+    const dispatcher = new ClackTerminalPromptDispatcher();
+    const many = Array.from({ length: 10 }, (_, i) =>
+      candidate(`from_${i}`, `to_${i}`)
+    );
+
+    const error = await dispatcher
+      .dispatch({
+        candidates: many,
+        events: [],
+        classification: "destructive",
+        channel: "terminal",
+      })
+      .then(
+        () => null,
+        (e: unknown) => e as Error
+      );
+
+    expect(error?.message).toContain("10 rename candidate(s)");
+    expect(error?.message).toContain("+7 more");
+  });
+
+  it("says how many of the omitted events are column drops", async () => {
+    // "+54 more" still leaves a reader unable to act. A drop is the only omitted kind
+    // that loses data, so its count is reported separately.
+    const dispatcher = new ClackTerminalPromptDispatcher();
+    const events: ClassifierEvent[] = [
+      ...Array.from({ length: 3 }, (_, i) => ({
+        kind: "type_change" as const,
+        id: `evt_type_${i}`,
+        tableName: "dc_posts",
+        columnName: `shown_${i}`,
+        fromType: "varchar(20)",
+        toType: "varchar(255)",
+        isWidening: true,
+        perDialectWarning: { pg: "", mysql: "", sqlite: "" },
+      })),
+      ...Array.from({ length: 4 }, (_, i) => ({
+        kind: "destructive_drop" as const,
+        id: `evt_drop_${i}`,
+        tableName: "dc_posts",
+        columnName: `hidden_${i}`,
+        columnType: "text",
+        tableRowCount: 1,
+        applicableResolutions: [],
+      })),
+    ];
+
+    const error = await dispatcher
+      .dispatch({
+        candidates: [candidate("title", "name")],
+        events,
+        classification: "destructive",
+        channel: "terminal",
+      })
+      .then(
+        () => null,
+        (e: unknown) => e as Error
+      );
+
+    expect(error?.message).toContain("7 resolution event(s)");
+    expect(error?.message).toContain("+4 more");
+    expect(error?.message).toContain("4 of them column drops");
+  });
+
+  it("adds no remainder when nothing was omitted", async () => {
+    const dispatcher = new ClackTerminalPromptDispatcher();
+
+    const error = await dispatcher
+      .dispatch({
+        candidates: [candidate("title", "name")],
+        events: [],
+        classification: "destructive",
+        channel: "terminal",
+      })
+      .then(
+        () => null,
+        (e: unknown) => e as Error
+      );
+
+    expect(error?.message).toContain("1 rename candidate(s)");
+    expect(error?.message).not.toContain("more");
   });
 
   it("returns empty resolutions when no candidates AND no TTY (no prompt needed)", async () => {

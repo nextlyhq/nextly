@@ -7,6 +7,13 @@
     "baseUrl": ".",
     "paths": {
       "nextly": ["../nextly/src"],
+      // The gate the layout endpoint and the browser BOTH decide with. Mapped
+      // to source because a bare subpath resolves through the package exports
+      // to `dist`, which does not exist until something builds -- so static
+      // analysis reports it unresolved on a clean checkout even though tsc and
+      // the bundler are fine after a build. The bare `nextly` mapping above
+      // does not cover subpaths.
+      "nextly/widget-gate": ["../nextly/src/domains/widgets/gate.ts"],
       "@admin/*": ["./src/*"]
     }
   },

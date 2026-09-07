@@ -22,6 +22,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@admin/components/ui";
 import type { BulkResponse, PerItemError } from "@admin/lib/api/response-types";
 import {
+  toastMutationResult,
+  warningText,
+  type HookWarning,
+} from "@admin/lib/mutation-warnings";
+import {
   entryApi,
   entryKeys,
   type UpdateEntryPayload,
@@ -47,9 +52,57 @@ export interface BulkCallbackPayload<T> {
   items: T[];
   /** Per-item failures with canonical NextlyErrorCode + public message. */
   errors: PerItemError[];
+  /**
+   * What the server reported about the writes that DID happen.
+   *
+   * Distinct from `errors`, which are per-item failures that stopped a write:
+   * these describe committed writes — a post-commit hook that failed, or an
+   * advisory about the state one left behind. Present here as well as in the
+   * built-in toast, because a consumer that turns `showToast` off to render its
+   * own feedback would otherwise have no route to them at all.
+   */
+  warnings?: HookWarning[];
 }
 
 /** Build the callback payload from a server `BulkResponse<T>`. */
+/**
+ * Say what a bulk write did, and separately what it has to report.
+ *
+ * ONE owner for both bulk hooks, so delete and update cannot drift into two
+ * ways of saying the same thing — the reason `toastMutationResult` exists for
+ * single-entry writes, and this defers to it whenever nothing failed.
+ *
+ * A per-item failure keeps the headline: those writes did NOT happen, and that
+ * is what the user has to decide about. The advisories still travel, because a
+ * bulk response that produced both and showed one of them misdescribes its own
+ * outcome — and because an author publishing ten pages at once was otherwise
+ * told nothing that an author publishing one of them would have been told.
+ */
+function toastBulkResult<T>(payload: BulkCallbackPayload<T>): void {
+  // Read OFF the payload rather than taken as a second argument. The payload is
+  // what a consumer's own callback receives, so deriving the toast from it
+  // keeps one answer to "which warnings does this operation report". Passing
+  // the response's array alongside made two, aliased today and free to diverge
+  // the moment `toCallbackPayload` filters or defaults anything — and the two
+  // that then disagreed would be the built-in feedback and the custom feedback
+  // meant to replace it.
+  const warnings = payload.warnings;
+  if (payload.failed === 0) {
+    toastMutationResult(payload.message, warnings);
+    return;
+  }
+  // Plain text rather than the rich detail the single-entry presenter renders:
+  // this module is not a component file, and a joined sentence carries the same
+  // information without turning it into one.
+  // Through the SAME formatter the element path uses, so a failed row does not
+  // cost the surviving rows their identity: several identically-worded notices
+  // name no page at all.
+  const detail = (warnings ?? []).map(warningText).join(" ");
+  toast.warning(payload.message, {
+    ...(detail.length > 0 ? { description: detail } : {}),
+  });
+}
+
 function toCallbackPayload<T>(
   response: BulkResponse<T>
 ): BulkCallbackPayload<T> {
@@ -60,6 +113,12 @@ function toCallbackPayload<T>(
     message: response.message,
     items: response.items,
     errors: response.errors,
+    // Carried into the callback as well as the built-in toast. A consumer that
+    // turns `showToast` off to render its own feedback is the one caller with
+    // no other route to these — the presenter it opted out of was the only
+    // thing reading them, so readiness notices and post-commit hook failures
+    // both vanished for exactly the surface that meant to handle them itself.
+    ...(response.warnings === undefined ? {} : { warnings: response.warnings }),
   };
 }
 
@@ -137,13 +196,7 @@ export function useBulkDeleteEntries({
 
       const payload = toCallbackPayload(response);
 
-      if (showToast) {
-        if (payload.failed > 0) {
-          toast.warning(payload.message);
-        } else {
-          toast.success(payload.message);
-        }
-      }
+      if (showToast) toastBulkResult(payload);
 
       onComplete?.(payload);
       onSuccess?.(payload);
@@ -228,13 +281,7 @@ export function useBulkUpdateEntries({
 
       const payload = toCallbackPayload(response);
 
-      if (showToast) {
-        if (payload.failed > 0) {
-          toast.warning(payload.message);
-        } else {
-          toast.success(payload.message);
-        }
-      }
+      if (showToast) toastBulkResult(payload);
 
       onComplete?.(payload);
       onSuccess?.(payload);

@@ -1,6 +1,7 @@
 # Nextly Monorepo: Agent Guide
 
-Nextly is an open-source, Next.js-native CMS and app framework. Users define
+Nextly is an open-source, Next.js-native content platform: a CMS and a Visual
+Page Builder. Users define
 content schema in TypeScript (code-first) or visually (the Schema Builder), and
 it runs inside their own Next.js app with their own database (Postgres, MySQL,
 or SQLite via Drizzle ORM). This repository is the pnpm + Turborepo monorepo

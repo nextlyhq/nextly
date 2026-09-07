@@ -29,6 +29,7 @@ import type {
   WidgetSize,
   WidgetStatCell,
   WidgetChrome,
+  WidgetSourceFieldType,
 } from "nextly/config";
 
 /**
@@ -43,10 +44,42 @@ export interface WidgetResultField {
   name: string;
   /** Absent when the source has no human label for this field. */
   label?: string;
+  /**
+   * What KIND of value this column holds, as the source declared it.
+   *
+   * 🔴 Read so a cell can be PRESENTED rather than printed. Every source
+   * declares its date fields as dates, that declaration used to stop at the
+   * server, and the row drew the ISO string the value crossed as --
+   * `2026-09-01T07:00:00.000Z` on a card whose subject is when.
+   *
+   * Typed from CORE's vocabulary rather than restated here. Repeating the four
+   * strings meant the server could add a kind this build then erased on the way
+   * in -- the parser would drop it, the cell would fall back to raw text, and
+   * nothing would report that a presentation had been lost.
+   *
+   * Still optional, and an unrecognised kind arrives as absent rather than
+   * rejecting the result: a newer server may name a type this build predates,
+   * and refusing the whole field list over it would blank a card that could
+   * have rendered its values as text.
+   */
+  type?: WidgetSourceFieldType;
 }
 
 export type WidgetResult =
-  | { op: "count"; total: number }
+  | {
+      op: "count";
+      total: number;
+      /**
+       * `total` is a FLOOR, not the whole answer.
+       *
+       * Some counts cannot be computed in the database: where a source's rows
+       * are filtered by a rule the query cannot express, the only honest count
+       * walks candidates and authorizes them, which is bounded work. Past that
+       * bound the card says `N+` rather than failing or showing a number that
+       * is quietly too small.
+       */
+      atLeast?: boolean;
+    }
   | {
       op: "list";
       items: Record<string, unknown>[];

@@ -16,7 +16,7 @@
  * this holds the behaviour under a key derived from it.
  *
  * The alternative was measured in the field rather than reasoned about: a
- * visual builder that allows functions inside its input config has to stringify
+ * Visual Page Builder that allows functions inside its input config has to stringify
  * and re-evaluate them, and documents the consequence — such a function may not
  * reference anything outside its own body, which typechecks and fails at
  * runtime.

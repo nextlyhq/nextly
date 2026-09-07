@@ -143,8 +143,10 @@ describe("executeWidgetQuery", () => {
       items: [{ id: "1", title: "Hello" }],
       // The selected columns travel with the rows, so a table widget can head
       // them without a second round trip and without the endpoint growing a
-      // channel that would enumerate a source's fields.
-      fields: [{ name: "title", label: "Title" }],
+      // channel that would enumerate a source's fields. The declared TYPE
+      // travels too: it is what lets a cell be presented rather than printed,
+      // and leaving it behind is what drew dates as ISO strings.
+      fields: [{ name: "title", label: "Title", type: "string" }],
     });
   });
 

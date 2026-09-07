@@ -125,6 +125,7 @@ expectTypeOf<keyof BlockNode>().toEqualTypeOf<
   | "cssId"
   | "attributes"
   | "migrationFailed"
+  | "origin"
 >();
 
 // ---------------------------------------------------------------------------

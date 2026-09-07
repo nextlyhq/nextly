@@ -97,17 +97,23 @@ describe("a stats card", () => {
     expect(screen.getByText("14")).toBeInTheDocument();
   });
 
-  it("makes each number a link named for where it goes", () => {
-    // The number is the target, and the accessible name says what activating it
-    // does -- "1,204" alone tells a screen-reader user nothing.
+  it("makes each number a link named for the count AND where it goes", () => {
+    // The number is the target, and the accessible name carries both halves.
+    //
+    // 🔴 The count has to be IN the name, not merely inside the link. An
+    // `aria-label` replaces the element's descendants as its accessible name,
+    // so a label naming only the destination announced "Draft posts" with no
+    // number at all -- and, once a count could be a floor, no way to tell
+    // `14` from `14 or more` while the visible card showed the difference.
+    // The destination stays, because "1,204" alone says nothing about what
+    // activating it does.
     renderWith({ total: count(1204), draft: count(14) });
 
-    const drafts = screen.getByRole("link", { name: "Draft posts" });
+    const drafts = screen.getByRole("link", { name: "14, Draft posts" });
     expect(drafts).toHaveAttribute("href", expect.stringContaining("where="));
-    expect(screen.getByRole("link", { name: "All posts" })).toHaveAttribute(
-      "href",
-      "/admin/collections/posts"
-    );
+    expect(
+      screen.getByRole("link", { name: "1,204, All posts" })
+    ).toHaveAttribute("href", "/admin/collections/posts");
   });
 
   it("draws a card whose id contains the separator a composite key would use", () => {

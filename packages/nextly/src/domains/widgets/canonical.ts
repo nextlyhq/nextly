@@ -74,7 +74,7 @@ export interface CanonicalWidget {
    * rather than a slug recovered from a display identity.
    */
   collection?: string;
-  requiredPermission?: string;
+  requiredPermission?: string | readonly string[];
   defaultSize?: string;
   defaultHeight?: string;
   defaultOrder?: number;

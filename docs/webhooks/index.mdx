@@ -1,0 +1,110 @@
+---
+title: Webhooks
+description: Tell another system when your content changes, with signed payloads and retries you can inspect.
+---
+
+A webhook is an HTTP call Nextly makes when something happens to your content — a post is
+published, a page is deleted — so another system can react without polling.
+
+## Availability
+
+| | |
+|---|---|
+| Built in | No plugin required |
+| Admin | A **Webhooks** section for endpoints, secrets and delivery history |
+| Permission | Managing endpoints is governed by `create-webhooks`, `update-webhooks` and `delete-webhooks` grants |
+
+## Endpoints
+
+An endpoint is a URL plus a filter describing which events it wants. Registering everything
+to one URL works, but filtering per endpoint means a receiver is not woken for events it
+will ignore.
+
+## Signing
+
+Every delivery is signed so the receiver can prove it came from you and was not modified.
+
+Nextly follows [Standard Webhooks](https://www.standardwebhooks.com/). A secret is shown to
+you as `whsec_` followed by base64 key material, and **the key is the decoded bytes, not the
+string you were shown**:
+
+```
+key           = base64_decode(secret without its "whsec_" prefix)
+signedContent = "<id>.<timestamp>.<rawBody>"
+signature     = base64(HMAC_SHA256(key, signedContent))
+```
+
+The `webhook-signature` header carries versioned tokens shaped `v1,<signature>`. During a
+secret rotation a delivery is signed with **every** active secret, and the tokens are joined
+by **spaces**:
+
+```
+webhook-signature: v1,<sigA> v1,<sigB>
+```
+
+So verification is: **check the timestamp is recent, then** split the header on whitespace,
+split each token on its comma, and accept if any token matches.
+
+The freshness check is not optional. Signing the timestamp proves it was not altered; it does
+not make the delivery expire. Nextly's own `verifySignature` rejects anything outside a
+**300-second (5 minute)** tolerance *before* it compares signatures, and a receiver that skips
+that step will accept a captured request forever.
+
+<Callout type="warn">
+Three ways to reject every authentic delivery, in the order people hit them: using the
+`whsec_...` string as the HMAC key instead of its decoded bytes; comparing against the whole
+header without stripping `v1,`; and splitting only on commas, which folds the next token into
+the first signature and breaks the moment you rotate a secret.
+
+And one way to accept an inauthentic one: matching the HMAC but never checking the timestamp,
+which leaves you replayable indefinitely.
+
+A Standard Webhooks verifier library does all four correctly. Prefer one over hand-rolling
+this.
+</Callout>
+
+Three headers travel with each delivery:
+
+| Header | Holds |
+|---|---|
+| `webhook-id` | The delivery's id, and part of the signed content |
+| `webhook-timestamp` | When it was signed, also part of the signed content |
+| `webhook-signature` | The signature itself |
+
+Because the timestamp is signed, a captured payload cannot be replayed later under its
+original signature.
+
+Verify against the **raw body**, before any JSON parsing. Re-serializing first changes the
+bytes and the signature will not match — the usual reason a correct implementation appears
+to fail.
+
+## Delivery, retries and the outbox
+
+An event is written to a durable **outbox** in the same transaction as the content change,
+and delivered from there. So a webhook cannot be lost because the process died between
+saving a document and making the HTTP call, and it cannot fire for a change that was
+rolled back.
+
+Delivery is then retried on a schedule:
+
+| | |
+|---|---|
+| Attempts | 6 by default |
+| First retry | 30 seconds |
+| Longest delay | 1 hour |
+
+A `2xx` response counts as delivered. A `429` or any `5xx` is retried. Other `4xx`
+responses are not retried, because a receiver rejecting the request as malformed will
+reject it again.
+
+## Delivery history
+
+Deliveries are recorded so you can see what was sent, what came back and how many attempts
+it took. That history is trimmed on a schedule — see
+[retention](/docs/webhooks/retention).
+
+## Related
+
+- [Retention](/docs/webhooks/retention) — how long delivery history is kept
+- [Background jobs](/docs/jobs) — work that runs outside the request
+- [ISR caching](/docs/guides/isr-caching) — updating your own pages on a change

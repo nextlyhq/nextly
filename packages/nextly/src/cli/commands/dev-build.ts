@@ -330,7 +330,7 @@ export async function syncComponents(
   try {
     result = await componentRegistry.syncCodeFirstComponents(codeFirstConfigs);
   } catch (error) {
-    logger.error("Components sync failed while registering components.");
+    logger.error("Field group sync failed while registering field groups.");
     throw error;
   }
 

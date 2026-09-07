@@ -20,7 +20,7 @@
  * @module components/features/widgets/archetypes/list
  */
 
-import { asText, selectsNothing } from "./cell-text";
+import { asPresentedText, selectsNothing } from "./cell-text";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
 /** How many rows a card of this size can show without becoming a table. */
@@ -41,6 +41,23 @@ export const listAccepts: ArchetypeAccepts = definition => {
   return selectsNothing(definition.title, "list", "row");
 };
 
+/**
+ * How many of a list card's selected fields this renderer actually draws.
+ *
+ * 🔴 Declared because the number is otherwise invisible at the only place it
+ * matters -- the card DECLARATION, in another package. A row is a label and a
+ * detail, so a third selected field is not extra information: it is dropped in
+ * silence, and the card looks finished while answering a narrower question than
+ * it was written to answer. Two shipped cards did exactly that, one of them
+ * omitting the timestamp from a card sorted by time.
+ *
+ * `listAccepts` cannot enforce it. Selecting too many fields is not a REFUSAL --
+ * the card draws correctly, just not everything asked for -- and turning it into
+ * one would blank a dashboard over what is a declaration mistake. So the check
+ * belongs where declarations are reviewed, and this constant is what it reads.
+ */
+export const LIST_RENDERED_FIELDS = 2;
+
 export const listBody: ArchetypeBody = (result, definition) => {
   if (result.op !== "list") {
     return {
@@ -50,6 +67,9 @@ export const listBody: ArchetypeBody = (result, definition) => {
   }
 
   const select = definition.query?.select ?? [];
+  // Keep in step with LIST_RENDERED_FIELDS: this destructure IS the number that
+  // constant declares, and a third name here without raising it would let a
+  // card select a field the guard still calls undrawable.
   const [labelField, detailField] = select;
   if (!labelField) {
     // Unreachable through the grid, which declines this declaration before it
@@ -74,14 +94,26 @@ export const listBody: ArchetypeBody = (result, definition) => {
   }
 
   const rows = result.items.slice(0, MAX_ROWS);
+  // The declared kind per column, so each cell is presented rather than
+  // printed. `fields` is what the SOURCE said survived the read; a column it
+  // does not describe falls back to plain text, which is what every row did
+  // before types were carried.
+  const typeOf = new Map(
+    (result.fields ?? []).map(field => [field.name, field.type])
+  );
 
   return {
     ok: true,
     node: (
       <ul data-testid="widget-list" className="flex flex-col gap-2">
         {rows.map((item, index) => {
-          const label = asText(item[labelField]);
-          const detail = detailField ? asText(item[detailField]) : undefined;
+          const label = asPresentedText(
+            item[labelField],
+            typeOf.get(labelField)
+          );
+          const detail = detailField
+            ? asPresentedText(item[detailField], typeOf.get(detailField))
+            : undefined;
           return (
             <li
               // The index, because a widget's rows have no identity core can

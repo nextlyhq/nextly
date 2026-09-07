@@ -48,6 +48,7 @@ import {
   COMPONENT_INSTANCE_TYPE,
   isComponentDocument,
   isUnsetOverride,
+  renderedDomId,
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
@@ -55,6 +56,7 @@ import {
   type OverrideValue,
 } from "./document";
 import { walkForest } from "./forest-walk";
+import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import {
   countNodes,
   DEFAULT_LIMITS,
@@ -323,6 +325,7 @@ export function resolveComponentInstances(
     taken: survey.ids,
     takenDomIds: survey.domIds,
     minted: [],
+    mintedDomIds: [],
     abort: undefined,
     referenced: [],
     referencedSeen: new Set<string>(),
@@ -366,6 +369,18 @@ interface ResolveRun {
    * back. Host ids are not in it: they were never this run's to release.
    */
   minted: string[];
+  /**
+   * The DOM ids this run claimed, in order, so a refused expansion can give
+   * them back.
+   *
+   * Its own list for the reason `minted` is one: `takenDomIds` is SEEDED with
+   * the host document's own ids, and those were never this run's to release.
+   * Without it an abandoned expansion left its claims standing, so the retry —
+   * or simply the next instance — found them occupied and suffixed an id that
+   * nothing else holds. An anchor, a `<label for>` or an id selector then
+   * addresses a name the page does not use.
+   */
+  mintedDomIds: string[];
   /**
    * Why the clone in progress gave up, set on the path that returns `null`.
    *
@@ -818,21 +833,29 @@ function withRemappedIdReferences(
       const attributes = isPlainRecord(node.attributes)
         ? remapIdReferences(node.attributes, ctx.domIds)
         : node.attributes;
-      const props = remapFragments(node.props, ctx.domIds, 0) as Record<
+      const props = remapFragmentProps(node.props, ctx.domIds) as Record<
         string,
         unknown
       >;
+      // The BOUND form of the same field, for the same reason: a bound `href`
+      // renders `bindings.href.fallback` when its source is empty, so a
+      // fallback left behind points at an id this composition has re-minted.
+      const bindings = remapFragmentBindings(
+        node.bindings,
+        ctx.domIds
+      ) as ResolvedBlockNode["bindings"];
       const slots = isPlainRecord(node.slots)
         ? rewriteSlots(node.slots)
         : node.slots;
       if (
         attributes === node.attributes &&
         slots === node.slots &&
-        props === node.props
+        props === node.props &&
+        bindings === node.bindings
       ) {
         return node;
       }
-      return { ...node, attributes, props, slots };
+      return { ...node, attributes, props, bindings, slots };
     });
   const rewriteSlots = (
     slots: Record<string, ResolvedBlockNode[]>
@@ -854,89 +877,12 @@ function withRemappedIdReferences(
   return rewrite(roots);
 }
 
-/**
- * How deep a prop tree is searched for fragment links.
- *
- * A bound on work over values a stored definition supplied, generous enough
- * that no authored prop shape reaches it.
- */
-const MAX_PROP_SCAN_DEPTH = 8;
-
-/**
- * Point a block's `#fragment` props at wherever those ids ended up.
- *
- * `cssId` is not referenced only by markup: a link's `href` may be `#pricing`,
- * and the renderer accepts that — `core/button` passes a bare fragment through
- * to the DOM. Remapping the target without the link leaves every composed
- * instance anchored to an id nothing carries, which is the same silent
- * breakage as a dangling `aria-labelledby`, one prop over.
- *
- * A value is rewritten ONLY when the whole string is `#` followed by an id
- * this composition actually minted, and that is what keeps it away from
- * content: `"#1 bestseller"` names no minted id and is left exactly as
- * written, and so is a fragment addressing something outside the component.
- */
-function remapFragments(
-  props: unknown,
-  domIds: ReadonlyMap<string, string>,
-  depth: number
-): unknown {
-  if (domIds.size === 0 || depth > MAX_PROP_SCAN_DEPTH) return props;
-  if (typeof props === "string") return remapOneFragment(props, domIds);
-  if (Array.isArray(props)) return remapFragmentList(props, domIds, depth);
-  if (!isPlainRecord(props)) return props;
-  return remapFragmentRecord(props, domIds, depth);
-}
-
-/** The same, for a record-valued prop. */
-function remapFragmentRecord(
-  props: Record<string, unknown>,
-  domIds: ReadonlyMap<string, string>,
-  depth: number
-): unknown {
-  const keys = boundedOwnKeys(props, MAX_ENVELOPE_ENTRIES);
-  if (keys === null) return props;
-  let changed = false;
-  const next: Record<string, unknown> = {};
-  for (const key of keys) {
-    const value = ownEntry(props, key);
-    const mapped = remapFragments(value, domIds, depth + 1);
-    if (mapped !== value) changed = true;
-    defineEntry(next, key, mapped);
-  }
-  return changed ? next : props;
-}
-
-/** The same, for an array-valued prop. */
-function remapFragmentList(
-  items: readonly unknown[],
-  domIds: ReadonlyMap<string, string>,
-  depth: number
-): unknown {
-  let changed = false;
-  const next = items.map(item => {
-    const mapped = remapFragments(item, domIds, depth + 1);
-    if (mapped !== item) changed = true;
-    return mapped;
-  });
-  return changed ? next : items;
-}
-
-/** One string, rewritten only if it is exactly a fragment this run minted. */
-function remapOneFragment(
-  value: string,
-  domIds: ReadonlyMap<string, string>
-): string {
-  if (!value.startsWith("#")) return value;
-  const target = domIds.get(value.slice(1));
-  return target === undefined ? value : `#${target}`;
-}
-
 /** Everything one speculative expansion may have to give back. */
 interface Savepoint {
   budget: number;
   unresolved: number;
   minted: number;
+  mintedDomIds: number;
 }
 
 /** Where the run stood before an instance was attempted. */
@@ -945,6 +891,7 @@ function savepoint(run: ResolveRun): Savepoint {
     budget: run.budget,
     unresolved: run.unresolved.length,
     minted: run.minted.length,
+    mintedDomIds: run.mintedDomIds.length,
   };
 }
 
@@ -971,6 +918,10 @@ function rollback(run: ResolveRun, mark: Savepoint): void {
     run.taken.delete(run.minted[i]);
   }
   run.minted.length = mark.minted;
+  for (let i = run.mintedDomIds.length - 1; i >= mark.mintedDomIds; i -= 1) {
+    run.takenDomIds.delete(run.mintedDomIds[i]);
+  }
+  run.mintedDomIds.length = mark.mintedDomIds;
 }
 
 /**
@@ -1576,6 +1527,180 @@ function composePlannedFor(
 }
 
 /**
+ * Compose again anything a sibling slot has since made room for.
+ *
+ * Slots are composed in the order the definition declares them, and replacing
+ * an instance hands back the node it occupied — so a slot filled with content
+ * that GROWS can be refused for budget before a slot filled with content that
+ * SHRINKS has released anything. Whether a page fits then depends on the order
+ * its author happened to declare two independent slots in.
+ *
+ * The answer is to RETRY rather than to predict. An earlier attempt lent the
+ * budget the room the replacements were expected to free, counted from the
+ * stored content — and an instance that turns out to be missing, gated or
+ * over-deep never returns that credit, so repayment left debt and a child's
+ * refusal escalated into its owner's. Credit has to be earned before it is
+ * spent.
+ *
+ * Retrying costs nothing to state: a refused instance is left STANDING with
+ * its marker, so the composed content still holds it and `inlineForest` will
+ * expand it if it fits now. One extra pass, and only over slots that actually
+ * hold a starved instance.
+ */
+function retryStarvedPlans(ctx: InlineContext, mark: number): void {
+  let retried = false;
+  for (const plan of ctx.plans.values()) {
+    for (const content of plan.slots?.values() ?? []) {
+      if (!content.composed) continue;
+      const next = retriedRoots(content.nodes, ctx);
+      if (next === content.nodes) continue;
+      content.nodes = next;
+      retried = true;
+    }
+  }
+  if (retried) reconcileRefusals(ctx, mark);
+}
+
+/**
+ * Make the refusal list agree with what the retry actually produced.
+ *
+ * A retry rewrites the tree and cannot rewrite what was already recorded, so
+ * two things need fixing afterwards. An instance that fits on the second
+ * attempt left a `budget` entry behind claiming it failed — a publish check
+ * reading that reports a problem the page does not have. And one that fails
+ * again recorded a second entry saying what the first already said.
+ *
+ * Only this node's own segment is touched. Entries before `mark` belong to
+ * earlier work and are none of this pass's business, which is why the mark is
+ * taken rather than the whole list rebuilt.
+ */
+function reconcileRefusals(ctx: InlineContext, mark: number): void {
+  const run = ctx.run;
+  const standing = new Set<string>();
+  for (const plan of ctx.plans.values()) {
+    for (const content of plan.slots?.values() ?? []) {
+      if (!content.composed) continue;
+      collectRefusedIds(content.nodes, standing);
+    }
+  }
+  // First-seen ORDER with the last-written VALUE. A retry appends, so keeping
+  // the appended position would move a retried instance to the end of a list
+  // whose usefulness is that it reads in document order — while keeping the
+  // first VALUE would report the attempt the retry superseded.
+  const { order, latest } = lastPerInstance(run.unresolved, mark);
+
+  run.unresolved.length = mark;
+  for (const id of order) {
+    const entry = latest.get(id);
+    if (entry === undefined) continue;
+    // A refusal for want of budget is the only kind a retry can settle: every
+    // other reason is a decision the second attempt reaches identically, so an
+    // instance refused for one is still standing afterwards and still in
+    // `standing`.
+    //
+    // Which means no test separates this from dropping every reason whose node
+    // has gone — removing the check leaves the suite green. It is kept because
+    // the two failures are not symmetric. A spurious entry reports a problem
+    // the page does not have, and someone reading the list can see the page is
+    // fine; a dropped one takes a real diagnostic away, and nothing is left to
+    // notice. If a retry ever does make a non-budget refusal disappear, this is
+    // the direction to fail in.
+    if (entry.reason === "budget" && !standing.has(id)) continue;
+    run.unresolved.push(entry);
+  }
+}
+
+/**
+ * One entry per instance from `mark` on: first-seen ORDER, last-written VALUE.
+ *
+ * A retry appends, so the appended position would move a retried instance to
+ * the end of a list whose usefulness is that it reads in document order —
+ * while the first value would report the attempt the retry superseded.
+ */
+function lastPerInstance(
+  entries: readonly UnresolvedInstance[],
+  mark: number
+): { order: string[]; latest: Map<string, UnresolvedInstance> } {
+  const order: string[] = [];
+  const latest = new Map<string, UnresolvedInstance>();
+  for (let i = mark; i < entries.length; i += 1) {
+    const entry = entries[i];
+    if (!latest.has(entry.instanceId)) order.push(entry.instanceId);
+    latest.set(entry.instanceId, entry);
+  }
+  return { order, latest };
+}
+
+/** The ids of every instance still standing with a marker in this forest. */
+function collectRefusedIds(
+  nodes: readonly ResolvedBlockNode[],
+  into: Set<string>
+): void {
+  walkForest(nodes, entry => {
+    const node = entry.node;
+    if (
+      isPlainRecord(node) &&
+      node.unresolvedComponent !== undefined &&
+      typeof node.id === "string"
+    ) {
+      into.add(node.id);
+    }
+    return "descend";
+  });
+}
+
+/**
+ * This slot's content with its ROOT starved instances expanded again.
+ *
+ * Roots only, and that bound is the whole care in this function. A starved
+ * instance sitting deeper was reached under some other instance's scope and
+ * owner — inside a component that has already expanded — and re-entering the
+ * composed forest from here would retry it as though the PAGE had held it: its
+ * output would record `instanceOf` for a scoped node the editor cannot select,
+ * and the reset path and depth could answer the cycle and nesting questions
+ * differently than the position it actually occupies.
+ *
+ * A root of this content is unambiguous: the page supplied it, so the host
+ * scope and depth ARE the ones it was reached under, and expanding it again is
+ * the same call with the same arguments. A deeper one is left standing, which
+ * is what it did before any retry existed.
+ *
+ * Returns the input array unchanged when nothing was retried, so a caller can
+ * tell by identity whether the refusal list needs reconciling.
+ */
+function retriedRoots(
+  nodes: readonly ResolvedBlockNode[],
+  ctx: InlineContext
+): ResolvedBlockNode[] {
+  let changed = false;
+  const out: ResolvedBlockNode[] = [];
+  for (const node of nodes) {
+    if (!isStarvedInstance(node)) {
+      out.push(node);
+      continue;
+    }
+    changed = true;
+    const produced = expandInstance(
+      node,
+      ctx.run,
+      ctx.hostScope,
+      ctx.hostDepth + 1
+    );
+    for (const entry of produced) out.push(entry);
+  }
+  return changed ? out : (nodes as ResolvedBlockNode[]);
+}
+
+/** Whether this node is an instance left standing for want of budget. */
+function isStarvedInstance(node: ResolvedBlockNode): boolean {
+  return (
+    isPlainRecord(node) &&
+    node.type === COMPONENT_INSTANCE_TYPE &&
+    node.unresolvedComponent === "budget"
+  );
+}
+
+/**
  * The same question, asked of every child forest a surviving node still holds.
  *
  * A slot the instance FILLS is skipped, mirroring `copyStoredSlots`: the plan
@@ -1623,7 +1748,15 @@ function composeOwnedSlots(
   owned: boolean
 ): void {
   if (!owned || supplied === undefined) return;
+  // Where this instance's refusals begin, so the retry knows which entries it
+  // may reconcile and which belong to work already finished.
+  const mark = ctx.run.unresolved.length;
   composeSurvivingSlots(definition.nodes, ctx, 1, { left: ctx.run.maxNodes });
+  // AFTER the whole prepass, never inside it. Slots exposed on DIFFERENT
+  // definition nodes release their room as the walk reaches them, so retrying
+  // one node's content the moment it is composed asks again before a later
+  // node has given anything back — and the declaration order still decides.
+  retryStarvedPlans(ctx, mark);
 }
 
 /**
@@ -1691,45 +1824,138 @@ function scopeNode(
 /**
  * Give this copy of the definition its own DOM ids.
  *
- * One definition inlined into two instances publishes its `cssId` and its
- * `id` attribute twice, which is a duplicate HTML id — so an anchor, a
- * `<label for>` or an id selector reaches whichever instance the browser
- * happens to find first. Node ids are already scoped; these are the other
- * addresses a document carries and they were being spread through untouched.
+ * One definition inlined into two instances publishes its `cssId` and its `id`
+ * attribute twice, which is a duplicate HTML id — so an anchor, a `<label for>`
+ * or an id selector reaches whichever instance the browser happens to find
+ * first. Node ids are already scoped; these are the other addresses a document
+ * carries and they were being spread through untouched.
  *
- * `mintDomId` rather than a rule of its own: pattern insert solves exactly
- * this when it copies a subtree, a page may hold the output of both, and two
+ * `mintDomId` rather than a rule of its own: pattern insert solves exactly this
+ * when it copies a subtree, a page may hold the output of both, and two
  * spellings of one replacement would put two ids on one target.
  */
 function applyScopedDomIds(
   scoped: ResolvedBlockNode,
   ctx: InlineContext
 ): void {
-  const remap = (value: string): string => {
-    const existing = ctx.domIds.get(value);
-    if (existing !== undefined) return existing;
-    const minted = claimDomId(ctx.run, mintDomId(value, scoped.id));
-    ctx.domIds.set(value, minted);
-    return minted;
-  };
+  // The bag is measured BEFORE the rendered id is asked for, and the answer is
+  // asked of what this can actually rewrite.
+  //
+  // `renderedDomId` mirrors the renderer, so it accepts shapes the rewrite
+  // below refuses — a custom prototype, or a bag past the envelope cap — and it
+  // reads every key to do so. Asking it first therefore did two wrong things at
+  // once on a malformed definition: it published a mapping for an id that then
+  // STAYED on the element, retargeting every reference to an id nothing
+  // renders; and it did that reading unbounded, once per instance, defeating
+  // the cap this walk is otherwise held to.
+  //
+  // Handing it the bag only when the bag is usable makes the two agree. A
+  // string `cssId` shadows the bag anyway, so a node with one still gets its
+  // rendered id and its scoped replacement; only a node relying on an
+  // unreadable bag now scopes nothing, which is the honest answer for an
+  // address this cannot rewrite.
+  const bag = snapshotAttributes(scoped.attributes);
+  const rendered = renderedDomId({
+    cssId: scoped.cssId,
+    attributes: bag ?? undefined,
+  });
+  const minted =
+    rendered === undefined ? undefined : scopedDomId(rendered, scoped.id, ctx);
 
-  if (typeof scoped.cssId === "string" && scoped.cssId !== "") {
-    scoped.cssId = remap(scoped.cssId);
+  // Only when it is a string is `cssId` the id this node renders, which is
+  // exactly when `renderedDomId` answered with it.
+  if (minted !== undefined && typeof scoped.cssId === "string") {
+    scoped.cssId = minted;
   }
-  if (!isPlainRecord(scoped.attributes)) return;
-  const names = boundedOwnKeys(scoped.attributes, MAX_ENVELOPE_ENTRIES);
-  if (names === null) return;
-  const next: Record<string, string> = {};
+  if (bag === null) return;
+  scoped.attributes = attributesWithScopedId(bag, rendered, minted);
+}
+
+/**
+ * The attribute bag as DATA: bounded, own string entries, read exactly once.
+ *
+ * A bag is a stored record in the ordinary case and an arbitrary object in the
+ * hostile one, where a value can be a getter or a Proxy trap that answers
+ * differently each time it is asked. Deriving the rendered id from one reading
+ * and rewriting from a second let the two disagree: the id `hero` was published
+ * to the reference table while `other` stayed on the element, so every
+ * `aria-describedby="hero"` was retargeted at an id nothing renders — the same
+ * failure this module set out to close, by a route that survives a bag whose
+ * prototype is exactly `Object.prototype`.
+ *
+ * So the bag is read once, into a plain record, and both answers come from that
+ * snapshot. `null` for a bag this cannot use at all — not a plain record, or
+ * past the envelope cap — which is also what keeps the read bounded, since
+ * {@link renderedDomId} mirrors the renderer and reads every key it is given.
+ *
+ * Non-string values are dropped rather than carried, matching what the rewrite
+ * already emitted: the bag it produces has only ever held strings.
+ */
+function snapshotAttributes(
+  attributes: unknown
+): Record<string, string> | null {
+  if (!isPlainRecord(attributes)) return null;
+  const names = boundedOwnKeys(attributes, MAX_ENVELOPE_ENTRIES);
+  if (names === null) return null;
+  const snapshot: Record<string, string> = {};
   for (const name of names) {
-    const value = ownEntry(scoped.attributes, name);
-    if (typeof value !== "string") continue;
-    // Case-insensitively, because HTML attribute names are: a stored `ID` and
-    // a stored `id` address the same thing to a browser, and remapping only
-    // the lowercase spelling leaves the other duplicated.
-    const isId = name.toLowerCase() === "id" && value !== "";
-    defineEntry(next, name, isId ? remap(value) : value);
+    const value = ownEntry(attributes, name);
+    if (typeof value === "string") defineEntry(snapshot, name, value);
   }
-  scoped.attributes = next;
+  return snapshot;
+}
+
+/**
+ * The per-instance replacement for one of a definition's DOM ids.
+ *
+ * Memoized on the ORIGINAL value, so a definition spelling one id on two nodes
+ * still addresses one target after composition — and so the reference pass
+ * downstream can look up what a given id became.
+ */
+function scopedDomId(
+  value: string,
+  nodeId: string,
+  ctx: InlineContext
+): string {
+  const existing = ctx.domIds.get(value);
+  if (existing !== undefined) return existing;
+  const minted = claimDomId(ctx.run, mintDomId(value, nodeId));
+  ctx.domIds.set(value, minted);
+  return minted;
+}
+
+/**
+ * The attribute bag with the RENDERED id replaced.
+ *
+ * Takes the SNAPSHOT its caller already read, never the stored bag: two
+ * readings of one record can disagree, and the rendered id was derived from the
+ * first — see {@link snapshotAttributes}.
+ *
+ * A SHADOWED id is left verbatim. It puts nothing on the page, so it cannot
+ * collide with another instance of the same definition, and it is a value the
+ * definition may still reference: a `hero` shadowed inside a definition was
+ * naming an element in the HOST, where it resolved. Minting a scoped id for it
+ * breaks that reference and aims it at nothing, which is strictly worse than
+ * leaving it.
+ *
+ * A document that spells ONE id both ways is unaffected: both spellings equal
+ * `rendered`, so both receive the same replacement and the copy keeps answering
+ * to a single address.
+ */
+function attributesWithScopedId(
+  snapshot: Record<string, string>,
+  rendered: string | undefined,
+  minted: string | undefined
+): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const [name, value] of Object.entries(snapshot)) {
+    // Case-insensitively, because HTML attribute names are: a stored `ID` and
+    // a stored `id` address the same thing to a browser.
+    const isRenderedId =
+      minted !== undefined && name.toLowerCase() === "id" && value === rendered;
+    defineEntry(next, name, isRenderedId ? minted : value);
+  }
+  return next;
 }
 
 /**
@@ -1846,17 +2072,19 @@ function placedContent(
  * same suffix lands on the same node on every render.
  */
 function claimDomId(run: ResolveRun, base: string): string {
-  if (!run.takenDomIds.has(base)) {
-    run.takenDomIds.add(base);
-    return base;
-  }
+  if (!run.takenDomIds.has(base)) return heldDomId(run, base);
   // Terminates: the set is finite and the suffix strictly increases.
   for (let n = 2; ; n += 1) {
     const candidate = `${base}-${n}`;
-    if (run.takenDomIds.has(candidate)) continue;
-    run.takenDomIds.add(candidate);
-    return candidate;
+    if (!run.takenDomIds.has(candidate)) return heldDomId(run, candidate);
   }
+}
+
+/** Take a DOM id, recording it so a refused expansion can give it back. */
+function heldDomId(run: ResolveRun, id: string): string {
+  run.takenDomIds.add(id);
+  run.mintedDomIds.push(id);
+  return id;
 }
 
 /**

@@ -24,6 +24,7 @@ import { describe, expect, it } from "vitest";
 import * as boundaryModule from "./block-boundary";
 import * as blocksEntry from "./blocks/index";
 import * as typographyDefaultsModule from "./blocks/typography-defaults";
+import * as componentSourceModule from "./component-source";
 import * as contextModule from "./context";
 import * as richTextModule from "./rich-text";
 import * as pageRendererModule from "./page-renderer";
@@ -96,6 +97,21 @@ const SOURCE_MODULES: ReadonlyArray<{
     // host assembling its own compile context reaches the same answer the
     // renderer does rather than spreading the record in by hand.
     internal: [],
+  },
+  {
+    name: "component-source",
+    module: componentSourceModule,
+    // Only the question a caller outside the render can legitimately ask is
+    // public. The discovery loop, its constants and its lookup memo are the
+    // render's own machinery: a consumer reaching for `definitionsFor` wants
+    // the definitions the pipeline already builds for it, and one reaching for
+    // the constants is sizing a batch the render decides.
+    internal: [
+      "COMPONENT_TAG_COLLECTION",
+      "EMPTY_DEFINITIONS",
+      "MAX_DISCOVERED_COMPONENTS",
+      "definitionsFor",
+    ],
   },
   { name: "context", module: contextModule, internal: [] },
   {
@@ -312,11 +328,20 @@ const SOURCE_MODULES: ReadonlyArray<{
     // is precisely how the renderer came to hide a node the exported reader
     // returns. A consumer never holds a resolved node without also holding the
     // stages that explain it, so there is nothing here to offer.
+    //
+    // `repairingLookup` is the view of the definitions map this pipeline
+    // composes through. It crosses to the pass that FETCHES definitions, which
+    // asks the resolver what it would reach and must ask through the same
+    // lookup — repair drops malformed nodes, so a fetch that built its own
+    // view would predict a different tree than the one that renders. Exported
+    // to delete that second view, not to offer one: a consumer holding a
+    // definitions map wants `prepareDocumentForRead`, which builds this itself.
     internal: [
       "isUnresolvedInstance",
       "prepareDocumentReadStages",
       "pruneKnownPlaceholders",
       "readingViewOf",
+      "repairingLookup",
     ],
   },
   {
@@ -342,6 +367,11 @@ describe("the root entry", () => {
       "BlockBoundary",
       "BlockList",
       "BlockPlaceholder",
+      // The field a component row stores its document under. Public because a
+      // caller configuring a readiness check outside the render must name the
+      // SAME field the render reads, and a second spelling of it is a second
+      // answer.
+      "COMPONENT_DOCUMENT_FIELD",
       // The editor marker namespace, public so an editor refuses a name the
       // renderer would drop rather than keeping a list beside it.
       "EDITOR_NAMESPACE",
@@ -385,6 +415,11 @@ describe("the root entry", () => {
       "resolvePageStylesWithTrace",
       "sharedStyleInputs",
       "styleTextForInjection",
+      // The render's own discovery, asked from outside the render. Public so a
+      // publish-time check reports the components a VISITOR will not see,
+      // rather than walking stored documents for ids the resolver never
+      // requests.
+      "unsuppliedComponentIds",
       "withTypographyDefaults",
     ]);
   });

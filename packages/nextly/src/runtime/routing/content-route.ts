@@ -511,7 +511,7 @@ function buildRoute<TNode>(
           "served here — a reviewer following one gets a 404 that looks like " +
           "an expired link.\n" +
           "  Add `draft: previewDraftGate()` to this route's config.\n" +
-          "  https://nextlyhq.com/docs/guides/draft-preview"
+          "  https://nextlyhq.com/docs/preview"
       );
     } catch {
       // A diagnostic never breaks a request.

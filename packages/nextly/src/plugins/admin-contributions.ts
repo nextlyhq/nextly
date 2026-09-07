@@ -198,7 +198,20 @@ interface PluginAdminWidgetBase {
   id: string;
   /** Column span the current grid honours: `half` spans 6 of 12, `full` spans 12. */
   size?: "full" | "half";
-  requiredPermission?: PermissionSlug;
+  /**
+   * Gates whether the CARD renders. An ARRAY means any-of.
+   *
+   * 🔴 The array form has to be accepted HERE as well as on `WidgetDefinition`,
+   * and the reason is a fail-open rather than a missing feature. Boot validates
+   * a contribution through the same `widgetValueProblem` that accepts an array,
+   * so a plugin declaring one passes registration -- and the summary layout
+   * resolution reads is built by a separate reader, which used to take strings
+   * only. It dropped the array, the layout endpoint saw no gate at all, and the
+   * card's id and default placement went to every authenticated reader while
+   * the browser hid it. Declaring the type narrower than what boot accepts is
+   * what made that reachable.
+   */
+  requiredPermission?: PermissionSlug | readonly PermissionSlug[];
   title?: string;
   description?: string;
   icon?: string;

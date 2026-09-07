@@ -264,6 +264,45 @@ describe("walkNodes / findNode / locateNode", () => {
     expect(nested?.index).toBe(1);
     expect(locateNode(nodes, "missing")).toBeUndefined();
   });
+
+  it("locates past a DAMAGED sibling instead of throwing", () => {
+    // These primitives are documented as running on stored documents nothing
+    // has validated, and one broken slot elsewhere in the forest must not
+    // decide the answer for a selection that has nothing to do with it. Before
+    // the guard this threw a TypeError out of `findIndex`, taking down every
+    // caller — including a multi-block reorder and a saved pattern — for a node
+    // neither of them had touched.
+    const nodes = [
+      {
+        id: "broken",
+        type: "core/box",
+        version: 1,
+        props: {},
+        slots: { body: null },
+      },
+      {
+        id: "holes",
+        type: "core/box",
+        version: 1,
+        props: {},
+        slots: { body: [null] },
+      },
+      {
+        id: "ok",
+        type: "core/box",
+        version: 1,
+        props: {},
+        slots: {
+          body: [{ id: "wanted", type: "core/box", version: 1, props: {} }],
+        },
+      },
+    ] as unknown as BlockNode[];
+
+    const at = locateNode(nodes, "wanted");
+    expect(at?.parent?.id).toBe("ok");
+    expect(at?.slot).toBe("body");
+    expect(at?.index).toBe(0);
+  });
 });
 
 describe("a forest whose slots form a cycle", () => {

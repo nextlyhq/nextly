@@ -131,6 +131,30 @@ describe("what it answers with", () => {
     expect(Object.keys(item).sort()).toEqual(["scheduledAt", "state", "title"]);
   });
 
+  /*
+   * 🔴 The DATE's type reaches the result, which is the half that used to stop
+   * at the server. Every source declares `scheduledAt` a date, the renderer
+   * needs that to present it, and without it the row drew the ISO string the
+   * value crossed as -- on a card whose entire subject is when. Asserted on the
+   * producer because the renderer and the wire parser each have their own test,
+   * and all three have to hold for a reader to see a date.
+   */
+  it("publishes the declared kind of each column", async () => {
+    const result = await executeWidgetQuery(
+      {
+        source: RELEASES_SOURCE_ID,
+        op: "list",
+        select: ["title", "scheduledAt"],
+      },
+      caller
+    );
+
+    expect((result as { fields?: unknown }).fields).toEqual([
+      { name: "title", label: "Release", type: "string" },
+      { name: "scheduledAt", label: "Scheduled", type: "date" },
+    ]);
+  });
+
   it("heads only the columns the query selected", async () => {
     const result = await executeWidgetQuery(
       { source: RELEASES_SOURCE_ID, op: "list", select: ["title"] },
@@ -138,7 +162,7 @@ describe("what it answers with", () => {
     );
 
     expect((result as { fields?: unknown }).fields).toEqual([
-      { name: "title", label: "Release" },
+      { name: "title", label: "Release", type: "string" },
     ]);
     const [item] = (result as { items: Record<string, unknown>[] }).items;
     expect(Object.keys(item)).toEqual(["title"]);

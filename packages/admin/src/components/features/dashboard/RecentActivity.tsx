@@ -1,8 +1,28 @@
 /**
- * RecentActivity Component
+ * Who changed what, most recent first.
  *
- * Displays a feed of recent activity on the dashboard.
- * Shows user actions like create, update, delete with avatars and timestamps.
+ * Drawn as the dashboard card `core/recent-activity`, which declares
+ * `chrome: "none"` -- so this component owns its own heading and its own
+ * loading, error and empty states, and draws the `<section>` shell its
+ * neighbours draw rather than a `Card` the grid would frame a second time.
+ *
+ * ## It shows a fixed page and offers no way past it
+ *
+ * 🔴 That is the decision, not a gap. The server publishes `{ activities,
+ * hasMore }` and deliberately no total -- counting the feed would mean
+ * authorizing every matching row against its document's read rule, which is
+ * unbounded over a table that only grows. So there is no "showing 5 of N" to
+ * write, and the surveyed products (Strapi's audit widget, WordPress's activity
+ * section, Sanity's document list) all answer the same way: a fixed handful of
+ * rows, no in-widget pagination, no count.
+ *
+ * This component previously carried both of the controls that implies and
+ * NEITHER worked: a "Detailed Log" link whose href was the dashboard the card
+ * sits on, and a "Sync Previous Events" button with no handler. Each promised a
+ * destination that does not exist -- there is no audit-log route in `ROUTES` at
+ * all -- and both were removed rather than wired, because a feed with a
+ * pagination affordance is the shape nothing else ships and the missing page is
+ * a feature to decide on, not a link to point somewhere plausible.
  *
  * @module components/features/dashboard/RecentActivity
  */
@@ -12,19 +32,15 @@ import {
   AvatarFallback,
   AvatarImage,
   Badge,
-  Card,
-  CardHeader,
-  CardTitle,
-  CardContent,
   Spinner,
 } from "@nextlyhq/ui";
-import { Clock, ChevronRight } from "lucide-react";
+import { Clock } from "lucide-react";
 import type React from "react";
 
 import { AlertCircle } from "@admin/components/icons";
-import { Link } from "@admin/components/ui/link";
-import { ROUTES } from "@admin/constants/routes";
 import { useRecentActivity } from "@admin/hooks/queries/useRecentActivity";
+import { useNowTick } from "@admin/hooks/useNowTick";
+import { formatRelativeTime } from "@admin/lib/dashboard";
 import { cn } from "@admin/lib/utils";
 import type { Activity } from "@admin/types/dashboard/activity";
 
@@ -41,7 +57,12 @@ export interface RecentActivityProps {
  *
  * Displays a single activity entry with avatar, description, and badge.
  */
-const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
+const ActivityItem: React.FC<{ activity: Activity; now: number }> = ({
+  activity,
+  // Passed down rather than each row starting its own clock: one timer per
+  // CARD, not one per row, and every row then names the same instant.
+  now,
+}) => {
   const getBadgeStyle = (type: string) => {
     const t = type.toLowerCase();
     if (t.includes("create"))
@@ -103,7 +124,17 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
 
         <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-muted-foreground">
           <Clock className="w-3 h-3 opacity-60" />
-          <time dateTime={activity.timestamp}>{activity.relativeTime}</time>
+          {/*
+            Derived HERE rather than carried on the entry. A relative time is a
+            function of when it is read, and computing it while mapping the
+            response froze it: an entry fetched as "just now" kept that label
+            for as long as the query's data was reused. `dateTime` carries the
+            absolute instant, so the machine-readable value is exact whatever
+            the prose says.
+          */}
+          <time dateTime={activity.timestamp}>
+            {formatRelativeTime(activity.timestamp, now)}
+          </time>
         </div>
       </div>
 
@@ -139,64 +170,60 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
   limit = 5,
 }) => {
   const { data, isLoading, error } = useRecentActivity(limit);
+  /*
+   * 🔴 Deriving the label at render is only half the repair. A render has to
+   * HAPPEN, and a dashboard card nobody touches gets none -- so an entry
+   * fetched as "just now" would keep that wording for as long as the page is
+   * open, which is the same wrong label reached by a different route. This is
+   * what makes the derivation run again.
+   *
+   * The value is passed to the formatter rather than discarded, so the label a
+   * reader sees and the instant this hook re-rendered for are the same one.
+   */
+  const now = useNowTick();
 
   return (
-    <Card className="border-border bg-card/40 backdrop-blur-md rounded-lg overflow-hidden transition-all duration-500 hover:border-border">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 px-8 py-7  border-b border-border">
-        <div className="space-y-1">
-          <CardTitle className="text-xs font-black uppercase tracking-[0.25em] text-muted-foreground">
-            System Event Log
-          </CardTitle>
-          <div className="h-1 w-8 bg-primary/20 rounded-sm" />
-        </div>
-        <Link
-          href={ROUTES.DASHBOARD}
-          className="text-xs font-black uppercase tracking-[0.2em] text-primary hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-md bg-primary/5 hover-unified"
+    <section aria-labelledby="dashboard-activity-heading" className="space-y-6">
+      <div className="flex items-center gap-4">
+        <h4
+          id="dashboard-activity-heading"
+          className="text-sm font-semibold tracking-tight text-foreground whitespace-nowrap"
         >
-          Detailed Log <ChevronRight className="h-3 w-3" />
-        </Link>
-      </CardHeader>
-      <CardContent className="p-3">
-        {isLoading && (
-          <div className="flex flex-col items-center justify-center py-20 gap-4">
-            <Spinner size="md" className="text-primary/40" />
-            <span className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground animate-pulse">
-              Syncing events...
-            </span>
-          </div>
-        )}
+          Recent activity
+        </h4>
+        <div className="h-px flex-1 bg-border" />
+      </div>
 
-        {error && (
-          <div className="flex items-center gap-3 py-12 justify-center text-sm text-destructive bg-destructive/5 rounded-md mx-3 mb-3">
-            <AlertCircle className="h-4 w-4" />
-            <span className="font-bold uppercase tracking-wider text-xs">
-              Failed to fetch activity stream
-            </span>
-          </div>
-        )}
+      {isLoading && (
+        <div className="flex flex-col items-center justify-center py-16 gap-4">
+          <Spinner size="md" className="text-primary/40" />
+          <span className="text-sm text-muted-foreground">
+            Loading activity…
+          </span>
+        </div>
+      )}
 
-        {data && !isLoading && !error && (
-          <div className="space-y-1 p-2">
-            {data.activities.length === 0 ? (
-              <EmptyState />
-            ) : (
-              <>
-                <div className="space-y-1">
-                  {data.activities.map(activity => (
-                    <ActivityItem key={activity.id} activity={activity} />
-                  ))}
-                </div>
-                <div className="mt-6 pt-4  border-t border-border text-center">
-                  <button className="text-xs font-black uppercase tracking-[0.3em] text-muted-foreground hover-unified transition-all duration-500 py-3 px-8 rounded-md hover-unified">
-                    Sync Previous Events
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+      {error && (
+        // Full-strength destructive border so the boundary is perceivable at
+        // the 3:1 UI minimum, matching the other cards' error state.
+        <div className="flex items-center gap-2 py-6 text-sm text-destructive justify-center bg-destructive/5 border border-destructive rounded-md">
+          <AlertCircle className="h-4 w-4" />
+          <span>Couldn&apos;t load recent activity.</span>
+        </div>
+      )}
+
+      {data && !isLoading && !error && (
+        <div className="space-y-1">
+          {data.activities.length === 0 ? (
+            <EmptyState />
+          ) : (
+            data.activities.map(activity => (
+              <ActivityItem key={activity.id} activity={activity} now={now} />
+            ))
+          )}
+        </div>
+      )}
+    </section>
   );
 };
 

@@ -9,6 +9,7 @@
  * a framework.
  */
 import { isPlainRecord } from "./plain-record";
+import { ownEntry } from "./safe-record";
 
 /**
  * Engine document-format version. Bumped only when the envelope shape itself
@@ -151,6 +152,82 @@ export interface BlockNode {
    * last-good props; a renderer shows a placeholder instead of crashing.
    */
   migrationFailed?: boolean;
+  /**
+   * Where this subtree was copied from, recorded once and never rendered.
+   *
+   * Written when a copy is taken and read by nothing at render time, the way
+   * {@link BlockNode.migrationFailed} is. What it buys is the one question a
+   * copy cannot otherwise answer: "the thing this came from has changed — do
+   * you want the change?" That question is asked by every mature builder's
+   * users and answered by none of them, because an unsynced copy keeps no
+   * record of its source.
+   *
+   * ONE field with a discriminant rather than one field per source. A pattern
+   * copy and a detached component are two provenances today and there will be
+   * more — an imported document, a duplicated page — and each of those as its
+   * own key is a stored format that grows a column per feature. The
+   * discriminant also makes the shapes differ honestly: a pattern copy carries
+   * a digest because the pattern it came from can change underneath it, and a
+   * detached component does not, because detaching is the act of declining
+   * further change.
+   */
+  origin?: BlockOrigin;
+}
+
+/**
+ * Where a copied subtree came from.
+ *
+ * Inert: no renderer reads it, no validator requires it, and a document
+ * without one is complete. It exists to be read LATER, by a surface asking
+ * whether an upstream source has moved on.
+ */
+export type BlockOrigin =
+  | {
+      /** Copied from a pattern, which keeps no link back. */
+      readonly from: "pattern";
+      /** The pattern entry's id. */
+      readonly id: string;
+      /**
+       * A digest of the pattern's content when this copy was taken.
+       *
+       * Content rather than a version number, because the engine is handed a
+       * document and not an entry row — it can hash what it was given and
+       * cannot see what the store calls it. A digest also answers the question
+       * more precisely than a version does: a re-save that changed nothing
+       * bumps a version and leaves a digest alone.
+       */
+      readonly digest: string;
+    }
+  | {
+      /** Detached from a component, severing the link deliberately. */
+      readonly from: "component";
+      /** The component definition's id. */
+      readonly id: string;
+    };
+
+/**
+ * Whether a stored value is a whole provenance record.
+ *
+ * Beside the type rather than beside either caller, because a document reaches
+ * storage by more than one road: an op through the edit vocabulary, and a field
+ * write through the document validator. A record that one road admits and the
+ * other refuses is a record that exists in the database and cannot be edited,
+ * so both ask this.
+ *
+ * Whole means every field the arm needs. A pattern origin without a digest
+ * cannot answer whether its source moved, which is the only question it exists
+ * for — storing one would leave a later reader with a record it must special
+ * case rather than trust.
+ */
+export function isBlockOrigin(value: unknown): value is BlockOrigin {
+  if (!isPlainRecord(value)) return false;
+  const id = ownEntry(value, "id");
+  if (typeof id !== "string" || id === "") return false;
+  const from = ownEntry(value, "from");
+  if (from === "component") return true;
+  if (from !== "pattern") return false;
+  const digest = ownEntry(value, "digest");
+  return typeof digest === "string" && digest !== "";
 }
 
 // ---------------------------------------------------------------------------
@@ -676,6 +753,83 @@ export const EXPOSED_PROPERTY_TYPES = [
  * agree, and the pair can be half-changed without either side failing.
  */
 export type ExposedPropertyType = (typeof EXPOSED_PROPERTY_TYPES)[number];
+
+/**
+ * The single HTML `id` a node actually renders, or `undefined` for none.
+ *
+ * A node can SPELL a DOM id two ways — the modelled `cssId` and the
+ * `attributes` escape hatch — and it emits at most ONE. The renderer assigns
+ * the bag first, lowercasing every key, and then overwrites with the modelled
+ * field, so this mirrors that order exactly.
+ *
+ * Only a STRING `cssId` shadows, the empty string included. The renderer reads
+ * it as `typeof node.cssId === "string" ? node.cssId : undefined` and
+ * overwrites only when that is not `undefined` — so `cssId: ""` shadows and
+ * emits `id=""`, while `cssId: null` is normalised away and the bag renders.
+ *
+ * An empty id is not an id: it takes nothing and only stops the bag.
+ *
+ * Published because reading the two fields independently is wrong in both
+ * directions, and every one of those readings was live somewhere:
+ *
+ * - counting them as two ids made a node look like it collided with ITSELF, so
+ *   a run spelling one id through both fields was refused as a duplicate;
+ * - counting a SHADOWED attribute id as taken made a copy rename itself to
+ *   avoid a string the destination never emits;
+ * - reading "any present `cssId`" instead of "a string" hid a bag id that does
+ *   render, and left two elements answering to one id.
+ */
+export function renderedDomId(node: {
+  readonly cssId?: unknown;
+  readonly attributes?: unknown;
+}): string | undefined {
+  const modelled = typeof node.cssId === "string" ? node.cssId : undefined;
+  const rendered = modelled ?? renderedDomIdIn(node.attributes);
+  return rendered === "" ? undefined : rendered;
+}
+
+/**
+ * The `id` an attribute bag alone would render, if any.
+ *
+ * The LAST case variant wins, whatever it holds, empty included. The renderer
+ * lowercases each key and assigns in turn, so a bag of `{ id: "hero", ID: "" }`
+ * leaves the element with `id=""` — and skipping the empty one here keeps
+ * `hero` and reports an id that does not render.
+ *
+ * Separate from {@link renderedDomId} because the narrower question is a real
+ * one: a surface asking whether an empty bag id would SHADOW something has to
+ * ask about the bag alone.
+ *
+ * Shape-checked the way the RENDERER checks, which is looser than this module's
+ * usual `isPlainRecord`: it does `Object.entries(attributes)` on any non-array
+ * object and emits what it finds, so a class instance or an object with a
+ * custom prototype and an own `id` puts that id on the page. Narrowing to a
+ * plain record here reported no id for such a node, and an insert then kept an
+ * incoming id the destination was already rendering.
+ *
+ * The narrow rule is right where it is used — validation asks what SURVIVES
+ * JSON, and a `Date` or a `Map` does not — but this question is "what does the
+ * renderer emit right now", and the answer has to be the renderer's.
+ *
+ * `Object.entries(null)` throws and an array is not a bag, so both are absent.
+ *
+ * UNBOUNDED, deliberately, because the renderer it mirrors is: every key is
+ * assigned. A caller that must not do work proportional to a bag it has not
+ * measured should bound the bag first and hand only a measured one to
+ * {@link renderedDomId} — reading a cap into this would make it answer
+ * differently from the renderer for exactly the documents where the answer
+ * matters.
+ */
+export function renderedDomIdIn(attributes: unknown): string | undefined {
+  if (typeof attributes !== "object" || attributes === null) return undefined;
+  if (Array.isArray(attributes)) return undefined;
+  let found: string | undefined;
+  for (const [name, value] of Object.entries(attributes)) {
+    if (name.toLowerCase() !== "id") continue;
+    if (typeof value === "string") found = value;
+  }
+  return found;
+}
 
 /**
  * One property of a definition that an instance may override.

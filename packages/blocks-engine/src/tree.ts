@@ -79,15 +79,17 @@
  * own.
  */
 import type { SlotSpec } from "./block";
-import { isBlockType } from "./document";
 import type { BlockNode } from "./document";
+import { isBlockType, renderedDomId } from "./document";
 import { walkForest } from "./forest-walk";
+import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import { MAX_DEPTH, MAX_NODES } from "./limits";
 import { canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
 import { isUsableSlotName } from "./registry";
 import { defineEntry, ownEntry } from "./safe-record";
+import { isConditionGated } from "./visibility";
 
 /** Stable unique node id. `crypto.randomUUID` exists in Node ≥ 20 and browsers. */
 export function newId(): string {
@@ -643,13 +645,20 @@ export function locateNode(
   nodes: BlockNode[],
   id: string
 ): NodeLocation | undefined {
-  const topIndex = nodes.findIndex(node => node.id === id);
+  // Read defensively at every step. This is a stored document and nothing here
+  // has validated it — a slot may hold `null` instead of an array, and a list
+  // may hold a hole — so an entry is asked for its id rather than assumed to
+  // have one. It matters because ONE damaged node anywhere in the forest would
+  // otherwise throw, and the caller looking for a completely unrelated
+  // selection elsewhere in the document gets a crash instead of an answer.
+  const topIndex = nodes.findIndex(node => node?.id === id);
   if (topIndex !== -1) return { index: topIndex };
   let found: NodeLocation | undefined;
   walkNodes(nodes, node => {
     if (found || !node.slots) return;
     for (const [slot, children] of Object.entries(node.slots)) {
-      const index = children.findIndex(child => child.id === id);
+      if (!Array.isArray(children)) continue;
+      const index = children.findIndex(child => child?.id === id);
       if (index !== -1) {
         found = { parent: node, slot, index };
         return;
@@ -723,8 +732,14 @@ function queueSlotRebuilds(
  * would let any unrelated edit silently destroy stored content that a caller
  * may still need to read or repair, which is a worse outcome than the throw it
  * replaced: the throw was loud and lost nothing.
+ *
+ * Published because those three are exactly what a caller rewriting one field
+ * across a stored forest gets wrong, and each was learned here rather than
+ * guessed. A planner stripping a lock or a provenance record wrote its own walk
+ * and inherited none of them; the rule is that a forest rewrite is this
+ * function with a different `fn`, not a new traversal.
  */
-function mapForest(
+export function mapForest(
   nodes: BlockNode[],
   fn: (node: BlockNode) => BlockNode
 ): BlockNode[] {
@@ -1052,52 +1067,215 @@ export interface ReidentifiedSubtree {
 }
 
 /**
- * Deep-clone a subtree with fresh ids, KEEPING its internal references usable.
+ * What a re-identification does with the DOM ids it copies.
+ *
+ * Two words rather than a boolean, because the call site is where this is read
+ * and `true` at a call site says nothing about which way it points.
+ *
+ * - `{ avoid }` — mint only the ids the destination ALREADY holds, and carry
+ *   the rest verbatim. For an INSERT, which is the only caller that can name
+ *   what it is landing among.
+ * - `"keep"` — carry every id across and record none as moved. For a run being
+ *   lifted into a document of its OWN, which is every SAVE: nothing is placed
+ *   beside anything, so nothing can collide.
+ * - `"remint"` — mint every id unconditionally. For a copier that cannot see
+ *   its destination, which is composition inlining a definition into an
+ *   instance without reading the host.
+ *
+ * A DOM id is authored content — someone typed `hero`, and it appears in a URL
+ * fragment, a stylesheet and the attribute panel — so it is rewritten only when
+ * keeping it would put two elements on a page answering to one id. `{ avoid }`
+ * exists because `"remint"` was doing it always: inserting into a page holding
+ * no `hero` still produced `hero-e75f55fb`, and feeding that back through a
+ * save grew the id by nine characters every cycle without bound.
+ */
+export type DomIdPolicy =
+  | "remint"
+  | "keep"
+  | {
+      /** The DOM ids the destination already carries, folded as HTML folds them. */
+      readonly avoid: ReadonlySet<string>;
+    };
+
+/** A re-identified FOREST, and the two maps describing what moved. */
+export interface ReidentifiedForest {
+  /** The rebuilt roots, in the order they were given. */
+  nodes: BlockNode[];
+  /** Every node's old id → its new one, across every root. */
+  nodeIds: ReadonlyMap<string, string>;
+  /**
+   * Every DOM id the forest carried → its replacement, across every root.
+   *
+   * EMPTY under {@link DomIdPolicy} `"keep"`, which is the honest record rather
+   * than an omission: nothing moved, so nothing needs following. A caller
+   * checking this map against a destination is asking which ids this copy
+   * introduces, and identity entries would answer that question wrongly.
+   */
+  domIds: ReadonlyMap<string, string>;
+}
+
+/**
+ * Deep-clone a FOREST with fresh ids, KEEPING its internal references usable.
  *
  * The same rebuild as {@link reidSubtree}, differing in what happens to a DOM
- * id: dropped there, minted afresh here and recorded. Two copies of one pattern
- * on a page must not emit the same HTML `id`, and a copy's internal anchor must
- * still reach its own target — remapping is the only answer that satisfies
- * both.
+ * id: dropped there, and here either minted afresh and recorded or carried
+ * across untouched, as {@link DomIdPolicy} says. Dropping is the one answer
+ * neither caller can use. Two copies of one pattern on a page must not emit the
+ * same HTML `id`, and a copy's internal anchor must still reach its own target
+ * — and an id that is simply gone satisfies neither.
  *
  * The minted id is DERIVED from the original (`pricing` becomes
  * `pricing-<suffix>`) rather than freshly random, because it is a value authors
  * read and write: it appears in a URL fragment, in a stylesheet and in the
  * attribute panel. A UUID would be unique and unusable.
  *
- * Uniqueness is guaranteed WITHIN the returned subtree, not against the
- * document it is going into — this function is given a subtree and cannot see
- * anything else. A caller inserting into a page it can read should check
- * {@link ReidentifiedSubtree.domIds} against that page.
+ * ## Why a forest, and not one root at a time
+ *
+ * A saved selection is a contiguous RUN of siblings, so the document it becomes
+ * holds several roots, and re-identifying them with one call each is not the
+ * same operation. Each call can only see the subtree it was handed, so its
+ * `domIds` records that subtree's ids and nothing else — and a reference that
+ * crosses from one root to another finds no entry, and is left pointing at the
+ * ORIGINAL element. For `aria-labelledby` and `aria-describedby` that means the
+ * copy silently loses its accessible name, a failure invisible to everyone who
+ * does not use assistive technology. Re-identifying the roots TOGETHER is what
+ * makes the second pass see every id, so the guarantee is a property of this
+ * function rather than of each caller remembering not to loop.
+ *
+ * Uniqueness is guaranteed WITHIN the returned forest, not against the document
+ * it is going into — this function is given a forest and cannot see anything
+ * else. A caller inserting into a page it can read should check
+ * {@link ReidentifiedForest.domIds} against that page.
+ *
+ * ## Minting is for a copy that lands BESIDE its original
+ *
+ * That is the whole reason for it, so what a caller answers is which ids its
+ * destination already holds. `"keep"` is for the one landing among nothing: a
+ * run lifted out of a page to become a document of its OWN. `{ avoid }` is for
+ * one that can name what is there. Minting where neither says to is not merely
+ * unnecessary, it is wrong in three ways that were measured rather than
+ * argued.
+ *
+ * A DOM id is authored content: someone typed `hero`, and it appears in a URL
+ * fragment, a stylesheet and the attribute panel. Storing `hero-3ee4a0d4` puts
+ * a value in the library that no author wrote and every author sees.
+ *
+ * It is not idempotent. Save the same selection twice and the two stored copies
+ * differ, so anything fingerprinting content — `patternDigest` keeps `cssId`
+ * deliberately, because a copy derives from it — reports a change nobody made.
+ * A staleness signal that fires without cause teaches authors to dismiss the
+ * one that means something.
+ *
+ * And it accumulates. Save, insert, save over the source, insert again: the id
+ * grew by nine characters every cycle, `hero` to
+ * `hero-3ee4a0d4-fb48e67c-1118df3b` and on, with no bound.
  */
-export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
+export function reidForestWithMap(
+  nodes: BlockNode[],
+  domIdPolicy: DomIdPolicy = "remint"
+): ReidentifiedForest {
   const nodeIds = new Map<string, string>();
   const domIds = new Map<string, string>();
 
-  const [rebuilt] = mapForest([node], original =>
-    reidOneKeepingReferences(original, nodeIds, domIds)
+  // A node the renderer prunes puts NO id on the page, so none of its ids may
+  // be rewritten: renaming one and following every reference to it leaves a
+  // visible sibling's `#hero` pointing at a minted id nothing owns, where
+  // before it reached the destination's own `hero`.
+  const hidden = hiddenSubtreeNodes(nodes);
+  const rebuilt = mapForest(nodes, original =>
+    reidOneKeepingReferences(original, nodeIds, domIds, domIdPolicy, hidden)
   );
   // A SECOND pass, because a node may reference an id defined on a node the
   // first had not reached yet. Without it a copied `aria-labelledby` points at
   // the original's id, so the copy loses its accessible name — the same gap
   // composition has, closed the same way.
-  const [linked] = mapForest([rebuilt ?? node], copy =>
-    // `isPlainRecord`, not `!== undefined`. A persisted `attributes: null` is
-    // content the first pass deliberately carries through untouched, and
-    // handing it to the remapper enumerates null and throws — a rebuild that
-    // destroys a node because of a field on a different one.
-    isPlainRecord(copy.attributes)
-      ? { ...copy, attributes: remapIdReferences(copy.attributes, domIds) }
-      : copy
-  );
-  return { node: linked ?? rebuilt ?? node, nodeIds, domIds };
+  const linked = mapForest(rebuilt, copy => relinkOne(copy, domIds));
+  return { nodes: linked, nodeIds, domIds };
+}
+
+/**
+ * One copied node, with every reference to a re-minted id following the copy.
+ *
+ * Both halves matter and only one of them is markup. `aria-labelledby` lives in
+ * `attributes`; a link's target lives in `props` as `href: "#pricing"`, and a
+ * copy that moves the id without the link leaves the anchor resolving to
+ * nothing. Applied HERE rather than left to each caller, because the caller
+ * that forgets does not fail — it stores a document that renders, validates and
+ * quietly points somewhere else.
+ */
+function relinkOne(
+  copy: BlockNode,
+  domIds: ReadonlyMap<string, string>
+): BlockNode {
+  // `isPlainRecord`, not `!== undefined`. A persisted `attributes: null` is
+  // content the first pass deliberately carries through untouched, and handing
+  // it to the remapper enumerates null and throws — a rebuild that destroys a
+  // node because of a field on a different one.
+  const attributes = isPlainRecord(copy.attributes)
+    ? remapIdReferences(copy.attributes, domIds)
+    : copy.attributes;
+  // See `fragment-refs` for why a copier may rewrite a prop it has no schema
+  // for: only a whole string of `#` plus an id THIS copy minted is touched, and
+  // nothing but a reference to the copy's own target can spell that.
+  const props = remapFragmentProps(copy.props, domIds) as BlockNode["props"];
+  // And the BOUND form of the same field. A bound `href` keeps its literal in
+  // `bindings.href.fallback`, which is what renders when the source is empty —
+  // so leaving it behind makes the link work until the data does not, which is
+  // the one case the fallback exists for.
+  const bindings = remapFragmentBindings(
+    copy.bindings,
+    domIds
+  ) as BlockNode["bindings"];
+  // Every remapper returns its input unchanged when nothing matched, so an
+  // ordinary node is returned as it stands rather than reallocated.
+  if (
+    attributes === copy.attributes &&
+    props === copy.props &&
+    bindings === copy.bindings
+  ) {
+    return copy;
+  }
+  // Spread CONDITIONALLY. `{ ...copy, bindings }` writes the key even when the
+  // value is `undefined`, and a key holding `undefined` is a value JSON cannot
+  // carry — `applyOp` refuses the whole insert for it. An ordinary node has no
+  // `bindings`, so any copy that relinked anything at all produced an op group
+  // the apply then rejected, and the planner's dry run promised an insert that
+  // could not happen.
+  return {
+    ...copy,
+    ...(attributes === undefined ? {} : { attributes }),
+    ...(props === undefined ? {} : { props }),
+    ...(bindings === undefined ? {} : { bindings }),
+  };
+}
+
+/**
+ * One subtree, re-identified — {@link reidForestWithMap} for a single root.
+ *
+ * Delegates rather than repeating the two passes, so the singular and the
+ * plural cannot drift into disagreeing about what a copy is.
+ *
+ * It takes no {@link DomIdPolicy}, and the honest reason is that nothing in the
+ * product calls this. Measured: every occurrence outside this file is a test,
+ * the package entry, or a comment in `resolve-instances.ts` citing it as an
+ * analogy — composition keeps a `domIds` memo of its own and re-identifies to
+ * deterministic scoped ids rather than random ones, and a save works on a RUN
+ * of siblings and reaches for the forest form. Adding the parameter would be
+ * offering an option to nobody. Whether a published helper with no caller
+ * should stay is a separate question from this one.
+ */
+export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
+  const { nodes, nodeIds, domIds } = reidForestWithMap([node]);
+  return { node: nodes[0] ?? node, nodeIds, domIds };
 }
 
 /** One node, re-identified, with its DOM id remapped rather than removed. */
 function reidOneKeepingReferences(
   node: BlockNode,
   nodeIds: Map<string, string>,
-  domIds: Map<string, string>
+  domIds: Map<string, string>,
+  domIdPolicy: DomIdPolicy,
+  hidden: ReadonlySet<BlockNode>
 ): BlockNode {
   const { slots, ...own } = node;
   const copy: BlockNode = { ...structuredClone(own), id: newId() };
@@ -1115,13 +1293,39 @@ function reidOneKeepingReferences(
     return minted;
   };
 
-  if (typeof copy.cssId === "string" && copy.cssId !== "") {
+  // An id that is NOT minted contributes no entry to `domIds`, which is the
+  // honest record: nothing moved, so the relink pass that follows has nothing
+  // to rewrite and every reference still names the id it named. Identity
+  // entries would say the same thing less clearly and make a caller checking
+  // the map against its destination report collisions it is not introducing.
+  //
+  // Only the id this node RENDERS is a candidate. A node can spell two and
+  // emits one, and minting the shadowed spelling is worse than pointless: the
+  // relink pass then rewrites every reference to it, so a link that deliberately
+  // reached an element in the DESTINATION now names a minted id nothing renders
+  // at all. Both spellings move together when they carry the same value, since
+  // the memo maps one original to one replacement — so the node still spells a
+  // single id afterwards.
+  const rendered = hidden.has(node) ? undefined : renderedDomId(node);
+  const moves = (value: string): boolean =>
+    value === rendered &&
+    (domIdPolicy === "remint" ||
+      (domIdPolicy !== "keep" && domIdPolicy.avoid.has(value)));
+
+  if (
+    typeof copy.cssId === "string" &&
+    copy.cssId !== "" &&
+    moves(copy.cssId)
+  ) {
     copy.cssId = remap(copy.cssId);
   }
   if (copy.attributes) {
     copy.attributes = Object.fromEntries(
       Object.entries(copy.attributes).map(([key, value]) =>
-        key.toLowerCase() === "id" && typeof value === "string" && value !== ""
+        key.toLowerCase() === "id" &&
+        typeof value === "string" &&
+        value !== "" &&
+        moves(value)
           ? [key, remap(value)]
           : [key, value]
       )
@@ -1172,6 +1376,23 @@ export const ID_REFERENCE_ATTRIBUTES: readonly string[] = [
 const ID_REFERENCE_SET = new Set(ID_REFERENCE_ATTRIBUTES);
 
 /**
+ * An IDREFS value as its tokens, with the separators gone.
+ *
+ * The single statement of what such a value MEANS: a list of ids, where runs of
+ * whitespace are one separator and a leading or trailing one is nothing. Every
+ * parser reads `"hero   label"` and `"hero label"` as the same two references,
+ * and {@link remapIdReferences} writes both back as the second.
+ *
+ * Published because a second reader now depends on that being true rather than
+ * merely doing the same thing: a fingerprint of what a copy carries has to
+ * normalise exactly where the copier normalises, and a parallel `split`
+ * elsewhere would agree until one of them changed.
+ */
+export function idReferenceTokens(value: string): string[] {
+  return value.split(/\s+/).filter(token => token !== "");
+}
+
+/**
  * Point a node's id REFERENCES at wherever those ids ended up.
  *
  * Applied as a second pass, after every id has been minted, and that ordering
@@ -1203,16 +1424,45 @@ export function remapIdReferences(
       defineEntry(next, name, value as string);
       continue;
     }
-    // Split on whitespace so an IDREFS list is rewritten token by token; the
-    // separator is normalised to one space, which is what every parser reads
-    // the original as anyway.
-    const tokens = value.split(/\s+/).filter(token => token !== "");
-    const mapped = tokens.map(token => domIds.get(token) ?? token);
+    // Token by token, through the one spelling of what an IDREFS list IS.
+    const mapped = idReferenceTokens(value).map(
+      token => domIds.get(token) ?? token
+    );
     const rewritten = mapped.join(" ");
     if (rewritten !== value) changed = true;
     defineEntry(next, name, rewritten);
   }
   return changed ? next : attributes;
+}
+
+/**
+ * Every node inside a subtree the renderer will prune, by identity.
+ *
+ * Gating is INHERITED: `pruneHiddenNodes` drops a gated node with everything
+ * under it, so an ungated child of a gated parent does not reach the page
+ * either. Asking `isConditionGated` of each node alone answers about that child
+ * and gets it wrong.
+ *
+ * Shared, because two different questions need the same answer and got it
+ * separately once already — which DOM ids a document has in use, and which of a
+ * copy's ids may be rewritten. When those disagree, a copy renames an id nobody
+ * renders and every reference to it follows the rename to nothing.
+ *
+ * Keyed on identity rather than on `id`, because a malformed document can spell
+ * one id on two nodes and this is asked of the objects being walked.
+ */
+export function hiddenSubtreeNodes(
+  nodes: readonly BlockNode[]
+): ReadonlySet<BlockNode> {
+  const hidden = new Set<BlockNode>();
+  const seen = new Map<BlockNode, boolean>();
+  walkNodes([...nodes], (node, parent) => {
+    const inherited = parent !== undefined && seen.get(parent) === true;
+    const gated = inherited || isConditionGated(node);
+    seen.set(node, gated);
+    if (gated) hidden.add(node);
+  });
+  return hidden;
 }
 
 /**

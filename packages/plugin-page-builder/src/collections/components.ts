@@ -73,16 +73,23 @@ export function componentsCollection() {
     // menu entry for the store and two sources listing one screen is the
     // problem rather than the belt-and-braces it looks like.
     //
-    // There are two automatic sources and `hidden` is the only thing that
-    // excludes both. `isInCollectionsSection` (admin `lib/sidebar-landing`)
-    // admits every collection that is not hidden and claims no sidebar group,
-    // which is the Collections listing; `DynamicPluginNav` lists every
-    // collection marked `isPlugin`, and `SidebarNavigation` renders it
-    // immediately above this plugin's own menu — so claiming plugin ownership
-    // does not move the duplicate, it puts both copies in one section, side by
-    // side. Hidden costs nothing else: the collection keeps its URL, its API
-    // and its permissions, and only stops being offered by navigation nobody
-    // asked for.
+    // ONE automatic source reaches this collection, and `hidden` is what
+    // excludes it: `isInCollectionsSection` (admin `lib/sidebar-landing`)
+    // admits every collection that is not hidden and claims no sidebar group.
+    //
+    // The other automatic source, `DynamicPluginNav`, lists only collections
+    // marked `admin.isPlugin`, which is a presentation flag this package never
+    // sets — so it never reaches these at all. That flag is also what an
+    // earlier note here conflated with PLACEMENT: a plugin declaring
+    // `placement` does move its collections out of the Plugins panel, through
+    // `isCollectionPlacedElsewhere`, but only for collections that opted into
+    // being listed there in the first place. Ownership and placement are
+    // separate questions, which is the distinction `collection-placement.ts`
+    // exists to draw.
+    //
+    // Hidden costs nothing else: the collection keeps its URL, its API and its
+    // permissions, and only stops being offered by navigation nobody asked
+    // for — this plugin's own menu links to it explicitly.
     admin: { useAsTitle: "title", hidden: true },
   });
 }

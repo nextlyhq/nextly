@@ -22,6 +22,24 @@ function invalid(doc: unknown): BlockDocument {
 }
 
 /** A site breakpoint set the fixtures validate against. */
+/**
+ * A text node the renderer prunes, restricted to one audience.
+ *
+ * Named so each fixture using it reads as "these two share an anchor" rather
+ * than restating what a condition envelope looks like, which is not what those
+ * fixtures are about.
+ */
+function gatedText(id: string, cssId: string, tier: string): BlockNode {
+  return {
+    id,
+    type: "core/text",
+    version: 1,
+    props: {},
+    cssId,
+    visibility: { conditions: [[{ field: "tier", op: "eq", value: tier }]] },
+  };
+}
+
 export const FIXTURE_BREAKPOINTS: BreakpointSet = {
   viewport: [
     { id: "base", label: "Desktop" },
@@ -567,6 +585,90 @@ export const VALIDATION_FIXTURES: ValidationFixture[] = [
       ],
     },
     expected: [{ path: "/nodes/1/cssId", code: "duplicate-dom-id" }],
+  },
+  {
+    name: "two GATED variants sharing one anchor are not a duplicate",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        // The case gating exists for: personalised variants of one section,
+        // each carrying the same anchor, with exactly one ever served. The
+        // renderer prunes both before markup, so the page holds neither.
+        gatedText("n1", "hero", "pro"),
+        gatedText("n2", "hero", "free"),
+      ],
+    },
+    expected: [],
+  },
+  {
+    name: "a gated node's CHILD is pruned with it, so its id is free",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+          slots: {
+            children: [
+              {
+                id: "n2",
+                type: "core/text",
+                version: 1,
+                props: {},
+                cssId: "hero",
+              },
+            ],
+          },
+        },
+        { id: "n3", type: "core/text", version: 1, props: {}, cssId: "hero" },
+      ],
+    },
+    expected: [],
+  },
+  {
+    name: "a gated node does not shield a VISIBLE duplicate",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        gatedText("n1", "hero", "pro"),
+        { id: "n2", type: "core/text", version: 1, props: {}, cssId: "hero" },
+        { id: "n3", type: "core/text", version: 1, props: {}, cssId: "hero" },
+      ],
+    },
+    expected: [{ path: "/nodes/2/cssId", code: "duplicate-dom-id" }],
+  },
+  {
+    name: "a SHADOWED attributes id does not collide with another node's",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        // Renders `actual`: the modelled field overwrites the bag, so `hero`
+        // never reaches the page and cannot collide with anything.
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          cssId: "actual",
+          attributes: { id: "hero" },
+        },
+        { id: "n2", type: "core/text", version: 1, props: {}, cssId: "hero" },
+      ],
+    },
+    expected: [],
   },
   {
     name: "a cssId colliding with an attributes id is a duplicate DOM id",

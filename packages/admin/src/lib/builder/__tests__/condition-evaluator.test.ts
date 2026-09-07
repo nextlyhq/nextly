@@ -1,5 +1,5 @@
 // Why: pure-function evaluator for FieldCondition. Lock semantics for
-// every operator so future changes to the visual builder can't silently
+// every operator so future changes to the Visual Schema Builder can't silently
 // drift from what the runtime evaluator does. Backwards-compat path
 // (legacy { field, equals } shape) is also covered.
 import { describe, expect, it } from "vitest";

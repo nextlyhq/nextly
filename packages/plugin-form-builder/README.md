@@ -1,6 +1,6 @@
 # @nextlyhq/plugin-form-builder
 
-Drag-and-drop form builder plugin for Nextly. Build forms visually, collect submissions, and filter them by form. _Coming soon in beta._
+Drag-and-drop form builder plugin for Nextly. Build forms visually, collect submissions, and filter them by form.
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@nextlyhq/plugin-form-builder"><img alt="npm" src="https://img.shields.io/npm/v/@nextlyhq/plugin-form-builder?style=flat-square&label=npm&color=cb3837" /></a>
@@ -8,11 +8,10 @@ Drag-and-drop form builder plugin for Nextly. Build forms visually, collect subm
   <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" /></a>
 </p>
 
-> [!WARNING]
-> **Coming soon in beta. Plugins are not ready for use yet.** Public plugin support, including stable APIs, the official plugin gallery, and documentation guarantees, lands at the Nextly **beta** release. This package is published for early exploration only. Surfaces, names, and behaviour will change without notice. Do not rely on plugins for production or serious development work. Wait for the beta release announcement before integrating plugins into your project.
-
 > [!IMPORTANT]
-> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
+> Nextly is in alpha. APIs may change before 1.0 — pin exact versions in production.
+> See the [plugin stability ladder](https://nextlyhq.com/docs/plugins/stability) for
+> which plugin surfaces are stable and which are experimental.
 
 ## What it is
 

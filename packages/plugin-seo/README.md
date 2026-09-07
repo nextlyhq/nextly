@@ -1,6 +1,9 @@
 # @nextlyhq/plugin-seo
 
-> Nextly is in alpha. APIs may change before 1.0.
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0 — pin exact versions in production.
+> See the [plugin stability ladder](https://nextlyhq.com/docs/plugins/stability) for
+> which plugin surfaces are stable and which are experimental.
 
 First-party SEO plugin for Nextly. It is **opt-in** and **framework-agnostic** (zero `next` dependency), so it is safe in every deployment mode — an integrated site, a headless setup feeding a separate frontend, or an internal admin tool. You add it only to the collections that need SEO.
 
@@ -190,6 +193,11 @@ export default {
 Then reference `https://example.com/sitemap.xml` from `robots.txt` or submit it in Search Console. An integrated Next.js app can also read the data through the planned Next helpers to serve the canonical `/sitemap.xml` directly. A pure-headless frontend can proxy the route to its own root the same way.
 
 > **Cache or rate-limit the public route.** It is unauthenticated and regenerates the document per request (up to the 50,000-URL / 50 MB caps), and on the `/admin/api` mount Nextly's built-in rate limiter is skipped. Put it behind an edge/CDN cache (sitemaps are crawled infrequently) or a rate limiter at your proxy — or disable it with `sitemap: false` if you don't need it.
+
+## Related packages
+
+- [`nextly`](../nextly) — `buildMetadata` from `nextly/runtime` turns these fields into tags
+- [`@nextlyhq/plugin-sdk`](../plugin-sdk) — the SDK this plugin is built on
 
 ## License
 

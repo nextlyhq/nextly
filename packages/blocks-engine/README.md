@@ -3,6 +3,15 @@
 The runtime-free core of the Nextly page builder: the stored document format
 and the pure operations over it.
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/@nextlyhq/blocks-engine"><img alt="npm" src="https://img.shields.io/npm/v/@nextlyhq%2Fblocks-engine?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" /></a>
+</p>
+
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
+
 ## What lives here
 
 - **The document model** — `BlockDocument` (a `kind`-discriminated envelope
@@ -64,3 +73,24 @@ altogether, and how to override the builder on purpose.
 
 Alpha. The document format carries `formatVersion` and changes to stored
 shapes ship with format migrations once the format is frozen.
+
+## Install
+
+```bash
+pnpm add @nextlyhq/blocks-engine
+```
+
+Most projects get this transitively through
+[`@nextlyhq/plugin-page-builder`](../plugin-page-builder) and do not install it
+directly. Install it when you are writing code against the document model itself —
+a custom block, a migration over stored documents, or your own tooling.
+
+## Related packages
+
+- [`@nextlyhq/blocks-react`](../blocks-react) — renders these documents
+- [`@nextlyhq/plugin-page-builder`](../plugin-page-builder) — the plugin that stores them
+- [`@nextlyhq/builder`](../builder) — the editor that produces them
+
+## License
+
+[MIT](../../LICENSE.md)

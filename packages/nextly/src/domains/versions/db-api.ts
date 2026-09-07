@@ -66,6 +66,17 @@ export interface VersionsSelectOptions {
     nulls?: "first" | "last";
   }[];
   limit?: number;
+  /**
+   * Where the page starts.
+   *
+   * Exposed because a cross-document read cannot size its query in advance: a
+   * document contributes one row per locale, and rows a stored access rule
+   * hides contribute none at all, so how many rows a page of DOCUMENTS costs is
+   * not knowable before reading them. Paging is what lets the caller keep
+   * reading until it has what it asked for, rather than guessing a bound from a
+   * number that does not describe the data. The adapter has always supported it.
+   */
+  offset?: number;
 }
 
 /** The database methods the versions repository depends on. */

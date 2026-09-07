@@ -11,7 +11,7 @@
  * @packageDocumentation
  */
 
-import { getColumns } from "drizzle-orm";
+import { count, getColumns } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
 
 import { buildDrizzleOrderBy } from "./drizzle-order";
@@ -24,6 +24,7 @@ import type {
   SupportedDialect,
   SqlParam,
   WhereClause,
+  CountOptions,
   SelectOptions,
   InsertOptions,
   UpdateOptions,
@@ -240,6 +241,53 @@ interface UpdateCapableDb {
     set(values: Record<string, unknown>): PromiseLike<unknown> & {
       where(condition: unknown): PromiseLike<unknown>;
     };
+  };
+}
+
+/** The one-column shape a count projection selects. */
+interface CountRow {
+  value: unknown;
+}
+
+/**
+ * A `$dynamic()` count select, whose WHERE is applied only when there is one.
+ *
+ * Both branches are awaitable, which is the property that makes the conditional
+ * work: the statement is a complete query with or without a condition, so
+ * neither arm is a builder still waiting for something.
+ */
+interface CountableSelect extends PromiseLike<CountRow[]> {
+  where(condition: unknown): PromiseLike<CountRow[]>;
+}
+
+/**
+ * A `SELECT DISTINCT` that can still be named as a subquery after a WHERE.
+ *
+ * `where` returns the same shape rather than a thenable, because this select is
+ * never executed on its own — it is aliased and counted over.
+ */
+interface AliasableSelect {
+  where(condition: unknown): AliasableSelect;
+  as(alias: string): unknown;
+}
+
+/**
+ * The fragment of Drizzle's select builder `count` uses, spelled dialect-neutrally.
+ *
+ * Declared for the same reason as {@link UpdateCapableDb}: the three dialects' builders carry
+ * different type parameters but agree on these chains, so naming just the chains keeps the compiler
+ * checking the calls while leaving the parts that genuinely differ outside the contract. Casting to
+ * `any` instead would compile whatever it was handed, so a dialect changing one of these signatures
+ * would break counts at runtime with nothing failing at build time.
+ */
+interface CountCapableDb {
+  select(projection: Record<string, unknown>): {
+    from(source: unknown): PromiseLike<CountRow[]> & {
+      $dynamic(): CountableSelect;
+    };
+  };
+  selectDistinct(projection: Record<string, unknown>): {
+    from(table: unknown): { $dynamic(): AliasableSelect };
   };
 }
 
@@ -862,6 +910,27 @@ export abstract class DrizzleAdapter {
     ) {
       return undefined;
     }
+    const { projection } = this.resolveColumns(tableObj, names);
+    return Object.keys(projection).length ? projection : undefined;
+  }
+
+  /**
+   * The requested column names split into what this table has and what it does not.
+   *
+   * One resolution, reported both ways, because two callers need different halves
+   * of the same answer: a projection drops what it cannot find, while a distinct
+   * count has to REFUSE it. Resolving twice would let the two disagree about what
+   * "found" means — the SQL-name alias below is exactly the kind of detail a
+   * second implementation gets wrong — and the count would then reject a column
+   * the projection happily uses.
+   *
+   * Both spellings resolve: a caller may name the Drizzle property or the SQL
+   * column, and either maps to the same projection key.
+   */
+  protected resolveColumns(
+    tableObj: unknown,
+    names: readonly string[]
+  ): { projection: Record<string, unknown>; unresolved: string[] } {
     const cols = getColumns(tableObj as never);
     const byAnyName: Record<string, { jsName: string; col: unknown }> = {};
     for (const [jsName, col] of Object.entries(cols)) {
@@ -870,11 +939,13 @@ export abstract class DrizzleAdapter {
       if (typeof sqlName === "string") byAnyName[sqlName] = { jsName, col };
     }
     const projection: Record<string, unknown> = {};
+    const unresolved: string[] = [];
     for (const name of names) {
       const hit = byAnyName[name];
       if (hit) projection[hit.jsName] = hit.col;
+      else unresolved.push(name);
     }
-    return Object.keys(projection).length ? projection : undefined;
+    return { projection, unresolved };
   }
 
   // ============================================================
@@ -1163,6 +1234,125 @@ export abstract class DrizzleAdapter {
    * });
    * ```
    */
+  /** The registered table object, or a refusal naming what is missing. */
+  private requireTableObject(table: string): unknown {
+    const tableObj = this.getTableObject(table);
+    if (tableObj) return tableObj;
+    throw this.createDatabaseError(
+      "query",
+      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
+      undefined
+    );
+  }
+
+  /**
+   * The columns a distinct count groups by, or `undefined` for a row count.
+   *
+   * 🔴 EVERY named column must resolve, not merely one of them. A `distinctOn`
+   * naming no column this table has would fall through to a row count, and one
+   * naming a valid column beside a misspelled or since-removed column would
+   * count distinct over a NARROWER key than the caller asked for. Both answer a
+   * different question than the one asked, silently; the second is the worse of
+   * the two, because a subset key groups more rows together and so UNDERCOUNTS,
+   * which reads as a plausible number rather than as a fault. Refused here,
+   * where the mistake was made, rather than surfacing as a wrong figure.
+   */
+  private countProjection(
+    tableObj: unknown,
+    table: string,
+    options: CountOptions | undefined
+  ): Record<string, unknown> | undefined {
+    const distinctOn = options?.distinctOn;
+    if (!distinctOn?.length) return undefined;
+    const { projection, unresolved } = this.resolveColumns(
+      tableObj,
+      distinctOn
+    );
+    if (unresolved.length > 0) {
+      throw this.createDatabaseError(
+        "query",
+        `distinctOn names ${unresolved.length === 1 ? "a column" : "columns"} that do not exist on "${table}": ${unresolved.join(", ")}`,
+        undefined
+      );
+    }
+    return projection;
+  }
+
+  /**
+   * `COUNT(*)` over a `SELECT DISTINCT` subquery.
+   *
+   * Its own function because it is a genuinely different query from the plain
+   * count rather than a variation on one, and because building both inline made
+   * the public method a chain of decisions the complexity gate objected to
+   * before a reader would have.
+   */
+  private async countDistinctRows(
+    db: CountCapableDb,
+    tableObj: unknown,
+    projection: Record<string, unknown>,
+    where: unknown
+  ): Promise<number> {
+    const inner = db.selectDistinct(projection).from(tableObj).$dynamic();
+    const distinctRows = where ? inner.where(where) : inner;
+    const [row] = await db
+      .select({ value: count() })
+      .from(distinctRows.as("nextly_distinct"));
+    return Number(row?.value ?? 0);
+  }
+
+  /** `COUNT(*)` over the table itself. */
+  private async countAllRows(
+    db: CountCapableDb,
+    tableObj: unknown,
+    where: unknown
+  ): Promise<number> {
+    const base = db.select({ value: count() }).from(tableObj).$dynamic();
+    const [row] = await (where ? base.where(where) : base);
+    return Number(row?.value ?? 0);
+  }
+
+  /**
+   * How many rows match, or how many DISTINCT combinations of some columns do.
+   *
+   * The data layer had no count at all: collection totals go through
+   * `countEntries`, an access-controlled path built for collection tables, and
+   * nothing could count a system table. A caller wanting one selected the rows
+   * and measured the array, which transfers every row to learn a number and
+   * cannot be bounded without making the number wrong.
+   *
+   * 🔴 `distinctOn` compiles to `COUNT(*)` over a `SELECT DISTINCT` SUBQUERY,
+   * never to `COUNT(DISTINCT a, b)`. The inline form is not portable and fails
+   * in the direction that is hardest to notice -- MySQL accepts it, PostgreSQL
+   * needs a row constructor, and SQLite rejects it outright with "wrong number
+   * of arguments to function count()" -- so a query written against one engine
+   * is a syntax error on another. The subquery is the single form all three
+   * accept, and building it here rather than at each call site is what keeps
+   * the answer identical per dialect.
+   */
+  async count(
+    table: string,
+    options?: CountOptions,
+    executor?: unknown
+  ): Promise<number> {
+    const tableObj = this.requireTableObject(table);
+    try {
+      // Transaction executor when supplied, otherwise the pooled instance —
+      // narrowed to the fragment of the select builder these two counts use,
+      // the same seam `update` takes with `UpdateCapableDb`.
+      const db = (executor ??
+        this.getDrizzle<CountCapableDb>()) as CountCapableDb;
+      const where = options?.where
+        ? buildDrizzleWhere(tableObj as never, options.where)
+        : undefined;
+      const projection = this.countProjection(tableObj, table, options);
+      return projection
+        ? await this.countDistinctRows(db, tableObj, projection, where)
+        : await this.countAllRows(db, tableObj, where);
+    } catch (error) {
+      throw this.handleQueryError(error, "count", table);
+    }
+  }
+
   async selectOne<T = unknown>(
     table: string,
     options?: SelectOptions,

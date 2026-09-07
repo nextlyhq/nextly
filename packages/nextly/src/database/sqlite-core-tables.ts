@@ -391,6 +391,12 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_versions" ("draft_key")`,
     `CREATE INDEX IF NOT EXISTS "nextly_versions_doc_recent_idx"
       ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "created_at")`,
+    // The dashboard's pending-edit cards. Its columns are the WHERE clause of
+    // `findPendingEditRows` followed by that read's own ordering; every index
+    // above leads with "scope_kind", which that query never constrains, so
+    // without this one both cards scan the whole version history.
+    `CREATE INDEX IF NOT EXISTS "nextly_versions_pending_edits_idx"
+      ON "nextly_versions" ("is_autosave", "status", "version_no", "scope_slug", "updated_at", "id")`,
     // Content releases. Columns match schemas/releases/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_releases" (
       "id" TEXT PRIMARY KEY NOT NULL,

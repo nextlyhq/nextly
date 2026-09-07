@@ -39,7 +39,7 @@
  */
 
 import {
-  locateNode,
+  siblingRun,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -370,43 +370,6 @@ function moveLockRefusal(
   return null;
 }
 
-/** Where each selected block sits, once they all sit in ONE list. */
-interface SharedRun {
-  /** The selected blocks, sorted by their index in that list. */
-  readonly places: readonly { readonly id: string; readonly index: number }[];
-}
-
-/**
- * The selection as positions in a single sibling list, or `null`.
- *
- * `null` means they do not all share one list — the case a move has no answer
- * for. Two blocks in different containers have no common order to step
- * through, and "one step up" would mean a different distance for each.
- */
-function sharedRun(
-  document: BlockDocument,
-  ids: readonly string[]
-): SharedRun | null {
-  const places: { id: string; index: number }[] = [];
-  let container: string | undefined;
-
-  for (const id of ids) {
-    const at = locateNode(document.nodes, id);
-    if (at === undefined) return null;
-    // Parent and slot together, because one parent's two slots are two lists.
-    // The separator is a space, which an id cannot contain, so no pair of
-    // distinct containers can collide into a single key.
-    const key = `${at.parent?.id ?? ""} ${at.slot ?? ""}`;
-    if (container === undefined) container = key;
-    else if (container !== key) return null;
-    places.push({ id, index: at.index });
-  }
-
-  if (places.length === 0) return null;
-  places.sort((left, right) => left.index - right.index);
-  return { places };
-}
-
 /**
  * Moving every selected block one step, keeping their order and their spacing.
  *
@@ -436,12 +399,23 @@ export function selectionMove(
   const refusal = moveLockRefusal(document, ids);
   if (refusal !== null) return refusal;
 
-  const run = sharedRun(document, ids);
-  if (run === null) return SPLIT_REFUSAL;
+  // The ENGINE's rule, not a copy of it. Every composition planner asks the
+  // same question — a pattern, a component and a converted selection are each
+  // one run lifted out of one place — and a planner runs in a plugin's server
+  // action where this package cannot be imported. Two implementations of "do
+  // these share a list" would disagree the first time either moved.
+  //
+  // `siblingRun` also refuses an empty selection and an id the document does
+  // not hold. Neither reaches here: `normalizeSelection` has already dropped
+  // every absent id and the length guard above has returned. So a split is the
+  // only cause left, and it keeps the sentence it always had.
+  const found = siblingRun(document.nodes, ids);
+  if (found.run === undefined) return SPLIT_REFUSAL;
 
   // Towards the destination first, so each block steps into an index its
   // neighbour has already left.
-  const order = direction === "up" ? run.places : [...run.places].reverse();
+  const places = found.run.places;
+  const order = direction === "up" ? places : [...places].reverse();
 
   const ops: BuilderOp[] = [];
   for (const place of order) {

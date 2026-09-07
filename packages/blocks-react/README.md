@@ -2,6 +2,15 @@
 
 The React renderer for Nextly block documents.
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/@nextlyhq/blocks-react"><img alt="npm" src="https://img.shields.io/npm/v/@nextlyhq%2Fblocks-react?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" /></a>
+</p>
+
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
+
 A block document is plain JSON validated by
 [`@nextlyhq/blocks-engine`](../blocks-engine). This package turns one into a
 React tree, as Server Components, with no client JavaScript unless a block opts
@@ -91,3 +100,22 @@ fixtures. The editor canvas supplies its own. One seam, four consumers.
 Alpha. `PageRenderer`, the core block library and `createBlocksPage` all ship,
 alongside the package boundary, its layering guarantees and the `PageContext`
 contract. The editor surfaces follow.
+
+## Install
+
+```bash
+pnpm add @nextlyhq/blocks-react
+```
+
+Install this in your own app rather than relying on it being present underneath the
+page-builder plugin: your app is what renders the public pages.
+
+## Related packages
+
+- [`@nextlyhq/blocks-engine`](../blocks-engine) — the document model it renders
+- [`@nextlyhq/plugin-page-builder`](../plugin-page-builder) — stores the documents
+- [`@nextlyhq/builder`](../builder) — the editor
+
+## License
+
+[MIT](../../LICENSE.md)

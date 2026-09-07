@@ -23,6 +23,7 @@ import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WidgetQuery } from "../widgets/query";
 import type { WidgetResult, WidgetResultField } from "../widgets/result";
 import { failUnavailableSourceOrOp } from "../widgets/sources";
+import { RELEASES_SOURCE_ID } from "../widgets/system-source-ids";
 import { registerSystemSource } from "../widgets/system-sources";
 
 import type { ReleaseRow } from "./releases-repository";
@@ -31,7 +32,7 @@ import type {
   ReleasesService,
 } from "./services/releases-service";
 
-export const RELEASES_SOURCE_ID = "system:releases";
+export { RELEASES_SOURCE_ID };
 
 /**
  * How many releases the card reads when the query names no limit.
@@ -121,14 +122,18 @@ function describeFields(
   select: readonly string[] | undefined
 ): WidgetResultField[] | undefined {
   if (!select || select.length === 0) return undefined;
-  const labels = new Map(RELEASE_FIELDS.map(f => [f.name, f.label]));
+  // The whole declared field. `scheduledAt` is a `date`, and publishing only
+  // its label left the renderer printing the ISO string it crossed as.
+  const declared = new Map(RELEASE_FIELDS.map(f => [f.name, f]));
   const seen = new Set<string>();
   const described: WidgetResultField[] = [];
   for (const name of select) {
     if (seen.has(name)) continue;
     seen.add(name);
-    const label = labels.get(name);
-    if (label !== undefined) described.push({ name, label });
+    const field = declared.get(name);
+    if (field !== undefined) {
+      described.push({ name, label: field.label, type: field.type });
+    }
   }
   return described.length > 0 ? described : undefined;
 }

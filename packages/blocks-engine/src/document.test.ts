@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import * as entry from "./index";
 
-import type { BlockDocument } from "./document";
+import type { BlockDocument, BlockNode } from "./document";
+import { renderedDomId, renderedDomIdIn } from "./document";
 import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
@@ -212,5 +213,93 @@ describe("the block-type predicate", () => {
     expect(`core/${"a".repeat(entry.MAX_BLOCK_TYPE_LENGTH - 4)}`).toHaveLength(
       entry.MAX_BLOCK_TYPE_LENGTH + 1
     );
+  });
+});
+
+describe("renderedDomId: which of a node's two spellings reaches the page", () => {
+  const bare = (extra: Record<string, unknown>) =>
+    ({
+      id: "n",
+      type: "core/box",
+      version: 1,
+      props: {},
+      ...extra,
+    }) as BlockNode;
+
+  it("prefers a non-empty cssId, which overwrites the bag", () => {
+    expect(
+      renderedDomId(bare({ cssId: "actual", attributes: { id: "hero" } }))
+    ).toBe("actual");
+  });
+
+  it("treats an EMPTY string cssId as shadowing, emitting nothing reachable", () => {
+    // The renderer sets `id=""`, which no anchor, label or selector reaches —
+    // and the bag's value is overwritten, so it does not render either.
+    expect(
+      renderedDomId(bare({ cssId: "", attributes: { id: "hero" } }))
+    ).toBeUndefined();
+  });
+
+  it("lets the bag through when cssId is NOT a string", () => {
+    // The renderer normalises a non-string cssId to undefined
+    // (`typeof node.cssId === "string" ? node.cssId : undefined`) and only then
+    // decides whether to overwrite — so the bag is what renders. Reading this
+    // as "any cssId shadows" costs a real duplicate id on the page.
+    expect(
+      renderedDomId(bare({ cssId: null, attributes: { id: "hero" } }))
+    ).toBe("hero");
+    expect(renderedDomId(bare({ cssId: 7, attributes: { id: "hero" } }))).toBe(
+      "hero"
+    );
+  });
+
+  it("folds the attribute name, because HTML does", () => {
+    expect(renderedDomId(bare({ attributes: { ID: "hero" } }))).toBe("hero");
+  });
+
+  it("lets a trailing EMPTY case variant overwrite an earlier one", () => {
+    // The renderer lowercases each key and assigns in turn, so
+    // `{ id: "hero", ID: "" }` leaves the element with `id=""`. Skipping the
+    // empty one keeps `hero` and reports an id that does not render — which
+    // then makes a copy rename itself away from an id nothing owns.
+    expect(
+      renderedDomId(bare({ attributes: { id: "hero", ID: "" } }))
+    ).toBeUndefined();
+  });
+
+  it("lets a trailing NON-empty variant win too", () => {
+    // The control. "Ignore empty values entirely" passes the case above only by
+    // accident; "last one wins, whatever it holds" is the rule.
+    expect(renderedDomId(bare({ attributes: { id: "", ID: "hero" } }))).toBe(
+      "hero"
+    );
+  });
+
+  it("reads a bag the RENDERER would read, not only a plain record", () => {
+    // The renderer does `Object.entries(attributes)` on any non-array object,
+    // so a class instance with an own `id` puts that id on the page. Narrowing
+    // to a plain record reported no id, and an insert then kept an incoming id
+    // the destination was already rendering.
+    class Bag {
+      id = "hero";
+    }
+    expect(renderedDomId(bare({ attributes: new Bag() }))).toBe("hero");
+    // Still absent for the shapes the renderer treats as absent.
+    expect(renderedDomIdIn(null)).toBeUndefined();
+    expect(renderedDomIdIn(["id"])).toBeUndefined();
+  });
+
+  it("asks the bag alone the same way", () => {
+    // The narrower question a surface asks when it needs to know whether an
+    // empty bag id would SHADOW something.
+    expect(renderedDomIdIn({ id: "hero", ID: "" })).toBe("");
+    expect(renderedDomIdIn({ id: "", ID: "hero" })).toBe("hero");
+    expect(renderedDomIdIn(null)).toBeUndefined();
+    expect(renderedDomIdIn(["id"])).toBeUndefined();
+  });
+
+  it("reports none when the node spells none", () => {
+    expect(renderedDomId(bare({}))).toBeUndefined();
+    expect(renderedDomId(bare({ attributes: { id: "" } }))).toBeUndefined();
   });
 });

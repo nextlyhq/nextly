@@ -17,7 +17,7 @@
  * @module components/features/widgets/archetypes/table
  */
 
-import { asText, selectsNothing } from "./cell-text";
+import { asPresentedText, selectsNothing } from "./cell-text";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
 /**
@@ -134,7 +134,10 @@ export const tableBody: ArchetypeBody = (result, definition) => {
                     {/* An em dash rather than an empty cell, so the grid of
                         cells stays legible and a missing value is visibly a
                         missing value. */}
-                    {asText(item[column.name]) ?? "—"}
+                    {/* Presented by the column's declared kind, so a date
+                        column reads as a date rather than as the ISO string
+                        it crossed the wire as. */}
+                    {asPresentedText(item[column.name], column.type) ?? "—"}
                   </td>
                 ))}
               </tr>

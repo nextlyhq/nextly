@@ -9,9 +9,12 @@
  * @module components/features/widgets/archetypes/stats
  */
 
+import type { ReactNode } from "react";
+
 import { Link } from "@admin/components/ui/link";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
 
+import { CountValue, countLabel } from "./count-value";
 import type { ArchetypeAccepts, CellsBody, CellSlotLookup } from "./types";
 
 /** A stats card is its cells, so a declaration without them draws nothing. */
@@ -33,13 +36,24 @@ export const statsAccepts: ArchetypeAccepts = definition => {
  * query's limit.
  */
 function cellValue(slot: WidgetSlot | undefined): {
-  text: string;
+  text: ReactNode;
   muted: boolean;
+  /** The spoken form, present only when there is a real number to speak. */
+  spoken?: string;
 } {
   if (!slot) return { text: "…", muted: true };
   if (!slot.ok) return { text: "—", muted: true };
   if (slot.result.op !== "count") return { text: "—", muted: true };
-  return { text: slot.result.total.toLocaleString(), muted: false };
+  // 🔴 Through the shared renderer, so a cell cannot present as exact a count
+  // its source reported as a floor. Formatting `total` alone here is what let
+  // one query render `2,000+` on a metric card and `2,000` in a stats cell.
+  return {
+    text: (
+      <CountValue total={slot.result.total} atLeast={slot.result.atLeast} />
+    ),
+    muted: false,
+    spoken: countLabel(slot.result.total, slot.result.atLeast),
+  };
 }
 
 export const statsBody: CellsBody = (definition, slotFor: CellSlotLookup) => {
@@ -86,7 +100,7 @@ export const statsBody: CellsBody = (definition, slotFor: CellSlotLookup) => {
         className="grid grid-cols-[repeat(auto-fit,minmax(6.5rem,1fr))] gap-4"
       >
         {cells.map(cell => {
-          const { text, muted } = cellValue(slotFor(cell.key));
+          const { text, muted, spoken } = cellValue(slotFor(cell.key));
           const value = (
             <span
               // `tabular-nums` for the reason `metric` uses it: the grid
@@ -105,10 +119,16 @@ export const statsBody: CellsBody = (definition, slotFor: CellSlotLookup) => {
                 {cell.link ? (
                   <Link
                     href={cell.link.href}
-                    // The number is the target, and the accessible name says
-                    // where it goes -- "1,204" alone tells a screen-reader user
-                    // nothing about what activating it does.
-                    aria-label={cell.link.label}
+                    // 🔴 The NUMBER as well as the destination. An
+                    // `aria-label` replaces the element's descendants as its
+                    // accessible name, so naming only the destination meant a
+                    // screen reader announced "Draft posts" and neither the
+                    // count nor, when the count was a floor, that it was one.
+                    // The label still ends with the destination, because
+                    // "1,204" alone says nothing about what activating it does.
+                    aria-label={
+                      spoken ? `${spoken}, ${cell.link.label}` : cell.link.label
+                    }
                     className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {value}

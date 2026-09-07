@@ -1050,6 +1050,181 @@ describe("resolveComponentInstances what an instance carries", () => {
     expect(result.referenced).toEqual(["hero", "empty"]);
   });
 
+  const twoSlotDefinition = () =>
+    component([box("t", [])], {
+      slots: {
+        grow: { label: "Grow", nodeId: "t", slot: "a" },
+        shrink: { label: "Shrink", nodeId: "t", slot: "b" },
+      },
+    });
+
+  const twoSlotPage = () =>
+    page([
+      instance(
+        "i1",
+        "hero",
+        {},
+        {
+          slots: {
+            grow: [instance("g", "big")],
+            shrink: [
+              instance("e1", "empty"),
+              instance("e2", "empty"),
+              instance("e3", "empty"),
+            ],
+          },
+        }
+      ),
+    ]);
+
+  it("retries a slot a sibling has since made room for", () => {
+    // The growing slot is declared first, so it is composed while the three
+    // empty components that will free its room have not been reached yet. It
+    // is refused, they compose, and the retry finds it fits after all — so the
+    // order two independent slots were declared in stops deciding whether the
+    // page renders.
+    const result = resolveComponentInstances(
+      twoSlotPage(),
+      defs({
+        hero: twoSlotDefinition(),
+        big: component([node("b1"), node("b2"), node("b3"), node("b4")]),
+        empty: component([]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 6 } }
+    );
+
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it("CONTROL: still refuses a page whose composed tree cannot fit", () => {
+    // Twice the definition, so no amount of retrying pays for it. Without this
+    // the rule above passes on an implementation that simply stops refusing.
+    const result = resolveComponentInstances(
+      twoSlotPage(),
+      defs({
+        hero: twoSlotDefinition(),
+        big: component([
+          node("b1"),
+          node("b2"),
+          node("b3"),
+          node("b4"),
+          node("b5"),
+          node("b6"),
+          node("b7"),
+          node("b8"),
+        ]),
+        empty: component([]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 6 } }
+    );
+
+    expect(result.unresolved.map(e => e.reason)).toEqual(["budget"]);
+  });
+
+  it("reports a starved instance ONCE when the retry fails too", () => {
+    // The retry re-walks the same content, so a second refusal records a
+    // second entry saying what the first already said. A publish check reading
+    // the list would count one problem twice.
+    const result = resolveComponentInstances(
+      twoSlotPage(),
+      defs({
+        hero: twoSlotDefinition(),
+        big: component([
+          node("b1"),
+          node("b2"),
+          node("b3"),
+          node("b4"),
+          node("b5"),
+          node("b6"),
+          node("b7"),
+          node("b8"),
+        ]),
+        empty: component([]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 6 } }
+    );
+
+    expect(result.unresolved).toHaveLength(1);
+  });
+
+  it("does not let one starved child take its owner down with it", () => {
+    // Slot content holding a growing instance and then a MISSING one. Each
+    // child fails for its own reason and neither reason is the owner's: a
+    // component that cannot fit and a component nobody published are both
+    // facts about the children, and promoting either into a refusal of the
+    // node that holds them costs a reader the whole component instead of the
+    // two blocks that could not be drawn.
+    const definition = component([box("t", [])], {
+      slots: { hole: { label: "Hole", nodeId: "t", slot: "a" } },
+    });
+    const doc = page([
+      instance(
+        "i1",
+        "hero",
+        {},
+        { slots: { hole: [instance("g", "big"), instance("m", "gone")] } }
+      ),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({
+        hero: definition,
+        big: component([node("b1"), node("b2"), node("b3")]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 3 } }
+    );
+
+    // The owner renders. Each child reports its own cause, and neither is
+    // promoted into a refusal of the component that holds them.
+    expect(result.unresolved).toEqual([
+      { instanceId: "g", componentId: "big", reason: "budget" },
+      { instanceId: "m", componentId: "gone", reason: "missing" },
+    ]);
+  });
+
+  it("retries across slots exposed on DIFFERENT definition nodes", () => {
+    // The two regions sit on two different nodes, so the walk reaches them one
+    // after the other. Retrying the first the moment it is composed asks again
+    // before the second has released anything, and the declaration order still
+    // decides — the retry has to wait for the whole prepass.
+    const definition = component([box("t1", []), box("t2", [])], {
+      slots: {
+        grow: { label: "Grow", nodeId: "t1", slot: "a" },
+        shrink: { label: "Shrink", nodeId: "t2", slot: "b" },
+      },
+    });
+    const doc = page([
+      instance(
+        "i1",
+        "hero",
+        {},
+        {
+          slots: {
+            grow: [instance("g", "big")],
+            shrink: [
+              instance("e1", "empty"),
+              instance("e2", "empty"),
+              instance("e3", "empty"),
+            ],
+          },
+        }
+      ),
+    ]);
+
+    const result = resolveComponentInstances(
+      doc,
+      defs({
+        hero: definition,
+        big: component([node("b1"), node("b2"), node("b3"), node("b4")]),
+        empty: component([]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 7 } }
+    );
+
+    expect(result.unresolved).toEqual([]);
+  });
+
   it("does not compose content bound for a default subtree the page replaced", () => {
     // Two exposed slots: one on a container, one on a node sitting inside that
     // container's DEFAULT children. Filling the outer slot replaces those
@@ -1265,6 +1440,185 @@ describe("resolveComponentInstances bounds", () => {
     // the instance naming it — the discrimination `malformed` cannot make.
     expect(result.unresolved.map(e => e.reason)).toEqual(["unreadable"]);
     expect(idsOf(result.document)).toEqual(["i1"]);
+  });
+});
+
+describe("a node that spells a DOM id twice and renders one", () => {
+  it("leaves a SHADOWED attribute id alone, and every reference to it", () => {
+    // The measured reproduction. `cssId` shadows the bag, so this node renders
+    // `actual` and never `hero` — and `hero` was therefore a reference to an
+    // element in the HOST, which resolved before composition. Scoping it points
+    // it at an id nothing renders, which is strictly worse than leaving it.
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        node("d1", {
+          cssId: "actual",
+          attributes: { id: "hero", "aria-describedby": "hero" },
+        }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[0]!.cssId).toContain("actual");
+    expect(nodes[0]!.cssId).not.toBe("actual");
+    expect(nodes[0]!.attributes!.id).toBe("hero");
+    expect(nodes[0]!.attributes!["aria-describedby"]).toBe("hero");
+  });
+
+  it("moves both spellings together when they carry one value", () => {
+    // Nothing is shadowed here: the two spell the SAME id, so the node renders
+    // it and both have to arrive at one replacement, or the copy answers to two
+    // addresses where the original answered to one.
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        node("d1", { cssId: "signup", attributes: { id: "signup" } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[0]!.attributes!.id).toBe(nodes[0]!.cssId);
+    expect(nodes[0]!.cssId).not.toBe("signup");
+  });
+
+  it("scopes an id the node carries ONLY in its attribute bag", () => {
+    // Nothing shadows it, so this bag id is what the node renders — and two
+    // instances of one definition would otherwise both put it on the page.
+    const doc = page([instance("i1", "hero"), instance("i2", "hero")]);
+    const definitions = defs({
+      hero: component([
+        node("d1", { attributes: { id: "hero", "aria-describedby": "hero" } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[0]!.attributes!.id).not.toBe("hero");
+    expect(nodes[0]!.attributes!.id).toContain("hero");
+    expect(nodes[0]!.attributes!.id).not.toBe(nodes[1]!.attributes!.id);
+    // And the reference inside the definition follows it, since the id it named
+    // IS the one this node renders.
+    expect(nodes[0]!.attributes!["aria-describedby"]).toBe(
+      nodes[0]!.attributes!.id
+    );
+  });
+
+  it("publishes no mapping for a bag it cannot rewrite", () => {
+    // `renderedDomId` mirrors the RENDERER, which emits an own `id` off any
+    // non-array object — including one with a custom prototype. The rewrite
+    // below is narrower. Asking the wide rule first published `hero -> minted`
+    // while the element kept `hero`, so a sibling reference was retargeted at
+    // an id nothing renders: strictly worse than leaving it.
+    const bag = Object.create({ inherited: true }) as Record<string, unknown>;
+    bag.id = "hero";
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        stored(node("d1") as ResolvedBlockNode, { attributes: bag }),
+        node("d2", { attributes: { "aria-describedby": "hero" } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[1]!.attributes!["aria-describedby"]).toBe("hero");
+  });
+
+  it("publishes no mapping for a bag past the envelope cap", () => {
+    // Same failure by the other route, and it is also where the unbounded read
+    // was: deriving the rendered id walked every key of a bag the resolver had
+    // not measured, once per instance.
+    const wide: Record<string, unknown> = { id: "hero" };
+    for (let i = 0; i <= MAX_ENVELOPE_ENTRIES; i++)
+      wide[`data-${String(i)}`] = "x";
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        stored(node("d1") as ResolvedBlockNode, { attributes: wide }),
+        node("d2", { attributes: { "aria-describedby": "hero" } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[1]!.attributes!["aria-describedby"]).toBe("hero");
+  });
+
+  it("reads the bag once, so a value that changes cannot split the two", () => {
+    // A bag entry can be a getter or a Proxy trap that answers differently each
+    // time. Deriving the rendered id from one reading and rewriting from a
+    // second let them disagree: `hero` reached the reference table while
+    // `other` stayed on the element. Survives a prototype of exactly
+    // `Object.prototype`, so neither earlier guard catches it.
+    let reads = 0;
+    const shifting: Record<string, unknown> = {};
+    Object.defineProperty(shifting, "id", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return reads === 1 ? "hero" : "other";
+      },
+    });
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        stored(node("d1") as ResolvedBlockNode, { attributes: shifting }),
+        node("d2", { attributes: { "aria-describedby": "hero" } }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    // The invariant, whichever value won: no reference names an id that is not
+    // on the element it points at.
+    expect(nodes[1]!.attributes!["aria-describedby"]).toBe(
+      nodes[0]!.attributes!.id
+    );
+  });
+
+  it("still scopes a cssId when the bag beside it is unreadable", () => {
+    // The boundary: a string `cssId` shadows the bag, so the rendered id does
+    // not depend on reading it. Refusing to scope here would leave two
+    // instances answering to one address.
+    const bag = Object.create({ inherited: true }) as Record<string, unknown>;
+    bag.id = "hero";
+    const doc = page([instance("i1", "hero"), instance("i2", "hero")]);
+    const definitions = defs({
+      hero: component([
+        stored(node("d1") as ResolvedBlockNode, {
+          cssId: "actual",
+          attributes: bag,
+        }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[0]!.cssId).toContain("actual");
+    expect(nodes[0]!.cssId).not.toBe(nodes[1]!.cssId);
+  });
+
+  it("scopes nothing for a node that renders no id at all", () => {
+    // An empty `cssId` still SHADOWS, so this node emits no usable id — and a
+    // bag value nothing renders must not reach the memo that rewrites
+    // references, for the reason the shadowed case above gives.
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({
+      hero: component([
+        stored(node("d1") as ResolvedBlockNode, {
+          cssId: "",
+          attributes: { id: "hero", "aria-describedby": "hero" },
+        }),
+      ]),
+    });
+
+    const nodes = resolveComponentInstances(doc, definitions).document.nodes;
+
+    expect(nodes[0]!.attributes!.id).toBe("hero");
+    expect(nodes[0]!.attributes!["aria-describedby"]).toBe("hero");
   });
 });
 

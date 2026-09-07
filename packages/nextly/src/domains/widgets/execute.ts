@@ -146,9 +146,10 @@ function describeSelectedFields(
     for (const key of Object.keys(item)) survived.add(key);
   }
 
-  const labels = new Map<string, string | undefined>(
-    source.fields.map(field => [field.name, field.label])
-  );
+  // The whole declared field, not just its label: the renderer needs the TYPE
+  // to present a value rather than print it, and looking the label up here
+  // while leaving the type behind is what made a date cross as an ISO string.
+  const declared = new Map(source.fields.map(field => [field.name, field]));
 
   const described: WidgetResultField[] = [];
   const taken = new Set<string>();
@@ -156,8 +157,12 @@ function describeSelectedFields(
     if (taken.has(name)) continue;
     taken.add(name);
     if (!survived.has(name)) continue;
-    const label = labels.get(name);
-    described.push({ name, ...(label !== undefined && { label }) });
+    const field = declared.get(name);
+    described.push({
+      name,
+      ...(field?.label !== undefined && { label: field.label }),
+      ...(field?.type !== undefined && { type: field.type }),
+    });
   }
 
   return described.length > 0 ? described : undefined;

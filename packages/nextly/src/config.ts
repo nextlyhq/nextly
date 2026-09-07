@@ -256,6 +256,12 @@ export {
   MAX_PLACEMENTS,
   type ColumnCount,
 } from "./domains/widgets/layout";
+// The VALUE as well as the type. A widget result names each column's kind, and
+// the admin has to decide which kinds it can present -- deriving that from this
+// tuple is what stops the browser silently erasing a kind core has started to
+// emit. `sources.ts` reaches only `NextlyError` and an import-free helper, so
+// publishing it on this client-safe surface pulls no server code after it.
+export { WIDGET_SOURCE_FIELD_TYPES } from "./domains/widgets/sources";
 export type {
   WidgetOp,
   WidgetSourceField,

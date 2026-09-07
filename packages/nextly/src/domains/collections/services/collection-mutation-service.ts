@@ -7273,6 +7273,16 @@ export class CollectionMutationService extends BaseService {
                   action: "update",
                   collection: params.collectionName,
                   entryId: params.entryId,
+                  // 🔴 The resolved write locale, exactly as the event-backed
+                  // path above records it. This seam bypasses the outbox --
+                  // a draft save changes no live document -- so omitting it
+                  // filed every localized draft edit as default-locale
+                  // activity, and the feed then authorized the row against the
+                  // default translation while its heading came from the edited
+                  // one.
+                  ...(localizedUpdate
+                    ? { locale: localizedUpdate.writeLocale }
+                    : {}),
                   data: workingDraftDocument ?? updatedDocument,
                   previous: priorWorkingDraftDocument ?? previousDocument,
                   actor: actorForWrite(params.actor, params.user),
@@ -7491,6 +7501,17 @@ export class CollectionMutationService extends BaseService {
         string,
         unknown
       >;
+      // Stamped BEFORE the hooks run, not only on the response below.
+      //
+      // A draft edit leaves `status` at the live parent's value, so a document
+      // handed to `afterUpdate` is indistinguishable from a real publish by its
+      // own fields — and the two mean opposite things to anything that reports
+      // on what a VISITOR sees, because this write changed nothing they can
+      // load. The read overlay already stamps this flag for the same reason; a
+      // hook could not ask the question at all until now.
+      if (workingDraftDocument) {
+        responseSource._isWorkingDraft = true;
+      }
 
       // The tags this update invalidates: the id and current-slug tags, plus the
       // previous-slug tag when the slug changed (captured in the transaction), so

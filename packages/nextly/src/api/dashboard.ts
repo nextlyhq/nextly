@@ -31,6 +31,7 @@ import {
   type ReadableResources,
   type ReadCaller,
 } from "../services/dashboard/readable-resources";
+import { registeredContentSlugs } from "../services/lib/registered-content-slugs";
 
 import { readAccessCaller, readCaller } from "./authenticated-read";
 import { respondData } from "./response-shapes";
@@ -54,9 +55,11 @@ async function getActivityLogService(): Promise<ActivityLogService> {
 /**
  * Every name the dashboard can describe, offered for a read decision.
  *
- * Three sources, and the third is the one that is easy to miss. The two content
- * registries give the collections and singles, so the set being authorized is
- * the set that would be counted. But the scope also bounds `/activity` and
+ * Three sources, and the third is the one that is easy to miss.
+ * {@link registeredContentSlugs} gives the collections and singles, so the set
+ * being authorized is the set that would be counted -- it is shared with the
+ * `system:versions` widget source, which bounds its cross-document read by the
+ * same candidates. But the scope also bounds `/activity` and
  * `recentChanges24h`, which filter `activity_log.collection` -- and that column
  * is a FREE STRING whose namespace is deliberately wider than the registries.
  * `recordSettingsActivity` files settings mutations under names that are
@@ -74,35 +77,9 @@ async function getActivityLogService(): Promise<ActivityLogService> {
  * `getRegisteredCollections` filters the registry list BY this scope, and
  * `filterByResource` can only ever narrow it -- a name that is not in the
  * registry cannot be added to it by appearing in the scope.
- *
- * A registry that cannot be reached contributes NOTHING rather than an
- * unbounded list -- an empty scope admits nothing, which is visible and
- * reportable; the alternative is a dashboard that widens when the container is
- * degraded.
  */
 async function registeredEntitySlugs(): Promise<string[]> {
-  const slugs: string[] = [...SETTINGS_ACTIVITY_NAMESPACES];
-  try {
-    const collections = await container
-      .get<{
-        getAllCollections: () => Promise<Array<{ slug: string }>>;
-      }>("collectionRegistryService")
-      .getAllCollections();
-    for (const collection of collections) slugs.push(String(collection.slug));
-  } catch {
-    // Unreachable registry: contribute nothing rather than guess.
-  }
-  try {
-    const singles = await container
-      .get<{
-        getAllSingles: () => Promise<Array<{ slug: string }>>;
-      }>("singleRegistryService")
-      .getAllSingles();
-    for (const single of singles) slugs.push(String(single.slug));
-  } catch {
-    // As above.
-  }
-  return slugs;
+  return [...SETTINGS_ACTIVITY_NAMESPACES, ...(await registeredContentSlugs())];
 }
 
 /**
@@ -224,10 +201,14 @@ export const getDashboardRecentEntries = withErrorHandler(
  * Query params:
  *   - limit: number (default: 5, max: 50)
  *
- * Body shape: `{ activities, total, hasMore }`. The activity feed is
- * cursor-style (`hasMore` flag, no page/limit/totalPages metadata
- * surfaced to clients), so this uses `respondData` rather than
- * `respondList`.
+ * Body shape: `{ activities, hasMore }`. The activity feed is cursor-style
+ * (`hasMore` flag, no page/limit/totalPages metadata surfaced to clients), so
+ * this uses `respondData` rather than `respondList`.
+ *
+ * No `total`, deliberately: it counted the rows the collection scope admitted,
+ * so it reported edits to documents the reader may not open, and narrowing it
+ * would mean authorizing every matching row — unbounded over a table that only
+ * grows. `ActivityLogResult` carries the same note beside the field's absence.
  */
 export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
@@ -240,10 +221,17 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
     : 5;
 
   const service = await getActivityLogService();
-  const scope = await resolveReadableResources(await readCaller(auth));
-  const result = await service.getRecentActivity({ limit, scope });
+  // The caller WHOLE, and resolved ONCE. Both consumers read it: the scope
+  // decides which collections are in reach, and the feed then authorizes each
+  // row's DOCUMENT as this caller -- a stored owner-only or custom read rule
+  // makes those two different sets, and a feed given only the scope reports one
+  // author's entry titles to another.
+  const caller = await readCaller(auth);
+  const scope = await resolveReadableResources(caller);
+  const result = await service.getRecentActivity({ limit, scope, caller });
 
-  // Cursor-shaped read: keep `hasMore` adjacent to `activities` and `total`.
+  // Cursor-shaped read: `hasMore` sits beside `activities`, with no `total` --
+  // see `ActivityLogResult` for why a count is not published here.
   // Spread into a fresh literal so the response-shape generic accepts the
   // named `ActivityLogResult` interface (no implicit index signature).
   return respondData({ ...result }, { headers: PRIVATE_NO_STORE_HEADERS });

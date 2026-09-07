@@ -407,7 +407,7 @@ describe("chrome decides whether the HOST frames the widget", () => {
 });
 
 describe("a declared permission", () => {
-  it("is refused when it is not a string", () => {
+  it("is refused when it is not a slug or a list of them", () => {
     // The field was declared and never checked, and the gap failed OPEN: the
     // dashboard's server filter reads "not a string" as "no permission
     // declared", so a widget whose author wrote `requiredPermission: { read:
@@ -415,7 +415,7 @@ describe("a declared permission", () => {
     // Refusing the declaration is the only place the mistake is still visible
     // to the person who made it.
     expect(widgetValueProblem({ requiredPermission: { read: true } })).toMatch(
-      /requiredPermission, when given, must be a string/
+      /requiredPermission, when given, must be a permission slug/
     );
     expect(widgetValueProblem({ requiredPermission: 42 })).toMatch(
       /requiredPermission/
@@ -430,6 +430,37 @@ describe("a declared permission", () => {
       widgetValueProblem({ requiredPermission: "invent-something" })
     ).toBeUndefined();
     expect(widgetValueProblem({})).toBeUndefined();
+  });
+
+  it("accepts an any-of list", () => {
+    expect(
+      widgetValueProblem({
+        requiredPermission: [
+          "read-content-releases",
+          "create-content-releases",
+        ],
+      })
+    ).toBeUndefined();
+  });
+
+  /*
+   * 🔴 The forms the array introduced, each refused for the same reason the
+   * object above is: they are PRESENT and unusable, and the gate reads an
+   * unusable declaration as a refusal. Admitting them here while the gate
+   * refuses them would hide a card with no error anywhere -- and admitting an
+   * empty array is worse than that, because "any of nothing" is satisfied by
+   * nobody, so `requiredPermission: []` would silently mean the opposite of
+   * what its author plainly wrote.
+   */
+  it.each([
+    ["an empty array", []],
+    ["an array with an empty member", ["read-posts", ""]],
+    ["an array with a non-slug member", ["read-posts", 7]],
+    ["an empty string", ""],
+  ])("refuses %s", (_label, requiredPermission) => {
+    expect(widgetValueProblem({ requiredPermission })).toMatch(
+      /requiredPermission/
+    );
   });
 });
 

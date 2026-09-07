@@ -68,6 +68,7 @@ export type {
   Condition,
   DocumentFormatVersion,
   DocumentKind,
+  BlockOrigin,
   DocumentSettings,
   LocaleOverlay,
   LocaleOverlayValue,
@@ -110,6 +111,11 @@ export {
   makeNode,
   expandSlotDefaults,
   walkNodes,
+  // The one forest rewrite. A caller changing a field across a stored tree
+  // needs its three learned behaviours — a cycle entry dropped, a malformed
+  // entry passed through, a malformed slot preserved — and writing a second
+  // traversal inherits none of them.
+  mapForest,
   findNode,
   locateNode,
   insertNode,
@@ -117,10 +123,20 @@ export {
   moveNode,
   reidSubtree,
   reidSubtreeWithMap,
+  // The forest form, which is the shape a saved selection actually has: a
+  // pattern is a run of siblings, and re-identifying its roots one at a time
+  // leaves a reference that crosses between them pointing at the original.
+  reidForestWithMap,
+  type DomIdPolicy,
   // The one rule for what a copied DOM id becomes. Public because two copiers
   // apply it — pattern insert and component composition — and a page may hold
   // the output of both, so a second spelling would put two ids on one target.
   mintDomId,
+  // Which nodes the renderer prunes, inherited down the subtree. Published
+  // because "is this id actually on the page" is asked by the planners, the
+  // copier and the editor's attribute panel, and three readings of it is three
+  // ways to disagree.
+  hiddenSubtreeNodes,
   // And the other half of it: an id that MOVED leaves every reference to it
   // pointing at nothing, and `aria-labelledby` resolving to nothing is an
   // element losing its accessible name in silence. Published as data and as a
@@ -128,21 +144,87 @@ export {
   // helpers still has to know which attributes carry an id.
   ID_REFERENCE_ATTRIBUTES,
   remapIdReferences,
+  // And what such a value IS, once its separators are gone. A consumer that
+  // fingerprints or compares copied content has to tokenise it exactly where
+  // the remapper does, and a `split` of their own agrees only until one moves.
+  idReferenceTokens,
   duplicateNode,
   updateNode,
 } from "./tree";
 export type {
   NodeLocation,
+  ReidentifiedForest,
   ReidentifiedSubtree,
   SlotDefaultSource,
   TreePosition,
 } from "./tree";
+
+// The one rule for which prop of a copied node holds a link, and what happens
+// to it. Published because the module claims to be the single source for every
+// copying surface, and a rule a consumer cannot import is a rule they will
+// write again — which is exactly how the fragment remap came to exist twice.
+export {
+  FRAGMENT_REFERENCE_PROPS,
+  remapFragmentBindings,
+  remapFragmentProps,
+} from "./fragment-refs";
+
+// Whether a selection is one run of siblings. Published because the editor and
+// every composition planner must agree on it, and they cannot share a
+// builder-side copy: a planner runs inside a plugin's server action, where the
+// builder — which peer-depends on React — has no business being imported.
+export { contiguousRun, siblingRun } from "./sibling-run";
+export type {
+  RunPlace,
+  RunProblem,
+  SiblingRun,
+  SiblingRunResult,
+} from "./sibling-run";
+
+// The composition planners: pure functions from a selection to the row to
+// create and the ops the page needs. Split from the doing so the caller can put
+// both writes in one unit of work and roll the create back — and so the dry run
+// and the real run are the same function rather than two that agree for now.
+export { patternDigest } from "./pattern-digest";
+export {
+  planConvertToComponent,
+  planInsertPattern,
+  planSaveAsComponent,
+  planSaveAsPattern,
+  planUpdatePatternFromSelection,
+} from "./composition-planners";
+export type {
+  ComponentExposure,
+  CompositionPlan,
+  InsertTarget,
+  StoredPattern,
+  PlacementTarget,
+  LibraryTarget,
+  PlanProblem,
+  PlanRefusal,
+  PlanResult,
+  PlannedCreate,
+  PlannedUpdate,
+  PatternUpdateTarget,
+  RequestedProperty,
+  RequestedSlot,
+} from "./composition-planners";
 
 // The node selection every reader of a stored document shares. Public because
 // the page-builder plugin's class-usage record has to stop exactly where the
 // style compiler stops: a class applied to a node the compiler styled but the
 // counter never reached is absent from the record a safe-delete check reads,
 // and absence there is indistinguishable from "not used".
+// The one answer to whether a stored value is a whole provenance record. A
+// consumer holding `BlockOrigin` and no way to check one has to write the check
+// again, and a second spelling of it admits records this package refuses.
+export { isBlockOrigin } from "./document";
+// The one rule for which DOM id a node actually renders. A node can spell one
+// two ways and emits at most one, so anything asking "what ids are on this
+// page" — a planner steering an insert around collisions, a duplicate check —
+// has to ask this rather than read the two fields independently.
+export { renderedDomId, renderedDomIdIn } from "./document";
+
 export { selectNodes } from "./select-nodes";
 export type {
   NodeSelection,
@@ -197,6 +279,7 @@ export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
 // contract that then drifts from the first.
 export type { ByteMeasurement } from "./measure-bytes";
 export {
+  componentEnvelopeIssues,
   validate,
   validateDocument,
   ISSUE_CODES,
@@ -639,6 +722,41 @@ export {
   isReservedOperationName,
   type ReservedOperationName,
 } from "./operations";
+
+// The op vocabulary itself: the edits an editor applies, addressed by id, with
+// the inverse derived before the mutation so undo is a fact rather than a
+// reconstruction. Exported from the ENGINE rather than owned by the editor
+// because applying an edit is not an editing-surface concern — a plugin route,
+// a script or an agent has the same right to it, and each would otherwise grow
+// its own vocabulary that agrees with this one only until one of them changed.
+export {
+  applyOp,
+  applyOps,
+  // Published for the planners: an insert whose subtree arrives locked is
+  // refused by the op layer, so a planner has to be able to foresee it rather
+  // than hand back a plan the apply throws on.
+  // And the document-level rule the apply runs before it looks at the op, so a
+  // plan is never built against a destination that cannot be edited at all.
+  documentRefusal,
+  forestRefusal,
+  lockedWithin,
+  // And the shape rule for what an insert will carry, for the same reason.
+  nodeShapeRefusal,
+  OpError,
+  // The apply's own position rule, asked without applying: a planner that
+  // wrote its own copy would agree until one of the two moved.
+  positionRefusal,
+  subtreeRemovalRefusal,
+  positionOf,
+  sameStoredValue,
+  sameStyleValue,
+  type AppliedOp,
+  type AppliedOps,
+  type BuilderOp,
+  type NodePatch,
+  type OpPosition,
+  type SlotAddress,
+} from "./ops";
 
 /**
  * The stored shape of rich text.

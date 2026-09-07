@@ -17,6 +17,7 @@ import { container } from "../di/container";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../errors/nextly-error";
 import { parsePermissionSlug } from "../plugins/routes/permission-slug";
+import type { ReadCaller } from "../services/dashboard/readable-resources";
 import type {
   AccessControlContext,
   CollectionAccessControl,
@@ -38,6 +39,41 @@ export interface ReadAccessCaller {
   permissions: string[];
   /** Role slugs, already normalized (session roles arrive as ids). */
   roles: string[];
+}
+
+/**
+ * The same caller a read endpoint resolved, in the shape an ENTITY-LEVEL read
+ * decision reads.
+ *
+ * Derived from {@link ReadCaller} rather than rebuilt from the `AuthContext`,
+ * and that is the whole point: `readCaller` has already resolved role IDs to
+ * slugs, and resolving them a second time is both an extra database read per
+ * request and a second chance to resolve them differently. One question, one
+ * resolution — the narrower view is derived from the richer one.
+ *
+ * `authenticatedScope` is present only for an API key, so its presence IS the
+ * auth method. Reading `actorType` rather than mere presence keeps that true if
+ * a future actor kind starts carrying a scope: a non-key actor must not be
+ * judged by {@link canReadEntity}'s api-key branch, which reads `permissions` as
+ * the key's own `{action}-{resource}` grants.
+ *
+ * Here rather than in `api/authenticated-read`, where it began, because a DOMAIN
+ * module needs it too — `system:versions` bounds a cross-document read by what
+ * its caller may see — and `domains/` must not import from `api/`. Reproducing
+ * the conversion there instead would be a second implementation of an access
+ * decision, which is the failure this module exists to prevent.
+ */
+export function readAccessCaller(caller: ReadCaller): ReadAccessCaller {
+  const isApiKey = caller.authenticatedScope?.actorType === "apiKey";
+  return {
+    userId: caller.user.id,
+    authMethod: isApiKey ? "api-key" : "session",
+    // A session caller carries none here on purpose: its grants are resolved
+    // from the database by `checkAccess`. Handing it the key vocabulary would
+    // answer "denied" for every check.
+    permissions: isApiKey ? (caller.authenticatedScope?.permissions ?? []) : [],
+    roles: caller.user.roles ?? [],
+  };
 }
 
 /** The RBAC service, or undefined before the container is initialized. */
