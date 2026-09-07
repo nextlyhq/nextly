@@ -46,6 +46,7 @@
  */
 import {
   COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
   isComponentDocument,
   isUnsetOverride,
   renderedDomId,
@@ -234,6 +235,13 @@ export interface ResolvedComposition {
   referenced: readonly string[];
   /** Every instance that could not be inlined. Empty on a clean resolution. */
   unresolved: readonly UnresolvedInstance[];
+  /**
+   * Every DOM id this resolution minted, mapped back to what it came from.
+   *
+   * Empty when nothing was scoped, which is also what a document holding no
+   * instances returns — the two say the same thing to every reader.
+   */
+  renamedDomIds: ReadonlyMap<string, string>;
 }
 
 /**
@@ -290,6 +298,7 @@ export function resolveComponentInstances(
     document,
     referenced: [],
     unresolved: [],
+    renamedDomIds: new Map<string, string>(),
   };
   if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
     return unchanged;
@@ -324,6 +333,7 @@ export function resolveComponentInstances(
     budget: limits.maxNodes - survey.count,
     taken: survey.ids,
     takenDomIds: survey.domIds,
+    renamedDomIds: new Map<string, string>(),
     minted: [],
     mintedDomIds: [],
     abort: undefined,
@@ -340,6 +350,7 @@ export function resolveComponentInstances(
     document: nodes === document.nodes ? document : { ...document, nodes },
     referenced: run.referenced,
     unresolved: run.unresolved,
+    renamedDomIds: run.renamedDomIds,
   };
 }
 
@@ -364,6 +375,22 @@ interface ResolveRun {
   taken: Set<string>;
   /** The same, for the ids that reach the DOM rather than the document. */
   takenDomIds: Set<string>;
+  /**
+   * Every DOM id this run MINTED, mapped back to the one it was derived from.
+   *
+   * Minted → original, not the other way round, and the direction is forced:
+   * one definition id becomes a different scoped id in every instance of that
+   * component, so keying on the original would keep only the last. A minted id
+   * is unique to its instance, so this direction stays injective however many
+   * instances a page holds.
+   *
+   * Published because the resolver is the only thing that knows it. A surface
+   * that turns composed content back into stored content — detaching an
+   * instance does exactly that — otherwise has to persist a render-time digest
+   * as though an author had typed it, or invert the mint by taking the string
+   * apart. This is the same gap `origin.renamed` closed for pattern inserts.
+   */
+  renamedDomIds: Map<string, string>;
   /**
    * The ids this run minted, in order, so a refused instance can give them
    * back. Host ids are not in it: they were never this run's to release.
@@ -639,6 +666,63 @@ function expandInstance(
   // slots — so a mark taken after it would leave a refused instance having
   // permanently charged the page for a tree nobody receives.
   const mark = savepoint(run);
+  let inlined: ResolvedBlockNode[] | null;
+  try {
+    inlined = inlinedDefinition(instance, definition, componentId, {
+      run,
+      scope,
+      depth,
+      presupplied,
+      owner,
+    });
+  } catch {
+    // Everything that follows CONSUMES the definition — its nodes, their props,
+    // their slots — and all of it is a caller's data. A field that computes
+    // itself and throws took that error out of a function promising a
+    // classification and a closed list of reasons. Guarding the envelope read
+    // was not enough: a NODE's fields are read later, by the clone.
+    //
+    // Contained at the expansion of ONE instance, which is the unit the
+    // savepoint already covers, so a definition that fails halfway gives back
+    // the ids and budget it had begun to claim — exactly as a refusal for the
+    // node budget does. `unreadable` is the reason this module already
+    // publishes for a supplied document it cannot read.
+    run.abort = undefined;
+    rollback(run, mark);
+    return [refuse(run, instance, componentId, "unreadable")];
+  }
+  if (inlined === null) {
+    const reason = run.abort ?? "budget";
+    run.abort = undefined;
+    rollback(run, mark);
+    return [refuse(run, instance, componentId, reason)];
+  }
+  return inlined;
+}
+
+/** Where an expansion sits, and what the host already composed for it. */
+interface InstancePlacement {
+  run: ResolveRun;
+  scope: ComposedScope;
+  depth: number;
+  presupplied?: Record<string, ResolvedBlockNode[]>;
+  owner?: string;
+}
+
+/**
+ * The definition's tree, inlined for one instance — the speculative half.
+ *
+ * Split from the refusal handling above so that everything which READS a
+ * caller's definition sits inside one boundary, and so the savepoint that pays
+ * for it is taken in exactly one place.
+ */
+function inlinedDefinition(
+  instance: ResolvedBlockNode,
+  definition: ComponentDocument,
+  componentId: string,
+  placement: InstancePlacement
+): ResolvedBlockNode[] | null {
+  const { run, scope, depth, presupplied, owner } = placement;
   // The instance node is REPLACED, so its own slot under the cap is freed for
   // what replaces it. Credited before the clone rather than after, or a
   // definition that exactly fills the remaining room is refused for needing
@@ -675,12 +759,7 @@ function expandInstance(
     cloneDefinitionForest(definition.nodes, ctx, 1),
     ctx
   );
-  if (inlined === null) {
-    const reason = run.abort ?? "budget";
-    run.abort = undefined;
-    rollback(run, mark);
-    return [refuse(run, instance, componentId, reason)];
-  }
+  if (inlined === null) return null;
   return withInstanceDevices(inlined, instance);
 }
 
@@ -815,6 +894,42 @@ function hideEach(
  * longer exists is ignored in silence: the element simply loses its name,
  * visibly to nobody who is not using assistive technology.
  */
+/** The three optional fields a relink can rewrite, plus the one it always does. */
+interface RelinkedFields {
+  attributes: ResolvedBlockNode["attributes"];
+  props: Record<string, unknown>;
+  bindings: ResolvedBlockNode["bindings"];
+  slots: ResolvedBlockNode["slots"];
+}
+
+/**
+ * One node with its rewritten fields, leaving ABSENT ones absent.
+ *
+ * Spread conditionally, the way `relinkOne` does for the same three fields.
+ * `{ ...node, bindings }` writes the key even when the value is `undefined`,
+ * and a key holding `undefined` is a value JSON cannot carry — `applyOp`
+ * refuses a whole insert for one. That went unnoticed while this output was
+ * only ever rendered; a resolved tree is now also what a detached instance is
+ * stored from, and an ordinary node with no attributes came out of here
+ * carrying `attributes: undefined`.
+ *
+ * Its own function so the walk that calls it stays inside the complexity the
+ * gate allows.
+ */
+function relinked(
+  node: ResolvedBlockNode,
+  fields: RelinkedFields
+): ResolvedBlockNode {
+  const { attributes, props, bindings, slots } = fields;
+  return {
+    ...node,
+    props,
+    ...(attributes === undefined ? {} : { attributes }),
+    ...(bindings === undefined ? {} : { bindings }),
+    ...(slots === undefined ? {} : { slots }),
+  };
+}
+
 function withRemappedIdReferences(
   roots: ResolvedBlockNode[] | null,
   ctx: InlineContext
@@ -855,7 +970,7 @@ function withRemappedIdReferences(
       ) {
         return node;
       }
-      return { ...node, attributes, props, bindings, slots };
+      return relinked(node, { attributes, props, bindings, slots });
     });
   const rewriteSlots = (
     slots: Record<string, ResolvedBlockNode[]>
@@ -919,7 +1034,16 @@ function rollback(run: ResolveRun, mark: Savepoint): void {
   }
   run.minted.length = mark.minted;
   for (let i = run.mintedDomIds.length - 1; i >= mark.mintedDomIds; i -= 1) {
-    run.takenDomIds.delete(run.mintedDomIds[i]);
+    const id = run.mintedDomIds[i];
+    run.takenDomIds.delete(id);
+    // The record of what it was derived from goes back with the claim itself.
+    // An abandoned expansion leaves the ORIGINAL instance standing, so a rename
+    // it had begun to make describes nothing in the returned document — and a
+    // consumer reversing the map would rewrite a reference using a mapping for
+    // an id nothing renders. Released here rather than in a pass of its own,
+    // keyed on the same list, so the two cannot come to disagree about what was
+    // given back.
+    run.renamedDomIds.delete(id);
   }
   run.mintedDomIds.length = mark.mintedDomIds;
 }
@@ -964,6 +1088,27 @@ function readDefinition(
   // document fault, so it takes `unreadable`: offering the publish remedy for
   // corrupt component data sends an author to the wrong screen, which is the
   // whole reason these reasons are a closed list rather than a message.
+  // Every read below is a caller's: the lookup is an object this module was
+  // handed, and the document it returns came from an import, a script or a
+  // database. A `kind` that computes itself and throws took the caller's error
+  // out of `resolveComponentInstances`, which promises a classification and a
+  // closed list of reasons — and out of every planner built on it.
+  //
+  // `unreadable` is the answer this function already declares for exactly this:
+  // "a value that IS supplied and cannot be read is a document fault". Nothing
+  // new is being invented, only made reachable.
+  try {
+    return readSuppliedDefinition(componentId, run);
+  } catch {
+    return "unreadable";
+  }
+}
+
+/** The lookup's answer for one component, read as the caller supplied it. */
+function readSuppliedDefinition(
+  componentId: string,
+  run: ResolveRun
+): ComponentDocument | ComponentUnresolvedReason {
   if (!run.definitions.has(componentId)) return "missing";
   // Read ONCE and carried out, so expansion never asks again.
   const definition = run.definitions.get(componentId);
@@ -977,6 +1122,17 @@ function readDefinition(
   // and slots meaning nothing. The kind is what the engine already publishes
   // an answer for.
   if (!isComponentDocument(definition)) return "unreadable";
+  // The FORMAT, on the same read. `unreadable` already means "an envelope this
+  // build does not understand" — the reason existed and nothing asked the
+  // question. A definition written in a format this build cannot interpret was
+  // inlined regardless, so a surface that persists what it inlines wrote
+  // content read under the wrong rules into a page.
+  //
+  // Asked HERE rather than by the caller, because the lookup is a caller's
+  // object and nothing in its contract makes it pure: validating one `get` and
+  // expanding a second means the document that was checked is not the document
+  // that is used.
+  if (definition.formatVersion !== DOCUMENT_FORMAT_VERSION) return "unreadable";
   return definition;
 }
 
@@ -1921,6 +2077,7 @@ function scopedDomId(
   if (existing !== undefined) return existing;
   const minted = claimDomId(ctx.run, mintDomId(value, nodeId));
   ctx.domIds.set(value, minted);
+  ctx.run.renamedDomIds.set(minted, value);
   return minted;
 }
 
