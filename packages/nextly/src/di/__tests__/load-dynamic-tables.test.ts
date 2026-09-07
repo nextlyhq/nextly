@@ -210,6 +210,48 @@ describe("loadDynamicTables — fault tolerance", () => {
     expect(register).not.toHaveBeenCalled();
   });
 
+  /*
+   * 🔴 The swallow above is right for a FRESH database and wrong for a caller
+   * that has just migrated: there the table certainly exists, so a failed read
+   * means that caller's registry is stale and it must not report a reload as
+   * done. Resolving silently gives both callers the same answer to different
+   * questions, so the failure is now offered to whoever asked for it.
+   *
+   * Driven through the REAL loader. The boot reload's own tests mock this
+   * module, so they can only show that it reacts to `onReadError` -- nothing
+   * there says this function ever calls it.
+   */
+  it("tells a caller that asked when the read itself failed", async () => {
+    const { adapter } = makeAdapter([], { throwOnSelect: true });
+    const register = vi.fn(async () => {});
+    const onReadError = vi.fn();
+
+    await expect(
+      loadDynamicTables(adapter, "dynamic_singles", register, onReadError)
+    ).resolves.toBeUndefined();
+
+    expect(onReadError).toHaveBeenCalledTimes(1);
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it("does not report a read error when the read succeeded", async () => {
+    // The control: a callback fired unconditionally would satisfy the case
+    // above while telling every healthy boot its registry is stale.
+    const { adapter } = makeAdapter([
+      { table_name: "single_ok", fields: "[]", slug: "ok", status: 0 },
+    ]);
+    const onReadError = vi.fn();
+
+    await loadDynamicTables(
+      adapter,
+      "dynamic_singles",
+      vi.fn(async () => {}),
+      onReadError
+    );
+
+    expect(onReadError).not.toHaveBeenCalled();
+  });
+
   it("isolates failures per row — a thrown register continues with the next row", async () => {
     const { adapter } = makeAdapter([
       { table_name: "single_bad", fields: "[]", slug: "bad", status: 0 },

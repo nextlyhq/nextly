@@ -24,6 +24,12 @@ vi.mock("../../domains/schema/services/runtime-schema-generator", () => ({
   generateRuntimeSchema: () => ({ table: {} }),
 }));
 
+const registerComponentSchemas = vi.hoisted(() => vi.fn(async () => 0));
+vi.mock(
+  "../../domains/field-groups/services/register-field-group-schemas",
+  () => ({ registerComponentSchemas })
+);
+
 // The in-flight and queued runs are pinned to `globalThis`, so one test's
 // leftovers would otherwise be answered to the next test's callers.
 const reloadGlobals = globalThis as unknown as {
@@ -59,6 +65,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   containerGet.mockReset();
   loadDynamicTables.mockReset();
+  registerComponentSchemas.mockReset();
+  registerComponentSchemas.mockResolvedValue(0);
 });
 
 describe("reloadDynamicTables", () => {
@@ -122,14 +130,78 @@ describe("reloadDynamicTables", () => {
   });
 
   /*
-   * 🔴 Never throws, and the production caller depends on it: it reloads before
-   * `allowBootMigrations()`, so an exception escaping here would leave that gate
-   * closed and hang every consumer waiting on it.
+   * 🔴 `loadDynamicTables` RESOLVES when the registry read fails -- it swallows
+   * that for the fresh database it was written for -- so a test that mocks it
+   * to REJECT asserts a behaviour the real dependency never produces, and the
+   * silence this path has to notice would go unnoticed. The loader now tells
+   * its caller, and this drives that channel rather than a rejection.
    */
-  it("does not throw when the load fails", async () => {
+  it("reports a swallowed read failure instead of claiming success", async () => {
     ready();
-    loadDynamicTables.mockRejectedValue(new Error("table is gone"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The real loader's shape: resolve, having told the caller it read nothing.
+    loadDynamicTables.mockImplementation(
+      async (
+        _adapter: unknown,
+        _table: unknown,
+        _register: unknown,
+        onReadError?: (e: unknown) => void
+      ) => {
+        onReadError?.(new Error("relation does not exist"));
+      }
+    );
+
+    await reloadDynamicTables("[t]");
+
+    expect(warn.mock.calls.flat().join(" ")).toMatch(/INCOMPLETE/);
+    // And it did NOT also claim the reload finished.
+    expect(log.mock.calls.flat().join(" ")).not.toMatch(/reloaded:/);
+  });
+
+  it("still reports success when nothing failed", async () => {
+    // The control: a rule that warned unconditionally would satisfy the case
+    // above while never reporting a healthy reload.
+    ready();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    loadDynamicTables.mockResolvedValue(undefined);
+
+    await reloadDynamicTables("[t]");
+
+    expect(log.mock.calls.flat().join(" ")).toMatch(/reloaded:/);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  /*
+   * 🔴 A migration generated from a UI manifest writes `dynamic_components`
+   * rows beside the collection and single ones, and a `comp_` table missing
+   * from the registry is unaddressable exactly as a collection would be.
+   * Through `registerComponentSchemas` rather than a third read, because that
+   * path also resolves the storage rename's type column per table and
+   * registers the `_locales` companion for a localized group.
+   */
+  it("registers field groups through the component path", async () => {
+    ready();
+    loadDynamicTables.mockResolvedValue(undefined);
+    registerComponentSchemas.mockResolvedValue(2);
+
+    await reloadDynamicTables("[t]");
+
+    expect(registerComponentSchemas).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the entity reload when field groups cannot be registered", async () => {
+    // One unregisterable group must not cost the collections and singles their
+    // reload -- and the caller must still not see a throw, because it reloads
+    // before the boot gate opens.
+    ready();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    loadDynamicTables.mockResolvedValue(undefined);
+    registerComponentSchemas.mockRejectedValue(new Error("comp registry gone"));
+
     await expect(reloadDynamicTables("[t]")).resolves.toBeUndefined();
+    expect(warn.mock.calls.flat().join(" ")).toMatch(/field groups/);
   });
 
   it("does not throw when the registry is not in the container", async () => {

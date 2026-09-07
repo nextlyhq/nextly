@@ -74,7 +74,21 @@ export async function loadDynamicTables(
      * tables hold both kinds. `undefined` where the registry is too old to say.
      */
     builderOwned: boolean | undefined
-  ) => Promise<void>
+  ) => Promise<void>,
+  /**
+   * Told when the registry read itself failed, rather than swallowing it.
+   *
+   * 🔴 The catch below exists for a FRESH database, where the registry table
+   * does not exist yet and an empty result is the right answer. A caller that
+   * has just run migrations is in the opposite situation: the table certainly
+   * exists, so a failed read means its registry is stale and it must not report
+   * the reload as done. Those two callers need different answers from the same
+   * silence, and only the caller knows which it is.
+   *
+   * Optional, so the boot-time registry build keeps the fresh-database
+   * behaviour it was written for without restating it.
+   */
+  onReadError?: (error: unknown) => void
 ): Promise<void> {
   // Components have no `status` column (they're not Draft/Published) — selecting it
   // would fail. They DO carry `localized` (i18n). Collections/singles carry both.
@@ -167,8 +181,10 @@ export async function loadDynamicTables(
         // Skip individual row if schema generation fails.
       }
     }
-  } catch {
-    // Dynamic table may not exist yet (fresh database).
+  } catch (err) {
+    // Dynamic table may not exist yet (fresh database), which is why this is
+    // swallowed by default. A caller that knows better says so.
+    onReadError?.(err);
   }
 }
 

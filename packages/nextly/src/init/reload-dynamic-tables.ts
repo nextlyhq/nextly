@@ -20,6 +20,7 @@
 // A TYPE-only import, so naming the loader's parameter costs nothing at
 // runtime: the specifier is erased, and the loader itself is still imported
 // dynamically below to keep it off the boot path until a reload actually runs.
+import type { SchemaRegistry } from "../database/schema-registry";
 import type { loadDynamicTables } from "../di/load-dynamic-tables";
 
 /**
@@ -77,7 +78,14 @@ function startReload(label: string): Promise<void> {
 /** What a registry reload needs from the container, once both are present. */
 interface ReloadDeps {
   adapter: Parameters<typeof loadDynamicTables>[0];
-  registerDynamicSchema: (tableName: string, table: unknown) => void;
+  /**
+   * The registry itself, not a bound method off it.
+   *
+   * The container hands both services back untyped, so they are narrowed ONCE
+   * where they are read; carrying the registry whole lets the field-group path
+   * register into the same object rather than being handed a second view of it.
+   */
+  registry: SchemaRegistry;
   dialect: "postgresql" | "mysql" | "sqlite";
 }
 
@@ -101,19 +109,87 @@ async function runReload(label: string): Promise<void> {
     const deps = await resolveDeps(label);
     if (!deps) return;
 
-    // Both registries, one pass each, through one loader. They differ only in
-    // the table read; spelling the body twice is how the two would drift.
+    // Both entity registries, one pass each, through one loader. They differ
+    // only in the table read; spelling the body twice is how the two drift.
+    let registered = 0;
+    const failures: string[] = [];
     for (const table of ["dynamic_collections", "dynamic_singles"] as const) {
-      await loadInto(deps, table);
+      registered += await loadInto(deps, table, err => {
+        failures.push(
+          `${table}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      });
     }
 
-    console.log(`${label} Schema registry reloaded from migration metadata.`);
+    /*
+     * 🔴 Field groups go through `registerComponentSchemas`, not a third turn
+     * of the loop above. A migration generated from a UI manifest writes
+     * `dynamic_components` rows alongside the collection and single ones, and
+     * a `comp_` table that is not in the registry is unaddressable exactly as a
+     * collection would be. The registration is more than a runtime schema —
+     * it resolves the storage rename's type column per table and registers the
+     * `_locales` companion for a localized group — and that logic already
+     * exists here. Restating the parts of it this module happens to need is
+     * how the two would come to disagree.
+     */
+    const components = await registerComponents(deps, label, failures);
+
+    if (failures.length > 0) {
+      console.warn(
+        `${label} Schema registry reload INCOMPLETE (${failures.join("; ")}). ` +
+          `Entities this boot registered may not be queryable until a restart.`
+      );
+      return;
+    }
+
+    console.log(
+      `${label} Schema registry reloaded: ${registered} entities, ` +
+        `${components} field groups.`
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(
       `${label} Schema registry reload failed: ${msg}. ` +
-        `Collections this boot registered are not queryable until a restart.`
+        `Entities this boot registered are not queryable until a restart.`
     );
+  }
+}
+
+/**
+ * Register every field group's runtime schema, or record why it could not be.
+ *
+ * Separated because it is the one part of a reload that is NOT a read of a
+ * metadata table: it is a whole registration path with its own dependencies,
+ * and inlining it put a second subject inside the loop above.
+ */
+async function registerComponents(
+  deps: ReloadDeps,
+  label: string,
+  failures: string[]
+): Promise<number> {
+  try {
+    const { registerComponentSchemas } = await import(
+      "../domains/field-groups/services/register-field-group-schemas"
+    );
+    return await registerComponentSchemas({
+      adapter: deps.adapter,
+      registry: deps.registry,
+      dialect: deps.dialect,
+      logger: {
+        debug: (m: string) => console.debug(`${label} ${m}`),
+        info: (m: string) => console.log(`${label} ${m}`),
+        warn: (m: string) => console.warn(`${label} ${m}`),
+        error: (m: string) => console.error(`${label} ${m}`),
+      },
+    });
+  } catch (err) {
+    // Recorded rather than thrown: one unregisterable group must not cost the
+    // collections and singles their reload, and this function's caller must
+    // never throw.
+    failures.push(
+      `field groups: ${err instanceof Error ? err.message : String(err)}`
+    );
+    return 0;
   }
 }
 
@@ -134,29 +210,34 @@ async function resolveDeps(label: string): Promise<ReloadDeps | undefined> {
   const { getCapabilities } = adapter as {
     getCapabilities: () => { dialect: "postgresql" | "mysql" | "sqlite" };
   };
-  const { registerDynamicSchema } = schemaRegistry as {
-    registerDynamicSchema: (tableName: string, table: unknown) => void;
-  };
 
   return {
     adapter: adapter as ReloadDeps["adapter"],
-    // Bound to the registry, because both are read off the container as
-    // untyped services and a bare method reference would lose its receiver.
-    registerDynamicSchema: registerDynamicSchema.bind(schemaRegistry),
+    registry: schemaRegistry as SchemaRegistry,
     dialect: getCapabilities.call(adapter).dialect,
   };
 }
 
-/** Read one metadata table and register a runtime schema for each row. */
+/**
+ * Read one metadata table, register a runtime schema per row, and say how many.
+ *
+ * 🔴 Returns a COUNT rather than nothing, because `loadDynamicTables` resolves
+ * whether or not it read anything — it swallows a failed read for the fresh
+ * database it was written for. Reporting "reloaded" off its resolution alone
+ * claimed a repair that may not have happened; the number is what this pass
+ * actually did, and `onReadError` is what separates zero rows from no read.
+ */
 async function loadInto(
   deps: ReloadDeps,
-  table: "dynamic_collections" | "dynamic_singles"
-): Promise<void> {
+  table: "dynamic_collections" | "dynamic_singles",
+  onReadError: (error: unknown) => void
+): Promise<number> {
   const { loadDynamicTables } = await import("../di/load-dynamic-tables");
   const { generateRuntimeSchema } = await import(
     "../domains/schema/services/runtime-schema-generator"
   );
 
+  let registered = 0;
   await loadDynamicTables(
     deps.adapter,
     table,
@@ -167,8 +248,11 @@ async function loadInto(
         deps.dialect,
         { status: hasStatus === true, localized: localized === true }
       );
-      deps.registerDynamicSchema(tableName, runtime);
+      deps.registry.registerDynamicSchema(tableName, runtime);
+      registered += 1;
       return Promise.resolve();
-    }
+    },
+    onReadError
   );
+  return registered;
 }
