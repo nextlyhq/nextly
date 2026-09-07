@@ -234,6 +234,13 @@ export interface ResolvedComposition {
   referenced: readonly string[];
   /** Every instance that could not be inlined. Empty on a clean resolution. */
   unresolved: readonly UnresolvedInstance[];
+  /**
+   * Every DOM id this resolution minted, mapped back to what it came from.
+   *
+   * Empty when nothing was scoped, which is also what a document holding no
+   * instances returns — the two say the same thing to every reader.
+   */
+  renamedDomIds: ReadonlyMap<string, string>;
 }
 
 /**
@@ -290,6 +297,7 @@ export function resolveComponentInstances(
     document,
     referenced: [],
     unresolved: [],
+    renamedDomIds: new Map<string, string>(),
   };
   if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
     return unchanged;
@@ -324,6 +332,7 @@ export function resolveComponentInstances(
     budget: limits.maxNodes - survey.count,
     taken: survey.ids,
     takenDomIds: survey.domIds,
+    renamedDomIds: new Map<string, string>(),
     minted: [],
     mintedDomIds: [],
     abort: undefined,
@@ -340,6 +349,7 @@ export function resolveComponentInstances(
     document: nodes === document.nodes ? document : { ...document, nodes },
     referenced: run.referenced,
     unresolved: run.unresolved,
+    renamedDomIds: run.renamedDomIds,
   };
 }
 
@@ -364,6 +374,22 @@ interface ResolveRun {
   taken: Set<string>;
   /** The same, for the ids that reach the DOM rather than the document. */
   takenDomIds: Set<string>;
+  /**
+   * Every DOM id this run MINTED, mapped back to the one it was derived from.
+   *
+   * Minted → original, not the other way round, and the direction is forced:
+   * one definition id becomes a different scoped id in every instance of that
+   * component, so keying on the original would keep only the last. A minted id
+   * is unique to its instance, so this direction stays injective however many
+   * instances a page holds.
+   *
+   * Published because the resolver is the only thing that knows it. A surface
+   * that turns composed content back into stored content — detaching an
+   * instance does exactly that — otherwise has to persist a render-time digest
+   * as though an author had typed it, or invert the mint by taking the string
+   * apart. This is the same gap `origin.renamed` closed for pattern inserts.
+   */
+  renamedDomIds: Map<string, string>;
   /**
    * The ids this run minted, in order, so a refused instance can give them
    * back. Host ids are not in it: they were never this run's to release.
@@ -1921,6 +1947,7 @@ function scopedDomId(
   if (existing !== undefined) return existing;
   const minted = claimDomId(ctx.run, mintDomId(value, nodeId));
   ctx.domIds.set(value, minted);
+  ctx.run.renamedDomIds.set(minted, value);
   return minted;
 }
 

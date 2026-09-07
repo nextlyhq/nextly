@@ -194,6 +194,7 @@ export type {
 export { patternDigest } from "./pattern-digest";
 export {
   planConvertToComponent,
+  planDetach,
   planDuplicateComponent,
   planInsertPattern,
   planSaveAsComponent,

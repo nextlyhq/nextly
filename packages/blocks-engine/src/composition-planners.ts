@@ -26,6 +26,7 @@
 import {
   COMPONENT_INSTANCE_TYPE,
   isComponentDocument,
+  isComponentInstance,
   renderedDomId,
 } from "./document";
 import type {
@@ -62,8 +63,12 @@ import {
 } from "./ops";
 import { patternDigest } from "./pattern-digest";
 import { isPlainRecord } from "./plain-record";
-import { componentIdsIn } from "./resolve-instances";
-import { boundedOwnKeys, defineEntry } from "./safe-record";
+import {
+  componentIdsIn,
+  resolveComponentInstances,
+  type DefinitionsById,
+} from "./resolve-instances";
+import { boundedOwnKeys, defineEntry, ownKeys } from "./safe-record";
 import { contiguousRun, type RunProblem } from "./sibling-run";
 import {
   findNode,
@@ -2293,6 +2298,408 @@ function walkRenderedIds(
     if (hidden.has(node)) return;
     const id = renderedDomId(node);
     if (id !== undefined) fn(id);
+  });
+}
+
+/**
+ * Detach a component instance: inline what it renders, and stop tracking it.
+ *
+ * The instance is replaced, where it stands, by the nodes it was drawing —
+ * the definition's tree with this instance's overrides, variant and slot
+ * content already applied. Afterwards the author owns those nodes outright and
+ * an edit to the definition no longer reaches them, which is the whole point:
+ * detach is how a page escapes a component without losing what it looked like.
+ *
+ * One way, and undoable only through history. Every builder that ships this
+ * ships it that way — Webflow's `unlinkComponent`, Gutenberg's unsynced
+ * pattern, Figma's detached instance — and the reason is that the inverse is
+ * not well defined: once the nodes are edited there is no telling which of them
+ * the definition would still claim.
+ *
+ * ## What it renders, through the renderer's own resolver
+ *
+ * The inlined nodes come from {@link resolveComponentInstances}, not from a
+ * second traversal of the definition. Overrides, variant selection, exposed
+ * slots and their defaults are a body of rules that already exists and is
+ * already tested; a planner that re-applied them would agree with the page
+ * until one of the two moved, and the failure would be silent — a detach that
+ * produces subtly different content from what the author was looking at.
+ *
+ * ## Nested instances stay linked, by construction
+ *
+ * A component the author dropped INTO this instance's slot is their content,
+ * not this component's, and detaching their host says nothing about it. That
+ * rule cannot be had from the resolver's depth cap: `maxComposedDepth` bounds
+ * DEFINITION-internal nesting, and supplied slot content is composed in the
+ * host's own scope where the depth never advances — measured, a nested instance
+ * in supplied content is fully inlined at depth 1, losing its link.
+ *
+ * So the content never reaches the resolver. Each supplied slot is swapped for
+ * a placeholder, the definition is resolved around those, and the author's own
+ * nodes are put back afterwards untouched. Nothing has to detect a nested
+ * instance because nothing was ever in a position to inline one.
+ *
+ * ## The author's content moves; the definition's is copied
+ *
+ * Two different things happen to two different halves, and conflating them is
+ * the defect this shape avoids. Supplied slot content MOVES: it keeps its node
+ * ids and its authored DOM ids, because it is the same content in a new parent
+ * and the instance that held it is removed in the same group. The definition's
+ * contribution is a COPY: it takes fresh node ids, and it may keep its authored
+ * DOM ids only where the page has none to collide with.
+ *
+ * The resolver's own ids are never persisted either way. It mints a `cx-`
+ * scoped id per composed node — a render-time digest, deliberately not a stored
+ * id shape — and re-minting DOM ids unconditionally is the defect
+ * `planInsertPattern` was fixed for: an id renamed on a page that had no
+ * conflict grows a suffix every cycle.
+ */
+export function planDetach(
+  document: BlockDocument,
+  instanceId: string,
+  definitions: DefinitionsById,
+  nesting: NestingSource,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): PlanResult<never> {
+  // Everything `applyOp` asks before it looks at an op, asked exactly as the
+  // other planners ask it: the envelope, then the whole forest, because a
+  // malformed node the author never touched refuses the first op of a group.
+  if (
+    documentRefusal(document) !== undefined ||
+    forestRefusal(document.nodes) !== undefined
+  ) {
+    return { problem: "unusable-document" };
+  }
+
+  const located = locatedInstance(document, instanceId);
+  if (located.problem !== undefined) return located;
+
+  const position = replacementPosition(located.at);
+  if (position.problem !== undefined) return position;
+
+  // The page as it will BE, taken from the op layer rather than derived: the
+  // remove has to succeed for anything else to matter, and its result is also
+  // the only honest answer to "which DOM ids are still taken". The instance's
+  // own subtree is not among them — that content is moving, not being copied
+  // beside itself, and treating it as taken renames the author's own anchors.
+  const locked =
+    lockRefusal([located.node]) ?? removableRefusal(document, [located.node]);
+  if (locked !== undefined) return locked;
+
+  const removal: BuilderOp = { kind: "remove", id: located.node.id };
+  let remaining: BlockDocument;
+  try {
+    remaining = applyOps(document, [removal], limits).document;
+  } catch {
+    return { problem: "unusable-document" };
+  }
+
+  const inlined = detachedRoots(
+    document,
+    located.node,
+    definitions,
+    domIdsIn(remaining.nodes),
+    limits
+  );
+  if (inlined.problem !== undefined) return inlined;
+
+  const destination = destinationOf(document, position.at);
+  if (destination.problem !== undefined) return destination;
+
+  // Asked of the nodes GOING IN, not of the instance they replace. A slot that
+  // accepted a component instance need not accept what the component draws.
+  const refusal =
+    placementRefusal(inlined.roots, destination.place.where, nesting) ??
+    internalNestingRefusal(inlined.roots, nesting);
+  if (refusal !== undefined) return refusal;
+
+  const ops: BuilderOp[] = [
+    removal,
+    ...inlined.roots.map(
+      (node, offset): BuilderOp => ({
+        kind: "insert",
+        node,
+        at: { ...position.at, index: position.at.index + offset },
+      })
+    ),
+  ];
+
+  // The byte cap, asked of the apply because the apply is the only thing that
+  // can answer it: a definition larger than the instance it replaces can push a
+  // page over a ceiling it was inside. Run on a copy, since `applyOps` is pure.
+  try {
+    applyOps(document, ops, limits);
+  } catch {
+    return { problem: "exceeds-limits" };
+  }
+
+  return { pageOps: ops };
+}
+
+/** An instance found on the page, with the position it holds. */
+interface LocatedInstance {
+  readonly node: BlockNode;
+  readonly at: RunPlacement;
+  readonly problem?: undefined;
+  readonly permitted?: undefined;
+}
+
+/**
+ * The one instance being detached, and where it sits.
+ *
+ * Through {@link contiguousRun}, which is how every other planner asks a
+ * document where a selection is — so the index a detach inserts at is computed
+ * by the same code that computes it for a save, rather than by a second search
+ * that can answer differently.
+ *
+ * Not through `savableRun`: that one also asks whether the selection could be
+ * lifted to a document ROOT, which is a question about saving. An instance that
+ * may not be a root is still perfectly detachable where it stands.
+ */
+function locatedInstance(
+  document: BlockDocument,
+  instanceId: string
+): LocatedInstance | PlanRefusal {
+  const result = contiguousRun(document.nodes, [instanceId]);
+  if (result.run === undefined) return { problem: result.problem };
+  const place = result.run.places[0];
+  if (place === undefined) return { problem: "unknown" };
+
+  const shape = shapeRefusal([place.node]);
+  if (shape !== undefined) return shape;
+  // A node that is not an instance has nothing to detach FROM, and inlining
+  // whatever it is would replace it with itself under a provenance record that
+  // is not true.
+  if (!isComponentInstance(place.node)) return { problem: "not-a-component" };
+
+  const { parentId, slot } = result.run;
+  return {
+    node: place.node,
+    at: {
+      ...(parentId === undefined ? {} : { parentId }),
+      ...(slot === undefined ? {} : { slot }),
+      index: place.index,
+    },
+  };
+}
+
+/** The nodes an instance was drawing, ready to stand on the page themselves. */
+interface DetachedRoots {
+  readonly roots: readonly BlockNode[];
+  readonly problem?: undefined;
+  readonly permitted?: undefined;
+}
+
+/**
+ * Resolve one instance into the nodes it renders, keeping its slot content out.
+ *
+ * The supplied slots are lifted off before the resolver sees them and put back
+ * after, which is what makes "a nested instance stays linked" true by
+ * construction rather than by a pass that hunts for one afterwards.
+ *
+ * Content the resolver does NOT place is content the page does not render —
+ * a slot the definition does not expose, say — and it is not carried over. The
+ * page showed the author what detaching would leave them, and this produces
+ * exactly that.
+ */
+function detachedRoots(
+  document: BlockDocument,
+  instance: BlockNode,
+  definitions: DefinitionsById,
+  taken: ReadonlySet<string>,
+  limits: DocumentLimits
+): DetachedRoots | PlanRefusal {
+  const componentId = instance.props?.componentId;
+  if (typeof componentId !== "string" || componentId === "") {
+    return { problem: "invalid-source" };
+  }
+
+  const held = suppliedSlots(instance);
+  // The page's OWN envelope, with only this instance in it. Built from the
+  // document rather than assembled, so the resolver reads the format version
+  // and settings the page actually carries.
+  const probe: BlockDocument = {
+    ...document,
+    nodes: [{ ...instance, slots: held.slots }],
+  };
+  const resolved = resolveComponentInstances(probe, definitions, {
+    maxComposedDepth: 1,
+    limits,
+  });
+  // The instance itself left standing means there is nothing to inline: the
+  // definition is missing, unpublished, or refused. Detaching to nothing would
+  // delete the author's section.
+  if (resolved.unresolved.some(one => one.componentId === componentId)) {
+    return { problem: "not-a-component" };
+  }
+
+  // TWO passes of the one copier, because two different things are being
+  // undone and each has its own policy.
+  //
+  // First the resolver's own scoping. It mints a `cx-` suffixed DOM id per
+  // composed node so two instances of a component do not collide on the page —
+  // a render-time digest, and `resolveComponentInstances` now says what each
+  // one came from. Persisting it would store a machine id where the author
+  // wrote `card-anchor`, and it would go stale the moment the definition
+  // renamed its own anchor.
+  //
+  // Then the page. With the authored ids back, `{avoid}` renames one only where
+  // the page really holds that name — the rule `planInsertPattern` was fixed to
+  // follow, after unconditional re-minting was found to grow a suffix on every
+  // cycle. Asking both of a single policy would need a fifth `DomIdPolicy` arm;
+  // asking the same published copier twice needs none.
+  const authored = reidForestWithMap(
+    withoutResolverMarkers(resolved.document.nodes),
+    { restore: resolved.renamedDomIds }
+  );
+  const copied = reidForestWithMap(authored.nodes, { avoid: taken });
+  const roots = restoreSuppliedSlots(
+    copied.nodes,
+    held.byId,
+    composed(authored.nodeIds, copied.nodeIds)
+  );
+  return {
+    roots: roots.map(root => ({
+      ...root,
+      origin: { from: "component" as const, id: componentId },
+    })),
+  };
+}
+
+/**
+ * Two id maps read as one, so a caller that copied twice can still say where a
+ * node it started with ended up.
+ */
+function composed(
+  first: ReadonlyMap<string, string>,
+  second: ReadonlyMap<string, string>
+): ReadonlyMap<string, string> {
+  const through = new Map<string, string>();
+  for (const [from, middle] of first) {
+    const to = second.get(middle);
+    if (to !== undefined) through.set(from, to);
+  }
+  return through;
+}
+
+/** The slot content an author supplied, lifted out and stood in for. */
+interface SuppliedSlots {
+  /** The instance's slots, each supplied one holding a single placeholder. */
+  readonly slots: Record<string, BlockNode[]>;
+  /** Placeholder id → the nodes it stands in for. */
+  readonly byId: ReadonlyMap<string, readonly BlockNode[]>;
+}
+
+/**
+ * Swap each supplied slot for a placeholder, keeping what it held.
+ *
+ * A placeholder rather than nothing, because WHERE the content goes is the
+ * resolver's answer to give: an exposed slot names a node deep in the
+ * definition's tree, and a planner that put the content back by finding that
+ * node itself would be a second implementation of the mapping — one that agrees
+ * until an exposed slot moves.
+ *
+ * An empty or unreadable slot is dropped rather than stood in for. Supplying
+ * nothing is how an author asks for the definition's own default content, and a
+ * placeholder there would suppress it.
+ */
+function suppliedSlots(instance: BlockNode): SuppliedSlots {
+  const source = instance.slots;
+  const byId = new Map<string, readonly BlockNode[]>();
+  const slots: Record<string, BlockNode[]> = {};
+  if (!isPlainRecord(source)) return { slots, byId };
+  for (const name of ownKeys(source)) {
+    const content: unknown = source[name];
+    if (!Array.isArray(content) || content.length === 0) continue;
+    const placeholder: BlockNode = {
+      id: newId(),
+      type: "core/box",
+      version: 1,
+      props: {},
+    };
+    byId.set(placeholder.id, content as readonly BlockNode[]);
+    slots[name] = [placeholder];
+  }
+  return { slots, byId };
+}
+
+/**
+ * Put the author's own nodes back where their placeholders landed.
+ *
+ * Located through the id map the copier returns, not by searching for the
+ * placeholder again: the copy re-identified it, and `nodeIds` is the record of
+ * where every id went. A placeholder the resolver did not place has no entry
+ * and its content is not carried — see {@link detachedRoots}.
+ */
+function restoreSuppliedSlots(
+  nodes: readonly BlockNode[],
+  byId: ReadonlyMap<string, readonly BlockNode[]>,
+  nodeIds: ReadonlyMap<string, string>
+): BlockNode[] {
+  if (byId.size === 0) return [...nodes];
+  const placed = new Map<string, readonly BlockNode[]>();
+  for (const [original, content] of byId) {
+    const landed = nodeIds.get(original);
+    if (landed !== undefined) placed.set(landed, content);
+  }
+  return placed.size === 0 ? [...nodes] : splicedForest(nodes, placed);
+}
+
+/** One forest, with each placed id replaced by the nodes it stands in for. */
+function splicedForest(
+  nodes: readonly BlockNode[],
+  placed: ReadonlyMap<string, readonly BlockNode[]>
+): BlockNode[] {
+  const out: BlockNode[] = [];
+  for (const node of nodes) {
+    const content = placed.get(node.id);
+    if (content !== undefined) {
+      out.push(...content);
+      continue;
+    }
+    out.push(splicedNode(node, placed));
+  }
+  return out;
+}
+
+/** The same, one level down. Bounded by the depth the resolver already capped. */
+function splicedNode(
+  node: BlockNode,
+  placed: ReadonlyMap<string, readonly BlockNode[]>
+): BlockNode {
+  const source = node.slots;
+  if (!isPlainRecord(source)) return node;
+  const slots: Record<string, BlockNode[]> = {};
+  for (const name of ownKeys(source)) {
+    const content: unknown = source[name];
+    slots[name] = Array.isArray(content)
+      ? splicedForest(content as readonly BlockNode[], placed)
+      : (content as BlockNode[]);
+  }
+  return { ...node, slots };
+}
+
+/**
+ * The resolved tree with the resolver's own fields taken off.
+ *
+ * `instanceOf` and `unresolvedComponent` are render-time facts —
+ * `ResolvedBlockNode` says so, and `BlockNode`'s key set is the stored format.
+ * Persisting either would put a field into the database that no reader of a
+ * stored document expects and that strict validation does not describe.
+ */
+function withoutResolverMarkers(nodes: readonly BlockNode[]): BlockNode[] {
+  return mapForest([...nodes], node => {
+    const marked = node as BlockNode & Record<string, unknown>;
+    if (
+      marked.instanceOf === undefined &&
+      marked.unresolvedComponent === undefined
+    ) {
+      return node;
+    }
+    const copy: Record<string, unknown> = { ...marked };
+    delete copy.instanceOf;
+    delete copy.unresolvedComponent;
+    return copy as unknown as BlockNode;
   });
 }
 
