@@ -269,10 +269,20 @@ export function isBlockOrigin(value: unknown): value is BlockOrigin {
 function isRenameRecord(value: unknown): boolean {
   if (value === undefined) return true;
   if (!isPlainRecord(value)) return false;
+  // The CURRENT ids, to reject a map that cannot be inverted. The record reads
+  // source → copy, and restoring reads it the other way — so two sources
+  // claiming one current id give the reverse two answers, and whichever the
+  // reader keeps depends on property order. A record that restores an arbitrary
+  // one of them is worse than none: it puts back an id the author never had
+  // there, silently, and the digest comparison built on it then reports a
+  // change nobody made.
+  const current = new Set<string>();
   for (const name of ownKeys(value)) {
     if (name === "") return false;
-    const was = ownEntry(value, name);
-    if (typeof was !== "string" || was === "") return false;
+    const now = ownEntry(value, name);
+    if (typeof now !== "string" || now === "") return false;
+    if (current.has(now)) return false;
+    current.add(now);
   }
   return true;
 }

@@ -327,6 +327,7 @@ describe("a provenance record's rename map", () => {
     ["a non-string current id", { pricing: 3 }],
     ["an empty current id", { pricing: "" }],
     ["an empty original", { "": "pricing" }],
+    ["two sources claiming one current id", { a: "same", b: "same" }],
   ])("refuses %s", (_name, renamed) => {
     // A half-record is read as "these are the originals" and puts back an id
     // that was never there, which is worse than having no record at all — the

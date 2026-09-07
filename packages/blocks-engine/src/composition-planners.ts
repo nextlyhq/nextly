@@ -742,7 +742,16 @@ function restampOps(
     ops: stale.map(root => ({
       kind: "update",
       id: root.id,
-      patch: { origin: { from: "pattern", id: patternId, digest } },
+      // The rename map is CARRIED, not dropped. This op rewrites the whole
+      // record, and the ids this copy carries are still the renamed ones — the
+      // save put them back in the PATTERN, not on the page. Dropping the map
+      // left the next save of the same copy with nothing to restore, so the
+      // page-specific suffix went into the pattern and the insert-save cycle
+      // resumed growing it. The round trip held once and failed on the second
+      // pass, which is why a test that never applied these ops could not see it.
+      patch: {
+        origin: insertOrigin(patternId, digest, renamedIn(root.origin)),
+      },
     })),
   };
 }
@@ -1008,22 +1017,27 @@ export function planDuplicateComponent<TFields>(
   // point handed a stored row, and a row can be `null` — where reading `.kind`
   // takes a native error out of a function that promises a refusal.
   if (!isPlainRecord(definition)) return { problem: "not-a-component" };
-  // The KIND, before anything is read as an envelope. A pattern duplicated
-  // through here would be stored as a component and refused by the collection
-  // it landed in, having reported success.
-  if (!isComponentDocument(definition)) return { problem: "not-a-component" };
-  // The envelope AND the forest, paired as every other planner in this module
-  // pairs them. `documentRefusal` reads the envelope and the `nodes` array —
-  // not the entries inside it — so a `null` among the nodes, or nested in a
-  // slot, is copied without complaint into a duplicate that plans successfully
-  // and then cannot be published, since strict validation is the gate for this
-  // collection and refuses the node it holds.
+  // The envelope AND the forest, BEFORE the kind is read. `documentRefusal`
+  // refuses a document whose fields compute themselves, and `kind` is one of
+  // them — so asking the kind first ran a caller's accessor, taking a native
+  // error out of a function that promises a refusal. The same input class this
+  // planner already handled for a computed `exposed`, at the field read that
+  // happens first.
+  //
+  // Paired as every other planner in this module pairs them: `documentRefusal`
+  // reads the envelope and the `nodes` array, not the entries inside it, so a
+  // `null` among the nodes or nested in a slot is otherwise copied without
+  // complaint into a duplicate that plans successfully and then cannot be
+  // published.
   if (
     documentRefusal(definition) !== undefined ||
     forestRefusal(definition.nodes) !== undefined
   ) {
     return { problem: "unusable-document" };
   }
+  // A pattern duplicated through here would be stored as a component and
+  // refused by the collection it landed in, having reported success.
+  if (!isComponentDocument(definition)) return { problem: "not-a-component" };
 
   const source: ComponentDocument = definition;
   const copied = reidForestWithMap([...source.nodes], "keep");
@@ -1037,6 +1051,15 @@ export function planDuplicateComponent<TFields>(
 
   const issues = componentEnvelopeIssues(duplicate, limits);
   if (issues.length > 0) return { problem: "invalid-exposure", issues };
+
+  // Two nodes rendering ONE id. The copy keeps DOM ids, so a source that
+  // already spelled one twice hands the duplicate the same fault — and nothing
+  // above sees it: the envelope check reads pointers, and the document refusal
+  // reads storability and size. Strict validation, the gate this predicts,
+  // refuses it as `duplicate-dom-id`, so the plan would succeed and the row
+  // could never be published. The pattern paths already ask this.
+  const duplicated = duplicateDomIdRefusal(duplicate.nodes);
+  if (duplicated !== undefined) return duplicated;
 
   return (
     definitionRefusal(duplicate, limits) ?? {
@@ -2356,6 +2379,22 @@ function insertOrigin(
     digest,
     ...(renamed.size === 0 ? {} : { renamed: Object.fromEntries(renamed) }),
   };
+}
+
+/**
+ * The rename map a root already carries, as the record spells it.
+ *
+ * Read back out of the provenance rather than recomputed, because only the
+ * insert that did the renaming knows it — recovering it from the values is the
+ * inference this feature exists instead of.
+ */
+function renamedIn(
+  origin: BlockOrigin | undefined
+): ReadonlyMap<string, string> {
+  if (origin === undefined || origin.from !== "pattern") return new Map();
+  const renamed = origin.renamed;
+  if (renamed === undefined) return new Map();
+  return new Map(Object.entries(renamed));
 }
 
 /**

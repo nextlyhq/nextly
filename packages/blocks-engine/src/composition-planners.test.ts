@@ -1923,3 +1923,164 @@ describe("duplicating a component definition", () => {
     expect(plan.issues?.map(i => i.code)).toContain("exposed-node-missing");
   });
 });
+
+describe("the rename record survives being restamped", () => {
+  it("ROUND TRIP TWICE: a second save still stores the source's own ids", () => {
+    // The gap in the round-trip test above, and it is the one that mattered:
+    // that test never APPLIED the page ops and saved again. A save-over
+    // restamps a stale root's provenance, and the restamp rewrote the whole
+    // record — dropping the rename map, so the next save had nothing to restore
+    // and put the page-specific suffix back into the pattern. The fix held for
+    // one cycle and failed on the second.
+    const authored = page([
+      node("t", { cssId: "pricing", props: { mark: "target" } }),
+    ]);
+    const stored = created(
+      planSaveAsPattern(authored, ["t"], target, anyParent)
+    ).document;
+
+    const destination = page([node("existing", { cssId: "pricing" })]);
+    const inserted = applyOps(
+      destination,
+      pageOps(
+        planInsertPattern(
+          destination,
+          { id: "hero-pattern", document: stored },
+          { index: 1 },
+          anyParent
+        )
+      )
+    ).document;
+    const copyId = inserted.nodes[1]!.id;
+
+    // EDIT the copy, so its digest differs and the save has to restamp it.
+    const edited = applyOps(inserted, [
+      {
+        kind: "update",
+        id: copyId,
+        patch: { props: { mark: "target", edited: true } },
+      },
+    ]).document;
+
+    const first = planUpdatePatternFromSelection(
+      edited,
+      [copyId],
+      { collection: "patterns", id: "hero-pattern" },
+      anyParent
+    );
+    expect(marked(first.update!.document.nodes, "target").cssId).toBe(
+      "pricing"
+    );
+
+    // Apply what the plan asked for, then save the same copy AGAIN.
+    const restamped = applyOps(edited, pageOps(first)).document;
+    const second = planUpdatePatternFromSelection(
+      restamped,
+      [copyId],
+      { collection: "patterns", id: "hero-pattern" },
+      anyParent
+    );
+
+    expect(marked(second.update!.document.nodes, "target").cssId).toBe(
+      "pricing"
+    );
+  });
+
+  it("keeps the map on the record the restamp writes", () => {
+    // Asserted on the record as well as through the round trip, because the
+    // round trip would also pass if the map were recomputed by some other
+    // route — and only the copy that renamed knows what it renamed.
+    const authored = page([
+      node("t", { cssId: "pricing", props: { mark: "target" } }),
+    ]);
+    const stored = created(
+      planSaveAsPattern(authored, ["t"], target, anyParent)
+    ).document;
+    const destination = page([node("existing", { cssId: "pricing" })]);
+    const inserted = applyOps(
+      destination,
+      pageOps(
+        planInsertPattern(
+          destination,
+          { id: "hero-pattern", document: stored },
+          { index: 1 },
+          anyParent
+        )
+      )
+    ).document;
+    const copyId = inserted.nodes[1]!.id;
+    const renamedTo = marked(inserted.nodes, "target").cssId!;
+
+    const edited = applyOps(inserted, [
+      {
+        kind: "update",
+        id: copyId,
+        patch: { props: { mark: "target", edited: true } },
+      },
+    ]).document;
+    const restamped = applyOps(
+      edited,
+      pageOps(
+        planUpdatePatternFromSelection(
+          edited,
+          [copyId],
+          { collection: "patterns", id: "hero-pattern" },
+          anyParent
+        )
+      )
+    ).document;
+
+    const origin = restamped.nodes[1]!.origin;
+    expect(origin?.from === "pattern" ? origin.renamed : undefined).toEqual({
+      pricing: renamedTo,
+    });
+  });
+});
+
+describe("a duplicate is refused what strict validation would refuse", () => {
+  it("refuses a source spelling one DOM id on two nodes", () => {
+    // The copy KEEPS DOM ids, so a source that already spelled one twice hands
+    // the duplicate the same fault — and nothing else here sees it: the
+    // envelope check reads pointers, the document refusal reads storability and
+    // size. The pattern paths already ask this question.
+    const doc = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component" as const,
+      nodes: [node("a", { cssId: "dup" }), node("b", { cssId: "dup" })],
+    } as unknown as BlockDocument;
+
+    expect(planDuplicateComponent(doc, componentTarget).problem).toBe(
+      "duplicate-dom-id"
+    );
+  });
+
+  it("does not read a kind that computes itself", () => {
+    // `documentRefusal` refuses a document whose fields compute themselves, and
+    // `kind` is one of them — so asking the kind FIRST ran the caller's accessor
+    // and took a native error out of a function that promises a refusal.
+    const computed: Record<string, unknown> = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      nodes: [],
+    };
+    Object.defineProperty(computed, "kind", {
+      enumerable: true,
+      get() {
+        throw new Error("read me and find out");
+      },
+    });
+
+    let threw: unknown;
+    let result;
+    try {
+      result = planDuplicateComponent(
+        computed as unknown as BlockDocument,
+        componentTarget
+      );
+    } catch (error) {
+      threw = error;
+    }
+
+    expect(threw).toBeUndefined();
+    expect(result?.problem).toBe("unusable-document");
+  });
+});
