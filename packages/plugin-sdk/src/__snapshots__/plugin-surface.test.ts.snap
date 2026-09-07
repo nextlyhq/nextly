@@ -154,6 +154,16 @@ exports[`plugin-sdk public export surface > \`./routing\` surface is unchanged 1
 ]
 `;
 
+exports[`plugin-sdk public export surface > \`./widgets\` surface is unchanged 1`] = `
+[
+  "WidgetComponentProps (type)",
+  "WidgetQueryBatchResponse (type)",
+  "WidgetResult (type)",
+  "WidgetResultField (type)",
+  "WidgetSlot (type)",
+]
+`;
+
 exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1`] = `
 [
   "Action (type)",

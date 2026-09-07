@@ -22,6 +22,8 @@
  * @module components/features/widgets/WidgetRenderer
  */
 
+import type { WidgetComponentProps } from "nextly/widget-result";
+
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import type {
   DashboardWidget,
@@ -109,9 +111,18 @@ export function WidgetRenderer({
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);
 
-  // Built once, so the two `chrome` branches below cannot drift into handing a
-  // component different props depending on whether its card is framed.
-  const componentProps = {
+  /*
+   * Built once, so the two `chrome` branches below cannot drift into handing a
+   * component different props depending on whether its card is framed.
+   *
+   * 🔴 ANNOTATED with the published type rather than inferred. `PluginSlot`
+   * forwards `Record<string, unknown>`, so nothing downstream would object to a
+   * renamed, dropped or retyped prop here -- and plugin authors compile against
+   * `WidgetComponentProps`, which would go on describing the old shape. That is
+   * the same parallel-definition drift this contract exists to end, so the
+   * producer is held to it here, where a mismatch fails to compile.
+   */
+  const componentProps: WidgetComponentProps = {
     widgetId: definition.id,
     placementId: placement?.id ?? definition.id,
     settings: placement?.settings ?? {},

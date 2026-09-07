@@ -21,6 +21,9 @@
       "nextly/document-lock": [
         "../nextly/src/domains/document-lock/contract.ts"
       ],
+      // Same reason again: the wire shapes a widget query answers with, whose
+      // `types` and `import` conditions point at different built paths.
+      "nextly/widget-result": ["../nextly/src/domains/widgets/result.ts"],
       "@admin/*": ["./src/*"]
     }
   },
