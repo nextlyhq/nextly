@@ -383,6 +383,27 @@ export function validateDocument(
   const unknownSeverity: IssueSeverity =
     ctx.mode === "strict" ? "error" : "warning";
 
+  // A root that is not even a candidate for a record — `null`, a primitive, an
+  // array — is refused before ANYTHING else is inspected, the caller's own
+  // settings included. Reading an adversarial breakpoint set on behalf of a
+  // document that was never going to be validated runs unrelated hostile input
+  // for nothing.
+  //
+  // Asked with tests that cannot themselves throw. `typeof`, a null comparison
+  // and `Array.isArray` run no user code; `isPlainRecord` asks for the
+  // prototype, and a root that refuses to answer that is exactly the case the
+  // readability gate below exists for. So the coarse question is asked here and
+  // the precise one stays in the envelope, after the survey has had its say.
+  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
+    issues.push({
+      path: "",
+      code: "invalid-document",
+      severity: "error",
+      message: "The document must be an object.",
+    });
+    return { issues, survey };
+  }
+
   // The SITE's own breakpoints, before anything about the document is decided.
   // They come from the caller's settings rather than from the document, so a
   // duplicate id among them is true whatever the document turns out to be —

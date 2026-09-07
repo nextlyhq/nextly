@@ -3290,6 +3290,43 @@ describe("a bag validation has already refused is never enumerated", () => {
     ).toBe(true);
   });
 
+  it.each([
+    ["null", null],
+    ["a primitive", 7],
+    ["an array", []],
+  ])(
+    "refuses %s as a document without touching the site settings",
+    (_name, root) => {
+      // Hoisting the breakpoint scan ahead of the readability gate put it ahead
+      // of the malformed-root refusal too, so a document that was never going to
+      // be validated still ran the caller's settings — and an adversarial set
+      // escaped as a native error. The coarse root test asks nothing that can
+      // throw, so it can safely come first.
+      const hostile = new Proxy(
+        { viewport: [], container: [] },
+        {
+          getPrototypeOf() {
+            throw new Error("settings should not be read for this document");
+          },
+        }
+      ) as unknown as typeof FIXTURE_BREAKPOINTS;
+
+      let escaped: unknown;
+      let codes: string[] = [];
+      try {
+        codes = validate(root as unknown as BlockDocument, {
+          breakpoints: hostile,
+          mode: "strict",
+        }).map(issue => issue.code);
+      } catch (error) {
+        escaped = error;
+      }
+
+      expect(escaped).toBeUndefined();
+      expect(codes).toEqual(["invalid-document"]);
+    }
+  );
+
   it("still reports a fault in the site's own breakpoints", () => {
     // `collectBreakpointIds` judges the CALLER's settings, not the document, so
     // a duplicate id among them is true whatever the document turns out to be.
