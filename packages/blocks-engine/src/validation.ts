@@ -383,59 +383,8 @@ export function validateDocument(
   const unknownSeverity: IssueSeverity =
     ctx.mode === "strict" ? "error" : "warning";
 
-  // A wholly-malformed document (null, an array, a primitive) is reported as a
-  // structural issue rather than crashing on the field reads below. `rawDoc`
-  // aliases the same value as `unknown`: reads through it are legitimately
-  // untrusted, while `doc` keeps its declared type for the typed helper calls.
-  const rawDoc: unknown = doc;
-  if (!isPlainRecord(rawDoc)) {
-    issues.push({
-      path: "",
-      code: "invalid-document",
-      severity: "error",
-      message: "The document must be an object.",
-    });
-    return { issues, survey };
-  }
-
-  const knownBreakpoints = collectBreakpointIds(ctx.breakpoints, issues);
-
-  const formatVersion = rawDoc.formatVersion;
-  if (formatVersion !== DOCUMENT_FORMAT_VERSION) {
-    issues.push({
-      path: "/formatVersion",
-      code: "invalid-format-version",
-      severity: "error",
-      message: `Unsupported document formatVersion ${describeValue(formatVersion)}.`,
-      suggestion: `Use formatVersion ${DOCUMENT_FORMAT_VERSION}.`,
-    });
-  }
-
-  // An unrecognized kind STRING is preserved in forgiving mode (a warning) and
-  // rejected in strict mode, matching the unknown-block-type policy. A missing
-  // or non-string kind is structural corruption, not a future value to
-  // preserve, so it is always an error.
-  const kind = rawDoc.kind;
-  if (!DOCUMENT_KINDS.includes(kind as (typeof DOCUMENT_KINDS)[number])) {
-    issues.push({
-      path: "/kind",
-      code: "invalid-kind",
-      severity: typeof kind === "string" ? unknownSeverity : "error",
-      message: `Unknown document kind "${describeValue(kind)}".`,
-      suggestion: `Use one of: ${DOCUMENT_KINDS.join(", ")}.`,
-    });
-  }
-
-  if (!Array.isArray(rawDoc.nodes)) {
-    issues.push({
-      path: "/nodes",
-      code: "nodes-not-array",
-      severity: "error",
-      message: "The document nodes field must be an array.",
-    });
-    // Nothing further to check without a node forest.
-    return { issues, survey };
-  }
+  const envelope = documentEnvelope(doc, ctx, unknownSeverity, issues);
+  if (envelope.stop) return { issues, survey };
 
   checkLimits(survey, issues);
   //
@@ -475,22 +424,148 @@ export function validateDocument(
   // traverse is refused already, and an envelope with a million entries would
   // otherwise be walked in full — and produce an issue per entry — to add
   // nothing to a refusal that has already been made.
-  if (kind === "component" && !overLimits) {
+  if (envelope.kind === "component" && !overLimits) {
     // The SURVEY's snapshot, not `limits`. `DocumentLimits` is an ordinary
     // object a caller may back with a getter, and `surveyDocument` snapshots
     // it precisely so two readings cannot disagree. Re-reading here would let
     // a shrinking limit report a node the survey counted as missing from the
     // index, which surfaces as `exposed-node-missing` on a sound definition.
     validateComponentEnvelope(
-      rawDoc,
-      rawDoc.nodes as BlockNode[],
+      envelope.doc,
+      envelope.nodes,
       survey.limits.maxNodes,
       issues
     );
   }
 
+  const state = nodeCheckState(ctx, issues, envelope, unknownSeverity, {
+    overLimits,
+  });
+
+  // Document-level styles use the same envelope as node styles but have no
+  // owning node, so validate them here or they would go unchecked.
+  const settings = envelope.doc.settings;
+  if (isPlainRecord(settings) && settings.styles !== undefined) {
+    validateStyleEnvelope(settings.styles, "/settings/styles", state);
+  }
+
+  validateNodeForest(envelope.nodes, state, survey.limits.maxNodes);
+
+  return { issues, survey };
+}
+
+/**
+ * What the document's own envelope said, and whether there is a forest to walk.
+ *
+ * Its own function because it is a distinct question with a distinct answer:
+ * "is this a document at all, and is its outer shape sound" is settled before
+ * anything reads a node, and two of its outcomes end the whole validation.
+ * Keeping it inline put those early returns in the middle of a function that
+ * also holds the walk, which is what made the walk unreachable to a reader —
+ * and to the complexity gate, which refuses any edit to a function this size.
+ *
+ * The order of the checks is the order of the issues, and it is load-bearing:
+ * callers assert on the first issue, so a breakpoint fault must still precede a
+ * format-version fault, and `nodes` must still be judged last.
+ */
+type DocumentEnvelope =
+  | { readonly stop: true }
+  | {
+      readonly stop: false;
+      /** The same value as the argument, established as a record. */
+      readonly doc: Record<string, unknown>;
+      /** Its `nodes`, established as an array. */
+      readonly nodes: BlockNode[];
+      /** As stored — validated above, and read again for the per-kind rules. */
+      readonly kind: unknown;
+      readonly knownBreakpoints: Set<string>;
+    };
+
+function documentEnvelope(
+  doc: BlockDocument,
+  ctx: ValidationContext,
+  unknownSeverity: IssueSeverity,
+  issues: ValidationIssue[]
+): DocumentEnvelope {
+  // A wholly-malformed document (null, an array, a primitive) is reported as a
+  // structural issue rather than crashing on the field reads below. `rawDoc`
+  // aliases the same value as `unknown`: reads through it are legitimately
+  // untrusted, while `doc` keeps its declared type for the typed helper calls.
+  const rawDoc: unknown = doc;
+  if (!isPlainRecord(rawDoc)) {
+    issues.push({
+      path: "",
+      code: "invalid-document",
+      severity: "error",
+      message: "The document must be an object.",
+    });
+    return { stop: true };
+  }
+
+  const knownBreakpoints = collectBreakpointIds(ctx.breakpoints, issues);
+
+  const formatVersion = rawDoc.formatVersion;
+  if (formatVersion !== DOCUMENT_FORMAT_VERSION) {
+    issues.push({
+      path: "/formatVersion",
+      code: "invalid-format-version",
+      severity: "error",
+      message: `Unsupported document formatVersion ${describeValue(formatVersion)}.`,
+      suggestion: `Use formatVersion ${DOCUMENT_FORMAT_VERSION}.`,
+    });
+  }
+
+  // An unrecognized kind STRING is preserved in forgiving mode (a warning) and
+  // rejected in strict mode, matching the unknown-block-type policy. A missing
+  // or non-string kind is structural corruption, not a future value to
+  // preserve, so it is always an error.
+  const kind = rawDoc.kind;
+  if (!DOCUMENT_KINDS.includes(kind as (typeof DOCUMENT_KINDS)[number])) {
+    issues.push({
+      path: "/kind",
+      code: "invalid-kind",
+      severity: typeof kind === "string" ? unknownSeverity : "error",
+      message: `Unknown document kind "${describeValue(kind)}".`,
+      suggestion: `Use one of: ${DOCUMENT_KINDS.join(", ")}.`,
+    });
+  }
+
+  if (!Array.isArray(rawDoc.nodes)) {
+    issues.push({
+      path: "/nodes",
+      code: "nodes-not-array",
+      severity: "error",
+      message: "The document nodes field must be an array.",
+    });
+    // Nothing further to check without a node forest.
+    return { stop: true };
+  }
+
+  return {
+    stop: false,
+    doc: rawDoc,
+    nodes: rawDoc.nodes as BlockNode[],
+    kind,
+    knownBreakpoints,
+  };
+}
+
+/**
+ * The state every node check shares, built once.
+ *
+ * Separated from the walk because it is configuration rather than traversal:
+ * nothing here decides anything about a node, and reading it beside the loop
+ * made the loop look like it depended on the order these were assembled in.
+ */
+function nodeCheckState(
+  ctx: ValidationContext,
+  issues: ValidationIssue[],
+  envelope: Extract<DocumentEnvelope, { stop: false }>,
+  unknownSeverity: IssueSeverity,
+  bounds: { readonly overLimits: boolean }
+): NodeCheckState {
   const styleBudget = newStyleIssueBudget();
-  const nodeState: NodeCheckState = {
+  return {
     // Both site lookups are wrapped once here rather than per node or per style
     // envelope, so a name repeated across the document costs the caller one
     // answer for the whole walk. Nothing else bounds that repetition: a name
@@ -502,70 +577,68 @@ export function validateDocument(
       classes: memoizeClassLookup(ctx.classes, styleBudget),
     },
     issues,
-    knownBreakpoints,
+    knownBreakpoints: envelope.knownBreakpoints,
     unknownSeverity,
     seenIds: new Map<string, string>(),
     seenDomIds: new Map<string, string>(),
 
-    skipValueParsing: overLimits,
+    skipValueParsing: bounds.overLimits,
     styleBudget,
   };
+}
 
-  // Document-level styles use the same envelope as node styles but have no
-  // owning node, so validate them here or they would go unchecked.
-  if (isPlainRecord(rawDoc.settings) && rawDoc.settings.styles !== undefined) {
-    validateStyleEnvelope(
-      rawDoc.settings.styles,
-      "/settings/styles",
-      nodeState
-    );
-  }
+/**
+ * One node on the queue, with everything the check of it needs.
+ *
+ * THREE placement states, not a nullable type. "At the top level" and "inside a
+ * container whose type is malformed" are different facts, and one absent value
+ * standing for both makes a child in a slot answer the ROOT question — which
+ * reports it as sitting nowhere while its own path says which slot holds it.
+ */
+interface QueuedNode {
+  node: BlockNode;
+  path: string;
+  placement: Placement;
+  /**
+   * True when an ancestor is condition-gated, so the renderer prunes this
+   * node with it.
+   *
+   * Carried DOWN the queue rather than precomputed over the raw forest.
+   * A separate walk would read every node's `visibility` and `slots` outside
+   * this loop, which is the one place bounded by `maxNodes` — so an oversized
+   * document would be traversed in full by the check meant to be capped.
+   */
+  hidden: boolean;
+}
 
-  // Iterative breadth-first walk. It never recurses, so a document nested
-  // arbitrarily deep cannot overflow the call stack — validation returns the
-  // depth issue instead of throwing. It also stops after visiting maxNodes
-  // nodes (the node-count issue is already recorded by checkLimits), so an
-  // oversized document cannot make the walk do unbounded work.
-  // Index-based reads (not .map/.forEach) so a sparse array's holes become
-  // explicit undefined entries reported as invalid nodes, and the queue is
-  // capped at maxNodes so an oversized forest cannot grow it without bound.
-  // Where this node was reached from, carried on the queue entry: a
-  // breadth-first walk has already left the parent behind by the time a node is
-  // dequeued, and re-deriving it would mean a second traversal answering a
-  // question this one already knew.
-  //
-  // THREE states, not a nullable type. "At the top level" and "inside a
-  // container whose type is malformed" are different facts, and one absent value
-  // standing for both makes a child in a slot answer the ROOT question — which
-  // reports it as sitting nowhere while its own path says which slot holds it.
-  const queue: Array<{
-    node: BlockNode;
-    path: string;
-    placement: Placement;
-    /**
-     * True when an ancestor is condition-gated, so the renderer prunes this
-     * node with it.
-     *
-     * Carried DOWN the queue rather than precomputed over the raw forest.
-     * A separate walk would read every node's `visibility` and `slots` outside
-     * this loop, which is the one place bounded by `maxNodes` — so an oversized
-     * document would be traversed in full by the check meant to be capped.
-     */
-    hidden: boolean;
-  }> = [];
-  for (
-    let i = 0;
-    i < doc.nodes.length && queue.length <= survey.limits.maxNodes;
-    i++
-  ) {
+/**
+ * Check every node in the forest, and everything about where it sits.
+ *
+ * Iterative breadth-first. It never recurses, so a document nested arbitrarily
+ * deep cannot overflow the call stack — validation returns the depth issue
+ * instead of throwing. It also stops after visiting `maxNodes` nodes (the
+ * node-count issue is already recorded by `checkLimits`), so an oversized
+ * document cannot make the walk do unbounded work.
+ *
+ * Index-based reads (not `.map`/`.forEach`) so a sparse array's holes become
+ * explicit `undefined` entries reported as invalid nodes, and the queue is
+ * capped at `maxNodes` so an oversized forest cannot grow it without bound.
+ */
+function validateNodeForest(
+  nodes: BlockNode[],
+  state: NodeCheckState,
+  maxNodes: number
+): void {
+  const queue: QueuedNode[] = [];
+  for (let i = 0; i < nodes.length && queue.length <= maxNodes; i++) {
     queue.push({
-      node: doc.nodes[i],
+      node: nodes[i],
       path: pointer("/nodes", i),
       placement: { at: "root" },
       hidden: false,
     });
   }
-  for (let i = 0; i < queue.length && i < survey.limits.maxNodes; i++) {
+  for (let i = 0; i < queue.length && i < maxNodes; i++) {
     const { node, path, placement, hidden } = queue[i];
     // Asked HERE rather than in a pass of its own, so the read is inside the
     // budget and happens on a node this loop has reached. Gating is inherited,
@@ -575,51 +648,60 @@ export function validateDocument(
     // throws, where the contract is an issue rather than an exception — the
     // same guard the slot walk below already applies.
     const gated = hidden || (isPlainRecord(node) && isConditionGated(node));
-    validateNode(node, path, nodeState, gated);
-    checkNesting(node, path, placement, nodeState);
-    if (isPlainRecord(node) && isPlainRecord(node.slots)) {
-      // The container's placement for every child beneath it, read once.
-      //
-      // `isNodeType`, NOT a `typeof` check, and they are not the same boundary:
-      // `"columns"` and `"core/columns/"` are strings that no block can be
-      // named, so a weaker guard admits them as container NAMES and a restricted
-      // child is then refused against a name nothing could ever match. The
-      // predicate used here is the one that decides `invalid-node-type`, so a
-      // container reported as malformed is exactly a container this cannot name.
-      //
-      // Children are still walked and still checked for everything else. Only
-      // the one question that needs the container's name is recorded as
-      // unanswerable rather than answered from a name that does not exist.
-      // The container's name, resolved once; the SLOT differs per iteration, so
-      // the placement is built inside the loop. Hoisting it would carry one
-      // slot's name to every sibling slot's children and check each against the
-      // wrong allow-list — a refusal naming a slot the node is not in.
-      const containerType = isNodeType(node.type) ? node.type : undefined;
-      for (const [slot, children] of Object.entries(node.slots)) {
-        const childPlacement: Placement =
-          containerType === undefined
-            ? { at: "unnameable-container" }
-            : { at: "container", type: containerType, slot };
-        if (Array.isArray(children)) {
-          const slotPath = pointer(pointer(path, "slots"), slot);
-          for (
-            let c = 0;
-            c < children.length && queue.length <= survey.limits.maxNodes;
-            c++
-          ) {
-            queue.push({
-              node: children[c],
-              path: pointer(slotPath, c),
-              placement: childPlacement,
-              hidden: gated,
-            });
-          }
-        }
-      }
+    validateNode(node, path, state, gated);
+    checkNesting(node, path, placement, state);
+    enqueueChildren({ node, path, gated }, queue, maxNodes);
+  }
+}
+
+/**
+ * Put a node's slot children on the queue, each with the placement it inherits.
+ *
+ * Its own function because it answers a question the loop above does not: where
+ * a child SITS, which needs the container's name and the slot it is in. Reading
+ * that inline made the loop's own subject — one node, checked — hard to see
+ * past two levels of nesting.
+ */
+function enqueueChildren(
+  parent: { node: BlockNode; path: string; gated: boolean },
+  queue: QueuedNode[],
+  maxNodes: number
+): void {
+  const { node, path, gated } = parent;
+  if (!isPlainRecord(node) || !isPlainRecord(node.slots)) return;
+  // The container's placement for every child beneath it, read once.
+  //
+  // `isNodeType`, NOT a `typeof` check, and they are not the same boundary:
+  // `"columns"` and `"core/columns/"` are strings that no block can be
+  // named, so a weaker guard admits them as container NAMES and a restricted
+  // child is then refused against a name nothing could ever match. The
+  // predicate used here is the one that decides `invalid-node-type`, so a
+  // container reported as malformed is exactly a container this cannot name.
+  //
+  // Children are still walked and still checked for everything else. Only
+  // the one question that needs the container's name is recorded as
+  // unanswerable rather than answered from a name that does not exist.
+  // The container's name, resolved once; the SLOT differs per iteration, so
+  // the placement is built inside the loop. Hoisting it would carry one
+  // slot's name to every sibling slot's children and check each against the
+  // wrong allow-list — a refusal naming a slot the node is not in.
+  const containerType = isNodeType(node.type) ? node.type : undefined;
+  for (const [slot, children] of Object.entries(node.slots)) {
+    const childPlacement: Placement =
+      containerType === undefined
+        ? { at: "unnameable-container" }
+        : { at: "container", type: containerType, slot };
+    if (!Array.isArray(children)) continue;
+    const slotPath = pointer(pointer(path, "slots"), slot);
+    for (let c = 0; c < children.length && queue.length <= maxNodes; c++) {
+      queue.push({
+        node: children[c],
+        path: pointer(slotPath, c),
+        placement: childPlacement,
+        hidden: gated,
+      });
     }
   }
-
-  return { issues, survey };
 }
 
 /**
