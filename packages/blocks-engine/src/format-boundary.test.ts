@@ -61,8 +61,16 @@ export function specifiersIn(source: string): string[] {
   // `ownEntry(value, "from")` followed by a comparison is a fragment of the
   // next two lines. Excluding the newline cannot hide a real specifier and does
   // refuse that.
+  //
+  // The newline is not enough on its own: an array of field names built the
+  // same false import on ONE line. `["from", "id"]` puts a quote, a comma and a
+  // second quote after the keyword, so the capture is `", "` and the boundary
+  // check reported a bundle reaching a dependency called `, `. A keyword
+  // directly preceded by a quote is inside a string, never an import — no real
+  // `from` or `import` can be, because the character before one is whitespace,
+  // a brace, a star, or the start of the file.
   for (const match of source.matchAll(
-    /(?:from|import)\s*\(?\s*['"]([^'"\n]+)['"]/g
+    /(?<!['"])\b(?:from|import)\s*\(?\s*['"]([^'"\n]+)['"]/g
   )) {
     found.push(match[1]!);
   }
@@ -117,6 +125,14 @@ describe("the import scanner", () => {
     expect(specifiersIn(source)).toEqual([]);
   });
 
+  it("does not read one out of an array of names on a single line", () => {
+    // The same trap without a newline to catch it: a list of field names puts a
+    // quote, a comma and a second quote after the keyword, so the capture is
+    // `", "` and the boundary check reports the bundle reaching a dependency
+    // called `, `. A keyword directly preceded by a quote is inside a string.
+    expect(specifiersIn('var FIELDS = ["from", "id", "digest"];')).toEqual([]);
+  });
+
   it("still sees every real specifier shape", () => {
     // The control: the narrowing must not cost a form the walk depends on.
     const source = [
@@ -132,6 +148,9 @@ describe("the import scanner", () => {
       "./side-effect",
       "./c",
     ]);
+    // And at offset ZERO, where there is no preceding character at all — the
+    // case a check that demands one would refuse.
+    expect(specifiersIn('import "./first";')).toEqual(["./first"]);
   });
 });
 
