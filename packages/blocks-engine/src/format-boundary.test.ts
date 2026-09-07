@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -105,15 +106,48 @@ function lookupChain(from: string): string[] {
   }
 }
 
+/**
+ * A directory to build the sandbox under whose ancestors hold no
+ * `node_modules`.
+ *
+ * `os.tmpdir()` is the obvious answer and is not always the right one: it reads
+ * `TMPDIR`, which a hermetic or project-local test setup can point INSIDE the
+ * checkout — and then the sandbox sits under the workspace, every runtime
+ * dependency resolves by the ordinary upward lookup, and the boundary passes by
+ * not being one. The precondition below catches that, so the failure is honest;
+ * it is still a red for a reason that has nothing to do with the bundle.
+ *
+ * So the location is CHOSEN rather than assumed. Candidates are tried in order
+ * and the first with a clean ancestor chain wins.
+ *
+ * Refuses rather than falling back to a dirty directory. A sandbox that
+ * resolves is not a sandbox, and a suite that quietly went on using one would
+ * report the boundary intact whatever the bundle imports.
+ */
+function isolatedRoot(): string {
+  // The runner's own temp first where CI provides one, then the platform's,
+  // then the POSIX default — which is deliberately last, because it is the one
+  // an environment variable cannot redirect and so the one least likely to have
+  // been pointed anywhere.
+  const candidates = [process.env.RUNNER_TEMP, tmpdir(), "/tmp"];
+  const tried: string[] = [];
+  for (const candidate of candidates) {
+    if (candidate === undefined || !existsSync(candidate)) continue;
+    const reachable = lookupChain(realpathSync(candidate)).filter(existsSync);
+    if (reachable.length === 0) return candidate;
+    tried.push(`${candidate} (reaches ${reachable[0] ?? ""})`);
+  }
+  throw new Error(
+    `no dependency-free directory to sandbox in; tried ${tried.join(", ")}`
+  );
+}
+
 let sandbox = "";
 let hooks = "";
 let record = "";
 
 beforeAll(() => {
-  // OUTSIDE the workspace, which is the whole point: a copy under the package
-  // would find the workspace's `node_modules` by the ordinary upward lookup and
-  // resolve every runtime dependency exactly as the real build does.
-  sandbox = mkdtempSync(join(tmpdir(), "nextly-format-boundary-"));
+  sandbox = mkdtempSync(join(isolatedRoot(), "nextly-format-boundary-"));
   cpSync(DIST, join(sandbox, "dist"), { recursive: true });
 
   record = join(sandbox, "resolved.jsonl");
@@ -249,7 +283,11 @@ describe("the format entry point's boundary", () => {
     // in the flattering direction if it is wrong: a `node_modules` anywhere
     // above the sandbox resolves every runtime dependency, the isolated import
     // succeeds for the wrong reason, and the control below stops controlling.
-    const reachable = lookupChain(sandbox).filter(existsSync);
+    //
+    // `isolatedRoot` chose a clean root, so this asserts that creating the
+    // sandbox inside it introduced nothing — and that the choice was made at
+    // all, which is the part a later edit could drop.
+    const reachable = lookupChain(realpathSync(sandbox)).filter(existsSync);
     expect(reachable, `resolvable from ${sandbox}`).toEqual([]);
   });
 
