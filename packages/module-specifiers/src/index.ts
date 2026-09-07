@@ -52,8 +52,9 @@ export const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
  * - `import ... from` and `export ... from`, which carry a module specifier.
  * - `import "pkg"`, a bare side-effect import, which carries no bindings.
  * - `import("pkg")` and `require("pkg")`, which are call expressions. A bare
- *   `require` identifier only: `loader.require("x")` is a method on some object,
- *   not a module resolve.
+ *   `require` identifier, or `module.require` — the documented CommonJS method,
+ *   which resolves exactly as the free function does. `loader.require("x")` is a
+ *   method on some other object and is not a module resolve.
  * - `import x = require("pkg")`, the documented CommonJS-interop spelling, which
  *   is neither of the above.
  * - `typeof import("pkg")` in type position, which the parser gives as an
@@ -78,6 +79,108 @@ export const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
  * over a file that was never read, and it was a live defect in two of the
  * readers this replaces. A default would let any caller reintroduce it silently.
  */
+/**
+ * See through wrappers that change the type or the grouping, never the object.
+ *
+ * `(module).require(...)`, `(module as NodeModule).require(...)` and
+ * `module!.require(...)` all read the same binding. A check on the receiver as
+ * written treats each as somebody else's property and reports the file as loading
+ * nothing, which is a bypass anyone can reach by accident.
+ */
+function unwrapReceiver(expression: ts.Expression): ts.Expression {
+  let current: ts.Expression = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+/**
+ * Whether the file introduces a binding of its own called `module`.
+ *
+ * 🔴 A file that declares `module` — a parameter, a variable, an import — is not
+ * talking about the CommonJS loader when it writes `module.require`, and
+ * reporting a dependency it never loads is the FALSE direction for a guard: a
+ * rule that fires on correct code stops being read. Renaming the identical
+ * receiver to `loader` already makes the report disappear, which is the tell that
+ * it was about the name rather than the thing.
+ *
+ * File-granular rather than scope-precise, and deliberately so: resolving a name
+ * to its declaration needs a program and a checker, which this reader exists to
+ * work without. The gap it leaves is a file that shadows `module` in one function
+ * and uses the real loader in another, where this reports neither.
+ */
+/** Every node kind that introduces a name a later expression can read. */
+const BINDING_KINDS: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.VariableDeclaration,
+  ts.SyntaxKind.Parameter,
+  ts.SyntaxKind.BindingElement,
+  ts.SyntaxKind.FunctionDeclaration,
+  ts.SyntaxKind.ClassDeclaration,
+  ts.SyntaxKind.ImportClause,
+  ts.SyntaxKind.ImportSpecifier,
+  ts.SyntaxKind.NamespaceImport,
+]);
+
+/** Whether one node binds the name `module`. */
+function bindsModule(node: ts.Node): boolean {
+  if (!BINDING_KINDS.has(node.kind)) return false;
+  const { name } = node as ts.NamedDeclaration;
+  return name !== undefined && ts.isIdentifier(name) && name.text === "module";
+}
+
+function declaresOwnModule(source: ts.SourceFile): boolean {
+  let declared = false;
+  const visit = (node: ts.Node): void => {
+    if (declared) return;
+    if (bindsModule(node)) {
+      declared = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return declared;
+}
+
+/**
+ * Whether an expression is `module.require`, however it is spelled.
+ *
+ * `module.require` is the documented CommonJS method and resolves exactly as the
+ * free `require` does, so a reader that recognises only the bare identifier
+ * reports a file loading nothing while it loads a driver. `a.b` and `a["b"]` are
+ * the same read, and a rule for one is a rule the other walks around.
+ *
+ * Deliberately narrow: the receiver has to be `module` itself, seen through
+ * casts and grouping, and the file must not have introduced a `module` of its
+ * own. `loader.require` is a method on somebody else's object, and treating every
+ * `.require` as a resolve would report ordinary code as a dependency nobody has.
+ */
+function readsModuleRequire(callee: ts.Expression, shadowed: boolean): boolean {
+  if (shadowed) return false;
+  const receiver =
+    ts.isPropertyAccessExpression(callee) ||
+    ts.isElementAccessExpression(callee)
+      ? unwrapReceiver(callee.expression)
+      : null;
+  if (
+    receiver === null ||
+    !ts.isIdentifier(receiver) ||
+    receiver.text !== "module"
+  ) {
+    return false;
+  }
+  if (ts.isPropertyAccessExpression(callee))
+    return callee.name.text === "require";
+  const key = (callee as ts.ElementAccessExpression).argumentExpression;
+  return ts.isStringLiteralLike(key) && key.text === "require";
+}
+
 export function importedSpecifiers(text: string, fileName: string): string[] {
   return moduleSpecifierRefs(text, fileName).map(ref => ref.specifier);
 }
@@ -126,6 +229,7 @@ export function moduleSpecifierRefs(
     true
   );
   const found: ModuleSpecifierRef[] = [];
+  const shadowsModule = declaresOwnModule(source);
   const seen = new Set<ts.Node>();
 
   const visit = (node: ts.Node): void => {
@@ -183,7 +287,8 @@ export function moduleSpecifierRefs(
       const callee = node.expression;
       const resolvesAModule =
         callee.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(callee) && callee.text === "require");
+        (ts.isIdentifier(callee) && callee.text === "require") ||
+        readsModuleRequire(callee, shadowsModule);
       if (resolvesAModule) {
         const target = node.arguments[0];
         found.push({

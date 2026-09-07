@@ -366,8 +366,8 @@ describe("useDocumentLock", () => {
   });
 
   it("does not re-render the editor while a colleague keeps holding it", async () => {
-    // The poll above runs every beat. A fresh state object each time would
-    // re-render the whole edit view for no news.
+    // The poll runs every beat. A fresh state object each time would re-render
+    // the whole edit view for no news.
     post.mockResolvedValue(held);
     const { result } = renderHook(() => useDocumentLock(ref));
     await waitFor(() =>
@@ -375,9 +375,14 @@ describe("useDocumentLock", () => {
     );
 
     const first = result.current.state;
-    await act(async () => {
-      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS * 2);
-    });
+    // One beat at a time, letting each poll answer. Advancing several at once
+    // holds a reply past the slot's own expiry, which is a different case and
+    // has its own test.
+    for (let beat = 0; beat < 2; beat += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+      });
+    }
 
     expect(result.current.state).toBe(first);
   });
@@ -401,32 +406,37 @@ describe("useDocumentLock", () => {
     expect(result.current.state.status).toBe("acquiring");
   });
 
-  it("never runs two acquisitions at once", async () => {
-    // 🔴 The server treats a live claim from the SAME owner as takeable, so a
-    // second acquire mints a fresh token and invalidates the one still in
-    // flight. Whichever reply lands second wins, and the editor can end up
-    // renewing a token the server already replaced - reported as a takeover
-    // naming the editor themselves.
-    let settle: (value: unknown) => void = () => {};
-    post.mockReturnValueOnce(
-      new Promise(resolve => {
-        settle = resolve;
-      })
-    );
+  it("never runs two acquisitions at once, and keeps the intent when one stalls", async () => {
+    // 🔴 Two claims outstanding at once is the shape that loses a token: the
+    // server treats a live claim from the SAME owner as takeable, so the later
+    // one to commit wins and the other's token is dead on arrival.
+    //
+    // 🔴 And the request is never aborted. A claim is not idempotent, so
+    // cancelling one makes its outcome unknowable - it may still commit, and an
+    // aborted fetch can never hand back the token it was given. Only the hold on
+    // the slot expires.
+    post.mockReturnValue(new Promise(() => {}));
 
     const { result } = renderHook(() => useDocumentLock(ref));
     expect(post).toHaveBeenCalledTimes(1);
 
+    // A person decides to take over while that claim is still open.
     await act(async () => {
-      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS * 3);
+      result.current.takeOver();
     });
-
     expect(post).toHaveBeenCalledTimes(1);
 
+    // The slot expires after a beat. The decision is re-asked as a decision.
     await act(async () => {
-      settle(acquired);
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
     });
-    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    expect(result.current.state.status).toBe("unavailable");
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post).toHaveBeenLastCalledWith("/document-lock", {
+      ...ref,
+      takeover: true,
+    });
   });
 
   it("reaches the deadline even when no request ever settles", async () => {
@@ -643,5 +653,522 @@ describe("useDocumentLock", () => {
     );
 
     expect(post.mock.calls.length).toBe(before + 1);
+  });
+
+  it("gives up on a claim that never answers, and retries", async () => {
+    // 🔴 A pending request is not a failed one. Nothing clears the one-at-a-time
+    // slot, so without a bound every later beat returns at the serialisation
+    // guard and the editor sits in `acquiring` for the whole session with a
+    // take-over queued behind a request that is never coming back.
+    //
+    // The mock honours the signal the way `fetch` does, since that abort is the
+    // whole mechanism under test.
+    post.mockImplementation(
+      (_path: string, _body: unknown, options?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () =>
+            reject(new Error("aborted"))
+          );
+        })
+    );
+
+    const { result } = renderHook(() => useDocumentLock(ref));
+    expect(result.current.state.status).toBe("acquiring");
+
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("unavailable")
+    );
+
+    // The slot is free again, so the next beat asks.
+    post.mockResolvedValue(acquired);
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+  });
+
+  it("shows the holder again after a failed poll, even if nothing changed", async () => {
+    // 🔴 The quiet-poll comparison must not outlive the state it was quiet about.
+    // A holder renewing on this same cadence reports identical fields, so keeping
+    // the cached reading suppresses the update and strands the editor on
+    // `unavailable` while the server is answering perfectly well.
+    post.mockResolvedValue(held);
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    post.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("unavailable")
+    );
+
+    // Same holder, same expiry: nothing about the reading changed.
+    post.mockResolvedValue(held);
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        status: "held-by-other",
+        holder: other,
+      })
+    );
+  });
+
+  it("repairs the live claim when an earlier run's reply displaces it", async () => {
+    // 🔴 Two fences, not one. The token fence separates two claims inside a run;
+    // this is two RUNS on the same document. A run whose cleanup has happened can
+    // still have a request in flight, and the server treats a claim from the SAME
+    // owner as takeable, so that late reply takes the row out from under the run
+    // that replaced it. Releasing it then leaves the live run holding a token the
+    // server has forgotten, reporting `held-by-me` over nothing.
+    let settleFirst: (value: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleFirst = resolve;
+      })
+    );
+
+    const { result, rerender } = renderHook(
+      ({ on }: { on: boolean }) => useDocumentLock({ ...ref, enabled: on }),
+      { initialProps: { on: true } }
+    );
+
+    // Same document, a second run: the first is cleaned up with its claim open.
+    rerender({ on: false });
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "live" },
+    });
+    rerender({ on: true });
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    const afterLive = post.mock.calls.length;
+
+    await act(async () => {
+      settleFirst({
+        message: "",
+        item: { status: "acquired", claimToken: "stale" },
+      });
+    });
+
+    // Handed back...
+    expect(del).toHaveBeenCalledWith(
+      "/document-lock",
+      expect.objectContaining({ claimToken: "stale" })
+    );
+    // ...and the live run told to claim again rather than trusting a token the
+    // server no longer has.
+    await waitFor(() =>
+      expect(post.mock.calls.length).toBeGreaterThan(afterLive)
+    );
+    expect(result.current.state.status).toBe("held-by-me");
+  });
+
+  it("does not wake a run that moved to another document", async () => {
+    // 🔴 Two claims on different documents use different lock keys, so a late
+    // reply for one cannot have displaced the other. Waking it would start a
+    // claim nobody asked for - and if THAT request fails it reports the document
+    // unavailable while the server still records it as held.
+    let settleFirst: (value: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleFirst = resolve;
+      })
+    );
+
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useDocumentLock({ ...ref, entryId: id }),
+      { initialProps: { id: "42" } }
+    );
+
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "live" },
+    });
+    rerender({ id: "43" });
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    const afterLive = post.mock.calls.length;
+
+    await act(async () => {
+      settleFirst({
+        message: "",
+        item: { status: "acquired", claimToken: "stale" },
+      });
+    });
+
+    // The stale claim is still handed back - it belongs to nobody now.
+    expect(del).toHaveBeenCalledWith(
+      "/document-lock",
+      expect.objectContaining({ claimToken: "stale" })
+    );
+    // But the document on screen was never displaced, so nothing is re-asked.
+    expect(post.mock.calls.length).toBe(afterLive);
+    expect(result.current.state.status).toBe("held-by-me");
+  });
+
+  it("credits a renewal from when it was sent, not when the reply arrived", async () => {
+    // 🔴 The lease starts when the SERVER processes a renewal. Timing it from
+    // receipt credits this editor with however long the reply spent in transit,
+    // so a reply delayed past the margin has the hook reporting a claim that
+    // expired server-side while a colleague can already take the row.
+    //
+    // The timeline below separates the two readings: the renewal is sent at one
+    // beat and answered much later, and the deadline that follows is reached
+    // only if the send time is what counted.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    let settleRenew: (value: unknown) => void = () => {};
+    patch.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleRenew = resolve;
+      })
+    );
+    // Every later beat is left open, so nothing else can move the deadline.
+    patch.mockReturnValue(new Promise(() => {}));
+
+    // The renewal is dispatched on this beat.
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    const sentAt = DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS;
+
+    // It is answered a long time later, but still inside the deadline measured
+    // from the last thing this editor knew.
+    const answeredAt =
+      DOCUMENT_LOCK_LOSS_AFTER_MS - DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS;
+    await act(async () => {
+      vi.advanceTimersByTime(answeredAt - sentAt);
+    });
+    await act(async () => {
+      settleRenew({ message: "", item: { status: "renewed" } });
+    });
+    expect(result.current.state.status).toBe("held-by-me");
+
+    // Now pass the deadline as measured from the SEND. Timed from the reply this
+    // editor would still believe it held the document.
+    await act(async () => {
+      vi.advanceTimersByTime(
+        sentAt +
+          DOCUMENT_LOCK_LOSS_AFTER_MS -
+          answeredAt +
+          DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS
+      );
+    });
+
+    await waitFor(() => expect(result.current.state.status).toBe("lost"));
+  });
+
+  it("credits a claim from when it was sent, not when the reply arrived", async () => {
+    // The same rule on the acquisition path. A claim answered slowly has already
+    // spent part of its lease by the time this editor hears about it.
+    let settleClaim: (value: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleClaim = resolve;
+      })
+    );
+
+    const { result } = renderHook(() => useDocumentLock(ref));
+    expect(result.current.state.status).toBe("acquiring");
+
+    // Answered slowly, but inside the slot's own expiry so it still installs.
+    const answeredAt = DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS - 1000;
+    await act(async () => {
+      vi.advanceTimersByTime(answeredAt);
+    });
+    patch.mockReturnValue(new Promise(() => {}));
+    await act(async () => {
+      settleClaim(acquired);
+    });
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    // The deadline as measured from the SEND lands on the beat at
+    // `DOCUMENT_LOCK_LOSS_AFTER_MS`; measured from the reply it would be a beat
+    // later, and this editor would still believe it held the document.
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_LOSS_AFTER_MS - answeredAt);
+    });
+
+    await waitFor(() => expect(result.current.state.status).toBe("lost"));
+  });
+
+  it("does not let an older renewal shorten a lease a newer one extended", async () => {
+    // 🔴 Replies can arrive out of order. An older renewal landing after a newer
+    // one would move the confirmation backwards, firing the deadline several
+    // beats early against a lease the server had already extended.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    let settleFirst: (value: unknown) => void = () => {};
+    let settleSecond: (value: unknown) => void = () => {};
+    patch.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleFirst = resolve;
+      })
+    );
+    patch.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleSecond = resolve;
+      })
+    );
+    patch.mockReturnValue(new Promise(() => {}));
+
+    // Two renewals dispatched a beat apart.
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+
+    // The newer one answers first, then the older one.
+    const renewed = { message: "", item: { status: "renewed" } };
+    await act(async () => {
+      settleSecond(renewed);
+    });
+    await act(async () => {
+      settleFirst(renewed);
+    });
+
+    // Just past the deadline measured from the OLDER renewal, and short of the
+    // one measured from the newer. Moved backwards, this reports `lost`.
+    await act(async () => {
+      vi.advanceTimersByTime(
+        DOCUMENT_LOCK_LOSS_AFTER_MS - DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS
+      );
+    });
+
+    expect(result.current.state.status).toBe("held-by-me");
+  });
+
+  it("queues a repair behind a claim the live run has not finished", async () => {
+    // 🔴 The repair is an acquire like any other, so it meets the same
+    // one-at-a-time slot. Dropping it there loses the whole point of it: the live
+    // run installs a token the stale reply has already invalidated and reports
+    // `held-by-me` over a claim the server has forgotten.
+    let settleStale: (value: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleStale = resolve;
+      })
+    );
+
+    const { result, rerender } = renderHook(
+      ({ on }: { on: boolean }) => useDocumentLock({ ...ref, enabled: on }),
+      { initialProps: { on: true } }
+    );
+
+    rerender({ on: false });
+
+    // The replacement run's own claim is still open when the stale one lands.
+    let settleLive: (value: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleLive = resolve;
+      })
+    );
+    rerender({ on: true });
+    const afterLiveSent = post.mock.calls.length;
+
+    await act(async () => {
+      settleStale({
+        message: "",
+        item: { status: "acquired", claimToken: "stale" },
+      });
+    });
+    // Nothing new asked yet: the slot is still held by the live claim.
+    expect(post.mock.calls.length).toBe(afterLiveSent);
+
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "second" },
+    });
+    await act(async () => {
+      settleLive({
+        message: "",
+        item: { status: "acquired", claimToken: "live" },
+      });
+    });
+
+    // The repair was kept, and runs once the slot frees.
+    await waitFor(() =>
+      expect(post.mock.calls.length).toBeGreaterThan(afterLiveSent)
+    );
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+  });
+
+  it("re-asks a take-over as a take-over when its own request stalls", async () => {
+    // 🔴 Finding the intent again is not the same as never losing it. A person's
+    // decision that outlives its request must come back as a decision: retried as
+    // a plain claim it politely declines to displace anyone, and the colleague
+    // keeps the document despite the click.
+    post.mockResolvedValue(held);
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    post.mockReturnValue(new Promise(() => {}));
+    await act(async () => {
+      result.current.takeOver();
+    });
+    expect(post).toHaveBeenLastCalledWith("/document-lock", {
+      ...ref,
+      takeover: true,
+    });
+    const sent = post.mock.calls.length;
+
+    // The slot expires without an answer.
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+
+    expect(post.mock.calls.length).toBeGreaterThan(sent);
+    expect(post).toHaveBeenLastCalledWith("/document-lock", {
+      ...ref,
+      takeover: true,
+    });
+  });
+
+  it("hands back a stalled claim that answers after its slot expired", async () => {
+    // 🔴 The reason nothing is aborted, and the reason a claim carries a
+    // sequence. The retry has already replaced this token server-side - the
+    // server treats the same owner as takeable - so installing the late one would
+    // report a claim the server has forgotten.
+    let settleStalled: (value: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleStalled = resolve;
+      })
+    );
+
+    const { result } = renderHook(() => useDocumentLock(ref));
+    expect(result.current.state.status).toBe("acquiring");
+
+    // The slot expires, and the next beat claims again and wins.
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "retry" },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    // Only now does the original answer.
+    await act(async () => {
+      settleStalled({
+        message: "",
+        item: { status: "acquired", claimToken: "stalled" },
+      });
+    });
+
+    expect(del).toHaveBeenCalledWith(
+      "/document-lock",
+      expect.objectContaining({ claimToken: "stalled" })
+    );
+    expect(result.current.state.status).toBe("held-by-me");
+  });
+
+  it("ignores a rejection from a claim that no longer owns the slot", async () => {
+    // 🔴 A retry can succeed and the original then reject. Reporting that
+    // replaces a good claim with `unavailable` and leaves it there, since
+    // renewals only move the confirmation forward and never restore the status.
+    let rejectStalled: (reason: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        rejectStalled = reject;
+      })
+    );
+
+    const { result } = renderHook(() => useDocumentLock(ref));
+    expect(result.current.state.status).toBe("acquiring");
+
+    // The slot expires and the next beat wins.
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "retry" },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    // Only now does the original fail.
+    await act(async () => {
+      rejectStalled(new Error("offline"));
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+
+    expect(result.current.state.status).toBe("held-by-me");
+  });
+
+  it("keeps a take-over queued while a repair says the claim may be dead", async () => {
+    // 🔴 A win only satisfies a queued take-over if it actually established
+    // possession. With a repair outstanding, the token just installed may already
+    // be the dead one - so dropping the click means the following plain claim
+    // comes back `held` and the decision is lost for good.
+    let settleStale: (value: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleStale = resolve;
+      })
+    );
+
+    const { result, rerender } = renderHook(
+      ({ on }: { on: boolean }) => useDocumentLock({ ...ref, enabled: on }),
+      { initialProps: { on: true } }
+    );
+    rerender({ on: false });
+
+    let settleLive: (value: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleLive = resolve;
+      })
+    );
+    rerender({ on: true });
+
+    // A person decides to take over while the live claim is still open.
+    await act(async () => {
+      result.current.takeOver();
+    });
+
+    // The stale reply lands, raising the repair.
+    await act(async () => {
+      settleStale({
+        message: "",
+        item: { status: "acquired", claimToken: "stale" },
+      });
+    });
+
+    // The live claim then wins - but a repair is outstanding, so the click stands.
+    // The repair itself is refused, which is the case that loses the click when
+    // the intent was dropped a moment too early.
+    post.mockResolvedValueOnce(held);
+    post.mockResolvedValue(acquired);
+    await act(async () => {
+      settleLive({
+        message: "",
+        item: { status: "acquired", claimToken: "live" },
+      });
+    });
+
+    await waitFor(() =>
+      expect(
+        post.mock.calls.filter(call => call[1]?.takeover === true).length,
+        "the take-over survived the repair"
+      ).toBeGreaterThan(0)
+    );
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
   });
 });

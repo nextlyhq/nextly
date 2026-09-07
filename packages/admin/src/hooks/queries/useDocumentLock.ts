@@ -17,28 +17,41 @@
  * ## One claim, owned by one effect
  *
  * Every mutable thing about a claim — the token, when it was last confirmed,
- * whether a request is in flight, and whether the editor is still mounted —
- * lives in the effect that created it, not in a ref shared across runs. That is
- * what makes the awkward cases fall out rather than needing to be handled one at
- * a time: a reply belonging to a superseded run closes over a `cancelled` that is
- * already true, and a reply belonging to a superseded CLAIM closes over a token
- * that no longer matches. React Strict Mode's double mount, a document switch
- * and an unmount are then the same case rather than three.
+ * what is in flight, and whether the editor is still mounted — lives in the
+ * effect that created it, not in a ref shared across runs. React Strict Mode's
+ * double mount, a document switch and an unmount are then the same case rather
+ * than three: each closes over a `cancelled` that is already true.
  *
- * ## Every reply is fenced on the token that produced it
+ * ## Every reply is fenced on what produced it
  *
- * 🔴 Not on the effect run. A takeover replaces the token WITHIN a run, so two
- * heartbeats can overlap across it: a `lost` answer belonging to the token that
- * was displaced would otherwise clear the claim the takeover just won, telling
- * an editor who holds the document that they do not.
+ * 🔴 A renewal is fenced on its TOKEN, not on the effect run. A takeover
+ * replaces the token WITHIN a run, so two heartbeats can overlap across it: a
+ * `lost` answer belonging to the displaced token would otherwise clear the claim
+ * the takeover just won.
  *
- * ## One acquire at a time
+ * 🔴 A claim is fenced on its SEQUENCE. Two acquisitions can be outstanding at
+ * once, and the server treats a live claim from the same owner as takeable, so
+ * the later one to commit wins and the other's token is already dead.
  *
- * 🔴 A second acquire cannot start while one is pending. The server treats a
- * live claim from the SAME owner as takeable, so a duplicate acquire mints a
- * fresh token and invalidates the one still in flight; whichever reply lands
- * second wins, and the editor can be left holding a token the server has already
- * replaced — renewing into a takeover that names the editor themselves.
+ * ## Nothing is aborted
+ *
+ * 🔴 A claim is not idempotent, so aborting one makes its outcome UNKNOWABLE:
+ * the request may still commit, and an aborted fetch can never hand back the
+ * token it was given. The editor would then hold a token the server has
+ * replaced with one it can never learn.
+ *
+ * So a slow claim is not cancelled — only its hold on the slot expires. The
+ * reply still arrives, and if the slot has moved on the token it carries is
+ * released as the duplicate it is. That converges without the server needing to
+ * know anything about client retries.
+ *
+ * ## Intent survives the wait
+ *
+ * 🔴 A person pressing "take over" is a decision, and a poll is not. Whatever is
+ * waiting on the slot is remembered as an intent rather than a boolean, a
+ * take-over outranks a queued claim, and a take-over whose request outlives the
+ * slot is re-asked as a take-over. Losing it turns the decision into a poll that
+ * politely declines to displace anyone.
  *
  * ## The beat outlives the claim
  *
@@ -114,6 +127,9 @@ export interface UseDocumentLockOptions {
   enabled?: boolean;
 }
 
+/** What is waiting for the acquisition slot. A decision outranks a poll. */
+type ClaimIntent = "takeover" | "claim";
+
 /** Whether two holder readings say the same thing, so a poll can stay quiet. */
 function sameHolder(a: DocumentLockHolder, b: DocumentLockHolder): boolean {
   return (
@@ -121,6 +137,15 @@ function sameHolder(a: DocumentLockHolder, b: DocumentLockHolder): boolean {
     a.ownerLabel === b.ownerLabel &&
     a.expiresInSeconds === b.expiresInSeconds
   );
+}
+
+/** Names one document, so a repair meant for it cannot land on another. */
+function documentKey(
+  scopeKind: DocumentScopeKind,
+  slug: string,
+  entryId: string
+): string {
+  return `${scopeKind}:${slug}:${entryId}`;
 }
 
 export function useDocumentLock({
@@ -137,6 +162,15 @@ export function useDocumentLock({
   const takeOverRef = useRef<() => void>(() => {});
   const takeOver = useCallback(() => takeOverRef.current(), []);
 
+  // 🔴 The cross-RUN half of the fencing, which the token fence cannot cover. A
+  // run whose cleanup has already happened can still have a request in flight,
+  // and the server treats a claim from the same owner as takeable, so that late
+  // reply displaces the run that replaced it. This is how the run that got
+  // displaced hears about it. It carries the document the repair is FOR: a run
+  // editing another document was never displaced, since the two claims use
+  // different lock keys, and waking it would start a claim nobody asked for.
+  const reacquireRef = useRef<(forDocument: string) => void>(() => {});
+
   const active = enabled && Boolean(entryId);
   // Memoised on the three primitives that identify the document. Rebuilt every
   // render it would be a new object each time, so the effect below would claim,
@@ -152,15 +186,21 @@ export function useDocumentLock({
       return;
     }
 
+    const key = documentKey(ref.scopeKind, ref.slug, ref.entryId);
+
     let cancelled = false;
     let token: string | null = null;
     let confirmedAt = Date.now();
     let holder: DocumentLockHolder | null = null;
-    let acquiring = false;
-    // A person pressing "take over" while a poll is mid-flight must not lose the
-    // click. Serialising without this turns their decision into silence, and the
-    // poll that displaced it only ever asks politely.
-    let queuedTakeover = false;
+    // The acquisition holding the slot, and what waits behind it.
+    let claimSeq = 0;
+    let inFlight: number | null = null;
+    let pending: ClaimIntent | null = null;
+    // 🔴 A separate fact from `pending`, though both mean "ask again". A queued
+    // claim or take-over is SATISFIED by winning the document; a repair is not,
+    // because the very thing it reports is that the token just installed may
+    // already be dead. Collapsing them lets a win swallow the repair.
+    let repairNeeded = false;
     // Set when this editor stops being a contender: displaced by the server, or
     // past its own deadline. The beat then waits for the person rather than
     // re-taking a claim they were just told they had lost.
@@ -178,14 +218,41 @@ export function useDocumentLock({
         .delete("/document-lock", { ...ref, claimToken })
         .catch(() => undefined);
 
+    /** Remember what still has to be asked. A decision outranks a poll. */
+    const remember = (intent: ClaimIntent) => {
+      if (intent === "takeover" || pending === null) pending = intent;
+    };
+
+    /** Ask for whatever was waiting, once the slot is free. */
+    const drain = () => {
+      if (cancelled || inFlight !== null) return;
+      if (repairNeeded) {
+        repairNeeded = false;
+        surrendered = false;
+        void acquire(false);
+        return;
+      }
+      if (pending === null) return;
+      const intent = pending;
+      pending = null;
+      void acquire(intent === "takeover");
+    };
+
     /** Store a claim this editor now holds. */
-    const installAcquired = (claimToken: string) => {
+    const installAcquired = (claimToken: string, sentAt: number) => {
       token = claimToken;
-      confirmedAt = Date.now();
+      // A new claim is a new lease, timed from when it was asked for.
+      confirmedAt = sentAt;
       holder = null;
       surrendered = false;
-      // Already holding it: a queued take-over would only displace ourselves.
-      queuedTakeover = false;
+      // 🔴 Whatever a person or a poll was waiting for has been got -- but only
+      // if this claim actually established possession. A take-over queued behind
+      // a poll that then WON must not be carried into a later claim and spent
+      // displacing a colleague nobody asked to displace; a take-over queued while
+      // a repair is outstanding must NOT be dropped, because the repair says this
+      // very token may already be dead and the following plain claim would come
+      // back `held`, losing the click for good.
+      if (!repairNeeded) pending = null;
       setState({ status: "held-by-me" });
     };
 
@@ -200,56 +267,107 @@ export function useDocumentLock({
       }
     };
 
-    const acquire = async (takeover: boolean) => {
-      if (acquiring) {
-        if (takeover) queuedTakeover = true;
+    /** Report that the server could not be asked, and forget what it last said. */
+    const installUnavailable = () => {
+      if (cancelled) return;
+      // 🔴 Forget the holder as well as the state. Kept, an identical reading on
+      // the next successful poll is suppressed as "nothing changed" and the
+      // editor stays on `unavailable` while the server is answering perfectly
+      // well — which is plausible whenever the holder renews on this cadence.
+      holder = null;
+      setState({ status: "unavailable" });
+    };
+
+    /**
+     * Give up the SLOT without giving up the request.
+     *
+     * 🔴 Not an abort. A claim is not idempotent, so cancelling one makes its
+     * outcome unknowable: it may still commit, and an aborted fetch can never
+     * hand back the token it was given. Letting the slot go frees the beat while
+     * the answer is still coming.
+     */
+    const expireSlot = (seq: number, intent: ClaimIntent) => {
+      if (inFlight !== seq) return;
+      inFlight = null;
+      installUnavailable();
+      // The intent outlives its request: a person's take-over must not quietly
+      // become a poll that declines to displace anyone.
+      remember(intent);
+      drain();
+    };
+
+    /** Report a claim that could not be sent, keeping a decision for the beat. */
+    const failClaim = (seq: number, intent: ClaimIntent) => {
+      // 🔴 A rejection from a claim that no longer owns the slot says nothing
+      // about the document. A retry can succeed and then the original finally
+      // rejects: reporting that would replace a good claim with `unavailable`
+      // and leave it there, since renewals only move `confirmedAt`. It would also
+      // requeue a take-over the retry has already satisfied, which later displaces
+      // a colleague with no second click.
+      if (inFlight !== seq) return;
+      inFlight = null;
+      installUnavailable();
+      // Kept for the beat rather than retried here, which would spin against a
+      // server that is down. A take-over is kept because it was a decision.
+      if (intent === "takeover") remember("takeover");
+    };
+
+    /**
+     * Hand back a claim that arrived too late to be this editor's.
+     *
+     * 🔴 And say so. The server treats a claim from the same owner as takeable,
+     * so this reply displaced whatever holds the document now; releasing it
+     * quietly leaves that holder on a token the server has already forgotten.
+     */
+    const discardDuplicate = (item: AcquireDocumentLockOutcome) => {
+      if (item.status !== "acquired") return;
+      release(item.claimToken);
+      reacquireRef.current(key);
+    };
+
+    async function acquire(takeover: boolean): Promise<void> {
+      const intent: ClaimIntent = takeover ? "takeover" : "claim";
+      if (inFlight !== null) {
+        remember(intent);
         return;
       }
-      acquiring = true;
+
+      const seq = (claimSeq += 1);
+      inFlight = seq;
+      const sentAt = Date.now();
+      const slotExpiry = setTimeout(
+        () => expireSlot(seq, intent),
+        DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS
+      );
+
       let item: AcquireDocumentLockOutcome;
       try {
         ({ item } = await protectedApi.post<
           MutationResponse<AcquireDocumentLockOutcome>
         >("/document-lock", { ...ref, takeover }));
       } catch {
-        // 🔴 Reported, not swallowed. A rejected acquire leaves no token, and
-        // every later beat would exit at its token guard, so an editor would
-        // spend the whole session silently unprotected. The beat retries.
-        acquiring = false;
-        if (!cancelled) setState({ status: "unavailable" });
-        drainQueuedTakeover();
+        clearTimeout(slotExpiry);
+        failClaim(seq, intent);
         return;
       }
-      acquiring = false;
+      clearTimeout(slotExpiry);
 
-      if (cancelled) {
-        // 🔴 The claim outlived the editor that asked for it: this reply landed
-        // after cleanup, which found no token to release. Releasing it here is
-        // the difference between a colleague waiting one request and waiting a
-        // whole lease.
-        if (item.status === "acquired") release(item.claimToken);
-        return;
-      }
+      // The slot moved on without this request, so whatever it won is a
+      // duplicate: a later acquisition has already replaced it server-side, or
+      // is about to.
+      const superseded = inFlight !== seq;
+      if (!superseded) inFlight = null;
 
-      if (item.status === "acquired") {
-        installAcquired(item.claimToken);
+      if (cancelled || superseded) {
+        discardDuplicate(item);
+        if (superseded) drain();
         return;
       }
 
-      installHeld(item.holder);
-      // 🔴 Only once the answer is stored, and only when it was a refusal.
-      // Draining first fires a second acquire against a claim this one may have
-      // just won, and if that one rejects it reports the claim unavailable over
-      // a token that is held and still renewing.
-      drainQueuedTakeover();
-    };
-
-    /** Run a take-over that arrived while another request held the slot. */
-    const drainQueuedTakeover = () => {
-      if (!queuedTakeover || cancelled) return;
-      queuedTakeover = false;
-      void acquire(true);
-    };
+      if (item.status === "acquired") installAcquired(item.claimToken, sentAt);
+      else installHeld(item.holder);
+      drain();
+    }
 
     /** Give the claim up, and hand back whatever the server may still be holding. */
     const surrender = (next: DocumentLockState) => {
@@ -265,6 +383,13 @@ export function useDocumentLock({
     };
 
     takeOverRef.current = () => void acquire(true);
+    reacquireRef.current = (forDocument: string) => {
+      if (cancelled || forDocument !== key) return;
+      // Queued rather than asked directly: the live run may have a claim of its
+      // own still open, and the slot admits one at a time.
+      repairNeeded = true;
+      drain();
+    };
     void acquire(false);
 
     const heartbeat = setInterval(() => {
@@ -277,6 +402,14 @@ export function useDocumentLock({
         Date.now() - confirmedAt >= DOCUMENT_LOCK_LOSS_AFTER_MS
       ) {
         surrender({ status: "lost" });
+        return;
+      }
+
+      // A decision or a repair waiting on the slot is asked before anything
+      // else, so neither is overtaken by the poll below and turned into a
+      // polite request that declines to displace anyone.
+      if (pending !== null || repairNeeded) {
+        drain();
         return;
       }
 
@@ -293,6 +426,9 @@ export function useDocumentLock({
       }
 
       const sent = token;
+      // Timed from dispatch for the same reason a claim is: the lease the server
+      // grants starts when it processes this, not when the answer gets back.
+      const renewSentAt = Date.now();
       void protectedApi
         .patch<MutationResponse<RenewDocumentLockOutcome>>("/document-lock", {
           ...ref,
@@ -301,7 +437,10 @@ export function useDocumentLock({
         .then(({ item }) => {
           if (cancelled || sent !== token) return;
           if (item.status === "renewed") {
-            confirmedAt = Date.now();
+            // 🔴 Never backwards. Replies can arrive out of order, and an older
+            // renewal landing after a newer one would shorten a lease the newer
+            // one already extended — firing the deadline several beats early.
+            confirmedAt = Math.max(confirmedAt, renewSentAt);
             return;
           }
           surrender({ status: "taken-over", holder: item.holder });
@@ -314,6 +453,9 @@ export function useDocumentLock({
     return () => {
       cancelled = true;
       takeOverRef.current = () => {};
+      // `reacquireRef` is left for the run that replaces this one to overwrite,
+      // and refuses a document it does not own, so a late reply cannot wake an
+      // editor that has gone or one looking at something else.
       clearInterval(heartbeat);
       if (token !== null) release(token);
     };
