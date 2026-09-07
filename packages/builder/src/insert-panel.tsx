@@ -81,7 +81,7 @@ import {
   registrySlotSource,
   type InsertGroup,
   type InsertionPoint,
-  type InsertEntry,
+  type BlockInsertEntry,
 } from "./inserter";
 
 export interface InsertPanelProps {
@@ -174,7 +174,7 @@ function DescriptionStrip({
   groups,
   tokens,
 }: {
-  groups: readonly InsertGroup[];
+  groups: readonly InsertGroup<BlockInsertEntry>[];
   tokens: ReadonlyMap<string, string>;
 }): React.JSX.Element | null {
   // Empty string is the palette's "nothing highlighted", which is a different
@@ -341,10 +341,10 @@ function TouchGestureHint({
  * itself would be a second writer racing the primitives' own selection.
  */
 function describedEntry(
-  groups: readonly InsertGroup[],
+  groups: readonly InsertGroup<BlockInsertEntry>[],
   tokens: ReadonlyMap<string, string>,
   active: string | undefined
-): InsertEntry | undefined {
+): BlockInsertEntry | undefined {
   if (active !== undefined) {
     for (const group of groups) {
       for (const entry of group.entries) {
@@ -510,7 +510,7 @@ export function InsertPanel({
    * itself would be a second writer racing the primitives' own selection.
    */
 
-  const insert = (entry: InsertEntry) => {
+  const insert = (entry: BlockInsertEntry) => {
     if (point === null) return;
     // `nesting` rather than `source`. They differ exactly when the caller
     // supplied no rules: `source` has already defaulted to the REGISTRY, which

@@ -31,7 +31,10 @@ import {
   groupByCategory,
   insertionPointFor,
   nodeForEntry,
-  type InsertEntry,
+  patternEntriesFrom,
+  PATTERN_ENTRY_PREFIX,
+  type BlockInsertEntry,
+  type SavedPattern,
 } from "./inserter";
 
 const base = {
@@ -46,12 +49,15 @@ afterEach(() => {
 });
 
 /** Register a palette and return the catalog the panel would be handed. */
-function catalog(definitions: readonly unknown[]): InsertEntry[] {
+function catalog(definitions: readonly unknown[]): BlockInsertEntry[] {
   registerBlocks(definitions as never, { source: "acme" });
   return catalogFrom(allBlocks());
 }
 
-function entry(entries: readonly InsertEntry[], id: string): InsertEntry {
+function entry(
+  entries: readonly BlockInsertEntry[],
+  id: string
+): BlockInsertEntry {
   const found = entries.find(candidate => candidate.id === id);
   if (found === undefined) {
     throw new Error(
@@ -210,10 +216,10 @@ describe("filterEntries", () => {
   // Registered once per case rather than per call. `registerBlocks` refuses a
   // redefinition, so a helper invoked twice inside one test fails on the
   // collision rather than on anything it was asserting.
-  let palette: InsertEntry[];
-  const entries = (): InsertEntry[] => palette;
+  let palette: BlockInsertEntry[];
+  const entries = (): BlockInsertEntry[] => palette;
 
-  const register = (): InsertEntry[] =>
+  const register = (): BlockInsertEntry[] =>
     catalog([
       {
         ...base,
@@ -379,7 +385,7 @@ describe("groupByCategory", () => {
 });
 
 describe("entryAllowedAt and allowedEntries", () => {
-  function palette(): InsertEntry[] {
+  function palette(): BlockInsertEntry[] {
     return catalog([
       { ...base, name: "acme/columns" },
       { ...base, name: "acme/column", parent: ["acme/columns"] },
@@ -969,5 +975,166 @@ describe("nodeForEntry", () => {
         "acme/registered-cell",
       ]);
     });
+  });
+});
+
+describe("the pattern tier", () => {
+  function saved(overrides: Partial<SavedPattern> = {}): SavedPattern {
+    return {
+      id: "hero",
+      title: "Hero",
+      document: documentOf([
+        { id: "a", type: "acme/text", version: 1, props: {} },
+      ]),
+      ...overrides,
+    };
+  }
+
+  it("keys a pattern out of the block namespace", () => {
+    // A stored pattern may be saved under any string, a registered block name
+    // included. Two entries answering to one id make the panel reuse one row's
+    // state for the other, and a highlighted entry stop naming what it names.
+    const blocks = catalog([{ ...base, name: "acme/text" }]);
+    const [pattern] = patternEntriesFrom([saved({ id: "acme/text" })]);
+
+    expect(pattern?.id).toBe(`${PATTERN_ENTRY_PREFIX}acme/text`);
+    expect(blocks.some(entry => entry.id === pattern?.id)).toBe(false);
+    expect(pattern?.patternId).toBe("acme/text");
+  });
+
+  it("offers no entry for a pattern with no roots", () => {
+    // Inserting it would add nothing, so a row for it reads as an action and is
+    // not one. The control is the same call with a root, which must produce one.
+    const empty = patternEntriesFrom([saved({ document: documentOf([]) })]);
+    const populated = patternEntriesFrom([saved()]);
+
+    expect(empty).toEqual([]);
+    expect(populated).toHaveLength(1);
+  });
+
+  it("splits the stored keyword string on every separator an author uses", () => {
+    // Stored as ONE string because the field is matched rather than
+    // enumerated, and the collection's own note says authors separate them
+    // however they like. Empty runs between two separators produce nothing: a
+    // blank term matches every query, so it would make the pattern universal.
+    const [pattern] = patternEntriesFrom([
+      saved({ keywords: "landing,  banner; splash ,, " }),
+    ]);
+
+    expect(pattern?.keywords).toEqual(["landing", "banner", "splash"]);
+  });
+
+  it("gives a pattern that declares neither a category nor a description one anyway", () => {
+    const [pattern] = patternEntriesFrom([saved()]);
+
+    expect(pattern?.category).toBe(UNCATEGORISED);
+    expect(pattern?.description).toBe("");
+  });
+
+  it("refuses a pattern whose SECOND root the destination will not take", () => {
+    // The root that refuses is deliberately not the first: judging a forest by
+    // its head passes this pattern, the panel accepts the click, and the
+    // planner then rejects the whole insert — the palette-and-drop
+    // disagreement the module exists to prevent.
+    catalog([
+      { ...base, name: "acme/text" },
+      { ...base, name: "acme/column", parent: ["acme/columns"] },
+    ]);
+    const [pattern] = patternEntriesFrom([
+      saved({
+        document: documentOf([
+          { id: "a", type: "acme/text", version: 1, props: {} },
+          { id: "b", type: "acme/column", version: 1, props: {} },
+        ]),
+      }),
+    ]);
+
+    const verdict = entryAllowedAt(
+      pattern as never,
+      { at: "root" },
+      registryNestingSource()
+    );
+
+    expect(verdict.allowed).toBe(false);
+    // The reason belongs to the root that produced it, so an author is told
+    // where that block can go rather than that "something" was refused.
+    expect(verdict.reason).toBe("restricted-at-root");
+    expect(verdict.permitted).toEqual(["acme/columns"]);
+  });
+
+  it("allows a pattern every one of whose roots the destination takes", () => {
+    catalog([{ ...base, name: "acme/text" }]);
+    const [pattern] = patternEntriesFrom([
+      saved({
+        document: documentOf([
+          { id: "a", type: "acme/text", version: 1, props: {} },
+          { id: "b", type: "acme/text", version: 1, props: {} },
+        ]),
+      }),
+    ]);
+
+    expect(
+      entryAllowedAt(pattern as never, { at: "root" }, registryNestingSource())
+        .allowed
+    ).toBe(true);
+  });
+
+  it("drops a refused pattern from what a target will accept", () => {
+    catalog([
+      { ...base, name: "acme/text" },
+      { ...base, name: "acme/column", parent: ["acme/columns"] },
+    ]);
+    const patterns = patternEntriesFrom([
+      saved({ id: "ok" }),
+      saved({
+        id: "bad",
+        document: documentOf([
+          { id: "b", type: "acme/column", version: 1, props: {} },
+        ]),
+      }),
+    ]);
+
+    expect(
+      allowedEntries(patterns, { at: "root" }, registryNestingSource()).map(
+        offered => offered.patternId
+      )
+    ).toEqual(["ok"]);
+  });
+
+  it("searches a pattern by its own words and not by a block name it has none of", () => {
+    const [pattern] = patternEntriesFrom([
+      saved({
+        title: "Hero",
+        description: "A big opener.",
+        keywords: "splash",
+      }),
+    ]);
+    const entries = [pattern as never];
+
+    expect(filterEntries(entries, "hero")).toHaveLength(1);
+    expect(filterEntries(entries, "opener")).toHaveLength(1);
+    expect(filterEntries(entries, "splash")).toHaveLength(1);
+    // `acme/text` is the type of the pattern's only root. A block entry is
+    // matched on its namespaced name because that is the identity an author
+    // reads in documentation; a pattern has no such identity, and matching it
+    // through the blocks it happens to contain would offer it for a query
+    // about something it is not.
+    expect(filterEntries(entries, "acme/text")).toEqual([]);
+  });
+
+  it("groups a pattern under its own category, beside the blocks", () => {
+    const blocks = catalog([
+      { ...base, name: "acme/text", editor: { category: "text" } },
+    ]);
+    const patterns = patternEntriesFrom([saved({ category: "text" })]);
+
+    const groups = groupByCategory([...blocks, ...patterns]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.category).toBe("text");
+    expect(groups[0]?.entries.map(offered => offered.id)).toEqual([
+      "acme/text",
+      `${PATTERN_ENTRY_PREFIX}hero`,
+    ]);
   });
 });
