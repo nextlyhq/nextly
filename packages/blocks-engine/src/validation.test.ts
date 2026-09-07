@@ -7,6 +7,7 @@ import {
 } from "./document";
 import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 import { DEFAULT_LIMITS, documentBytes } from "./limits";
+import { applyOps } from "./ops";
 import {
   MAX_SITE_LOOKUPS,
   MAX_SITE_ISSUES,
@@ -2804,6 +2805,91 @@ describe("componentEnvelopeIssues holds itself to a real bound", () => {
     expect(componentEnvelopeIssues(doc).map(i => i.code)).toContain(
       "exposed-node-missing"
     );
+  });
+});
+
+describe("a node's provenance record is checked on both roads to storage", () => {
+  /** A one-node page whose node carries this origin. */
+  function withOrigin(origin: unknown): BlockDocument {
+    return {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/text", version: 1, props: {}, origin }],
+    } as unknown as BlockDocument;
+  }
+
+  const codesFor = (origin: unknown, mode: "strict" | "forgiving" = "strict") =>
+    validate(withOrigin(origin), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode,
+    }).map(issue => issue.code);
+
+  it.each([
+    ["a pattern with no digest", { from: "pattern", id: "p1" }],
+    [
+      "a pattern with an empty digest",
+      { from: "pattern", id: "p1", digest: "" },
+    ],
+    ["a pattern with an empty id", { from: "pattern", id: "", digest: "d" }],
+    ["a component with no id", { from: "component" }],
+    ["an unknown arm", { from: "elsewhere", id: "x" }],
+    ["not a record", "pattern"],
+  ])("refuses %s", (_name, origin) => {
+    // An import or a script can write one of these through the FIELD road, and
+    // every later provenance reader takes it at face value: a staleness check
+    // against a pattern with no id answers confidently and wrongly.
+    expect(codesFor(origin)).toContain("invalid-origin");
+  });
+
+  it.each([
+    ["a whole pattern record", { from: "pattern", id: "p1", digest: "d1" }],
+    ["a whole component record", { from: "component", id: "c1" }],
+  ])("accepts %s", (_name, origin) => {
+    // The controls. Without them a check that refused every record would pass
+    // every assertion above.
+    expect(codesFor(origin)).not.toContain("invalid-origin");
+  });
+
+  it("accepts a node with no record at all", () => {
+    const codes = validate(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ id: "n1", type: "core/text", version: 1, props: {} }],
+      } as unknown as BlockDocument,
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    ).map(issue => issue.code);
+
+    expect(codes).not.toContain("invalid-origin");
+  });
+
+  it("refuses it in FORGIVING mode too", () => {
+    // Forgiving mode keeps a document readable when a future build wrote
+    // something this one does not understand. A half-written record is not a
+    // future value — it is a claim about history with a piece missing, and a
+    // reader cannot tell which piece.
+    expect(codesFor({ from: "pattern", id: "p1" }, "forgiving")).toContain(
+      "invalid-origin"
+    );
+  });
+
+  it("agrees with the road an op takes", () => {
+    // The point of the check: a record one road admits and the other refuses is
+    // one that exists in the database and cannot be edited. Both ask
+    // `isBlockOrigin`, so this asserts the SAME record is refused by both.
+    const half = { from: "pattern", id: "p1" };
+
+    expect(codesFor(half)).toContain("invalid-origin");
+    expect(() =>
+      applyOps(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [{ id: "n1", type: "core/text", version: 1, props: {} }],
+        } as unknown as BlockDocument,
+        [{ kind: "update", id: "n1", patch: { origin: half } }] as never
+      )
+    ).toThrow();
   });
 });
 
