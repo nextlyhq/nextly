@@ -212,7 +212,7 @@ export function WidgetGrid() {
   const {
     slots,
     cellSlots,
-    isFetching,
+    fetchingPlacementIds,
     updatedAt,
     requested,
     counted,
@@ -286,7 +286,7 @@ export function WidgetGrid() {
           cellSlots={cellSlots}
           requested={requested}
           updatedAt={updatedAt}
-          isFetching={isFetching}
+          fetchingPlacementIds={fetchingPlacementIds}
           announcement={announcement}
           onMove={moveWithinColumn}
           onMoveColumn={moveColumn}

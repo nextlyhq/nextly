@@ -401,6 +401,61 @@ describe("useWidgetQueries", () => {
     });
   });
 
+  it("reports only the partition still in flight as fetching, not every card", async () => {
+    // 🔴 The same independence the failure case above relies on. A dashboard
+    // over the cap is split into partitions that settle separately, so a card
+    // whose own request has answered must stop reporting itself busy even while
+    // another partition is still running -- otherwise settled numbers stay
+    // dimmed for a reason no reader can see, and the published
+    // `WidgetComponentProps.isFetching` contract is not kept.
+    const over = MAX_QUERIES_PER_REQUEST + 1;
+    const requests = Array.from({ length: over }, (_, i) => ({
+      placementId: `core/${i}`,
+      query: countQuery(`collection:c${i}`),
+    }));
+
+    let releaseSecond: (() => void) | undefined;
+    const secondAnswered = new Promise<void>(resolve => {
+      releaseSecond = resolve;
+    });
+    vi.mocked(protectedApi.post).mockImplementation(
+      async (_path: string, body: unknown) => {
+        const sent = (body as { queries: unknown[] }).queries;
+        // The trailing partition holds exactly the one query over the cap.
+        if (sent.length === 1) await secondAnswered;
+        return {
+          results: sent.map(() => ({
+            ok: true,
+            result: { op: "count", total: 3 },
+          })),
+        };
+      }
+    );
+
+    const { result } = renderHook(() => useWidgetQueries(requests), {
+      wrapper,
+    });
+
+    // The first partition answers while the second is still held.
+    await waitFor(() => expect(result.current.slots["core/0"]).toBeDefined());
+
+    expect(result.current.fetchingPlacementIds.has("core/0")).toBe(false);
+    expect(result.current.fetchingPlacementIds.has(`core/${over - 1}`)).toBe(
+      true
+    );
+    // CONTROL: the batch-wide flag is still true, which is exactly why a card
+    // reading it rather than this set was wrong.
+    expect(result.current.isFetching).toBe(true);
+
+    releaseSecond?.();
+    await waitFor(() =>
+      expect(result.current.slots[`core/${over - 1}`]).toBeDefined()
+    );
+    await waitFor(() =>
+      expect(result.current.fetchingPlacementIds.size).toBe(0)
+    );
+  });
+
   describe("a member of results that is not a slot", () => {
     async function slotFor(member: unknown) {
       vi.mocked(protectedApi.post).mockResolvedValue({ results: [member] });
