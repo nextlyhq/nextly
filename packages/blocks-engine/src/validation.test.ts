@@ -2873,6 +2873,82 @@ describe("a node's provenance record is checked on both roads to storage", () =>
     );
   });
 
+  it.each([
+    [
+      "a throwing getter",
+      () => {
+        throw new Error("boom");
+      },
+    ],
+    ["a benign getter", () => ({ from: "pattern", id: "p1", digest: "d1" })],
+  ])("never invokes an origin that is %s", (_name, get) => {
+    // `surveyDocument` refuses to invoke an accessor and already reports such a
+    // document unreadable, so reading one here would run the document's own
+    // code inside the check deciding whether to trust it. Measured before the
+    // descriptor read: the throwing one escaped `validate()` as a native error,
+    // and the benign one was invoked TWICE — once per read.
+    let reads = 0;
+    const node: Record<string, unknown> = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+    };
+    Object.defineProperty(node, "origin", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return get();
+      },
+    });
+
+    let escaped: unknown;
+    let codes: string[] = [];
+    try {
+      codes = validate(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [node],
+        } as unknown as BlockDocument,
+        { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+      ).map(issue => issue.code);
+    } catch (error) {
+      escaped = error;
+    }
+
+    expect(escaped).toBeUndefined();
+    expect(reads).toBe(0);
+    // The verdict that already covers it, rather than a second one from here:
+    // a document whose fields compute themselves is refused as a whole.
+    expect(codes).toContain("document-unreadable");
+    expect(codes).not.toContain("invalid-origin");
+  });
+
+  it("ignores an origin inherited from a prototype", () => {
+    // `structuredClone` and object spreads copy OWN properties, so a value
+    // reached through the prototype is not what would be stored — the rule this
+    // engine applies to every other field.
+    const node = Object.create({
+      origin: { from: "pattern", id: "" },
+    }) as Record<string, unknown>;
+    node.id = "n1";
+    node.type = "core/text";
+    node.version = 1;
+    node.props = {};
+
+    const codes = validate(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [node],
+      } as unknown as BlockDocument,
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    ).map(issue => issue.code);
+
+    expect(codes).not.toContain("invalid-origin");
+  });
+
   it("agrees with the road an op takes", () => {
     // The point of the check: a record one road admits and the other refuses is
     // one that exists in the database and cannot be edited. Both ask

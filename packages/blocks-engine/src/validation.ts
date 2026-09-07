@@ -1053,7 +1053,25 @@ function checkNodeOrigin(
   path: string,
   issues: ValidationIssue[]
 ): void {
-  if (node.origin === undefined || isBlockOrigin(node.origin)) return;
+  // Through the DESCRIPTOR, never an ordinary read. `surveyDocument` refuses to
+  // invoke an accessor and already reports such a document `document-unreadable`
+  // — so reading one here runs the document's own code inside the check deciding
+  // whether to trust it, which is the rule `ops.ts` states about node fields.
+  // Measured before this: a throwing getter escaped `validate()` as a native
+  // error, and a benign one was invoked TWICE, once per read below.
+  //
+  // An accessor is left to the verdict that already covers it rather than given
+  // a second one here: a document whose fields compute themselves is refused as
+  // a whole, and reporting its `origin` as malformed would send an author to fix
+  // a record that may be perfectly well formed.
+  //
+  // An INHERITED `origin` is absent for the same reason it is elsewhere in this
+  // engine: `structuredClone` and object spreads copy own properties, so a value
+  // reached through the prototype is not what would be stored.
+  const descriptor = Object.getOwnPropertyDescriptor(node, "origin");
+  if (descriptor === undefined || descriptor.get !== undefined) return;
+  const origin: unknown = descriptor.value;
+  if (origin === undefined || isBlockOrigin(origin)) return;
   issues.push({
     path: pointer(path, "origin"),
     code: "invalid-origin",
