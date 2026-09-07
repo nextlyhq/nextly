@@ -97,3 +97,115 @@ describe("a failed insert", () => {
     ).rejects.toSatisfy((e: unknown) => !NextlyError.isConflict(e));
   });
 });
+
+/**
+ * A service whose stored row is whatever a test wants to have been persisted.
+ *
+ * Only `getLayout` is exercised here, so the write half of the stub above is
+ * not reproduced -- the SELECT is the entire input.
+ */
+class StoredRowService extends WidgetLayoutService {
+  constructor(
+    private readonly storedLayout: string,
+    logger: Logger
+  ) {
+    super(adapterStub, logger);
+  }
+
+  protected override get db(): never {
+    const rows = [{ id: "user:u1", layout: this.storedLayout, version: 3 }];
+    const selectChain = {
+      from: () => selectChain,
+      where: () => selectChain,
+      limit: async () => rows,
+      then: (resolve: (v: unknown) => unknown) => resolve(rows),
+    };
+    return { select: () => selectChain } as never;
+  }
+}
+
+/** A logger that keeps what it was told, so a test can read it back. */
+function recordingLogger(): {
+  logger: Logger;
+  warnings: { message: string; meta?: Record<string, unknown> }[];
+} {
+  const warnings: { message: string; meta?: Record<string, unknown> }[] = [];
+  return {
+    warnings,
+    logger: {
+      debug: () => {},
+      info: () => {},
+      warn: (message: string, meta?: Record<string, unknown>) => {
+        warnings.push({ message, ...(meta === undefined ? {} : { meta }) });
+      },
+      error: () => {},
+    },
+  };
+}
+
+const twiceKeyed = JSON.stringify({
+  schemaVersion: 2,
+  columnCount: 2,
+  placements: [
+    { id: "same", widgetId: "core/a", column: 0, order: 0, hidden: false },
+    { id: "same", widgetId: "core/b", column: 1, order: 1, hidden: false },
+  ],
+});
+
+describe("a stored row whose placement ids collide", () => {
+  it("is served with the arrangement intact rather than reported unreadable", async () => {
+    const { logger } = recordingLogger();
+    const row = await new StoredRowService(twiceKeyed, logger).getLayout(
+      "user",
+      "u1"
+    );
+
+    expect(row.unreadable).toBe(false);
+    expect(row.layout?.placements).toHaveLength(2);
+    expect(new Set(row.layout?.placements.map(p => p.id)).size).toBe(2);
+  });
+
+  it("keeps the row's own version, so a save still races correctly", async () => {
+    const { logger } = recordingLogger();
+    const row = await new StoredRowService(twiceKeyed, logger).getLayout(
+      "user",
+      "u1"
+    );
+
+    expect(row.version).toBe(3);
+  });
+
+  it("WARNS, naming the id, so the repair is not invisible to an operator", async () => {
+    // The reader is told nothing on purpose -- their dashboard is whole. That
+    // makes this log the only place the malformed row can be found, and the
+    // only signal that whatever wrote it is still writing them.
+    const { logger, warnings } = recordingLogger();
+    await new StoredRowService(twiceKeyed, logger).getLayout("user", "u1");
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.meta).toMatchObject({
+      scopeKind: "user",
+      scopeId: "u1",
+      repairedPlacementIds: ["same"],
+    });
+  });
+
+  it("CONTROL: a sound row is served with no warning at all", async () => {
+    const sound = JSON.stringify({
+      schemaVersion: 2,
+      columnCount: 2,
+      placements: [
+        { id: "a", widgetId: "core/a", column: 0, order: 0, hidden: false },
+        { id: "b", widgetId: "core/b", column: 1, order: 1, hidden: false },
+      ],
+    });
+    const { logger, warnings } = recordingLogger();
+    const row = await new StoredRowService(sound, logger).getLayout(
+      "user",
+      "u1"
+    );
+
+    expect(row.layout?.placements.map(p => p.id)).toEqual(["a", "b"]);
+    expect(warnings).toEqual([]);
+  });
+});

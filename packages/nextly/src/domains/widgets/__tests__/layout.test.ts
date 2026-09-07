@@ -11,6 +11,7 @@ import {
   MAX_CONFIG_DEPTH,
   MAX_PLACEMENTS,
   defaultPlacements,
+  duplicatePlacementId,
   layoutSizeProblem,
   visibilityToken,
   mergePreservingHidden,
@@ -601,5 +602,107 @@ describe("a v1 arrangement survives the move to columns", () => {
     // had put away — the one field whose loss is invisible until it reappears.
     const { placements } = readStoredLayout(V1);
     expect(placements.find(p => p.widgetId === "w-c")?.hidden).toBe(true);
+  });
+});
+
+describe("two placements may not share an id", () => {
+  const dup = (
+    id: string,
+    widgetId: string,
+    order: number
+  ): WidgetPlacement => ({
+    id,
+    widgetId,
+    column: 0,
+    order,
+    hidden: false,
+  });
+
+  it("names the id a layout holds twice", () => {
+    expect(
+      duplicatePlacementId([
+        dup("a", "core/one", 0),
+        dup("b", "core/two", 1),
+        dup("a", "core/three", 2),
+      ])
+    ).toBe("a");
+  });
+
+  it("says nothing about a layout whose ids are all distinct", () => {
+    expect(
+      duplicatePlacementId([dup("a", "core/one", 0), dup("b", "core/two", 1)])
+    ).toBeUndefined();
+  });
+
+  it("says nothing about an empty layout", () => {
+    expect(duplicatePlacementId([])).toBeUndefined();
+  });
+});
+
+describe("a stored row that holds one id twice", () => {
+  const collided: WidgetPlacement[] = [
+    { id: "same", widgetId: "core/first", column: 0, order: 0, hidden: false },
+    {
+      id: "same",
+      widgetId: "core/second",
+      column: 1,
+      order: 5,
+      hidden: true,
+      size: "md",
+    },
+  ];
+
+  it("is REPAIRED rather than refused, so the arrangement survives", () => {
+    // Throwing here would cost the reader every card: the service reports the
+    // row unreadable and falls back to the registry's own order.
+    const read = readStoredLayout(serializeLayout(collided));
+    expect(read.placements).toHaveLength(2);
+    expect(new Set(read.placements.map(p => p.id)).size).toBe(2);
+  });
+
+  it("leaves the FIRST holder of the id untouched", () => {
+    const read = readStoredLayout(serializeLayout(collided));
+    expect(read.placements[0]).toEqual(collided[0]);
+  });
+
+  it("keeps everything the re-keyed placement carried except its id", () => {
+    const read = readStoredLayout(serializeLayout(collided));
+    const rekeyed = read.placements[1];
+    expect(rekeyed?.id).not.toBe("same");
+    expect(rekeyed).toMatchObject({
+      widgetId: "core/second",
+      column: 1,
+      order: 5,
+      hidden: true,
+      size: "md",
+    });
+  });
+
+  it("reports which id it had to repair, so the row is findable in a log", () => {
+    const read = readStoredLayout(serializeLayout(collided));
+    expect(read.repairedPlacementIds).toEqual(["same"]);
+  });
+
+  it("CONTROL: a sound row is returned with no repair reported", () => {
+    const sound: WidgetPlacement[] = [
+      { id: "a", widgetId: "core/first", column: 0, order: 0, hidden: false },
+      { id: "b", widgetId: "core/second", column: 0, order: 1, hidden: false },
+    ];
+    const read = readStoredLayout(serializeLayout(sound));
+    expect(read.placements).toEqual(sound);
+    expect(read.repairedPlacementIds).toBeUndefined();
+  });
+
+  it("repairs a v1 row too, which leaves by the other branch", () => {
+    const raw = JSON.stringify({
+      schemaVersion: 1,
+      placements: [
+        { id: "same", widgetId: "core/first", order: 0, hidden: false },
+        { id: "same", widgetId: "core/second", order: 1, hidden: false },
+      ],
+    });
+    const read = readStoredLayout(raw);
+    expect(new Set(read.placements.map(p => p.id)).size).toBe(2);
+    expect(read.repairedPlacementIds).toEqual(["same"]);
   });
 });

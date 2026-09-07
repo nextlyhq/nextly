@@ -49,6 +49,7 @@ import {
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
   defaultPlacements,
+  duplicatePlacementId,
   layoutSizeProblem,
   mergePreservingHidden,
   partitionPlacements,
@@ -563,7 +564,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     });
   }
 
-  const duplicate = firstDuplicateId(submitted);
+  const duplicate = duplicatePlacementId(submitted);
   if (duplicate !== undefined) {
     throw NextlyError.validation({
       errors: [
@@ -662,18 +663,6 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     { headers: OPAQUE_CONFIG_HEADERS }
   );
 });
-
-/** The first placement id used twice, or `undefined`. */
-function firstDuplicateId(
-  placements: readonly WidgetPlacement[]
-): string | undefined {
-  const seen = new Set<string>();
-  for (const placement of placements) {
-    if (seen.has(placement.id)) return placement.id;
-    seen.add(placement.id);
-  }
-  return undefined;
-}
 
 /**
  * DELETE `/api/dashboard/layout` — put the dashboard back to the registry's

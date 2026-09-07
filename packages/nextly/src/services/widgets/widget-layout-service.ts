@@ -130,11 +130,25 @@ export class WidgetLayoutService extends BaseService {
       typeof row.version === "number" ? row.version : NO_STORED_LAYOUT_VERSION;
 
     try {
-      return {
-        layout: readStoredLayout(String(row.layout)),
-        version,
-        unreadable: false,
-      };
+      const layout = readStoredLayout(String(row.layout));
+      // 🔴 The repair is invisible to the reader and must not be invisible to
+      // an operator. Re-keying keeps the dashboard whole, which also means
+      // nothing on screen ever reports that the row was malformed -- and the
+      // row stays malformed until this reader's next save. Whatever wrote the
+      // duplicate would otherwise go on writing them unobserved, so the one
+      // place the defect can still be found is here.
+      if (layout.repairedPlacementIds !== undefined) {
+        this.logger.warn(
+          "Repaired duplicate placement ids in a stored layout",
+          {
+            scopeKind: kind,
+            scopeId,
+            version,
+            repairedPlacementIds: layout.repairedPlacementIds,
+          }
+        );
+      }
+      return { layout, version, unreadable: false };
     } catch (error) {
       this.logger.error("Unreadable dashboard layout row", {
         scopeKind: kind,

@@ -112,6 +112,18 @@ export interface StoredLayout {
   /** How many columns the reader arranged these placements into. */
   columnCount: ColumnCount;
   placements: WidgetPlacement[];
+  /**
+   * The ids this read had to re-key because the row held them twice, absent
+   * when the row was already sound.
+   *
+   * 🔴 Metadata ABOUT the read, not content of the row, and deliberately not
+   * serialized: `serializeLayout` takes the placements rather than this object,
+   * so a repaired layout written back stores the repair and not the report.
+   * It exists because a silent repair is a repair nobody can find -- the row
+   * stays broken until the reader's next save, and any writer other than the
+   * gated PUT that produced the duplicate keeps producing them unobserved.
+   */
+  repairedPlacementIds?: readonly string[];
 }
 
 /**
@@ -249,6 +261,37 @@ export function placementProblem(value: unknown): string | undefined {
 }
 
 /**
+ * The first placement id that appears more than once, or `undefined`.
+ *
+ * 🔴 A COLLECTION-level question, which is why it is not one of
+ * `PLACEMENT_RULES`: every rule there judges one placement against itself, and
+ * uniqueness is the one property no placement can satisfy alone.
+ *
+ * Downstream readers already assume it holds. `ArrangedColumns` uses the id as
+ * its React key and as the `items` identity dnd-kit sorts by -- and dnd-kit
+ * resolves an item through `items.indexOf(id)`, which answers with the FIRST
+ * match, so a duplicate silently drags the wrong card. The widget batch is
+ * keyed by placement id too, so two cards sharing one would answer each other's
+ * queries.
+ *
+ * Asked by both ends and answered differently by each, which is why it is one
+ * exported question rather than a rule either end owns: the endpoint REFUSES a
+ * submission that fails it, because the client is there to be told, and
+ * `withUniquePlacementIds` REPAIRS a stored row that fails it, because no one
+ * is.
+ */
+export function duplicatePlacementId(
+  placements: readonly WidgetPlacement[]
+): string | undefined {
+  const seen = new Set<string>();
+  for (const placement of placements) {
+    if (seen.has(placement.id)) return placement.id;
+    seen.add(placement.id);
+  }
+  return undefined;
+}
+
+/**
  * Whether a caller's placement NAMED a column, as opposed to omitting one.
  *
  * 🔴 The two are different answers and the stored type cannot hold the
@@ -345,9 +388,10 @@ export function readStoredLayout(raw: string): StoredLayout {
   // from a NEWER core and holds fields we would silently drop on the next
   // write; a version below ours means a migrator is missing. Neither is a
   // shape to guess at. When v2 arrives this is where `migrateLayout` runs.
-  if (decoded.schemaVersion === 1) return migrateV1(decoded);
-
-  if (decoded.schemaVersion !== LAYOUT_SCHEMA_VERSION) {
+  if (
+    decoded.schemaVersion !== 1 &&
+    decoded.schemaVersion !== LAYOUT_SCHEMA_VERSION
+  ) {
     throw NextlyError.internal({
       logContext: {
         reason: "stored dashboard layout names an unknown schema version",
@@ -357,11 +401,19 @@ export function readStoredLayout(raw: string): StoredLayout {
     });
   }
 
-  return {
-    schemaVersion: LAYOUT_SCHEMA_VERSION,
-    columnCount: readColumnCount(decoded.columnCount),
-    placements: readPlacements(decoded.placements),
-  };
+  // 🔴 ONE exit, through the repair. Both the migrated and the current shape
+  // leave by it, so there is no version of a stored row that can reach a caller
+  // still holding an id twice -- which is the assumption every reader of a
+  // placement id downstream is already making.
+  return withUniquePlacementIds(
+    decoded.schemaVersion === 1
+      ? migrateV1(decoded)
+      : {
+          schemaVersion: LAYOUT_SCHEMA_VERSION,
+          columnCount: readColumnCount(decoded.columnCount),
+          placements: readPlacements(decoded.placements),
+        }
+  );
 }
 
 /** The stored column count, or the default when it names none this core has. */
@@ -548,6 +600,83 @@ export function newPlacementId(): string {
 }
 
 /**
+ * A fresh placement id that nothing in `taken` already holds.
+ *
+ * The retry is not superstition about UUIDs. A placement id is opaque and a
+ * client may mint one by any rule it likes, so `taken` can hold a value shaped
+ * like a generated id; the loop costs nothing and the collision it prevents is
+ * the exact state this module refuses to store.
+ */
+function freshPlacementIdNotIn(taken: ReadonlySet<string>): string {
+  let fresh = newPlacementId();
+  while (taken.has(fresh)) fresh = newPlacementId();
+  return fresh;
+}
+
+/**
+ * The placement as it can stand beside everything in `taken`: itself when its
+ * id is still free, a re-keyed copy when it is not.
+ *
+ * 🔴 The single rule for resolving a collision, because there are two places
+ * that must resolve one the same way and they arrive at it from opposite
+ * directions -- a stored row read back, and a write carrying placements its
+ * caller never saw. Answering differently in the two would mean a row could be
+ * written with a collision one of them tolerates.
+ *
+ * `taken` is MUTATED, which is what makes a sequence of calls accumulate into a
+ * set of distinct ids rather than each call answering in isolation.
+ */
+function claimPlacementId(
+  placement: WidgetPlacement,
+  taken: Set<string>
+): { placement: WidgetPlacement; rekeyedFrom?: string } {
+  if (!taken.has(placement.id)) {
+    taken.add(placement.id);
+    return { placement };
+  }
+  const fresh = freshPlacementIdNotIn(taken);
+  taken.add(fresh);
+  return { placement: { ...placement, id: fresh }, rekeyedFrom: placement.id };
+}
+
+/**
+ * The same arrangement, with any id the row held twice re-keyed.
+ *
+ * 🔴 REPAIRS rather than throws, and the asymmetry with the write path is the
+ * point. A submitted layout is refused, because the client is present and can
+ * be told. A stored row has no one to tell: `readStoredLayout` throwing means
+ * the service logs, reports the row unreadable and falls back to the registry's
+ * own order, so the reader's whole arrangement disappears over a defect in one
+ * id. Re-keying keeps every card where the reader put it, and is safe for the
+ * reason `mergePreservingHidden` already relies on -- a placement id is opaque,
+ * and everything hung off it, `config` included, travels on the placement.
+ *
+ * The FIRST holder keeps the id, so the placement a reader is most likely to
+ * think of as the original is the one that does not move.
+ *
+ * Returns the layout unchanged when nothing collided, so a sound row is not
+ * rebuilt and carries no repair report.
+ *
+ * Deliberately NOT exported. `readStoredLayout` is the one door a stored row
+ * comes through, and the guarantee downstream readers rely on is that it has
+ * come through it -- a second caller applying this somewhere else would be
+ * repairing rows that had already been repaired, and hiding the door that did
+ * not.
+ */
+function withUniquePlacementIds(layout: StoredLayout): StoredLayout {
+  const taken = new Set<string>();
+  const repaired: string[] = [];
+  const placements = layout.placements.map(placement => {
+    const claimed = claimPlacementId(placement, taken);
+    if (claimed.rekeyedFrom !== undefined) repaired.push(claimed.rekeyedFrom);
+    return claimed.placement;
+  });
+  return repaired.length === 0
+    ? layout
+    : { ...layout, placements, repairedPlacementIds: repaired };
+}
+
+/**
  * The array a write stores: what this caller submitted, plus what they were
  * never shown.
  *
@@ -577,16 +706,9 @@ export function mergePreservingHidden(
   // Oldest-positioned first, so the cap keeps a stable, order-derived subset
   // rather than whichever ones happened to arrive last.
   const bounded = [...invisible].sort(byPosition).slice(0, room);
-  const carried = bounded.map(placement => {
-    if (!taken.has(placement.id)) {
-      taken.add(placement.id);
-      return placement;
-    }
-    let fresh = newPlacementId();
-    while (taken.has(fresh)) fresh = newPlacementId();
-    taken.add(fresh);
-    return { ...placement, id: fresh };
-  });
+  const carried = bounded.map(
+    placement => claimPlacementId(placement, taken).placement
+  );
   return [...submitted, ...carried];
 }
 
