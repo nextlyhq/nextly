@@ -28,6 +28,7 @@ import {
   allBlocks,
   expandSlotDefaults,
   findNode,
+  internalNestingVerdict,
   isPatternDocument,
   getBlock,
   locateNode,
@@ -146,7 +147,13 @@ export interface SavedPattern {
    */
   readonly keywords?: string | null;
   /**
-   * The pattern's document, carried whole.
+   * The pattern's document, carried whole — or absent, as a stored row's is.
+   *
+   * The collection does not mark its blocks field required and the field layer
+   * persists an omitted document as SQL `NULL`, so a published row with a
+   * title, a slug and a granularity but no content is a legal row. There is
+   * nothing to offer for one, so it is skipped exactly as an empty pattern is;
+   * reading `kind` off it took catalogue construction down.
    *
    * Held BY REFERENCE, and treated as immutable, which is how a stored row is
    * treated everywhere else it travels. Cloning each one instead would copy
@@ -160,7 +167,7 @@ export interface SavedPattern {
    * rules forbid. And the value it would then place is the row as it stands
    * now, which for a live library is the better of the two answers.
    */
-  readonly document: BlockDocument;
+  readonly document?: BlockDocument | null;
 }
 
 /**
@@ -356,18 +363,32 @@ export function catalogFrom(
  * them again would overrule it.
  */
 export function patternEntriesFrom(
-  patterns: readonly SavedPattern[]
+  patterns: readonly SavedPattern[],
+  nesting: NestingSource
 ): PatternInsertEntry[] {
   const entries: PatternInsertEntry[] = [];
   for (const pattern of patterns) {
+    const document = pattern.document;
+    if (document === undefined || document === null) continue;
     // The planner refuses a document that is not a pattern outright, as
     // `not-a-pattern`, and the type admits one: `SavedPattern.document` is a
     // `BlockDocument`, so a page or a component row handed to this by mistake
     // is a legal value. Offering it produces a tile that accepts a click and
     // cannot succeed, which is the disagreement between the palette and the
     // insert that this module exists to prevent.
-    if (!isPatternDocument(pattern.document)) continue;
-    if (pattern.document.nodes.length === 0) continue;
+    if (!isPatternDocument(document)) continue;
+    if (document.nodes.length === 0) continue;
+    // The nesting rule can move after a pattern is saved — a block gains a
+    // `parent` restriction, a slot narrows its `allow` — which invalidates
+    // edges inside documents nobody has touched since. `planInsertPattern`
+    // refuses such a pattern wherever it is put, so offering one is a tile that
+    // accepts a click and is then rejected.
+    //
+    // Asked ONCE per entry rather than inside `entryAllowedAt`: the answer says
+    // nothing about the destination, so asking it per target would re-walk
+    // every pattern's forest on each keystroke of a filter — against a library
+    // the design sizes at three thousand entries.
+    if (!internalNestingVerdict(document.nodes, nesting).allowed) continue;
     entries.push({
       kind: "pattern",
       id: `${PATTERN_ENTRY_PREFIX}${pattern.id}`,
@@ -378,7 +399,7 @@ export function patternEntriesFrom(
       description: pattern.description ?? "",
       category: pattern.category ?? UNCATEGORISED,
       keywords: keywordsOf(pattern.keywords),
-      document: pattern.document,
+      document,
     });
   }
   return entries;

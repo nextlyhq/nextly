@@ -983,6 +983,9 @@ describe("nodeForEntry", () => {
 });
 
 describe("the pattern tier", () => {
+  /** The registry's nesting rule, which the catalogue now judges patterns by. */
+  const nest = () => registryNestingSource();
+
   function saved(overrides: Partial<SavedPattern> = {}): SavedPattern {
     return {
       id: "hero",
@@ -1002,7 +1005,7 @@ describe("the pattern tier", () => {
     // included. Two entries answering to one id make the panel reuse one row's
     // state for the other, and a highlighted entry stop naming what it names.
     const blocks = catalog([{ ...base, name: "acme/text" }]);
-    const [pattern] = patternEntriesFrom([saved({ id: "acme/text" })]);
+    const [pattern] = patternEntriesFrom([saved({ id: "acme/text" })], nest());
 
     expect(pattern?.id).toBe(`${PATTERN_ENTRY_PREFIX}acme/text`);
     expect(blocks.some(entry => entry.id === pattern?.id)).toBe(false);
@@ -1012,8 +1015,11 @@ describe("the pattern tier", () => {
   it("offers no entry for a pattern with no roots", () => {
     // Inserting it would add nothing, so a row for it reads as an action and is
     // not one. The control is the same call with a root, which must produce one.
-    const empty = patternEntriesFrom([saved({ document: documentOf([]) })]);
-    const populated = patternEntriesFrom([saved()]);
+    const empty = patternEntriesFrom(
+      [saved({ document: patternOf([]) })],
+      nest()
+    );
+    const populated = patternEntriesFrom([saved()], nest());
 
     expect(empty).toEqual([]);
     expect(populated).toHaveLength(1);
@@ -1025,7 +1031,7 @@ describe("the pattern tier", () => {
     // present, so the ordinary pattern — one saved without keywords — arrives
     // as null. An undefined-only check reached `null.split` and took catalog
     // construction down with it.
-    const [pattern] = patternEntriesFrom([saved({ keywords: null })]);
+    const [pattern] = patternEntriesFrom([saved({ keywords: null })], nest());
 
     expect(pattern?.keywords).toEqual([]);
   });
@@ -1035,17 +1041,74 @@ describe("the pattern tier", () => {
     // row handed to this by mistake is a legal value — and the planner refuses
     // exactly that as `not-a-pattern`. A tile for one accepts a click and
     // cannot succeed.
-    const offered = patternEntriesFrom([
-      saved({ id: "a-page", document: { ...saved().document, kind: "page" } }),
-      saved({
-        id: "a-component",
-        document: { ...saved().document, kind: "component" },
-      }),
-    ]);
-    const control = patternEntriesFrom([saved()]);
+    const only = [{ id: "a", type: "acme/text", version: 1, props: {} }];
+    const offered = patternEntriesFrom(
+      [
+        saved({ id: "a-page", document: documentOf(only) }),
+        saved({
+          id: "a-component",
+          document: { ...documentOf(only), kind: "component" } as BlockDocument,
+        }),
+      ],
+      nest()
+    );
+    const control = patternEntriesFrom([saved()], nest());
 
     expect(offered).toEqual([]);
     expect(control).toHaveLength(1);
+  });
+
+  it("offers nothing for a row whose document was never filled in", () => {
+    // The collection does not mark its blocks field required and the field
+    // layer persists an omitted document as SQL NULL, so a published row with
+    // a title, a slug and a granularity but no content is legal. Reading
+    // `kind` off one took catalogue construction down.
+    const absent = patternEntriesFrom(
+      [
+        { id: "never-filled", title: "Empty" },
+        { id: "explicit-null", title: "Null", document: null },
+      ],
+      nest()
+    );
+    const control = patternEntriesFrom([saved()], nest());
+
+    expect(absent).toEqual([]);
+    expect(control).toHaveLength(1);
+  });
+
+  it("offers nothing for a pattern whose own nesting no longer holds", () => {
+    // A pattern is saved once and inserted for as long as it exists, so a
+    // block that later declares a `parent` restriction invalidates edges inside
+    // documents nobody has touched. The planner refuses such a pattern wherever
+    // it is put, so a tile for one accepts a click that cannot succeed.
+    catalog([
+      { ...base, name: "acme/wrap" },
+      { ...base, name: "acme/col", parent: ["acme/grid"] },
+    ]);
+    const stranded = patternOf([
+      {
+        id: "w",
+        type: "acme/wrap",
+        version: 1,
+        props: {},
+        slots: {
+          children: [{ id: "c", type: "acme/col", version: 1, props: {} }],
+        },
+      },
+    ]);
+
+    // The control is the same forest with the offending child removed: it must
+    // still be offered, or this would pass on a catalogue that offers nothing.
+    const intact = patternOf([
+      { id: "w", type: "acme/wrap", version: 1, props: {} },
+    ]);
+
+    expect(patternEntriesFrom([saved({ document: stranded })], nest())).toEqual(
+      []
+    );
+    expect(
+      patternEntriesFrom([saved({ id: "ok", document: intact })], nest())
+    ).toHaveLength(1);
   });
 
   it("splits the stored keyword string on every separator an author uses", () => {
@@ -1053,15 +1116,16 @@ describe("the pattern tier", () => {
     // enumerated, and the collection's own note says authors separate them
     // however they like. Empty runs between two separators produce nothing: a
     // blank term matches every query, so it would make the pattern universal.
-    const [pattern] = patternEntriesFrom([
-      saved({ keywords: "landing,  banner; splash ,, " }),
-    ]);
+    const [pattern] = patternEntriesFrom(
+      [saved({ keywords: "landing,  banner; splash ,, " })],
+      nest()
+    );
 
     expect(pattern?.keywords).toEqual(["landing", "banner", "splash"]);
   });
 
   it("gives a pattern that declares neither a category nor a description one anyway", () => {
-    const [pattern] = patternEntriesFrom([saved()]);
+    const [pattern] = patternEntriesFrom([saved()], nest());
 
     expect(pattern?.category).toBe(UNCATEGORISED);
     expect(pattern?.description).toBe("");
@@ -1076,14 +1140,17 @@ describe("the pattern tier", () => {
       { ...base, name: "acme/text" },
       { ...base, name: "acme/column", parent: ["acme/columns"] },
     ]);
-    const [pattern] = patternEntriesFrom([
-      saved({
-        document: patternOf([
-          { id: "a", type: "acme/text", version: 1, props: {} },
-          { id: "b", type: "acme/column", version: 1, props: {} },
-        ]),
-      }),
-    ]);
+    const [pattern] = patternEntriesFrom(
+      [
+        saved({
+          document: patternOf([
+            { id: "a", type: "acme/text", version: 1, props: {} },
+            { id: "b", type: "acme/column", version: 1, props: {} },
+          ]),
+        }),
+      ],
+      nest()
+    );
 
     const verdict = entryAllowedAt(
       pattern as never,
@@ -1100,14 +1167,17 @@ describe("the pattern tier", () => {
 
   it("allows a pattern every one of whose roots the destination takes", () => {
     catalog([{ ...base, name: "acme/text" }]);
-    const [pattern] = patternEntriesFrom([
-      saved({
-        document: patternOf([
-          { id: "a", type: "acme/text", version: 1, props: {} },
-          { id: "b", type: "acme/text", version: 1, props: {} },
-        ]),
-      }),
-    ]);
+    const [pattern] = patternEntriesFrom(
+      [
+        saved({
+          document: patternOf([
+            { id: "a", type: "acme/text", version: 1, props: {} },
+            { id: "b", type: "acme/text", version: 1, props: {} },
+          ]),
+        }),
+      ],
+      nest()
+    );
 
     expect(
       entryAllowedAt(pattern as never, { at: "root" }, registryNestingSource())
@@ -1120,15 +1190,18 @@ describe("the pattern tier", () => {
       { ...base, name: "acme/text" },
       { ...base, name: "acme/column", parent: ["acme/columns"] },
     ]);
-    const patterns = patternEntriesFrom([
-      saved({ id: "ok" }),
-      saved({
-        id: "bad",
-        document: patternOf([
-          { id: "b", type: "acme/column", version: 1, props: {} },
-        ]),
-      }),
-    ]);
+    const patterns = patternEntriesFrom(
+      [
+        saved({ id: "ok" }),
+        saved({
+          id: "bad",
+          document: patternOf([
+            { id: "b", type: "acme/column", version: 1, props: {} },
+          ]),
+        }),
+      ],
+      nest()
+    );
 
     expect(
       allowedEntries(patterns, { at: "root" }, registryNestingSource()).map(
@@ -1138,13 +1211,16 @@ describe("the pattern tier", () => {
   });
 
   it("searches a pattern by its own words and not by a block name it has none of", () => {
-    const [pattern] = patternEntriesFrom([
-      saved({
-        title: "Hero",
-        description: "A big opener.",
-        keywords: "splash",
-      }),
-    ]);
+    const [pattern] = patternEntriesFrom(
+      [
+        saved({
+          title: "Hero",
+          description: "A big opener.",
+          keywords: "splash",
+        }),
+      ],
+      nest()
+    );
     const entries = [pattern as never];
 
     expect(filterEntries(entries, "hero")).toHaveLength(1);
@@ -1162,7 +1238,7 @@ describe("the pattern tier", () => {
     const blocks = catalog([
       { ...base, name: "acme/text", editor: { category: "text" } },
     ]);
-    const patterns = patternEntriesFrom([saved({ category: "text" })]);
+    const patterns = patternEntriesFrom([saved({ category: "text" })], nest());
 
     const groups = groupByCategory([...blocks, ...patterns]);
 

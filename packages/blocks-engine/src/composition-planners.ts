@@ -47,6 +47,7 @@ import {
   placementVerdict,
   type NestingRefusal,
   type NestingSource,
+  type NestingVerdict,
   type PlacementTarget,
 } from "./nesting";
 import {
@@ -2049,19 +2050,54 @@ function internalNestingRefusal(
   roots: readonly BlockNode[],
   nesting: NestingSource
 ): PlanRefusal | undefined {
-  let refusal: PlanRefusal | undefined;
+  const verdict = internalNestingVerdict(roots, nesting);
+  if (verdict.allowed) return undefined;
+  return {
+    problem: verdict.reason,
+    ...(verdict.permitted === undefined
+      ? {}
+      : { permitted: verdict.permitted }),
+  };
+}
+
+/**
+ * Whether every edge INSIDE a forest still satisfies the nesting rule.
+ *
+ * A question about the forest alone: it asks nothing about where the forest is
+ * going, so the answer is the same at every destination. That is what makes it
+ * worth asking once rather than per placement — and what makes it a different
+ * question from {@link placementVerdict}, which is entirely about the target.
+ *
+ * It exists as a published verdict because two roads ask it. A planner refuses
+ * an insert whose internals no longer nest; a palette must not OFFER one, or
+ * the author is handed a tile that accepts a click the planner then rejects.
+ * The two must answer identically, which they cannot do while one of them is
+ * private to this module.
+ *
+ * Stored patterns are why this can fail at all. A pattern is saved once and
+ * inserted for as long as it exists, so a block that later declares a `parent`
+ * restriction — or a slot that narrows its `allow` — invalidates edges inside
+ * documents nobody has touched since.
+ */
+export function internalNestingVerdict(
+  roots: readonly BlockNode[],
+  nesting: NestingSource
+): NestingVerdict {
+  let refusal: NestingVerdict | undefined;
   walkNodes([...roots], node => {
     if (refusal !== undefined) return;
     for (const [slot, children] of Object.entries(node.slots ?? {})) {
+      // A stored forest reaches here unvalidated, so a slot may hold anything.
       if (!Array.isArray(children)) continue;
-      refusal ??= placementRefusal(
-        children,
+      const verdict = placementVerdict(
+        children.map(child => child.type),
         { kind: "slot", parentType: node.type, slot },
         nesting
       );
+      if (!verdict.allowed) refusal ??= verdict;
     }
   });
-  return refusal;
+  return refusal ?? { allowed: true };
 }
 
 /** Where the run will sit, once the destination has been checked. */

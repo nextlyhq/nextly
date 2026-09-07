@@ -197,6 +197,7 @@ export {
   planDetach,
   planDuplicateComponent,
   planInsertPattern,
+  internalNestingVerdict,
   planSaveAsComponent,
   planSaveAsPattern,
   planUpdatePatternFromSelection,

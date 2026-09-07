@@ -37,6 +37,6 @@ and `patternEntriesFrom` builds the second from stored rows. A pattern is
 multi-root and is inserted as one atomic group, so it may go only where EVERY
 one of its roots may go — asked of the same nesting rule a block is asked of,
 which is what keeps the palette from offering a placement the insert refuses.
-A pattern with no roots is not offered at all, and neither is a document that is not a pattern — the planner refuses one outright, and the type admits it.
+A pattern is offered only if the planner could actually place it: not one with no roots, not a document that is not a pattern, not a row whose document was never filled in, and not one whose own nesting no longer holds. The last is what a stored pattern is exposed to — it is saved once and inserted for as long as it exists, so a block that later declares a parent restriction invalidates edges inside documents nobody has touched.
 
-The rule those verdicts ask is now published from the engine as `placementVerdict`, and the planner's own refusal derives from it: a palette, a canvas and a planner asking the same question three ways is how one comes to offer a placement another refuses. `isPatternDocument` is published for the same reason.
+The rules those verdicts ask are now published from the engine as `placementVerdict` and `internalNestingVerdict`, and the planner's own refusals derive from them: a palette, a canvas and a planner asking the same question three ways is how one comes to offer a placement another refuses. `isPatternDocument` is published for the same reason.
