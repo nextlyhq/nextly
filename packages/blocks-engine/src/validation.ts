@@ -19,7 +19,7 @@ import {
   MAX_CLASSES_PER_NODE,
   STYLE_STATES,
   isBindingSource,
-  isBlockOrigin,
+  readBlockOrigin,
   isBlockType,
   renderedDomId,
 } from "./document";
@@ -1049,23 +1049,51 @@ function checkNodeType(
  * instead of creating it, and it is the one a planner now reads back.
  */
 /**
- * Whether a record computes any of its own fields.
+ * Whether a node's stored `origin` is one to report as malformed.
  *
- * Answered from DESCRIPTORS, so nothing runs. A caller supplying accessors here
- * has already made the document one `surveyDocument` refuses to measure and
- * reports `document-unreadable`; this only stops a later predicate reaching in
- * and invoking them on the way to a second, less useful verdict.
+ * The four-way reading comes from {@link readBlockOrigin}, beside the type, so
+ * this asks the guard's own question instead of naming its fields a second time
+ * — the reason it can tell `computed` from `malformed` without a parallel list
+ * to keep in step.
  *
- * Not a plain record is not this question's business: the predicate that
- * follows refuses such a value on its shape, and it reads nothing to do so.
+ * `computed` is left alone. A field the guard consults being an accessor makes
+ * the record untrusted, but it may be perfectly well formed, and the document
+ * holding it is one `surveyDocument` refuses to measure and already reports
+ * `document-unreadable`. A second verdict naming this one field would send an
+ * author to repair something that may not be broken.
+ *
+ * `unreadable` is NOT left alone, and the difference is the whole point.
+ * Reflection can fail where an accessor cannot be missed: the survey walks the
+ * keys a record HAS, so a Proxy trap that throws only for an ABSENT field —
+ * `renamed`, say — is never triggered by it, and the document is reported
+ * perfectly readable. Deferring on that let `{ from: "pattern", id: "" }`
+ * through with no issue raised at all. Nothing can establish such a record is
+ * whole, so it is not treated as though something had.
  */
-function holdsAnAccessor(value: unknown): boolean {
-  if (!isPlainRecord(value)) return false;
-  for (const name of Object.getOwnPropertyNames(value)) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, name);
-    if (descriptor !== undefined && descriptor.get !== undefined) return true;
+function reportsAMalformedOrigin(node: Record<string, unknown>): boolean {
+  const descriptor = ownOriginDescriptor(node);
+  if (descriptor === undefined || descriptor.get !== undefined) return false;
+  const origin: unknown = descriptor.value;
+  if (origin === undefined) return false;
+  const reading = readBlockOrigin(origin);
+  return reading === "malformed" || reading === "unreadable";
+}
+
+/**
+ * The node's own `origin` descriptor, or `undefined` when reflection fails.
+ *
+ * Reading a descriptor off the NODE can throw too — the node itself may be a
+ * Proxy — and that failure says nothing about the record, so there is nothing
+ * to report about one. The document is refused as unreadable by the survey.
+ */
+function ownOriginDescriptor(
+  node: Record<string, unknown>
+): PropertyDescriptor | undefined {
+  try {
+    return Object.getOwnPropertyDescriptor(node, "origin");
+  } catch {
+    return undefined;
   }
-  return false;
 }
 
 function checkNodeOrigin(
@@ -1088,17 +1116,7 @@ function checkNodeOrigin(
   // An INHERITED `origin` is absent for the same reason it is elsewhere in this
   // engine: `structuredClone` and object spreads copy own properties, so a value
   // reached through the prototype is not what would be stored.
-  const descriptor = Object.getOwnPropertyDescriptor(node, "origin");
-  if (descriptor === undefined || descriptor.get !== undefined) return;
-  const origin: unknown = descriptor.value;
-  if (origin === undefined) return;
-  // The record's OWN fields, before the predicate reads them. `isBlockOrigin`
-  // reaches `from`, `id` and `digest` through `ownEntry`, which reads values —
-  // so a data property holding a record whose FIELDS are accessors escaped this
-  // guard by one level. The document is already refused as a whole for holding
-  // them, which is the verdict this defers to rather than adding a second.
-  if (holdsAnAccessor(origin)) return;
-  if (isBlockOrigin(origin)) return;
+  if (!reportsAMalformedOrigin(node)) return;
   issues.push({
     path: pointer(path, "origin"),
     code: "invalid-origin",

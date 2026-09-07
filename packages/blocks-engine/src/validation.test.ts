@@ -2925,6 +2925,152 @@ describe("a node's provenance record is checked on both roads to storage", () =>
     expect(codes).not.toContain("invalid-origin");
   });
 
+  it.each(["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor"])(
+    "refuses a record whose %s trap throws, rather than escaping",
+    trap => {
+      // Reflection itself can fail, and the guard promises an answer, not a
+      // throw. Uncaught, all three took the caller's error out of `validate()`
+      // as a native error instead of the issue list it promises.
+      const origin = new Proxy({ from: "pattern", id: "p1", digest: "d1" }, {
+        [trap]() {
+          throw new Error("boom");
+        },
+      } as ProxyHandler<object>);
+
+      let escaped: unknown;
+      let codes: string[] = [];
+      try {
+        codes = codesFor(origin);
+      } catch (error) {
+        escaped = error;
+      }
+
+      expect(escaped).toBeUndefined();
+      // Reported, NOT deferred. See the case below for why the survey cannot be
+      // relied on to have covered it.
+      //
+      // `ownKeys` is the exception the rule produces rather than an oversight:
+      // nothing enumerates the record's own keys any more, so that trap never
+      // fires for this check and the record reads as whole. The survey still
+      // meets it — it has to serialize the document — and refuses the document
+      // as unwritable, which is the verdict that covers it.
+      expect(codes).toContain(
+        trap === "ownKeys" ? "document-unwritable" : "invalid-origin"
+      );
+    }
+  );
+
+  it("refuses a malformed record whose trap fires only for an ABSENT field", () => {
+    // The case that makes deferring unsafe. The survey walks the keys a record
+    // HAS, so a trap that throws only for `renamed` — which this record does
+    // not carry — is never triggered by it, and the document is reported
+    // perfectly readable. A check that asked for every field it might consult,
+    // rather than only the ones the guard actually reaches, hit that trap on a
+    // record the guard rejects at its FIRST field, and then read the failure as
+    // "the survey already covered this" — letting an EMPTY id through with no
+    // issue raised at all.
+    //
+    // Nothing asks for `renamed` here now: the guard stops at `id`. That is the
+    // second reason this record is refused, and the case below covers the
+    // first, where the trap really is reached.
+    const origin = new Proxy(
+      { from: "pattern", id: "", digest: "d1" },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === "renamed") throw new Error("boom");
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      }
+    );
+
+    const codes = codesFor(origin);
+
+    expect(codes).toContain("invalid-origin");
+    // The control: the survey really did find nothing wrong, so the verdict
+    // above is this check's own and not one inherited from it.
+    expect(codes).not.toContain("document-unreadable");
+  });
+
+  it("refuses a record it cannot finish reading, even one otherwise whole", () => {
+    // Here the trap IS reached: every earlier field is sound, so the guard goes
+    // on to `renamed` and reflection fails there. The record may well be whole —
+    // but nothing can establish that, and the survey has not refused the
+    // document either, since it never asked for the absent field. Reporting is
+    // the only answer that does not treat an unverified record as verified.
+    const origin = new Proxy(
+      { from: "pattern", id: "p1", digest: "d1" },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === "renamed") throw new Error("boom");
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      }
+    );
+
+    const codes = codesFor(origin);
+
+    expect(codes).toContain("invalid-origin");
+    expect(codes).not.toContain("document-unreadable");
+  });
+
+  it("reads only the fields the guard reaches, not every key the record carries", () => {
+    // The check goes through the guard's own reads. Enumerating the record's
+    // own keys cost one descriptor lookup PER KEY, on a document the byte cap
+    // had already rejected — work proportional to caller-supplied content the
+    // bounded survey deliberately never traverses.
+    //
+    // Counted as descriptor lookups rather than as `ownKeys` calls, because
+    // `getOwnPropertyNames` is a SINGLE call whatever the record holds: a count
+    // of those is identical for three keys and fifty thousand, and cannot tell
+    // the two implementations apart.
+    const lookups = (keys: number): number => {
+      const origin: Record<string, unknown> = {
+        from: "pattern",
+        id: "p1",
+        digest: "d1",
+      };
+      for (let i = 0; i < keys; i += 1) origin[`k${String(i)}`] = 1;
+      let counted = 0;
+      const watched = new Proxy(origin, {
+        getOwnPropertyDescriptor(target, key) {
+          counted += 1;
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      });
+      // Over the byte cap on an EARLIER member, which is the case the bound
+      // exists for: the survey stops, reports `document-too-large`, and never
+      // traverses this record — so every lookup counted here belongs to the
+      // walk that runs afterwards. Without it the survey measures the whole
+      // record legitimately and the count says nothing about this check.
+      const doc = {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "n1",
+            type: "core/text",
+            version: 1,
+            props: { big: "x".repeat(5_000) },
+            origin: watched,
+          },
+        ],
+      } as unknown as BlockDocument;
+      const codes = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        limits: { ...DEFAULT_LIMITS, maxBytes: 1_000 },
+      }).map(issue => issue.code);
+      expect(codes).toContain("document-too-large");
+      return counted;
+    };
+
+    const many = lookups(50_000);
+    // The control: a record of three keys, so the assertion is about the count
+    // not growing rather than about it being small for a small record.
+    expect(lookups(0)).toBeGreaterThan(0);
+    expect(many).toBe(lookups(0));
+  });
+
   it("never invokes an accessor INSIDE the record either", () => {
     // One level deeper than the property itself: a data-property `origin` whose
     // `digest` is a getter. `isBlockOrigin` reaches its fields through
