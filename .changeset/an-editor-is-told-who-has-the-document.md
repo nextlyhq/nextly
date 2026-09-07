@@ -34,22 +34,34 @@ uneditable while somebody else has it. Both are needed: rendered read-only the
 fields are legible but ambiguous, since a tinted uneditable form reads equally as
 a document this account lacks permission to change.
 
-The claim is advisory throughout, and the four decisions that follow from it are
-derived in one place so the collection editor and the single editor cannot
-disagree about them.
+The claim is advisory throughout, and what follows from it is derived in one
+place so the collection editor and the single editor cannot disagree.
 
+- **Every write passes one gate.** Save, Publish, Unpublish, Delete, discarding a
+  working draft, the keyboard shortcut, a native form submit and the quick-edit
+  modal all reach the same handlers, so the refusal lives there. The controls are
+  disabled as well, because nothing should offer what it cannot do, but disabling
+  affordances one at a time is a list the next write path gets added without.
+- **The title and the slug are writes too**, and the same claim withholds them.
+  The title also drives the slug, so leaving it editable contradicted the strip
+  above it.
 - **Asking does not block editing.** Gating every document open on a round trip
   would cost every author on every open, to guard against a case that is rare,
   and a refusal loses nothing since the form is never cleared.
-- **A lock that cannot be checked does not stop work.** The claim exists to tell
-  two people about each other, not to be a permission, so a server that cannot be
-  reached leaves the editor working with a note rather than an outage.
+- **A failure to re-check a KNOWN claim does not unlock the document.** Every beat
+  re-asks, so a transient rejection arrives long after a holder was reported;
+  treating that as "free" hands the document to a second editor while the last
+  confirmed fact is that a colleague holds an unexpired lease. Only a first check
+  that never succeeded leaves the editor working.
 - **A displaced editor keeps what they typed.** Their unsaved work stays on
-  screen and stays theirs; what stops is writing, until they take the document
-  back.
-- **Autosave stops wherever saving stops.** A recovery point is a write to the
-  same row, so leaving it running under someone else's claim is the overwrite the
-  feature exists to prevent, made quieter by happening on a timer nobody watches.
+  screen and stays theirs; what stops is writing.
+- **Autosave keeps running**, which is the opposite of what it looks like it
+  should do. `useDocumentAutosave` does not write the document: it upserts a
+  recovery row keyed by document AND author that the live-row predicate excludes,
+  so it cannot reach the holder's document or their recovery row. Stopping it
+  would remove the displaced editor's safety net at the exact moment the banner
+  promises their unsaved changes are still theirs, and the engine depends on it
+  running.
 
 The strip is where the lock is spoken. `DocumentStatusLive` is deliberately not
 given a second copy: it exists so the header has one live region rather than one

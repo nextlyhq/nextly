@@ -308,9 +308,9 @@ export function EntryForm({
 
   const {
     form,
-    handleSubmit,
-    handleDelete,
-    handleDiscardWorkingDraft,
+    handleSubmit: submitEntry,
+    handleDelete: deleteEntry,
+    handleDiscardWorkingDraft: discardWorkingDraft,
     handleCancel,
     isSubmitting,
     isDirty,
@@ -621,6 +621,25 @@ export function EntryForm({
     enabled: mode === "edit" && viewingVersion === null,
   });
 
+  /*
+   * The one gate every write passes through.
+   *
+   * 🔴 Not the controls. Save, Publish, Unpublish, Delete, discarding a working
+   * draft, the keyboard shortcut, a native form submit and the quick-edit modal
+   * all reach these three functions. Disabling the affordances one at a time is
+   * a list that the next write path gets added without, and the failure is
+   * silent: the banner says the document is somebody else's while the editor
+   * overwrites them. The affordances ARE disabled, so nothing offers what it
+   * cannot do — this is the guard that does not depend on remembering.
+   */
+  const handleSubmit: typeof submitEntry = (event, intent) =>
+    lock.actionsDisabled ? Promise.resolve() : submitEntry(event, intent);
+  const handleDelete = () => {
+    if (!lock.actionsDisabled) deleteEntry();
+  };
+  const handleDiscardWorkingDraft = () =>
+    lock.actionsDisabled ? Promise.resolve() : discardWorkingDraft();
+
   const autosaveScope = useMemo(
     () => autosaveScopeFor("collection", collection.name, savedEntryId),
     [savedEntryId, collection.name]
@@ -663,7 +682,7 @@ export function EntryForm({
      * write to the same row, so leaving it running is the overwrite the claim
      * exists to prevent, made quieter by happening on a timer nobody watches.
      */
-    enabled: !isSubmitting && viewingVersion === null && lock.autosaveAllowed,
+    enabled: !isSubmitting && viewingVersion === null,
   });
   const linkLocale = previewLinkLocale({
     localized: collection.localized === true,
@@ -903,6 +922,7 @@ export function EntryForm({
                                 ? {}
                                 : { onViewApi })}
                               mode={mode}
+                              documentLocked={lock.readOnly}
                               titleField={titleField}
                               hasStatus={hasStatus}
                               draftsEnabled={collection.draftsEnabled === true}
@@ -1025,6 +1045,8 @@ export function EntryForm({
                             <EntryMetaStrip
                               slugField={slugField}
                               hasStatus={hasStatus}
+                              // The slug is a write, and the same claim withholds it.
+                              lockSlug={lock.readOnly}
                               // The pill reports the language being edited, matching the header's submit
                               // affordances. Reading the main row instead would show "Published" beside a
                               // Publish button whenever a translation lags its default language.

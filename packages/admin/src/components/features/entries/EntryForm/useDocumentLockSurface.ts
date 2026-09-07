@@ -12,6 +12,9 @@
  * @module components/features/entries/EntryForm/useDocumentLockSurface
  */
 
+import type { DocumentLockHolder } from "nextly/document-lock";
+import { useRef } from "react";
+
 import {
   useDocumentLock,
   type UseDocumentLockOptions,
@@ -31,5 +34,20 @@ export function useDocumentLockSurface(
   options: UseDocumentLockOptions
 ): DocumentLockSurface {
   const { state, takeOver } = useDocumentLock(options);
-  return { ...documentLockAffordances(state), takeOver };
+
+  // 🔴 The colleague outlives a failed refresh. Every beat re-asks, so a
+  // transient rejection arrives as `unavailable` long after a holder was
+  // reported - and forgetting them there would hand the document to a second
+  // editor while the last confirmed fact is that somebody holds an unexpired
+  // lease. Cleared only by an answer that says nobody has it.
+  const lastKnownHolder = useRef<DocumentLockHolder | null>(null);
+  if (state.status === "held-by-other") lastKnownHolder.current = state.holder;
+  else if (state.status === "held-by-me" || state.status === "idle") {
+    lastKnownHolder.current = null;
+  }
+
+  return {
+    ...documentLockAffordances(state, lastKnownHolder.current),
+    takeOver,
+  };
 }

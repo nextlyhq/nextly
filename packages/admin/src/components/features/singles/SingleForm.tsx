@@ -368,9 +368,27 @@ export function SingleForm({
   // Submit handler. The intent arg names the user's button click and
   // determines payload shape — same intent set as the collection
   // EntryForm (see EntryFormIntent). Mirrors the EntryForm pattern.
+  /*
+   * The advisory claim, derived before the first write is defined because every
+   * write has to be able to ask about it.
+   */
+  const lock = useDocumentLockSurface({
+    scopeKind: "single",
+    slug: schema.slug,
+    entryId: document.id,
+  });
+
   const handleSubmit = useCallback(
     async (e?: React.BaseSyntheticEvent, intent?: EntryFormIntent) => {
       e?.preventDefault();
+
+      // 🔴 The one gate every write passes through. Save, Publish, Unpublish, the
+      // keyboard shortcut and a native form submit all reach this function, and
+      // disabling the affordances one at a time is a list that the next write
+      // path gets added without. The affordances ARE disabled, so nothing offers
+      // what it cannot do - this is the guard that does not depend on anyone
+      // remembering.
+      if (lock.actionsDisabled) return;
 
       await form.handleSubmit(async rawData => {
         // Why: shared intent→payload helper mirrors the EntryForm
@@ -391,7 +409,7 @@ export function SingleForm({
         }
       })(e);
     },
-    [form, onSubmit, blankPasswordFields]
+    [form, onSubmit, blankPasswordFields, lock.actionsDisabled]
   );
 
   const handleCancel = useCallback(() => {
@@ -598,11 +616,6 @@ export function SingleForm({
    * is addressed by its slug and the row behind it, and before that row exists
    * there is nothing to claim and nobody else can be in it.
    */
-  const lock = useDocumentLockSurface({
-    scopeKind: "single",
-    slug: schema.slug,
-    entryId: document.id,
-  });
 
   const autosave = useDocumentAutosave({
     scope: autosaveScope,
@@ -611,7 +624,7 @@ export function SingleForm({
     // Held off while a colleague holds the document: the recovery point is a
     // write to the same row, so leaving it running is the overwrite the claim
     // exists to prevent.
-    enabled: !isSubmitting && lock.autosaveAllowed,
+    enabled: !isSubmitting,
   });
   const recovery = useAutosaveRecovery({
     scope: autosaveScope,

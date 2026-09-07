@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import userEvent from "@testing-library/user-event";
 
-import { render, screen } from "@admin/__tests__/utils";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@admin/__tests__/utils";
 
 const { useDocumentLock, useDocumentAutosave } = vi.hoisted(() => ({
   useDocumentLock: vi.fn(),
@@ -44,6 +50,8 @@ const document = {
 } as unknown as SingleDocumentData;
 
 const bob = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
+/** The real DOM document, since `document` here is the single being edited. */
+const document_ = globalThis.document;
 const takeOver = vi.fn();
 
 beforeEach(() => {
@@ -148,10 +156,16 @@ describe("SingleForm under a document lock", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("stops autosaving while a colleague holds the document", () => {
-    // 🔴 The quietest of the four. A recovery point is a write to the same row,
-    // so an autosave running under someone else's claim is exactly the overwrite
-    // this feature exists to prevent, on a timer nobody is watching.
+  it("keeps the author's own recovery running while a colleague holds it", () => {
+    // 🔴 The opposite of what it looks like it should do, and the engine depends
+    // on it. `useDocumentAutosave` does not write the document: it upserts a
+    // recovery row keyed by document AND author, which the live-row predicate
+    // excludes, so it cannot reach the holder's document or their recovery row.
+    //
+    // `document-lock-repository` says a takeover moves the ousted author's work
+    // nowhere precisely BECAUSE that row keeps being written. Stopping it removes
+    // the safety net at the moment the banner promises their unsaved changes are
+    // still theirs.
     useDocumentLock.mockReturnValue({
       state: { status: "held-by-other", holder: bob },
       takeOver,
@@ -162,23 +176,70 @@ describe("SingleForm under a document lock", () => {
     );
 
     expect(useDocumentAutosave).toHaveBeenCalledWith(
-      expect.objectContaining({ enabled: false })
+      expect.objectContaining({ enabled: true })
     );
   });
 
-  it("autosaves normally when this editor holds it", () => {
-    // The other direction, so the rule cannot be satisfied by never autosaving.
+  it("refuses a save that reaches past the disabled controls", async () => {
+    // 🔴 The controls are disabled, but disabling them one at a time is a list
+    // the next write path gets added without. A displaced editor still has a
+    // keyboard: this is the guard that does not depend on remembering.
+    const onSubmit = vi.fn();
     useDocumentLock.mockReturnValue({
       state: { status: "held-by-me" },
       takeOver,
     });
 
-    render(
-      <SingleForm schema={schema} document={document} onSubmit={vi.fn()} />
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <SingleForm schema={schema} document={document} onSubmit={onSubmit} />
     );
 
-    expect(useDocumentAutosave).toHaveBeenCalledWith(
-      expect.objectContaining({ enabled: true })
+    // Dirty while they still hold it.
+    await user.type(screen.getByLabelText("Hero Title"), "work");
+
+    // Then a colleague takes it.
+    useDocumentLock.mockReturnValue({
+      state: { status: "taken-over", holder: bob },
+      takeOver,
+    });
+    rerender(
+      <SingleForm schema={schema} document={document} onSubmit={onSubmit} />
     );
+
+    // Native submission, which no disabled button stands in front of.
+    const form = document_.querySelector("form");
+    expect(form, "the editor renders a form to submit").not.toBeNull();
+    fireEvent.submit(form as HTMLFormElement);
+
+    // 🔴 Settled, not polled. `waitFor` around a negative assertion passes on its
+    // first check - before the submit it is meant to catch has even run - which
+    // is a test that cannot fail. The submit is asynchronous, so it is given time
+    // to happen and then found not to have.
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    });
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("saves normally when this editor holds it", async () => {
+    // The other direction, so the gate cannot be satisfied by refusing everything.
+    const onSubmit = vi.fn();
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-me" },
+      takeOver,
+    });
+
+    const user = userEvent.setup();
+    render(
+      <SingleForm schema={schema} document={document} onSubmit={onSubmit} />
+    );
+
+    await user.type(screen.getByLabelText("Hero Title"), "work");
+    const form = document_.querySelector("form");
+    expect(form, "the editor renders a form to submit").not.toBeNull();
+    fireEvent.submit(form as HTMLFormElement);
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
   });
 });

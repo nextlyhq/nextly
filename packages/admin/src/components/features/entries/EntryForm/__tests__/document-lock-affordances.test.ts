@@ -1,10 +1,15 @@
+import type { DocumentLockHolder } from "nextly/document-lock";
 import { describe, expect, it } from "vitest";
 
 import type { DocumentLockState } from "@admin/hooks/queries/useDocumentLock";
 
 import { documentLockAffordances } from "../document-lock-affordances";
 
-const bob = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
+const bob: DocumentLockHolder = {
+  ownerId: "u2",
+  ownerLabel: "Bob",
+  expiresInSeconds: 90,
+};
 
 describe("what a lock state means for the editor", () => {
   it.each<DocumentLockState>([
@@ -15,7 +20,6 @@ describe("what a lock state means for the editor", () => {
     expect(documentLockAffordances(state)).toEqual({
       readOnly: false,
       actionsDisabled: false,
-      autosaveAllowed: true,
       notice: null,
     });
   });
@@ -36,7 +40,6 @@ describe("what a lock state means for the editor", () => {
     });
     expect(affordances.readOnly).toBe(true);
     expect(affordances.actionsDisabled).toBe(true);
-    expect(affordances.autosaveAllowed).toBe(false);
     expect(affordances.notice?.message).toContain("Bob");
     expect(affordances.notice?.takeOverLabel).toBe("Take over");
   });
@@ -75,49 +78,60 @@ describe("what a lock state means for the editor", () => {
     expect(affordances.notice?.takeOverLabel).toBe("Take it back");
   });
 
-  it("keeps the editor working when the lock cannot be checked", () => {
+  it("keeps the editor working when nothing was ever known", () => {
     // 🔴 The lock is advisory: it exists to tell two people about each other, not
-    // to be a permission. Stopping work when the server cannot be reached turns
-    // an advisory nicety into an outage, and fails in the direction that loses
-    // the author's afternoon.
+    // to be a permission. Stopping work on the FIRST failed check turns an
+    // advisory nicety into an outage, and fails in the direction that loses the
+    // author's afternoon.
     const affordances = documentLockAffordances({ status: "unavailable" });
     expect(affordances.readOnly).toBe(false);
     expect(affordances.actionsDisabled).toBe(false);
-    expect(affordances.autosaveAllowed).toBe(true);
     expect(affordances.notice?.takeOverLabel).toBeNull();
     expect(affordances.notice?.tone).toBe("unchecked");
   });
 
-  it("stops autosave wherever it stops saving", () => {
-    // 🔴 The recovery point is a write to the same document, so leaving it
-    // running while a colleague edits is the overwrite this feature exists to
-    // prevent — quieter, and therefore worse.
-    const states: DocumentLockState[] = [
-      { status: "held-by-other", holder: bob },
-      { status: "taken-over", holder: bob },
-      { status: "lost" },
-    ];
-    for (const state of states) {
-      const affordances = documentLockAffordances(state);
-      expect(affordances.autosaveAllowed, state.status).toBe(
-        !affordances.actionsDisabled
-      );
-      expect(affordances.autosaveAllowed, state.status).toBe(false);
-    }
+  it("keeps a known colleague's claim when the refresh fails", () => {
+    // 🔴 `unavailable` is not only the first check: every beat re-asks, and any
+    // transient rejection lands there. Treating that as "unlocked" hands the
+    // document to a second editor while the last confirmed fact is that a
+    // colleague holds an unexpired lease.
+    const affordances = documentLockAffordances({ status: "unavailable" }, bob);
+    expect(affordances.readOnly).toBe(true);
+    expect(affordances.actionsDisabled).toBe(true);
+    expect(affordances.notice?.message).toContain("Bob");
+    expect(affordances.notice?.takeOverLabel).toBe("Take over");
   });
 
   it("offers a way back from every state it withholds writing in", () => {
     // A read-only document with no affordance is a dead end, and the reader
     // cannot tell it from one they lack permission for.
-    const states: DocumentLockState[] = [
+    const cases: [DocumentLockState, DocumentLockHolder | null][] = [
+      [{ status: "held-by-other", holder: bob }, null],
+      [{ status: "taken-over", holder: bob }, null],
+      [{ status: "taken-over" }, null],
+      [{ status: "lost" }, null],
+      [{ status: "unavailable" }, bob],
+    ];
+    for (const [state, known] of cases) {
+      const affordances = documentLockAffordances(state, known);
+      expect(affordances.readOnly, state.status).toBe(true);
+      expect(affordances.notice?.takeOverLabel, state.status).toBeTruthy();
+    }
+  });
+
+  it("withholds every write together, never just some", () => {
+    // 🔴 Read-only fields with live Save is the worst of both: the banner says the
+    // document is somebody else's and the editor can still overwrite them.
+    const cases: DocumentLockState[] = [
       { status: "held-by-other", holder: bob },
       { status: "taken-over", holder: bob },
-      { status: "taken-over" },
       { status: "lost" },
     ];
-    for (const state of states) {
+    for (const state of cases) {
       const affordances = documentLockAffordances(state);
-      expect(affordances.notice?.takeOverLabel, state.status).toBeTruthy();
+      expect(affordances.actionsDisabled, state.status).toBe(
+        affordances.readOnly
+      );
     }
   });
 });

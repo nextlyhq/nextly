@@ -202,6 +202,15 @@ export interface EntrySystemHeaderProps {
    * so collection entry forms keep the editable, optionally-required title.
    */
   lockIdentity?: boolean;
+  /**
+   * Whether a colleague's claim withholds writing.
+   *
+   * Separate from `lockIdentity`, which is about a Single's fixed title: this one
+   * comes and goes while the editor is open. The title is a WRITE like any other,
+   * and it also drives the slug through `useAutoSlug`, so leaving it editable
+   * under someone else's claim contradicts the strip above it.
+   */
+  documentLocked?: boolean;
 
   /** Rail collapsed state. */
   isRailCollapsed?: boolean;
@@ -268,6 +277,7 @@ export function EntrySystemHeader({
   historyFields,
   historyEnabled,
   lockIdentity = false,
+  documentLocked = false,
   isRailCollapsed = false,
   onToggleRail,
   toolbarSlot,
@@ -575,7 +585,7 @@ export function EntrySystemHeader({
             control={form.control}
             label={titleLabel}
             required={titleRequired && !isReadingHistory}
-            locked={lockIdentity || isReadingHistory}
+            locked={lockIdentity || isReadingHistory || documentLocked}
             submitting={isSubmitting}
             rtl={titleRtl}
             inputRef={(el: HTMLInputElement | null) => {
