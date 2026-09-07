@@ -51,6 +51,21 @@ describe("useDocumentLock", () => {
     });
   });
 
+  it("claims once per document, not once per render", async () => {
+    // The document reference is memoised on the three values that identify it.
+    // Rebuilt each render, the effect would tear down and re-claim on every
+    // one: a stream of acquire and release calls, and a colleague watching the
+    // lock flicker between held and free.
+    const { result, rerender } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    rerender();
+    rerender();
+
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(del).not.toHaveBeenCalled();
+  });
+
   it("names the holder when someone else has it", async () => {
     // Advisory: the second editor is told who, not merely refused.
     post.mockResolvedValue(held);

@@ -40,7 +40,7 @@ import {
   type DocumentScopeKind,
   type RenewDocumentLockOutcome,
 } from "nextly/document-lock";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 
@@ -82,7 +82,13 @@ export function useDocumentLock({
   const generation = useRef(0);
 
   const active = enabled && Boolean(entryId);
-  const ref = { scopeKind, slug, entryId: entryId ?? "" };
+  // Memoised on the three primitives that identify the document. Rebuilt every
+  // render it would be a new object each time, so the effect below would claim,
+  // release and claim again on every render rather than once per document.
+  const ref = useMemo(
+    () => ({ scopeKind, slug, entryId: entryId ?? "" }),
+    [scopeKind, slug, entryId]
+  );
 
   const claim = useCallback(
     async (takeover: boolean, run: number) => {
@@ -100,7 +106,7 @@ export function useDocumentLock({
         setState({ status: "held-by-other", holder: item.holder });
       }
     },
-    [scopeKind, slug, entryId]
+    [ref]
   );
 
   /** Edit anyway, displacing the current holder. Their editor is told. */
@@ -151,7 +157,7 @@ export function useDocumentLock({
         .delete("/document-lock", { ...ref, claimToken: token })
         .catch(() => undefined);
     };
-  }, [active, claim, scopeKind, slug, entryId]);
+  }, [active, claim, ref]);
 
   return { state, takeOver };
 }
