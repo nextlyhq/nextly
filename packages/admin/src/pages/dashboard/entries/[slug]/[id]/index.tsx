@@ -17,7 +17,9 @@ import { useMemo } from "react";
 
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
 import {
+  DocumentLockBanner,
   EntryForm,
+  useDocumentLockSurface,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
 import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
@@ -318,6 +320,51 @@ export default function EditEntryPage({
   const isLoading = isLoadingCollection || isLoadingEntry;
   const error = collectionError || entryError;
 
+  // Resolved here, above this component's loading and error returns, for the
+  // reason the hooks above give: whether a custom view renders decides whether
+  // THIS page claims the document, and a hook cannot be asked that after a
+  // return. The registration hook has run, so the registry can answer.
+  const customEditViewPath =
+    collection?.admin?.components?.views?.Edit?.Component;
+  const CustomEditView = customEditViewPath
+    ? getComponent<CustomEditViewProps>(customEditViewPath)
+    : undefined;
+
+  /*
+   * A custom edit view replaces the FORM, not the facts about the document, so
+   * it takes the same claim the default editor takes. Without one it never
+   * announces itself to the lock, so a colleague opening the same document is
+   * told nobody holds it, and the editor is shown no holder and offered no
+   * takeover — on precisely the documents a project cared enough about to build
+   * a bespoke editor for.
+   *
+   * 🔴 Enabled ONLY on that branch. `EntryForm` claims for the default editor,
+   * and claiming in both places would put two claims on one document under one
+   * author, which the repository keys and releases separately. The condition is
+   * the resolved component rather than the registered path, because a path that
+   * resolves to nothing falls through to `EntryForm` and that branch has its
+   * own claim.
+   */
+  const customViewLock = useDocumentLockSurface({
+    scopeKind: "collection",
+    slug: slug ?? "",
+    entryId: id,
+    // 🔴 The same prerequisites the custom branch renders under, not merely a
+    // resolved component. A claim taken while the entry is still loading, or
+    // after it failed, heartbeats a document the editor is not looking at - and
+    // on a load failure that leaves the lock endpoint reachable, colleagues are
+    // told this person is editing a page that never appeared for them.
+    enabled: Boolean(
+      CustomEditView &&
+        slug &&
+        id &&
+        !isLoading &&
+        !error &&
+        collection &&
+        entry
+    ),
+  });
+
   /**
    * The page's measure, on every branch.
    *
@@ -447,13 +494,6 @@ export default function EditEntryPage({
   const entryData = entry as unknown as Record<string, unknown>;
   const entryTitle = getEntryTitle(entryData, id, collection.admin?.useAsTitle);
 
-  // Check for custom Edit view component from plugins
-  const customEditViewPath =
-    collection.admin?.components?.views?.Edit?.Component;
-  const CustomEditView = customEditViewPath
-    ? getComponent<CustomEditViewProps>(customEditViewPath)
-    : undefined;
-
   // Shared callbacks for both default and custom views
   const handleSuccess = () => {
     // Stay on edit page - success toast is shown by mutation hook
@@ -479,6 +519,13 @@ export default function EditEntryPage({
       onSuccess: handleSuccess,
       onDelete: handleDelete,
       onCancel: handleCancel,
+      // The banner above says in words that changes cannot be saved while a
+      // colleague holds this. Passing the same decision the banner was derived
+      // from is what keeps that sentence true.
+      documentLock: {
+        readOnly: customViewLock.readOnly,
+        actionsDisabled: customViewLock.actionsDisabled,
+      },
     };
 
     return (
@@ -500,6 +547,13 @@ export default function EditEntryPage({
           <ScheduledReleaseBanner
             document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
             onDefaultLocale={!isNonDefaultLocale}
+          />
+          {/* Said for the same reason, about the other fact a second editor
+              needs: who has this document open. The strip renders nothing while
+              the claim is this editor's own. */}
+          <DocumentLockBanner
+            notice={customViewLock.notice}
+            onTakeOver={customViewLock.takeOver}
           />
           {/* Boxed for the same reason the injection slots are: under the
               measured frame this is a direct child of a CSS grid, and the rule

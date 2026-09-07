@@ -70,6 +70,19 @@ export {
   type AutoSaveIndicatorProps,
 } from "./AutoSaveIndicator";
 
+// Document lock: the banner and the claim behind it, for every editor of a
+// document rather than only this form. A custom edit view replaces the FORM,
+// not the facts about the document, and it reaches these through the same
+// barrel the form does.
+export {
+  DocumentLockBanner,
+  type DocumentLockBannerProps,
+} from "./DocumentLockBanner";
+export {
+  useDocumentLockSurface,
+  type DocumentLockSurface,
+} from "./useDocumentLockSurface";
+
 // Show JSON dialog
 export { ShowJSONDialog, type ShowJSONDialogProps } from "./ShowJSONDialog";
 
