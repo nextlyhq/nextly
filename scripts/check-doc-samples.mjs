@@ -305,6 +305,28 @@ export function compile(samples, label, ignore = SUPPLIED_BY_THE_READER) {
  * them got ERR_PACKAGE_PATH_NOT_EXPORTED. A harness that bypassed the map
  * would have called those three fine.
  */
+/**
+ * Refuse to judge the documentation with the packages half-built.
+ *
+ * Samples resolve `nextly` through its exports map, which points at `dist`. A
+ * tree that is absent, or being rewritten by a concurrent build, resolves the
+ * runtime entry and not its types, and TypeScript then reports every import as
+ * implicitly `any`: one run mid-build produced 182 of those and called them
+ * findings against the pages. The pages were not the problem, and a check that
+ * names the wrong cause is worse than one that does not run.
+ */
+function requireBuiltPackages() {
+  const types = join(ROOT, "packages", "nextly", "dist", "index.d.ts");
+  if (existsSync(types)) return;
+  console.error(
+    "doc samples: packages/nextly/dist/index.d.ts is missing, so the samples " +
+      "cannot resolve the types they are checked against.\n" +
+      "  Build first: pnpm turbo build --filter='./packages/*'\n" +
+      "  Nothing was checked, and no finding here would have been about the docs."
+  );
+  process.exit(1);
+}
+
 function linkResolutionTree(dir) {
   const modules = join(dir, "node_modules");
   mkdirSync(modules, { recursive: true });
@@ -1301,8 +1323,25 @@ async function main() {
   // continues an earlier one, or imports a package a reader would have and this
   // checkout does not, is not something a reader meets, and counting those
   // would fill the baseline with the harness's own artefacts.
+  requireBuiltPackages();
   const byFile = await auditDocs();
   const findings = [...byFile.values()].flat();
+  // The build can finish or restart while this runs, so the post-condition is
+  // asserted too: a workspace package reported as untyped means the tree moved
+  // underneath the compile, not that a page is wrong.
+  const untyped = findings.filter(line =>
+    /error TS7016: Could not find a declaration file for module '(?:nextly|@nextlyhq\/)/.test(
+      line
+    )
+  );
+  if (untyped.length > 0) {
+    console.error(
+      `doc samples: ${String(untyped.length)} sample(s) report a workspace package as ` +
+        "untyped, which means the build moved while this ran. Re-run against a " +
+        "settled tree; none of these are findings about the docs."
+    );
+    process.exit(1);
+  }
   const counted = Object.fromEntries(
     [...byFile].map(([file, lines]) => [file, lines.length])
   );
@@ -1313,6 +1352,32 @@ async function main() {
       `doc samples: baseline written for ${String(Object.keys(counted).length)} page(s), ` +
         `${String(findings.length)} finding(s), ${auditBasis()}.`
     );
+    return;
+  }
+
+  // One page at a time, for a reader working through a single file: the
+  // whole-repository verdict is not useful while other pages are mid-edit, and
+  // a person checking their own work should not have to read past everyone
+  // else's. The baseline is still the whole repository's; only the comparison
+  // narrows.
+  const onlyIndex = process.argv.indexOf("--only");
+  const only = onlyIndex === -1 ? null : process.argv[onlyIndex + 1];
+  if (only) {
+    const found = counted[only] ?? 0;
+    const cap = readBaseline()[only] ?? 0;
+    const lines = byFile.get(only) ?? [];
+    console.log(`\n${only}: allowed ${String(cap)}, found ${String(found)}`);
+    for (const line of lines) console.log(`  ${line}`);
+    if (found > cap) {
+      console.error("\nthis page got worse");
+      process.exit(1);
+    }
+    if (found < cap) {
+      console.log(
+        `\n${String(cap - found)} fewer than the baseline: lower it to ${String(found)} ` +
+          "in scripts/doc-samples-baseline.json (or remove the entry at zero)."
+      );
+    }
     return;
   }
 
