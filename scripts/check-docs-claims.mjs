@@ -772,17 +772,45 @@ function isCredential(token) {
  * issue.
  *
  * `Bearer YOUR_API_KEY` is an instruction, not a format, and reporting it would have the
- * always-run docs job block a correct page. The test is the absence of a lowercase letter:
- * prefixes are issued lowercase, so no real key can be spelled this way, and capitals are how
- * documentation everywhere says "replace me".
+ * always-run docs job block a correct page.
  *
- * A token that spells the issued prefix in capitals is NOT a placeholder. `NX_LIVE_...` is a
- * mis-cased key, and a key is authenticated by `sha256` of the whole string, so that header
- * cannot work. Excusing it would make this check tolerate the one defect it exists to catch.
+ * Recognised by its WORDS rather than by being capitals. Reading every uppercase token as a
+ * placeholder excuses any retired prefix spelled in caps: `SK_LIVE_EXAMPLE` would be waved
+ * through while the docs taught a header that cannot authenticate. Every segment has to be a
+ * word documentation uses to mean "replace me", so `YOUR_API_KEY` qualifies and `SK_LIVE_` does
+ * not, because `SK` and `LIVE` name a vendor and an environment.
+ *
+ * That also keeps `NX_LIVE_...` reported. It is a mis-cased key, and a key is authenticated by
+ * `sha256` of the whole string, so that header cannot work; excusing it would make this check
+ * tolerate the one defect it exists to catch.
  */
-function isPlaceholder(token, prefix) {
+const PLACEHOLDER_WORDS = new Set([
+  "YOUR",
+  "MY",
+  "THE",
+  "A",
+  "AN",
+  "API",
+  "KEY",
+  "KEYS",
+  "TOKEN",
+  "SECRET",
+  "VALUE",
+  "PLACEHOLDER",
+  "EXAMPLE",
+  "HERE",
+  "REPLACE",
+  "INSERT",
+  "PASTE",
+  "XXX",
+  "XXXX",
+  "ABC",
+  "TODO",
+]);
+
+function isPlaceholder(token) {
   if (/[a-z]/.test(token)) return false;
-  return !token.toLowerCase().startsWith(prefix.toLowerCase());
+  return token.split(/[-_]/).every(word => PLACEHOLDER_WORDS.has(word));
 }
 
 /** Tests and fixtures, whose bearer headers are for other services and prove nothing here. */
@@ -835,6 +863,17 @@ const KEY_VOCABULARY = /\bkeys?\b/i;
 
 /** A doc comment, matched against text `sourceComments` has already reduced to those. */
 const DOC_COMMENT = /\/\*\*[\s\S]*?\*\//g;
+
+/**
+ * A Markdown paragraph, which is the sentence a bare format sits in.
+ *
+ * A fenced block counts as one, because a key format is usually shown inside one and the
+ * heading or sentence that introduces it is not what the fence contains. Splitting on blank
+ * lines therefore keeps the fence with nothing, so `KEY_VOCABULARY` has to find the word inside
+ * it: `nx_live_<base64url-32-bytes>` sits under a `Key Format` heading, and the fenced examples
+ * in this repository all carry the word themselves.
+ */
+const PARAGRAPH = /[^\n]+(?:\n[^\n]+)*/g;
 
 /** HTML and MDX comments, which a reader never sees and a generator never publishes. */
 const NON_RENDERED_COMMENT = /<!--[\s\S]*?-->|\{\s*\/\*[\s\S]*?\*\/\s*\}/g;
@@ -939,6 +978,8 @@ function blankComments(text) {
 function partitionSource(text, keep) {
   let out = "";
   let index = 0;
+  // A short tail of the code emitted so far, enough to see a closing bracket or a keyword.
+  let previous = "";
   const blank = character => (character === "\n" ? "\n" : " ");
   // Three kinds, not two. "is this a comment" decides blanking and "is this documentation"
   // decides extraction, and they disagree on a `//` note and a plain `/*` block: both are
@@ -965,6 +1006,41 @@ function partitionSource(text, keep) {
         text[index + 2] === "*" && text[index + 3] !== "/" ? "doc" : "comment";
       for (; index < stop; index += 1) out += emit(text[index], kind);
       continue;
+    }
+    // A regex literal, which is the other thing that can hold a stray slash-star.
+    //
+    // `/[/*]/` before a doc comment opened a comment at the character-class slash and ate
+    // through the JSDoc terminator. That direction was documented here as costing a refusal
+    // rather than a false pass, which was true only of reading the DECLARATION: on the
+    // extraction side the doc comment is silently dropped and the check reports clean.
+    //
+    // Comments are recognised first, exactly as a JavaScript lexer does, so `/*` and `//` never
+    // reach here and only the ambiguity between division and a regex is left. The previous
+    // significant character settles it: a value can end with a name, a number or a closing
+    // bracket, and a slash after one of those is division.
+    if (here === "/" && next !== "/" && next !== "*") {
+      if (!/[\w$)\]]$/.test(previous) || /\b(?:return|typeof|case|in|of|new|delete|void|throw)$/.test(previous)) {
+        out += emit(here, "code");
+        index += 1;
+        let inClass = false;
+        while (index < text.length && text[index] !== "\n") {
+          const character = text[index];
+          out += emit(character, "code");
+          index += 1;
+          if (character === "\\") {
+            if (index < text.length) {
+              out += emit(text[index], "code");
+              index += 1;
+            }
+            continue;
+          }
+          if (character === "[") inClass = true;
+          else if (character === "]") inClass = false;
+          else if (character === "/" && !inClass) break;
+        }
+        previous = "/";
+        continue;
+      }
     }
     if (here === '"' || here === "'" || here === "`") {
       // Only a template literal spans lines. A quoted string cannot hold a raw newline, so
@@ -1002,9 +1078,11 @@ function partitionSource(text, keep) {
         out += emit(text[index], "code");
         index += 1;
       }
+      previous = "x";
       continue;
     }
     out += emit(here, "code");
+    if (!/\s/.test(here)) previous = (previous + here).slice(-8);
     index += 1;
   }
   return out;
@@ -1083,8 +1161,15 @@ function documentedKeyPrefix(repoRoot, tracked, packages, findings, isExempt) {
   const privatePackages = new Set(
     withManifest.filter(name => !published.has(name))
   );
+  //
+  // Changesets are dropped for the reason the per-line checks drop them: they quote the claim
+  // being corrected, so a note saying "replace `Bearer sk_old_EXAMPLE`" describes the fix and
+  // is not a page anyone reads.
   const prose = proseFiles(tracked).filter(
-    rel => !TEST_FILE.test(rel) && !privatePackages.has(rel.split("/")[1])
+    rel =>
+      !TEST_FILE.test(rel) &&
+      !rel.startsWith(".changeset/") &&
+      !privatePackages.has(rel.split("/")[1])
   );
 
   let examined = 0;
@@ -1116,17 +1201,17 @@ function documentedKeyPrefix(repoRoot, tracked, packages, findings, isExempt) {
     // Bare formats are read wherever a doc comment is talking about a key. `rbac.ts` publishes
     // three of them with no scheme, in JSDoc that ships in the package's declarations, so
     // scoping this to the declaring file left editor-visible examples free to go stale.
-    if (markdown) {
-      for (const match of scanned.matchAll(KEY_FORMAT_EXAMPLE)) {
-        if (!candidates.has(match.index)) candidates.set(match.index, match);
-      }
-    } else {
-      for (const block of scanned.matchAll(DOC_COMMENT)) {
-        if (!KEY_VOCABULARY.test(block[0])) continue;
-        for (const match of block[0].matchAll(KEY_FORMAT_EXAMPLE)) {
-          const start = block.index + match.index;
-          if (!candidates.has(start)) candidates.set(start, match);
-        }
+    // The unit of context differs by file type and the test does not: a paragraph in Markdown,
+    // a doc comment in source. Without it on both sides, a page explaining that the generated
+    // index is `idx_comp_<slug>_parent` is read as documenting an API key prefix.
+    const contexts = markdown
+      ? [...scanned.matchAll(PARAGRAPH)]
+      : [...scanned.matchAll(DOC_COMMENT)];
+    for (const context of contexts) {
+      if (!KEY_VOCABULARY.test(context[0])) continue;
+      for (const match of context[0].matchAll(KEY_FORMAT_EXAMPLE)) {
+        const start = context.index + match.index;
+        if (!candidates.has(start)) candidates.set(start, match);
       }
     }
 
@@ -1146,7 +1231,7 @@ function documentedKeyPrefix(repoRoot, tracked, packages, findings, isExempt) {
       // "send a Bearer token" is prose about the scheme, not an example of a credential.
       if (!isCredential(token)) continue;
       // A placeholder is not an example of the format, so it is neither judged nor counted.
-      if (isPlaceholder(token, prefix)) continue;
+      if (isPlaceholder(token)) continue;
       examined += 1;
       if (DOCUMENTED_PREFIX.exec(token)?.[0] === prefix) continue;
       findings.push({

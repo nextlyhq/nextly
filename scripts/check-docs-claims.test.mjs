@@ -1923,6 +1923,89 @@ describe("documented-key-prefix", () => {
     ).not.toContain("documented-key-prefix");
   });
 
+  it("keeps a doc comment that follows a regex literal", async () => {
+    // `/[/*]/` holds a slash-star, and reading it as a comment ate through the doc comment
+    // below it. That drops a published example and the check then reports clean, so this
+    // direction is a false pass rather than the refusal the declaration read would give.
+    expect(
+      await checksFor(
+        tree({
+          "packages/nextly/src/api/parse.ts":
+            "const SLASHES = /[/*]/;\n" +
+            "/** Authenticate with `Authorization: Bearer sk_live_EXAMPLE`. */\n" +
+            "export const P = SLASHES;\n",
+        }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("still reads a division sign as division", async () => {
+    // The other side. Treating `a / b` as a regex start would run to the next slash and
+    // swallow whatever is between, so the previous token has to decide.
+    expect(
+      await checksFor(
+        tree({
+          "packages/nextly/src/api/rate.ts":
+            "const half = total / 2;\n" +
+            "/** Authenticate with `Authorization: Bearer sk_live_EXAMPLE`. */\n" +
+            "export const R = half;\n",
+        }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("does not excuse a retired prefix spelled in capitals", async () => {
+    // Reading every uppercase token as a placeholder waves through any prefix that is no
+    // longer issued, and the docs then teach a header that cannot authenticate.
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx": "Use Authorization: Bearer SK_LIVE_EXAMPLE\n",
+        }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("does not judge a changeset quoting the claim it corrects", async () => {
+    // A changeset says what is being fixed, so it repeats the wrong example by design. The
+    // per-line checks already skip them for this reason.
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n",
+          ".changeset/brave-otters-shout.md":
+            "---\n'@nextlyhq/thing': patch\n---\n\nReplace `Authorization: Bearer sk_old_EXAMPLE` in the auth guide.\n",
+        }),
+      ),
+    ).not.toContain("documented-key-prefix");
+  });
+
+  it("does not read an index name in Markdown as a key format", async () => {
+    // The context test applies to both surfaces. A page explaining a generated index name is
+    // not documenting a credential, and only the surrounding sentence can say so.
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n",
+          "docs/reference/field-groups.mdx":
+            "## Index names\n\nThe generated index is `idx_comp_<slug>_parent`, which bounds the slug length.\n",
+        }),
+      ),
+    ).not.toContain("documented-key-prefix");
+  });
+
+  it("still judges a bare key format in Markdown that talks about keys", async () => {
+    // The positive control for that gate, or it would read as "never scan Markdown".
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx":
+            "## Key format\n\nEvery API key looks like `sk_live_<random>...` when issued.\n",
+        }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
   it("judges a doc comment, which is the form that gets published", async () => {
     // The other side of the same rule. Without it, restricting the scan to
     // JSDoc would read as "scan nothing" and pass just as well.
