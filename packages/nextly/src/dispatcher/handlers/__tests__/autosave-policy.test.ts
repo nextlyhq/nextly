@@ -14,7 +14,7 @@ const autosaveSpy = vi.fn();
 
 vi.mock("../../../api/versions-access", () => ({
   assertVersionDocumentReadable: vi.fn(),
-  assertVersionDocumentUpdatable: vi.fn(),
+  assertDocumentUpdatable: vi.fn(),
   resolveVersionsPolicy: (...a: unknown[]) => policySpy(...a),
   tryResolveCurrentFields: vi.fn(async () => []),
   redactSnapshotForUser: vi.fn(),

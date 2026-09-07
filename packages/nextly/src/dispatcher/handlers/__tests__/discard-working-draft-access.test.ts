@@ -22,7 +22,7 @@ vi.mock("../../../domains/versions/discard-working-draft", () => ({
 
 vi.mock("../../../api/versions-access", () => ({
   assertVersionDocumentReadable: readableSpy,
-  assertVersionDocumentUpdatable: updatableSpy,
+  assertDocumentUpdatable: updatableSpy,
 }));
 
 vi.mock("../../../auth/entity-read-access", () => ({

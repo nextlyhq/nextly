@@ -9,7 +9,7 @@
  * `checkCollectionAccess`:
  *   - `deleteEntry`
  *   - the version-label update gate (`canUpdateEntry`, used by
- *     `assertVersionDocumentUpdatable`)
+ *     `assertDocumentUpdatable`)
  *
  * Each uses a collection whose code-defined rule refuses the operation. A
  * super-admin caller WITHOUT a scope bypasses the rule; the same super-admin
@@ -98,7 +98,7 @@ describe("API-key scope coverage on delete + version-label gates", () => {
     );
     const id = (created.data as { id: string }).id;
 
-    // `canUpdateEntry` is the gate `assertVersionDocumentUpdatable` runs before a
+    // `canUpdateEntry` is the gate `assertDocumentUpdatable` runs before a
     // version-label edit. A super-admin owning an update-scoped key: the scope
     // reaches the gate, the super-admin bypass is skipped, and the refusing rule
     // applies — the key may NOT edit labels.
