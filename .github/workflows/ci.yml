@@ -521,6 +521,20 @@ jobs:
 
       # `./e2e` is named explicitly: it is a workspace member but sits under
       # neither glob, being neither something we publish nor something we run.
+      # After Build, deliberately: the samples resolve `nextly` and `@nextlyhq/*`
+      # through the real exports map of the packages in this commit, which
+      # exists only once they are built. Mapped paths would have answered for a
+      # subpath the package does not export, and the exports map is exactly what
+      # a sample can get wrong: three snippets in the authentication guide
+      # imported `nextly/lib/env`, which is not in it.
+      #
+      # It ratchets rather than gates outright, because the pages already carry
+      # findings and a check that is red when nothing is wrong teaches people to
+      # re-run reds instead of reading them.
+      - name: Doc samples compile
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: pnpm check:doc-samples
+
       - name: Lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: pnpm turbo lint --continue --filter='./packages/*' --filter='./apps/*' --filter='./e2e'

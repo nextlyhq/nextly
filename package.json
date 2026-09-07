@@ -29,6 +29,7 @@
     "check:integration-lane": "node scripts/check-integration-lane.mjs",
     "check:comments": "node scripts/check-comment-convention.mjs",
     "check:docs-claims": "node scripts/check-docs-claims.mjs",
+    "check:doc-samples": "node scripts/check-doc-samples.mjs",
     "docs:fix": "node scripts/check-docs-claims.mjs --fix",
     "check:repo-metadata": "node scripts/check-repo-metadata.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
