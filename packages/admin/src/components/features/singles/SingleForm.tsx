@@ -32,6 +32,7 @@ import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFr
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { AutosaveRecoveryBanner } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
 import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
+import { DocumentLockBanner } from "@admin/components/features/entries/EntryForm/DocumentLockBanner";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import {
   EntryFormContextProvider,
@@ -48,6 +49,7 @@ import {
   UnsavedWorkProvider,
   useFormUnsavedWork,
 } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
+import { useDocumentLockSurface } from "@admin/components/features/entries/EntryForm/useDocumentLockSurface";
 import {
   mapIntentToPayload,
   passwordFieldNames,
@@ -591,11 +593,25 @@ export function SingleForm({
     () => autosaveScopeFor("single", schema.slug, document?.id),
     [schema.slug, document?.id]
   );
+  /*
+   * The same advisory claim the entry editor holds, on the same terms. A single
+   * is addressed by its slug and the row behind it, and before that row exists
+   * there is nothing to claim and nobody else can be in it.
+   */
+  const lock = useDocumentLockSurface({
+    scopeKind: "single",
+    slug: schema.slug,
+    entryId: document.id,
+  });
+
   const autosave = useDocumentAutosave({
     scope: autosaveScope,
     form,
     locale: locale ?? null,
-    enabled: !isSubmitting,
+    // Held off while a colleague holds the document: the recovery point is a
+    // write to the same row, so leaving it running is the overwrite the claim
+    // exists to prevent.
+    enabled: !isSubmitting && lock.autosaveAllowed,
   });
   const recovery = useAutosaveRecovery({
     scope: autosaveScope,
@@ -774,6 +790,11 @@ export function SingleForm({
                   editor. Placed above the flex row it sat UNDER the sticky
                   header, which intercepted pointer events: the offer was
                   visible and its buttons were not clickable. */}
+                          <DocumentLockBanner
+                            notice={lock.notice}
+                            onTakeOver={lock.takeOver}
+                            className="mx-6 mt-3"
+                          />
                           {recovery.offer ? (
                             <AutosaveRecoveryBanner
                               savedAt={recovery.offer.savedAt}
@@ -816,6 +837,7 @@ export function SingleForm({
                               <EntryFormContent
                                 fields={mainFields}
                                 disabled={isSubmitting}
+                                readOnly={lock.readOnly}
                                 withCard
                               />
                             </div>

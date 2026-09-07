@@ -58,6 +58,7 @@ import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
 import { AutosaveRecoveryBanner } from "./AutosaveRecoveryBanner";
 import type { ContributedAction } from "./DocumentActionBar";
+import { DocumentLockBanner } from "./DocumentLockBanner";
 import {
   effectiveEntryStatus,
   isSlugPerLocale,
@@ -80,6 +81,7 @@ import { FormErrorSummary } from "./FormErrorSummary";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
+import { useDocumentLockSurface } from "./useDocumentLockSurface";
 import {
   useEntryForm,
   getCollectionFields,
@@ -371,6 +373,7 @@ export function EntryForm({
   });
 
   const collectionSlug = collection.slug ?? collection.name;
+
   const localeCtx = useEntryLocaleContext({
     locale,
     defaultLocale,
@@ -601,6 +604,23 @@ export function EntryForm({
   // once the entry has an id: a document that has never been saved has nothing
   // for the endpoint to address, and `null` turns recording off rather than
   // inventing one.
+
+  /*
+   * An advisory claim on the document, so two editors are told about each other
+   * rather than discovering it when one overwrites the other.
+   *
+   * Off while creating: a document with no id is nothing to claim, and nobody
+   * else can be in it. Off while a past version is on screen for the reason the
+   * autosave is — reading is not editing, and holding a claim against a document
+   * nobody is typing into keeps it from a colleague who would.
+   */
+  const lock = useDocumentLockSurface({
+    scopeKind: "collection",
+    slug: collectionSlug,
+    entryId: entry?.id,
+    enabled: mode === "edit" && viewingVersion === null,
+  });
+
   const autosaveScope = useMemo(
     () => autosaveScopeFor("collection", collection.name, savedEntryId),
     [savedEntryId, collection.name]
@@ -638,7 +658,12 @@ export function EntryForm({
      * document to whatever the reader happened to be looking at. Reading is not
      * editing, and the write is the only part of that which is recoverable.
      */
-    enabled: !isSubmitting && viewingVersion === null,
+    /*
+     * And held off while a colleague holds the document. The recovery point is a
+     * write to the same row, so leaving it running is the overwrite the claim
+     * exists to prevent, made quieter by happening on a timer nobody watches.
+     */
+    enabled: !isSubmitting && viewingVersion === null && lock.autosaveAllowed,
   });
   const linkLocale = previewLinkLocale({
     localized: collection.localized === true,
@@ -767,6 +792,7 @@ export function EntryForm({
             <EntryFormContent
               fields={getCollectionFields(collection)}
               disabled={isSubmitting}
+              readOnly={lock.readOnly}
               mode={mode}
             />
             <EntryFormActions
@@ -957,6 +983,13 @@ export function EntryForm({
                                 mode === "edit" ? toggleRail : undefined
                               }
                             />
+                            {/* First of the strips: a document somebody else is in
+                      changes what every affordance below it means, so it is read
+                      before the offer to restore work into it. */}
+                            <DocumentLockBanner
+                              notice={lock.notice}
+                              onTakeOver={lock.takeOver}
+                            />
                             {/* Above the fields and below the header: the reader sees
                       the document it refers to without the offer covering it. */}
                             {recovery.offer ? (
@@ -1043,7 +1076,10 @@ export function EntryForm({
                                     ? {}
                                     : { onSelect: onLocaleChange })}
                                   hasStatus={hasStatus}
-                                  actionsDisabled={viewingVersion !== null}
+                                  actionsDisabled={
+                                    viewingVersion !== null ||
+                                    lock.actionsDisabled
+                                  }
                                 />
                               </div>
                             )}
@@ -1099,6 +1135,7 @@ export function EntryForm({
                                   <EntryFormContent
                                     fields={mainFields}
                                     disabled={isSubmitting}
+                                    readOnly={lock.readOnly}
                                     withCard
                                     mode={mode}
                                   />
@@ -1127,7 +1164,10 @@ export function EntryForm({
                                   {...(onLocaleChange === undefined
                                     ? {}
                                     : { onLocaleChange })}
-                                  actionsDisabled={viewingVersion !== null}
+                                  actionsDisabled={
+                                    viewingVersion !== null ||
+                                    lock.actionsDisabled
+                                  }
                                   isDirty={isDirty}
                                 />
                               </div>
