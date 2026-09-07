@@ -34,7 +34,7 @@ import { boundedLimit, surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
 import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
-import { isPlainRecord } from "./plain-record";
+import { definitelyNotARecord, isPlainRecord } from "./plain-record";
 import { boundedOwnKeys } from "./safe-record";
 import type { TokenKind } from "./style/catalog-types";
 import { breakpointContexts } from "./style/compile-page";
@@ -350,32 +350,6 @@ export interface ValidationResult {
 }
 
 /**
- * The coarse root question: is this value even a CANDIDATE for a record?
- *
- * `typeof` and the null comparison run no code at all. `Array.isArray` runs no
- * trap either, but it reads the array brand THROUGH a proxy, and a revoked one
- * throws rather than answering — `TypeError: Cannot perform 'IsArray' on a
- * proxy that has been revoked`, which leaves a native error where an issue list
- * is owed. `surveyDocument` wraps the same call for the same reason.
- *
- * A root that cannot answer the brand question is NOT thereby a non-record. It
- * is unreadable, and that verdict belongs to the survey, which has already
- * recorded it, and to the readability gate that reports it — so the throw
- * resolves to "not an array" and the value falls through to them. Answering
- * `true` instead would relabel as `invalid-document` a root the readability
- * gate reports as `document-unwritable`, and would refuse it on the strength of
- * a question that was never answered.
- */
-function malformedRoot(doc: unknown): boolean {
-  if (typeof doc !== "object" || doc === null) return true;
-  try {
-    return Array.isArray(doc);
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Issues only — the narrow view, DERIVED from {@link validateDocument} rather
  * than computed beside it.
  *
@@ -388,6 +362,25 @@ export function validate(
   ctx: ValidationContext
 ): ValidationIssue[] {
   return validateDocument(doc, ctx).issues;
+}
+
+/**
+ * The one issue both root readings report.
+ *
+ * Two places decide a root is not a document — the coarse test before the
+ * caller's settings are read, and the envelope's fuller reading after the
+ * survey — and they say the same thing for the same reason. Written twice, the
+ * two copies agree until someone improves the sentence in one of them, and an
+ * author then reads a different message depending on which shape their document
+ * happens to be broken in.
+ */
+function invalidDocumentIssue(): ValidationIssue {
+  return {
+    path: "",
+    code: "invalid-document",
+    severity: "error",
+    message: "The document must be an object.",
+  };
 }
 
 export function validateDocument(
@@ -415,17 +408,14 @@ export function validateDocument(
   // document that was never going to be validated runs unrelated hostile input
   // for nothing.
   //
-  // Coarse, and deliberately so: `isPlainRecord` asks for the prototype, and a
-  // root that refuses to answer that is exactly the case the readability gate
-  // below exists for. So the blunt question is settled here and the precise one
-  // stays in the envelope, after the survey has had its say.
-  if (malformedRoot(doc)) {
-    issues.push({
-      path: "",
-      code: "invalid-document",
-      severity: "error",
-      message: "The document must be an object.",
-    });
+  // The THROW-FREE reading of the same question the envelope asks in full.
+  // `isPlainRecord` settles it by asking for the prototype, which a hostile root
+  // refuses — exactly the case the readability gate below exists for — so it
+  // cannot run before the survey has had its say. `definitelyNotARecord` never
+  // accepts what its fuller half would refuse, so refusing early here can only
+  // ever agree with the envelope, and the two cannot drift apart.
+  if (definitelyNotARecord(doc)) {
+    issues.push(invalidDocumentIssue());
     return { issues, survey };
   }
 
@@ -569,12 +559,7 @@ function documentEnvelope(
   // untrusted, while `doc` keeps its declared type for the typed helper calls.
   const rawDoc: unknown = doc;
   if (!isPlainRecord(rawDoc)) {
-    issues.push({
-      path: "",
-      code: "invalid-document",
-      severity: "error",
-      message: "The document must be an object.",
-    });
+    issues.push(invalidDocumentIssue());
     return { stop: true };
   }
 

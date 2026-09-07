@@ -42,3 +42,9 @@ one stays where it was, after the survey has had its say.
 refuses the array brand rather than answering it — so it is wrapped, and a root
 that cannot answer reaches the survey's readability verdict instead of being
 refused on a question nothing answered.
+
+Both readings now live beside each other as `isPlainRecord` and
+`definitelyNotARecord`, sharing the clause they agree on and reporting one
+issue. The throw-free reading refuses only what the full one would refuse, so
+asking it early can never disagree with asking the full one late — a property
+asserted over a shared table of root shapes rather than left as a convention.
