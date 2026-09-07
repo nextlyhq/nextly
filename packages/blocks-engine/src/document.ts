@@ -9,7 +9,7 @@
  * a framework.
  */
 import { isPlainRecord } from "./plain-record";
-import { ownEntry } from "./safe-record";
+import { ownKeys } from "./safe-record";
 
 /**
  * Engine document-format version. Bumped only when the envelope shape itself
@@ -197,6 +197,30 @@ export type BlockOrigin =
        * bumps a version and leaves a digest alone.
        */
       readonly digest: string;
+      /**
+       * The DOM ids this copy had to rename, as the source spells them → as
+       * this copy does.
+       *
+       * An insert renames an id only because the page already held that name,
+       * so the replacement is a fact about the destination rather than anything
+       * the author wrote. Recording it is what lets a copy saved back out of the
+       * page be stored under the names the source uses — without it, the
+       * pattern's own fingerprint moves on a save that changed nothing, every
+       * other copy reports itself stale, and the id grows another suffix on each
+       * insert-save cycle.
+       *
+       * Recorded rather than derived, because the original cannot be recovered
+       * from the current value: a minted id is the authored one plus a suffix
+       * taken from a node id, and content from a script or an import may name
+       * anchors that way on purpose. That was measured — an authored
+       * `hero-12345678` on node `12345678-…` was silently rewritten to `hero`.
+       *
+       * ABSENT means nothing to put back, which is also what a record written
+       * before this field existed says. The two are the same answer for every
+       * reader — restore nothing — so an older document needs no migration and
+       * behaves exactly as it does today.
+       */
+      readonly renamed?: Readonly<Record<string, string>>;
     }
   | {
       /** Detached from a component, severing the link deliberately. */
@@ -221,13 +245,111 @@ export type BlockOrigin =
  */
 export function isBlockOrigin(value: unknown): value is BlockOrigin {
   if (!isPlainRecord(value)) return false;
-  const id = ownEntry(value, "id");
+  const id = storedEntry(value, "id");
   if (typeof id !== "string" || id === "") return false;
-  const from = ownEntry(value, "from");
+  const from = storedEntry(value, "from");
   if (from === "component") return true;
   if (from !== "pattern") return false;
-  const digest = ownEntry(value, "digest");
-  return typeof digest === "string" && digest !== "";
+  const digest = storedEntry(value, "digest");
+  if (typeof digest !== "string" || digest === "") return false;
+  return hasStoredRenameRecord(value);
+}
+
+/**
+ * A record's own STORED value for one key, or `undefined` when it has none.
+ *
+ * The DESCRIPTOR, never the read. Every field of a provenance record is data a
+ * caller supplied — an import, a script, an in-process edit — and reading one
+ * runs that caller's code inside the published guard deciding whether to trust
+ * it. A throwing getter escapes {@link isBlockOrigin} as a native error rather
+ * than the `false` it promises, and a side-effecting one executes on the way
+ * past. Measured, all four fields did that.
+ *
+ * `"value" in descriptor` rather than asking whether there is a getter: an
+ * accessor descriptor carries no `value` key at all, and a set-only accessor
+ * has no getter either — so asking about the getter alone calls one stored
+ * value and one computed one the same thing.
+ *
+ * A computed field is reported as ABSENT, and for `id`, `from` and `digest`
+ * that is already a refusal: none of them may be missing. `renamed` may, which
+ * is why {@link hasStoredRenameRecord} asks separately rather than through
+ * this.
+ */
+function storedEntry(record: object, key: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  return descriptor === undefined || !("value" in descriptor)
+    ? undefined
+    : descriptor.value;
+}
+
+/**
+ * Whether an origin's rename record is one this guard accepts.
+ *
+ * Three answers, not two, which is why it cannot go through
+ * {@link storedEntry}: ABSENT is valid and means nothing was renamed, COMPUTED
+ * is refused because it is not stored data, and both read as `undefined` once
+ * the descriptor is collapsed to a value.
+ */
+function hasStoredRenameRecord(origin: object): boolean {
+  const descriptor = Object.getOwnPropertyDescriptor(origin, "renamed");
+  if (descriptor === undefined) return true;
+  if (!("value" in descriptor)) return false;
+  return isRenameRecord(descriptor.value);
+}
+
+/**
+ * Whether a rename record is one a later reader could act on.
+ *
+ * Absent is valid and means nothing was renamed. Present and malformed is not:
+ * a half-record would be read as "these are the originals" and put an id back
+ * that was never there, which is worse than having no record — the same reason
+ * {@link isBlockOrigin} refuses a pattern origin without a digest.
+ *
+ * Own entries only, and every one a non-empty string on both sides. An empty id
+ * is not an id, and an entry mapping to one would erase the id it restores.
+ */
+function isRenameRecord(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isPlainRecord(value)) return false;
+  // The CURRENT ids, to reject a map that cannot be inverted. The record reads
+  // source → copy, and restoring reads it the other way — so two sources
+  // claiming one current id give the reverse two answers, and whichever the
+  // reader keeps depends on property order. A record that restores an arbitrary
+  // one of them is worse than none: it puts back an id the author never had
+  // there, silently, and the digest comparison built on it then reports a
+  // change nobody made.
+  const current = new Set<string>();
+  for (const name of ownKeys(value)) {
+    if (!isRenameEntry(value, name, current)) return false;
+  }
+  return true;
+}
+
+/**
+ * One entry of a rename map: stored data, non-empty on both sides, and naming a
+ * current id no other entry claims.
+ *
+ * The DESCRIPTOR, before the value. An entry can be an accessor, and reading one
+ * runs the document's own code inside a published guard — where a throwing
+ * getter escapes as a native error rather than the `false` this promises. A
+ * computed entry is not stored data, which is the same answer the document and
+ * node guards give it.
+ *
+ * `current` is threaded rather than gathered afterwards so one pass answers
+ * both questions, and it is mutated here for the same reason: a second walk to
+ * find duplicates would read every entry twice.
+ */
+function isRenameEntry(
+  value: object,
+  name: string,
+  current: Set<string>
+): boolean {
+  if (name === "") return false;
+  const now = storedEntry(value, name);
+  if (typeof now !== "string" || now === "") return false;
+  if (current.has(now)) return false;
+  current.add(now);
+  return true;
 }
 
 // ---------------------------------------------------------------------------

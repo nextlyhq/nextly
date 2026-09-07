@@ -6,6 +6,7 @@ import type { BlockDocument, BlockNode } from "./document";
 import { renderedDomId, renderedDomIdIn } from "./document";
 import {
   COMPONENT_INSTANCE_TYPE,
+  isBlockOrigin,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   isComponentInstance,
@@ -301,5 +302,101 @@ describe("renderedDomId: which of a node's two spellings reaches the page", () =
   it("reports none when the node spells none", () => {
     expect(renderedDomId(bare({}))).toBeUndefined();
     expect(renderedDomId(bare({ attributes: { id: "" } }))).toBeUndefined();
+  });
+});
+
+/** A rename map whose only entry is an accessor. */
+function computedRenameEntry(): Record<string, unknown> {
+  const renamed: Record<string, unknown> = {};
+  Object.defineProperty(renamed, "authored", {
+    enumerable: true,
+    get() {
+      throw new Error("boom");
+    },
+  });
+  return renamed;
+}
+
+describe("a provenance record's rename map", () => {
+  const base = { from: "pattern" as const, id: "p1", digest: "d1" };
+
+  it("accepts a record with no rename map", () => {
+    // The migration path, and the control for every refusal below: a record
+    // written before this field existed is still whole.
+    expect(isBlockOrigin(base)).toBe(true);
+  });
+
+  it("accepts a well-formed map", () => {
+    expect(
+      isBlockOrigin({ ...base, renamed: { pricing: "pricing-a1b2" } })
+    ).toBe(true);
+  });
+
+  it.each([
+    ["not a record", "pricing"],
+    ["an array", ["pricing"]],
+    ["null", null],
+    ["a non-string current id", { pricing: 3 }],
+    ["an empty current id", { pricing: "" }],
+    ["an empty original", { "": "pricing" }],
+    ["two sources claiming one current id", { a: "same", b: "same" }],
+    ["an entry that computes itself", computedRenameEntry()],
+  ])("refuses %s", (_name, renamed) => {
+    // A half-record is read as "these are the originals" and puts back an id
+    // that was never there, which is worse than having no record at all — the
+    // same reason a pattern origin without a digest is refused.
+    expect(isBlockOrigin({ ...base, renamed })).toBe(false);
+  });
+
+  it.each(["id", "from", "digest", "renamed"])(
+    "refuses a record whose %s computes itself, without running it",
+    field => {
+      // Every field of a provenance record is data a caller supplied — an
+      // import, a script, an in-process edit — and this is the published guard
+      // that decides whether to trust it. Reading a field with an ordinary
+      // property access runs the caller's code INSIDE that decision: a throwing
+      // getter escaped as a native error rather than the `false` this promises,
+      // and a side-effecting one executed on the way past. Measured, all four
+      // fields did that; only the entries INSIDE the map were descriptor-read.
+      let reads = 0;
+      const origin: Record<string, unknown> = { ...base };
+      Object.defineProperty(origin, field, {
+        enumerable: true,
+        configurable: true,
+        get() {
+          reads += 1;
+          throw new Error("a provenance field must never be invoked");
+        },
+      });
+
+      expect(isBlockOrigin(origin)).toBe(false);
+      expect(reads).toBe(0);
+    }
+  );
+
+  it("refuses a record whose renamed is a set-only accessor", () => {
+    // Absent and COMPUTED are different answers and both read back as
+    // `undefined`, so collapsing the descriptor to its value would call this
+    // record whole. A set-only accessor has no getter either, which is why the
+    // rule is "does the descriptor hold a value", not "is there a getter".
+    const origin: Record<string, unknown> = { ...base };
+    Object.defineProperty(origin, "renamed", {
+      enumerable: true,
+      configurable: true,
+      set() {
+        /* nothing */
+      },
+    });
+    expect(isBlockOrigin(origin)).toBe(false);
+  });
+
+  it("ignores a rename map on a component record", () => {
+    // That arm severs a link deliberately and restores nothing, so it has no
+    // such field; an extra member is not what makes a record whole. The map is
+    // PRESENT in the input, and malformed — without that this would prove only
+    // that the component arm accepts a record with no map at all.
+    expect(
+      isBlockOrigin({ from: "component", id: "c1", renamed: "nonsense" })
+    ).toBe(true);
   });
 });

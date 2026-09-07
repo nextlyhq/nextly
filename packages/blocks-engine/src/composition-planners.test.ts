@@ -13,9 +13,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   planConvertToComponent,
+  planDuplicateComponent,
   planInsertPattern,
   planSaveAsComponent,
   planSaveAsPattern,
+  planUpdatePatternFromSelection,
 } from "./composition-planners";
 import type { PlanResult, PlannedCreate } from "./composition-planners";
 import { COMPONENT_INSTANCE_TYPE, DOCUMENT_FORMAT_VERSION } from "./document";
@@ -24,6 +26,8 @@ import { applyOps } from "./ops";
 import type { BuilderOp } from "./ops";
 import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import type { DocumentLimits } from "./limits";
+import { componentEnvelopeIssues } from "./validation";
+import { patternDigest } from "./pattern-digest";
 import { walkNodes } from "./tree";
 
 function node(
@@ -1260,6 +1264,13 @@ describe("a caller-sized exposure costs a refusal, not a traversal", () => {
     // The control: under the DEFAULT cap the same definition is refused, so
     // the assertion above is about the limit being threaded rather than about
     // the pointer happening to resolve.
+    //
+    // Refused for its SIZE, which is what is actually wrong with it. This
+    // asserted `exposed-node-missing` until the bound was settled before the
+    // index was built — and that verdict was the defect: `k5100` is a real node
+    // this document really contains, called dangling only because the index
+    // stopped at the cap. It sent an author to repair a sound exposure while
+    // the size, the one thing they could act on, went unmentioned.
     const defaulted = planSaveAsComponent(
       doc,
       ["root"],
@@ -1267,9 +1278,8 @@ describe("a caller-sized exposure costs a refusal, not a traversal", () => {
       exposure,
       anyParent
     );
-    expect(defaulted.issues?.map(i => i.code)).toContain(
-      "exposed-node-missing"
-    );
+    expect(defaulted.problem).toBe("exceeds-limits");
+    expect(defaulted.issues).toBeUndefined();
   });
 });
 
@@ -1567,5 +1577,863 @@ describe("what a definition may not be", () => {
 
     expect(threw).toBeUndefined();
     expect(result?.problem).toBe("invalid-exposure");
+  });
+});
+
+describe("an insert records what it renamed, and a save puts it back", () => {
+  /** A pattern whose only node is named `pricing`, plus a link to it. */
+  function heroPattern(): BlockDocument {
+    const authored = page([
+      node("t", { cssId: "pricing", props: { mark: "target" } }),
+      node("l", {
+        props: { mark: "link" },
+        attributes: { "aria-describedby": "pricing" },
+      }),
+    ]);
+    return created(planSaveAsPattern(authored, ["t", "l"], target, anyParent))
+      .document;
+  }
+
+  /** Insert it into a page that already holds `pricing`, forcing a rename. */
+  function insertedInto(stored: BlockDocument) {
+    const destination = page([node("existing", { cssId: "pricing" })]);
+    const insert = planInsertPattern(
+      destination,
+      { id: "hero-pattern", document: stored },
+      { index: 1 },
+      anyParent
+    );
+    const placed = pageOps(insert).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    expect(placed).toHaveLength(2);
+    return {
+      destination: applyOps(destination, pageOps(insert)).document,
+      placed,
+    };
+  }
+
+  it("records the rename on the inserted root, source id to copy id", () => {
+    const { placed } = insertedInto(heroPattern());
+    const renamedTarget = marked(placed, "target");
+
+    // It really did rename: the destination already held `pricing`.
+    expect(renamedTarget.cssId).not.toBe("pricing");
+    expect(renamedTarget.cssId).toContain("pricing");
+
+    const origin = renamedTarget.origin;
+    expect(origin?.from).toBe("pattern");
+    expect(origin?.from === "pattern" ? origin.renamed : undefined).toEqual({
+      pricing: renamedTarget.cssId,
+    });
+  });
+
+  it("records the rename on a root that only REFERENCES the renamed id", () => {
+    // The other half of what a rename touches. `reidForestWithMap` rewrites
+    // references across the WHOLE forest, so the link root's
+    // `aria-describedby` followed `pricing` to its minted name — but the record
+    // was built from the ids each root RENDERS, and this root renders none. It
+    // therefore carried a page-specific id with nothing saying what it had been.
+    const { placed } = insertedInto(heroPattern());
+    const renamedTarget = marked(placed, "target");
+    const link = marked(placed, "link");
+
+    // It really did follow the rename.
+    expect(link.attributes?.["aria-describedby"]).toBe(renamedTarget.cssId);
+
+    const origin = link.origin;
+    expect(origin?.from === "pattern" ? origin.renamed : undefined).toEqual({
+      pricing: renamedTarget.cssId,
+    });
+  });
+
+  it("ROUND TRIP: saving only the referencing root restores its reference", () => {
+    // The consequence, which the record exists to prevent. Saving the pair
+    // together already worked, because the TARGET's record covered `pricing`
+    // and the restore reads every selected root's. Saving the link alone is
+    // the case that had no answer: the run went into the library still naming
+    // `pricing-<suffix>`, an id that exists on exactly one page and resolves to
+    // nothing anywhere it is inserted next — a silent loss of the accessible
+    // name, which is what these references are for.
+    const { destination, placed } = insertedInto(heroPattern());
+    const link = marked(placed, "link");
+
+    const saved = planSaveAsPattern(destination, [link.id], target, anyParent);
+
+    const savedLink = marked(created(saved).document.nodes, "link");
+    expect(savedLink.attributes?.["aria-describedby"]).toBe("pricing");
+  });
+
+  it("restores a renamed id on a node the author gated after inserting", () => {
+    // Gating decides what may be RENAMED, because a rename avoids the ids a
+    // page renders. Putting one BACK asks nothing about the page — so a node
+    // gated between the insert and the save still holds the minted id and still
+    // has to give it up. Skipping it restored the link and not its target,
+    // which points the two at different ids and breaks the pattern for every
+    // page it is inserted into afterwards.
+    const { destination, placed } = insertedInto(heroPattern());
+    const renamedTarget = marked(placed, "target");
+    const gated = page(
+      destination.nodes.map(one =>
+        one.id === renamedTarget.id
+          ? {
+              ...one,
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+              },
+            }
+          : one
+      )
+    );
+
+    const saved = planSaveAsPattern(
+      gated,
+      placed.map(one => one.id),
+      target,
+      anyParent
+    );
+    const stored = created(saved).document.nodes;
+
+    expect(marked(stored, "target").cssId).toBe("pricing");
+    expect(marked(stored, "link").attributes?.["aria-describedby"]).toBe(
+      "pricing"
+    );
+  });
+
+  it.each([
+    [
+      "an href prop",
+      (id: string) => ({ props: { mark: "link", href: `#${id}` } }),
+      (n: BlockNode) => n.props?.href,
+    ],
+    [
+      "a bound href's fallback",
+      (id: string) => ({
+        props: { mark: "link" },
+        bindings: { href: { $bind: "url", fallback: `#${id}` } },
+      }),
+      (n: BlockNode) =>
+        (n.bindings as { href?: { fallback?: unknown } } | undefined)?.href
+          ?.fallback,
+    ],
+  ])(
+    "records the rename for a root that references it through %s",
+    (_name, build, read) => {
+      // `relinkOne` rewrites THREE carriers, not one: an IDREFS attribute, a
+      // `#id` link in props, and that link's binding fallback. A record built
+      // from a second enumeration of the carriers would cover whichever the
+      // author of that list remembered, so the record is taken from the relink
+      // pass itself and every carrier it rewrites is covered by construction.
+      const authored = page([
+        node("t", { cssId: "pricing", props: { mark: "target" } }),
+        node("l", build("pricing")),
+      ]);
+      const stored = created(
+        planSaveAsPattern(authored, ["t", "l"], target, anyParent)
+      ).document;
+
+      const destination = page([node("existing", { cssId: "pricing" })]);
+      const insert = planInsertPattern(
+        destination,
+        { id: "hero-pattern", document: stored },
+        { index: 1 },
+        anyParent
+      );
+      const placed = pageOps(insert).flatMap(op =>
+        op.kind === "insert" ? [op.node] : []
+      );
+      const renamedTarget = marked(placed, "target");
+      const link = marked(placed, "link");
+
+      // It really did follow the rename.
+      expect(read(link)).toBe(`#${renamedTarget.cssId!}`);
+
+      const origin = link.origin;
+      expect(origin?.from === "pattern" ? origin.renamed : undefined).toEqual({
+        pricing: renamedTarget.cssId,
+      });
+    }
+  );
+
+  it("records nothing when nothing was renamed", () => {
+    // Absent rather than empty, so a copy that renamed nothing is identical to
+    // one taken before this was recorded.
+    const insert = planInsertPattern(
+      page([node("other", { cssId: "elsewhere" })]),
+      { id: "hero-pattern", document: heroPattern() },
+      { index: 1 },
+      anyParent
+    );
+    const placed = pageOps(insert).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    );
+    const origin = marked(placed, "target").origin;
+
+    expect(origin?.from === "pattern" ? "renamed" in origin : true).toBe(false);
+  });
+
+  it("ROUND TRIP: saving the copy back stores the source's own ids", () => {
+    // The property neither planner has on its own. The insert renames to fit
+    // the page; the save puts it back — so a copy edited and saved over its own
+    // pattern is stored under the names the pattern uses, its digest does not
+    // move, and every other copy of that pattern stays in sync.
+    const stored = heroPattern();
+    const { destination, placed } = insertedInto(stored);
+    const ids = placed.map(one => one.id);
+
+    const saved = planUpdatePatternFromSelection(
+      destination,
+      ids,
+      { collection: "patterns", id: "hero-pattern" },
+      anyParent
+    );
+
+    const rewritten = saved.update?.document;
+    expect(rewritten).toBeDefined();
+
+    const savedTarget = marked(rewritten!.nodes, "target");
+    const savedLink = marked(rewritten!.nodes, "link");
+
+    // The authored id, not the one minted to fit that one page.
+    expect(savedTarget.cssId).toBe("pricing");
+    // And the reference followed it, which is the half a value-only fix misses.
+    expect(savedLink.attributes?.["aria-describedby"]).toBe("pricing");
+
+    // The whole point: the pattern's fingerprint has not moved, so no other
+    // copy is told it is stale for an edit nobody made.
+    expect(patternDigest(rewritten!.nodes)).toBe(patternDigest(stored.nodes));
+  });
+
+  it("leaves a copy with no record exactly as it is", () => {
+    // The migration path: a root inserted before this field existed carries no
+    // record, which says the same thing an empty one does — restore nothing.
+    const stored = heroPattern();
+    const { destination, placed } = insertedInto(stored);
+    const withoutRecord = page(
+      applyOps(destination, []).document.nodes.map(one =>
+        one.origin?.from === "pattern"
+          ? {
+              ...one,
+              origin: {
+                from: "pattern" as const,
+                id: one.origin.id,
+                digest: one.origin.digest,
+              },
+            }
+          : one
+      )
+    );
+
+    const saved = planUpdatePatternFromSelection(
+      withoutRecord,
+      placed.map(one => one.id),
+      { collection: "patterns", id: "hero-pattern" },
+      anyParent
+    );
+
+    // Unchanged: the minted id is stored, exactly as it was before this change.
+    expect(marked(saved.update!.document.nodes, "target").cssId).not.toBe(
+      "pricing"
+    );
+  });
+
+  it("refuses two copies of one pattern that restore to the same id", () => {
+    // Honest rather than convenient: the run really does hold two elements the
+    // source names identically, and storing them under their minted names would
+    // put two ids nobody wrote into the library, each suffixed again next time.
+    const stored = heroPattern();
+    const first = insertedInto(stored);
+    const second = planInsertPattern(
+      first.destination,
+      { id: "hero-pattern", document: stored },
+      { index: 3 },
+      anyParent
+    );
+    const page2 = applyOps(first.destination, pageOps(second)).document;
+    const everyId = page2.nodes
+      .filter(one => one.origin !== undefined)
+      .map(one => one.id);
+
+    expect(
+      planUpdatePatternFromSelection(
+        page2,
+        everyId,
+        { collection: "patterns", id: "hero-pattern" },
+        anyParent
+      ).problem
+    ).toBe("duplicate-dom-id");
+  });
+});
+
+describe("duplicating a component definition", () => {
+  /** A definition exposing a property and a slot, both pointing into its tree. */
+  function definitionWith(extra: Partial<ComponentDocument> = {}) {
+    return {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component" as const,
+      nodes: [
+        node(
+          "card",
+          { props: { mark: "card" }, cssId: "hero" },
+          {
+            children: [
+              node("headline", { props: { mark: "headline", text: "Hi" } }),
+            ],
+          }
+        ),
+      ],
+      exposed: [
+        {
+          id: "p1",
+          label: "Headline",
+          nodeId: "headline",
+          propPath: "text",
+          type: "text" as const,
+        },
+      ],
+      slots: { body: { label: "Body", nodeId: "card", slot: "children" } },
+      variants: { compact: { label: "Compact", overrides: { p1: "Short" } } },
+      ...extra,
+    } satisfies ComponentDocument;
+  }
+
+  const dup = (source: BlockDocument) =>
+    planDuplicateComponent(source, componentTarget, undefined);
+
+  it("re-aims every pointer at the COPY, so the duplicate can be published", () => {
+    // The defect this planner is written around: re-identifying without
+    // rewriting the pointers yields a definition that loads, renders, offers
+    // its properties in the inspector, and fails its own publish gate with one
+    // error per exposure.
+    const source = definitionWith();
+    const copy = definition(dup(source));
+
+    const copiedHeadline = marked(copy.nodes, "headline");
+    const copiedCard = marked(copy.nodes, "card");
+
+    expect(copy.exposed?.[0]?.nodeId).toBe(copiedHeadline.id);
+    expect(copy.slots?.body?.nodeId).toBe(copiedCard.id);
+    // The property that matters, asked of the gate rather than of the ids.
+    expect(componentEnvelopeIssues(copy)).toEqual([]);
+  });
+
+  it("gives the copy its own node ids", () => {
+    const source = definitionWith();
+    const copy = definition(dup(source));
+
+    expect(idsIn(copy.nodes)).not.toContain("card");
+    expect(idsIn(copy.nodes)).not.toContain("headline");
+  });
+
+  it("keeps the exposed ids, because variants are keyed by them", () => {
+    // Re-minting would demand a second rewrite of every variant's keys and buy
+    // nothing: a fresh duplicate has no instances, and an exposed id is scoped
+    // to its own document.
+    const copy = definition(dup(definitionWith()));
+
+    expect(copy.exposed?.[0]?.id).toBe("p1");
+    expect(copy.variants?.compact?.overrides).toEqual({ p1: "Short" });
+  });
+
+  it("keeps the DOM ids", () => {
+    // A duplicate is a document of its OWN rather than a copy placed beside the
+    // original, so there is nothing to collide with — and composition mints
+    // per-instance ids when it inlines a definition.
+    expect(marked(definition(dup(definitionWith())).nodes, "card").cssId).toBe(
+      "hero"
+    );
+  });
+
+  it("touches no page", () => {
+    expect(dup(definitionWith()).pageOps).toEqual([]);
+  });
+
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["a string", "row"],
+    ["a number", 3],
+  ])("answers rather than throwing for %s", (_name, row) => {
+    // A published entry point handed a STORED ROW, and a row can be any of
+    // these — where reading `.kind` off it takes a native error out of a
+    // function that promises a refusal.
+    let threw: unknown;
+    let result;
+    try {
+      result = planDuplicateComponent(
+        row as unknown as BlockDocument,
+        componentTarget
+      );
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeUndefined();
+    expect(result?.problem).toBe("not-a-component");
+  });
+
+  it.each([
+    ["a null among the nodes", [node("a"), null as unknown as BlockNode]],
+    [
+      "a null nested in a slot",
+      [node("a", {}, { children: [null as unknown as BlockNode] })],
+    ],
+  ])("refuses %s", (_name, nodes) => {
+    // `documentRefusal` reads the envelope and the `nodes` array, not the
+    // entries inside it — so without the forest check beside it these were
+    // copied into a duplicate that PLANNED SUCCESSFULLY and then could not be
+    // published, since strict validation is this collection's gate. Every other
+    // planner here pairs the two refusals; this one now does too.
+    const broken = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component" as const,
+      nodes,
+    } as unknown as BlockDocument;
+
+    expect(planDuplicateComponent(broken, componentTarget).problem).toBe(
+      "unusable-document"
+    );
+  });
+
+  it("refuses a document that is not a component", () => {
+    // A pattern duplicated through here would be stored as a component and
+    // refused by the collection it landed in, having reported success.
+    expect(dup(page([node("a")])).problem).toBe("not-a-component");
+  });
+
+  it("refuses a source JSON could not write", () => {
+    const unwritable = definitionWith() as unknown as Record<string, unknown>;
+    unwritable.settings = { custom: 1n };
+
+    expect(dup(unwritable as unknown as BlockDocument).problem).toBe(
+      "unusable-document"
+    );
+  });
+
+  it("refuses a source whose envelope COMPUTES itself", () => {
+    // The reason the source is asked before anything reads it. Reading an
+    // accessor gives a value, so nothing throws and the copy comes out plain —
+    // meaning the duplicate would pass every later check while the row it came
+    // from is one the store cannot write. Asking first refuses the broken
+    // source instead of quietly minting a sound copy of it.
+    const computed = definitionWith() as unknown as Record<string, unknown>;
+    Object.defineProperty(computed, "exposed", {
+      enumerable: true,
+      get() {
+        return [
+          {
+            id: "p1",
+            label: "L",
+            nodeId: "headline",
+            propPath: "text",
+            type: "text",
+          },
+        ];
+      },
+    });
+
+    expect(dup(computed as unknown as BlockDocument).problem).toBe(
+      "unusable-document"
+    );
+  });
+
+  it("reports a source whose envelope was already broken", () => {
+    // Asked of what is STORED, so a definition that was already dangling is
+    // reported rather than silently duplicated into a second broken row.
+    const broken = definitionWith({
+      exposed: [
+        {
+          id: "p1",
+          label: "L",
+          nodeId: "gone",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    });
+
+    const plan = dup(broken);
+    expect(plan.problem).toBe("invalid-exposure");
+    expect(plan.issues?.map(i => i.code)).toContain("exposed-node-missing");
+  });
+});
+
+describe("the rename record survives being restamped", () => {
+  it("ROUND TRIP TWICE: a second save still stores the source's own ids", () => {
+    // The gap in the round-trip test above, and it is the one that mattered:
+    // that test never APPLIED the page ops and saved again. A save-over
+    // restamps a stale root's provenance, and the restamp rewrote the whole
+    // record — dropping the rename map, so the next save had nothing to restore
+    // and put the page-specific suffix back into the pattern. The fix held for
+    // one cycle and failed on the second.
+    const authored = page([
+      node("t", { cssId: "pricing", props: { mark: "target" } }),
+    ]);
+    const stored = created(
+      planSaveAsPattern(authored, ["t"], target, anyParent)
+    ).document;
+
+    const destination = page([node("existing", { cssId: "pricing" })]);
+    const inserted = applyOps(
+      destination,
+      pageOps(
+        planInsertPattern(
+          destination,
+          { id: "hero-pattern", document: stored },
+          { index: 1 },
+          anyParent
+        )
+      )
+    ).document;
+    const copyId = inserted.nodes[1]!.id;
+
+    // EDIT the copy, so its digest differs and the save has to restamp it.
+    const edited = applyOps(inserted, [
+      {
+        kind: "update",
+        id: copyId,
+        patch: { props: { mark: "target", edited: true } },
+      },
+    ]).document;
+
+    const first = planUpdatePatternFromSelection(
+      edited,
+      [copyId],
+      { collection: "patterns", id: "hero-pattern" },
+      anyParent
+    );
+    expect(marked(first.update!.document.nodes, "target").cssId).toBe(
+      "pricing"
+    );
+
+    // Apply what the plan asked for, then save the same copy AGAIN.
+    const restamped = applyOps(edited, pageOps(first)).document;
+    const second = planUpdatePatternFromSelection(
+      restamped,
+      [copyId],
+      { collection: "patterns", id: "hero-pattern" },
+      anyParent
+    );
+
+    expect(marked(second.update!.document.nodes, "target").cssId).toBe(
+      "pricing"
+    );
+  });
+
+  it("keeps the map on the record the restamp writes", () => {
+    // Asserted on the record as well as through the round trip, because the
+    // round trip would also pass if the map were recomputed by some other
+    // route — and only the copy that renamed knows what it renamed.
+    const authored = page([
+      node("t", { cssId: "pricing", props: { mark: "target" } }),
+    ]);
+    const stored = created(
+      planSaveAsPattern(authored, ["t"], target, anyParent)
+    ).document;
+    const destination = page([node("existing", { cssId: "pricing" })]);
+    const inserted = applyOps(
+      destination,
+      pageOps(
+        planInsertPattern(
+          destination,
+          { id: "hero-pattern", document: stored },
+          { index: 1 },
+          anyParent
+        )
+      )
+    ).document;
+    const copyId = inserted.nodes[1]!.id;
+    const renamedTo = marked(inserted.nodes, "target").cssId!;
+
+    const edited = applyOps(inserted, [
+      {
+        kind: "update",
+        id: copyId,
+        patch: { props: { mark: "target", edited: true } },
+      },
+    ]).document;
+    const restamped = applyOps(
+      edited,
+      pageOps(
+        planUpdatePatternFromSelection(
+          edited,
+          [copyId],
+          { collection: "patterns", id: "hero-pattern" },
+          anyParent
+        )
+      )
+    ).document;
+
+    const origin = restamped.nodes[1]!.origin;
+    expect(origin?.from === "pattern" ? origin.renamed : undefined).toEqual({
+      pricing: renamedTo,
+    });
+  });
+});
+
+describe("a duplicate is refused what strict validation would refuse", () => {
+  it("refuses a source spelling one DOM id on two nodes", () => {
+    // The copy KEEPS DOM ids, so a source that already spelled one twice hands
+    // the duplicate the same fault — and nothing else here sees it: the
+    // envelope check reads pointers, the document refusal reads storability and
+    // size. The pattern paths already ask this question.
+    const doc = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component" as const,
+      nodes: [node("a", { cssId: "dup" }), node("b", { cssId: "dup" })],
+    } as unknown as BlockDocument;
+
+    expect(planDuplicateComponent(doc, componentTarget).problem).toBe(
+      "duplicate-dom-id"
+    );
+  });
+
+  it("does not read a kind that computes itself", () => {
+    // `documentRefusal` refuses a document whose fields compute themselves, and
+    // `kind` is one of them — so asking the kind FIRST ran the caller's accessor
+    // and took a native error out of a function that promises a refusal.
+    const computed: Record<string, unknown> = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      nodes: [],
+    };
+    Object.defineProperty(computed, "kind", {
+      enumerable: true,
+      get() {
+        throw new Error("read me and find out");
+      },
+    });
+
+    let threw: unknown;
+    let result;
+    try {
+      result = planDuplicateComponent(
+        computed as unknown as BlockDocument,
+        componentTarget
+      );
+    } catch (error) {
+      threw = error;
+    }
+
+    expect(threw).toBeUndefined();
+    expect(result?.problem).toBe("unusable-document");
+  });
+});
+
+describe("a polluted prototype is not provenance", () => {
+  it("does not treat an inherited origin as a record this page holds", () => {
+    // An ordinary read walks the prototype chain. With `Object.prototype.origin`
+    // polluted, every node on the page looked copied from somewhere — and this
+    // planner emitted an update stamping that false provenance onto a root that
+    // had none. Measured: one op where none is correct.
+    //
+    // The document validator answers this about OWN properties only, so an
+    // ordinary read here also put the two roads back into disagreement, which is
+    // the asymmetry these planners exist to close.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.origin = { from: "pattern", id: "ghost", digest: "d" };
+    try {
+      const doc = page([node("a", { props: { mark: "plain" } })]);
+
+      const plan = planUpdatePatternFromSelection(
+        doc,
+        ["a"],
+        { collection: "patterns", id: "ghost" },
+        anyParent
+      );
+
+      expect(pageOps(plan)).toEqual([]);
+    } finally {
+      delete polluted.origin;
+    }
+  });
+
+  it("does not restore DOM ids from an inherited rename map", () => {
+    // The same read, on the other consumer: a polluted record would hand the
+    // save a map it never recorded and put back ids nobody renamed.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.origin = {
+      from: "pattern",
+      id: "ghost",
+      digest: "d",
+      renamed: { authored: "minted" },
+    };
+    try {
+      const doc = page([node("a", { cssId: "minted", props: { mark: "t" } })]);
+
+      const saved = created(
+        planSaveAsPattern(doc, ["a"], target, anyParent)
+      ).document;
+
+      expect(marked(saved.nodes, "t").cssId).toBe("minted");
+    } finally {
+      delete polluted.origin;
+    }
+  });
+});
+
+describe("what an insert records stays proportional to the pattern", () => {
+  it("records only the renames each root carried", () => {
+    // The complete map on every root makes the stored document and the op group
+    // grow with the SQUARE of the pattern's width. Measured before this: a
+    // 40-root pattern landing beside a colliding copy carried 1600 entries
+    // where 40 were meant, and a 250-root one produced an op group the default
+    // document cap refuses outright — the feature breaking exactly the large
+    // patterns it is most useful for.
+    const roots = Array.from({ length: 40 }, (_, i) =>
+      node(`r${String(i)}`, { cssId: `id${String(i)}` })
+    );
+    const stored = created(
+      planSaveAsPattern(
+        page(roots),
+        roots.map(root => root.id),
+        target,
+        anyParent
+      )
+    ).document;
+
+    const destination = page(
+      roots.map((_, i) => node(`d${String(i)}`, { cssId: `id${String(i)}` }))
+    );
+    const placed = pageOps(
+      planInsertPattern(
+        destination,
+        { id: "hero-pattern", document: stored },
+        { index: 40 },
+        anyParent
+      )
+    ).flatMap(op => (op.kind === "insert" ? [op.node] : []));
+
+    expect(placed).toHaveLength(40);
+    for (const one of placed) {
+      const origin = one.origin;
+      expect(
+        Object.keys(
+          (origin?.from === "pattern" ? origin.renamed : undefined) ?? {}
+        )
+      ).toHaveLength(1);
+    }
+  });
+
+  it("still restores through a per-root map", () => {
+    // The control for the narrowing: keeping only each root's own entries must
+    // not cost the restore, which is what the whole record is for.
+    const authored = page([
+      node("t", { cssId: "pricing", props: { mark: "target" } }),
+    ]);
+    const stored = created(
+      planSaveAsPattern(authored, ["t"], target, anyParent)
+    ).document;
+    const destination = page([node("existing", { cssId: "pricing" })]);
+    const inserted = applyOps(
+      destination,
+      pageOps(
+        planInsertPattern(
+          destination,
+          { id: "hero-pattern", document: stored },
+          { index: 1 },
+          anyParent
+        )
+      )
+    ).document;
+
+    const saved = planUpdatePatternFromSelection(
+      inserted,
+      [inserted.nodes[1]!.id],
+      { collection: "patterns", id: "hero-pattern" },
+      anyParent
+    );
+
+    expect(marked(saved.update!.document.nodes, "target").cssId).toBe(
+      "pricing"
+    );
+  });
+});
+
+describe("a duplicate is a row of its own", () => {
+  it("shares no mutable envelope data with its source", () => {
+    // The spread left `variants`, `assets`, `settings` and every nested
+    // `options` array shared with the source, so editing the duplicate edited
+    // the component it came from.
+    const options = [{ value: "a", label: "A" }];
+    const source = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component" as const,
+      nodes: [node("a")],
+      exposed: [
+        {
+          id: "p1",
+          label: "L",
+          nodeId: "a",
+          propPath: "t",
+          type: "select" as const,
+          options,
+        },
+      ],
+      assets: { mediaIds: ["m1"] },
+    } as unknown as BlockDocument;
+
+    const copy = definition(
+      planDuplicateComponent(source, componentTarget)
+    ) as unknown as {
+      exposed: { options: { label: string }[] }[];
+      assets: { mediaIds: string[] };
+    };
+
+    copy.exposed[0]!.options[0]!.label = "MUTATED";
+    copy.assets.mediaIds.push("m2");
+
+    expect(options[0]!.label).toBe("A");
+    expect(
+      (source as unknown as { assets: { mediaIds: string[] } }).assets.mediaIds
+    ).toHaveLength(1);
+  });
+
+  it("blames the SIZE, not a sound exposure, when the forest is over the cap", () => {
+    // The envelope check resolves every exposure pointer against an index it
+    // builds under `maxNodes`, so a forest past that bound is indexed only as
+    // far as the bound reaches. A pointer at anything beyond it then comes back
+    // as `exposed-node-missing` — a node the document really contains, called
+    // dangling. That verdict sends an author to delete or repair an exposure
+    // that was never wrong, while the one thing they could act on, the size,
+    // goes unmentioned. Only DEPTH and COUNT can truncate the index, so only
+    // those are settled before one is built.
+    const source = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component" as const,
+      nodes: [node("n1"), node("n2"), node("n3")],
+      exposed: [
+        {
+          id: "x1",
+          label: "Text",
+          nodeId: "n3",
+          propPath: "text",
+          type: "text" as const,
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    const plan = planDuplicateComponent(source, componentTarget, {
+      ...DEFAULT_LIMITS,
+      maxNodes: 2,
+    });
+
+    expect(plan.problem).toBe("exceeds-limits");
+    // And no issue list at all, so the sound pointer is never blamed.
+    expect(plan.issues).toBeUndefined();
+  });
+
+  it("refuses a source whose node breaks the node contract", () => {
+    // `forestRefusal` establishes that the forest holds plain serializable
+    // records, not that each is a node this engine would carry. A legacy
+    // `type: "box"` survives it, and the copy then reports success for a
+    // definition strict validation refuses.
+    const legacy = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component" as const,
+      nodes: [{ id: "a", type: "box", version: 1, props: {} }],
+    } as unknown as BlockDocument;
+
+    expect(planDuplicateComponent(legacy, componentTarget).problem).toBe(
+      "invalid-node"
+    );
   });
 });

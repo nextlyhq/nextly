@@ -1095,6 +1095,24 @@ export type DomIdPolicy =
   | {
       /** The DOM ids the destination already carries, folded as HTML folds them. */
       readonly avoid: ReadonlySet<string>;
+    }
+  | {
+      /**
+       * DOM ids to put BACK, as they are now → as they were, keeping the rest.
+       *
+       * The inverse of what an `avoid` copy recorded. An insert renames an id
+       * only because the page it landed on already held that name, so the new
+       * one is a fact about that page rather than anything the author wrote —
+       * and a copy saved back out of the page carries it into a library where
+       * it means nothing, and grows another suffix on every insert-save cycle.
+       *
+       * A map rather than a re-mint, because the original cannot be derived
+       * from the current value: a minted id is the authored one plus a suffix
+       * drawn from a node id, and content from a script or an import may name
+       * its anchors that way deliberately. Only the copy that did the renaming
+       * knows, which is why it records it.
+       */
+      readonly restore: ReadonlyMap<string, string>;
     };
 
 /** A re-identified FOREST, and the two maps describing what moved. */
@@ -1170,18 +1188,41 @@ export interface ReidentifiedForest {
  * grew by nine characters every cycle, `hero` to
  * `hero-3ee4a0d4-fb48e67c-1118df3b` and on, with no bound.
  */
+/** No node is gated — the set a restore walks with. */
+const EMPTY_NODE_SET: ReadonlySet<BlockNode> = new Set<BlockNode>();
+
 export function reidForestWithMap(
   nodes: BlockNode[],
   domIdPolicy: DomIdPolicy = "remint"
 ): ReidentifiedForest {
   const nodeIds = new Map<string, string>();
   const domIds = new Map<string, string>();
+  const restoring = typeof domIdPolicy === "object" && "restore" in domIdPolicy;
+
+  // A RESTORE knows both halves of every move before the walk starts, so it
+  // seeds them. The other policies discover what moved as they go, and an id
+  // that was not minted contributes no entry — but a restore is undoing an
+  // insert's renames, and a selection may hold the REFERENCE without the node
+  // that renders it. Saving only the root carrying `aria-describedby` found
+  // nothing in the map, left the page-specific id in place, and put a pattern
+  // in the library naming an id that exists on exactly one page.
+  if (restoring) {
+    for (const [now, was] of domIdPolicy.restore) domIds.set(now, was);
+  }
 
   // A node the renderer prunes puts NO id on the page, so none of its ids may
   // be rewritten: renaming one and following every reference to it leaves a
   // visible sibling's `#hero` pointing at a minted id nothing owns, where
   // before it reached the destination's own `hero`.
-  const hidden = hiddenSubtreeNodes(nodes);
+  //
+  // A RESTORE is the exception, and walks with an empty set. Gating decides
+  // what may be RENAMED, because a rename has to avoid the ids a page renders
+  // — a question about the page. Putting an id BACK asks nothing about the
+  // page: the insert renamed only ungated nodes, so everything in a restore map
+  // was renamed while visible, and a node an author gated afterwards still
+  // holds the minted id and still has to give it up. Leaving it behind restored
+  // the reference and not its target, pointing the two at different ids.
+  const hidden = restoring ? EMPTY_NODE_SET : hiddenSubtreeNodes(nodes);
   const rebuilt = mapForest(nodes, original =>
     reidOneKeepingReferences(original, nodeIds, domIds, domIdPolicy, hidden)
   );
@@ -1250,6 +1291,55 @@ function relinkOne(
 }
 
 /**
+ * Which of a set of candidate DOM ids one subtree's REFERENCES actually reach.
+ *
+ * A copy's rename record has to cover every id the copy still points at, not
+ * only the ids it renders. One root can define `#hero` while a sibling names it
+ * through `aria-describedby`, a `href="#hero"` prop, or that href's binding
+ * fallback — {@link reidForestWithMap} rewrites all three across the whole
+ * forest, so a record built from rendered ids alone leaves the referencing root
+ * with a page-specific id and no way back to what its source called it.
+ *
+ * Answered by RUNNING the relink pass rather than by a second enumeration of
+ * which fields hold a reference. That list lives in three places already
+ * ({@link ID_REFERENCE_ATTRIBUTES} and the two fragment remappers), and a
+ * fourth reader of it would agree with them exactly until one of them gained a
+ * carrier — at which point this would go on reporting a complete record while
+ * silently missing the new one. Running the pass cannot drift from the pass.
+ *
+ * The rewritten nodes are DISCARDED; only which lookups the pass made is kept.
+ * One entry per root, positionally, so the work is linear in the forest however
+ * many entries the candidate map holds.
+ */
+export function referencedDomIds(
+  roots: readonly BlockNode[],
+  candidates: ReadonlyMap<string, string>
+): ReadonlyMap<string, string>[] {
+  const perRoot = roots.map(() => new Map<string, string>());
+  if (candidates.size === 0) return perRoot;
+  // ONE probe for the whole forest, and the root being walked decides where a
+  // hit is recorded. Copying the candidates per root would put the map's size
+  // into the per-root cost — the same shape as recording every root's renames
+  // on every root, which made a wide pattern's work grow with its square.
+  //
+  // A real `Map`, so every member the remappers reach — `size` as well as
+  // `get` — behaves as they expect; only the lookup is observed.
+  let used = perRoot[0];
+  const probe = new Map(candidates);
+  const lookup = probe.get.bind(probe);
+  probe.get = (key: string): string | undefined => {
+    const found = lookup(key);
+    if (found !== undefined) used.set(key, found);
+    return found;
+  };
+  roots.forEach((root, index) => {
+    used = perRoot[index]!;
+    mapForest([root], copy => relinkOne(copy, probe));
+  });
+  return perRoot;
+}
+
+/**
  * One subtree, re-identified — {@link reidForestWithMap} for a single root.
  *
  * Delegates rather than repeating the two passes, so the singular and the
@@ -1270,6 +1360,52 @@ export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
 }
 
 /** One node, re-identified, with its DOM id remapped rather than removed. */
+/**
+ * What a moving DOM id becomes: the recorded original, or a minted one.
+ *
+ * Both answers go through the caller's memo, so a subtree spelling one id on
+ * two nodes still maps both to a single replacement and a reference to it still
+ * reaches one target.
+ *
+ * A `restore` policy that does not name this id falls back to minting, which
+ * cannot happen through {@link movesUnder} — that only lets an id move when the
+ * map holds it — and is the safe answer rather than returning the id unchanged,
+ * which would be a copy silently keeping an id it was told to move.
+ */
+function replacementFor(
+  value: string,
+  nodeId: string,
+  policy: DomIdPolicy
+): string {
+  if (typeof policy === "object" && "restore" in policy) {
+    return policy.restore.get(value) ?? mintDomId(value, nodeId);
+  }
+  return mintDomId(value, nodeId);
+}
+
+/**
+ * Whether the id this node RENDERS changes under the policy it was given.
+ *
+ * Only the rendered one is ever a candidate — a node can spell two and emits
+ * one, and moving the shadowed spelling makes the relink pass rewrite every
+ * reference to an id nothing renders.
+ *
+ * Its own function because the copier it serves is at the complexity the gate
+ * allows, and because the four policies read as one question here rather than
+ * as a condition threaded through two rewrite sites.
+ */
+function movesUnder(
+  value: string,
+  rendered: string | undefined,
+  policy: DomIdPolicy
+): boolean {
+  if (value !== rendered) return false;
+  if (policy === "remint") return true;
+  if (policy === "keep") return false;
+  if ("restore" in policy) return policy.restore.has(value);
+  return policy.avoid.has(value);
+}
+
 function reidOneKeepingReferences(
   node: BlockNode,
   nodeIds: Map<string, string>,
@@ -1288,9 +1424,9 @@ function reidOneKeepingReferences(
   const remap = (value: string): string => {
     const existing = domIds.get(value);
     if (existing !== undefined) return existing;
-    const minted = mintDomId(value, copy.id);
-    domIds.set(value, minted);
-    return minted;
+    const replacement = replacementFor(value, copy.id, domIdPolicy);
+    domIds.set(value, replacement);
+    return replacement;
   };
 
   // An id that is NOT minted contributes no entry to `domIds`, which is the
@@ -1308,9 +1444,7 @@ function reidOneKeepingReferences(
   // single id afterwards.
   const rendered = hidden.has(node) ? undefined : renderedDomId(node);
   const moves = (value: string): boolean =>
-    value === rendered &&
-    (domIdPolicy === "remint" ||
-      (domIdPolicy !== "keep" && domIdPolicy.avoid.has(value)));
+    movesUnder(value, rendered, domIdPolicy);
 
   if (
     typeof copy.cssId === "string" &&

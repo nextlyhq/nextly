@@ -23,7 +23,11 @@
  *
  * @module composition-planners
  */
-import { COMPONENT_INSTANCE_TYPE, renderedDomId } from "./document";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  isComponentDocument,
+  renderedDomId,
+} from "./document";
 import type {
   BlockDocument,
   BlockNode,
@@ -35,7 +39,7 @@ import type {
 } from "./document";
 import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import type { DocumentLimits } from "./limits";
-import { surveyDocument } from "./measure-bytes";
+import { surveyDocument, type DocumentSurvey } from "./measure-bytes";
 import {
   canBeRoot,
   canNest,
@@ -66,6 +70,7 @@ import {
   hiddenSubtreeNodes,
   mapForest,
   newId,
+  referencedDomIds,
   reidForestWithMap,
   walkNodes,
 } from "./tree";
@@ -230,7 +235,9 @@ export type PlanProblem =
    * to be created, and the author has to remove that instance or create the
    * component under a different id.
    */
-  | "self-reference";
+  | "self-reference"
+  /** The document handed over is not a component definition. */
+  | "not-a-component";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -554,7 +561,15 @@ function savedPatternDocument(
   document: BlockDocument,
   selected: readonly BlockNode[]
 ): SavedPattern | PlanRefusal {
-  const copied = reidForestWithMap([...selected], "keep");
+  // KEEP every id, except the ones an insert renamed to fit this page: those
+  // go back to what the source calls them. The two are one policy rather than a
+  // second pass, so node ids are minted once and the map this returns still
+  // describes the document it comes with.
+  const restore = restoredDomIds(selected);
+  const copied = reidForestWithMap(
+    [...selected],
+    restore.size === 0 ? "keep" : { restore }
+  );
   const stored: BlockDocument = {
     formatVersion: document.formatVersion,
     kind: "pattern",
@@ -697,7 +712,7 @@ function restampOps(
   // Decided WITHOUT reading the document, so a plan that turns out to edit
   // nothing never has to be right about a page it will not touch.
   const stale = selected.filter(root => {
-    const origin = root.origin;
+    const origin = ownOrigin(root);
     if (origin === undefined || origin.from !== "pattern") return false;
     return origin.id === patternId && origin.digest !== digest;
   });
@@ -728,7 +743,16 @@ function restampOps(
     ops: stale.map(root => ({
       kind: "update",
       id: root.id,
-      patch: { origin: { from: "pattern", id: patternId, digest } },
+      // The rename map is CARRIED, not dropped. This op rewrites the whole
+      // record, and the ids this copy carries are still the renamed ones — the
+      // save put them back in the PATTERN, not on the page. Dropping the map
+      // left the next save of the same copy with nothing to restore, so the
+      // page-specific suffix went into the pattern and the insert-save cycle
+      // resumed growing it. The round trip held once and failed on the second
+      // pass, which is why a test that never applied these ops could not see it.
+      patch: {
+        origin: insertOrigin(patternId, digest, renamedIn(ownOrigin(root))),
+      },
     })),
   };
 }
@@ -954,6 +978,165 @@ export function planConvertToComponent<TFields>(
   };
 }
 
+/**
+ * Duplicate a component definition into a library row of its own.
+ *
+ * **The envelope is re-aimed, not merely carried.** A definition is not only a
+ * tree: `exposed` and `slots` are POINTERS into it, and a duplicate re-identifies
+ * every node. Copying the pointers across unchanged produces a document that
+ * loads, renders, shows its properties in the inspector — and fails its own
+ * publish gate with one error per exposure, because strict validation refuses a
+ * pointer at a node the document does not contain. The design's one line for
+ * this planner does not reach that; `reidForestWithMap` returns `nodeIds` for
+ * exactly this purpose.
+ *
+ * **Exposed ids are KEPT.** Variant presets are keyed by them, so re-minting
+ * would demand a second rewrite of every variant's keys and buy nothing: a fresh
+ * duplicate has no instances, and an exposed id is scoped to its own document,
+ * so two definitions sharing one is not a collision.
+ *
+ * **DOM ids are KEPT**, for the reason a saved pattern keeps them: the duplicate
+ * is a document of its OWN rather than a copy placed beside the original, so
+ * there is nothing to collide with. Composition mints per-instance ids when it
+ * inlines a definition, so two definitions carrying one `cssId` never put two of
+ * them on a page.
+ *
+ * **The SOURCE is asked one question first.** `documentRefusal` refuses a
+ * document JSON cannot write, and it reads the whole document — the envelope
+ * included. That is what makes every field below safe to read once: a stored row
+ * whose `exposed` is an accessor, or whose entries are computed, is refused
+ * before anything walks it. A caller-supplied REQUEST has no such rule and has
+ * to be read into data first; a stored document does, and asking it is cheaper
+ * and more honest than restating it.
+ */
+export function planDuplicateComponent<TFields>(
+  definition: BlockDocument,
+  target: LibraryTarget<TFields>,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): PlanResult<TFields> {
+  // The CONTAINER, before its kind is read off it. This is a published entry
+  // point handed a stored row, and a row can be `null` — where reading `.kind`
+  // takes a native error out of a function that promises a refusal.
+  if (!isPlainRecord(definition)) return { problem: "not-a-component" };
+  // The envelope AND the forest, BEFORE the kind is read. `documentRefusal`
+  // refuses a document whose fields compute themselves, and `kind` is one of
+  // them — so asking the kind first ran a caller's accessor, taking a native
+  // error out of a function that promises a refusal. The same input class this
+  // planner already handled for a computed `exposed`, at the field read that
+  // happens first.
+  //
+  // Paired as every other planner in this module pairs them: `documentRefusal`
+  // reads the envelope and the `nodes` array, not the entries inside it, so a
+  // `null` among the nodes or nested in a slot is otherwise copied without
+  // complaint into a duplicate that plans successfully and then cannot be
+  // published.
+  if (
+    documentRefusal(definition) !== undefined ||
+    forestRefusal(definition.nodes) !== undefined
+  ) {
+    return { problem: "unusable-document" };
+  }
+  // A pattern duplicated through here would be stored as a component and
+  // refused by the collection it landed in, having reported success.
+  if (!isComponentDocument(definition)) return { problem: "not-a-component" };
+  // The NODE contracts, which `forestRefusal` does not reach: it establishes
+  // that the forest holds plain serializable records, not that each is a node
+  // this engine would carry. A legacy `type: "box"` survives it, and the copy
+  // then reports success for a definition strict validation refuses. The
+  // pattern paths ask this of every root they lift; so does this.
+  const shape = shapeRefusal(definition.nodes);
+  if (shape !== undefined) return shape;
+
+  const copied = reidForestWithMap([...definition.nodes], "keep");
+  // The envelope, DEEP-COPIED, minus the nodes the copier already rebuilt.
+  // Spreading the source left `variants`, `settings`, `assets` and every nested
+  // `options` array shared with it, so editing the duplicate edited the
+  // component it came from — measured, renaming the copy's variant renamed the
+  // original's. A duplicate is a row of its own or it is not a duplicate.
+  //
+  // Safe to clone because `documentRefusal` has already refused anything JSON
+  // cannot write, which is what `structuredClone` refuses too.
+  const carried = structuredClone({
+    ...definition,
+    nodes: [],
+  }) as ComponentDocument;
+  const duplicate = {
+    ...carried,
+    kind: "component" as const,
+    nodes: copied.nodes,
+    ...aimedExposed(carried.exposed, copied.nodeIds),
+    ...aimedSlotMap(carried.slots, copied.nodeIds),
+  } satisfies ComponentDocument;
+
+  // Measured ONCE, and read by both questions below. The bounds that decide
+  // whether an envelope index describes the whole forest have to be settled
+  // BEFORE one is built; the rest of what the survey knows is asked after, so a
+  // caller-sized envelope still earns the verdict about the envelope.
+  const survey = surveyDocument(duplicate, limits);
+  if (overIndexBound(survey)) return { problem: "exceeds-limits" };
+
+  const issues = componentEnvelopeIssues(duplicate, limits);
+  if (issues.length > 0) return { problem: "invalid-exposure", issues };
+
+  // Two nodes rendering ONE id. The copy keeps DOM ids, so a source that
+  // already spelled one twice hands the duplicate the same fault — and nothing
+  // above sees it: the envelope check reads pointers, and the document refusal
+  // reads storability and size. Strict validation, the gate this predicts,
+  // refuses it as `duplicate-dom-id`, so the plan would succeed and the row
+  // could never be published. The pattern paths already ask this.
+  const duplicated = duplicateDomIdRefusal(duplicate.nodes);
+  if (duplicated !== undefined) return duplicated;
+
+  return (
+    definitionRefusal(duplicate, survey) ?? {
+      create: {
+        collection: target.collection,
+        document: duplicate,
+        fields: target.fields,
+      },
+      pageOps: [],
+    }
+  );
+}
+
+/**
+ * A definition's exposed list, re-aimed at the copy.
+ *
+ * Bounded and shape-guarded on the same terms a nomination is, because a stored
+ * row is untrusted in the same ways — but read ONCE without a snapshot pass,
+ * since `documentRefusal` has already refused a document whose fields compute
+ * themselves. What is left is plain data that may still be the wrong shape, and
+ * anything this cannot re-aim is carried for the envelope check to name.
+ */
+function aimedExposed(
+  exposed: unknown,
+  nodeIds: ReadonlyMap<string, string>
+): { exposed?: ExposedProperty[] } {
+  if (exposed === undefined) return {};
+  if (!Array.isArray(exposed) || exposed.length > MAX_ENVELOPE_ENTRIES) {
+    return { exposed: exposed as ExposedProperty[] };
+  }
+  const aimed: ExposedProperty[] = [];
+  for (const one of exposed) aimed.push(aimedProperty(one, nodeIds));
+  return { exposed: aimed };
+}
+
+/** A definition's slot map, re-aimed at the copy, on the same terms. */
+function aimedSlotMap(
+  slots: unknown,
+  nodeIds: ReadonlyMap<string, string>
+): { slots?: Record<string, ExposedSlot> } {
+  if (slots === undefined) return {};
+  if (!isPlainRecord(slots)) {
+    return { slots: slots as Record<string, ExposedSlot> };
+  }
+  const names = boundedOwnKeys(slots, MAX_ENVELOPE_ENTRIES);
+  if (names === null) return { slots: slots as Record<string, ExposedSlot> };
+  const aimed: Record<string, ExposedSlot> = {};
+  for (const id of names) defineEntry(aimed, id, aimedSlot(slots[id], nodeIds));
+  return { slots: aimed };
+}
+
 /** The definition a component save would store, or why it could not. */
 interface SavedComponent {
   readonly document: ComponentDocument;
@@ -1015,6 +1198,13 @@ function componentDocument(
     ...exposedSlots(read, saved.nodeIds),
   };
 
+  // Measured ONCE, and read by both questions below. The bounds that truncate
+  // an envelope index are settled before one is built; this path reaches that
+  // case too — a run saved as a component under a host `maxNodes` smaller than
+  // the run.
+  const survey = surveyDocument(definition, limits);
+  if (overIndexBound(survey)) return { problem: "exceeds-limits" };
+
   // The HOST's limits, not this module's default. The envelope check indexes
   // the forest under whatever node cap it is given, and a host that raised
   // `maxNodes` can hold a definition larger than the default — whose later
@@ -1031,7 +1221,7 @@ function componentDocument(
   // make the whole document unstorable: an option carrying a `BigInt` survives
   // the envelope check, which reads `value` and `label`, and JSON cannot write
   // it. The plan would report success and the create would fail on save.
-  return definitionRefusal(definition, limits) ?? { document: definition };
+  return definitionRefusal(definition, survey) ?? { document: definition };
 }
 
 /**
@@ -1281,16 +1471,38 @@ function unreadable(read: ReadExposure): boolean {
  */
 function definitionRefusal(
   definition: ComponentDocument,
-  limits: DocumentLimits
+  survey: DocumentSurvey
 ): PlanRefusal | undefined {
   if (documentRefusal(definition) !== undefined) {
     return { problem: "unusable-document" };
   }
-  const survey = surveyDocument(definition, limits);
   if (survey.tooLarge || survey.tooDeep || survey.tooManyNodes) {
     return { problem: "exceeds-limits" };
   }
   return undefined;
+}
+
+/**
+ * Whether an envelope index built under these limits would MISS part of the
+ * forest.
+ *
+ * `componentEnvelopeIssues` indexes the nodes to resolve every exposure pointer
+ * against, and it builds that index under `maxNodes` — so a forest past the
+ * bound is indexed only as far as the bound reaches, and a pointer at anything
+ * beyond it comes back as `exposed-node-missing`. Measured, a sound pointer at
+ * the third node of a three-node component under `maxNodes: 2` was reported as
+ * dangling, sending the author to delete or repair an exposure that was never
+ * wrong while the actual problem — the size — went unmentioned.
+ *
+ * Only DEPTH and COUNT, because only those two truncate the index. The byte cap
+ * does not: an over-cap `options` list makes a document unstorable without
+ * making its node index partial, and refusing it here would answer "your
+ * exposure is too big" with a verdict about the whole document. That one stays
+ * behind the envelope check, where it still reads as `invalid-exposure` — which
+ * is the answer an author can act on.
+ */
+function overIndexBound(survey: DocumentSurvey): boolean {
+  return survey.tooDeep || survey.tooManyNodes;
 }
 
 /**
@@ -1703,11 +1915,13 @@ export function planInsertPattern(
   // a root can arrive carrying a record from an earlier copy. The digest is
   // taken from the pattern as it stands now, so a later reader can tell whether
   // the source has moved on since this copy was made.
-  const marked = withOrigin(copy.nodes, {
-    from: "pattern",
-    id: pattern.id,
-    digest: patternDigest(pattern.document.nodes),
-  });
+  const marked = withInsertOrigin(
+    copy.nodes,
+    pattern.document.nodes,
+    pattern.id,
+    patternDigest(pattern.document.nodes),
+    copy.renamed
+  );
 
   const refusal =
     placementRefusal(marked, destination.place.where, nesting) ??
@@ -1928,6 +2142,11 @@ function lockRefusal(roots: readonly BlockNode[]): PlanRefusal | undefined {
 
 /** A re-identified copy, or the reason one could not be made. */
 interface FreshCopy {
+  /**
+   * Each DOM id the copy had to change, as the source spells it → as the copy
+   * does. Empty when the destination held none of them.
+   */
+  readonly renamed: ReadonlyMap<string, string>;
   readonly nodes: BlockNode[];
   readonly problem?: undefined;
 }
@@ -1983,7 +2202,7 @@ function freshCopy(
     const clash =
       [...minted.domIds.values()].some(id => taken.has(id)) ||
       duplicateDomIdRefusal(minted.nodes) !== undefined;
-    if (!clash) return { nodes: minted.nodes };
+    if (!clash) return { nodes: minted.nodes, renamed: minted.domIds };
   }
   return { problem: "dom-id-collision" };
 }
@@ -2180,18 +2399,163 @@ function withoutOrigin(roots: readonly BlockNode[]): BlockNode[] {
 }
 
 /**
- * The inserted roots, each recording the pattern it came from.
+ * The inserted roots, each recording the pattern AND the renames that are its
+ * own.
  *
- * OVERWRITTEN, never filled in only where absent: a root can arrive carrying a
- * record from an earlier copy, and leaving that in place would attribute this
- * insertion to a pattern it has nothing to do with. Only the ROOTS are marked,
- * because the run is what was inserted — a descendant did not come from the
- * pattern separately, and marking every node would make an author detaching one
- * child look like a second insertion.
+ * Per root, not one map repeated. The copy renames across the whole forest, so
+ * attaching the complete map to every root makes the stored document and the op
+ * group grow with the SQUARE of the pattern's width — measured, a 40-root
+ * pattern landing beside a colliding copy carried 1600 entries where 40 were
+ * meant, and a 250-root one produced an op group the default document cap
+ * refuses outright. The feature would then break exactly the large patterns it
+ * is most useful for.
+ *
+ * Matched by POSITION, because `reidForestWithMap` rebuilds the forest in the
+ * order it was given and this is the same list. Read off the SOURCE roots, since
+ * the map is keyed on the ids as the source spells them.
  */
-function withOrigin(
-  roots: readonly BlockNode[],
-  origin: BlockOrigin
+function withInsertOrigin(
+  copied: readonly BlockNode[],
+  source: readonly BlockNode[],
+  patternId: string,
+  digest: string,
+  renamed: ReadonlyMap<string, string>
 ): BlockNode[] {
-  return roots.map(root => ({ ...root, origin }));
+  // Asked of the whole forest ONCE: the relink pass runs per root either way,
+  // but the candidate map is built a single time rather than per root.
+  const referenced = referencedDomIds(source, renamed);
+  return copied.map((root, index) => ({
+    ...root,
+    origin: insertOrigin(
+      patternId,
+      digest,
+      renamedFor(source[index], renamed, referenced[index])
+    ),
+  }));
+}
+
+/**
+ * The entries naming a DOM id this one root actually uses.
+ *
+ * USES, not renders. A root participates in a rename two ways, matching the two
+ * passes {@link reidForestWithMap} makes: it can RENDER an id that had to move,
+ * and it can REFERENCE one that moved on a sibling — an `aria-describedby`, a
+ * `href="#hero"`, or that href's binding fallback. The relink pass rewrites the
+ * second across the whole forest, so a record covering only the first left the
+ * referencing root carrying a page-specific id that no later save could put
+ * back: saved on its own, it went into the library still pointing at
+ * `hero-761f34a2`, which resolves to nothing anywhere else.
+ *
+ * Each half is asked of the pass that performs it, so neither can drift from
+ * what the copier actually did.
+ */
+function renamedFor(
+  source: BlockNode | undefined,
+  renamed: ReadonlyMap<string, string>,
+  referenced: ReadonlyMap<string, string> | undefined
+): ReadonlyMap<string, string> {
+  if (source === undefined || renamed.size === 0) return new Map();
+  const mine = new Map<string, string>(referenced);
+  // Through the shared walk that answers what reaches the page, so this and the
+  // copier cannot come to disagree about which ids a root carries.
+  walkRenderedIds([source], id => {
+    const now = renamed.get(id);
+    if (now !== undefined) mine.set(id, now);
+  });
+  return mine;
+}
+
+/**
+ * The provenance record an insert writes, carrying what it had to rename.
+ *
+ * `renamed` is omitted when nothing moved rather than written empty, matching
+ * every other "absent means none" field in this contract — and making a copy
+ * that renamed nothing byte-identical to one taken before this was recorded.
+ */
+function insertOrigin(
+  patternId: string,
+  digest: string,
+  renamed: ReadonlyMap<string, string>
+): BlockOrigin {
+  return {
+    from: "pattern",
+    id: patternId,
+    digest,
+    ...(renamed.size === 0 ? {} : { renamed: Object.fromEntries(renamed) }),
+  };
+}
+
+/**
+ * The rename map a root already carries, as the record spells it.
+ *
+ * Read back out of the provenance rather than recomputed, because only the
+ * insert that did the renaming knows it — recovering it from the values is the
+ * inference this feature exists instead of.
+ */
+/**
+ * A node's provenance record, when the NODE itself holds one.
+ *
+ * An ordinary read walks the prototype chain, so a polluted
+ * `Object.prototype.origin` makes every node on a page look copied from
+ * somewhere. Measured: a selection of one ordinary node came back stale against
+ * a pattern it had never seen, and the plan emitted an update stamping that
+ * false provenance onto it.
+ *
+ * The document validator answers this question about OWN properties only, and
+ * the two have to agree — a record one road sees and the other does not is
+ * exactly the asymmetry these planners exist to close. `structuredClone` and
+ * object spreads copy own properties too, so an inherited value is not what
+ * would be stored either way.
+ *
+ * An accessor is treated as absent for the reason the validator treats it so:
+ * reading it runs the document's own code inside the decision about whether to
+ * trust it.
+ */
+function ownOrigin(node: BlockNode): BlockOrigin | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(node, "origin");
+  if (descriptor === undefined || descriptor.get !== undefined) {
+    return undefined;
+  }
+  return descriptor.value as BlockOrigin | undefined;
+}
+
+function renamedIn(
+  origin: BlockOrigin | undefined
+): ReadonlyMap<string, string> {
+  if (origin === undefined || origin.from !== "pattern") return new Map();
+  const renamed = origin.renamed;
+  if (renamed === undefined) return new Map();
+  return new Map(Object.entries(renamed));
+}
+
+/**
+ * The DOM ids a saved run should be stored under, as it spells them → as its
+ * source does.
+ *
+ * Built from the roots' own provenance, so a run assembled from two different
+ * inserts restores each half against the pattern it came from. A root with no
+ * record contributes nothing and keeps every id it carries: nothing renamed it,
+ * so there is nothing to put back.
+ *
+ * INVERTED from the record, which reads source → copy because that is the
+ * direction an insert renames in.
+ *
+ * Two copies of ONE pattern in a single selection can both restore to the same
+ * id, and the save then refuses as `"duplicate-dom-id"`. That is the honest
+ * answer: the run really does hold two elements the source names identically,
+ * and storing them under their minted names would put two ids nobody wrote into
+ * a library, each to be suffixed again on the next insert.
+ */
+function restoredDomIds(
+  selected: readonly BlockNode[]
+): ReadonlyMap<string, string> {
+  const restore = new Map<string, string>();
+  for (const root of selected) {
+    const origin = ownOrigin(root);
+    if (origin === undefined || origin.from !== "pattern") continue;
+    const renamed = origin.renamed;
+    if (renamed === undefined) continue;
+    for (const [was, now] of Object.entries(renamed)) restore.set(now, was);
+  }
+  return restore;
 }
