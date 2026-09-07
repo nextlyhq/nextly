@@ -51,6 +51,10 @@
       "types": "./dist/widget-gate.d.ts",
       "import": "./dist/domains/widgets/gate.mjs"
     },
+    "./document-lock": {
+      "types": "./dist/document-lock.d.ts",
+      "import": "./dist/domains/document-lock/contract.mjs"
+    },
     "./query": {
       "types": "./dist/query/index.d.ts",
       "import": "./dist/query/index.mjs"

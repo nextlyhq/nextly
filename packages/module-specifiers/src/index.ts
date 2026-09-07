@@ -79,13 +79,53 @@ export const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
  * readers this replaces. A default would let any caller reintroduce it silently.
  */
 export function importedSpecifiers(text: string, fileName: string): string[] {
+  return moduleSpecifierRefs(text, fileName).map(ref => ref.specifier);
+}
+
+/** One module a source file names, and whether it survives to runtime. */
+export interface ModuleSpecifierRef {
+  /** The specifier as written, or {@link UNRESOLVABLE_SPECIFIER}. */
+  readonly specifier: string;
+  /**
+   * Whether this reference is erased before anything runs.
+   *
+   * True for `import type`, `export type`, `typeof import()`, a JSDoc
+   * `@import` and a triple-slash type reference. False for everything that
+   * survives into the emitted module: a plain import, a bare side-effect
+   * import, `import(...)`, `require(...)` and `import x = require(...)`.
+   *
+   * 🔴 A mixed clause such as `import { a, type B } from "pkg"` is NOT type-only.
+   * The module is still loaded for `a`, and reading the inline `type` keyword as
+   * governing the whole clause would erase a real runtime edge.
+   */
+  readonly typeOnly: boolean;
+}
+
+/**
+ * Every module a source text names, each labelled with whether it reaches runtime.
+ *
+ * The richer view {@link importedSpecifiers} is derived from, because the two answer different
+ * questions and a caller that needs the distinction cannot recover it from a list of strings.
+ * An import-boundary guard wants every reference, since depending on a package's types is a
+ * dependency on internals nobody promised to keep; a guard about what a BUNDLE contains wants only
+ * the references that survive, since an erased one cannot put code anywhere.
+ *
+ * 🔴 Both must come from one walk. Two visitors agree the day they are written, and the drift is
+ * silent in the direction that answers "clean" -- which is the defect
+ * `.claude/rules/derived-checks.md` exists to prevent, and which this file was already written to
+ * fix once.
+ */
+export function moduleSpecifierRefs(
+  text: string,
+  fileName: string
+): ModuleSpecifierRef[] {
   const source = ts.createSourceFile(
     fileName,
     text,
     ts.ScriptTarget.ESNext,
     true
   );
-  const found: string[] = [];
+  const found: ModuleSpecifierRef[] = [];
   const seen = new Set<ts.Node>();
 
   const visit = (node: ts.Node): void => {
@@ -104,29 +144,41 @@ export function importedSpecifiers(text: string, fileName: string): string[] {
       node.moduleSpecifier &&
       ts.isStringLiteralLike(node.moduleSpecifier)
     ) {
-      found.push(node.moduleSpecifier.text);
+      found.push({
+        specifier: node.moduleSpecifier.text,
+        typeOnly: ts.isImportDeclaration(node)
+          ? Boolean(node.importClause?.isTypeOnly)
+          : node.isTypeOnly,
+      });
     } else if (ts.isJSDocImportTag(node)) {
       const target = node.moduleSpecifier;
-      found.push(
-        target && ts.isStringLiteralLike(target)
-          ? target.text
-          : UNRESOLVABLE_SPECIFIER
-      );
+      found.push({
+        specifier:
+          target && ts.isStringLiteralLike(target)
+            ? target.text
+            : UNRESOLVABLE_SPECIFIER,
+        typeOnly: true,
+      });
     } else if (ts.isImportTypeNode(node)) {
       const target = node.argument;
-      found.push(
-        ts.isLiteralTypeNode(target) && ts.isStringLiteralLike(target.literal)
-          ? target.literal.text
-          : UNRESOLVABLE_SPECIFIER
-      );
+      found.push({
+        specifier:
+          ts.isLiteralTypeNode(target) && ts.isStringLiteralLike(target.literal)
+            ? target.literal.text
+            : UNRESOLVABLE_SPECIFIER,
+        typeOnly: true,
+      });
     } else if (
       ts.isImportEqualsDeclaration(node) &&
       ts.isExternalModuleReference(node.moduleReference)
     ) {
       const target = node.moduleReference.expression;
-      found.push(
-        ts.isStringLiteralLike(target) ? target.text : UNRESOLVABLE_SPECIFIER
-      );
+      found.push({
+        specifier: ts.isStringLiteralLike(target)
+          ? target.text
+          : UNRESOLVABLE_SPECIFIER,
+        typeOnly: false,
+      });
     } else if (ts.isCallExpression(node)) {
       const callee = node.expression;
       const resolvesAModule =
@@ -134,11 +186,13 @@ export function importedSpecifiers(text: string, fileName: string): string[] {
         (ts.isIdentifier(callee) && callee.text === "require");
       if (resolvesAModule) {
         const target = node.arguments[0];
-        found.push(
-          target && ts.isStringLiteralLike(target)
-            ? target.text
-            : UNRESOLVABLE_SPECIFIER
-        );
+        found.push({
+          specifier:
+            target && ts.isStringLiteralLike(target)
+              ? target.text
+              : UNRESOLVABLE_SPECIFIER,
+          typeOnly: false,
+        });
       }
     }
 
@@ -155,7 +209,7 @@ export function importedSpecifiers(text: string, fileName: string): string[] {
   // `forEachChild` never reaches it. The parser puts it here instead, and it is
   // a dependency on that package's types exactly as an `import type` is.
   for (const directive of source.typeReferenceDirectives) {
-    found.push(directive.fileName);
+    found.push({ specifier: directive.fileName, typeOnly: true });
   }
 
   return found;

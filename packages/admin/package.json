@@ -56,6 +56,7 @@
   "devDependencies": {
     "@nextlyhq/admin-css": "workspace:*",
     "@nextlyhq/eslint-config": "workspace:*",
+    "@nextlyhq/module-specifiers": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@nextlyhq/ui": "workspace:*",
     "@tailwindcss/cli": "^4.3.2",

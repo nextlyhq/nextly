@@ -14,6 +14,13 @@
       // the bundler are fine after a build. The bare `nextly` mapping above
       // does not cover subpaths.
       "nextly/widget-gate": ["../nextly/src/domains/widgets/gate.ts"],
+      // Same reason, and a second one: the root entry reaches the DI
+      // container and the auth middleware, whose `@nextly/*` aliases this
+      // project does not define, so importing it here reports a hundred
+      // errors about code the admin never touches.
+      "nextly/document-lock": [
+        "../nextly/src/domains/document-lock/contract.ts"
+      ],
       "@admin/*": ["./src/*"]
     }
   },

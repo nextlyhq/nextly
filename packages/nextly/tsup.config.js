@@ -100,6 +100,13 @@ const clientEntries = [
   // reports nothing anywhere. Reaching it through `nextly/config` instead would
   // make a bundler traverse the whole config surface for two pure functions.
   "src/domains/widgets/gate.ts",
+  // The lease timings and wire types a client needs to HOLD a lock, as their
+  // own entry. The admin maps `nextly` to this package's source, so reaching
+  // these through the root entry pulls the DI container and the auth
+  // middleware into its typecheck: measured at 112 errors, none of them about
+  // the importing code. The repository stays out — it takes an adapter and
+  // belongs to the server; a client reaches locks through the route.
+  "src/domains/document-lock/contract.ts",
   // The query-parameter formats, so a caller writes one with the same code the
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.

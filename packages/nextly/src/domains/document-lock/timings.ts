@@ -25,7 +25,7 @@
  * @module domains/document-lock/timings
  */
 
-import { deriveLeaseTimings } from "../../database/lease-clock";
+import { deriveLeaseTimings } from "../../database/lease-timings";
 
 /** How long one confirmation grants a holder. */
 export const DOCUMENT_LOCK_TTL_SECONDS = 150;

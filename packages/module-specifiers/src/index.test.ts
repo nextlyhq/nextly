@@ -15,7 +15,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { UNRESOLVABLE_SPECIFIER, importedSpecifiers } from "./index";
+import {
+  UNRESOLVABLE_SPECIFIER,
+  importedSpecifiers,
+  moduleSpecifierRefs,
+} from "./index";
 
 const read = (text: string, fileName = "module.ts"): string[] =>
   importedSpecifiers(text, fileName);
@@ -144,5 +148,113 @@ describe("the JSDoc descent terminates", () => {
         "module.js"
       )
     ).toEqual(["pkg"]);
+  });
+});
+
+/**
+ * The kind half of the same walk.
+ *
+ * A guard about a BUNDLE needs only the references that survive to runtime, and one about an import
+ * BOUNDARY needs all of them. Both come from this one walk, so they cannot drift apart -- and the
+ * drift would be silent in the direction that answers "clean".
+ */
+describe("whether a reference survives to runtime", () => {
+  const refs = (text: string, fileName = "module.ts") =>
+    moduleSpecifierRefs(text, fileName);
+
+  it("reports a plain import as reaching runtime", () => {
+    expect(refs(`import a from "pkg";`)).toEqual([
+      { specifier: "pkg", typeOnly: false },
+    ]);
+  });
+
+  it("reports a bare side-effect import as reaching runtime", () => {
+    expect(refs(`import "pkg";`)).toEqual([
+      { specifier: "pkg", typeOnly: false },
+    ]);
+  });
+
+  it("reports an import type as erased", () => {
+    expect(refs(`import type { A } from "pkg";`)).toEqual([
+      { specifier: "pkg", typeOnly: true },
+    ]);
+  });
+
+  it("reports an export type as erased", () => {
+    expect(refs(`export type { A } from "pkg";`)).toEqual([
+      { specifier: "pkg", typeOnly: true },
+    ]);
+  });
+
+  it("reports a mixed clause as reaching runtime", () => {
+    // 🔴 The module is still loaded for the value binding. Reading the inline `type` keyword as
+    // governing the whole clause erases a real runtime edge, which is the direction that answers
+    // "clean" for a bundle guard.
+    expect(refs(`import { a, type B } from "pkg";`)).toEqual([
+      { specifier: "pkg", typeOnly: false },
+    ]);
+  });
+
+  it("reports a dynamic import as reaching runtime", () => {
+    expect(refs(`const f = () => import("pkg");`)).toEqual([
+      { specifier: "pkg", typeOnly: false },
+    ]);
+  });
+
+  it("reports require as reaching runtime", () => {
+    expect(refs(`const a = require("pkg");`)).toEqual([
+      { specifier: "pkg", typeOnly: false },
+    ]);
+  });
+
+  it("reports an import-equals as reaching runtime", () => {
+    expect(refs(`import a = require("pkg");`)).toEqual([
+      { specifier: "pkg", typeOnly: false },
+    ]);
+  });
+
+  it("reports typeof import as erased", () => {
+    expect(refs(`type A = typeof import("pkg");`)).toEqual([
+      { specifier: "pkg", typeOnly: true },
+    ]);
+  });
+
+  it("reports a JSDoc import as erased", () => {
+    expect(
+      refs(
+        `/** @typedef {import("pkg").T} T */\nexport const x = 1;`,
+        "module.js"
+      )
+    ).toEqual([{ specifier: "pkg", typeOnly: true }]);
+  });
+
+  it("reports a triple-slash type reference as erased", () => {
+    expect(refs(`/// <reference types="pkg" />\nexport const x = 1;`)).toEqual([
+      { specifier: "pkg", typeOnly: true },
+    ]);
+  });
+
+  it("keeps an unreadable target unreadable, and at runtime", () => {
+    // An unresolvable target has to stay a violation for both consumers.
+    expect(refs(`const a = require(name);`)).toEqual([
+      { specifier: UNRESOLVABLE_SPECIFIER, typeOnly: false },
+    ]);
+  });
+
+  it("is the source the string list is derived from", () => {
+    // 🔴 The control for the rule this file exists under. If `importedSpecifiers` ever grows its
+    // own walk again, this disagrees.
+    const text = [
+      `import a from "one";`,
+      `import type { B } from "two";`,
+      `const c = require("three");`,
+      `type D = typeof import("four");`,
+    ].join("\n");
+    expect(importedSpecifiers(text, "module.ts")).toEqual(
+      moduleSpecifierRefs(text, "module.ts").map(ref => ref.specifier)
+    );
+    expect(moduleSpecifierRefs(text, "module.ts").map(r => r.typeOnly)).toEqual(
+      [false, true, false, true]
+    );
   });
 });
