@@ -1048,6 +1048,26 @@ function checkNodeType(
  * validator does not check `migrationFailed` either. `origin` joins that set
  * instead of creating it, and it is the one a planner now reads back.
  */
+/**
+ * Whether a record computes any of its own fields.
+ *
+ * Answered from DESCRIPTORS, so nothing runs. A caller supplying accessors here
+ * has already made the document one `surveyDocument` refuses to measure and
+ * reports `document-unreadable`; this only stops a later predicate reaching in
+ * and invoking them on the way to a second, less useful verdict.
+ *
+ * Not a plain record is not this question's business: the predicate that
+ * follows refuses such a value on its shape, and it reads nothing to do so.
+ */
+function holdsAnAccessor(value: unknown): boolean {
+  if (!isPlainRecord(value)) return false;
+  for (const name of Object.getOwnPropertyNames(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (descriptor !== undefined && descriptor.get !== undefined) return true;
+  }
+  return false;
+}
+
 function checkNodeOrigin(
   node: Record<string, unknown>,
   path: string,
@@ -1071,7 +1091,14 @@ function checkNodeOrigin(
   const descriptor = Object.getOwnPropertyDescriptor(node, "origin");
   if (descriptor === undefined || descriptor.get !== undefined) return;
   const origin: unknown = descriptor.value;
-  if (origin === undefined || isBlockOrigin(origin)) return;
+  if (origin === undefined) return;
+  // The record's OWN fields, before the predicate reads them. `isBlockOrigin`
+  // reaches `from`, `id` and `digest` through `ownEntry`, which reads values —
+  // so a data property holding a record whose FIELDS are accessors escaped this
+  // guard by one level. The document is already refused as a whole for holding
+  // them, which is the verdict this defers to rather than adding a second.
+  if (holdsAnAccessor(origin)) return;
+  if (isBlockOrigin(origin)) return;
   issues.push({
     path: pointer(path, "origin"),
     code: "invalid-origin",

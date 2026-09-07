@@ -2925,28 +2925,68 @@ describe("a node's provenance record is checked on both roads to storage", () =>
     expect(codes).not.toContain("invalid-origin");
   });
 
-  it("ignores an origin inherited from a prototype", () => {
-    // `structuredClone` and object spreads copy OWN properties, so a value
-    // reached through the prototype is not what would be stored — the rule this
-    // engine applies to every other field.
-    const node = Object.create({
-      origin: { from: "pattern", id: "" },
-    }) as Record<string, unknown>;
-    node.id = "n1";
-    node.type = "core/text";
-    node.version = 1;
-    node.props = {};
+  it("never invokes an accessor INSIDE the record either", () => {
+    // One level deeper than the property itself: a data-property `origin` whose
+    // `digest` is a getter. `isBlockOrigin` reaches its fields through
+    // `ownEntry`, which reads values — so guarding only the outer property left
+    // the predicate to invoke them on the way in.
+    const origin: Record<string, unknown> = { from: "pattern", id: "p1" };
+    let reads = 0;
+    Object.defineProperty(origin, "digest", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        throw new Error("boom");
+      },
+    });
 
-    const codes = validate(
-      {
-        formatVersion: 1,
-        kind: "page",
-        nodes: [node],
-      } as unknown as BlockDocument,
-      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
-    ).map(issue => issue.code);
+    let escaped: unknown;
+    let codes: string[] = [];
+    try {
+      codes = validate(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            { id: "n1", type: "core/text", version: 1, props: {}, origin },
+          ],
+        } as unknown as BlockDocument,
+        { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+      ).map(issue => issue.code);
+    } catch (error) {
+      escaped = error;
+    }
 
-    expect(codes).not.toContain("invalid-origin");
+    expect(escaped).toBeUndefined();
+    expect(reads).toBe(0);
+    // The verdict that already covers such a document, rather than a second one.
+    expect(codes).toContain("document-unreadable");
+  });
+
+  it("ignores an origin inherited from the prototype", () => {
+    // Through `Object.prototype`, which is the reachable case: a node built with
+    // `Object.create(custom)` fails `isPlainRecord` and never reaches this check
+    // at all, so a test written that way proves nothing about it.
+    //
+    // `structuredClone` and object spreads copy OWN properties, so an inherited
+    // value is not what would be stored — the rule this engine applies to every
+    // other field.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.origin = { from: "pattern", id: "" };
+    try {
+      const codes = validate(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [{ id: "n1", type: "core/text", version: 1, props: {} }],
+        } as unknown as BlockDocument,
+        { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+      ).map(issue => issue.code);
+
+      expect(codes).not.toContain("invalid-origin");
+    } finally {
+      delete polluted.origin;
+    }
   });
 
   it("agrees with the road an op takes", () => {
