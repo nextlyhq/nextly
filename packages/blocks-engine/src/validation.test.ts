@@ -3289,6 +3289,68 @@ describe("a bag validation has already refused is never enumerated", () => {
     ).toBe(true);
   });
 
+  it.each(["formatVersion", "kind", "nodes"])(
+    "does not read the document's own %s when it could not be read",
+    field => {
+      // The ENVELOPE is reached before any node is, so a check placed after it
+      // is placed too late: these three are read to decide whether the document
+      // is one at all, and each took a caller's error out of `validate()`.
+      const doc: Record<string, unknown> = {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [],
+      };
+      Object.defineProperty(doc, field, {
+        enumerable: true,
+        configurable: true,
+        get() {
+          throw new Error("a document should not get to run this");
+        },
+      });
+
+      let escaped: unknown;
+      let codes: string[] = [];
+      try {
+        codes = validate(doc as unknown as BlockDocument, {
+          breakpoints: FIXTURE_BREAKPOINTS,
+          mode: "strict",
+        }).map(issue => issue.code);
+      } catch (error) {
+        escaped = error;
+      }
+
+      expect(escaped).toBeUndefined();
+      expect(codes).toContain("document-unreadable");
+    }
+  );
+
+  it("does not inspect a root whose prototype trap throws", () => {
+    // `isPlainRecord` asks for the prototype, so the very first thing the
+    // envelope does is something a hostile root can refuse.
+    const doc = new Proxy(
+      { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "page", nodes: [] },
+      {
+        getPrototypeOf() {
+          throw new Error("a document should not get to run this");
+        },
+      }
+    );
+
+    let escaped: unknown;
+    let codes: string[] = [];
+    try {
+      codes = validate(doc as unknown as BlockDocument, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      }).map(issue => issue.code);
+    } catch (error) {
+      escaped = error;
+    }
+
+    expect(escaped).toBeUndefined();
+    expect(codes).toContain("document-unreadable");
+  });
+
   it.each([
     "id",
     "type",

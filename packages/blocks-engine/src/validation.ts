@@ -383,6 +383,31 @@ export function validateDocument(
   const unknownSeverity: IssueSeverity =
     ctx.mode === "strict" ? "error" : "warning";
 
+  // A document the survey could not READ is not one to read, and this is the
+  // first line after the measurement for that reason: everything below reaches
+  // the document's own fields by ordinary property access.
+  //
+  // `surveyDocument` refuses to invoke an accessor — it reports the document
+  // `document-unreadable` rather than run a getter it was handed. Reading on
+  // regardless invokes exactly what it declined to, and a throwing getter then
+  // leaves as a native error rather than the issue list this promises.
+  // Measured, every field of a node did that, and so did `formatVersion`,
+  // `kind` and `nodes` on the document itself — which is why the check sits
+  // ahead of the envelope rather than after it.
+  //
+  // `unreadable`, and NOT `overLimits`. They are different facts and only one
+  // is about reading: a document that merely exceeds `maxNodes` was read
+  // perfectly well and reports `traversed: false` with `unreadable: false`, and
+  // its nodes are still worth checking under the cap. Stopping on the broader
+  // fact would drop every per-node issue such a document earns.
+  //
+  // The verdict is still RECORDED before returning, or a caller gets an empty
+  // issue list for a document nothing could read.
+  if (survey.unreadable) {
+    checkLimits(survey, issues);
+    return { issues, survey };
+  }
+
   const envelope = documentEnvelope(doc, ctx, unknownSeverity, issues);
   if (envelope.stop) return { issues, survey };
 
@@ -413,34 +438,6 @@ export function validateDocument(
   // back changed. It is a measurement that STOPPED SHORT which leaves nothing
   // bounded, and that is exactly what `traversed` reports.
   const overLimits = !survey.traversed;
-
-  // A document the survey could not READ is not one to read.
-  //
-  // `surveyDocument` refuses to invoke an accessor — it reports the document
-  // `document-unreadable` rather than run a getter it was handed — and
-  // everything below reaches those same fields by ordinary property access,
-  // invoking exactly what the survey declined to. Measured on this file before
-  // the gate: ten node fields did it — `id`, `type`, `version`, `props`,
-  // `slots`, `attributes`, `cssId`, `styles`, `bindings` and `visibility` —
-  // each taking a caller's error out of `validate()` as a native throw instead
-  // of the issue list it promises.
-  //
-  // `unreadable`, and NOT `overLimits`. They are different facts and only one
-  // of them is about reading: a document that merely exceeds `maxNodes` was
-  // read perfectly well, and its nodes are still worth checking under the cap —
-  // measured, such a survey reports `traversed: false` with `unreadable: false`.
-  // Stopping on the broader fact would silently drop every per-node issue on an
-  // oversized document.
-  //
-  // Stopping HERE rather than guarding each read is the point. Guarding reads
-  // is what this file kept trying: roughly twenty-three of thirty review
-  // findings across three pull requests were one site or one level of that, and
-  // two of them were introduced BY a fix for another. The verdict was already
-  // computed and already trustworthy; it was simply never consulted.
-  //
-  // `checkLimits` has already recorded `document-unreadable`, so the caller is
-  // told why — and gets the survey, which says the same thing in a field.
-  if (survey.unreadable) return { issues, survey };
 
   // Per-kind rules. Only `component` has any today, and it is the kind whose
   // extra fields nothing else in the document can check: `exposed` and `slots`

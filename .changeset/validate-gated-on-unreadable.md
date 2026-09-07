@@ -36,11 +36,10 @@ what the survey had declined to. Ten node fields did it: `id`, `type`,
 `visibility`, each taking a caller's error out of `validate()` as a native throw
 instead of the issue list it promises.
 
-This is the root of a class that produced roughly twenty-three of thirty review
-findings across three pull requests — a value read before it has been
-established as data — and two of those findings were introduced by a fix for
-another. Guarding each read is what kept failing; the verdict was already
-computed and simply never consulted.
+The document's own `formatVersion`, `kind` and `nodes` did it too, which is why
+the check sits ahead of the envelope rather than after it: the envelope is
+reached before any node is, and it reads those three to decide whether the value
+is a document at all.
 
 **A document that merely exceeds a limit is unaffected.** Only `unreadable`
 stops the walk. An oversized document was read perfectly well, its nodes are
