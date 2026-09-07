@@ -1716,6 +1716,49 @@ describe("documented-key-prefix", () => {
     ).toContain("documented-key-prefix");
   });
 
+  it("judges a key written out in full where it is declared", async () => {
+    // The declaring file shows the display prefix a masked UI renders, `"nx_live_abcdefgh"`,
+    // which trails off nowhere and so is invisible to the placeholder form. It goes stale
+    // exactly as a header example does.
+    expect(
+      await checksFor(
+        tree(
+          { "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n" },
+          '/** Display prefix: first 16 chars ("sk_live_abcdefgh") for the masked key. */\nconst KEY_PREFIX = "nx_live_";',
+        ),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("accepts the concrete example when it matches what is issued", async () => {
+    // The positive control. Without it a rule reporting every concrete token would pass the
+    // case above just as well.
+    expect(
+      await checksFor(
+        tree(
+          { "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n" },
+          '/** Display prefix: first 16 chars ("nx_live_abcdefgh") for the masked key. */\nconst KEY_PREFIX = "nx_live_";',
+        ),
+      ),
+    ).not.toContain("documented-key-prefix");
+  });
+
+  it("does not read a database identifier elsewhere as a concrete key", async () => {
+    // The reason the concrete form is confined to the declaring file. A comment saying
+    // "primary key" satisfies the vocabulary as readily as one about credentials, and across
+    // the tree that shape reports twenty-two column, table and index names against one real
+    // example.
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n",
+          "packages/nextly/src/schema/columns.ts":
+            '/** The primary key column is named `"single_pricings_pkey"` by the dialect. */\nexport const x = 1;\n',
+        }),
+      ),
+    ).not.toContain("documented-key-prefix");
+  });
+
   it("does not read a snake_case identifier elsewhere as a key format", async () => {
     // `idx_comp_<slug>_parent` is an index name, and nothing in the shape of a token says it
     // is a credential. Outside the declaring file only the header form is read, which

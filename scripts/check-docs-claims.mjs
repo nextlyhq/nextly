@@ -824,15 +824,33 @@ const TEST_FILE = /(?:^|\/)__tests__\/|\.(?:test|spec)\.[cm]?[jt]sx?$/;
  * Matching only `Bearer` examples would let those advertise a retired prefix indefinitely while
  * one updated bearer example kept the population guard satisfied.
  *
- * Read ONLY in that declaring file, and the narrowness is the point. Nothing in the shape of a
+ * Read wherever the surrounding text is talking about a key, since nothing in the shape of a
  * token says it is a credential: run against the tree, this pattern reads
  * `idx_comp_<slug>_parent` in `api/field-groups.ts` as a key prefix, which is an index name.
- * The declaring file's comments are the canonical specification of the format, so a token there
- * shaped like a prefix and differing from the declared one is a stale spelling of it; the same
- * token anywhere else is a snake_case identifier that happens to precede a placeholder.
- * Everywhere else documents the HEADER, and `BEARER_EXAMPLE` covers that with no such ambiguity.
+ * The sentence is what separates them, so `KEY_VOCABULARY` gates every surface.
+ *
+ * The trailing placeholder is the other half of that narrowness. Requiring `<` or `...` is what
+ * keeps this to a STATED FORMAT rather than any snake_case token: measured across the tree,
+ * dropping it and matching concrete tokens instead reports `change_column_type`,
+ * `actor_user_id`, `single_pricings_pkey` and nineteen more like them, because a doc comment
+ * that says "primary key" or "key column" satisfies the vocabulary as readily as one about
+ * credentials. `CONCRETE_KEY_EXAMPLE` covers the concrete form where that is safe.
  */
 const KEY_FORMAT_EXAMPLE = /\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+_)(?=<|\.\.\.)/g;
+
+/**
+ * A key written out in full rather than trailed off, as `"nx_live_abcdefgh"`.
+ *
+ * The file that declares the prefix shows one twice, as the display prefix a masked UI renders,
+ * and those are as able to go stale as any header example.
+ *
+ * Read in that file and nowhere else, and the measurement is the reason: this pattern applied
+ * across every key-talking context reports twenty-two database identifiers, `change_column_type`
+ * and `single_pricings_pkey` among them, against one real example, because "primary key" and
+ * "key column" are sentences about keys too. Inside the declaring file it reports that one
+ * example and nothing else, since every comment there is about this credential.
+ */
+const CONCRETE_KEY_EXAMPLE = /["'`]([a-z][a-z0-9]*(?:_[a-z0-9]+)+_[A-Za-z0-9]+)["'`]/g;
 
 /**
  * The prefix an example claims, which is its leading run of underscore-separated segments.
@@ -1009,10 +1027,11 @@ function partitionSource(text, keep) {
     }
     // A regex literal, which is the other thing that can hold a stray slash-star.
     //
-    // `/[/*]/` before a doc comment opened a comment at the character-class slash and ate
-    // through the JSDoc terminator. That direction was documented here as costing a refusal
-    // rather than a false pass, which was true only of reading the DECLARATION: on the
-    // extraction side the doc comment is silently dropped and the check reports clean.
+    // `/[/*]/` sitting before a doc comment must not open one at the character-class slash and
+    // eat through the JSDoc terminator. Which way that fails depends on what the caller wants:
+    // reading the DECLARATION it over-blanks and the check refuses, and reading the file as
+    // documentation it drops the doc comment and the check reports clean. The second is a
+    // silent pass, so the literal is consumed here rather than left to either.
     //
     // Comments are recognised first, exactly as a JavaScript lexer does, so `/*` and `//` never
     // reach here and only the ambiguity between division and a regex is left. The previous
@@ -1209,9 +1228,16 @@ function documentedKeyPrefix(repoRoot, tracked, packages, findings, isExempt) {
       : [...scanned.matchAll(DOC_COMMENT)];
     for (const context of contexts) {
       if (!KEY_VOCABULARY.test(context[0])) continue;
-      for (const match of context[0].matchAll(KEY_FORMAT_EXAMPLE)) {
-        const start = context.index + match.index;
-        if (!candidates.has(start)) candidates.set(start, match);
+      const patterns =
+        rel === KEY_PREFIX_SOURCE
+          ? [KEY_FORMAT_EXAMPLE, CONCRETE_KEY_EXAMPLE]
+          : [KEY_FORMAT_EXAMPLE];
+      for (const pattern of patterns) {
+        for (const match of context[0].matchAll(pattern)) {
+          // The capture, not the whole match: the concrete form takes its quotes with it.
+          const start = context.index + match.index + match[0].indexOf(match[1]);
+          if (!candidates.has(start)) candidates.set(start, match);
+        }
       }
     }
 
