@@ -7,6 +7,7 @@ import {
 } from "./document";
 import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 import { DEFAULT_LIMITS, documentBytes } from "./limits";
+import { applyOps } from "./ops";
 import {
   MAX_SITE_LOOKUPS,
   MAX_SITE_ISSUES,
@@ -2804,6 +2805,207 @@ describe("componentEnvelopeIssues holds itself to a real bound", () => {
     expect(componentEnvelopeIssues(doc).map(i => i.code)).toContain(
       "exposed-node-missing"
     );
+  });
+});
+
+describe("a node's provenance record is checked on both roads to storage", () => {
+  /** A one-node page whose node carries this origin. */
+  function withOrigin(origin: unknown): BlockDocument {
+    return {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/text", version: 1, props: {}, origin }],
+    } as unknown as BlockDocument;
+  }
+
+  const codesFor = (origin: unknown, mode: "strict" | "forgiving" = "strict") =>
+    validate(withOrigin(origin), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode,
+    }).map(issue => issue.code);
+
+  it.each([
+    ["a pattern with no digest", { from: "pattern", id: "p1" }],
+    [
+      "a pattern with an empty digest",
+      { from: "pattern", id: "p1", digest: "" },
+    ],
+    ["a pattern with an empty id", { from: "pattern", id: "", digest: "d" }],
+    ["a component with no id", { from: "component" }],
+    ["an unknown arm", { from: "elsewhere", id: "x" }],
+    ["not a record", "pattern"],
+  ])("refuses %s", (_name, origin) => {
+    // An import or a script can write one of these through the FIELD road, and
+    // every later provenance reader takes it at face value: a staleness check
+    // against a pattern with no id answers confidently and wrongly.
+    expect(codesFor(origin)).toContain("invalid-origin");
+  });
+
+  it.each([
+    ["a whole pattern record", { from: "pattern", id: "p1", digest: "d1" }],
+    ["a whole component record", { from: "component", id: "c1" }],
+  ])("accepts %s", (_name, origin) => {
+    // The controls. Without them a check that refused every record would pass
+    // every assertion above.
+    expect(codesFor(origin)).not.toContain("invalid-origin");
+  });
+
+  it("accepts a node with no record at all", () => {
+    const codes = validate(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ id: "n1", type: "core/text", version: 1, props: {} }],
+      } as unknown as BlockDocument,
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    ).map(issue => issue.code);
+
+    expect(codes).not.toContain("invalid-origin");
+  });
+
+  it("refuses it in FORGIVING mode too", () => {
+    // Forgiving mode keeps a document readable when a future build wrote
+    // something this one does not understand. A half-written record is not a
+    // future value — it is a claim about history with a piece missing, and a
+    // reader cannot tell which piece.
+    expect(codesFor({ from: "pattern", id: "p1" }, "forgiving")).toContain(
+      "invalid-origin"
+    );
+  });
+
+  it.each([
+    [
+      "a throwing getter",
+      () => {
+        throw new Error("boom");
+      },
+    ],
+    ["a benign getter", () => ({ from: "pattern", id: "p1", digest: "d1" })],
+  ])("never invokes an origin that is %s", (_name, get) => {
+    // `surveyDocument` refuses to invoke an accessor and already reports such a
+    // document unreadable, so reading one here would run the document's own
+    // code inside the check deciding whether to trust it. Measured before the
+    // descriptor read: the throwing one escaped `validate()` as a native error,
+    // and the benign one was invoked TWICE — once per read.
+    let reads = 0;
+    const node: Record<string, unknown> = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+    };
+    Object.defineProperty(node, "origin", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return get();
+      },
+    });
+
+    let escaped: unknown;
+    let codes: string[] = [];
+    try {
+      codes = validate(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [node],
+        } as unknown as BlockDocument,
+        { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+      ).map(issue => issue.code);
+    } catch (error) {
+      escaped = error;
+    }
+
+    expect(escaped).toBeUndefined();
+    expect(reads).toBe(0);
+    // The verdict that already covers it, rather than a second one from here:
+    // a document whose fields compute themselves is refused as a whole.
+    expect(codes).toContain("document-unreadable");
+    expect(codes).not.toContain("invalid-origin");
+  });
+
+  it("never invokes an accessor INSIDE the record either", () => {
+    // One level deeper than the property itself: a data-property `origin` whose
+    // `digest` is a getter. `isBlockOrigin` reaches its fields through
+    // `ownEntry`, which reads values — so guarding only the outer property left
+    // the predicate to invoke them on the way in.
+    const origin: Record<string, unknown> = { from: "pattern", id: "p1" };
+    let reads = 0;
+    Object.defineProperty(origin, "digest", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        throw new Error("boom");
+      },
+    });
+
+    let escaped: unknown;
+    let codes: string[] = [];
+    try {
+      codes = validate(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            { id: "n1", type: "core/text", version: 1, props: {}, origin },
+          ],
+        } as unknown as BlockDocument,
+        { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+      ).map(issue => issue.code);
+    } catch (error) {
+      escaped = error;
+    }
+
+    expect(escaped).toBeUndefined();
+    expect(reads).toBe(0);
+    // The verdict that already covers such a document, rather than a second one.
+    expect(codes).toContain("document-unreadable");
+  });
+
+  it("ignores an origin inherited from the prototype", () => {
+    // Through `Object.prototype`, which is the reachable case: a node built with
+    // `Object.create(custom)` fails `isPlainRecord` and never reaches this check
+    // at all, so a test written that way proves nothing about it.
+    //
+    // `structuredClone` and object spreads copy OWN properties, so an inherited
+    // value is not what would be stored — the rule this engine applies to every
+    // other field.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.origin = { from: "pattern", id: "" };
+    try {
+      const codes = validate(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [{ id: "n1", type: "core/text", version: 1, props: {} }],
+        } as unknown as BlockDocument,
+        { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+      ).map(issue => issue.code);
+
+      expect(codes).not.toContain("invalid-origin");
+    } finally {
+      delete polluted.origin;
+    }
+  });
+
+  it("agrees with the road an op takes", () => {
+    // The point of the check: a record one road admits and the other refuses is
+    // one that exists in the database and cannot be edited. Both ask
+    // `isBlockOrigin`, so this asserts the SAME record is refused by both.
+    const half = { from: "pattern", id: "p1" };
+
+    expect(codesFor(half)).toContain("invalid-origin");
+    expect(() =>
+      applyOps(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [{ id: "n1", type: "core/text", version: 1, props: {} }],
+        } as unknown as BlockDocument,
+        [{ kind: "update", id: "n1", patch: { origin: half } }] as never
+      )
+    ).toThrow();
   });
 });
 

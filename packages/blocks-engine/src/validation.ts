@@ -19,6 +19,7 @@ import {
   MAX_CLASSES_PER_NODE,
   STYLE_STATES,
   isBindingSource,
+  isBlockOrigin,
   isBlockType,
   renderedDomId,
 } from "./document";
@@ -203,6 +204,8 @@ export const ISSUE_CODES = {
   "invalid-document": "The document is not an object.",
   "nodes-not-array": "The document nodes field is not an array.",
   "invalid-node": "A node is not an object.",
+  "invalid-origin":
+    "A node's provenance record is missing a field it needs to be trusted.",
   "depth-exceeded": "The node tree is nested deeper than the allowed maximum.",
   "node-count-exceeded":
     "The document has more nodes than the allowed maximum.",
@@ -949,6 +952,163 @@ interface NodeCheckState {
   skipValueParsing: boolean;
 }
 
+/**
+ * A node's id: present, non-empty, and unique across the whole document.
+ *
+ * Its own function because the node check is already at the complexity this
+ * repo's gate allows, and because "which id is this, and has it been seen" is a
+ * question with its own state — the seen-ids map — that nothing else there
+ * touches. Early returns rather than nesting, which says the same thing with
+ * one level less of it.
+ */
+function checkNodeId(
+  node: Record<string, unknown>,
+  path: string,
+  state: NodeCheckState
+): void {
+  const { issues } = state;
+  if (typeof node.id !== "string" || node.id.length === 0) {
+    issues.push({
+      path: pointer(path, "id"),
+      code: "missing-node-id",
+      severity: "error",
+      message: "Every node needs a non-empty string id.",
+    });
+    return;
+  }
+  const firstSeenAt = state.seenIds.get(node.id);
+  if (firstSeenAt !== undefined) {
+    issues.push({
+      path: pointer(path, "id"),
+      code: "duplicate-node-id",
+      severity: "error",
+      message: `Node id "${describeValue(node.id)}" is already used at ${firstSeenAt}.`,
+      suggestion: "Give every node a unique id.",
+    });
+    return;
+  }
+  state.seenIds.set(node.id, pointer(path, "id"));
+}
+
+/** A node's type: a namespaced slug, and — given a registry — registered. */
+function checkNodeType(
+  node: Record<string, unknown>,
+  path: string,
+  state: NodeCheckState
+): void {
+  const { issues } = state;
+  if (!isNodeType(node.type)) {
+    issues.push({
+      path: pointer(path, "type"),
+      code: "invalid-node-type",
+      severity: "error",
+      message: `Node type "${describeValue(node.type)}" must be a namespaced slug like "core/heading".`,
+    });
+    return;
+  }
+  if (
+    state.ctx.registry &&
+    // Engine-owned synthetic types are not registrable blocks and so are never
+    // present in a block registry; exempt them from the registration check.
+    !ENGINE_NODE_TYPES.has(node.type) &&
+    !state.ctx.registry.has(node.type)
+  ) {
+    issues.push({
+      path: pointer(path, "type"),
+      code: "unknown-node-type",
+      severity: state.unknownSeverity,
+      message: `Node type "${describeValue(node.type)}" is not registered.`,
+      suggestion: "Register the block or remove the node.",
+    });
+  }
+}
+
+/**
+ * A node's provenance record, if it carries one.
+ *
+ * A document reaches storage by two roads — an op through `applyOp`, and a
+ * field write through this validator — and only the op road asked this. So an
+ * import or a script could persist `{ from: "pattern", id: "", digest: "" }`,
+ * which every later provenance reader takes at face value: a staleness check
+ * comparing against a pattern with no id answers confidently and wrongly, and a
+ * save-over restoring the DOM ids an insert renamed reads a record it cannot
+ * trust.
+ *
+ * Through {@link isBlockOrigin}, which is the op road's own predicate and lives
+ * beside the type it describes. A record one road admits and the other refuses
+ * is one that exists in the database and cannot be edited, so both ask the same
+ * question rather than two that agree for now.
+ *
+ * ERROR in both modes. Forgiving mode exists to keep a document READABLE when a
+ * future build wrote something this one does not understand; a half-written
+ * record is not a future value but a claim about history with a piece missing,
+ * and a reader cannot tell which piece.
+ *
+ * The asymmetry this closes is pre-existing and general rather than new: this
+ * validator does not check `migrationFailed` either. `origin` joins that set
+ * instead of creating it, and it is the one a planner now reads back.
+ */
+/**
+ * Whether a record computes any of its own fields.
+ *
+ * Answered from DESCRIPTORS, so nothing runs. A caller supplying accessors here
+ * has already made the document one `surveyDocument` refuses to measure and
+ * reports `document-unreadable`; this only stops a later predicate reaching in
+ * and invoking them on the way to a second, less useful verdict.
+ *
+ * Not a plain record is not this question's business: the predicate that
+ * follows refuses such a value on its shape, and it reads nothing to do so.
+ */
+function holdsAnAccessor(value: unknown): boolean {
+  if (!isPlainRecord(value)) return false;
+  for (const name of Object.getOwnPropertyNames(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (descriptor !== undefined && descriptor.get !== undefined) return true;
+  }
+  return false;
+}
+
+function checkNodeOrigin(
+  node: Record<string, unknown>,
+  path: string,
+  issues: ValidationIssue[]
+): void {
+  // Through the DESCRIPTOR, never an ordinary read. `surveyDocument` refuses to
+  // invoke an accessor and already reports such a document `document-unreadable`
+  // — so reading one here runs the document's own code inside the check deciding
+  // whether to trust it, which is the rule `ops.ts` states about node fields.
+  // Measured before this: a throwing getter escaped `validate()` as a native
+  // error, and a benign one was invoked TWICE, once per read below.
+  //
+  // An accessor is left to the verdict that already covers it rather than given
+  // a second one here: a document whose fields compute themselves is refused as
+  // a whole, and reporting its `origin` as malformed would send an author to fix
+  // a record that may be perfectly well formed.
+  //
+  // An INHERITED `origin` is absent for the same reason it is elsewhere in this
+  // engine: `structuredClone` and object spreads copy own properties, so a value
+  // reached through the prototype is not what would be stored.
+  const descriptor = Object.getOwnPropertyDescriptor(node, "origin");
+  if (descriptor === undefined || descriptor.get !== undefined) return;
+  const origin: unknown = descriptor.value;
+  if (origin === undefined) return;
+  // The record's OWN fields, before the predicate reads them. `isBlockOrigin`
+  // reaches `from`, `id` and `digest` through `ownEntry`, which reads values —
+  // so a data property holding a record whose FIELDS are accessors escaped this
+  // guard by one level. The document is already refused as a whole for holding
+  // them, which is the verdict this defers to rather than adding a second.
+  if (holdsAnAccessor(origin)) return;
+  if (isBlockOrigin(origin)) return;
+  issues.push({
+    path: pointer(path, "origin"),
+    code: "invalid-origin",
+    severity: "error",
+    message:
+      "A node's origin must say where it came from, whole: a pattern needs an id and a digest, a component an id.",
+    suggestion: "Remove the record, or write it complete.",
+  });
+}
+
 function validateNode(
   node: BlockNode,
   path: string,
@@ -966,52 +1126,9 @@ function validateNode(
     return;
   }
 
-  // id: present, non-empty, unique across the whole document.
-  if (typeof node.id !== "string" || node.id.length === 0) {
-    issues.push({
-      path: pointer(path, "id"),
-      code: "missing-node-id",
-      severity: "error",
-      message: "Every node needs a non-empty string id.",
-    });
-  } else {
-    const firstSeenAt = state.seenIds.get(node.id);
-    if (firstSeenAt !== undefined) {
-      issues.push({
-        path: pointer(path, "id"),
-        code: "duplicate-node-id",
-        severity: "error",
-        message: `Node id "${describeValue(node.id)}" is already used at ${firstSeenAt}.`,
-        suggestion: "Give every node a unique id.",
-      });
-    } else {
-      state.seenIds.set(node.id, pointer(path, "id"));
-    }
-  }
-
-  // type: namespaced slug, and — if a registry is supplied — registered.
-  if (!isNodeType(node.type)) {
-    issues.push({
-      path: pointer(path, "type"),
-      code: "invalid-node-type",
-      severity: "error",
-      message: `Node type "${describeValue(node.type)}" must be a namespaced slug like "core/heading".`,
-    });
-  } else if (
-    state.ctx.registry &&
-    // Engine-owned synthetic types are not registrable blocks and so are never
-    // present in a block registry; exempt them from the registration check.
-    !ENGINE_NODE_TYPES.has(node.type) &&
-    !state.ctx.registry.has(node.type)
-  ) {
-    issues.push({
-      path: pointer(path, "type"),
-      code: "unknown-node-type",
-      severity: state.unknownSeverity,
-      message: `Node type "${describeValue(node.type)}" is not registered.`,
-      suggestion: "Register the block or remove the node.",
-    });
-  }
+  checkNodeId(node, path, state);
+  checkNodeType(node, path, state);
+  checkNodeOrigin(node, path, issues);
 
   // version: positive integer.
   if (!isNodeVersion(node.version)) {
