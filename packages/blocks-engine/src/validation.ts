@@ -383,6 +383,13 @@ export function validateDocument(
   const unknownSeverity: IssueSeverity =
     ctx.mode === "strict" ? "error" : "warning";
 
+  // The SITE's own breakpoints, before anything about the document is decided.
+  // They come from the caller's settings rather than from the document, so a
+  // duplicate id among them is true whatever the document turns out to be —
+  // and collecting them inside the envelope meant an unreadable document
+  // silently swallowed a fault in the site's configuration.
+  const knownBreakpoints = collectBreakpointIds(ctx.breakpoints, issues);
+
   // A document the survey could not READ is not one to read, and this is the
   // first line after the measurement for that reason: everything below reaches
   // the document's own fields by ordinary property access.
@@ -408,7 +415,7 @@ export function validateDocument(
     return { issues, survey };
   }
 
-  const envelope = documentEnvelope(doc, ctx, unknownSeverity, issues);
+  const envelope = documentEnvelope(doc, unknownSeverity, issues);
   if (envelope.stop) return { issues, survey };
 
   checkLimits(survey, issues);
@@ -463,7 +470,7 @@ export function validateDocument(
     );
   }
 
-  const state = nodeCheckState(ctx, issues, envelope, unknownSeverity, {
+  const state = nodeCheckState(ctx, issues, knownBreakpoints, unknownSeverity, {
     overLimits,
   });
 
@@ -503,12 +510,10 @@ type DocumentEnvelope =
       readonly nodes: BlockNode[];
       /** As stored — validated above, and read again for the per-kind rules. */
       readonly kind: unknown;
-      readonly knownBreakpoints: Set<string>;
     };
 
 function documentEnvelope(
   doc: BlockDocument,
-  ctx: ValidationContext,
   unknownSeverity: IssueSeverity,
   issues: ValidationIssue[]
 ): DocumentEnvelope {
@@ -526,8 +531,6 @@ function documentEnvelope(
     });
     return { stop: true };
   }
-
-  const knownBreakpoints = collectBreakpointIds(ctx.breakpoints, issues);
 
   const formatVersion = rawDoc.formatVersion;
   if (formatVersion !== DOCUMENT_FORMAT_VERSION) {
@@ -571,7 +574,6 @@ function documentEnvelope(
     doc: rawDoc,
     nodes: rawDoc.nodes as BlockNode[],
     kind,
-    knownBreakpoints,
   };
 }
 
@@ -585,7 +587,7 @@ function documentEnvelope(
 function nodeCheckState(
   ctx: ValidationContext,
   issues: ValidationIssue[],
-  envelope: Extract<DocumentEnvelope, { stop: false }>,
+  knownBreakpoints: Set<string>,
   unknownSeverity: IssueSeverity,
   bounds: { readonly overLimits: boolean }
 ): NodeCheckState {
@@ -602,7 +604,7 @@ function nodeCheckState(
       classes: memoizeClassLookup(ctx.classes, styleBudget),
     },
     issues,
-    knownBreakpoints: envelope.knownBreakpoints,
+    knownBreakpoints,
     unknownSeverity,
     seenIds: new Map<string, string>(),
     seenDomIds: new Map<string, string>(),

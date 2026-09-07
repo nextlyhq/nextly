@@ -2948,17 +2948,18 @@ describe("a node's provenance record is checked on both roads to storage", () =>
       }
 
       expect(escaped).toBeUndefined();
-      // The SURVEY's verdict, and WHICH verdict depends on where the trap
-      // bites. `getPrototypeOf` stops the survey from reading the document, so
-      // it is `document-unreadable` and the walk no longer runs at all.
-      // `ownKeys` and `getOwnPropertyDescriptor` stop it SERIALIZING one, which
-      // is `document-unwritable` — a different fact, and one the walk is not
-      // gated on, so those two still reach the per-record guard.
+      // A SURVEY-classification test, and only that. All three traps make the
+      // survey call the document unreadable, so validation stops at that
+      // verdict and none of them reaches the per-record guard — this would
+      // stay green with that guard deleted, and says nothing about it.
       //
-      // That is worth stating because it is what keeps the guard necessary. It
-      // is not made redundant by the gate: two of these three traps get past
-      // it, and so does the case below — a trap that fires only for an ABSENT
-      // field, which the survey never asks for and therefore never meets.
+      // Which verdict is reported depends on where the trap bites first:
+      // `ownKeys` and `getOwnPropertyDescriptor` also stop the document being
+      // SERIALIZED, and `checkLimits` reports unwritable ahead of unreadable.
+      //
+      // What keeps the guard necessary is the case below — a trap that fires
+      // only for an ABSENT field, which the survey never asks for and therefore
+      // never meets, so the walk runs and the record is judged.
       expect(codes).toContain(
         trap === "getPrototypeOf"
           ? "document-unreadable"
@@ -3287,6 +3288,46 @@ describe("a bag validation has already refused is never enumerated", () => {
         mode: "strict",
       }).issues.some(issue => issue.code === "document-unreadable")
     ).toBe(true);
+  });
+
+  it("still reports a fault in the site's own breakpoints", () => {
+    // `collectBreakpointIds` judges the CALLER's settings, not the document, so
+    // a duplicate id among them is true whatever the document turns out to be.
+    // Collecting it inside the envelope meant an unreadable document silently
+    // swallowed a fault in the site's configuration — one the author would fix
+    // in a different screen entirely.
+    const node: Record<string, unknown> = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+    };
+    Object.defineProperty(node, "props", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        throw new Error("a document should not get to run this");
+      },
+    });
+    const duplicated = {
+      viewport: [
+        { id: "base", label: "Desktop" },
+        { id: "base", label: "Again" },
+      ],
+      container: [],
+    } as unknown as typeof FIXTURE_BREAKPOINTS;
+
+    const codes = validate(
+      {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [node],
+      } as unknown as BlockDocument,
+      { breakpoints: duplicated, mode: "strict" }
+    ).map(issue => issue.code);
+
+    expect(codes).toContain("breakpoint-id-not-unique");
+    expect(codes).toContain("document-unreadable");
   });
 
   it.each(["formatVersion", "kind", "nodes"])(
