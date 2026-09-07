@@ -734,9 +734,9 @@ const KEY_PREFIX_DECLARATION = /^[ \t]*(?:export[ \t]+)?const[ \t]+KEY_PREFIX[ \
 /**
  * A bearer example naming a concrete key rather than a placeholder.
  *
- * `Bearer <key>` and `Bearer <token>` are left alone: those are something a reader substitutes,
- * not a claim about the format. `\s+` spans a newline so an example wrapped after the scheme is
- * still one example.
+ * `Bearer <key>` and `Bearer <token>` never reach here, since the leading `[A-Za-z]` cannot
+ * match `<`. Symbolic placeholders can, and `isPlaceholder` decides those. `\s+` spans a
+ * newline so an example wrapped after the scheme is still one example.
  *
  * The SCHEME is matched case-insensitively because RFC 7235 makes it so: `bearer` is a valid
  * HTTP request. The CREDENTIAL is compared case-sensitively, and the two are not the same
@@ -746,6 +746,27 @@ const KEY_PREFIX_DECLARATION = /^[ \t]*(?:export[ \t]+)?const[ \t]+KEY_PREFIX[ \
  * excused.
  */
 const BEARER_EXAMPLE = /Bearer\s+([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*)/gi;
+
+/**
+ * Whether a token is a placeholder a reader substitutes rather than a key the docs claim to
+ * issue.
+ *
+ * `Bearer YOUR_API_KEY` is an instruction, not a format, and reporting it would have the
+ * always-run docs job block a correct page. The test is the absence of a lowercase letter:
+ * prefixes are issued lowercase, so no real key can be spelled this way, and capitals are how
+ * documentation everywhere says "replace me".
+ *
+ * A token that spells the issued prefix in capitals is NOT a placeholder. `NX_LIVE_...` is a
+ * mis-cased key, and a key is authenticated by `sha256` of the whole string, so that header
+ * cannot work. Excusing it would make this check tolerate the one defect it exists to catch.
+ */
+function isPlaceholder(token, prefix) {
+  if (/[a-z]/.test(token)) return false;
+  return !token.toLowerCase().startsWith(prefix.toLowerCase());
+}
+
+/** Tests and fixtures, whose bearer headers are for other services and prove nothing here. */
+const TEST_FILE = /(?:^|\/)__tests__\/|\.(?:test|spec)\.[cm]?tsx?$/;
 
 /** HTML and MDX comments, which a reader never sees and a generator never publishes. */
 const NON_RENDERED_COMMENT = /<!--[\s\S]*?-->|\{\s*\/\*[\s\S]*?\*\/\s*\}/g;
@@ -766,14 +787,14 @@ function blankComments(text) {
 /**
  * The documented API key prefix, compared against the one the service issues.
  *
- * Four bearer examples said `sk_`, which is another vendor's prefix, and one file used the real
- * prefix in a code sample and the wrong one in the sentence describing the header a few lines
- * away. Nothing catches this at runtime: a key is looked up by hash, so a wrong prefix is an
- * ordinary authentication failure with no hint that the format was the problem. The docs are
- * also the source of `llms-full.txt`, so the wrong format reached coding agents too.
+ * A documented prefix belonging to another vendor, or differing between a code sample and the
+ * sentence describing it a few lines away, is invisible without this. Nothing catches it at
+ * runtime: a key is looked up by hash, so a wrong prefix is an ordinary authentication failure
+ * with no hint that the format was the problem. The docs are also the source of
+ * `llms-full.txt`, so a wrong format reaches coding agents as readily as readers.
  *
- * The prefix is READ from the declaration rather than restated here. Two copies of "what a key
- * looks like" is how the docs and the code came apart in the first place.
+ * The prefix is READ from the declaration rather than restated here. A second copy of "what a
+ * key looks like" is the thing that lets the docs and the code drift apart.
  *
  * This lives here rather than in a vitest suite in `packages/nextly` for two reasons, both
  * measured: that package is not in the CI `Test` step's filter list, so the suite ran in no job
@@ -782,6 +803,69 @@ function blankComments(text) {
  * This script runs in the `comments` job, which is deliberately not gated on the inert
  * decision, so it runs on a docs-only commit, which is exactly when this regresses.
  */
+/**
+ * Blank TypeScript comments, keeping every offset and line break where it was.
+ *
+ * `KEY_PREFIX_DECLARATION` is anchored to the start of a line, which stops a `//`-commented
+ * copy standing in for the real thing. A block comment does not indent what it contains, so
+ * `/*` on its own line followed by `const KEY_PREFIX = "nx_old_";` matches as readily as the
+ * declaration. Where issuance has since moved to a differently named constant, that stale copy
+ * is the only match, and the check reads it and holds the docs to a value nothing issues.
+ *
+ * String literals are tracked rather than skipped over, because `//` inside one begins no
+ * comment and blanking from it would swallow the rest of the line, the declaration included.
+ * A regex literal containing a slash pair is read as a comment and over-blanks; that costs a
+ * `key-prefix-undeclared` refusal rather than a false pass, which is the direction to be wrong
+ * in, and this file has none.
+ */
+function blankSourceComments(text) {
+  let out = "";
+  let index = 0;
+  const blank = character => (character === "\n" ? "\n" : " ");
+  while (index < text.length) {
+    const here = text[index];
+    const next = text[index + 1];
+    if (here === "/" && next === "/") {
+      while (index < text.length && text[index] !== "\n") {
+        out += " ";
+        index += 1;
+      }
+      continue;
+    }
+    if (here === "/" && next === "*") {
+      const close = text.indexOf("*/", index + 2);
+      const stop = close === -1 ? text.length : close + 2;
+      for (; index < stop; index += 1) out += blank(text[index]);
+      continue;
+    }
+    if (here === '"' || here === "'" || here === "`") {
+      out += here;
+      index += 1;
+      while (index < text.length && text[index] !== here) {
+        if (text[index] === "\\") {
+          out += text[index];
+          index += 1;
+          if (index < text.length) {
+            out += text[index];
+            index += 1;
+          }
+          continue;
+        }
+        out += text[index];
+        index += 1;
+      }
+      if (index < text.length) {
+        out += text[index];
+        index += 1;
+      }
+      continue;
+    }
+    out += here;
+    index += 1;
+  }
+  return out;
+}
+
 function documentedKeyPrefix(repoRoot, tracked, findings, isExempt) {
   if (!tracked.includes(KEY_PREFIX_SOURCE)) {
     findings.push({
@@ -810,7 +894,7 @@ function documentedKeyPrefix(repoRoot, tracked, findings, isExempt) {
 
   // Fails closed. If the declaration is renamed, moved or duplicated, this refuses rather than
   // quietly checking the docs against nothing.
-  const declarations = [...source.matchAll(KEY_PREFIX_DECLARATION)];
+  const declarations = [...blankSourceComments(source).matchAll(KEY_PREFIX_DECLARATION)];
   if (declarations.length !== 1) {
     findings.push({
       check: "key-prefix-undeclared",
@@ -824,10 +908,15 @@ function documentedKeyPrefix(repoRoot, tracked, findings, isExempt) {
 
   // Every prose surface, not just `docs/`. ARCHITECTURE.md publishes a bearer example too, and
   // a scope that named one directory would have left it unguarded.
-  const prose = proseFiles(tracked).filter(rel => {
-    const ext = extname(rel);
-    return ext === ".md" || ext === ".mdx";
-  });
+  //
+  // TypeScript under `packages/` is in scope for the same reason. `shared/types/config.ts`
+  // documents `Authorization: Bearer nx_live_...` in JSDoc that ships in the package's
+  // declarations, so it is an example a reader is shown in their editor, and a Markdown-only
+  // scope would let it go stale while every published page was updated and the check passed.
+  //
+  // Tests are dropped. Their bearer headers belong to other services and to fixtures, so
+  // judging them against the Nextly prefix would report a defect that is not one.
+  const prose = proseFiles(tracked).filter(rel => !TEST_FILE.test(rel));
 
   let examined = 0;
 
@@ -838,17 +927,24 @@ function documentedKeyPrefix(repoRoot, tracked, findings, isExempt) {
     } catch {
       continue; // unreadable-manifest already reports a file the index names and disk lacks
     }
-    const lines = text.split("\n");
     // Matched over the whole file rather than line by line, so an example wrapped after the
     // scheme is still found. Offsets survive comment blanking, so the line number is real.
     const scanned = blankComments(text);
     for (const match of scanned.matchAll(BEARER_EXAMPLE)) {
       const line = scanned.slice(0, match.index).split("\n").length;
       const token = match[1];
-      // Counted AFTER the exemption, so the population is the examples this actually judged.
-      // Counting before it meant a tree whose only remaining example was exempted reported
-      // neither a finding nor a refusal.
-      if (isExempt(rel, lines[line - 1] ?? "")) continue;
+      // The exemption is digested from the whole matched example rather than from the line the
+      // match starts on. An allowlisted third-party example that wraps after `Bearer` puts its
+      // credential on the next line, so a line digest would cover the scheme and not the thing
+      // being excused, and swapping in a wrong Nextly prefix would inherit the exemption while
+      // other pages held the examined count above zero. `digestLine` collapses whitespace, so
+      // wrapping the same example a different way still matches.
+      //
+      // Counted AFTER the exemption, so the population is the examples this actually judged: a
+      // tree whose only remaining example was exempted must report a refusal, not silence.
+      if (isExempt(rel, match[0])) continue;
+      // A placeholder is not an example of the format, so it is neither judged nor counted.
+      if (isPlaceholder(token, prefix)) continue;
       examined += 1;
       if (token.startsWith(prefix)) continue;
       findings.push({

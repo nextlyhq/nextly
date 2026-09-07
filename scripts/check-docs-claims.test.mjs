@@ -1288,7 +1288,8 @@ describe("documented-key-prefix", () => {
   });
 
   it("fires on a bearer example using another vendor's prefix", async () => {
-    // The real defect: four examples said `sk_`, which is Stripe's.
+    // `sk_` is Stripe's prefix, so a Nextly page documenting it sends a reader
+    // a header that cannot authenticate against this service.
     expect(
       await checksFor(tree({ "docs/guides/authentication.mdx": "Use `Authorization: Bearer sk_...`\n" }))
     ).toContain("documented-key-prefix");
@@ -1349,10 +1350,11 @@ describe("documented-key-prefix", () => {
   });
 
   it("ignores a commented-out declaration left behind after a rename", async () => {
-    // The regex used to match the name anywhere. A stale
-    // `// const KEY_PREFIX = "nx_live_"` kept for context would then be the one
-    // declaration it found, and the docs would be held to a value the service
-    // no longer issues, reported clean.
+    // A stale `// const KEY_PREFIX = "nx_live_"` kept for context is not a
+    // declaration, and counting it as one is how the docs get held to a value
+    // the service no longer issues while the check reports clean. The live
+    // constant here has a different name, so the commented line is the only
+    // text matching the old one.
     expect(
       await checksFor(
         tree(
@@ -1396,10 +1398,11 @@ describe("documented-key-prefix", () => {
   });
 
   it("reports another service's token unless a line is exempted", async () => {
-    // Ownership cannot be read off a credential. An earlier version skipped any
-    // recognised vendor prefix, which meant a Stripe-shaped token in the Nextly
-    // auth guide was silently treated as a Stripe example rather than a
-    // regression, while other pages kept the examined count above zero.
+    // Ownership cannot be read off a credential. A Stripe-shaped token in the
+    // Nextly auth guide is a regression, not a Stripe example, so the shape of
+    // the token decides nothing and only an exempted line is excused. The tree
+    // holds other valid examples, so the examined count stays above zero and
+    // the finding is what distinguishes this from a clean pass.
     expect(
       await checksFor(
         tree({
@@ -1411,8 +1414,10 @@ describe("documented-key-prefix", () => {
   });
 
   it("matches the scheme whatever its casing", async () => {
-    // A lowercase scheme reached no comparison at all, and other pages kept the
-    // examined count above zero, so CI stayed green on a wrong prefix.
+    // RFC 7235 makes the scheme case-insensitive, so `bearer` names the same
+    // header as `Bearer` and its credential is compared like any other. A
+    // scheme that reached no comparison would leave a wrong prefix unreported
+    // while the rest of the tree kept the examined count above zero.
     for (const scheme of ["bearer", "BEARER", "BeArEr"]) {
       expect(
         await checksFor(
@@ -1442,8 +1447,9 @@ describe("documented-key-prefix", () => {
   });
 
   it("covers prose outside docs/, such as ARCHITECTURE.md", async () => {
-    // The first scope named one directory. ARCHITECTURE.md publishes a bearer
-    // example too, and was unguarded.
+    // The scope is every prose surface rather than one directory.
+    // ARCHITECTURE.md publishes a bearer example too, and a scope named after
+    // `docs/` would leave it unguarded.
     expect(
       await checksFor(
         tree({ "ARCHITECTURE.md": "API keys: Authorization: Bearer sk_live_EXAMPLE\n" }),
@@ -1453,7 +1459,8 @@ describe("documented-key-prefix", () => {
 
   it("finds an example wrapped after the scheme", async () => {
     // Markdown renders the break as whitespace, so this is one example to a
-    // reader. Matching line by line saw two halves and judged neither.
+    // reader. A line-by-line match sees two halves and judges neither, and the
+    // wrong prefix goes out in a page that reads exactly like the correct one.
     expect(
       await checksFor(
         tree({
@@ -1495,22 +1502,136 @@ describe("documented-key-prefix", () => {
   });
 
   it("refuses when the only remaining example is exempted", async () => {
-    // The population must count what was JUDGED. Counting before the exemption
-    // meant a tree whose last example was allowlisted reported neither a
-    // finding nor a refusal, having checked no Nextly key at all.
-    const line = "Use Authorization: Bearer partner_EXAMPLE";
+    // The population must count what was JUDGED. A tree whose last example is
+    // allowlisted has checked no Nextly key at all, so it owes a refusal rather
+    // than the silence of a finding it did not look for.
+    const example = "Bearer partner_EXAMPLE";
     expect(
       await checksFor(
-        tree({ "docs/guides/integrations.mdx": line + "\n" }),
+        tree({ "docs/guides/integrations.mdx": `Use Authorization: ${example}\n` }),
         {
           allowlist: {
             "documented-key-prefix": {
-              "docs/guides/integrations.mdx": { count: 1, digests: [digestLine(line)] },
+              "docs/guides/integrations.mdx": { count: 1, digests: [digestLine(example)] },
             },
           },
         },
       ),
     ).toContain("key-prefix-unexamined");
+  });
+
+  it("does not let a wrapped exemption cover a credential it never saw", async () => {
+    // The exemption is digested from the whole example, not from the line the
+    // match starts on. A third-party example that wraps after `Bearer` puts its
+    // credential on the next line, so a line digest would name the scheme and
+    // leave the credential free to change underneath it: swapping in a wrong
+    // Nextly prefix would inherit the exemption while other pages held the
+    // examined count above zero and CI stayed green.
+    const wrapped = "Bearer\npartner_EXAMPLE";
+    const allowlist = {
+      "documented-key-prefix": {
+        "docs/guides/integrations.mdx": { count: 1, digests: [digestLine(wrapped)] },
+      },
+    };
+    // The example the allowlist was written for is excused.
+    expect(
+      await checksFor(
+        tree({ "docs/guides/integrations.mdx": `Use Authorization: ${wrapped}\n` }),
+        { allowlist },
+      ),
+    ).not.toContain("documented-key-prefix");
+    // The same first line with a different credential is not.
+    expect(
+      await checksFor(
+        tree({ "docs/guides/integrations.mdx": "Use Authorization: Bearer\nsk_EXAMPLE\n" }),
+        { allowlist },
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("ignores a declaration inside a block comment", async () => {
+    // The anchor stops a `//`-commented copy standing in for the real thing,
+    // and a block comment does not indent what it contains, so a stale
+    // `const KEY_PREFIX` on its own line inside one matches the same anchor.
+    // Where issuance has moved to a differently named constant, that stale copy
+    // is the only match, and the docs are then held to a value nothing issues.
+    expect(
+      await checksFor(
+        tree(
+          { "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n" },
+          '/*\nconst KEY_PREFIX = "nx_live_";\n*/\nconst API_KEY_PREFIX = "nx_v2_";',
+        ),
+      ),
+    ).toContain("key-prefix-undeclared");
+  });
+
+  it("keeps a declaration whose line holds a string containing a slash pair", async () => {
+    // Blanking comments must track string literals: a `//` inside one begins no
+    // comment, and blanking from it would swallow the rest of the line and the
+    // declaration with it.
+    expect(
+      await checksFor(
+        tree(
+          { "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n" },
+          'const DOCS = "https://nextlyhq.com";\nconst KEY_PREFIX = "nx_live_";',
+        ),
+      ),
+    ).not.toContain("key-prefix-undeclared");
+  });
+
+  it("leaves a symbolic placeholder alone", async () => {
+    // `YOUR_API_KEY` instructs a reader to substitute something; it is not a
+    // claim about the format. Reporting it would have the always-run docs job
+    // block a correct page. Nothing was judged here, so the refusal is what is
+    // owed instead.
+    const checks = await checksFor(
+      tree({ "docs/guides/authentication.mdx": "Use Authorization: Bearer YOUR_API_KEY\n" }),
+    );
+    expect(checks).not.toContain("documented-key-prefix");
+    expect(checks).toContain("key-prefix-unexamined");
+  });
+
+  it("still reports a capitalised spelling of the issued prefix", async () => {
+    // The placeholder rule reads capitals as "replace me", and this is the one
+    // all-capitals token it must not excuse: `NX_LIVE_` spells the prefix the
+    // service issues, so it is a mis-cased key rather than an instruction, and
+    // sha256 of the whole string means that header cannot authenticate.
+    expect(
+      await checksFor(
+        tree({ "docs/guides/authentication.mdx": "Use Authorization: Bearer NX_LIVE_KEY\n" }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("checks bearer examples published in TypeScript documentation", async () => {
+    // `shared/types/config.ts` documents the header in JSDoc that ships in the
+    // package's declarations, so it is an example a reader is shown in their
+    // editor. A Markdown-only scope lets it go stale while every published page
+    // is updated and the check passes.
+    expect(
+      await checksFor(
+        tree({
+          "packages/nextly/src/shared/types/config.ts":
+            "/** Authenticate with `Authorization: Bearer sk_live_EXAMPLE`. */\nexport type C = {};\n",
+        }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("does not judge bearer headers in tests, which belong to other services", async () => {
+    // Fixtures authenticate against Resend, Stripe and stub receivers. Holding
+    // those to the Nextly prefix reports a defect that is not one, and a job
+    // that always runs cannot afford it.
+    const checks = await checksFor(
+      tree({
+        "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n",
+        "packages/nextly/src/domains/email/__tests__/resend.test.ts":
+          'const headers = { Authorization: "Bearer re_test_key" };\n',
+        "packages/nextly/src/utils/validate-url.test.ts":
+          'const headers = { authorization: "Bearer sk_test_key" };\n',
+      }),
+    );
+    expect(checks).not.toContain("documented-key-prefix");
   });
 
   it("refuses when it examined no example at all", async () => {
