@@ -148,6 +148,12 @@ export {
   // fingerprints or compares copied content has to tokenise it exactly where
   // the remapper does, and a `split` of their own agrees only until one moves.
   idReferenceTokens,
+  // Which of a set of candidate ids a subtree's references actually reach,
+  // answered by running the relink pass rather than by enumerating the carriers
+  // a second time. Published for the same reason the two above are: a surface
+  // recording what a copy renamed has to agree with what the copier rewrote,
+  // and a parallel walk agrees only until one of them gains a carrier.
+  referencedDomIds,
   duplicateNode,
   updateNode,
 } from "./tree";

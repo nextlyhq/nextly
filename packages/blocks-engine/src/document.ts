@@ -9,7 +9,7 @@
  * a framework.
  */
 import { isPlainRecord } from "./plain-record";
-import { ownEntry, ownKeys } from "./safe-record";
+import { ownKeys } from "./safe-record";
 
 /**
  * Engine document-format version. Bumped only when the envelope shape itself
@@ -245,14 +245,56 @@ export type BlockOrigin =
  */
 export function isBlockOrigin(value: unknown): value is BlockOrigin {
   if (!isPlainRecord(value)) return false;
-  const id = ownEntry(value, "id");
+  const id = storedEntry(value, "id");
   if (typeof id !== "string" || id === "") return false;
-  const from = ownEntry(value, "from");
+  const from = storedEntry(value, "from");
   if (from === "component") return true;
   if (from !== "pattern") return false;
-  const digest = ownEntry(value, "digest");
+  const digest = storedEntry(value, "digest");
   if (typeof digest !== "string" || digest === "") return false;
-  return isRenameRecord(ownEntry(value, "renamed"));
+  return hasStoredRenameRecord(value);
+}
+
+/**
+ * A record's own STORED value for one key, or `undefined` when it has none.
+ *
+ * The DESCRIPTOR, never the read. Every field of a provenance record is data a
+ * caller supplied — an import, a script, an in-process edit — and reading one
+ * runs that caller's code inside the published guard deciding whether to trust
+ * it. A throwing getter escapes {@link isBlockOrigin} as a native error rather
+ * than the `false` it promises, and a side-effecting one executes on the way
+ * past. Measured, all four fields did that.
+ *
+ * `"value" in descriptor` rather than asking whether there is a getter: an
+ * accessor descriptor carries no `value` key at all, and a set-only accessor
+ * has no getter either — so asking about the getter alone calls one stored
+ * value and one computed one the same thing.
+ *
+ * A computed field is reported as ABSENT, and for `id`, `from` and `digest`
+ * that is already a refusal: none of them may be missing. `renamed` may, which
+ * is why {@link hasStoredRenameRecord} asks separately rather than through
+ * this.
+ */
+function storedEntry(record: object, key: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  return descriptor === undefined || !("value" in descriptor)
+    ? undefined
+    : descriptor.value;
+}
+
+/**
+ * Whether an origin's rename record is one this guard accepts.
+ *
+ * Three answers, not two, which is why it cannot go through
+ * {@link storedEntry}: ABSENT is valid and means nothing was renamed, COMPUTED
+ * is refused because it is not stored data, and both read as `undefined` once
+ * the descriptor is collapsed to a value.
+ */
+function hasStoredRenameRecord(origin: object): boolean {
+  const descriptor = Object.getOwnPropertyDescriptor(origin, "renamed");
+  if (descriptor === undefined) return true;
+  if (!("value" in descriptor)) return false;
+  return isRenameRecord(descriptor.value);
 }
 
 /**
@@ -303,9 +345,7 @@ function isRenameEntry(
   current: Set<string>
 ): boolean {
   if (name === "") return false;
-  const descriptor = Object.getOwnPropertyDescriptor(value, name);
-  if (descriptor === undefined || descriptor.get !== undefined) return false;
-  const now: unknown = descriptor.value;
+  const now = storedEntry(value, name);
   if (typeof now !== "string" || now === "") return false;
   if (current.has(now)) return false;
   current.add(now);

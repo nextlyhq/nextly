@@ -48,6 +48,22 @@ Nothing to migrate. A record written before this field existed carries no rename
 map, which says exactly what an empty one says — restore nothing — so an older
 document behaves as it does today.
 
+A root that only REFERENCES a renamed id records the rename too. One root can
+define `#pricing` while a sibling names it through `aria-describedby`, an
+`href="#pricing"`, or that link's binding fallback — the insert rewrites all
+four, so a record covering only the ids a root RENDERS left the referencing root
+carrying a page-specific id with no way back. Saved on its own, it went into the
+library naming an id that exists on exactly one page and resolves to nothing
+anywhere it is inserted next. Restoring now also reaches a node an author gated
+after inserting it, which otherwise gave back the reference and not its target.
+
+A component whose forest is larger than the node cap is now refused for its
+SIZE. Exposure pointers are resolved against an index built under `maxNodes`, so
+a forest past that bound was indexed only as far as the bound reached and every
+pointer beyond it was reported as pointing at a node the document does not
+contain — sending an author to repair a sound exposure while the one thing they
+could act on went unmentioned.
+
 A component definition can also be duplicated. Its exposed properties and slot
 regions are pointers INTO its tree, so a copy that re-identifies the nodes
 without re-aiming them loads, renders, shows its properties in the inspector,

@@ -348,6 +348,48 @@ describe("a provenance record's rename map", () => {
     expect(isBlockOrigin({ ...base, renamed })).toBe(false);
   });
 
+  it.each(["id", "from", "digest", "renamed"])(
+    "refuses a record whose %s computes itself, without running it",
+    field => {
+      // Every field of a provenance record is data a caller supplied — an
+      // import, a script, an in-process edit — and this is the published guard
+      // that decides whether to trust it. Reading a field with an ordinary
+      // property access runs the caller's code INSIDE that decision: a throwing
+      // getter escaped as a native error rather than the `false` this promises,
+      // and a side-effecting one executed on the way past. Measured, all four
+      // fields did that; only the entries INSIDE the map were descriptor-read.
+      let reads = 0;
+      const origin: Record<string, unknown> = { ...base };
+      Object.defineProperty(origin, field, {
+        enumerable: true,
+        configurable: true,
+        get() {
+          reads += 1;
+          throw new Error("a provenance field must never be invoked");
+        },
+      });
+
+      expect(isBlockOrigin(origin)).toBe(false);
+      expect(reads).toBe(0);
+    }
+  );
+
+  it("refuses a record whose renamed is a set-only accessor", () => {
+    // Absent and COMPUTED are different answers and both read back as
+    // `undefined`, so collapsing the descriptor to its value would call this
+    // record whole. A set-only accessor has no getter either, which is why the
+    // rule is "does the descriptor hold a value", not "is there a getter".
+    const origin: Record<string, unknown> = { ...base };
+    Object.defineProperty(origin, "renamed", {
+      enumerable: true,
+      configurable: true,
+      set() {
+        /* nothing */
+      },
+    });
+    expect(isBlockOrigin(origin)).toBe(false);
+  });
+
   it("ignores a rename map on a component record", () => {
     // That arm severs a link deliberately and restores nothing, so it has no
     // such field; an extra member is not what makes a record whole. The map is

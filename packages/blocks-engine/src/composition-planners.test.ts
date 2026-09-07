@@ -1264,6 +1264,13 @@ describe("a caller-sized exposure costs a refusal, not a traversal", () => {
     // The control: under the DEFAULT cap the same definition is refused, so
     // the assertion above is about the limit being threaded rather than about
     // the pointer happening to resolve.
+    //
+    // Refused for its SIZE, which is what is actually wrong with it. This
+    // asserted `exposed-node-missing` until the bound was settled before the
+    // index was built — and that verdict was the defect: `k5100` is a real node
+    // this document really contains, called dangling only because the index
+    // stopped at the cap. It sent an author to repair a sound exposure while
+    // the size, the one thing they could act on, went unmentioned.
     const defaulted = planSaveAsComponent(
       doc,
       ["root"],
@@ -1271,9 +1278,8 @@ describe("a caller-sized exposure costs a refusal, not a traversal", () => {
       exposure,
       anyParent
     );
-    expect(defaulted.issues?.map(i => i.code)).toContain(
-      "exposed-node-missing"
-    );
+    expect(defaulted.problem).toBe("exceeds-limits");
+    expect(defaulted.issues).toBeUndefined();
   });
 });
 
@@ -1621,6 +1627,133 @@ describe("an insert records what it renamed, and a save puts it back", () => {
       pricing: renamedTarget.cssId,
     });
   });
+
+  it("records the rename on a root that only REFERENCES the renamed id", () => {
+    // The other half of what a rename touches. `reidForestWithMap` rewrites
+    // references across the WHOLE forest, so the link root's
+    // `aria-describedby` followed `pricing` to its minted name — but the record
+    // was built from the ids each root RENDERS, and this root renders none. It
+    // therefore carried a page-specific id with nothing saying what it had been.
+    const { placed } = insertedInto(heroPattern());
+    const renamedTarget = marked(placed, "target");
+    const link = marked(placed, "link");
+
+    // It really did follow the rename.
+    expect(link.attributes?.["aria-describedby"]).toBe(renamedTarget.cssId);
+
+    const origin = link.origin;
+    expect(origin?.from === "pattern" ? origin.renamed : undefined).toEqual({
+      pricing: renamedTarget.cssId,
+    });
+  });
+
+  it("ROUND TRIP: saving only the referencing root restores its reference", () => {
+    // The consequence, which the record exists to prevent. Saving the pair
+    // together already worked, because the TARGET's record covered `pricing`
+    // and the restore reads every selected root's. Saving the link alone is
+    // the case that had no answer: the run went into the library still naming
+    // `pricing-<suffix>`, an id that exists on exactly one page and resolves to
+    // nothing anywhere it is inserted next — a silent loss of the accessible
+    // name, which is what these references are for.
+    const { destination, placed } = insertedInto(heroPattern());
+    const link = marked(placed, "link");
+
+    const saved = planSaveAsPattern(destination, [link.id], target, anyParent);
+
+    const savedLink = marked(created(saved).document.nodes, "link");
+    expect(savedLink.attributes?.["aria-describedby"]).toBe("pricing");
+  });
+
+  it("restores a renamed id on a node the author gated after inserting", () => {
+    // Gating decides what may be RENAMED, because a rename avoids the ids a
+    // page renders. Putting one BACK asks nothing about the page — so a node
+    // gated between the insert and the save still holds the minted id and still
+    // has to give it up. Skipping it restored the link and not its target,
+    // which points the two at different ids and breaks the pattern for every
+    // page it is inserted into afterwards.
+    const { destination, placed } = insertedInto(heroPattern());
+    const renamedTarget = marked(placed, "target");
+    const gated = page(
+      destination.nodes.map(one =>
+        one.id === renamedTarget.id
+          ? {
+              ...one,
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+              },
+            }
+          : one
+      )
+    );
+
+    const saved = planSaveAsPattern(
+      gated,
+      placed.map(one => one.id),
+      target,
+      anyParent
+    );
+    const stored = created(saved).document.nodes;
+
+    expect(marked(stored, "target").cssId).toBe("pricing");
+    expect(marked(stored, "link").attributes?.["aria-describedby"]).toBe(
+      "pricing"
+    );
+  });
+
+  it.each([
+    [
+      "an href prop",
+      (id: string) => ({ props: { mark: "link", href: `#${id}` } }),
+      (n: BlockNode) => n.props?.href,
+    ],
+    [
+      "a bound href's fallback",
+      (id: string) => ({
+        props: { mark: "link" },
+        bindings: { href: { $bind: "url", fallback: `#${id}` } },
+      }),
+      (n: BlockNode) =>
+        (n.bindings as { href?: { fallback?: unknown } } | undefined)?.href
+          ?.fallback,
+    ],
+  ])(
+    "records the rename for a root that references it through %s",
+    (_name, build, read) => {
+      // `relinkOne` rewrites THREE carriers, not one: an IDREFS attribute, a
+      // `#id` link in props, and that link's binding fallback. A record built
+      // from a second enumeration of the carriers would cover whichever the
+      // author of that list remembered, so the record is taken from the relink
+      // pass itself and every carrier it rewrites is covered by construction.
+      const authored = page([
+        node("t", { cssId: "pricing", props: { mark: "target" } }),
+        node("l", build("pricing")),
+      ]);
+      const stored = created(
+        planSaveAsPattern(authored, ["t", "l"], target, anyParent)
+      ).document;
+
+      const destination = page([node("existing", { cssId: "pricing" })]);
+      const insert = planInsertPattern(
+        destination,
+        { id: "hero-pattern", document: stored },
+        { index: 1 },
+        anyParent
+      );
+      const placed = pageOps(insert).flatMap(op =>
+        op.kind === "insert" ? [op.node] : []
+      );
+      const renamedTarget = marked(placed, "target");
+      const link = marked(placed, "link");
+
+      // It really did follow the rename.
+      expect(read(link)).toBe(`#${renamedTarget.cssId!}`);
+
+      const origin = link.origin;
+      expect(origin?.from === "pattern" ? origin.renamed : undefined).toEqual({
+        pricing: renamedTarget.cssId,
+      });
+    }
+  );
 
   it("records nothing when nothing was renamed", () => {
     // Absent rather than empty, so a copy that renamed nothing is identical to
@@ -2252,6 +2385,40 @@ describe("a duplicate is a row of its own", () => {
     expect(
       (source as unknown as { assets: { mediaIds: string[] } }).assets.mediaIds
     ).toHaveLength(1);
+  });
+
+  it("blames the SIZE, not a sound exposure, when the forest is over the cap", () => {
+    // The envelope check resolves every exposure pointer against an index it
+    // builds under `maxNodes`, so a forest past that bound is indexed only as
+    // far as the bound reaches. A pointer at anything beyond it then comes back
+    // as `exposed-node-missing` — a node the document really contains, called
+    // dangling. That verdict sends an author to delete or repair an exposure
+    // that was never wrong, while the one thing they could act on, the size,
+    // goes unmentioned. Only DEPTH and COUNT can truncate the index, so only
+    // those are settled before one is built.
+    const source = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component" as const,
+      nodes: [node("n1"), node("n2"), node("n3")],
+      exposed: [
+        {
+          id: "x1",
+          label: "Text",
+          nodeId: "n3",
+          propPath: "text",
+          type: "text" as const,
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    const plan = planDuplicateComponent(source, componentTarget, {
+      ...DEFAULT_LIMITS,
+      maxNodes: 2,
+    });
+
+    expect(plan.problem).toBe("exceeds-limits");
+    // And no issue list at all, so the sound pointer is never blamed.
+    expect(plan.issues).toBeUndefined();
   });
 
   it("refuses a source whose node breaks the node contract", () => {

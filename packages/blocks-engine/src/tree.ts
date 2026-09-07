@@ -1188,18 +1188,41 @@ export interface ReidentifiedForest {
  * grew by nine characters every cycle, `hero` to
  * `hero-3ee4a0d4-fb48e67c-1118df3b` and on, with no bound.
  */
+/** No node is gated — the set a restore walks with. */
+const EMPTY_NODE_SET: ReadonlySet<BlockNode> = new Set<BlockNode>();
+
 export function reidForestWithMap(
   nodes: BlockNode[],
   domIdPolicy: DomIdPolicy = "remint"
 ): ReidentifiedForest {
   const nodeIds = new Map<string, string>();
   const domIds = new Map<string, string>();
+  const restoring = typeof domIdPolicy === "object" && "restore" in domIdPolicy;
+
+  // A RESTORE knows both halves of every move before the walk starts, so it
+  // seeds them. The other policies discover what moved as they go, and an id
+  // that was not minted contributes no entry — but a restore is undoing an
+  // insert's renames, and a selection may hold the REFERENCE without the node
+  // that renders it. Saving only the root carrying `aria-describedby` found
+  // nothing in the map, left the page-specific id in place, and put a pattern
+  // in the library naming an id that exists on exactly one page.
+  if (restoring) {
+    for (const [now, was] of domIdPolicy.restore) domIds.set(now, was);
+  }
 
   // A node the renderer prunes puts NO id on the page, so none of its ids may
   // be rewritten: renaming one and following every reference to it leaves a
   // visible sibling's `#hero` pointing at a minted id nothing owns, where
   // before it reached the destination's own `hero`.
-  const hidden = hiddenSubtreeNodes(nodes);
+  //
+  // A RESTORE is the exception, and walks with an empty set. Gating decides
+  // what may be RENAMED, because a rename has to avoid the ids a page renders
+  // — a question about the page. Putting an id BACK asks nothing about the
+  // page: the insert renamed only ungated nodes, so everything in a restore map
+  // was renamed while visible, and a node an author gated afterwards still
+  // holds the minted id and still has to give it up. Leaving it behind restored
+  // the reference and not its target, pointing the two at different ids.
+  const hidden = restoring ? EMPTY_NODE_SET : hiddenSubtreeNodes(nodes);
   const rebuilt = mapForest(nodes, original =>
     reidOneKeepingReferences(original, nodeIds, domIds, domIdPolicy, hidden)
   );
@@ -1265,6 +1288,55 @@ function relinkOne(
     ...(props === undefined ? {} : { props }),
     ...(bindings === undefined ? {} : { bindings }),
   };
+}
+
+/**
+ * Which of a set of candidate DOM ids one subtree's REFERENCES actually reach.
+ *
+ * A copy's rename record has to cover every id the copy still points at, not
+ * only the ids it renders. One root can define `#hero` while a sibling names it
+ * through `aria-describedby`, a `href="#hero"` prop, or that href's binding
+ * fallback — {@link reidForestWithMap} rewrites all three across the whole
+ * forest, so a record built from rendered ids alone leaves the referencing root
+ * with a page-specific id and no way back to what its source called it.
+ *
+ * Answered by RUNNING the relink pass rather than by a second enumeration of
+ * which fields hold a reference. That list lives in three places already
+ * ({@link ID_REFERENCE_ATTRIBUTES} and the two fragment remappers), and a
+ * fourth reader of it would agree with them exactly until one of them gained a
+ * carrier — at which point this would go on reporting a complete record while
+ * silently missing the new one. Running the pass cannot drift from the pass.
+ *
+ * The rewritten nodes are DISCARDED; only which lookups the pass made is kept.
+ * One entry per root, positionally, so the work is linear in the forest however
+ * many entries the candidate map holds.
+ */
+export function referencedDomIds(
+  roots: readonly BlockNode[],
+  candidates: ReadonlyMap<string, string>
+): ReadonlyMap<string, string>[] {
+  const perRoot = roots.map(() => new Map<string, string>());
+  if (candidates.size === 0) return perRoot;
+  // ONE probe for the whole forest, and the root being walked decides where a
+  // hit is recorded. Copying the candidates per root would put the map's size
+  // into the per-root cost — the same shape as recording every root's renames
+  // on every root, which made a wide pattern's work grow with its square.
+  //
+  // A real `Map`, so every member the remappers reach — `size` as well as
+  // `get` — behaves as they expect; only the lookup is observed.
+  let used = perRoot[0];
+  const probe = new Map(candidates);
+  const lookup = probe.get.bind(probe);
+  probe.get = (key: string): string | undefined => {
+    const found = lookup(key);
+    if (found !== undefined) used.set(key, found);
+    return found;
+  };
+  roots.forEach((root, index) => {
+    used = perRoot[index]!;
+    mapForest([root], copy => relinkOne(copy, probe));
+  });
+  return perRoot;
 }
 
 /**

@@ -39,7 +39,7 @@ import type {
 } from "./document";
 import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import type { DocumentLimits } from "./limits";
-import { surveyDocument } from "./measure-bytes";
+import { surveyDocument, type DocumentSurvey } from "./measure-bytes";
 import {
   canBeRoot,
   canNest,
@@ -70,6 +70,7 @@ import {
   hiddenSubtreeNodes,
   mapForest,
   newId,
+  referencedDomIds,
   reidForestWithMap,
   walkNodes,
 } from "./tree";
@@ -1067,6 +1068,13 @@ export function planDuplicateComponent<TFields>(
     ...aimedSlotMap(carried.slots, copied.nodeIds),
   } satisfies ComponentDocument;
 
+  // Measured ONCE, and read by both questions below. The bounds that decide
+  // whether an envelope index describes the whole forest have to be settled
+  // BEFORE one is built; the rest of what the survey knows is asked after, so a
+  // caller-sized envelope still earns the verdict about the envelope.
+  const survey = surveyDocument(duplicate, limits);
+  if (overIndexBound(survey)) return { problem: "exceeds-limits" };
+
   const issues = componentEnvelopeIssues(duplicate, limits);
   if (issues.length > 0) return { problem: "invalid-exposure", issues };
 
@@ -1080,7 +1088,7 @@ export function planDuplicateComponent<TFields>(
   if (duplicated !== undefined) return duplicated;
 
   return (
-    definitionRefusal(duplicate, limits) ?? {
+    definitionRefusal(duplicate, survey) ?? {
       create: {
         collection: target.collection,
         document: duplicate,
@@ -1190,6 +1198,13 @@ function componentDocument(
     ...exposedSlots(read, saved.nodeIds),
   };
 
+  // Measured ONCE, and read by both questions below. The bounds that truncate
+  // an envelope index are settled before one is built; this path reaches that
+  // case too — a run saved as a component under a host `maxNodes` smaller than
+  // the run.
+  const survey = surveyDocument(definition, limits);
+  if (overIndexBound(survey)) return { problem: "exceeds-limits" };
+
   // The HOST's limits, not this module's default. The envelope check indexes
   // the forest under whatever node cap it is given, and a host that raised
   // `maxNodes` can hold a definition larger than the default — whose later
@@ -1206,7 +1221,7 @@ function componentDocument(
   // make the whole document unstorable: an option carrying a `BigInt` survives
   // the envelope check, which reads `value` and `label`, and JSON cannot write
   // it. The plan would report success and the create would fail on save.
-  return definitionRefusal(definition, limits) ?? { document: definition };
+  return definitionRefusal(definition, survey) ?? { document: definition };
 }
 
 /**
@@ -1456,16 +1471,38 @@ function unreadable(read: ReadExposure): boolean {
  */
 function definitionRefusal(
   definition: ComponentDocument,
-  limits: DocumentLimits
+  survey: DocumentSurvey
 ): PlanRefusal | undefined {
   if (documentRefusal(definition) !== undefined) {
     return { problem: "unusable-document" };
   }
-  const survey = surveyDocument(definition, limits);
   if (survey.tooLarge || survey.tooDeep || survey.tooManyNodes) {
     return { problem: "exceeds-limits" };
   }
   return undefined;
+}
+
+/**
+ * Whether an envelope index built under these limits would MISS part of the
+ * forest.
+ *
+ * `componentEnvelopeIssues` indexes the nodes to resolve every exposure pointer
+ * against, and it builds that index under `maxNodes` — so a forest past the
+ * bound is indexed only as far as the bound reaches, and a pointer at anything
+ * beyond it comes back as `exposed-node-missing`. Measured, a sound pointer at
+ * the third node of a three-node component under `maxNodes: 2` was reported as
+ * dangling, sending the author to delete or repair an exposure that was never
+ * wrong while the actual problem — the size — went unmentioned.
+ *
+ * Only DEPTH and COUNT, because only those two truncate the index. The byte cap
+ * does not: an over-cap `options` list makes a document unstorable without
+ * making its node index partial, and refusing it here would answer "your
+ * exposure is too big" with a verdict about the whole document. That one stays
+ * behind the envelope check, where it still reads as `invalid-exposure` — which
+ * is the answer an author can act on.
+ */
+function overIndexBound(survey: DocumentSurvey): boolean {
+  return survey.tooDeep || survey.tooManyNodes;
 }
 
 /**
@@ -2384,19 +2421,41 @@ function withInsertOrigin(
   digest: string,
   renamed: ReadonlyMap<string, string>
 ): BlockNode[] {
+  // Asked of the whole forest ONCE: the relink pass runs per root either way,
+  // but the candidate map is built a single time rather than per root.
+  const referenced = referencedDomIds(source, renamed);
   return copied.map((root, index) => ({
     ...root,
-    origin: insertOrigin(patternId, digest, renamedFor(source[index], renamed)),
+    origin: insertOrigin(
+      patternId,
+      digest,
+      renamedFor(source[index], renamed, referenced[index])
+    ),
   }));
 }
 
-/** The entries naming a DOM id this one root actually carried. */
+/**
+ * The entries naming a DOM id this one root actually uses.
+ *
+ * USES, not renders. A root participates in a rename two ways, matching the two
+ * passes {@link reidForestWithMap} makes: it can RENDER an id that had to move,
+ * and it can REFERENCE one that moved on a sibling — an `aria-describedby`, a
+ * `href="#hero"`, or that href's binding fallback. The relink pass rewrites the
+ * second across the whole forest, so a record covering only the first left the
+ * referencing root carrying a page-specific id that no later save could put
+ * back: saved on its own, it went into the library still pointing at
+ * `hero-761f34a2`, which resolves to nothing anywhere else.
+ *
+ * Each half is asked of the pass that performs it, so neither can drift from
+ * what the copier actually did.
+ */
 function renamedFor(
   source: BlockNode | undefined,
-  renamed: ReadonlyMap<string, string>
+  renamed: ReadonlyMap<string, string>,
+  referenced: ReadonlyMap<string, string> | undefined
 ): ReadonlyMap<string, string> {
   if (source === undefined || renamed.size === 0) return new Map();
-  const mine = new Map<string, string>();
+  const mine = new Map<string, string>(referenced);
   // Through the shared walk that answers what reaches the page, so this and the
   // copier cannot come to disagree about which ids a root carries.
   walkRenderedIds([source], id => {
