@@ -1,9 +1,10 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  applyRepairs,
   digestLine,
   namesRetiredCategory,
   packageKeywords,
@@ -2207,5 +2208,148 @@ describe("packageKeywords", () => {
       "cms",
       "framework",
     ]);
+  });
+});
+
+describe("documented-key-prefix repair", () => {
+  const SOURCE = "packages/nextly/src/domains/auth/services/api-key-service.ts";
+  const tree = (docs, declaration = 'const KEY_PREFIX = "nx_live_";') => ({
+    "README.md": "# nextly\n\n@nextlyhq/thing\n",
+    [SOURCE]: `${declaration}\nexport function make() { return KEY_PREFIX; }\n`,
+    ...docs,
+  });
+
+  /** Runs the checks in repairing mode and hands back both halves. */
+  async function repairsFor(spec) {
+    const { root, files } = await fixture(spec);
+    const repairs = [];
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files,
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+      repairs,
+    });
+    return { root, files, repairs, checks: findings.map(f => f.check) };
+  }
+
+  it("records the swap the finding already knows how to make", async () => {
+    const { repairs } = await repairsFor(
+      tree({
+        "docs/guides/authentication.mdx":
+          "Use `Authorization: Bearer sk_live_EXAMPLE`\n",
+      })
+    );
+
+    expect(repairs).toEqual([
+      {
+        file: "docs/guides/authentication.mdx",
+        start: expect.any(Number),
+        from: "sk_live_",
+        to: "nx_live_",
+      },
+    ]);
+  });
+
+  it("records nothing when the page already agrees with the source", async () => {
+    // The negative case the repair needs most: a fixer that offered an edit on
+    // a correct page would rewrite the tree on every run.
+    const { repairs, checks } = await repairsFor(
+      tree({
+        "docs/guides/authentication.mdx":
+          "Use `Authorization: Bearer nx_live_EXAMPLE`\n",
+      })
+    );
+
+    expect(checks).not.toContain("documented-key-prefix");
+    expect(repairs).toEqual([]);
+  });
+
+  it("leaves an example that states no format as a finding", async () => {
+    // 🔴 `Bearer abc123` claims no prefix, so there is nothing to swap. Giving
+    // it one would be writing the documentation rather than correcting it, so
+    // it stays reported and unrepaired.
+    const { repairs, checks } = await repairsFor(
+      tree({
+        "docs/guides/authentication.mdx":
+          "Use `Authorization: Bearer abc123`\n",
+      })
+    );
+
+    expect(checks).toContain("documented-key-prefix");
+    expect(repairs).toEqual([]);
+  });
+
+  it("rewrites the page, and the re-read reports clean", async () => {
+    const spec = tree({
+      "docs/guides/authentication.mdx":
+        "Use `Authorization: Bearer sk_live_EXAMPLE`\n",
+    });
+    const { root, files, repairs } = await repairsFor(spec);
+
+    applyRepairs(root, repairs);
+
+    expect(
+      await readFile(join(root, "docs/guides/authentication.mdx"), "utf-8")
+    ).toBe("Use `Authorization: Bearer nx_live_EXAMPLE`\n");
+
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files,
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+    });
+    expect(findings.map(f => f.check)).not.toContain("documented-key-prefix");
+  });
+
+  it("rewrites every example in one file, whatever the prefixes measure", async () => {
+    // 🔴 The prefixes here are DIFFERENT LENGTHS from the one replacing them, so
+    // an edit applied front to back would move every later offset in the file
+    // and corrupt the ones after the first. Two examples in one page is the
+    // smallest tree that can catch it, and the real docs have eleven.
+    const page =
+      "First `Authorization: Bearer sk_EXAMPLE`\n\n" +
+      "Then `Authorization: Bearer stripe_live_key_EXAMPLE`\n";
+    const { root, files, repairs } = await repairsFor(
+      tree({ "docs/guides/authentication.mdx": page })
+    );
+
+    expect(repairs).toHaveLength(2);
+    applyRepairs(root, repairs);
+
+    expect(
+      await readFile(join(root, "docs/guides/authentication.mdx"), "utf-8")
+    ).toBe(
+      "First `Authorization: Bearer nx_live_EXAMPLE`\n\n" +
+        "Then `Authorization: Bearer nx_live_EXAMPLE`\n"
+    );
+
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files,
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+    });
+    expect(findings.map(f => f.check)).not.toContain("documented-key-prefix");
+  });
+
+  it("refuses rather than rewriting bytes it cannot recognise", async () => {
+    // The offsets rest on the readers padding comments instead of deleting
+    // them. If that ever stopped holding, a silent rewrite would corrupt a
+    // page, so the write checks what it is replacing and stops instead.
+    const { root } = await fixture(
+      tree({ "docs/guides/authentication.mdx": "Use `Bearer sk_live_EXAMPLE`\n" })
+    );
+
+    expect(() =>
+      applyRepairs(root, [
+        {
+          file: "docs/guides/authentication.mdx",
+          start: 0,
+          from: "sk_live_",
+          to: "nx_live_",
+        },
+      ])
+    ).toThrow(/refusing to rewrite/);
   });
 });
