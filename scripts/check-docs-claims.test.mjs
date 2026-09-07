@@ -1743,6 +1743,70 @@ describe("documented-key-prefix", () => {
     ).not.toContain("documented-key-prefix");
   });
 
+  it("judges the prefix quoted on its own, with nothing after it", async () => {
+    // The declaring file explains what the prefix is for and names it bare. Nothing trails it,
+    // so the placeholder form never saw it, and it goes stale like any other statement.
+    expect(
+      await checksFor(
+        tree(
+          { "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n" },
+          '/** Keys carry the `sk_live_` prefix for identification in logs. */\nconst KEY_PREFIX = "nx_live_";',
+        ),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("judges an alphabetic credential when the header is spelled out", async () => {
+    // `Authorization: Bearer abcdef` is a line a reader copies and it cannot authenticate,
+    // whatever its shape. Naming the header is what separates it from prose about the scheme,
+    // so no guess from punctuation is needed.
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx": "Send `Authorization: Bearer abcdef` with each call.\n",
+        }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("still leaves prose about the scheme alone", async () => {
+    // The other side of that, or naming the header would read as "report every word".
+    const checks = await checksFor(
+      tree({
+        "docs/guides/authentication.mdx":
+          "Send a Bearer token. A Bearer header was present.\nUse Authorization: Bearer nx_live_EXAMPLE\n",
+      }),
+    );
+    expect(checks).not.toContain("documented-key-prefix");
+  });
+
+  it("reads a heading as the introduction to the fence below it", async () => {
+    // A fence holds no blank line, so it is a paragraph of its own, and the heading that
+    // announces what it contains is a different one. Judged alone the fence says nothing about
+    // keys and the stale format inside it goes unexamined.
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx":
+            "## API key format\n\n```\nsk_live_<random>...\n```\n",
+        }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("does not carry that introduction further than one block", async () => {
+    // The window is the block before, not the whole page: a page that mentions keys once
+    // would otherwise put every fenced identifier in it under suspicion.
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx":
+            "Use Authorization: Bearer nx_live_EXAMPLE\n\nSome unrelated prose here.\n\n```\nidx_comp_<slug>_parent\n```\n",
+        }),
+      ),
+    ).not.toContain("documented-key-prefix");
+  });
+
   it("does not read a database identifier elsewhere as a concrete key", async () => {
     // The reason the concrete form is confined to the declaring file. A comment saying
     // "primary key" satisfies the vocabulary as readily as one about credentials, and across

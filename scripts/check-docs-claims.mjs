@@ -760,11 +760,17 @@ const BEARER_EXAMPLE =
  * copy and neither can authenticate. Deciding here rather than in the pattern keeps the two
  * questions apart, since "what follows Bearer" and "is that a key" have different answers.
  *
- * A separator or a digit is what tells them apart. Prose says "send a Bearer token" and "a
- * Bearer header was present", and those words carry neither.
+ * A separator or a digit is what tells them apart in running prose, which says "send a Bearer
+ * token" and "a Bearer header was present", and those words carry neither.
+ *
+ * A header written out in full needs no such guess. `Authorization: Bearer abcdef` is a line a
+ * reader copies, and it cannot authenticate whatever its shape, so the scheme having been
+ * spelled with its header name is enough on its own.
  */
-function isCredential(token) {
-  return /[_-]/.test(token) || /[0-9]/.test(token);
+const EXPLICIT_HEADER = /Authorization:[ \t]*$/i;
+
+function isCredential(token, explicitHeader) {
+  return explicitHeader || /[_-]/.test(token) || /[0-9]/.test(token);
 }
 
 /**
@@ -839,10 +845,12 @@ const TEST_FILE = /(?:^|\/)__tests__\/|\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const KEY_FORMAT_EXAMPLE = /\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+_)(?=<|\.\.\.)/g;
 
 /**
- * A key written out in full rather than trailed off, as `"nx_live_abcdefgh"`.
+ * A key written out in full rather than trailed off, as `"nx_live_abcdefgh"`, or the prefix
+ * quoted on its own, as "keys carry the `nx_live_` prefix".
  *
- * The file that declares the prefix shows one twice, as the display prefix a masked UI renders,
- * and those are as able to go stale as any header example.
+ * The file that declares the prefix does both: the display prefix a masked UI renders, and a
+ * bare mention of the prefix in the paragraph explaining what it is for. Neither trails off, so
+ * neither is visible to the placeholder form, and both are as able to go stale as any header.
  *
  * Read in that file and nowhere else, and the measurement is the reason: this pattern applied
  * across every key-talking context reports twenty-two database identifiers, `change_column_type`
@@ -850,7 +858,7 @@ const KEY_FORMAT_EXAMPLE = /\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+_)(?=<|\.\.\.)/g;
  * "key column" are sentences about keys too. Inside the declaring file it reports that one
  * example and nothing else, since every comment there is about this credential.
  */
-const CONCRETE_KEY_EXAMPLE = /["'`]([a-z][a-z0-9]*(?:_[a-z0-9]+)+_[A-Za-z0-9]+)["'`]/g;
+const CONCRETE_KEY_EXAMPLE = /["'`]([a-z][a-z0-9]*(?:_[a-z0-9]+)+_[A-Za-z0-9]*)["'`]/g;
 
 /**
  * The prefix an example claims, which is its leading run of underscore-separated segments.
@@ -1215,7 +1223,13 @@ function documentedKeyPrefix(repoRoot, tracked, packages, findings, isExempt) {
     // and is one example rather than two.
     const candidates = new Map();
     for (const match of scanned.matchAll(BEARER_EXAMPLE)) {
-      candidates.set(match.index + match[0].length - match[1].length, match);
+      const explicitHeader = EXPLICIT_HEADER.test(
+        scanned.slice(Math.max(0, match.index - 24), match.index)
+      );
+      candidates.set(match.index + match[0].length - match[1].length, {
+        match,
+        explicitHeader,
+      });
     }
     // Bare formats are read wherever a doc comment is talking about a key. `rbac.ts` publishes
     // three of them with no scheme, in JSDoc that ships in the package's declarations, so
@@ -1226,8 +1240,13 @@ function documentedKeyPrefix(repoRoot, tracked, packages, findings, isExempt) {
     const contexts = markdown
       ? [...scanned.matchAll(PARAGRAPH)]
       : [...scanned.matchAll(DOC_COMMENT)];
-    for (const context of contexts) {
-      if (!KEY_VOCABULARY.test(context[0])) continue;
+    for (const [position, context] of contexts.entries()) {
+      // The block before counts as part of the context. Markdown introduces a format with a
+      // heading or a sentence and then puts the value in its own fence, and a fence holds no
+      // blank line so it is a paragraph of its own: judged alone, `## API key format` above it
+      // says nothing about what follows.
+      const introduced = (contexts[position - 1]?.[0] ?? "") + "\n" + context[0];
+      if (!KEY_VOCABULARY.test(introduced)) continue;
       const patterns =
         rel === KEY_PREFIX_SOURCE
           ? [KEY_FORMAT_EXAMPLE, CONCRETE_KEY_EXAMPLE]
@@ -1236,12 +1255,16 @@ function documentedKeyPrefix(repoRoot, tracked, packages, findings, isExempt) {
         for (const match of context[0].matchAll(pattern)) {
           // The capture, not the whole match: the concrete form takes its quotes with it.
           const start = context.index + match.index + match[0].indexOf(match[1]);
-          if (!candidates.has(start)) candidates.set(start, match);
+          if (!candidates.has(start)) {
+            candidates.set(start, { match, explicitHeader: false });
+          }
         }
       }
     }
 
-    for (const [start, match] of [...candidates].sort((a, b) => a[0] - b[0])) {
+    for (const [start, { match, explicitHeader }] of [...candidates].sort(
+      (a, b) => a[0] - b[0]
+    )) {
       const line = scanned.slice(0, start).split("\n").length;
       const token = match[1];
       // The exemption is digested from the whole matched example rather than from the line the
@@ -1255,7 +1278,7 @@ function documentedKeyPrefix(repoRoot, tracked, packages, findings, isExempt) {
       // tree whose only remaining example was exempted must report a refusal, not silence.
       if (isExempt(rel, match[0])) continue;
       // "send a Bearer token" is prose about the scheme, not an example of a credential.
-      if (!isCredential(token)) continue;
+      if (!isCredential(token, explicitHeader)) continue;
       // A placeholder is not an example of the format, so it is neither judged nor counted.
       if (isPlaceholder(token)) continue;
       examined += 1;
