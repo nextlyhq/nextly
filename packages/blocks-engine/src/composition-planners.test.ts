@@ -19,7 +19,11 @@ import {
   planSaveAsPattern,
   planUpdatePatternFromSelection,
 } from "./composition-planners";
-import type { PlanResult, PlannedCreate } from "./composition-planners";
+import type {
+  PlanResult,
+  PlanWarning,
+  PlannedCreate,
+} from "./composition-planners";
 import { COMPONENT_INSTANCE_TYPE, DOCUMENT_FORMAT_VERSION } from "./document";
 import type { BlockDocument, BlockNode, ComponentDocument } from "./document";
 import { applyOps } from "./ops";
@@ -2434,6 +2438,201 @@ describe("a duplicate is a row of its own", () => {
 
     expect(planDuplicateComponent(legacy, componentTarget).problem).toBe(
       "invalid-node"
+    );
+  });
+});
+
+describe("the anchors a conversion leaves behind", () => {
+  /** A link whose target is a fragment, which is where an anchor is named. */
+  function link(id: string, href: string): BlockNode {
+    return node(id, { type: "core/link", props: { href } });
+  }
+
+  function warnings<T>(plan: PlanResult<T>): readonly PlanWarning[] {
+    if (plan.warnings === undefined) {
+      throw new Error(`no plan: ${String(plan.problem)}`);
+    }
+    return plan.warnings;
+  }
+
+  it("warns when a link still on the page names an id the run takes away", () => {
+    // Composition scopes a definition-authored id per instance — it has to,
+    // because two instances cannot both answer to one `id` — so the anchor
+    // stops resolving. A warning and not a refusal: nothing here is invalid,
+    // and the author may want the component anyway.
+    const doc = page([
+      link("nav", "#pricing"),
+      node("run", { cssId: "pricing" }),
+    ]);
+
+    const plan = planConvertToComponent(
+      doc,
+      ["run"],
+      componentTarget,
+      "def-1",
+      {},
+      anyParent
+    );
+
+    expect(plan.problem).toBeUndefined();
+    expect(warnings(plan)).toEqual([
+      { kind: "orphaned-anchor", domId: "pricing", referencingRoots: ["nav"] },
+    ]);
+  });
+
+  it("says nothing about a link INSIDE the run", () => {
+    // Both halves move into the definition together and the relink pass
+    // rewrites the reference, so this one keeps working. Reporting it would
+    // train an author to ignore the warning that matters.
+    const doc = page([
+      node(
+        "run",
+        {},
+        {
+          children: [
+            link("nav", "#pricing"),
+            node("hero", { cssId: "pricing" }),
+          ],
+        }
+      ),
+      node("after"),
+    ]);
+
+    const plan = planConvertToComponent(
+      doc,
+      ["run"],
+      componentTarget,
+      "def-1",
+      {},
+      anyParent
+    );
+
+    expect(warnings(plan)).toEqual([]);
+  });
+
+  it("still warns when the id is named from inside AND outside", () => {
+    // The case that decides how this is computed. Subtracting what the run
+    // references from what the document references reports nothing here, and
+    // the OUTSIDE link is broken exactly as it is in the first test — so the
+    // run is removed and what remains is what gets asked.
+    const doc = page([
+      link("outside", "#pricing"),
+      node(
+        "run",
+        { cssId: "pricing" },
+        { children: [link("inside", "#pricing")] }
+      ),
+    ]);
+
+    const plan = planConvertToComponent(
+      doc,
+      ["run"],
+      componentTarget,
+      "def-1",
+      {},
+      anyParent
+    );
+
+    expect(warnings(plan)).toEqual([
+      {
+        kind: "orphaned-anchor",
+        domId: "pricing",
+        referencingRoots: ["outside"],
+      },
+    ]);
+  });
+
+  it("reads an id off the attribute bag as readily as off cssId", () => {
+    // `renderedDomId` is the one rule for which of the two a node emits, and
+    // this asks the question through it rather than through a second reading
+    // that would know about only one of them.
+    const doc = page([
+      link("nav", "#pricing"),
+      node("run", { attributes: { id: "pricing" } }),
+    ]);
+
+    expect(
+      warnings(
+        planConvertToComponent(
+          doc,
+          ["run"],
+          componentTarget,
+          "def-1",
+          {},
+          anyParent
+        )
+      ).map(warning => warning.domId)
+    ).toEqual(["pricing"]);
+  });
+
+  it("finds a reference through an ARIA relationship, not only a fragment", () => {
+    const doc = page([
+      node("label", { attributes: { "aria-controls": "pricing" } }),
+      node("run", { cssId: "pricing" }),
+    ]);
+
+    expect(
+      warnings(
+        planConvertToComponent(
+          doc,
+          ["run"],
+          componentTarget,
+          "def-1",
+          {},
+          anyParent
+        )
+      ).map(warning => warning.domId)
+    ).toEqual(["pricing"]);
+  });
+
+  it("says nothing when the id the run carries is not named anywhere", () => {
+    const doc = page([
+      link("nav", "#elsewhere"),
+      node("run", { cssId: "pricing" }),
+    ]);
+
+    expect(
+      warnings(
+        planConvertToComponent(
+          doc,
+          ["run"],
+          componentTarget,
+          "def-1",
+          {},
+          anyParent
+        )
+      )
+    ).toEqual([]);
+  });
+
+  it("says nothing when the run renders no id at all", () => {
+    const doc = page([link("nav", "#pricing"), node("run")]);
+
+    expect(
+      warnings(
+        planConvertToComponent(
+          doc,
+          ["run"],
+          componentTarget,
+          "def-1",
+          {},
+          anyParent
+        )
+      )
+    ).toEqual([]);
+  });
+
+  it("carries an empty list from a planner that moves nothing off the page", () => {
+    // Saving to the library COPIES, so nothing stops being addressable. The
+    // field is present and empty rather than absent, so a surface reading it
+    // has one value to handle instead of two.
+    const doc = page([
+      link("nav", "#pricing"),
+      node("run", { cssId: "pricing" }),
+    ]);
+
+    expect(planSaveAsPattern(doc, ["run"], target, anyParent).warnings).toEqual(
+      []
     );
   });
 });

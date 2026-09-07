@@ -79,6 +79,7 @@ import {
   newId,
   referencedDomIds,
   reidForestWithMap,
+  removeNode,
   walkNodes,
 } from "./tree";
 import { componentEnvelopeIssues } from "./validation";
@@ -141,6 +142,65 @@ export interface PlannedUpdate {
 }
 
 /** What a composition action would create, and what it would do to the page. */
+/**
+ * A consequence of a plan the author should be told about, which is not a
+ * reason to refuse it.
+ *
+ * Warnings ride ALONGSIDE a successful plan, and a caller that ignores them
+ * still gets a correct apply. That split is the same one a dry run makes
+ * everywhere it is done well — `terraform plan` reports diagnostics whose
+ * severity decides whether execution halts, and the Kubernetes API server
+ * returns advisory warnings on a successful response with the explicit rule
+ * that nothing automated may act on them.
+ *
+ * It lives on the PLAN rather than in whichever surface offers the action, for
+ * the reason every other foreseeable consequence does: the plan IS the dry run.
+ * A surface computing it separately would ask a question the planner already
+ * has the answer to, and the second surface to offer the same action would have
+ * to remember to ask it.
+ */
+export type PlanWarning = OrphanedAnchorWarning;
+
+/**
+ * The plan moves a block that renders a DOM id, and something still on the page
+ * links to it.
+ *
+ * Converting a run to a component moves its nodes into a definition, and
+ * composition scopes every definition-authored id per instance — it has to,
+ * because two instances of one definition cannot both answer to one `id`. So an
+ * author who wrote `id="pricing"` on a section, with `href="#pricing"` in a nav
+ * elsewhere on the page, is left with a link that resolves to nothing.
+ *
+ * Inherent rather than a defect, which is why it warns and does not refuse: no
+ * scoping rule makes one id serve many instances, and the author may well want
+ * the component anyway. Webflow has the same shape and reports it only when
+ * someone notices the link has stopped working; Gutenberg met it from the other
+ * side, where duplicating a block duplicated its anchor and put one id on the
+ * page twice.
+ *
+ * A reference from INSIDE the run is not reported. Those move together and the
+ * relink pass rewrites them, so they keep working — it is only a reference the
+ * conversion leaves behind that breaks.
+ */
+export interface OrphanedAnchorWarning {
+  readonly kind: "orphaned-anchor";
+  /** The rendered DOM id that will stop being addressable. */
+  readonly domId: string;
+  /**
+   * The page ROOTS whose subtrees still reference it, in document order.
+   *
+   * Roots rather than the linking node itself, and the name says so. The one
+   * walk that answers "which of these ids does this subtree reference" —
+   * `referencedDomIds` — runs the relink pass with an instrumented candidate
+   * map, so a hit is attributed to the root being walked and the node is not in
+   * hand when it is recorded. Narrowing to the node would mean a relink pass
+   * per node, which is the traversal cost multiplied by the page.
+   *
+   * Enough for the sentence a surface has to write: it names where to look.
+   */
+  readonly referencingRoots: readonly string[];
+}
+
 export interface CompositionPlan<TFields> {
   /** The row to create, absent for an action that only edits the page. */
   readonly create?: PlannedCreate<TFields>;
@@ -162,6 +222,16 @@ export interface CompositionPlan<TFields> {
    * library leaves the page exactly as it was.
    */
   readonly pageOps: readonly BuilderOp[];
+  /**
+   * What the author should know before applying it, empty when there is
+   * nothing.
+   *
+   * Always an array and never absent, so "no warnings" and "this planner does
+   * not produce them" are the same observable value rather than two a caller
+   * has to tell apart. An optional field would make the second expressible, and
+   * a surface reading it would have to decide what an absence meant.
+   */
+  readonly warnings: readonly PlanWarning[];
   readonly problem?: undefined;
   // Declared on the success member too, so a caller reads either field off the
   // union without narrowing first and cannot read a refusal's detail off a plan.
@@ -280,6 +350,7 @@ export interface PlanRefusal {
   readonly create?: undefined;
   readonly update?: undefined;
   readonly pageOps?: undefined;
+  readonly warnings?: undefined;
 }
 
 export type PlanResult<TFields> = CompositionPlan<TFields> | PlanRefusal;
@@ -359,6 +430,7 @@ export function planSaveAsPattern<TFields>(
       fields: target.fields,
     },
     pageOps: [],
+    warnings: [],
   };
 }
 
@@ -704,6 +776,7 @@ export function planUpdatePatternFromSelection(
       document: saved.stored,
     },
     pageOps: pageOps.ops,
+    warnings: [],
   };
 }
 
@@ -903,6 +976,7 @@ export function planSaveAsComponent<TFields>(
       fields: target.fields,
     },
     pageOps: [],
+    warnings: [],
   };
 }
 
@@ -992,6 +1066,10 @@ export function planConvertToComponent<TFields>(
       fields: target.fields,
     },
     pageOps: replaced.ops,
+    // Computed from the document as it stands, BEFORE the ops are applied: the
+    // question is which links the conversion leaves behind, and the answer is
+    // only available while the run is still on the page.
+    warnings: orphanedAnchorWarnings(document, saved.selected),
   };
 }
 
@@ -1112,6 +1190,7 @@ export function planDuplicateComponent<TFields>(
         fields: target.fields,
       },
       pageOps: [],
+      warnings: [],
     }
   );
 }
@@ -1953,6 +2032,7 @@ export function planInsertPattern(
 
   return {
     pageOps: insertOps(marked, destination.place, document, target),
+    warnings: [],
   };
 }
 
@@ -2316,6 +2396,65 @@ function domIdsIn(nodes: BlockNode[]): Set<string> {
  * incoming pattern is renamed to avoid it. The cost is one renamed id on a page
  * that already contains a block it cannot draw.
  */
+/**
+ * The anchors a conversion would leave pointing at nothing.
+ *
+ * The run is about to become a component definition, and composition scopes
+ * every definition-authored DOM id per instance. So an id the run RENDERS stops
+ * being addressable under the name it had, and any link still on the page that
+ * named it resolves to nothing.
+ *
+ * Asked as the difference between two forests rather than as a set subtraction
+ * over one. A subtraction — everything that references the id, minus what the
+ * run itself references — reports nothing for an id referenced from BOTH sides,
+ * and that is the case where an outside link is still broken. So the run is
+ * REMOVED and what remains is what gets asked.
+ *
+ * Every reader here is the engine's own: {@link domIdsIn} for what the run
+ * puts on the page, `removeNode` for taking the run out of it, and
+ * `referencedDomIds` for which of those ids the remainder still names — which
+ * runs the relink pass with an instrumented candidate map, so what counts as a
+ * reference is whatever the relink itself would follow rather than a second
+ * list of attributes to keep in step.
+ */
+function orphanedAnchorWarnings(
+  document: BlockDocument,
+  selected: readonly BlockNode[]
+): PlanWarning[] {
+  const owned = domIdsIn([...selected]);
+  if (owned.size === 0) return [];
+
+  // `referencedDomIds` takes the candidates as a MAP because its real caller is
+  // the relink, which needs the replacement. Only the keys are consulted here,
+  // so each id stands in as its own value rather than a sentinel that would
+  // read as a rename to anyone tracing the call.
+  const candidates = new Map<string, string>();
+  for (const id of owned) candidates.set(id, id);
+
+  let residual = [...document.nodes];
+  for (const node of selected) residual = removeNode(residual, node.id);
+
+  // Accumulated in walk order, so two runs of one plan report the same
+  // warnings in the same order — a surface that lists them, or a test that
+  // asserts on them, is otherwise reading an order nothing fixed.
+  const roots = new Map<string, string[]>();
+  referencedDomIds(residual, candidates).forEach((hits, index) => {
+    const root = residual[index];
+    if (root === undefined) return;
+    for (const domId of hits.keys()) {
+      const found = roots.get(domId);
+      if (found === undefined) roots.set(domId, [root.id]);
+      else found.push(root.id);
+    }
+  });
+
+  return [...roots].map(([domId, referencingRoots]) => ({
+    kind: "orphaned-anchor",
+    domId,
+    referencingRoots,
+  }));
+}
+
 function walkRenderedIds(
   nodes: readonly BlockNode[],
   fn: (id: string) => void
@@ -2461,7 +2600,7 @@ export function planDetach(
     return { problem: "exceeds-limits" };
   }
 
-  return { pageOps: ops };
+  return { pageOps: ops, warnings: [] };
 }
 
 /**
