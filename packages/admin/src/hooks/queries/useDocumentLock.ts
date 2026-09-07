@@ -245,12 +245,14 @@ export function useDocumentLock({
       confirmedAt = sentAt;
       holder = null;
       surrendered = false;
-      // 🔴 Whatever a person or a poll was waiting for has already been got. A
-      // take-over queued behind a poll that then WON must not be carried into a
-      // later claim and spent displacing a colleague nobody asked to displace.
-      // `repairNeeded` is deliberately untouched: winning is exactly what a
-      // repair is about, since the token just installed may be the dead one.
-      pending = null;
+      // 🔴 Whatever a person or a poll was waiting for has been got -- but only
+      // if this claim actually established possession. A take-over queued behind
+      // a poll that then WON must not be carried into a later claim and spent
+      // displacing a colleague nobody asked to displace; a take-over queued while
+      // a repair is outstanding must NOT be dropped, because the repair says this
+      // very token may already be dead and the following plain claim would come
+      // back `held`, losing the click for good.
+      if (!repairNeeded) pending = null;
       setState({ status: "held-by-me" });
     };
 
@@ -296,7 +298,14 @@ export function useDocumentLock({
 
     /** Report a claim that could not be sent, keeping a decision for the beat. */
     const failClaim = (seq: number, intent: ClaimIntent) => {
-      if (inFlight === seq) inFlight = null;
+      // 🔴 A rejection from a claim that no longer owns the slot says nothing
+      // about the document. A retry can succeed and then the original finally
+      // rejects: reporting that would replace a good claim with `unavailable`
+      // and leave it there, since renewals only move `confirmedAt`. It would also
+      // requeue a take-over the retry has already satisfied, which later displaces
+      // a colleague with no second click.
+      if (inFlight !== seq) return;
+      inFlight = null;
       installUnavailable();
       // Kept for the beat rather than retried here, which would spin against a
       // server that is down. A take-over is kept because it was a decision.

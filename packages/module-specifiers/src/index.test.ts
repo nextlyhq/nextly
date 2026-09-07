@@ -300,3 +300,47 @@ describe("module.require", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * The receiver, seen through what the language lets you write around it.
+ */
+describe("module.require through wrappers and shadows", () => {
+  it.each([
+    `const a = (module).require("pkg");`,
+    `const a = (module as NodeModule).require("pkg");`,
+    `const a = module!.require("pkg");`,
+    `const a = (module satisfies object).require("pkg");`,
+    `const a = ((module)).require("pkg");`,
+  ])("still reads it in %s", source => {
+    // 🔴 Each of these reads the same binding. A check on the receiver as
+    // written treats them as somebody else's property and reports the file as
+    // loading nothing, which is a bypass anyone can reach by accident.
+    expect(importedSpecifiers(source, "m.ts")).toEqual(["pkg"]);
+  });
+
+  it.each([
+    `function f(module: { require(id: string): unknown }) { return module.require("pkg"); }`,
+    `const module = { require: (id: string) => id };\nconst a = module.require("pkg");`,
+  ])(
+    "claims no dependency when the file declares its own module: %s",
+    source => {
+      // 🔴 The false direction for a guard. Renaming the identical receiver to
+      // `loader` already makes the report disappear, which is the tell that it was
+      // about the name rather than the thing.
+      expect(importedSpecifiers(source, "m.ts")).toEqual([]);
+    }
+  );
+
+  it("reports only the real import when module is a default binding", () => {
+    // The import itself is a specifier and stays one; what goes is the invented
+    // dependency on "pkg" that the file never loads.
+    const source = `import module from "elsewhere";\nconst a = module.require("pkg");`;
+    expect(importedSpecifiers(source, "m.ts")).toEqual(["elsewhere"]);
+  });
+
+  it("still sees a bare require in a file that shadows module", () => {
+    // The shadow is about the receiver, not about the file.
+    const source = `function f(module: unknown) { return module; }\nconst a = require("pkg");`;
+    expect(importedSpecifiers(source, "m.ts")).toEqual(["pkg"]);
+  });
+});

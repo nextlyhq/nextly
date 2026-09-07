@@ -1078,4 +1078,97 @@ describe("useDocumentLock", () => {
     );
     expect(result.current.state.status).toBe("held-by-me");
   });
+
+  it("ignores a rejection from a claim that no longer owns the slot", async () => {
+    // 🔴 A retry can succeed and the original then reject. Reporting that
+    // replaces a good claim with `unavailable` and leaves it there, since
+    // renewals only move the confirmation forward and never restore the status.
+    let rejectStalled: (reason: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        rejectStalled = reject;
+      })
+    );
+
+    const { result } = renderHook(() => useDocumentLock(ref));
+    expect(result.current.state.status).toBe("acquiring");
+
+    // The slot expires and the next beat wins.
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "retry" },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    // Only now does the original fail.
+    await act(async () => {
+      rejectStalled(new Error("offline"));
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+
+    expect(result.current.state.status).toBe("held-by-me");
+  });
+
+  it("keeps a take-over queued while a repair says the claim may be dead", async () => {
+    // 🔴 A win only satisfies a queued take-over if it actually established
+    // possession. With a repair outstanding, the token just installed may already
+    // be the dead one - so dropping the click means the following plain claim
+    // comes back `held` and the decision is lost for good.
+    let settleStale: (value: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleStale = resolve;
+      })
+    );
+
+    const { result, rerender } = renderHook(
+      ({ on }: { on: boolean }) => useDocumentLock({ ...ref, enabled: on }),
+      { initialProps: { on: true } }
+    );
+    rerender({ on: false });
+
+    let settleLive: (value: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleLive = resolve;
+      })
+    );
+    rerender({ on: true });
+
+    // A person decides to take over while the live claim is still open.
+    await act(async () => {
+      result.current.takeOver();
+    });
+
+    // The stale reply lands, raising the repair.
+    await act(async () => {
+      settleStale({
+        message: "",
+        item: { status: "acquired", claimToken: "stale" },
+      });
+    });
+
+    // The live claim then wins - but a repair is outstanding, so the click stands.
+    // The repair itself is refused, which is the case that loses the click when
+    // the intent was dropped a moment too early.
+    post.mockResolvedValueOnce(held);
+    post.mockResolvedValue(acquired);
+    await act(async () => {
+      settleLive({
+        message: "",
+        item: { status: "acquired", claimToken: "live" },
+      });
+    });
+
+    await waitFor(() =>
+      expect(
+        post.mock.calls.filter(call => call[1]?.takeover === true).length,
+        "the take-over survived the repair"
+      ).toBeGreaterThan(0)
+    );
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+  });
 });

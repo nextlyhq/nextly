@@ -55,3 +55,19 @@ waking it would start a claim nobody asked for.
 **The confirmation timestamp never moves backwards.** Renewal replies can arrive
 out of order, and an older one landing after a newer one shortened a lease the
 newer one had already extended, firing the loss deadline several beats early.
+**A rejection from a superseded claim is ignored.** A retry can win and the
+original then fail; reporting that replaced a good claim with `unavailable` and
+left it there, since renewals only move the confirmation forward. It also
+requeued a take-over the retry had already satisfied, which later displaced a
+colleague with no second click.
+
+**A queued take-over survives a repair.** A win only spends the click if it
+actually established possession, and a repair says the token just installed may
+already be the dead one.
+
+**`module.require` is read through the wrappers around it** — parentheses, a
+cast, a non-null assertion, `satisfies` — since each reads the same binding and a
+check on the receiver as written is a bypass anyone can reach by accident. And it
+claims nothing when the file declares a `module` of its own, because reporting a
+dependency the file never loads is the direction that makes a rule stop being
+read.
