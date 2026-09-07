@@ -735,8 +735,12 @@ const KEY_PREFIX_DECLARATION = /^[ \t]*(?:export[ \t]+)?const[ \t]+KEY_PREFIX[ \
  * A bearer example naming a concrete key rather than a placeholder.
  *
  * `Bearer <key>` and `Bearer <token>` never reach here, since the leading `[A-Za-z]` cannot
- * match `<`. Symbolic placeholders can, and `isPlaceholder` decides those. `\s+` spans a
- * newline so an example wrapped after the scheme is still one example.
+ * match `<`. Symbolic placeholders can, and `isPlaceholder` decides those.
+ *
+ * The separator allows AT MOST ONE line break, so an example wrapped after the scheme is still
+ * one example while `Bearer` ending a paragraph is not joined to an underscored word opening
+ * the next. Markdown renders a single break as a space and a blank line as a boundary, and this
+ * is where that distinction has to be drawn.
  *
  * The SCHEME is matched case-insensitively because RFC 7235 makes it so: `bearer` is a valid
  * HTTP request. The CREDENTIAL is compared case-sensitively, and the two are not the same
@@ -745,7 +749,8 @@ const KEY_PREFIX_DECLARATION = /^[ \t]*(?:export[ \t]+)?const[ \t]+KEY_PREFIX[ \
  * that cannot work, which is exactly what this check is for, so it is reported rather than
  * excused.
  */
-const BEARER_EXAMPLE = /Bearer\s+([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*)/gi;
+const BEARER_EXAMPLE =
+  /Bearer(?:[ \t]+|[ \t]*\r?\n[ \t]*)([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*)/gi;
 
 /**
  * Whether a token is a placeholder a reader substitutes rather than a key the docs claim to
@@ -768,8 +773,29 @@ function isPlaceholder(token, prefix) {
 /** Tests and fixtures, whose bearer headers are for other services and prove nothing here. */
 const TEST_FILE = /(?:^|\/)__tests__\/|\.(?:test|spec)\.[cm]?tsx?$/;
 
+/**
+ * A key format documented without the authorization scheme.
+ *
+ * `nx_live_<base64url-32-bytes>` and `nx_live_...` state what a key looks like as plainly as a
+ * bearer header does, and the file that DECLARES the prefix documents it this way three times.
+ * Matching only `Bearer` examples would let those advertise a retired prefix indefinitely while
+ * one updated bearer example kept the population guard satisfied.
+ *
+ * Read ONLY in that declaring file, and the narrowness is the point. Nothing in the shape of a
+ * token says it is a credential: run against the tree, this pattern reads
+ * `idx_comp_<slug>_parent` in `api/field-groups.ts` as a key prefix, which is an index name.
+ * The declaring file's comments are the canonical specification of the format, so a token there
+ * shaped like a prefix and differing from the declared one is a stale spelling of it; the same
+ * token anywhere else is a snake_case identifier that happens to precede a placeholder.
+ * Everywhere else documents the HEADER, and `BEARER_EXAMPLE` covers that with no such ambiguity.
+ */
+const KEY_FORMAT_EXAMPLE = /\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+_)(?=<|\.\.\.)/g;
+
 /** HTML and MDX comments, which a reader never sees and a generator never publishes. */
 const NON_RENDERED_COMMENT = /<!--[\s\S]*?-->|\{\s*\/\*[\s\S]*?\*\/\s*\}/g;
+
+/** Fenced blocks, closed or running to end of file, as `renderedProse` also counts them. */
+const FENCED_BLOCK = /^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1[^\n]*$|^ {0,3}(?:`{3,}|~{3,})[\s\S]*$/gm;
 
 /**
  * Blank out comments while keeping every offset and line break where it was.
@@ -777,10 +803,21 @@ const NON_RENDERED_COMMENT = /<!--[\s\S]*?-->|\{\s*\/\*[\s\S]*?\*\/\s*\}/g;
  * `renderedProse` would be the obvious reuse and is wrong here: it also strips fenced blocks,
  * and the fenced blocks are where the bearer examples live. This removes only what a reader
  * cannot see, and pads rather than deletes so a match's offset still names its real line.
+ *
+ * Comment SYNTAX inside a fence is not a comment. A fenced TSX sample showing
+ * `{/* Authorization: Bearer sk_live_... *\/}` is printed to the reader verbatim, so blanking it
+ * would hide a wrong prefix from the check while every other example kept the population above
+ * zero. Fences are located first and anything starting inside one is left exactly as it is.
  */
 function blankComments(text) {
-  return text.replace(NON_RENDERED_COMMENT, match =>
-    match.replace(/[^\n]/g, " ")
+  const fences = [];
+  for (const fence of text.matchAll(FENCED_BLOCK)) {
+    fences.push([fence.index, fence.index + fence[0].length]);
+  }
+  return text.replace(NON_RENDERED_COMMENT, (match, offset) =>
+    fences.some(([open, close]) => offset >= open && offset < close)
+      ? match
+      : match.replace(/[^\n]/g, " ")
   );
 }
 
@@ -804,13 +841,21 @@ function blankComments(text) {
  * decision, so it runs on a docs-only commit, which is exactly when this regresses.
  */
 /**
- * Blank TypeScript comments, keeping every offset and line break where it was.
+ * Split TypeScript into its comments and its code, keeping every offset and line break.
  *
- * `KEY_PREFIX_DECLARATION` is anchored to the start of a line, which stops a `//`-commented
- * copy standing in for the real thing. A block comment does not indent what it contains, so
- * `/*` on its own line followed by `const KEY_PREFIX = "nx_old_";` matches as readily as the
- * declaration. Where issuance has since moved to a differently named constant, that stale copy
- * is the only match, and the check reads it and holds the docs to a value nothing issues.
+ * Both halves are needed and for opposite reasons.
+ *
+ * Blanking the COMMENTS is how `KEY_PREFIX_DECLARATION` is read. That pattern is anchored to
+ * the start of a line, which stops a `//`-commented copy standing in for the real thing, but a
+ * block comment does not indent what it contains, so `/*` on its own line followed by
+ * `const KEY_PREFIX = "nx_old_";` matches as readily as the declaration. Where issuance has
+ * since moved to a differently named constant, that stale copy is the only match, and the check
+ * reads it and holds the docs to a value nothing issues.
+ *
+ * Keeping ONLY the comments is how a TypeScript file is read as documentation. What a reader is
+ * shown of a `.ts` file is its JSDoc, and the code beside it is machinery: an email provider
+ * that builds `Authorization: "Bearer vendor_key"` at runtime is doing its job, not documenting
+ * a Nextly key, and judging it would block an always-run job over a correct integration.
  *
  * String literals are tracked rather than skipped over, because `//` inside one begins no
  * comment and blanking from it would swallow the rest of the line, the declaration included.
@@ -818,16 +863,19 @@ function blankComments(text) {
  * `key-prefix-undeclared` refusal rather than a false pass, which is the direction to be wrong
  * in, and this file has none.
  */
-function blankSourceComments(text) {
+function partitionSource(text, keep) {
   let out = "";
   let index = 0;
   const blank = character => (character === "\n" ? "\n" : " ");
+  // A region is emitted verbatim when it is the half asked for, and padded out when it is not.
+  const take = (character, isComment) =>
+    (isComment === (keep === "comments") ? character : blank(character));
   while (index < text.length) {
     const here = text[index];
     const next = text[index + 1];
     if (here === "/" && next === "/") {
       while (index < text.length && text[index] !== "\n") {
-        out += " ";
+        out += take(text[index], true);
         index += 1;
       }
       continue;
@@ -835,36 +883,42 @@ function blankSourceComments(text) {
     if (here === "/" && next === "*") {
       const close = text.indexOf("*/", index + 2);
       const stop = close === -1 ? text.length : close + 2;
-      for (; index < stop; index += 1) out += blank(text[index]);
+      for (; index < stop; index += 1) out += take(text[index], true);
       continue;
     }
     if (here === '"' || here === "'" || here === "`") {
-      out += here;
+      out += take(here, false);
       index += 1;
       while (index < text.length && text[index] !== here) {
         if (text[index] === "\\") {
-          out += text[index];
+          out += take(text[index], false);
           index += 1;
           if (index < text.length) {
-            out += text[index];
+            out += take(text[index], false);
             index += 1;
           }
           continue;
         }
-        out += text[index];
+        out += take(text[index], false);
         index += 1;
       }
       if (index < text.length) {
-        out += text[index];
+        out += take(text[index], false);
         index += 1;
       }
       continue;
     }
-    out += here;
+    out += take(here, false);
     index += 1;
   }
   return out;
 }
+
+/** The file with its comments padded out, leaving the code a parser would see. */
+const blankSourceComments = text => partitionSource(text, "code");
+
+/** The file with its code padded out, leaving what a reader is shown of it. */
+const sourceComments = text => partitionSource(text, "comments");
 
 function documentedKeyPrefix(repoRoot, tracked, findings, isExempt) {
   if (!tracked.includes(KEY_PREFIX_SOURCE)) {
@@ -927,11 +981,31 @@ function documentedKeyPrefix(repoRoot, tracked, findings, isExempt) {
     } catch {
       continue; // unreadable-manifest already reports a file the index names and disk lacks
     }
+    // Read each file as what it SHOWS a reader. In Markdown that is everything except the
+    // comments a generator never publishes; in TypeScript it is exactly the comments, since
+    // the code beside them builds headers rather than documenting Nextly's.
+    //
     // Matched over the whole file rather than line by line, so an example wrapped after the
-    // scheme is still found. Offsets survive comment blanking, so the line number is real.
-    const scanned = blankComments(text);
+    // scheme is still found. Both readers pad rather than delete, so a match's offset still
+    // names its real line.
+    const markdown = rel.endsWith(".md") || rel.endsWith(".mdx");
+    const scanned = markdown ? blankComments(text) : sourceComments(text);
+
+    // A bearer header and a bare format claim the same thing, so they are judged together.
+    // Keyed by where the token starts, because `Bearer nx_live_...` satisfies both patterns
+    // and is one example rather than two.
+    const candidates = new Map();
     for (const match of scanned.matchAll(BEARER_EXAMPLE)) {
-      const line = scanned.slice(0, match.index).split("\n").length;
+      candidates.set(match.index + match[0].length - match[1].length, match);
+    }
+    if (rel === KEY_PREFIX_SOURCE) {
+      for (const match of scanned.matchAll(KEY_FORMAT_EXAMPLE)) {
+        if (!candidates.has(match.index)) candidates.set(match.index, match);
+      }
+    }
+
+    for (const [start, match] of [...candidates].sort((a, b) => a[0] - b[0])) {
+      const line = scanned.slice(0, start).split("\n").length;
       const token = match[1];
       // The exemption is digested from the whole matched example rather than from the line the
       // match starts on. An allowlisted third-party example that wraps after `Bearer` puts its
@@ -951,7 +1025,7 @@ function documentedKeyPrefix(repoRoot, tracked, findings, isExempt) {
         check: "documented-key-prefix",
         file: rel,
         line,
-        message: `documents \`Bearer ${token}\`; keys are issued with the prefix "${prefix}"`,
+        message: `documents \`${match[0].trim()}\`; keys are issued with the prefix "${prefix}"`,
       });
     }
   }
@@ -1020,6 +1094,16 @@ export async function runChecks({
    * file-wide bypass wearing the shape of a single exception. Digests are per-line and match
    * `comment-convention-allowlist.json`.
    */
+  /**
+   * An exemption is spent, not held. `count` says how many occurrences in a file an entry
+   * excuses, and it was carried in the allowlist and read by nobody: one entry excused every
+   * duplicate of its line, so a second copy of an allowlisted claim could be added anywhere in
+   * the same file and inherit permission granted to the first. The declared number is now the
+   * budget, and going over it reports the surplus rather than absorbing it.
+   *
+   * Absent, it falls back to the number of digests, which is what a one-line-per-digest entry
+   * means and what every entry written so far says.
+   */
   const exemption = check => {
     const forCheck = allowlist[check] ?? {};
     const byPath = new Map();
@@ -1029,11 +1113,31 @@ export async function runChecks({
     // rather than as an error.
     const posix = value => value.split(sep).join("/");
     for (const [path, entry] of Object.entries(forCheck)) {
-      byPath.set(posix(path), new Set(entry.digests ?? []));
+      const digests = entry.digests ?? [];
+      byPath.set(posix(path), {
+        digests: new Set(digests),
+        budget: entry.count ?? digests.length,
+        spent: 0,
+        reported: false,
+      });
     }
     return (relPath, line) => {
-      const digests = byPath.get(posix(relPath));
-      return digests ? digests.has(digestLine(line)) : false;
+      const entry = byPath.get(posix(relPath));
+      if (!entry || !entry.digests.has(digestLine(line))) return false;
+      entry.spent += 1;
+      if (entry.spent <= entry.budget) return true;
+      // Said once per file. The surplus occurrences are each reported by the check that found
+      // them, and repeating this beside every one of them would bury that.
+      if (!entry.reported) {
+        entry.reported = true;
+        findings.push({
+          check: "allowlist-count-exceeded",
+          file: posix(relPath),
+          line: null,
+          message: `the "${check}" entry allows ${String(entry.budget)} occurrence(s) and the file has more; raise the count with a reason, or fix the extra one`,
+        });
+      }
+      return false;
     };
   };
 
