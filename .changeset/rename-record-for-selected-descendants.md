@@ -1,0 +1,35 @@
+---
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/builder": patch
+"create-nextly-app": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/module-specifiers": patch
+"nextly": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
+"@nextlyhq/ui": patch
+---
+
+Saving a descendant of an inserted pattern no longer stores the page-specific id.
+
+An insert records what it renamed on the roots it placed — deliberately, because a descendant did not arrive from the pattern separately and marking every node would make detaching one child read as a second insertion. But the restore read each selected node's own record, so selecting a DESCENDANT of an inserted root and saving that as a pattern found nothing to put back: the suffixed, page-specific id went into the new library entry, where the next insert would suffix it again.
+
+The record is now INHERITED rather than stamped more widely. A node uses its own where it carries one — so a pattern inserted inside a pattern still restores against the one it came from — and otherwise its nearest ancestor's, carried down in the shared node walk rather than a traversal of the planner's own.
+
+The scope is keyed by the node, not by its id: a document reaching a planner is untrusted and may spell one id twice, and an id-keyed scope hands a node under one container the record belonging to a different container of the same name.

@@ -654,7 +654,7 @@ function savedPatternDocument(
   // go back to what the source calls them. The two are one policy rather than a
   // second pass, so node ids are minted once and the map this returns still
   // describes the document it comes with.
-  const restore = restoredDomIds(selected);
+  const restore = restoredDomIds(document, selected);
   const copied = reidForestWithMap(
     [...selected],
     restore.size === 0 ? "keep" : { restore }
@@ -3405,15 +3405,57 @@ function renamedIn(
  * a library, each to be suffixed again on the next insert.
  */
 function restoredDomIds(
+  document: BlockDocument,
   selected: readonly BlockNode[]
 ): ReadonlyMap<string, string> {
+  const scopes = renameScopes(document.nodes);
   const restore = new Map<string, string>();
   for (const root of selected) {
-    const origin = ownOrigin(root);
-    if (origin === undefined || origin.from !== "pattern") continue;
-    const renamed = origin.renamed;
+    const renamed = scopes.get(root);
     if (renamed === undefined) continue;
-    for (const [was, now] of Object.entries(renamed)) restore.set(now, was);
+    for (const [was, now] of renamed) restore.set(now, was);
   }
   return restore;
+}
+
+/**
+ * Each node mapped to the pattern rename record IN SCOPE for it: its own where
+ * it carries one, otherwise its nearest ancestor's.
+ *
+ * The record is stamped on inserted ROOTS only, deliberately — a descendant did
+ * not arrive from the pattern separately, and marking every node would make
+ * detaching one child read as a second insertion. That leaves a descendant with
+ * no record of its own, and saving one as a pattern of its own therefore stored
+ * the suffixed, page-specific id: the very growth the restore exists to stop,
+ * resuming for that subtree.
+ *
+ * So the record is INHERITED rather than stamped more widely. A nested insert
+ * still wins for its own subtree, because a node carrying a record uses it
+ * instead of the one it sits inside.
+ *
+ * Keyed by the NODE, never by its id. A document reaching a planner is
+ * untrusted and may spell one id twice, and the scope a node inherits is its
+ * PARENT's — so an id-keyed map hands a node under one container the record
+ * belonging to a different container of the same name, restoring it against a
+ * pattern it was never inserted from and writing an id the author never wrote.
+ *
+ * Through the shared walk rather than a traversal of this module's own, which
+ * is what makes the cycle, the non-node entry and the node budget somebody
+ * else's already-solved problem. It relies on that walk visiting a parent
+ * before its children, which is what lets one pass carry the scope down.
+ */
+function renameScopes(
+  nodes: readonly BlockNode[]
+): ReadonlyMap<BlockNode, ReadonlyMap<string, string>> {
+  const scopes = new Map<BlockNode, ReadonlyMap<string, string>>();
+  walkNodes([...nodes], (node, parent) => {
+    const own = renamedIn(ownOrigin(node));
+    if (own.size > 0) {
+      scopes.set(node, own);
+      return;
+    }
+    const inherited = parent === undefined ? undefined : scopes.get(parent);
+    if (inherited !== undefined) scopes.set(node, inherited);
+  });
+  return scopes;
 }

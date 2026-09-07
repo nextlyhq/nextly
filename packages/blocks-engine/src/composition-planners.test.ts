@@ -32,7 +32,7 @@ import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import type { DocumentLimits } from "./limits";
 import { componentEnvelopeIssues } from "./validation";
 import { patternDigest } from "./pattern-digest";
-import { walkNodes } from "./tree";
+import { findNode, walkNodes } from "./tree";
 
 function node(
   id: string,
@@ -2634,5 +2634,167 @@ describe("the anchors a conversion leaves behind", () => {
     expect(planSaveAsPattern(doc, ["run"], target, anyParent).warnings).toEqual(
       []
     );
+  });
+});
+
+describe("a saved DESCENDANT of an inserted root", () => {
+  /** A pattern whose renamed id sits on a CHILD, two levels under the root. */
+  function nestedPattern(): BlockDocument {
+    const authored = page([
+      node(
+        "wrap",
+        { props: { mark: "wrap" } },
+        {
+          children: [
+            node(
+              "mid",
+              { props: { mark: "mid" } },
+              {
+                children: [
+                  node("t", { cssId: "pricing", props: { mark: "target" } }),
+                ],
+              }
+            ),
+          ],
+        }
+      ),
+    ]);
+    return created(planSaveAsPattern(authored, ["wrap"], target, anyParent))
+      .document;
+  }
+
+  /** Insert it into a page that already holds `pricing`, forcing a rename. */
+  function placedIn(stored: BlockDocument): BlockDocument {
+    const destination = page([node("existing", { cssId: "pricing" })]);
+    const insert = planInsertPattern(
+      destination,
+      { id: "hero-pattern", document: stored },
+      { index: 1 },
+      anyParent
+    );
+    return applyOps(destination, pageOps(insert)).document;
+  }
+
+  it("stores the SOURCE id, not the suffixed one the page gave it", () => {
+    // The record is stamped on inserted ROOTS only — a descendant did not
+    // arrive from the pattern separately. Read from the node's own record
+    // alone, a descendant restored nothing and the page-specific id went into
+    // the new pattern, where the next insert would suffix it again.
+    const after = placedIn(nestedPattern());
+    const renamed = marked([...after.nodes], "target");
+    expect(renamed.cssId).not.toBe("pricing");
+    expect(renamed.cssId).toContain("pricing");
+
+    const saved = created(
+      planSaveAsPattern(after, [renamed.id], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("pricing");
+  });
+
+  it("carries the record down more than one level", () => {
+    // `mid` sits between the root that holds the record and the node that
+    // holds the id, so a scope that reached only a direct child would restore
+    // nothing here while passing the case above.
+    const after = placedIn(nestedPattern());
+    const mid = marked([...after.nodes], "mid");
+
+    const saved = created(
+      planSaveAsPattern(after, [mid.id], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("pricing");
+  });
+
+  it("lets a nested insert's own record win inside its own subtree", () => {
+    // A node carrying a record uses it INSTEAD of the one it sits inside, so a
+    // pattern inserted within a pattern restores against the pattern it
+    // actually came from.
+    const outer = placedIn(nestedPattern());
+    const mid = marked([...outer.nodes], "mid");
+    const inner = planInsertPattern(
+      outer,
+      { id: "inner-pattern", document: nestedPattern() },
+      { parentId: mid.id, slot: "children", index: 0 },
+      anyParent
+    );
+    const after = applyOps(outer, pageOps(inner)).document;
+
+    // Two nodes now answer to "target": the outer one and the inner copy. The
+    // inner root is the one carrying the inner record.
+    const innerRoot = pageOps(inner).flatMap(op =>
+      op.kind === "insert" ? [op.node] : []
+    )[0];
+    const innerOnPage = findNode([...after.nodes], innerRoot?.id ?? "");
+    const innerTarget = marked(
+      innerOnPage === undefined ? [] : [innerOnPage],
+      "target"
+    );
+
+    const saved = created(
+      planSaveAsPattern(after, [innerTarget.id], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("pricing");
+  });
+
+  it("does not restore a node against its PARENT's namesake", () => {
+    // A document reaching a planner is untrusted and may spell one node id
+    // twice, so a scope keyed by id answers for whichever namesake the walk
+    // reached first. Here `wrap` names two different containers and only one
+    // was inserted from a pattern; the selected node sits under the OTHER, so
+    // it has nothing to restore against — while an id-keyed scope hands it the
+    // first `wrap`'s record and writes an id the author never wrote.
+    const doc = page([
+      node(
+        "wrap",
+        {
+          origin: {
+            from: "pattern",
+            id: "hero-pattern",
+            digest: "d",
+            renamed: { pricing: "pricing-1" },
+          },
+        } as Partial<BlockNode>,
+        { children: [node("x", { props: { mark: "inserted" } })] }
+      ),
+      node(
+        "wrap",
+        {},
+        {
+          children: [
+            node("y", { cssId: "pricing-1", props: { mark: "authored" } }),
+          ],
+        }
+      ),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["y"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "authored").cssId).toBe("pricing-1");
+  });
+
+  it("keeps every id when no ancestor was ever inserted from a pattern", () => {
+    // The control for all three above: without a record in scope there is
+    // nothing to put back, and an authored id is the author's to keep.
+    const authored = page([
+      node(
+        "wrap",
+        {},
+        {
+          children: [
+            node("t", { cssId: "pricing", props: { mark: "target" } }),
+          ],
+        }
+      ),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(authored, ["t"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("pricing");
   });
 });
