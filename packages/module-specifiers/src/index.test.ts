@@ -258,3 +258,45 @@ describe("whether a reference survives to runtime", () => {
     );
   });
 });
+
+/**
+ * `module.require` is the documented CommonJS method and resolves exactly as the
+ * free function does, so a reader that sees only the bare identifier reports a
+ * file loading nothing while it loads a driver.
+ */
+describe("module.require", () => {
+  it("reads it as a runtime resolve", () => {
+    expect(
+      importedSpecifiers(`const a = module.require("pkg");`, "m.ts")
+    ).toEqual(["pkg"]);
+    expect(
+      moduleSpecifierRefs(`const a = module.require("pkg");`, "m.ts")
+    ).toEqual([{ specifier: "pkg", typeOnly: false }]);
+  });
+
+  it("reads the bracket spelling the same way", () => {
+    // `a.b` and `a["b"]` are the same read, and a rule for one is a rule the
+    // other walks around.
+    expect(
+      importedSpecifiers(`const a = module["require"]("pkg");`, "m.ts")
+    ).toEqual(["pkg"]);
+  });
+
+  it("keeps an unreadable target unreadable", () => {
+    expect(
+      importedSpecifiers(`const a = module.require(name);`, "m.ts")
+    ).toEqual([UNRESOLVABLE_SPECIFIER]);
+  });
+
+  it("leaves a require method on some other object alone", () => {
+    // 🔴 The negative control. Treating every `.require` as a resolve reports
+    // ordinary code as a dependency nobody has, and a rule that fires on correct
+    // code stops being read.
+    expect(
+      importedSpecifiers(`const a = loader.require("pkg");`, "m.ts")
+    ).toEqual([]);
+    expect(
+      importedSpecifiers(`const a = holder["require"]("pkg");`, "m.ts")
+    ).toEqual([]);
+  });
+});

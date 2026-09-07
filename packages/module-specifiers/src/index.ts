@@ -52,8 +52,9 @@ export const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
  * - `import ... from` and `export ... from`, which carry a module specifier.
  * - `import "pkg"`, a bare side-effect import, which carries no bindings.
  * - `import("pkg")` and `require("pkg")`, which are call expressions. A bare
- *   `require` identifier only: `loader.require("x")` is a method on some object,
- *   not a module resolve.
+ *   `require` identifier, or `module.require` — the documented CommonJS method,
+ *   which resolves exactly as the free function does. `loader.require("x")` is a
+ *   method on some other object and is not a module resolve.
  * - `import x = require("pkg")`, the documented CommonJS-interop spelling, which
  *   is neither of the above.
  * - `typeof import("pkg")` in type position, which the parser gives as an
@@ -78,6 +79,37 @@ export const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
  * over a file that was never read, and it was a live defect in two of the
  * readers this replaces. A default would let any caller reintroduce it silently.
  */
+/**
+ * Whether an expression is `module.require`, however it is spelled.
+ *
+ * `module.require` is the documented CommonJS method and resolves exactly as the
+ * free `require` does, so a reader that recognises only the bare identifier
+ * reports a file loading nothing while it loads a driver. `a.b` and `a["b"]` are
+ * the same read, and a rule for one is a rule the other walks around.
+ *
+ * Deliberately narrow: the receiver has to be `module` itself. `loader.require`
+ * is a method on somebody else's object, and treating every `.require` as a
+ * resolve would report ordinary code as a dependency nobody has.
+ */
+function readsModuleRequire(callee: ts.Expression): boolean {
+  const receiver = ts.isPropertyAccessExpression(callee)
+    ? callee.expression
+    : ts.isElementAccessExpression(callee)
+      ? callee.expression
+      : null;
+  if (
+    receiver === null ||
+    !ts.isIdentifier(receiver) ||
+    receiver.text !== "module"
+  ) {
+    return false;
+  }
+  if (ts.isPropertyAccessExpression(callee))
+    return callee.name.text === "require";
+  const key = (callee as ts.ElementAccessExpression).argumentExpression;
+  return ts.isStringLiteralLike(key) && key.text === "require";
+}
+
 export function importedSpecifiers(text: string, fileName: string): string[] {
   return moduleSpecifierRefs(text, fileName).map(ref => ref.specifier);
 }
@@ -183,7 +215,8 @@ export function moduleSpecifierRefs(
       const callee = node.expression;
       const resolvesAModule =
         callee.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(callee) && callee.text === "require");
+        (ts.isIdentifier(callee) && callee.text === "require") ||
+        readsModuleRequire(callee);
       if (resolvesAModule) {
         const target = node.arguments[0];
         found.push({
