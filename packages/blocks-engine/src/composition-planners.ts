@@ -2017,24 +2017,75 @@ function storedRefusal(
   document: BlockDocument,
   pattern: BlockDocument
 ): PlanRefusal | undefined {
-  if (!isPatternDocument(pattern)) return { problem: "not-a-pattern" };
-  if (pattern.nodes.length === 0) return { problem: "empty" };
+  const unusable = storedPatternRefusal(pattern);
+  if (unusable !== undefined) return unusable;
   // BOTH envelopes, judged by the apply's own document rule rather than by a
   // field of it. The ops are built from one document and applied to the other,
   // and everything `applyOp` asks before it looks at an op — the envelope's
   // keys, its values, its format and its kind — is a way a plan can be built
   // against a destination that cannot be edited at all.
+  // The DESTINATION's envelope and its whole forest, because `applyOp` walks
+  // both before it applies anything — so a malformed entry nowhere near the
+  // insertion point still refuses the op this plan promises.
   if (
     documentRefusal(document) !== undefined ||
-    documentRefusal(pattern) !== undefined ||
-    // The DESTINATION's whole forest, because `applyOp` walks it before it
-    // applies anything — so a malformed entry nowhere near the insertion point
-    // still refuses the op this plan promises.
     forestRefusal(document.nodes) !== undefined
   ) {
     return { problem: "unusable-document" };
   }
+  return undefined;
+}
+
+/**
+ * Everything about a PATTERN that refuses an insert, wherever it is going.
+ *
+ * Split from the destination's half because the two are asked at different
+ * moments by different callers. A planner asks both, in that order. A palette
+ * asks only this one, and asks it ONCE per stored row rather than per candidate
+ * position — the answer cannot depend on where the pattern is being put.
+ *
+ * Not published on its own: {@link patternRefusal} is what a caller outside
+ * this module wants, and the two differ only in whether the nesting rule has
+ * been asked. Keeping the narrow one private is what stops a caller composing
+ * an incomplete preflight by accident.
+ */
+function storedPatternRefusal(pattern: BlockDocument): PlanRefusal | undefined {
+  if (!isPatternDocument(pattern)) return { problem: "not-a-pattern" };
+  if (pattern.nodes.length === 0) return { problem: "empty" };
+  if (documentRefusal(pattern) !== undefined) {
+    return { problem: "unusable-document" };
+  }
   return shapeRefusal(pattern.nodes) ?? duplicateDomIdRefusal(pattern.nodes);
+}
+
+/**
+ * Whether a stored pattern could be inserted ANYWHERE, and why not.
+ *
+ * The complete pattern-only preflight, published because a palette has to
+ * refuse exactly what the planner refuses. Offering a row the planner will
+ * reject is a tile that accepts a click and then fails, and the ways a stored
+ * pattern can be unusable are not a short list a surface should be keeping its
+ * own copy of: the wrong kind, no nodes, an envelope the apply cannot read, a
+ * node whose shape it cannot apply, two nodes rendering one DOM id, and an
+ * internal placement the rules no longer allow.
+ *
+ * That last one is why the nesting source is a parameter: a pattern is stored
+ * once and inserted for as long as it exists, so the rules can move underneath
+ * it.
+ *
+ * The DESTINATION's half is deliberately not here. Whether a particular page
+ * can be edited, and whether these roots may sit at a particular position, are
+ * questions about somewhere the pattern is going — asked per placement, by
+ * {@link placementVerdict} and the planner itself.
+ */
+export function patternRefusal(
+  pattern: BlockDocument,
+  nesting: NestingSource
+): PlanRefusal | undefined {
+  return (
+    storedPatternRefusal(pattern) ??
+    internalNestingRefusal(pattern.nodes, nesting)
+  );
 }
 
 /**

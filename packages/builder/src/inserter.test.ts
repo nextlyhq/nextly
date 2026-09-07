@@ -1111,6 +1111,31 @@ describe("the pattern tier", () => {
     ).toHaveLength(1);
   });
 
+  it("offers nothing for a pattern the planner refuses on its shape", () => {
+    // The palette used to keep its own list of what makes a stored row
+    // unusable — kind, emptiness, nesting — and the planner's is longer. Two
+    // nodes rendering one DOM id is one of the ways it is longer, and a tile
+    // for such a row accepts a click that cannot succeed.
+    catalog([{ ...base, name: "acme/text" }]);
+    const twice = patternOf([
+      { id: "a", type: "acme/text", version: 1, props: {}, cssId: "hero" },
+      { id: "b", type: "acme/text", version: 1, props: {}, cssId: "hero" },
+    ]);
+    // The control is the same forest with the collision removed, so this cannot
+    // pass on a catalogue that offers nothing.
+    const once = patternOf([
+      { id: "a", type: "acme/text", version: 1, props: {}, cssId: "hero" },
+      { id: "b", type: "acme/text", version: 1, props: {} },
+    ]);
+
+    expect(patternEntriesFrom([saved({ document: twice })], nest())).toEqual(
+      []
+    );
+    expect(
+      patternEntriesFrom([saved({ id: "ok", document: once })], nest())
+    ).toHaveLength(1);
+  });
+
   it("splits the stored keyword string on every separator an author uses", () => {
     // Stored as ONE string because the field is matched rather than
     // enumerated, and the collection's own note says authors separate them

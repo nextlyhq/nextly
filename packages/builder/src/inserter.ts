@@ -28,8 +28,7 @@ import {
   allBlocks,
   expandSlotDefaults,
   findNode,
-  internalNestingVerdict,
-  isPatternDocument,
+  patternRefusal,
   getBlock,
   locateNode,
   makeNode,
@@ -376,19 +375,20 @@ export function patternEntriesFrom(
     // is a legal value. Offering it produces a tile that accepts a click and
     // cannot succeed, which is the disagreement between the palette and the
     // insert that this module exists to prevent.
-    if (!isPatternDocument(document)) continue;
-    if (document.nodes.length === 0) continue;
-    // The nesting rule can move after a pattern is saved — a block gains a
-    // `parent` restriction, a slot narrows its `allow` — which invalidates
-    // edges inside documents nobody has touched since. `planInsertPattern`
-    // refuses such a pattern wherever it is put, so offering one is a tile that
-    // accepts a click and is then rejected.
+    // The planner's own preflight, asked whole rather than reproduced in part.
+    // The ways a stored row can be unusable are not a short list: the wrong
+    // kind, no nodes, an envelope the apply cannot read, a node whose shape it
+    // cannot apply, two nodes rendering one DOM id, an internal placement the
+    // rules no longer allow. `planInsertPattern` refuses every one of them
+    // wherever the pattern is put, so a tile for one accepts a click that
+    // cannot succeed — and a palette keeping its own subset of that list drifts
+    // the first time the planner learns a new way to say no.
     //
-    // Asked ONCE per entry rather than inside `entryAllowedAt`: the answer says
-    // nothing about the destination, so asking it per target would re-walk
-    // every pattern's forest on each keystroke of a filter — against a library
-    // the design sizes at three thousand entries.
-    if (!internalNestingVerdict(document.nodes, nesting).allowed) continue;
+    // Asked ONCE per row rather than inside `entryAllowedAt`, because none of
+    // it depends on the destination: per target it would re-walk every
+    // pattern's forest on each keystroke of a filter, against a library the
+    // design sizes at three thousand entries.
+    if (patternRefusal(document, nesting) !== undefined) continue;
     entries.push({
       kind: "pattern",
       id: `${PATTERN_ENTRY_PREFIX}${pattern.id}`,
