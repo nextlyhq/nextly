@@ -26,21 +26,29 @@
 "@nextlyhq/ui": patch
 ---
 
-An editor can now hold an advisory claim on the document they are editing,
-and be told when a colleague is already in it.
+Add `nextly/document-lock`, a client entry carrying the document lease contract
+and its wire types and nothing else, and the admin-side hook that holds a claim
+against it.
 
-`useDocumentLock` claims on mount, renews on a heartbeat and releases on the
-way out. Renewing stops the moment a claim is taken over, and reports WHO took
-it, because the acquire outcome carries the new holder. A failed renew is not
-a lost claim: the lease outlives several beats, so a dropped packet resolves
-itself on the next one, and treating it as a takeover would move an editor to
-read-only over a blip.
+The entry is separate from the root one because the admin maps `nextly` to this
+package's source, so reaching two constants through the root pulls the DI
+container and the auth middleware into the admin's typecheck, measured at 112
+errors about code it never touches. The timings are re-exported rather than
+restated: they are the agreement between a lease and whoever renews it, and a
+second copy of either number drifts from the first the moment one is tuned.
 
-The timings come from `nextly/document-lock`, a client entry carrying the lease
-contract and the wire types and nothing else. They are the agreement between a
-lease and whoever renews it, and a second copy of either number drifts from the
-first the moment one is tuned. It is its own entry rather than part of the root
-one because the admin maps `nextly` to this package's source: reaching two
-constants through the root pulls the DI container and the auth middleware into
-the admin's typecheck, measured at 112 errors about code it never touches. The
-repository stays behind the route, where it belongs.
+`deriveLeaseTimings` moved out of `database/lease-clock` into
+`database/lease-timings`, which imports nothing. The clock module asks the
+database what time it is, so it loads the ORM at module top level, and anything
+reading the timings through it put that ORM into the import graph of every
+client that needed a number. A check now walks the source import graph of every
+published subpath an admin `"use client"` module imports and fails on one that
+can reach a database package.
+
+No editor mounts the hook yet, so nothing about using the admin changes in this
+release. What ships is the mechanism the editor work builds on: the claim is
+held for one document at a time, every reply is fenced on the claim token that
+produced it rather than on the effect that sent it, a claim acquired after the
+editor has gone is released rather than left for the lease to reap, and a run of
+failed confirmations is treated as a blip until the lease's own loss deadline
+and as a loss after it.
