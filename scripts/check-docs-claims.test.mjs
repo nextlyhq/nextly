@@ -1746,6 +1746,46 @@ describe("documented-key-prefix", () => {
     ).toContain("documented-key-prefix");
   });
 
+  it("does not judge a note to whoever maintains the code", async () => {
+    // A line comment is not published. An integration explaining which header a
+    // vendor wants is documenting that vendor, and an always-run job cannot
+    // block a correct one over it.
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n",
+          "packages/nextly/src/domains/email/provider.ts":
+            "// The vendor requires Authorization: Bearer vendor_key_LIVE\nexport const x = 1;\n",
+        }),
+      ),
+    ).not.toContain("documented-key-prefix");
+  });
+
+  it("does not judge an ordinary block comment either", async () => {
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n",
+          "packages/nextly/src/domains/email/provider.ts":
+            "/* Vendor wants Authorization: Bearer vendor_key_LIVE */\nexport const x = 1;\n",
+        }),
+      ),
+    ).not.toContain("documented-key-prefix");
+  });
+
+  it("judges a doc comment, which is the form that gets published", async () => {
+    // The other side of the same rule. Without it, restricting the scan to
+    // JSDoc would read as "scan nothing" and pass just as well.
+    expect(
+      await checksFor(
+        tree({
+          "packages/nextly/src/shared/types/config.ts":
+            "/** Authenticate with `Authorization: Bearer sk_live_EXAMPLE`. */\nexport type C = {};\n",
+        }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
   it("does not judge bearer headers in tests, which belong to other services", async () => {
     // Fixtures authenticate against Resend, Stripe and stub receivers. Holding
     // those to the Nextly prefix reports a defect that is not one, and a job

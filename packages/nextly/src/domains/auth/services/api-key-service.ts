@@ -129,11 +129,10 @@ export interface UpdateApiKeyInput {
  *
  * `scripts/check-docs-claims.mjs` reads this declaration and compares the
  * documentation's bearer examples against it, so this is the one place the key
- * format is stated. The docs had drifted to `sk_`, another vendor's prefix, in
- * four places, including one file that used the real prefix a few lines away
- * from the wrong one. Nothing catches that at runtime: a key is looked up by
- * hash, so a wrong prefix is an ordinary authentication failure with no hint
- * that the format was the problem.
+ * format is stated and a second copy of it anywhere is a claim that can go
+ * stale. Nothing catches a wrong one at runtime: a key is looked up by hash, so
+ * a documented prefix that does not match this authenticates as an ordinary
+ * failure, with no hint that the format was the problem.
  *
  * Not exported. The guard reads the declaration rather than importing it,
  * because it runs under plain Node before any TypeScript is built.

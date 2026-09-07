@@ -852,10 +852,17 @@ function blankComments(text) {
  * since moved to a differently named constant, that stale copy is the only match, and the check
  * reads it and holds the docs to a value nothing issues.
  *
- * Keeping ONLY the comments is how a TypeScript file is read as documentation. What a reader is
- * shown of a `.ts` file is its JSDoc, and the code beside it is machinery: an email provider
- * that builds `Authorization: "Bearer vendor_key"` at runtime is doing its job, not documenting
- * a Nextly key, and judging it would block an always-run job over a correct integration.
+ * Keeping only the DOC COMMENTS is how a TypeScript file is read as documentation. What a
+ * reader is shown of a `.ts` file is its JSDoc; the code beside it is machinery, and so is a
+ * `//` note to whoever maintains it. An email provider that builds
+ * `Authorization: "Bearer vendor_key"` at runtime, or explains in a line comment that the
+ * vendor wants one, is doing its job rather than documenting a Nextly key, and judging either
+ * would block an always-run job over a correct integration.
+ *
+ * `/**` and not `/*`, so the boundary is the form that gets published. Attachment to an
+ * exported declaration would be the stricter rule and is the wrong one: the key format is
+ * stated in `api-key-service.ts`'s file-level block, which is attached to nothing, and
+ * requiring an export would drop exactly the examples this check exists to hold.
  *
  * String literals are tracked rather than skipped over, because `//` inside one begins no
  * comment and blanking from it would swallow the rest of the line, the declaration included.
@@ -867,15 +874,18 @@ function partitionSource(text, keep) {
   let out = "";
   let index = 0;
   const blank = character => (character === "\n" ? "\n" : " ");
-  // A region is emitted verbatim when it is the half asked for, and padded out when it is not.
-  const take = (character, isComment) =>
-    (isComment === (keep === "comments") ? character : blank(character));
+  // Three kinds, not two. "is this a comment" decides blanking and "is this documentation"
+  // decides extraction, and they disagree on a `//` note and a plain `/*` block: both are
+  // comments, neither is published. Collapsing them leaves ordinary block comments emitted
+  // verbatim while reading the declaration, which is the case the anchor exists to refuse.
+  const emit = (character, kind) =>
+    (keep === "code" ? kind === "code" : kind === "doc") ? character : blank(character);
   while (index < text.length) {
     const here = text[index];
     const next = text[index + 1];
     if (here === "/" && next === "/") {
       while (index < text.length && text[index] !== "\n") {
-        out += take(text[index], true);
+        out += emit(text[index], "comment");
         index += 1;
       }
       continue;
@@ -883,32 +893,36 @@ function partitionSource(text, keep) {
     if (here === "/" && next === "*") {
       const close = text.indexOf("*/", index + 2);
       const stop = close === -1 ? text.length : close + 2;
-      for (; index < stop; index += 1) out += take(text[index], true);
+      // `/**` is the published form. `/*` is a note, and `/**/` is an empty one rather than a
+      // doc block, so the character after the second star has to be something.
+      const kind =
+        text[index + 2] === "*" && text[index + 3] !== "/" ? "doc" : "comment";
+      for (; index < stop; index += 1) out += emit(text[index], kind);
       continue;
     }
     if (here === '"' || here === "'" || here === "`") {
-      out += take(here, false);
+      out += emit(here, "code");
       index += 1;
       while (index < text.length && text[index] !== here) {
         if (text[index] === "\\") {
-          out += take(text[index], false);
+          out += emit(text[index], "code");
           index += 1;
           if (index < text.length) {
-            out += take(text[index], false);
+            out += emit(text[index], "code");
             index += 1;
           }
           continue;
         }
-        out += take(text[index], false);
+        out += emit(text[index], "code");
         index += 1;
       }
       if (index < text.length) {
-        out += take(text[index], false);
+        out += emit(text[index], "code");
         index += 1;
       }
       continue;
     }
-    out += take(here, false);
+    out += emit(here, "code");
     index += 1;
   }
   return out;
