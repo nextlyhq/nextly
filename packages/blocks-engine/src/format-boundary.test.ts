@@ -1,8 +1,18 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, parse, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
  * The `./format` entry point's whole value is what it does NOT reach.
@@ -21,192 +31,263 @@ import { describe, expect, it } from "vitest";
  * the compiler compiles, type-checks, and passes every source-level guard while
  * silently restoring the regression this entry point was added to remove.
  *
- * A comment saying "import nothing heavy here" is the version of this that does
- * not work: the correct path and the easy path differ, so the rule gets broken
- * by someone who knows it.
+ * ## Why nothing here reads the bundle as text
+ *
+ * The boundary used to be checked by matching import syntax with a regular
+ * expression, and a scan over syntax has an unbounded surface: measured, an
+ * `import` written with a comment between the keyword and its parenthesis
+ * matched nothing — certifying the entry while omitting a module it reaches —
+ * and a keyword inside a longer string was read as an import that does not
+ * exist. Both directions were wrong, and the first is the dangerous one,
+ * because a scan that sees less reports a healthier boundary.
+ *
+ * So the question is put to the module resolver instead, in the two forms that
+ * cannot be under-read:
+ *
+ * - the entry is imported from a directory with NO `node_modules` above it, so
+ *   anything reaching a runtime dependency fails to resolve. Complete by
+ *   construction rather than a pattern to keep extending.
+ * - the entry is imported again under a resolution hook, which reports every
+ *   specifier Node actually resolved. That is the module graph itself, not a
+ *   reading of what the text appears to say.
+ *
+ * @module format-boundary.test
  */
 
 const DIST = resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist");
+const FORMAT_ENTRY = "format.mjs";
+const ROOT_ENTRY = "index.mjs";
+
+/** What running one entry point in a child process reported. */
+interface EntryRun {
+  readonly ok: boolean;
+  readonly stderr: string;
+  /** Each specifier the resolver was asked for, with what it answered. */
+  readonly resolved: readonly { specifier: string; url: string }[];
+}
 
 /**
- * Every module specifier a source file imports, in any of the forms the bundler
- * emits.
+ * The directories a bare specifier would be looked up in, from `from` upwards.
  *
- * Four forms, all of which a bundle can contain:
- *
- * - `import x from "y"` and `export … from "y"` — the `from` clause.
- * - `import "y"` — a side-effect import, which has no `from` clause and is how
- *   a parser is pulled in for its registration behaviour alone.
- * - `import("y")` — a dynamic import, which defers loading without avoiding it.
- * - both quote styles, since the bundler emits single quotes.
- *
- * A form this misses is not reported as a gap. The graph simply comes back
- * smaller and the external set emptier, which is what a healthy boundary looks
- * like, so every assertion below passes over a dependency it never saw.
- * `specifiersIn` is therefore exported and asserted directly on input whose
- * answer is known, rather than trusted because the boundary looks intact.
+ * Node walks parents until the filesystem root, so isolation is a property of
+ * the whole chain rather than of the directory chosen. Asserted rather than
+ * assumed: a `node_modules` anywhere above would make every import below
+ * resolve, and the boundary test would pass by not being a boundary.
  */
-export function specifiersIn(source: string): string[] {
-  const found: string[] = [];
-  // `from "x"` covers import and export alike; the second alternative is a bare
-  // `import "x"` with no binding, which the first cannot see.
-  // `import(` is matched with its parenthesis so a dynamic import is seen; the
-  // bare `import "x"` alternative would not reach it, because the quote does
-  // not follow the keyword directly.
-  //
-  // The capture excludes a NEWLINE because a module specifier cannot contain
-  // one, and without that this reads a false import out of ordinary code: the
-  // literal `"from"` ends with a quote, so the keyword pattern matches the word
-  // inside the string and captures everything up to the next quote — which for
-  // `ownEntry(value, "from")` followed by a comparison is a fragment of the
-  // next two lines. Excluding the newline cannot hide a real specifier and does
-  // refuse that.
-  for (const match of source.matchAll(
-    /(?:from|import)\s*\(?\s*['"]([^'"\n]+)['"]/g
-  )) {
-    found.push(match[1]!);
+function lookupChain(from: string): string[] {
+  const chain: string[] = [];
+  let current = from;
+  for (;;) {
+    chain.push(join(current, "node_modules"));
+    const parent = dirname(current);
+    if (parent === current || current === parse(current).root) return chain;
+    current = parent;
   }
-  return found;
+}
+
+let sandbox = "";
+let hooks = "";
+let record = "";
+
+beforeAll(() => {
+  // OUTSIDE the workspace, which is the whole point: a copy under the package
+  // would find the workspace's `node_modules` by the ordinary upward lookup and
+  // resolve every runtime dependency exactly as the real build does.
+  sandbox = mkdtempSync(join(tmpdir(), "nextly-format-boundary-"));
+  cpSync(DIST, join(sandbox, "dist"), { recursive: true });
+
+  record = join(sandbox, "resolved.jsonl");
+  hooks = join(sandbox, "hooks.mjs");
+  // A resolution hook rather than a reading of the emitted text. It records
+  // what the resolver was ASKED and what it ANSWERED, so a specifier written in
+  // a form no pattern anticipates is still seen — there is no form to miss.
+  writeFileSync(
+    hooks,
+    [
+      `import { appendFileSync } from "node:fs";`,
+      `export async function resolve(specifier, context, next) {`,
+      `  const result = await next(specifier, context);`,
+      `  appendFileSync(process.env.NEXTLY_RESOLVE_RECORD, JSON.stringify({ specifier, url: result.url }) + "\\n");`,
+      `  return result;`,
+      `}`,
+    ].join("\n")
+  );
+});
+
+afterAll(() => {
+  if (sandbox !== "") rmSync(sandbox, { recursive: true, force: true });
+});
+
+/**
+ * Import one entry point in a child process, optionally recording what the
+ * resolver did.
+ *
+ * A child rather than this process, because the question is what happens on a
+ * fresh resolution from a particular directory — and the test runner has
+ * already loaded this package, its dependencies and its own graph.
+ */
+function runEntry(
+  from: string,
+  entry: string,
+  { instrumented }: { instrumented: boolean }
+): EntryRun {
+  const url = pathToFileURL(join(from, entry)).href;
+  const bootstrap = instrumented
+    ? [
+        `import { register } from "node:module";`,
+        `import { pathToFileURL } from "node:url";`,
+        `register(pathToFileURL(${JSON.stringify(hooks)}));`,
+        `await import(${JSON.stringify(url)});`,
+      ].join("\n")
+    : `await import(${JSON.stringify(url)});`;
+
+  if (instrumented) writeFileSync(record, "");
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "--eval", bootstrap],
+    {
+      encoding: "utf8",
+      // The child's own cwd, so a bare specifier is looked up from the
+      // directory holding the entry rather than from wherever vitest was run.
+      cwd: from,
+      env: { ...process.env, NEXTLY_RESOLVE_RECORD: record },
+    }
+  );
+
+  const resolved = !instrumented
+    ? []
+    : readFileSync(record, "utf8")
+        .split("\n")
+        .filter(line => line !== "")
+        .map(line => JSON.parse(line) as { specifier: string; url: string });
+
+  return { ok: result.status === 0, stderr: result.stderr ?? "", resolved };
 }
 
 const isRelative = (specifier: string) => specifier.startsWith(".");
 
-/** Every emitted file an entry point reaches, following relative specifiers. */
-function bundleGraph(entry: string): string[] {
-  const seen = new Set<string>();
-  const queue = [entry];
-
-  while (queue.length > 0) {
-    const file = queue.pop();
-    if (file === undefined || seen.has(file) || !existsSync(file)) continue;
-    seen.add(file);
-
-    for (const specifier of specifiersIn(readFileSync(file, "utf8"))) {
-      if (isRelative(specifier)) queue.push(resolve(dirname(file), specifier));
-    }
+/**
+ * The bare package specifiers a run actually resolved.
+ *
+ * A specifier carrying a SCHEME is not one of them, and excluding it is not
+ * cosmetic: the bootstrap imports the entry by its own `file:` URL, so a run
+ * that resolved nothing at all would otherwise report one external and every
+ * empty-set assertion below would fail on the harness rather than on the
+ * boundary. Built-ins are excluded for the reason the boundary is about
+ * bundle weight: `node:path` costs a consumer nothing to load.
+ */
+function externals(run: EntryRun): string[] {
+  const found = new Set<string>();
+  for (const { specifier } of run.resolved) {
+    if (isRelative(specifier) || URL.canParse(specifier)) continue;
+    if (specifier.startsWith("node:")) continue;
+    found.add(specifier);
   }
-
-  return [...seen];
+  return [...found].sort();
 }
 
-/** Bare package specifiers an entry point's graph imports at runtime. */
-function externalImports(files: string[]): Set<string> {
-  const externals = new Set<string>();
-  for (const file of files) {
-    for (const specifier of specifiersIn(readFileSync(file, "utf8"))) {
-      if (!isRelative(specifier)) externals.add(specifier);
-    }
+/** The bytes of every emitted file a run loaded from `dist`. */
+function bytesOf(run: EntryRun): number {
+  const files = new Set<string>();
+  for (const { url } of run.resolved) {
+    if (!url.startsWith("file:")) continue;
+    const file = fileURLToPath(url);
+    if (file.startsWith(DIST)) files.add(file);
   }
-  return externals;
+  let total = 0;
+  for (const file of files) total += statSync(file).size;
+  return total;
 }
 
-function bytesOf(files: string[]): number {
-  return files.reduce((total, file) => total + statSync(file).size, 0);
-}
-
-describe("the import scanner", () => {
-  it("does not read an import out of a string literal named like the keyword", () => {
-    // `"from"` ends in a quote, so a keyword match that allowed a newline in
-    // the specifier captured the next two lines of ordinary code and reported
-    // it as an external dependency. A module specifier has no newline in it.
-    const source = [
-      'const from = ownEntry(value, "from");',
-      'if (from === "component") return true;',
-    ].join("\n");
-
-    expect(specifiersIn(source)).toEqual([]);
+describe("the format entry point's boundary", () => {
+  it("has been built", () => {
+    // Every assertion below reads these files. A missing one makes the
+    // isolated import fail for a reason that has nothing to do with the
+    // boundary, and an unbuilt tree would otherwise read as a broken one.
+    for (const entry of [FORMAT_ENTRY, ROOT_ENTRY]) {
+      const file = join(DIST, entry);
+      expect(existsSync(file), `${file} is missing`).toBe(true);
+    }
   });
 
-  it("still sees every real specifier shape", () => {
-    // The control: the narrowing must not cost a form the walk depends on.
-    const source = [
-      'import { a } from "./a";',
-      'export { b } from "./b";',
-      'import "./side-effect";',
-      'const c = await import("./c");',
-    ].join("\n");
+  it("is asked from a directory nothing can be resolved out of", () => {
+    // The precondition the two assertions below rest on, and the one that fails
+    // in the flattering direction if it is wrong: a `node_modules` anywhere
+    // above the sandbox resolves every runtime dependency, the isolated import
+    // succeeds for the wrong reason, and the control below stops controlling.
+    const reachable = lookupChain(sandbox).filter(existsSync);
+    expect(reachable, `resolvable from ${sandbox}`).toEqual([]);
+  });
 
-    expect(specifiersIn(source)).toEqual([
-      "./a",
-      "./b",
-      "./side-effect",
-      "./c",
-    ]);
+  it("imports with no node_modules in reach", () => {
+    // The boundary itself. Not "no import matched a pattern" — the resolver was
+    // given the entry with nothing to resolve a bare specifier from, and it
+    // loaded. Anything reaching a runtime dependency cannot.
+    const run = runEntry(join(sandbox, "dist"), FORMAT_ENTRY, {
+      instrumented: false,
+    });
+
+    expect(run.ok, run.stderr).toBe(true);
+  });
+
+  it("CONTROL: the package root cannot, in that same directory", () => {
+    // Without this the test above passes on an isolation that isolates
+    // nothing — a sandbox that could still see a `node_modules`, a child that
+    // silently exited 0, an entry file that does not exist. The root reaches
+    // the CSS parser, so it must fail here, and its failure is what proves the
+    // format entry's success means something.
+    const run = runEntry(join(sandbox, "dist"), ROOT_ENTRY, {
+      instrumented: false,
+    });
+
+    expect(run.ok).toBe(false);
+    expect(run.stderr).toContain("ERR_MODULE_NOT_FOUND");
+    expect(run.stderr).toContain("css-tree");
   });
 });
 
-describe("the format entry point's boundary", () => {
-  const formatEntry = join(DIST, "format.mjs");
-  const rootEntry = join(DIST, "index.mjs");
+describe("what the format entry point actually loads", () => {
+  it("resolves no runtime dependency", () => {
+    // The same claim asked a second way, in a place where dependencies ARE
+    // resolvable. The isolated import proves nothing external could load; this
+    // proves nothing external was even asked for, which is what would still
+    // hold if the sandbox ever stopped being isolated.
+    const run = runEntry(DIST, FORMAT_ENTRY, { instrumented: true });
 
-  it("has been built", () => {
-    // Every assertion below reads these files. Missing ones would make each
-    // graph empty, every external set empty, and every expectation trivially
-    // satisfied — a suite reporting that nothing heavy is reachable because
-    // nothing at all is.
-    expect(existsSync(formatEntry), `${formatEntry} is missing`).toBe(true);
-    expect(existsSync(rootEntry), `${rootEntry} is missing`).toBe(true);
+    expect(run.ok, run.stderr).toBe(true);
+    expect(externals(run)).toEqual([]);
   });
 
-  it("reaches no runtime dependency", () => {
-    const externals = externalImports(bundleGraph(formatEntry));
-    expect([...externals].sort()).toEqual([]);
+  it("CONTROL: the same instrument sees the root's dependency", () => {
+    // A hook that recorded nothing would report an empty external set for every
+    // entry point, including one that demonstrably pulls a parser. Matched by
+    // package rather than by exact specifier: the compiler imports
+    // `css-tree/parser` and `css-tree/walker` by subpath, so an equality check
+    // against the bare name finds nothing and the control passes for the wrong
+    // reason.
+    const run = runEntry(DIST, ROOT_ENTRY, { instrumented: true });
+
+    expect(run.ok, run.stderr).toBe(true);
+    expect(externals(run).map(specifier => specifier.split("/")[0])).toContain(
+      "css-tree"
+    );
   });
 
   it("stays a small fraction of the package root", () => {
-    const format = bytesOf(bundleGraph(formatEntry));
-    const root = bytesOf(bundleGraph(rootEntry));
-
     // A ratio rather than a byte ceiling: the absolute size moves whenever the
     // engine grows, and a fixed number would either fail on unrelated work or
     // be raised until it meant nothing. What must stay true is that this entry
     // costs a small fraction of the root, which is the property consumers rely
-    // on. Measured at roughly 1.5% when written.
+    // on.
+    //
+    // Measured over the files the resolver REPORTED loading, so the two sides
+    // are the graphs Node built rather than two readings of the text.
+    const format = bytesOf(
+      runEntry(DIST, FORMAT_ENTRY, { instrumented: true })
+    );
+    const root = bytesOf(runEntry(DIST, ROOT_ENTRY, { instrumented: true }));
+
     expect(format).toBeGreaterThan(0);
     expect(root).toBeGreaterThan(format * 10);
-  });
-
-  it("is measured by a walk that can actually see the difference", () => {
-    // The positive control, and the reason the two assertions above mean
-    // anything. A traversal that silently followed nothing would report an
-    // empty external set and a tiny size for EVERY entry point, including one
-    // that demonstrably pulls a parser. Requiring the root to reach a real
-    // dependency proves the walk resolves specifiers and reads what it finds.
-    const rootFiles = bundleGraph(rootEntry);
-    expect(rootFiles.length).toBeGreaterThan(1);
-    // Matched by package rather than by exact specifier: the compiler imports
-    // `css-tree/parser` and `css-tree/walker` by subpath, so an equality check
-    // against the bare name finds nothing and the control passes for the wrong
-    // reason — reporting a healthy boundary because it could not see the
-    // dependency it was pointed at.
-    const rootPackages = [...externalImports(rootFiles)].map(
-      specifier => specifier.split("/")[0]
-    );
-    expect(rootPackages).toContain("css-tree");
-  });
-
-  it("sees every import form the bundler emits", () => {
-    // The control for the SCANNER rather than for the boundary, on input whose
-    // answer is known. It is the only assertion in this file that can fail when
-    // the scanner narrows: the four above read real bundles, where a form that
-    // goes unmatched produces a smaller graph and an emptier external set —
-    // indistinguishable from the boundary being intact.
-    const emitted = [
-      `import { a } from './rel.mjs';`,
-      `import "css-tree/parser";`,
-      `export { b } from "./other.mjs";`,
-      `import c from 'some-pkg';`,
-      `const lazy = () => import("lazy-pkg/sub");`,
-      `await import('./deferred.mjs');`,
-    ].join("\n");
-
-    expect(specifiersIn(emitted).sort()).toEqual([
-      "./deferred.mjs",
-      "./other.mjs",
-      "./rel.mjs",
-      "css-tree/parser",
-      "lazy-pkg/sub",
-      "some-pkg",
-    ]);
   });
 });
