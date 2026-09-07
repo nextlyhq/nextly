@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-sso",
-  "version": "0.0.2-alpha.62",
+  "version": "0.0.2-alpha.63",
   "description": "First-party Single Sign-On plugin for Nextly: Google, Microsoft (Entra ID) and GitHub via OAuth 2.1 / OpenID Connect",
   "license": "MIT",
   "private": true,
@@ -32,7 +32,7 @@
     "jose": "^6.2.2"
   },
   "peerDependencies": {
-    "nextly": "0.0.2-alpha.62"
+    "nextly": "workspace:*"
   },
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
