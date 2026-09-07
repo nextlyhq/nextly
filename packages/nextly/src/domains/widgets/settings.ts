@@ -27,7 +27,7 @@
  *
  * - a key no setting declares is IGNORED, and kept in storage;
  * - a declared key that is absent takes the setting's default;
- * - a value of the wrong type takes the default too.
+ * - a value the declaration no longer accepts takes the default too.
  *
  * 🔴 Rejecting unknown keys at write time would make a saved layout unwritable
  * the moment a plugin renames a setting or is uninstalled, and plugins version
@@ -45,7 +45,19 @@ import { NextlyError } from "../../errors/nextly-error";
 export interface WidgetSettingBase {
   name: string;
   label?: string;
-  description?: string;
+  /**
+   * Presentation the field system owns, and where help text lives.
+   *
+   * 🔴 `description` sits HERE rather than at the top level, and the renderer
+   * is why. The premise of this whole type is that `FieldRenderer` draws a
+   * setting with no adapter — and `FieldWrapper` reads help text from
+   * `field.admin.description`, nowhere else. Declared at the top level it
+   * compiled, travelled to the admin intact, and was silently never drawn: an
+   * author would write a description, see nothing on screen, and have no
+   * failure anywhere to look at. Being a field config has to mean being one
+   * where the renderer reads, not only where the compiler agrees.
+   */
+  admin?: { description?: string };
 }
 
 /**
@@ -62,8 +74,9 @@ export interface WidgetSettingBase {
  *
  * The shape is still a field config, so `FieldRenderer` draws it with no
  * adapter. `__tests__/settings.compat.test-d.ts` asserts that each variant is
- * assignable to `FieldConfig`, inside the package where that import resolves —
- * so the compatibility this rests on is checked rather than asserted in prose.
+ * assignable to `FieldConfig` AND that it introduces no top-level key the field
+ * types do not have, inside the package where that import resolves — so the
+ * compatibility this rests on is checked rather than asserted in prose.
  */
 export type WidgetSetting =
   | (WidgetSettingBase & { type: "text"; defaultValue?: string })
@@ -80,8 +93,70 @@ export type WidgetSetting =
       options: { label: string; value: string }[];
     });
 
-/** The field types a widget setting may use. */
-const SETTING_TYPES = new Set(["text", "number", "checkbox", "select"]);
+/**
+ * Whether a value is usable as a setting of each type.
+ *
+ * 🔴 ONE table, read in both directions this module judges a value in: a
+ * STORED value being read back for a card, and a DEFAULT being declared by an
+ * author. Only the stored direction existed before, so
+ * `{ type: "number", defaultValue: "ten" }` passed boot, resolved to the string
+ * it declared, and put text where a row count goes — the author's mistake
+ * surfacing as a query that quietly did something else. Two tables could
+ * answer one question two ways; this one cannot.
+ *
+ * The keys are also the vocabulary. A type is one a setting may declare
+ * exactly when this table can judge its values, so adding a type here is the
+ * whole of adding a type.
+ */
+const USABLE_AS: Record<
+  WidgetSetting["type"],
+  (value: unknown, options: readonly { value: string }[] | undefined) => boolean
+> = {
+  text: value => typeof value === "string",
+  number: value => typeof value === "number" && Number.isFinite(value),
+  checkbox: value => typeof value === "boolean",
+  /*
+   * 🔴 The OPTIONS decide, not the type alone. A stored select value stays a
+   * string after its option is renamed or removed, so a type-only check went on
+   * accepting a choice the declaration no longer offers: the card drew a value
+   * its own settings form could not show, and the fall back to the default that
+   * this reading exists for never happened for the one type whose declaration
+   * can retire a value.
+   */
+  select: (value, options) =>
+    typeof value === "string" &&
+    options !== undefined &&
+    options.some(option => option.value === value),
+};
+
+/** Whether this is a type a setting may declare. */
+function isSettingType(value: unknown): value is WidgetSetting["type"] {
+  // `Object.hasOwn` rather than `in`, because the type name comes from a
+  // plugin's declaration: `"toString"` is `in` every object literal.
+  return typeof value === "string" && Object.hasOwn(USABLE_AS, value);
+}
+
+/** Whether this is a usable set of choices for a select. */
+function isSelectOptions(
+  value: unknown
+): value is { label: string; value: string }[] {
+  return (
+    Array.isArray(value) &&
+    // Empty is refused: a select with no choices can never hold a value, so
+    // every stored one falls back and the form draws a control with nothing in
+    // it. That is a declaration mistake rather than a state to render.
+    value.length > 0 &&
+    value.every(
+      option =>
+        typeof option === "object" &&
+        option !== null &&
+        "value" in option &&
+        typeof option.value === "string" &&
+        "label" in option &&
+        typeof option.label === "string"
+    )
+  );
+}
 
 /**
  * How many settings one widget may declare.
@@ -105,6 +180,141 @@ function fail(message: string): never {
 }
 
 /**
+ * Why this declaration cannot be used, or `undefined` when it can.
+ *
+ * 🔴 Returns the problem rather than throwing it, because the two channels into
+ * the registry need the same rules in different shapes: `registerWidget` throws
+ * on a bad definition, while `validatedAdminWidgets` walks a list of rules that
+ * each return a sentence and names the plugin that shipped the widget. Written
+ * as a throwing validator, only the registry could call it — which is exactly
+ * what happened: a contributed `settings` reached the admin having passed no
+ * settings rule at all, and `settings: {}` from an untyped declaration got as
+ * far as the grid before failing, taking the dashboard down instead of the
+ * install. One rule set answering both channels is the thing
+ * `plugins/__tests__/channel-divergence` exists to protect.
+ */
+export function widgetSettingsProblem(settings: unknown): string | undefined {
+  if (settings === undefined) return undefined;
+  if (!Array.isArray(settings)) return '"settings" must be an array';
+  if (settings.length > MAX_WIDGET_SETTINGS) {
+    return `at most ${MAX_WIDGET_SETTINGS} settings, got ${settings.length}`;
+  }
+
+  const seen = new Set<string>();
+  for (const setting of settings) {
+    const problem = settingProblem(setting, seen);
+    if (problem !== undefined) return problem;
+  }
+  return undefined;
+}
+
+/**
+ * Why one setting cannot be used, or `undefined` when it can.
+ *
+ * Separate from the collection check because they answer different questions —
+ * whether this declaration is well formed, against whether the SET of them is
+ * (no duplicates, not too many) — and reading them interleaved made both harder
+ * to follow than either is alone.
+ *
+ * `seen` is passed rather than returned because uniqueness is a property of the
+ * set, and the only place that can observe it is the loop.
+ */
+function settingProblem(
+  setting: unknown,
+  seen: Set<string>
+): string | undefined {
+  if (typeof setting !== "object" || setting === null) {
+    return "every setting must be an object";
+  }
+  const { name, type, defaultValue, options } = setting as {
+    name?: unknown;
+    type?: unknown;
+    defaultValue?: unknown;
+    options?: unknown;
+  };
+
+  if (typeof name !== "string" || name === "") {
+    return 'every setting needs a non-empty "name"';
+  }
+  if (seen.has(name)) {
+    // Two settings of one name make the resolved value depend on which was
+    // read last, and the author cannot see which that is.
+    return `duplicate setting "${name}"`;
+  }
+  seen.add(name);
+
+  if (!isSettingType(type)) {
+    return `setting "${name}" has type ${JSON.stringify(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
+  }
+
+  return problemForType(type, options, defaultValue, name);
+}
+
+/**
+ * Why this setting's TYPE-SPECIFIC parts are unusable, or `undefined`.
+ *
+ * The options a select must offer and the default any setting may declare are
+ * the two rules that depend on WHICH type this is; everything above is asked of
+ * every setting alike. Kept apart so the general checks read as one list rather
+ * than as a list interrupted by a branch about selects — and because the two
+ * are ordered: a default can only be judged against options already known good.
+ */
+function problemForType(
+  type: WidgetSetting["type"],
+  options: unknown,
+  defaultValue: unknown,
+  name: string
+): string | undefined {
+  if (type === "select" && !isSelectOptions(options)) {
+    return `setting "${name}" is a select and needs a non-empty "options" array of { label, value } entries`;
+  }
+
+  return defaultProblem(
+    type,
+    isSelectOptions(options) ? options : undefined,
+    defaultValue,
+    name
+  );
+}
+
+/** Why this setting's declared default is unusable, or `undefined`. */
+function defaultProblem(
+  type: WidgetSetting["type"],
+  options: readonly { value: string }[] | undefined,
+  defaultValue: unknown,
+  name: string
+): string | undefined {
+  /*
+   * 🔴 A FUNCTION default is refused rather than called. `defaultValue` may be
+   * a thunk on a collection field, where it is evaluated on the server that
+   * holds it — but a widget definition is serialized to the admin through
+   * `/api/admin-meta/workspace`, and a function does not survive JSON. Accepted
+   * here it would simply be absent by the time anything could use it, so the
+   * setting would silently have no default at all. Refusing puts that in front
+   * of the author, who is the only one who can fix it.
+   */
+  if (typeof defaultValue === "function") {
+    return `setting "${name}" has a function default; widget settings cross the wire as JSON, so a default must be a literal`;
+  }
+  if (defaultValue === undefined) return undefined;
+
+  /*
+   * 🔴 Judged by the SAME table a stored value is, because a default that fails
+   * it is worse than a wrong stored value rather than better: a stored value
+   * falls back to the default, while a bad default is what everything falls
+   * back TO. `resolveWidgetSettings` handed it straight out, so a `number`
+   * setting defaulting to `"ten"` reached the query as a string with nothing
+   * left to correct it. The refusal is at boot because that is where the author
+   * who wrote it is standing.
+   */
+  if (USABLE_AS[type](defaultValue, options)) return undefined;
+
+  return type === "select"
+    ? `setting "${name}" defaults to ${JSON.stringify(defaultValue)}, which is not one of its options`
+    : `setting "${name}" is typed "${type}" but defaults to ${JSON.stringify(defaultValue)}`;
+}
+
+/**
  * Refuse a declaration the admin could not draw or the reader could not use.
  *
  * 🔴 Refuses at BOOT rather than degrading, which is the opposite of how the
@@ -117,89 +327,16 @@ export function validateWidgetSettings(
   settings: unknown,
   widgetId: string
 ): asserts settings is WidgetSetting[] | undefined {
-  if (settings === undefined) return;
-  if (!Array.isArray(settings))
-    fail(`${widgetId}: "settings" must be an array`);
-  if (settings.length > MAX_WIDGET_SETTINGS) {
-    fail(
-      `${widgetId}: at most ${MAX_WIDGET_SETTINGS} settings, got ${settings.length}`
-    );
-  }
-
-  const seen = new Set<string>();
-  for (const setting of settings) {
-    validateOneSetting(setting, widgetId, seen);
-  }
-}
-
-/**
- * Refuse one setting the admin could not draw or the reader could not use.
- *
- * Separate from the collection check because they answer different questions —
- * whether this declaration is well formed, against whether the SET of them is
- * (no duplicates, not too many) — and reading them interleaved made both harder
- * to follow than either is alone.
- *
- * `seen` is passed rather than returned because uniqueness is a property of the
- * set, and the only place that can observe it is the loop.
- */
-function validateOneSetting(
-  setting: unknown,
-  widgetId: string,
-  seen: Set<string>
-): void {
-  if (typeof setting !== "object" || setting === null) {
-    fail(`${widgetId}: every setting must be an object`);
-  }
-  const { name, type, defaultValue } = setting as {
-    name?: unknown;
-    type?: unknown;
-    defaultValue?: unknown;
-  };
-
-  if (typeof name !== "string" || name === "") {
-    fail(`${widgetId}: every setting needs a non-empty "name"`);
-  }
-  if (seen.has(name)) {
-    // Two settings of one name make the resolved value depend on which was
-    // read last, and the author cannot see which that is.
-    fail(`${widgetId}: duplicate setting "${name}"`);
-  }
-  seen.add(name);
-
-  if (typeof type !== "string" || !SETTING_TYPES.has(type)) {
-    fail(
-      `${widgetId}: setting "${name}" has type ${JSON.stringify(type)}; expected one of ${[...SETTING_TYPES].join(", ")}`
-    );
-  }
-
-  /*
-   * 🔴 A FUNCTION default is refused rather than called. `defaultValue` may be
-   * a thunk on a collection field, where it is evaluated on the server that
-   * holds it — but a widget definition is serialized to the admin through
-   * `/api/admin-meta/workspace`, and a function does not survive JSON. Accepted
-   * here it would simply be absent by the time anything could use it, so the
-   * setting would silently have no default at all. Refusing puts that in front
-   * of the author, who is the only one who can fix it.
-   */
-  if (typeof defaultValue === "function") {
-    fail(
-      `${widgetId}: setting "${name}" has a function default; widget settings cross the wire as JSON, so a default must be a literal`
-    );
-  }
+  const problem = widgetSettingsProblem(settings);
+  if (problem !== undefined) fail(`${widgetId}: ${problem}`);
 }
 
 /** Whether a stored value is usable as this setting's type. */
 function matchesType(setting: WidgetSetting, value: unknown): boolean {
-  switch (setting.type) {
-    case "number":
-      return typeof value === "number" && Number.isFinite(value);
-    case "checkbox":
-      return typeof value === "boolean";
-    case "text":
-    case "select":
-      return typeof value === "string";
-  }
+  return USABLE_AS[setting.type](
+    value,
+    setting.type === "select" ? setting.options : undefined
+  );
 }
 
 /** The default a setting declares, or `undefined` when it declares none. */
@@ -228,10 +365,11 @@ export function resolveWidgetSettings(
       resolved[setting.name] = value;
       continue;
     }
-    // A wrong-typed value takes the default rather than refusing: the reader
-    // did not necessarily write it -- a plugin changing a setting's type across
-    // an upgrade produces exactly this -- and a card that refuses to draw is a
-    // worse answer than one drawn the way its author intended.
+    // A value the declaration no longer accepts takes the default rather than
+    // refusing: the reader did not necessarily write it -- a plugin changing a
+    // setting's type, or retiring a select option, across an upgrade produces
+    // exactly this -- and a card that refuses to draw is a worse answer than
+    // one drawn the way its author intended.
     const fallback = declaredDefault(setting);
     if (fallback !== undefined) resolved[setting.name] = fallback;
   }

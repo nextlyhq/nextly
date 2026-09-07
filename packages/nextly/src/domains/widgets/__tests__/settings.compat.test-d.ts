@@ -39,3 +39,38 @@ expectTypeOf<TextSetting>().not.toBeNever();
 expectTypeOf<NumberSetting>().not.toBeNever();
 expectTypeOf<CheckboxSetting>().not.toBeNever();
 expectTypeOf<SelectSetting>().not.toBeNever();
+
+/*
+ * 🔴 Assignability is not enough, and the gap is not academic: `toMatchTypeOf`
+ * permits EXTRA properties, so every assertion above passed while `description`
+ * sat at the top level — where `FieldWrapper`, which reads help text from
+ * `field.admin.description`, never looks. The setting was a valid field config
+ * AND its description was silently undrawable, which is precisely the state
+ * this file exists to make impossible.
+ *
+ * So each variant is also required to introduce NO top-level key its field
+ * counterpart lacks. A property in the wrong PLACE is a key the field type does
+ * not have, so it fails here rather than by never rendering.
+ */
+type TextField = Extract<FieldConfig, { type: "text" }>;
+type NumberField = Extract<FieldConfig, { type: "number" }>;
+type CheckboxField = Extract<FieldConfig, { type: "checkbox" }>;
+type SelectField = Extract<FieldConfig, { type: "select" }>;
+
+expectTypeOf<Exclude<keyof TextSetting, keyof TextField>>().toBeNever();
+expectTypeOf<Exclude<keyof NumberSetting, keyof NumberField>>().toBeNever();
+expectTypeOf<Exclude<keyof CheckboxSetting, keyof CheckboxField>>().toBeNever();
+expectTypeOf<Exclude<keyof SelectSetting, keyof SelectField>>().toBeNever();
+
+/*
+ * The control for the four above, and it is a different one from the control
+ * for assignability. `Extract` resolving to `never` makes `keyof` the set of
+ * ALL property names, so `Exclude` would be enormous rather than empty and the
+ * assertions would fail loudly — but `keyof never` is `string | number | symbol`
+ * only because `never` is the empty union, and a reader has no reason to know
+ * which way that falls. These say the field side resolved to something real.
+ */
+expectTypeOf<TextField>().not.toBeNever();
+expectTypeOf<NumberField>().not.toBeNever();
+expectTypeOf<CheckboxField>().not.toBeNever();
+expectTypeOf<SelectField>().not.toBeNever();

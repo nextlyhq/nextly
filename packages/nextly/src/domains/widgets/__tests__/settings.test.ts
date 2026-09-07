@@ -75,6 +75,104 @@ describe("validateWidgetSettings refuses what an author can fix", () => {
     ).toThrow(/function default/);
   });
 
+  /*
+   * 🔴 A default is judged by the SAME predicate a stored value is. A stored
+   * value that fails it falls back to the default; a DEFAULT that fails it is
+   * what everything falls back to, so nothing downstream can correct it — the
+   * string reached the query where a row count goes.
+   */
+  it("refuses a default that is not a value of its own type", () => {
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "limit", type: "number", defaultValue: "ten" }],
+        "core/x"
+      )
+    ).toThrow(/limit/);
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "compact", type: "checkbox", defaultValue: "yes" }],
+        "core/x"
+      )
+    ).toThrow(/compact/);
+  });
+
+  it("accepts a default that IS a value of its own type", () => {
+    // The control. A rule that refused every default would satisfy the case
+    // above while making `defaultValue` undeclarable.
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "limit", type: "number", defaultValue: 10 }],
+        "core/x"
+      )
+    ).not.toThrow();
+  });
+
+  it("refuses a number default JSON cannot carry", () => {
+    // `NaN` and the infinities are numbers that serialize to `null`, so a
+    // default declared as one arrives at the admin absent -- the same outcome
+    // as the function default beside it, reached by a different route.
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "limit", type: "number", defaultValue: Number.NaN }],
+        "core/x"
+      )
+    ).toThrow(/limit/);
+  });
+
+  it("refuses a select that offers no options", () => {
+    // A select with nothing to choose can hold no value at all, so every
+    // stored one falls back and the form draws an empty control.
+    expect(() =>
+      validateWidgetSettings([{ name: "mode", type: "select" }], "core/x")
+    ).toThrow(/options/);
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "mode", type: "select", options: [] }],
+        "core/x"
+      )
+    ).toThrow(/options/);
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "mode", type: "select", options: [{ value: "a" }] }],
+        "core/x"
+      )
+    ).toThrow(/options/);
+  });
+
+  it("refuses a select default that is not one of its options", () => {
+    expect(() =>
+      validateWidgetSettings(
+        [
+          {
+            name: "mode",
+            type: "select",
+            defaultValue: "gone",
+            options: [{ label: "A", value: "a" }],
+          },
+        ],
+        "core/x"
+      )
+    ).toThrow(/gone/);
+  });
+
+  it("accepts a select default that IS one of its options", () => {
+    // The control for the pair above: the options rule must still permit a
+    // well-formed select, or the two refusals could be one rule rejecting all.
+    expect(() =>
+      validateWidgetSettings(
+        [
+          {
+            name: "mode",
+            type: "select",
+            defaultValue: "a",
+            options: [{ label: "A", value: "a" }],
+          },
+        ],
+        "core/x"
+      )
+    ).not.toThrow();
+  });
+
   it("refuses more settings than the ceiling allows", () => {
     const many = Array.from({ length: MAX_WIDGET_SETTINGS + 1 }, (_, i) => ({
       name: `s${i}`,
@@ -126,6 +224,45 @@ describe("resolveWidgetSettings reads a stored value without punishing it", () =
     // nothing and the author offered nothing" from "the value is the default".
     const title: WidgetSetting = { name: "title", type: "text" };
     expect(resolveWidgetSettings([title], {})).toEqual({});
+  });
+
+  /*
+   * 🔴 A select's stored value is checked against its OPTIONS, not merely
+   * against being a string. A plugin that renames or retires a choice leaves
+   * every reader who picked it holding a value the declaration no longer
+   * offers: the card drew it and the settings form could not show it, which is
+   * the upgrade this whole reading exists to survive.
+   */
+  it("falls back when a stored select value is no longer offered", () => {
+    const mode: WidgetSetting = {
+      name: "mode",
+      type: "select",
+      defaultValue: "list",
+      options: [
+        { label: "List", value: "list" },
+        { label: "Grid", value: "grid" },
+      ],
+    };
+    expect(resolveWidgetSettings([mode], { mode: "gallery" })).toEqual({
+      mode: "list",
+    });
+  });
+
+  it("keeps a stored select value the declaration still offers", () => {
+    // The control. Without it, refusing every select value would satisfy the
+    // case above while making the setting impossible to change.
+    const mode: WidgetSetting = {
+      name: "mode",
+      type: "select",
+      defaultValue: "list",
+      options: [
+        { label: "List", value: "list" },
+        { label: "Grid", value: "grid" },
+      ],
+    };
+    expect(resolveWidgetSettings([mode], { mode: "grid" })).toEqual({
+      mode: "grid",
+    });
   });
 
   it("answers empty for a widget that declares nothing", () => {

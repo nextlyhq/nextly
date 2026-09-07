@@ -452,6 +452,64 @@ const MUST_AGREE: Array<{
       actions: [42],
     },
   },
+  /*
+   * The settings rules. This channel had NO settings check at all, so
+   * `settings: {}` passed the JSON gate, was published, and threw out of
+   * `applyWidgetSettings` while the grid rendered -- the dashboard going down
+   * rather than the one install that declared it. Both validators now read the
+   * same `widgetSettingsProblem`, and these rows are what says so.
+   */
+  {
+    case: "settings that are not an array",
+    expect: /"settings" must be an array/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      settings: {},
+    },
+  },
+  {
+    case: "a setting default that is not a value of its type",
+    expect: /defaults to/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      settings: [{ name: "limit", type: "number", defaultValue: "ten" }],
+    },
+  },
+  {
+    case: "a select setting that offers no options",
+    expect: /needs a non-empty "options"/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      settings: [{ name: "mode", type: "select" }],
+    },
+  },
+  {
+    case: "two settings of one name",
+    expect: /duplicate setting/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      settings: [
+        { name: "limit", type: "number" },
+        { name: "limit", type: "text" },
+      ],
+    },
+  },
   {
     case: "a chrome that is not a string",
     expect: /chrome, when given, must be a string/,

@@ -178,29 +178,33 @@ export function WidgetGrid() {
   /*
    * The cards the batch asks for, with each reader's own settings applied.
    *
-   * 🔴 Applied HERE rather than inside the batch, because this is the last
-   * place a card and the placement that put it there are both in scope: the
-   * batch takes widgets, and a widget does not know which placement it is being
-   * drawn for — the same widget can sit on the dashboard twice with different
-   * settings.
+   * Applied HERE rather than inside the batch, because the stored config
+   * belongs to the placement and the batch has no reason to read a layout. The
+   * ROW is carried through rather than the widget alone, so the answer comes
+   * back keyed to the placement that asked: the same widget placed twice with
+   * different settings asks two different questions, and keying those by widget
+   * filed both under one entry.
    *
    * `applyWidgetSettings` returns the query it was given when nothing applies,
    * so a card with no settings keeps its identity through this map and the
    * batch's memoisation does not see a new object every render.
    */
-  const widgets = useMemo(
+  const cards = useMemo(
     () =>
       visible.map(row =>
         row.widget.query
           ? {
-              ...row.widget,
-              query: applyWidgetSettings(
-                row.widget.query,
-                row.widget.settings,
-                row.config
-              ),
+              ...row,
+              widget: {
+                ...row.widget,
+                query: applyWidgetSettings(
+                  row.widget.query,
+                  row.widget.settings,
+                  row.config
+                ),
+              },
             }
-          : row.widget
+          : row
       ),
     [visible]
   );
@@ -214,7 +218,7 @@ export function WidgetGrid() {
     counted,
     failed,
     settling,
-  } = useWidgetBatch(widgets);
+  } = useWidgetBatch(cards);
 
   const { announcement, announceColumn: announceSettledColumn } =
     useGridAnnouncer(settling, counted, failed);

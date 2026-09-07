@@ -16,6 +16,7 @@ export {
   validateWidgetDefinition,
   type WidgetDefinition,
   type WidgetAction,
+  type WidgetSetting,
   type WidgetStatCell,
   type WidgetSize,
   type WidgetChrome,

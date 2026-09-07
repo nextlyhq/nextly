@@ -113,19 +113,19 @@ export function ArrangedColumns({
               index={indexInColumn}
               count={rowsInColumn.length}
               isEditing={isEditing}
-              slot={slots[row.widget.id]}
+              slot={slots[row.placementId]}
               // Built HERE, where the whole record is, so the composite key
               // format stays with the batch that writes it rather than being
               // spelled again inside an archetype.
               // This card's own answers, by cell key. Nested rather than a
               // composite string, so no id can collide with another.
-              slotFor={key => cellSlots[row.widget.id]?.[key]}
+              slotFor={key => cellSlots[row.placementId]?.[key]}
               // Only a widget that actually ASKED can be waiting on an answer. A
               // card drawn entirely by a plugin component took no part in the
               // batch, and neither did one whose archetype nothing can draw, so a
               // refetch says nothing about either.
-              updatedAt={requested.has(row.widget.id) ? updatedAt : null}
-              isFetching={requested.has(row.widget.id) ? isFetching : false}
+              updatedAt={requested.has(row.placementId) ? updatedAt : null}
+              isFetching={requested.has(row.placementId) ? isFetching : false}
               // The arrangement hook announces, because it is the one that
               // resolves the destination -- announcing here would name a
               // position computed a second time, and the two would drift.

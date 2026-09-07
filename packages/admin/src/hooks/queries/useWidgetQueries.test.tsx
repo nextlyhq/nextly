@@ -59,7 +59,7 @@ describe("useWidgetQueries", () => {
       () =>
         useWidgetQueries([
           {
-            widgetId: "__proto__",
+            placementId: "__proto__",
             cellKey: "total",
             query: countQuery("collection:posts"),
           },
@@ -92,9 +92,9 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { widgetId: "core/a", query: countQuery("collection:posts") },
-          { widgetId: "core/b", query: countQuery("collection:pages") },
-          { widgetId: "core/c", query: countQuery("collection:media") },
+          { placementId: "core/a", query: countQuery("collection:posts") },
+          { placementId: "core/b", query: countQuery("collection:pages") },
+          { placementId: "core/c", query: countQuery("collection:media") },
         ]),
       { wrapper }
     );
@@ -126,8 +126,8 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { widgetId: "core/posts", query: countQuery("collection:posts") },
-          { widgetId: "core/pages", query: countQuery("collection:pages") },
+          { placementId: "core/posts", query: countQuery("collection:posts") },
+          { placementId: "core/pages", query: countQuery("collection:pages") },
         ]),
       { wrapper }
     );
@@ -156,8 +156,8 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { widgetId: "core/broken", query: countQuery("collection:gone") },
-          { widgetId: "core/fine", query: countQuery("collection:posts") },
+          { placementId: "core/broken", query: countQuery("collection:gone") },
+          { placementId: "core/fine", query: countQuery("collection:posts") },
         ]),
       { wrapper }
     );
@@ -195,8 +195,8 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { widgetId: "core/a", query: countQuery("collection:posts") },
-          { widgetId: "core/b", query: countQuery("collection:pages") },
+          { placementId: "core/a", query: countQuery("collection:posts") },
+          { placementId: "core/b", query: countQuery("collection:pages") },
         ]),
       { wrapper }
     );
@@ -217,8 +217,8 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { widgetId: "core/a", query: countQuery("collection:posts") },
-          { widgetId: "core/b", query: countQuery("collection:pages") },
+          { placementId: "core/a", query: countQuery("collection:posts") },
+          { placementId: "core/b", query: countQuery("collection:pages") },
         ]),
       { wrapper }
     );
@@ -241,7 +241,7 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { widgetId: "core/a", query: countQuery("collection:posts") },
+          { placementId: "core/a", query: countQuery("collection:posts") },
         ]),
       { wrapper }
     );
@@ -257,7 +257,7 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { widgetId: "core/a", query: countQuery("collection:posts") },
+          { placementId: "core/a", query: countQuery("collection:posts") },
         ]),
       { wrapper }
     );
@@ -276,8 +276,8 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { widgetId: "core/a", query: countQuery("collection:posts") },
-          { widgetId: "core/b", query: countQuery("collection:pages") },
+          { placementId: "core/a", query: countQuery("collection:posts") },
+          { placementId: "core/b", query: countQuery("collection:pages") },
         ]),
       { wrapper }
     );
@@ -295,7 +295,7 @@ describe("useWidgetQueries", () => {
     // at once, over a limit none of them individually crossed.
     const over = MAX_QUERIES_PER_REQUEST + 1;
     const requests = Array.from({ length: over }, (_, i) => ({
-      widgetId: `core/${i}`,
+      placementId: `core/${i}`,
       query: countQuery(`collection:c${i}`),
     }));
     vi.mocked(protectedApi.post).mockImplementation(
@@ -342,7 +342,7 @@ describe("useWidgetQueries", () => {
     const requests = Array.from(
       { length: MAX_QUERIES_PER_REQUEST },
       (_, i) => ({
-        widgetId: `core/${i}`,
+        placementId: `core/${i}`,
         query: countQuery(`collection:c${i}`),
       })
     );
@@ -368,7 +368,7 @@ describe("useWidgetQueries", () => {
   it("fails only the partition that failed, not the widgets beside it", async () => {
     const over = MAX_QUERIES_PER_REQUEST + 1;
     const requests = Array.from({ length: over }, (_, i) => ({
-      widgetId: `core/${i}`,
+      placementId: `core/${i}`,
       query: countQuery(`collection:c${i}`),
     }));
     vi.mocked(protectedApi.post).mockImplementation(
@@ -407,7 +407,7 @@ describe("useWidgetQueries", () => {
       const { result } = renderHook(
         () =>
           useWidgetQueries([
-            { widgetId: "core/a", query: countQuery("collection:posts") },
+            { placementId: "core/a", query: countQuery("collection:posts") },
           ]),
         { wrapper }
       );
@@ -611,7 +611,7 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { widgetId: "core/a", query: countQuery("collection:posts") },
+          { placementId: "core/a", query: countQuery("collection:posts") },
         ]),
       { wrapper }
     );

@@ -4,9 +4,9 @@
  *
  * `POST /api/dashboard/query` takes `{ queries: WidgetQuery[] }` and answers
  * `{ results }` POSITIONALLY — `results[i]` belongs to `queries[i]` and carries
- * no widget id of its own. Re-keying that back onto widget ids is this hook's
- * whole job, and it is the reason a dashboard of ten cards costs one request
- * rather than ten.
+ * no identity of its own. Re-keying that back onto the PLACEMENT that asked is
+ * this hook's whole job, and it is the reason a dashboard of ten cards costs
+ * one request rather than ten.
  *
  * It also REFUSES a body above `MAX_QUERIES_PER_REQUEST`, so "one request for
  * everything" stops being correct at the thirty-first widget: a single batch
@@ -41,14 +41,29 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-/** One widget's request: the id to key the answer back to, and what to ask. */
+/** One card's request: the id to key the answer back to, and what to ask. */
 export interface WidgetQueryRequest {
-  widgetId: string;
+  /**
+   * Which PLACEMENT asked, not which widget.
+   *
+   * 🔴 The widget id cannot key an answer, because it does not identify a
+   * question. `WidgetPlacement` is a full snapshot with its own identity
+   * precisely so one widget can sit on a dashboard twice carrying different
+   * `config` — and a setting that drives the query makes those two cards
+   * genuinely different questions. Keyed by widget, both filed into one entry:
+   * the second response overwrote the first and both cards drew the same rows,
+   * each reader's own choice visible on neither.
+   *
+   * A placement id is unique within a layout and opaque, so it needs no
+   * composite key and no encoding — which is the same reason the cell answers
+   * below are nested rather than joined into one string.
+   */
+  placementId: string;
   /**
    * Which of the widget's cells this answer belongs to, for a `stats` card.
    *
    * Absent for every archetype that asks ONE question, so their slot key stays
-   * the bare widget id and every existing reader is untouched.
+   * the bare placement id and only a `stats` card is nested.
    */
   cellKey?: string;
   query: WidgetQuery;
@@ -58,9 +73,9 @@ export interface WidgetQueryRequest {
 export type CellSlots = Record<string, Record<string, WidgetSlot>>;
 
 export interface UseWidgetQueriesResult {
-  /** Keyed by `widgetId`. A widget with no answer yet is simply absent. */
+  /** Keyed by `placementId`. A card with no answer yet is simply absent. */
   slots: Record<string, WidgetSlot>;
-  /** Keyed by `widgetId`, then by cell key. Only `stats` cards appear here. */
+  /** Keyed by `placementId`, then by cell key. Only `stats` cards appear. */
   cellSlots: CellSlots;
   isLoading: boolean;
   /**
@@ -106,15 +121,14 @@ function emptyRecord<T>(): Record<string, T> {
 }
 
 /**
- * Files one answer where its widget will look for it.
+ * Files one answer where its card will look for it.
  *
- * 🔴 Two maps rather than one map with a composite key. A contributed widget id
- * is checked only for being usable TEXT, not against the registry's slug
- * pattern, so it may contain any character -- including whichever separator a
- * composite key chose. `core/a` cell `b` and a contributed widget literally
- * named `core/a#b` would then file into the same entry and one card would draw
- * the other's number. Nesting removes the encoding, and with it the class of
- * bug: there is no string to collide.
+ * 🔴 Two maps rather than one map with a composite key. A placement id is
+ * checked only for being usable TEXT, so it may contain any character --
+ * including whichever separator a composite key chose. Placement `a` cell `b`
+ * and a placement literally named `a#b` would then file into the same entry and
+ * one card would draw the other's number. Nesting removes the encoding, and
+ * with it the class of bug: there is no string to collide.
  */
 function fileAnswer(
   slots: Record<string, WidgetSlot>,
@@ -123,10 +137,10 @@ function fileAnswer(
   slot: WidgetSlot
 ): void {
   if (entry.cellKey === undefined) {
-    slots[entry.widgetId] = slot;
+    slots[entry.placementId] = slot;
     return;
   }
-  (cellSlots[entry.widgetId] ??= emptyRecord())[entry.cellKey] = slot;
+  (cellSlots[entry.placementId] ??= emptyRecord())[entry.cellKey] = slot;
 }
 
 /** What a widget is told when the batch came back shorter than it went out. */
