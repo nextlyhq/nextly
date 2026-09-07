@@ -30,7 +30,8 @@
   },
   "files": [
     "dist",
-    "docs"
+    "docs",
+    "!dist/metafile-*.json"
   ],
   "scripts": {
     "build": "tsup",
