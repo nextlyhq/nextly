@@ -1809,6 +1809,120 @@ describe("documented-key-prefix", () => {
     ).not.toContain("documented-key-prefix");
   });
 
+  it("judges a concrete credential that carries no underscore", async () => {
+    // Requiring an underscore missed these. Both are headers a reader would copy and neither
+    // can authenticate, so the shape of the separator decides nothing.
+    for (const token of ["sk-live-EXAMPLE", "abc123"]) {
+      expect(
+        await checksFor(
+          tree({
+            "docs/guides/authentication.mdx": `Use Authorization: Bearer ${token}\n`,
+          }),
+        ),
+      ).toContain("documented-key-prefix");
+    }
+  });
+
+  it("leaves prose about the scheme alone", async () => {
+    // The other side of matching any word after `Bearer`. "send a Bearer token" is a sentence
+    // about the header, and reporting it would block correct pages on a job that always runs.
+    const checks = await checksFor(
+      tree({
+        "docs/guides/authentication.mdx":
+          "Send a Bearer token. A Bearer header was present.\nUse Authorization: Bearer nx_live_EXAMPLE\n",
+      }),
+    );
+    expect(checks).not.toContain("documented-key-prefix");
+  });
+
+  it("does not judge a JavaScript test file", async () => {
+    // `proseFiles` includes package `.mjs`, and the test predicate named only TypeScript
+    // extensions, so a `.test.mjs` doc comment was read as Nextly documentation. Nine package
+    // test files in this repository are named that way.
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n",
+          "packages/nextly/src/domains/email/provider.test.mjs":
+            "/** Authenticate with `Authorization: Bearer vendor_bad_KEY`. */\nexport const x = 1;\n",
+        }),
+      ),
+    ).not.toContain("documented-key-prefix");
+  });
+
+  it("does not judge a package npm never receives", async () => {
+    // Build machinery reaches no consumer, so a comment in it documents nothing.
+    expect(
+      await checksFor({
+        "README.md": "# nextly\n\n@nextlyhq/thing\n",
+        [SOURCE]: 'const KEY_PREFIX = "nx_live_";\n',
+        "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n",
+        "packages/tsconfig/package.json": JSON.stringify({
+          name: "@nextlyhq/tsconfig",
+          private: true,
+        }),
+        "packages/tsconfig/src/index.ts":
+          "/** Authenticate with `Authorization: Bearer vendor_bad_KEY`. */\nexport const x = 1;\n",
+      }),
+    ).not.toContain("documented-key-prefix");
+  });
+
+  it("judges comment syntax an inline code span makes visible", async () => {
+    // A span prints its contents as typed, so this is an example a reader copies, exactly as
+    // a fenced one is.
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx":
+            "Write `{/* Authorization: Bearer sk_bad_EXAMPLE */}` in the layout.\n",
+        }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("reports a stale example when the prefix is SHORTENED", async () => {
+    // `startsWith` passes anything the declared value is a prefix of, so shortening
+    // `nx_live_` to `nx_` left every stale example in the tree satisfying it and the check
+    // reporting clean while nothing issued that format any more.
+    expect(
+      await checksFor(
+        tree(
+          { "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n" },
+          'const KEY_PREFIX = "nx_";',
+        ),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("judges a bare key format in any doc comment talking about keys", async () => {
+    // `direct-api/types/rbac.ts` publishes three of these with no scheme, in JSDoc that ships
+    // in the package's declarations, so scoping to the declaring file left editor-visible
+    // examples free to go stale.
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n",
+          "packages/nextly/src/direct-api/types/rbac.ts":
+            '/** The full raw key value (e.g., `"sk_live_<random>..."`). */\nexport type K = string;\n',
+        }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("does not read an index name as a key format", async () => {
+    // The sentence decides, because the shape cannot: `idx_comp_<slug>_parent` in
+    // `api/field-groups.ts` is a database identifier, and its comment never says key.
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n",
+          "packages/nextly/src/api/field-groups.ts":
+            "/** The index is named `idx_comp_<slug>_parent`, which bounds the slug length. */\nexport const x = 1;\n",
+        }),
+      ),
+    ).not.toContain("documented-key-prefix");
+  });
+
   it("judges a doc comment, which is the form that gets published", async () => {
     // The other side of the same rule. Without it, restricting the scan to
     // JSDoc would read as "scan nothing" and pass just as well.

@@ -750,7 +750,22 @@ const KEY_PREFIX_DECLARATION = /^[ \t]*(?:export[ \t]+)?const[ \t]+KEY_PREFIX[ \
  * excused.
  */
 const BEARER_EXAMPLE =
-  /Bearer(?:[ \t]+|[ \t]*\r?\n[ \t]*)([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*)/gi;
+  /Bearer(?:[ \t]+|[ \t]*\r?\n[ \t]*)([A-Za-z][A-Za-z0-9_-]*)/gi;
+
+/**
+ * Whether a bearer token is a credential rather than the word "token".
+ *
+ * The pattern deliberately matches any word after the scheme, because requiring an underscore
+ * missed `Bearer sk-live-EXAMPLE` and `Bearer abc123`: both are concrete headers a reader would
+ * copy and neither can authenticate. Deciding here rather than in the pattern keeps the two
+ * questions apart, since "what follows Bearer" and "is that a key" have different answers.
+ *
+ * A separator or a digit is what tells them apart. Prose says "send a Bearer token" and "a
+ * Bearer header was present", and those words carry neither.
+ */
+function isCredential(token) {
+  return /[_-]/.test(token) || /[0-9]/.test(token);
+}
 
 /**
  * Whether a token is a placeholder a reader substitutes rather than a key the docs claim to
@@ -771,7 +786,7 @@ function isPlaceholder(token, prefix) {
 }
 
 /** Tests and fixtures, whose bearer headers are for other services and prove nothing here. */
-const TEST_FILE = /(?:^|\/)__tests__\/|\.(?:test|spec)\.[cm]?tsx?$/;
+const TEST_FILE = /(?:^|\/)__tests__\/|\.(?:test|spec)\.[cm]?[jt]sx?$/;
 
 /**
  * A key format documented without the authorization scheme.
@@ -791,11 +806,54 @@ const TEST_FILE = /(?:^|\/)__tests__\/|\.(?:test|spec)\.[cm]?tsx?$/;
  */
 const KEY_FORMAT_EXAMPLE = /\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+_)(?=<|\.\.\.)/g;
 
+/**
+ * The prefix an example claims, which is its leading run of underscore-separated segments.
+ *
+ * Compared for EQUALITY against the declaration rather than with `startsWith`, which passes
+ * anything the declared value is a prefix of. Shortening `nx_live_` to `nx_` would leave every
+ * `nx_live_...` example in the tree satisfying `startsWith("nx_")`, so the docs and the source
+ * could both keep advertising a format nothing issues while this reported clean.
+ *
+ * An example writing out a full literal key whose random half contains an underscore reads as a
+ * different prefix and is reported. That is the right answer twice over: the documented form is
+ * `nx_live_...` or `nx_live_<random>`, and a real key in documentation is something a person
+ * should look at.
+ */
+const DOCUMENTED_PREFIX = /^[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)*_/;
+
+/**
+ * Doc comments that are talking about an API key.
+ *
+ * A bare `something_<placeholder>` says nothing about what it is. Run against the tree, a
+ * pattern for that shape reads `idx_comp_<slug>_parent` in `api/field-groups.ts`, which is an
+ * index name, so the surrounding sentence has to decide. Every block that documents the key
+ * format says so plainly: `api-key-service.ts` heads its with "Key Format", and
+ * `direct-api/types/rbac.ts` calls its examples the raw key value. The index-name block does
+ * not use the word at all.
+ */
+const KEY_VOCABULARY = /\bkeys?\b/i;
+
+/** A doc comment, matched against text `sourceComments` has already reduced to those. */
+const DOC_COMMENT = /\/\*\*[\s\S]*?\*\//g;
+
 /** HTML and MDX comments, which a reader never sees and a generator never publishes. */
 const NON_RENDERED_COMMENT = /<!--[\s\S]*?-->|\{\s*\/\*[\s\S]*?\*\/\s*\}/g;
 
 /** Fenced blocks, closed or running to end of file, as `renderedProse` also counts them. */
 const FENCED_BLOCK = /^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1[^\n]*$|^ {0,3}(?:`{3,}|~{3,})[\s\S]*$/gm;
+
+/**
+ * An inline code span, which prints its contents as typed.
+ *
+ * A span cannot cross a blank line in CommonMark, and holding it to a single line here is the
+ * safe direction: reading too far would protect ordinary prose and stop a genuine hidden
+ * comment from being blanked.
+ *
+ * Indented code blocks are deliberately not protected. Four spaces means a code block after a
+ * blank line and a continuation inside a list item, and guessing wrong the other way blocks a
+ * correct page on a job that always runs. A comment example that matters can be fenced.
+ */
+const INLINE_CODE = /(`+)(?:(?!\1)[^\n])+\1/g;
 
 /**
  * Blank out comments while keeping every offset and line break where it was.
@@ -804,18 +862,26 @@ const FENCED_BLOCK = /^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1[^\n]*$|^ {0,3}(?:`{3
  * and the fenced blocks are where the bearer examples live. This removes only what a reader
  * cannot see, and pads rather than deletes so a match's offset still names its real line.
  *
- * Comment SYNTAX inside a fence is not a comment. A fenced TSX sample showing
- * `{/* Authorization: Bearer sk_live_... *\/}` is printed to the reader verbatim, so blanking it
- * would hide a wrong prefix from the check while every other example kept the population above
- * zero. Fences are located first and anything starting inside one is left exactly as it is.
+ * Comment SYNTAX inside rendered code is not a comment. A fenced TSX sample, or an inline span
+ * showing `{/* Authorization: Bearer sk_live_... *\/}`, is printed to the reader verbatim, so
+ * blanking it would hide a wrong prefix from the check while every other example kept the
+ * population above zero. Both are located first and anything starting inside one is left
+ * exactly as it is.
  */
 function blankComments(text) {
-  const fences = [];
+  const rendered = [];
   for (const fence of text.matchAll(FENCED_BLOCK)) {
-    fences.push([fence.index, fence.index + fence[0].length]);
+    rendered.push([fence.index, fence.index + fence[0].length]);
+  }
+  // Spans are collected from the text with fences already accounted for, so a stray backtick
+  // inside a fenced block cannot pair with one outside it.
+  for (const span of text.matchAll(INLINE_CODE)) {
+    const start = span.index;
+    if (rendered.some(([open, close]) => start >= open && start < close)) continue;
+    rendered.push([start, start + span[0].length]);
   }
   return text.replace(NON_RENDERED_COMMENT, (match, offset) =>
-    fences.some(([open, close]) => offset >= open && offset < close)
+    rendered.some(([open, close]) => offset >= open && offset < close)
       ? match
       : match.replace(/[^\n]/g, " ")
   );
@@ -950,7 +1016,7 @@ const blankSourceComments = text => partitionSource(text, "code");
 /** The file with its code padded out, leaving what a reader is shown of it. */
 const sourceComments = text => partitionSource(text, "comments");
 
-function documentedKeyPrefix(repoRoot, tracked, findings, isExempt) {
+function documentedKeyPrefix(repoRoot, tracked, packages, findings, isExempt) {
   if (!tracked.includes(KEY_PREFIX_SOURCE)) {
     findings.push({
       check: "key-prefix-source-missing",
@@ -1000,7 +1066,26 @@ function documentedKeyPrefix(repoRoot, tracked, findings, isExempt) {
   //
   // Tests are dropped. Their bearer headers belong to other services and to fixtures, so
   // judging them against the Nextly prefix would report a defect that is not one.
-  const prose = proseFiles(tracked).filter(rel => !TEST_FILE.test(rel));
+  //
+  // So are private packages. `eslint-config`, `tsconfig` and their neighbours are build
+  // machinery that npm never receives, so a comment in one reaches no consumer and documents
+  // nothing. `publishedPackages` already decides this for every other check here, and asking
+  // it again is what keeps the two answers from drifting apart.
+  //
+  // Derived as "has a manifest that publishing did not return", not as "was returned by
+  // publishing". A directory whose manifest is missing or unreadable stays IN scope, so a
+  // package cannot drop out of this check by losing the file that describes it. Unreadable is
+  // separately reported.
+  const published = new Set(packages.map(pkg => basename(pkg.dir)));
+  const withManifest = tracked
+    .filter(rel => /^packages\/[^/]+\/package\.json$/.test(rel))
+    .map(rel => rel.split("/")[1]);
+  const privatePackages = new Set(
+    withManifest.filter(name => !published.has(name))
+  );
+  const prose = proseFiles(tracked).filter(
+    rel => !TEST_FILE.test(rel) && !privatePackages.has(rel.split("/")[1])
+  );
 
   let examined = 0;
 
@@ -1028,9 +1113,20 @@ function documentedKeyPrefix(repoRoot, tracked, findings, isExempt) {
     for (const match of scanned.matchAll(BEARER_EXAMPLE)) {
       candidates.set(match.index + match[0].length - match[1].length, match);
     }
-    if (rel === KEY_PREFIX_SOURCE) {
+    // Bare formats are read wherever a doc comment is talking about a key. `rbac.ts` publishes
+    // three of them with no scheme, in JSDoc that ships in the package's declarations, so
+    // scoping this to the declaring file left editor-visible examples free to go stale.
+    if (markdown) {
       for (const match of scanned.matchAll(KEY_FORMAT_EXAMPLE)) {
         if (!candidates.has(match.index)) candidates.set(match.index, match);
+      }
+    } else {
+      for (const block of scanned.matchAll(DOC_COMMENT)) {
+        if (!KEY_VOCABULARY.test(block[0])) continue;
+        for (const match of block[0].matchAll(KEY_FORMAT_EXAMPLE)) {
+          const start = block.index + match.index;
+          if (!candidates.has(start)) candidates.set(start, match);
+        }
       }
     }
 
@@ -1047,10 +1143,12 @@ function documentedKeyPrefix(repoRoot, tracked, findings, isExempt) {
       // Counted AFTER the exemption, so the population is the examples this actually judged: a
       // tree whose only remaining example was exempted must report a refusal, not silence.
       if (isExempt(rel, match[0])) continue;
+      // "send a Bearer token" is prose about the scheme, not an example of a credential.
+      if (!isCredential(token)) continue;
       // A placeholder is not an example of the format, so it is neither judged nor counted.
       if (isPlaceholder(token, prefix)) continue;
       examined += 1;
-      if (token.startsWith(prefix)) continue;
+      if (DOCUMENTED_PREFIX.exec(token)?.[0] === prefix) continue;
       findings.push({
         check: "documented-key-prefix",
         file: rel,
@@ -1362,7 +1460,7 @@ export async function runChecks({
 
   readmeSkeleton(repoRoot, packages, findings);
   retiredKeywords(repoRoot, packages, findings);
-  documentedKeyPrefix(repoRoot, tracked, findings, exemption("documented-key-prefix"));
+  documentedKeyPrefix(repoRoot, tracked, packages, findings, exemption("documented-key-prefix"));
   internalLinks(repoRoot, tracked, findings);
   metaReachability(repoRoot, tracked, findings);
 
