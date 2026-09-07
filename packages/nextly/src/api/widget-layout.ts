@@ -49,7 +49,7 @@ import {
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
   defaultPlacements,
-  duplicatePlacementId,
+  resolvePlacementIds,
   layoutSizeProblem,
   mergePreservingHidden,
   partitionPlacements,
@@ -564,7 +564,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     });
   }
 
-  const duplicate = duplicatePlacementId(submitted);
+  const { duplicate } = resolvePlacementIds(submitted);
   if (duplicate !== undefined) {
     throw NextlyError.validation({
       errors: [

@@ -113,17 +113,19 @@ export interface StoredLayout {
   columnCount: ColumnCount;
   placements: WidgetPlacement[];
   /**
-   * The ids this read had to re-key because the row held them twice, absent
-   * when the row was already sound.
+   * Ids this row holds more than once, absent when it is sound.
    *
    * 🔴 Metadata ABOUT the read, not content of the row, and deliberately not
-   * serialized: `serializeLayout` takes the placements rather than this object,
-   * so a repaired layout written back stores the repair and not the report.
-   * It exists because a silent repair is a repair nobody can find -- the row
-   * stays broken until the reader's next save, and any writer other than the
-   * gated PUT that produced the duplicate keeps producing them unobserved.
+   * serialized -- `serializeLayout` takes the placements rather than this
+   * object. It reports what was FOUND rather than what was fixed, because the
+   * fixing happens later, per caller, in `partitionPlacements`; this is the one
+   * view of the whole row, and it never leaves the server.
+   *
+   * It exists because the repair is otherwise invisible: the reader's dashboard
+   * is whole either way, so nothing on screen ever says the row is malformed,
+   * and whatever wrote the duplicate goes on writing them unobserved.
    */
-  repairedPlacementIds?: readonly string[];
+  duplicatePlacementIds?: readonly string[];
 }
 
 /**
@@ -261,34 +263,90 @@ export function placementProblem(value: unknown): string | undefined {
 }
 
 /**
- * The first placement id that appears more than once, or `undefined`.
+ * One pass over a set of placements, answering everything anyone asks about
+ * their ids: whether one repeats, and the same placements with any repeat
+ * resolved.
  *
- * 🔴 A COLLECTION-level question, which is why it is not one of
+ * 🔴 ONE analysis, because the refusal and the repair must agree. The endpoint
+ * refuses a submission holding a repeat and a reader resolves one it finds
+ * stored; asking that question in two places lets a later change to id
+ * semantics accept a collision one end tolerates and the other rewrites, and
+ * the row that results is one neither end predicts.
+ *
+ * A COLLECTION-level question, which is why it is not one of
  * `PLACEMENT_RULES`: every rule there judges one placement against itself, and
  * uniqueness is the one property no placement can satisfy alone.
  *
- * Downstream readers already assume it holds. `ArrangedColumns` uses the id as
- * its React key and as the `items` identity dnd-kit sorts by -- and dnd-kit
- * resolves an item through `items.indexOf(id)`, which answers with the FIRST
- * match, so a duplicate silently drags the wrong card. The widget batch is
- * keyed by placement id too, so two cards sharing one would answer each other's
- * queries.
+ * `seed` is the set already claimed by placements this call is not looking at
+ * -- what a write has already accepted from its caller, against which carried
+ * placements must find their own ids. It is COPIED rather than mutated, so a
+ * caller's set is not changed underneath it.
  *
- * Asked by both ends and answered differently by each, which is why it is one
- * exported question rather than a rule either end owns: the endpoint REFUSES a
- * submission that fails it, because the client is there to be told, and
- * `withUniquePlacementIds` REPAIRS a stored row that fails it, because no one
- * is.
+ * Downstream readers assume the answer holds. `ArrangedColumns` uses the id as
+ * its React key and as the `items` identity dnd-kit sorts by, and dnd-kit
+ * resolves an item through `items.indexOf(id)`, which answers with the FIRST
+ * match -- so a repeat silently drags the wrong card. The widget batch is keyed
+ * by placement id too, so two cards sharing one answer each other's queries.
  */
-export function duplicatePlacementId(
-  placements: readonly WidgetPlacement[]
-): string | undefined {
-  const seen = new Set<string>();
-  for (const placement of placements) {
-    if (seen.has(placement.id)) return placement.id;
-    seen.add(placement.id);
+export function resolvePlacementIds(
+  placements: readonly WidgetPlacement[],
+  seed: ReadonlySet<string> = new Set()
+): {
+  /** The first id already claimed when it was reached, if any. */
+  duplicate?: string;
+  /** The placements, with every repeat re-keyed. */
+  placements: WidgetPlacement[];
+  /** The ORIGINAL ids that had to be re-keyed, in the order met. */
+  rekeyed: string[];
+} {
+  const taken = new Set(seed);
+  const rekeyed: string[] = [];
+  let duplicate: string | undefined;
+
+  const resolved = placements.map(placement => {
+    if (!taken.has(placement.id)) {
+      taken.add(placement.id);
+      return placement;
+    }
+    duplicate ??= placement.id;
+    rekeyed.push(placement.id);
+    const id = repairedPlacementId(placement.id, taken);
+    taken.add(id);
+    return { ...placement, id };
+  });
+
+  return {
+    ...(duplicate === undefined ? {} : { duplicate }),
+    placements: resolved,
+    rekeyed,
+  };
+}
+
+/**
+ * The id a repeat is given: DERIVED from the one it repeats, never minted.
+ *
+ * 🔴 Stable across reads, which is the property that makes repairing on read
+ * safe at all. A fresh `crypto.randomUUID()` would answer a different id on
+ * every GET, so a client that round-trips what it was handed submits an id the
+ * server no longer recognises -- and the write path, which inherits a
+ * placement's column from the stored row BY ID for any client that states
+ * none, would miss its lookup and move that card to the first column. Derived
+ * from the original, the same row answers the same ids until it is rewritten.
+ *
+ * The suffix climbs only to clear ids already taken, so the result is a pure
+ * function of the original id and the set it must not collide with.
+ */
+function repairedPlacementId(
+  original: string,
+  taken: ReadonlySet<string>
+): string {
+  let ordinal = 2;
+  let candidate = `${original}~${ordinal}`;
+  while (taken.has(candidate)) {
+    ordinal += 1;
+    candidate = `${original}~${ordinal}`;
   }
-  return undefined;
+  return candidate;
 }
 
 /**
@@ -401,19 +459,26 @@ export function readStoredLayout(raw: string): StoredLayout {
     });
   }
 
-  // 🔴 ONE exit, through the repair. Both the migrated and the current shape
-  // leave by it, so there is no version of a stored row that can reach a caller
-  // still holding an id twice -- which is the assumption every reader of a
-  // placement id downstream is already making.
-  return withUniquePlacementIds(
+  // 🔴 ONE exit, and it REPORTS a repeat rather than resolving one. Resolving
+  // here would resolve across the whole row, where a placement this caller may
+  // not know exists could claim an id and push a placement they CAN see onto a
+  // different one -- the id they are handed would then depend on the existence
+  // of a card that was filtered precisely so they could not learn of it. The
+  // resolution happens per caller in `partitionPlacements`, which is the
+  // function that already decides what a caller may know. This report is the
+  // whole row's view, and it never leaves the server.
+  const layout =
     decoded.schemaVersion === 1
       ? migrateV1(decoded)
       : {
           schemaVersion: LAYOUT_SCHEMA_VERSION,
           columnCount: readColumnCount(decoded.columnCount),
           placements: readPlacements(decoded.placements),
-        }
-  );
+        };
+  const { rekeyed } = resolvePlacementIds(layout.placements);
+  return rekeyed.length === 0
+    ? layout
+    : { ...layout, duplicatePlacementIds: rekeyed };
 }
 
 /** The stored column count, or the default when it names none this core has. */
@@ -591,89 +656,30 @@ export function partitionPlacements(
     else invisible.push(placement);
   }
   visible.sort(byPosition);
-  return { visible, invisible };
+  /*
+   * 🔴 Each half resolves its repeats AGAINST ITSELF, never against the other,
+   * and that separation is the trust boundary this function exists to draw. A
+   * row that holds one id twice is resolved by position, so resolving across
+   * both halves would let an invisible placement keep the id and hand the
+   * visible one a different id than it would have had -- an existence oracle
+   * over any id a caller can name, and default placement ids are widget ids, so
+   * the probe space is guessable. What a caller is handed now depends only on
+   * placements that caller can see.
+   *
+   * The two halves may therefore still share an id between them. That is the
+   * writer's question, not the reader's: nothing draws both halves, and
+   * `mergePreservingHidden` resolves the carried half against what the caller
+   * submitted before anything is stored.
+   */
+  return {
+    visible: resolvePlacementIds(visible).placements,
+    invisible: resolvePlacementIds(invisible).placements,
+  };
 }
 
 /** A fresh, opaque placement id. Used when a copy of a widget is placed. */
 export function newPlacementId(): string {
   return crypto.randomUUID();
-}
-
-/**
- * A fresh placement id that nothing in `taken` already holds.
- *
- * The retry is not superstition about UUIDs. A placement id is opaque and a
- * client may mint one by any rule it likes, so `taken` can hold a value shaped
- * like a generated id; the loop costs nothing and the collision it prevents is
- * the exact state this module refuses to store.
- */
-function freshPlacementIdNotIn(taken: ReadonlySet<string>): string {
-  let fresh = newPlacementId();
-  while (taken.has(fresh)) fresh = newPlacementId();
-  return fresh;
-}
-
-/**
- * The placement as it can stand beside everything in `taken`: itself when its
- * id is still free, a re-keyed copy when it is not.
- *
- * 🔴 The single rule for resolving a collision, because there are two places
- * that must resolve one the same way and they arrive at it from opposite
- * directions -- a stored row read back, and a write carrying placements its
- * caller never saw. Answering differently in the two would mean a row could be
- * written with a collision one of them tolerates.
- *
- * `taken` is MUTATED, which is what makes a sequence of calls accumulate into a
- * set of distinct ids rather than each call answering in isolation.
- */
-function claimPlacementId(
-  placement: WidgetPlacement,
-  taken: Set<string>
-): { placement: WidgetPlacement; rekeyedFrom?: string } {
-  if (!taken.has(placement.id)) {
-    taken.add(placement.id);
-    return { placement };
-  }
-  const fresh = freshPlacementIdNotIn(taken);
-  taken.add(fresh);
-  return { placement: { ...placement, id: fresh }, rekeyedFrom: placement.id };
-}
-
-/**
- * The same arrangement, with any id the row held twice re-keyed.
- *
- * 🔴 REPAIRS rather than throws, and the asymmetry with the write path is the
- * point. A submitted layout is refused, because the client is present and can
- * be told. A stored row has no one to tell: `readStoredLayout` throwing means
- * the service logs, reports the row unreadable and falls back to the registry's
- * own order, so the reader's whole arrangement disappears over a defect in one
- * id. Re-keying keeps every card where the reader put it, and is safe for the
- * reason `mergePreservingHidden` already relies on -- a placement id is opaque,
- * and everything hung off it, `config` included, travels on the placement.
- *
- * The FIRST holder keeps the id, so the placement a reader is most likely to
- * think of as the original is the one that does not move.
- *
- * Returns the layout unchanged when nothing collided, so a sound row is not
- * rebuilt and carries no repair report.
- *
- * Deliberately NOT exported. `readStoredLayout` is the one door a stored row
- * comes through, and the guarantee downstream readers rely on is that it has
- * come through it -- a second caller applying this somewhere else would be
- * repairing rows that had already been repaired, and hiding the door that did
- * not.
- */
-function withUniquePlacementIds(layout: StoredLayout): StoredLayout {
-  const taken = new Set<string>();
-  const repaired: string[] = [];
-  const placements = layout.placements.map(placement => {
-    const claimed = claimPlacementId(placement, taken);
-    if (claimed.rekeyedFrom !== undefined) repaired.push(claimed.rekeyedFrom);
-    return claimed.placement;
-  });
-  return repaired.length === 0
-    ? layout
-    : { ...layout, placements, repairedPlacementIds: repaired };
 }
 
 /**
@@ -706,9 +712,7 @@ export function mergePreservingHidden(
   // Oldest-positioned first, so the cap keeps a stable, order-derived subset
   // rather than whichever ones happened to arrive last.
   const bounded = [...invisible].sort(byPosition).slice(0, room);
-  const carried = bounded.map(
-    placement => claimPlacementId(placement, taken).placement
-  );
+  const carried = resolvePlacementIds(bounded, taken).placements;
   return [...submitted, ...carried];
 }
 

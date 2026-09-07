@@ -153,7 +153,10 @@ const twiceKeyed = JSON.stringify({
 });
 
 describe("a stored row whose placement ids collide", () => {
-  it("is served with the arrangement intact rather than reported unreadable", async () => {
+  it("is served rather than reported unreadable", async () => {
+    // Throwing would cost the reader every card: the row reports unreadable and
+    // the dashboard falls back to the registry's own order. The repeat is
+    // resolved later, per caller, by `partitionPlacements`.
     const { logger } = recordingLogger();
     const row = await new StoredRowService(twiceKeyed, logger).getLayout(
       "user",
@@ -162,7 +165,6 @@ describe("a stored row whose placement ids collide", () => {
 
     expect(row.unreadable).toBe(false);
     expect(row.layout?.placements).toHaveLength(2);
-    expect(new Set(row.layout?.placements.map(p => p.id)).size).toBe(2);
   });
 
   it("keeps the row's own version, so a save still races correctly", async () => {
@@ -175,7 +177,7 @@ describe("a stored row whose placement ids collide", () => {
     expect(row.version).toBe(3);
   });
 
-  it("WARNS, naming the id, so the repair is not invisible to an operator", async () => {
+  it("WARNS, naming the id, so the malformed row is not invisible to an operator", async () => {
     // The reader is told nothing on purpose -- their dashboard is whole. That
     // makes this log the only place the malformed row can be found, and the
     // only signal that whatever wrote it is still writing them.
@@ -186,7 +188,7 @@ describe("a stored row whose placement ids collide", () => {
     expect(warnings[0]?.meta).toMatchObject({
       scopeKind: "user",
       scopeId: "u1",
-      repairedPlacementIds: ["same"],
+      duplicatePlacementIds: ["same"],
     });
   });
 
@@ -206,6 +208,7 @@ describe("a stored row whose placement ids collide", () => {
     );
 
     expect(row.layout?.placements.map(p => p.id)).toEqual(["a", "b"]);
+    expect(row.layout?.duplicatePlacementIds).toBeUndefined();
     expect(warnings).toEqual([]);
   });
 });

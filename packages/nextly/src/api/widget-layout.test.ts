@@ -281,7 +281,7 @@ describe("GET /api/dashboard/layout", () => {
     expect(body.source).toBe("own");
     expect(body.placements).toHaveLength(2);
     expect(new Set(body.placements?.map(p => p.id)).size).toBe(2);
-    expect(body).not.toHaveProperty("repairedPlacementIds");
+    expect(body).not.toHaveProperty("duplicatePlacementIds");
   });
 
   it("drops a stored placement whose widget is gone, without saying so", async () => {
@@ -708,6 +708,67 @@ describe("PUT /api/dashboard/layout", () => {
 
     expect(res.status).toBe(200);
     expect(saved).toBeDefined();
+  });
+
+  it("keeps a resolved placement's column across the read/write round trip", async () => {
+    /*
+     * 🔴 The failure a freshly minted repair id causes, at the level it causes
+     * it. A client that states no column inherits the one the stored row holds
+     * for that placement, looked up BY ID. If the id it was handed on GET is
+     * not the id this PUT's own read produces, the lookup misses and the card
+     * silently moves to the first column. The repair id is derived from the id
+     * it repeats precisely so both reads answer the same thing.
+     */
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(widget({ id: "core/b" }));
+    stored = {
+      version: 4,
+      layout: serializeLayout(
+        [
+          {
+            id: "same",
+            widgetId: "core/a",
+            column: 0,
+            order: 0,
+            hidden: false,
+          },
+          {
+            id: "same",
+            widgetId: "core/b",
+            column: 1,
+            order: 10,
+            hidden: false,
+          },
+        ],
+        2
+      ),
+    };
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    const handed = body.placements ?? [];
+    expect(new Set(handed.map(p => p.id)).size).toBe(2);
+    const moved = handed.find(p => p.widgetId === "core/b");
+    expect(moved?.id).not.toBe("same");
+    expect(moved?.column).toBe(1);
+
+    // A client written before columns echoes what it was handed and states no
+    // column of its own.
+    const res = await putWidgetLayout(
+      putReq({
+        placements: handed.map(p => ({
+          id: p.id,
+          widgetId: p.widgetId,
+          order: p.order,
+          hidden: p.hidden,
+        })),
+        version: 4,
+        scope: body.scope,
+      })
+    );
+
+    expect(res.status).toBe(200);
+    const stayed = saved?.placements.find(p => p.widgetId === "core/b");
+    expect(stayed?.column).toBe(1);
   });
 
   it("refuses a body that is not an object", async () => {
