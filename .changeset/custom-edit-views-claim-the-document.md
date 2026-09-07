@@ -48,6 +48,14 @@ holds the document, and a view that wrote anyway would make that sentence false
 and would overwrite the holder's row. The bundled form builder reads it, so its
 save is withheld and its Save button says so.
 
+Both halves of the claim, not only the save. The strip says the editor may read
+this document and not change it, so the builder's state withholds every action
+that would change it while a colleague holds it, and keeps the ones that only
+move around: selecting a field, switching tabs. The refusal sits once at the
+state every control reaches rather than at each of the dozens of controls, and it
+withholds every action except the ones named, so one added later is covered
+without anyone remembering.
+
 The claim is taken only once the document is actually on screen. Taken while the
 entry is still loading, or after it failed to load, it would heartbeat a document
 the editor is not looking at, and colleagues would be told this person is editing

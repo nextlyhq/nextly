@@ -732,6 +732,7 @@ export function FormBuilderView({
   return (
     <FormBuilderProvider
       key={providerKey}
+      readOnly={documentLock?.readOnly === true}
       initialData={{
         id: resolvedEntryId,
         name: initialData?.name,
