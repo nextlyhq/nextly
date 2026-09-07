@@ -219,6 +219,23 @@ export type BlockOrigin =
  * for — storing one would leave a later reader with a record it must special
  * case rather than trust.
  */
+/**
+ * Every field {@link isBlockOrigin} reads off a provenance record.
+ *
+ * As data, in one place, the way `ID_REFERENCE_ATTRIBUTES` names the attributes
+ * that carry an id — because a second reader now depends on it. The validator
+ * asks whether a stored `origin` would make the guard invoke an accessor, and
+ * answering it by enumerating the record's own keys made that work proportional
+ * to a caller-supplied key count: a record with fifty thousand keys was fully
+ * materialised on a document the byte cap had already rejected. Reading the
+ * FIXED set instead is constant, and it is also the exact question — the guard
+ * cannot invoke an accessor on a field it never reads.
+ *
+ * A name added to the guard and not to this list would be read without being
+ * checked, so `document.test.ts` asserts the guard reads nothing outside it.
+ */
+export const BLOCK_ORIGIN_FIELDS: readonly string[] = ["from", "id", "digest"];
+
 export function isBlockOrigin(value: unknown): value is BlockOrigin {
   if (!isPlainRecord(value)) return false;
   const id = ownEntry(value, "id");

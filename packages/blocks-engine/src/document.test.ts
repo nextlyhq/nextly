@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 import * as entry from "./index";
 
 import type { BlockDocument, BlockNode } from "./document";
-import { renderedDomId, renderedDomIdIn } from "./document";
+import {
+  BLOCK_ORIGIN_FIELDS,
+  isBlockOrigin,
+  renderedDomId,
+  renderedDomIdIn,
+} from "./document";
 import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
@@ -301,5 +306,35 @@ describe("renderedDomId: which of a node's two spellings reaches the page", () =
   it("reports none when the node spells none", () => {
     expect(renderedDomId(bare({}))).toBeUndefined();
     expect(renderedDomId(bare({ attributes: { id: "" } }))).toBeUndefined();
+  });
+});
+
+describe("the published list of provenance fields stays in step with the guard", () => {
+  it("names every field isBlockOrigin reads, and no more", () => {
+    // The validator asks whether a stored `origin` would make this guard invoke
+    // an accessor, and answers it from the FIXED list rather than by
+    // enumerating a caller-supplied record's keys. A field added to the guard
+    // and not to the list would be read without being checked — so the coupling
+    // is asserted rather than left to a docblock.
+    //
+    // Both arms, because `from: "component"` returns before the guard reads
+    // `digest` and a pattern-only fixture would leave that read unobserved.
+    const read = new Set<string>();
+    const watch = (record: Record<string, unknown>): unknown =>
+      new Proxy(record, {
+        get(target, key, receiver) {
+          if (typeof key === "string") read.add(key);
+          return Reflect.get(target, key, receiver);
+        },
+        has(target, key) {
+          if (typeof key === "string") read.add(key);
+          return Reflect.has(target, key);
+        },
+      });
+
+    isBlockOrigin(watch({ from: "pattern", id: "p1", digest: "d1" }));
+    isBlockOrigin(watch({ from: "component", id: "c1" }));
+
+    expect([...read].sort()).toEqual([...BLOCK_ORIGIN_FIELDS].sort());
   });
 });

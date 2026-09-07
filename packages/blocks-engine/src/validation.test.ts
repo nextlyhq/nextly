@@ -2925,6 +2925,92 @@ describe("a node's provenance record is checked on both roads to storage", () =>
     expect(codes).not.toContain("invalid-origin");
   });
 
+  it.each(["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor"])(
+    "survives a throwing %s trap on the record",
+    trap => {
+      // Reflection itself can fail. `surveyDocument` catches exactly this and
+      // already reports the document unreadable — and the descriptor reads that
+      // decide whether an `origin` is whole run AFTERWARDS. Uncaught, they took
+      // the caller's error out of `validate()` as a native throw instead of the
+      // issue list it promises, past a verdict already reached.
+      const origin = new Proxy({ from: "pattern", id: "p1", digest: "d1" }, {
+        [trap]() {
+          throw new Error("boom");
+        },
+      } as ProxyHandler<object>);
+
+      let escaped: unknown;
+      let codes: string[] = [];
+      try {
+        codes = codesFor(origin);
+      } catch (error) {
+        escaped = error;
+      }
+
+      expect(escaped).toBeUndefined();
+      // The verdict the survey already reached, not a second one from here.
+      expect(codes).not.toContain("invalid-origin");
+    }
+  );
+
+  it("inspects a fixed set of fields, not every key the record carries", () => {
+    // The check reads the fields the guard READS. Enumerating own keys cost one
+    // descriptor lookup PER KEY, on a document the byte cap had already
+    // rejected — work proportional to caller-supplied content the bounded
+    // survey deliberately never traverses.
+    //
+    // Counted as descriptor lookups rather than as `ownKeys` calls, because
+    // `getOwnPropertyNames` is a SINGLE call whatever the record holds: a count
+    // of those is identical for three keys and fifty thousand, and cannot tell
+    // the two implementations apart.
+    const lookups = (keys: number): number => {
+      const origin: Record<string, unknown> = {
+        from: "pattern",
+        id: "p1",
+        digest: "d1",
+      };
+      for (let i = 0; i < keys; i += 1) origin[`k${String(i)}`] = 1;
+      let counted = 0;
+      const watched = new Proxy(origin, {
+        getOwnPropertyDescriptor(target, key) {
+          counted += 1;
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      });
+      // Over the byte cap on an EARLIER member, which is the case the bound
+      // exists for: the survey stops, reports `document-too-large`, and never
+      // traverses this record — so every lookup counted here belongs to the
+      // walk that runs afterwards. Without it the survey measures the whole
+      // record legitimately and the count says nothing about this check.
+      const doc = {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "n1",
+            type: "core/text",
+            version: 1,
+            props: { big: "x".repeat(5_000) },
+            origin: watched,
+          },
+        ],
+      } as unknown as BlockDocument;
+      const codes = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        limits: { ...DEFAULT_LIMITS, maxBytes: 1_000 },
+      }).map(issue => issue.code);
+      expect(codes).toContain("document-too-large");
+      return counted;
+    };
+
+    const many = lookups(50_000);
+    // The control: a record of three keys, so the assertion is about the count
+    // not growing rather than about it being small for a small record.
+    expect(lookups(0)).toBeGreaterThan(0);
+    expect(many).toBe(lookups(0));
+  });
+
   it("never invokes an accessor INSIDE the record either", () => {
     // One level deeper than the property itself: a data-property `origin` whose
     // `digest` is a getter. `isBlockOrigin` reaches its fields through

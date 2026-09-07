@@ -12,6 +12,7 @@
 import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 import {
   BINDING_SOURCES,
+  BLOCK_ORIGIN_FIELDS,
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
@@ -1061,11 +1062,51 @@ function checkNodeType(
  */
 function holdsAnAccessor(value: unknown): boolean {
   if (!isPlainRecord(value)) return false;
-  for (const name of Object.getOwnPropertyNames(value)) {
+  // The fields the guard READS, not every key the record happens to carry.
+  // Enumerating own keys made this work proportional to a caller-supplied key
+  // count — measured, a fifty-thousand-key `origin` was fully materialised on a
+  // document the byte cap had already rejected, which is work the bounded
+  // survey deliberately never did. The fixed set is constant and is also the
+  // exact question: the guard cannot invoke an accessor on a field it never
+  // reads.
+  for (const name of BLOCK_ORIGIN_FIELDS) {
     const descriptor = Object.getOwnPropertyDescriptor(value, name);
     if (descriptor !== undefined && descriptor.get !== undefined) return true;
   }
   return false;
+}
+
+/**
+ * Whether a node's stored `origin` is present, judgeable, and NOT whole.
+ *
+ * Split out so every way of answering "nothing to report here" is one `return`
+ * rather than a condition threaded through the issue push.
+ *
+ * The reflection is guarded because reflection itself can fail. A caller may
+ * supply a Proxy whose `getPrototypeOf`, `ownKeys` or `getOwnPropertyDescriptor`
+ * trap throws — `surveyDocument` catches exactly that and already reports the
+ * document `document-unreadable` — and the descriptor reads here run afterwards.
+ * Uncaught, they took the caller's error out of `validate()` as a native throw
+ * instead of the issue list it promises, past a verdict the survey had already
+ * reached. Swallowing it leaves that verdict standing rather than adding a
+ * second, less useful one about a record nothing can read.
+ */
+function reportsAMalformedOrigin(node: Record<string, unknown>): boolean {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(node, "origin");
+    if (descriptor === undefined || descriptor.get !== undefined) return false;
+    const origin: unknown = descriptor.value;
+    if (origin === undefined) return false;
+    // The record's OWN fields, before the predicate reads them. `isBlockOrigin`
+    // reaches them through `ownEntry`, which reads values — so a data property
+    // holding a record whose FIELDS are accessors escaped this guard by one
+    // level. The document is already refused as a whole for holding them, which
+    // is the verdict this defers to rather than adding a second.
+    if (holdsAnAccessor(origin)) return false;
+    return !isBlockOrigin(origin);
+  } catch {
+    return false;
+  }
 }
 
 function checkNodeOrigin(
@@ -1088,17 +1129,7 @@ function checkNodeOrigin(
   // An INHERITED `origin` is absent for the same reason it is elsewhere in this
   // engine: `structuredClone` and object spreads copy own properties, so a value
   // reached through the prototype is not what would be stored.
-  const descriptor = Object.getOwnPropertyDescriptor(node, "origin");
-  if (descriptor === undefined || descriptor.get !== undefined) return;
-  const origin: unknown = descriptor.value;
-  if (origin === undefined) return;
-  // The record's OWN fields, before the predicate reads them. `isBlockOrigin`
-  // reaches `from`, `id` and `digest` through `ownEntry`, which reads values —
-  // so a data property holding a record whose FIELDS are accessors escaped this
-  // guard by one level. The document is already refused as a whole for holding
-  // them, which is the verdict this defers to rather than adding a second.
-  if (holdsAnAccessor(origin)) return;
-  if (isBlockOrigin(origin)) return;
+  if (!reportsAMalformedOrigin(node)) return;
   issues.push({
     path: pointer(path, "origin"),
     code: "invalid-origin",
