@@ -32,4 +32,6 @@ An insert records what it renamed on the roots it placed — deliberately, becau
 
 The record is now INHERITED rather than stamped more widely. A node uses its own where it carries one — so a pattern inserted inside a pattern still restores against the one it came from — and otherwise its nearest ancestor's, carried down in the shared node walk rather than a traversal of the planner's own.
 
-The scope is keyed by the node, not by its id: a document reaching a planner is untrusted and may spell one id twice, and an id-keyed scope hands a node under one container the record belonging to a different container of the same name.
+The scope is keyed by the node, not by its id: a document reaching a planner is untrusted and may spell one id twice, and an id-keyed scope hands a node under one container the record belonging to a different container of the same name. Where one node OBJECT occurs in two places, nothing can say which occurrence a selection meant, so no record is applied and every id is kept.
+
+Inheritance stops at any node carrying a pattern record, whether or not that record renamed anything — a collision is the exception, so the ordinary insert writes no rename map at all. And a malformed record on a node nothing selected no longer takes the save down: the walk reaches the whole document now, and provenance is read as the untrusted stored data it is.

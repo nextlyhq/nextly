@@ -2637,6 +2637,18 @@ describe("the anchors a conversion leaves behind", () => {
   });
 });
 
+/**
+ * A node carrying provenance the type does not admit.
+ *
+ * Stored documents reach a planner from a database, so a record whose
+ * `renamed` is `null` is a value the runtime really can be handed and the type
+ * really cannot describe. Asserted once, here, rather than at each fixture, so
+ * the places doing it are countable.
+ */
+function withStoredOrigin(node: BlockNode, origin: unknown): BlockNode {
+  return { ...node, origin } as unknown as BlockNode;
+}
+
 describe("a saved DESCENDANT of an inserted root", () => {
   /** A pattern whose renamed id sits on a CHILD, two levels under the root. */
   function nestedPattern(): BlockDocument {
@@ -2774,6 +2786,103 @@ describe("a saved DESCENDANT of an inserted root", () => {
     ).document;
 
     expect(marked([...saved.nodes], "authored").cssId).toBe("pricing-1");
+  });
+
+  it("stops at a nested pattern that renamed NOTHING", () => {
+    // A collision is the exception, so `insertOrigin` writes no `renamed` at
+    // all for the ordinary insert — and a boundary derived from the map being
+    // non-empty therefore is not one. The inner pattern authored `pricing-1`
+    // itself; inheriting the host's map rewrites it to the HOST pattern's
+    // spelling and stores content the inner pattern never had.
+    const doc = page([
+      node(
+        "outer",
+        {
+          origin: {
+            from: "pattern",
+            id: "outer-pattern",
+            digest: "d",
+            renamed: { pricing: "pricing-1" },
+          },
+        } as Partial<BlockNode>,
+        {
+          children: [
+            node(
+              "inner",
+              {
+                origin: { from: "pattern", id: "inner-pattern", digest: "d2" },
+              } as Partial<BlockNode>,
+              {
+                children: [
+                  node("t", { cssId: "pricing-1", props: { mark: "target" } }),
+                ],
+              }
+            ),
+          ],
+        }
+      ),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["t"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("pricing-1");
+  });
+
+  it("saves past a sibling whose provenance is malformed", () => {
+    // The walk reaches the WHOLE document now, so a record nothing selected
+    // still gets read — and a stored `renamed` holding null took the planner
+    // out as a native TypeError, refusing a valid save because of metadata on
+    // an unrelated node. A planner answers with a plan or a refusal.
+    const doc = page([
+      withStoredOrigin(node("sibling"), {
+        from: "pattern",
+        id: "p",
+        digest: "d",
+        renamed: null,
+      }),
+      node("mine", { cssId: "hero", props: { mark: "target" } }),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["mine"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("hero");
+  });
+
+  it("declines to restore a node that occurs in two places", () => {
+    // One node OBJECT under two parents. A selection names objects rather than
+    // places, so nothing can say which occurrence was meant — and restoring
+    // against the recorded one rewrites an id under a parent that never came
+    // from a pattern. Declining keeps every id, which is what a node with no
+    // record in scope gets anyway.
+    const shared = node("shared", {
+      cssId: "pricing-1",
+      props: { mark: "target" },
+    });
+    const doc = page([
+      node(
+        "recorded",
+        {
+          origin: {
+            from: "pattern",
+            id: "hero-pattern",
+            digest: "d",
+            renamed: { pricing: "pricing-1" },
+          },
+        } as Partial<BlockNode>,
+        { children: [shared] }
+      ),
+      node("plain", {}, { children: [shared] }),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["shared"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("pricing-1");
   });
 
   it("keeps every id when no ancestor was ever inserted from a pattern", () => {

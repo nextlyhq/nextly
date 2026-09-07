@@ -3380,10 +3380,39 @@ function ownOrigin(node: BlockNode): BlockOrigin | undefined {
 function renamedIn(
   origin: BlockOrigin | undefined
 ): ReadonlyMap<string, string> {
-  if (origin === undefined || origin.from !== "pattern") return new Map();
-  const renamed = origin.renamed;
-  if (renamed === undefined) return new Map();
-  return new Map(Object.entries(renamed));
+  if (!isPatternOrigin(origin)) return new Map();
+  const renamed: unknown = origin.renamed;
+  if (!isPlainRecord(renamed)) return new Map();
+  const map = new Map<string, string>();
+  // Own keys, and a string on both sides. The record is stored data: a
+  // `renamed` holding `null`, an array, or an entry whose replacement is a
+  // number is a document that should not exist, and reading one is how a
+  // planner returns a native error where it promised a plan or a refusal.
+  for (const was of ownKeys(renamed)) {
+    const now: unknown = renamed[was];
+    if (typeof now === "string") map.set(was, now);
+  }
+  return map;
+}
+
+/**
+ * Whether a node's record says it was copied from a pattern.
+ *
+ * Asked of the RECORD's shape rather than by reading `from` off whatever
+ * arrived: a stored origin may be `null`, an array or a primitive, and a
+ * property read on one of those is the crash this module exists to convert
+ * into a refusal.
+ *
+ * Its own predicate because two questions now depend on it and they must agree:
+ * which record supplies a rename map, and which node is a scope BOUNDARY. A
+ * pattern that renamed nothing carries no `renamed` at all, so the two answers
+ * differ — and deriving the boundary from the map being non-empty is exactly
+ * the defect that made a nested pattern inherit its host's renames.
+ */
+function isPatternOrigin(
+  origin: unknown
+): origin is Extract<BlockOrigin, { from: "pattern" }> {
+  return isPlainRecord(origin) && origin.from === "pattern";
 }
 
 /**
@@ -3448,14 +3477,44 @@ function renameScopes(
   nodes: readonly BlockNode[]
 ): ReadonlyMap<BlockNode, ReadonlyMap<string, string>> {
   const scopes = new Map<BlockNode, ReadonlyMap<string, string>>();
+  const seen = new Set<BlockNode>();
   walkNodes([...nodes], (node, parent) => {
-    const own = renamedIn(ownOrigin(node));
-    if (own.size > 0) {
-      scopes.set(node, own);
+    // A node with a pattern record of its OWN is where inheritance stops, and
+    // the test is the RECORD rather than the size of its map. An insert that
+    // renamed nothing writes no `renamed` at all — the ordinary case, since a
+    // collision is the exception — so a boundary derived from a non-empty map
+    // lets a nested pattern inherit its host's renames and store its own
+    // content under the host pattern's spelling.
+    //
+    // Set on every visit rather than once: the value is a property of the node
+    // itself, so two occurrences of one node cannot disagree about it.
+    const own = ownOrigin(node);
+    if (isPatternOrigin(own)) {
+      scopes.set(node, renamedIn(own));
       return;
     }
+
     const inherited = parent === undefined ? undefined : scopes.get(parent);
+    if (seen.has(node)) {
+      // The same node OBJECT reached a second time, under a different parent.
+      // A selection names objects, not places, so nothing downstream can say
+      // which occurrence was meant — and restoring against the wrong one
+      // rewrites ids the author wrote. Declining leaves every id alone, which
+      // is what a node with no record in scope gets anyway.
+      if (scopes.get(node) !== inherited) scopes.set(node, NO_RENAMES);
+      return;
+    }
+    seen.add(node);
     if (inherited !== undefined) scopes.set(node, inherited);
   });
   return scopes;
 }
+
+/**
+ * The scope of a node whose own is unknowable, and of one that inherits none.
+ *
+ * A shared empty map rather than a fresh one per node: the walk compares scopes
+ * by IDENTITY to notice that two occurrences of one node disagree, and a new
+ * empty map on each visit would read as a disagreement with itself.
+ */
+const NO_RENAMES: ReadonlyMap<string, string> = new Map();
