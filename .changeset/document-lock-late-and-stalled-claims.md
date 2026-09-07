@@ -26,35 +26,32 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Close five ways a document claim could report one thing while the server held
-another, and widen the reader the client-bundle boundary depends on.
+Close five more ways a document claim could report one thing while the server
+held another, and stop aborting claims.
 
-**A claim is credited from when it was sent, not when the reply arrived.** The
-lease starts when the server processes a claim, so timing it from receipt credits
-the editor with however long the reply spent in transit. A reply delayed past the
-margin left the hook reporting a claim that had already expired server-side,
-while a colleague could take the row.
+**Nothing is aborted any more.** A claim is not idempotent, so cancelling one
+makes its outcome unknowable: it may still commit, and an aborted fetch can never
+hand back the token it was given. The editor would then hold a token the server
+had replaced with one it could never learn. Only the hold on the one-at-a-time
+slot expires now; the reply still arrives, and a claim whose slot has moved on is
+released as the duplicate it is. That converges without the server needing to know
+anything about client retries.
 
-**A request that never settles is now bounded.** Nothing cleared the
-one-at-a-time slot for a pending request, so every later beat returned at the
-serialisation guard and the editor sat in `acquiring` for the whole session with
-a take-over queued behind a request that was never coming back. Claims carry an
-abort signal bounded by one heartbeat.
+**Intent survives the wait.** Whatever waits on the slot is remembered as an
+intent rather than a flag, and a take-over whose request outlives its slot is
+re-asked as a take-over. Retried as a plain claim it politely declines to displace
+anyone, and the colleague keeps the document despite the click.
 
-**A failed poll forgets the holder it had cached.** A colleague renewing on the
-same cadence reports identical fields, so the quiet-poll comparison suppressed
-the update and stranded the editor on `unavailable` while the server was
-answering perfectly well.
+**A repair is queued, not dropped.** The signal that a late duplicate displaced
+the live claim is an acquisition like any other, so it meets the same slot. It is
+kept separately from a queued claim, because a claim is satisfied by winning the
+document and a repair is not: what a repair reports is that the token just
+installed may already be dead.
 
-**A late reply from a replaced effect run repairs what it broke.** The server
-treats a claim from the same owner as takeable, so a request still in flight when
-its effect was cleaned up displaced the run that replaced it. Handing that claim
-back left the live run holding a token the server had already forgotten. The run
-that got displaced is now told to claim again.
+**A repair names the document it is for.** Two claims on different documents use
+different lock keys, so a late reply for one cannot have displaced the other, and
+waking it would start a claim nobody asked for.
 
-**`module.require` counts as loading a module.** It is the documented CommonJS
-method and resolves exactly as the free function does, so
-`@nextlyhq/module-specifiers` reported a file loading nothing while it loaded a
-driver, and the client-bundle boundary that reads it would have certified such a
-graph as clean. `loader.require` still does not count: it is a method on somebody
-else's object.
+**The confirmation timestamp never moves backwards.** Renewal replies can arrive
+out of order, and an older one landing after a newer one shortened a lease the
+newer one had already extended, firing the loss deadline several beats early.
