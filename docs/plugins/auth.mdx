@@ -47,7 +47,7 @@ A strategy returns one of four outcomes: `authenticated`, `challenge`, `fail`, o
 `authenticate`-chain model, typed.
 
 ```ts
-import type { AuthStrategy } from "@nextlyhq/plugin-sdk";
+import type { AuthStrategy, AuthUser } from "@nextlyhq/plugin-sdk";
 
 export function googleOAuth(opts: { clientId: string }): AuthStrategy {
   return {
@@ -69,7 +69,10 @@ export function googleOAuth(opts: { clientId: string }): AuthStrategy {
       const user = existing.data[0];
       if (!user) return { type: "fail", reason: "no-linked-account" };
 
-      return { type: "authenticated", user: { id: user.id, email: user.email } };
+      return {
+        type: "authenticated",
+        user: { id: user.id as AuthUser["id"], email: user.email as string },
+      };
     },
   };
 }

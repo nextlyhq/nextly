@@ -378,9 +378,13 @@ Everything else on this page is `@public` today.
 The plugin's own `admin` field controls where its items live (D20):
 
 ```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 import { AdminPlacement } from "nextly";
 
 definePlugin({
+  name: "@acme/nextly-plugin-reports",
+  version: "1.0.0",
+  nextly: "^1.0.0",
   // ...
   admin: {
     placement: AdminPlacement.COLLECTIONS, // COLLECTIONS | SINGLES | USERS | SETTINGS | PLUGINS | STANDALONE
@@ -400,6 +404,9 @@ An integrator can override a plugin's placement without forking it, via
 
 ```ts
 // nextly.config.ts
+import { defineConfig } from "nextly";
+import { reports } from "@acme/nextly-plugin-reports";
+
 export default defineConfig({
   plugins: [reports()],
   admin: {

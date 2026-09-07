@@ -103,6 +103,8 @@ The error implements adapter-drizzle's `DatabaseError` interface, so existing `i
 ```ts
 import { UnsupportedDialectVersionError } from "@nextlyhq/adapter-drizzle/version-check";
 
+declare const adapter: import("@nextlyhq/adapter-drizzle").DrizzleAdapter;
+
 try {
   await adapter.connect();
 } catch (error) {

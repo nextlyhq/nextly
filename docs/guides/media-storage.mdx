@@ -399,7 +399,9 @@ With `next/image`:
 
 ```tsx
 import Image from "next/image";
+import { getNextly } from "nextly/runtime";
 
+const nextly = getNextly();
 const media = await nextly.media.findByID({ id: "abc-123" });
 const large = media?.sizes?.large;
 
