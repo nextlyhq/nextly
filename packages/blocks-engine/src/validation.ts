@@ -12,7 +12,6 @@
 import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 import {
   BINDING_SOURCES,
-  BLOCK_ORIGIN_FIELDS,
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
@@ -20,7 +19,7 @@ import {
   MAX_CLASSES_PER_NODE,
   STYLE_STATES,
   isBindingSource,
-  isBlockOrigin,
+  readBlockOrigin,
   isBlockType,
   renderedDomId,
 } from "./document";
@@ -1050,66 +1049,50 @@ function checkNodeType(
  * instead of creating it, and it is the one a planner now reads back.
  */
 /**
- * Whether a record computes any of the fields the provenance guard consults.
+ * Whether a node's stored `origin` is one to report as malformed.
  *
- * Answered from DESCRIPTORS, so nothing runs — and `isBlockOrigin` reads that
- * way too, so this no longer exists to stop it invoking anything. What it
- * decides is the VERDICT: a computed field makes the guard answer `false`, and
- * reporting that as `invalid-origin` would send an author to repair a record
- * that may be perfectly well formed. A document whose fields compute themselves
- * is one `surveyDocument` refuses to measure and already reports
- * `document-unreadable`, so this defers to that rather than adding a second,
- * less useful verdict about one field of it.
+ * The four-way reading comes from {@link readBlockOrigin}, beside the type, so
+ * this asks the guard's own question instead of naming its fields a second time
+ * — the reason it can tell `computed` from `malformed` without a parallel list
+ * to keep in step.
  *
- * Not a plain record is not this question's business: the predicate that
- * follows refuses such a value on its shape, and it reads nothing to do so.
+ * `computed` is left alone. A field the guard consults being an accessor makes
+ * the record untrusted, but it may be perfectly well formed, and the document
+ * holding it is one `surveyDocument` refuses to measure and already reports
+ * `document-unreadable`. A second verdict naming this one field would send an
+ * author to repair something that may not be broken.
+ *
+ * `unreadable` is NOT left alone, and the difference is the whole point.
+ * Reflection can fail where an accessor cannot be missed: the survey walks the
+ * keys a record HAS, so a Proxy trap that throws only for an ABSENT field —
+ * `renamed`, say — is never triggered by it, and the document is reported
+ * perfectly readable. Deferring on that let `{ from: "pattern", id: "" }`
+ * through with no issue raised at all. Nothing can establish such a record is
+ * whole, so it is not treated as though something had.
  */
-function holdsAnAccessor(value: unknown): boolean {
-  if (!isPlainRecord(value)) return false;
-  // The fields the guard READS, not every key the record happens to carry.
-  // Enumerating own keys made this work proportional to a caller-supplied key
-  // count — measured, a fifty-thousand-key `origin` was fully materialised on a
-  // document the byte cap had already rejected, which is work the bounded
-  // survey deliberately never did. The fixed set is constant and is also the
-  // exact question: the guard cannot invoke an accessor on a field it never
-  // reads.
-  for (const name of BLOCK_ORIGIN_FIELDS) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, name);
-    if (descriptor !== undefined && descriptor.get !== undefined) return true;
-  }
-  return false;
+function reportsAMalformedOrigin(node: Record<string, unknown>): boolean {
+  const descriptor = ownOriginDescriptor(node);
+  if (descriptor === undefined || descriptor.get !== undefined) return false;
+  const origin: unknown = descriptor.value;
+  if (origin === undefined) return false;
+  const reading = readBlockOrigin(origin);
+  return reading === "malformed" || reading === "unreadable";
 }
 
 /**
- * Whether a node's stored `origin` is present, judgeable, and NOT whole.
+ * The node's own `origin` descriptor, or `undefined` when reflection fails.
  *
- * Split out so every way of answering "nothing to report here" is one `return`
- * rather than a condition threaded through the issue push.
- *
- * The reflection is guarded because reflection itself can fail. A caller may
- * supply a Proxy whose `getPrototypeOf`, `ownKeys` or `getOwnPropertyDescriptor`
- * trap throws — `surveyDocument` catches exactly that and already reports the
- * document `document-unreadable` — and the descriptor reads here run afterwards.
- * Uncaught, they took the caller's error out of `validate()` as a native throw
- * instead of the issue list it promises, past a verdict the survey had already
- * reached. Swallowing it leaves that verdict standing rather than adding a
- * second, less useful one about a record nothing can read.
+ * Reading a descriptor off the NODE can throw too — the node itself may be a
+ * Proxy — and that failure says nothing about the record, so there is nothing
+ * to report about one. The document is refused as unreadable by the survey.
  */
-function reportsAMalformedOrigin(node: Record<string, unknown>): boolean {
+function ownOriginDescriptor(
+  node: Record<string, unknown>
+): PropertyDescriptor | undefined {
   try {
-    const descriptor = Object.getOwnPropertyDescriptor(node, "origin");
-    if (descriptor === undefined || descriptor.get !== undefined) return false;
-    const origin: unknown = descriptor.value;
-    if (origin === undefined) return false;
-    // The record's OWN fields, before the predicate reads them. `isBlockOrigin`
-    // reaches them through `ownEntry`, which reads values — so a data property
-    // holding a record whose FIELDS are accessors escaped this guard by one
-    // level. The document is already refused as a whole for holding them, which
-    // is the verdict this defers to rather than adding a second.
-    if (holdsAnAccessor(origin)) return false;
-    return !isBlockOrigin(origin);
+    return Object.getOwnPropertyDescriptor(node, "origin");
   } catch {
-    return false;
+    return undefined;
   }
 }
 

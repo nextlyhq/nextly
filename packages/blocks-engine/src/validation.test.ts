@@ -2926,13 +2926,11 @@ describe("a node's provenance record is checked on both roads to storage", () =>
   });
 
   it.each(["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor"])(
-    "survives a throwing %s trap on the record",
+    "refuses a record whose %s trap throws, rather than escaping",
     trap => {
-      // Reflection itself can fail. `surveyDocument` catches exactly this and
-      // already reports the document unreadable — and the descriptor reads that
-      // decide whether an `origin` is whole run AFTERWARDS. Uncaught, they took
-      // the caller's error out of `validate()` as a native throw instead of the
-      // issue list it promises, past a verdict already reached.
+      // Reflection itself can fail, and the guard promises an answer, not a
+      // throw. Uncaught, all three took the caller's error out of `validate()`
+      // as a native error instead of the issue list it promises.
       const origin = new Proxy({ from: "pattern", id: "p1", digest: "d1" }, {
         [trap]() {
           throw new Error("boom");
@@ -2948,16 +2946,78 @@ describe("a node's provenance record is checked on both roads to storage", () =>
       }
 
       expect(escaped).toBeUndefined();
-      // The verdict the survey already reached, not a second one from here.
-      expect(codes).not.toContain("invalid-origin");
+      // Reported, NOT deferred. See the case below for why the survey cannot be
+      // relied on to have covered it.
+      //
+      // `ownKeys` is the exception the rule produces rather than an oversight:
+      // nothing enumerates the record's own keys any more, so that trap never
+      // fires for this check and the record reads as whole. The survey still
+      // meets it — it has to serialize the document — and refuses the document
+      // as unwritable, which is the verdict that covers it.
+      expect(codes).toContain(
+        trap === "ownKeys" ? "document-unwritable" : "invalid-origin"
+      );
     }
   );
 
-  it("inspects a fixed set of fields, not every key the record carries", () => {
-    // The check reads the fields the guard READS. Enumerating own keys cost one
-    // descriptor lookup PER KEY, on a document the byte cap had already
-    // rejected — work proportional to caller-supplied content the bounded
-    // survey deliberately never traverses.
+  it("refuses a malformed record whose trap fires only for an ABSENT field", () => {
+    // The case that makes deferring unsafe. The survey walks the keys a record
+    // HAS, so a trap that throws only for `renamed` — which this record does
+    // not carry — is never triggered by it, and the document is reported
+    // perfectly readable. A check that asked for every field it might consult,
+    // rather than only the ones the guard actually reaches, hit that trap on a
+    // record the guard rejects at its FIRST field, and then read the failure as
+    // "the survey already covered this" — letting an EMPTY id through with no
+    // issue raised at all.
+    //
+    // Nothing asks for `renamed` here now: the guard stops at `id`. That is the
+    // second reason this record is refused, and the case below covers the
+    // first, where the trap really is reached.
+    const origin = new Proxy(
+      { from: "pattern", id: "", digest: "d1" },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === "renamed") throw new Error("boom");
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      }
+    );
+
+    const codes = codesFor(origin);
+
+    expect(codes).toContain("invalid-origin");
+    // The control: the survey really did find nothing wrong, so the verdict
+    // above is this check's own and not one inherited from it.
+    expect(codes).not.toContain("document-unreadable");
+  });
+
+  it("refuses a record it cannot finish reading, even one otherwise whole", () => {
+    // Here the trap IS reached: every earlier field is sound, so the guard goes
+    // on to `renamed` and reflection fails there. The record may well be whole —
+    // but nothing can establish that, and the survey has not refused the
+    // document either, since it never asked for the absent field. Reporting is
+    // the only answer that does not treat an unverified record as verified.
+    const origin = new Proxy(
+      { from: "pattern", id: "p1", digest: "d1" },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === "renamed") throw new Error("boom");
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      }
+    );
+
+    const codes = codesFor(origin);
+
+    expect(codes).toContain("invalid-origin");
+    expect(codes).not.toContain("document-unreadable");
+  });
+
+  it("reads only the fields the guard reaches, not every key the record carries", () => {
+    // The check goes through the guard's own reads. Enumerating the record's
+    // own keys cost one descriptor lookup PER KEY, on a document the byte cap
+    // had already rejected — work proportional to caller-supplied content the
+    // bounded survey deliberately never traverses.
     //
     // Counted as descriptor lookups rather than as `ownKeys` calls, because
     // `getOwnPropertyNames` is a SINGLE call whatever the record holds: a count

@@ -244,82 +244,103 @@ export type BlockOrigin =
  * case rather than trust.
  */
 /**
- * Every field {@link isBlockOrigin} reads off a provenance record.
+ * What a stored provenance record turned out to be.
  *
- * As data, in one place, the way `ID_REFERENCE_ATTRIBUTES` names the attributes
- * that carry an id — because a second reader now depends on it. The validator
- * asks whether a stored `origin` computes any field this guard consults, so it
- * can leave such a record to the document-wide verdict instead of reporting it
- * malformed. Answering that by enumerating the record's own keys made the work
- * proportional to a caller-supplied key count: a record with fifty thousand
- * keys cost a descriptor lookup each — measured, 50,006 against 6 — on a
- * document the byte cap had ALREADY rejected, which is exactly the work the
- * bounded survey declines to do. Reading this FIXED set is constant, and it is
- * also the precise question: a field the guard never consults cannot change its
- * answer.
+ * Four answers because a caller-supplied record can fail in three different
+ * ways, and the validator owes each a different response:
  *
- * A name added to the guard and not to this list would go unconsidered, so
- * `document.test.ts` asserts the guard reads nothing outside it.
+ * - `whole` — every field the guard needs, present and well formed.
+ * - `malformed` — read cleanly, and not a record this engine would trust.
+ * - `computed` — a field the guard consults is an accessor rather than stored
+ *   data. The record may be perfectly well formed; what is certain is that the
+ *   document holding it is one `surveyDocument` refuses to measure and already
+ *   reports `document-unreadable`, so a second verdict naming this one field
+ *   would send an author to repair something that may not be broken.
+ * - `unreadable` — REFLECTION itself failed. A Proxy may throw from
+ *   `getOwnPropertyDescriptor`, `ownKeys` or `getPrototypeOf`, and unlike an
+ *   accessor that is not something the survey is guaranteed to have met: it
+ *   walks the keys a record HAS, so a trap that fires only for an absent field
+ *   like `renamed` leaves the survey reporting the document perfectly readable.
+ *   Deferring here then let `{ from: "pattern", id: "" }` through with no issue
+ *   at all. Nothing can establish such a record is whole, so it is not trusted.
  */
-export const BLOCK_ORIGIN_FIELDS: readonly string[] = [
-  "from",
-  "id",
-  "digest",
-  "renamed",
-];
+export type OriginReading = "whole" | "malformed" | "computed" | "unreadable";
+
+/**
+ * Read a stored provenance record, saying which of the four it is.
+ *
+ * The richer question, from which {@link isBlockOrigin} is derived rather than
+ * computed alongside. The validator needs to tell `computed` from `malformed`,
+ * and answering that separately meant naming the guard's fields a second time —
+ * two lists to keep in step, synchronised by a test that can only observe the
+ * fixtures it runs. Here the guard's own reads ARE the definition: a field it
+ * consults is one this notices, and a field it stops consulting stops
+ * mattering, with nothing to keep in step.
+ */
+export function readBlockOrigin(value: unknown): OriginReading {
+  try {
+    if (!isPlainRecord(value)) return "malformed";
+    const reader = storedReader(value);
+    const whole = wholeOrigin(reader.read);
+    if (reader.computed()) return "computed";
+    return whole ? "whole" : "malformed";
+  } catch {
+    return "unreadable";
+  }
+}
 
 export function isBlockOrigin(value: unknown): value is BlockOrigin {
-  if (!isPlainRecord(value)) return false;
-  const id = storedEntry(value, "id");
-  if (typeof id !== "string" || id === "") return false;
-  const from = storedEntry(value, "from");
-  if (from === "component") return true;
-  if (from !== "pattern") return false;
-  const digest = storedEntry(value, "digest");
-  if (typeof digest !== "string" || digest === "") return false;
-  return hasStoredRenameRecord(value);
+  return readBlockOrigin(value) === "whole";
 }
 
 /**
- * A record's own STORED value for one key, or `undefined` when it has none.
+ * A reader of one record's STORED fields, remembering whether any was computed.
  *
- * The DESCRIPTOR, never the read. Every field of a provenance record is data a
- * caller supplied — an import, a script, an in-process edit — and reading one
- * runs that caller's code inside the published guard deciding whether to trust
- * it. A throwing getter escapes {@link isBlockOrigin} as a native error rather
- * than the `false` it promises, and a side-effecting one executes on the way
- * past. Measured, all four fields did that.
+ * The DESCRIPTOR, never an ordinary read. Every field of a provenance record is
+ * data a caller supplied — an import, a script, an in-process edit — and
+ * reading one runs that caller's code inside the guard deciding whether to
+ * trust it. A throwing getter escaped as a native error rather than the answer
+ * the guard promises, and a side-effecting one executed on the way past.
+ * Measured, all four fields did that.
  *
  * `"value" in descriptor` rather than asking whether there is a getter: an
  * accessor descriptor carries no `value` key at all, and a set-only accessor
  * has no getter either — so asking about the getter alone calls one stored
  * value and one computed one the same thing.
  *
- * A computed field is reported as ABSENT, and for `id`, `from` and `digest`
- * that is already a refusal: none of them may be missing. `renamed` may, which
- * is why {@link hasStoredRenameRecord} asks separately rather than through
- * this.
+ * A computed field reads back as ABSENT and sets the flag. Absent is a refusal
+ * on its own for `id`, `from` and `digest`, none of which may be missing;
+ * `renamed` MAY be, and the flag is what keeps those two apart.
  */
-function storedEntry(record: object, key: string): unknown {
-  const descriptor = Object.getOwnPropertyDescriptor(record, key);
-  return descriptor === undefined || !("value" in descriptor)
-    ? undefined
-    : descriptor.value;
+function storedReader(record: object): {
+  read: (key: string) => unknown;
+  computed: () => boolean;
+} {
+  let computed = false;
+  return {
+    read(key: string): unknown {
+      const descriptor = Object.getOwnPropertyDescriptor(record, key);
+      if (descriptor === undefined) return undefined;
+      if (!("value" in descriptor)) {
+        computed = true;
+        return undefined;
+      }
+      return descriptor.value;
+    },
+    computed: () => computed,
+  };
 }
 
-/**
- * Whether an origin's rename record is one this guard accepts.
- *
- * Three answers, not two, which is why it cannot go through
- * {@link storedEntry}: ABSENT is valid and means nothing was renamed, COMPUTED
- * is refused because it is not stored data, and both read as `undefined` once
- * the descriptor is collapsed to a value.
- */
-function hasStoredRenameRecord(origin: object): boolean {
-  const descriptor = Object.getOwnPropertyDescriptor(origin, "renamed");
-  if (descriptor === undefined) return true;
-  if (!("value" in descriptor)) return false;
-  return isRenameRecord(descriptor.value);
+/** Whether the fields a provenance record must carry are all there and sound. */
+function wholeOrigin(read: (key: string) => unknown): boolean {
+  const id = read("id");
+  if (typeof id !== "string" || id === "") return false;
+  const from = read("from");
+  if (from === "component") return true;
+  if (from !== "pattern") return false;
+  const digest = read("digest");
+  if (typeof digest !== "string" || digest === "") return false;
+  return isRenameRecord(read("renamed"));
 }
 
 /**
@@ -344,8 +365,11 @@ function isRenameRecord(value: unknown): boolean {
   // there, silently, and the digest comparison built on it then reports a
   // change nobody made.
   const current = new Set<string>();
+  // ONE reader for the whole map, so an entry is read by the same rule the
+  // record's own fields are and nothing allocates per entry.
+  const { read } = storedReader(value);
   for (const name of ownKeys(value)) {
-    if (!isRenameEntry(value, name, current)) return false;
+    if (!isRenameEntry(read, name, current)) return false;
   }
   return true;
 }
@@ -365,12 +389,12 @@ function isRenameRecord(value: unknown): boolean {
  * find duplicates would read every entry twice.
  */
 function isRenameEntry(
-  value: object,
+  read: (key: string) => unknown,
   name: string,
   current: Set<string>
 ): boolean {
   if (name === "") return false;
-  const now = storedEntry(value, name);
+  const now = read(name);
   if (typeof now !== "string" || now === "") return false;
   if (current.has(now)) return false;
   current.add(now);

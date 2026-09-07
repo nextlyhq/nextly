@@ -48,6 +48,11 @@ or a Proxy whose own reflection traps throw; `surveyDocument` refuses to invoke
 an accessor and already reports such a document unreadable, so the check defers
 to that verdict rather than adding a second one about a record nothing can read.
 
-It also inspects a fixed set of fields rather than every key the record carries,
-so a document already refused by the byte cap cannot be made to do work
-proportional to content the bounded survey deliberately never traversed.
+It also reads only the fields the guard actually reaches, rather than every key
+the record carries, so a document already refused by the byte cap cannot be made
+to do work proportional to content the bounded survey never traversed.
+
+`readBlockOrigin` is published beside `isBlockOrigin` and the guard is derived
+from it. A caller that must tell a record it cannot READ from one that is merely
+wrong — the validator does — would otherwise name the guard's fields a second
+time, and two lists of the same thing drift silently.

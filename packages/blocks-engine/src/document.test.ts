@@ -3,11 +3,7 @@ import { describe, expect, it } from "vitest";
 import * as entry from "./index";
 
 import type { BlockDocument, BlockNode } from "./document";
-import {
-  BLOCK_ORIGIN_FIELDS,
-  renderedDomId,
-  renderedDomIdIn,
-} from "./document";
+import { renderedDomId, renderedDomIdIn } from "./document";
 import {
   COMPONENT_INSTANCE_TYPE,
   isBlockOrigin,
@@ -402,38 +398,5 @@ describe("a provenance record's rename map", () => {
     expect(
       isBlockOrigin({ from: "component", id: "c1", renamed: "nonsense" })
     ).toBe(true);
-  });
-});
-
-describe("the published list of provenance fields stays in step with the guard", () => {
-  it("names every field isBlockOrigin reads, and no more", () => {
-    // The validator asks whether a stored `origin` would make it report a
-    // record malformed that the document-wide verdict already covers, and
-    // answers it from the FIXED list rather than by enumerating a
-    // caller-supplied record's keys. A field added to the guard and not to the
-    // list would go unconsidered — so the coupling is asserted rather than left
-    // to a docblock.
-    //
-    // Watched on the DESCRIPTOR trap, because that is how the guard reads: it
-    // takes every field through `Object.getOwnPropertyDescriptor` so a computed
-    // one is never invoked. A `get` trap observes nothing at all here and would
-    // leave this passing on an empty set.
-    //
-    // Both arms, because `from: "component"` returns before `digest` and
-    // `renamed` are reached, and a pattern-only fixture would leave the
-    // component arm's reads unobserved.
-    const read = new Set<string>();
-    const watch = (record: Record<string, unknown>): unknown =>
-      new Proxy(record, {
-        getOwnPropertyDescriptor(target, key) {
-          if (typeof key === "string") read.add(key);
-          return Reflect.getOwnPropertyDescriptor(target, key);
-        },
-      });
-
-    isBlockOrigin(watch({ from: "pattern", id: "p1", digest: "d1" }));
-    isBlockOrigin(watch({ from: "component", id: "c1" }));
-
-    expect([...read].sort()).toEqual([...BLOCK_ORIGIN_FIELDS].sort());
   });
 });
