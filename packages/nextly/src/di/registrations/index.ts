@@ -9,6 +9,7 @@ export { registerAuthServices } from "./register-auth";
 export { registerCollectionServices } from "./register-collections";
 export { registerComponentServices } from "./register-components";
 export { registerDashboardServices } from "./register-dashboard";
+export { registerDocumentLockServices } from "./register-document-lock";
 export { registerEmailServices } from "./register-email";
 export { registerJobServices } from "./register-jobs";
 export { registerReleaseServices } from "./register-releases";

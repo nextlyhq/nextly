@@ -42,6 +42,12 @@ import {
   getDashboardRecentEntries,
   getDashboardActivity,
 } from "./api/dashboard";
+import {
+  acquireLock,
+  readLock,
+  releaseLock,
+  renewLock,
+} from "./api/document-lock";
 import { POST as emailSend } from "./api/email-send";
 import { POST as emailSendWithTemplate } from "./api/email-send-template";
 import {
@@ -370,6 +376,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "previewUrl",
   "imageSizes",
   "dashboard",
+  "documentLock",
   "translations",
   "schema",
   "email",
@@ -513,6 +520,36 @@ async function handleDashboardRequest(
         JSON.stringify({ error: "Unknown dashboard operation" }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
+  }
+}
+
+/**
+ * Delegate a document-lock request to its handler.
+ *
+ * Advisory locking: every one of these reports a claim and none of them refuses
+ * a write, so nothing on the mutation path consults this.
+ */
+async function handleDocumentLockRequest(
+  req: Request,
+  method: string
+): Promise<Response> {
+  switch (method) {
+    case "readDocumentLock":
+      return readLock(req);
+    case "acquireDocumentLock":
+      return acquireLock(req);
+    case "renewDocumentLock":
+      return renewLock(req);
+    case "releaseDocumentLock":
+      return releaseLock(req);
+    default:
+      // Reached only if the parser and this switch disagree, which is a new or
+      // mistyped route rather than anything the caller did. A canonical error
+      // carries the code and request id a client needs to report it; an ad hoc
+      // `{ error }` body is unreadable exactly when someone is debugging.
+      throw NextlyError.notFound({
+        logContext: { service: "documentLock", method },
+      });
   }
 }
 
@@ -1130,6 +1167,14 @@ async function handleServiceRequest(
   // their own via req.json() before anything else touches the stream.
   if (service === "dashboard") {
     return handleDashboardRequest(req, method);
+  }
+
+  // ==================== DOCUMENT LOCK DIRECT DISPATCH ====================
+  // Owns its auth (requireAuthentication) and reads its own body, so it
+  // intercepts here for the same reason dashboard does: before `req.text()`,
+  // which the read has no body for.
+  if (service === "documentLock") {
+    return handleDocumentLockRequest(req, method);
   }
 
   // ==================== TRANSLATIONS DIRECT DISPATCH ====================

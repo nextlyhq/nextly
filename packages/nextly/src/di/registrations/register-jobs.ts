@@ -20,6 +20,10 @@
  */
 
 import { nextly } from "../../direct-api/nextly";
+import {
+  createDocumentLockSweepJob,
+  type DocumentLockService,
+} from "../../domains/document-lock";
 import { JobRegistry } from "../../domains/jobs/job-registry";
 import { JobsRepository } from "../../domains/jobs/jobs-repository";
 import { databaseRunAs } from "../../domains/jobs/jobs-runner";
@@ -179,6 +183,17 @@ export function registerJobServices(ctx: RegistrationContext): void {
         contentApi: nextly,
         runAs: databaseRunAs(adapter),
         onOutcome: result => reportReleasesOutcome(logger, result),
+      })
+    );
+
+    // Advisory document locks. A lapsed row is already ignored by every
+    // reader, so this buys space rather than correctness: without it the table
+    // keeps a row per document ever opened and never shrinks. It rides the same
+    // `/api/jobs/run` entry as everything else here, so it needs no schedule of
+    // its own.
+    registry.register(
+      createDocumentLockSweepJob({
+        service: container.get<DocumentLockService>("documentLockService"),
       })
     );
 

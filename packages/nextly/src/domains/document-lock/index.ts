@@ -4,6 +4,11 @@
  * @module domains/document-lock
  */
 
+export { DocumentLockService } from "./document-lock-service";
+export {
+  DOCUMENT_LOCK_SWEEP_JOB,
+  createDocumentLockSweepJob,
+} from "./document-lock-sweep-job";
 export {
   acquireDocumentLock,
   readDocumentLock,

@@ -207,6 +207,7 @@ import {
   registerRevalidationServices,
   registerSingleServices,
   registerUserServices,
+  registerDocumentLockServices,
   registerVersionServices,
   registerWebhookServices,
   resetWidgetRegistries,
@@ -470,6 +471,52 @@ const globalForReg = globalThis as unknown as {
  * @throws Error if database environment configuration is invalid
  * @throws Error if database connection fails
  */
+/**
+ * Every domain registration, in one place a test can execute.
+ *
+ * Extracted so the wiring is checkable by RUNNING it rather than by reading
+ * this file for the characters of a call. A registration that nothing invokes
+ * is how document locking came to ship as three unused tables, and a source
+ * scan cannot tell a live call from one sitting in a dead branch or a comment.
+ *
+ * Order is not strictly required, since every registration is a lazy singleton.
+ * The sequence is kept because each comment inside it records a reason.
+ */
+export function registerDomainServices(ctx: RegistrationContext): void {
+  // Order is not strictly required because every registration is a lazy
+  // singleton; however, we order domains roughly by dependency depth so
+  // that the shape matches the original monolithic implementation.
+  registerComponentServices(ctx);
+  registerUserServices(ctx);
+  registerEmailServices(ctx);
+  registerDashboardServices(ctx);
+  registerAuthServices(ctx);
+  // Before the collection/single services, which resolve the cacheRevalidator
+  // lazily when a write flushes its intents.
+  registerRevalidationServices(ctx);
+  registerCollectionServices(ctx);
+  registerMediaServices(ctx);
+  registerMetaServices(ctx);
+  registerSingleServices(ctx);
+  registerDocumentLockServices(ctx);
+  registerVersionServices(ctx);
+  registerWebhookServices(ctx);
+  // LAST of the domain registrations, because the job registry is where every
+  // domain's job types are constructed and it therefore reads the widest set of
+  // dependencies — content services for the releases drain, the endpoint
+  // registry and retention deps for the webhook drain.
+  //
+  // Singleton factories are lazy, so this would work in any position. Ordering
+  // it anyway keeps the reason a fact about this file rather than a property of
+  // the container that a future refactor could remove without noticing.
+  registerJobServices(ctx);
+  // After the jobs registration, which registers the drain that materialises
+  // what this service schedules. Order is not load-bearing — both resolve their
+  // dependencies from the container — but keeping them adjacent means a reader
+  // meets the two halves of releases together.
+  registerReleaseServices(ctx);
+}
+
 export async function registerServices(
   config: NextlyServiceConfig
 ): Promise<void> {
@@ -1090,37 +1137,7 @@ export async function registerServices(
     passwordHasher,
   };
 
-  // Order is not strictly required because every registration is a lazy
-  // singleton; however, we order domains roughly by dependency depth so
-  // that the shape matches the original monolithic implementation.
-  registerComponentServices(ctx);
-  registerUserServices(ctx);
-  registerEmailServices(ctx);
-  registerDashboardServices(ctx);
-  registerAuthServices(ctx);
-  // Before the collection/single services, which resolve the cacheRevalidator
-  // lazily when a write flushes its intents.
-  registerRevalidationServices(ctx);
-  registerCollectionServices(ctx);
-  registerMediaServices(ctx);
-  registerMetaServices(ctx);
-  registerSingleServices(ctx);
-  registerVersionServices(ctx);
-  registerWebhookServices(ctx);
-  // LAST of the domain registrations, because the job registry is where every
-  // domain's job types are constructed and it therefore reads the widest set of
-  // dependencies — content services for the releases drain, the endpoint
-  // registry and retention deps for the webhook drain.
-  //
-  // Singleton factories are lazy, so this would work in any position. Ordering
-  // it anyway keeps the reason a fact about this file rather than a property of
-  // the container that a future refactor could remove without noticing.
-  registerJobServices(ctx);
-  // After the jobs registration, which registers the drain that materialises
-  // what this service schedules. Order is not load-bearing — both resolve their
-  // dependencies from the container — but keeping them adjacent means a reader
-  // meets the two halves of releases together.
-  registerReleaseServices(ctx);
+  registerDomainServices(ctx);
 
   // ----------------------------------------
   // Layer 4: Sync Code-First Collections
