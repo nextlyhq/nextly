@@ -22,7 +22,8 @@ export function dialectFromUrl(url: unknown): Dialect | undefined {
   if (
     url.startsWith("file:") ||
     url.endsWith(".db") ||
-    url.endsWith(".sqlite")
+    url.endsWith(".sqlite") ||
+    url.endsWith(".sqlite3")
   ) {
     return "sqlite";
   }
@@ -47,8 +48,13 @@ function withResolvedDialect(raw: unknown): unknown {
   if (typeof raw !== "object" || raw === null) return raw;
   const source = raw as Record<string, unknown>;
   if (source.DB_DIALECT) return source;
+  // An empty DB_DIALECT is unstated, so it must not reach the enum: leaving it
+  // in place made `DB_DIALECT=""` with a URL implying nothing fail validation
+  // rather than take the PostgreSQL default, which contradicts the rule stated
+  // just above. Removed whether or not the URL supplies a replacement.
+  const { DB_DIALECT: _unstated, ...rest } = source;
   const implied = dialectFromUrl(source.DATABASE_URL);
-  return implied ? { ...source, DB_DIALECT: implied } : source;
+  return implied ? { ...rest, DB_DIALECT: implied } : rest;
 }
 
 const _envObject = z

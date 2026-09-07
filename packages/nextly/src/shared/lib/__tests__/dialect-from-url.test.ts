@@ -11,7 +11,8 @@
 // the application actually takes.
 import { describe, expect, it } from "vitest";
 
-import { validateEnvObject } from "../env";
+import { detectDialectFromUrl } from "../../../cli/utils/adapter";
+import { dialectFromUrl, validateEnvObject } from "../env";
 
 const base = { NODE_ENV: "development" } as const;
 
@@ -96,6 +97,54 @@ describe("a URL that implies nothing", () => {
       validateEnvObject({
         ...base,
         DATABASE_URL: "mssql://u:p@localhost:1433/app",
+      }).DB_DIALECT
+    ).toBe("postgresql");
+  });
+});
+
+describe("the CLI and the schema answer the same question", () => {
+  // They used to hold separate copies of these rules, and the copies had
+  // drifted: the CLI accepted `.sqlite3` and the schema did not, so the same
+  // URL produced one dialect for `nextly migrate` and another for the runtime
+  // reading env.DB_DIALECT. This is the test that fails if a copy comes back.
+  const urls = [
+    "postgres://u:p@h:5432/d",
+    "postgresql://u:p@h:5432/d",
+    "mysql://u:p@h:3306/d",
+    "file:./data/nextly.db",
+    "sqlite:./app.db",
+    "sqlite://./app.sqlite",
+    "sqlite:./app.sqlite3",
+    "mssql://u:p@h:1433/d",
+    "",
+  ];
+
+  it("agrees on every form either of them accepted", () => {
+    for (const url of urls) {
+      expect(detectDialectFromUrl(url)).toBe(dialectFromUrl(url));
+    }
+  });
+
+  it("keeps the .sqlite3 form the CLI accepted", () => {
+    // Losing it would have been a silent narrowing: a narrower rule is only
+    // better if it is also complete.
+    expect(dialectFromUrl("sqlite:./app.sqlite3")).toBe("sqlite");
+    expect(
+      validateEnvObject({ ...base, DATABASE_URL: "sqlite:./app.sqlite3" })
+        .DB_DIALECT
+    ).toBe("sqlite");
+  });
+});
+
+describe("an empty dialect never reaches the enum", () => {
+  it("takes the default when the URL implies nothing", () => {
+    // `DB_DIALECT=""` left in place was rejected by the enum instead of
+    // reading as unstated, which contradicted the rule stated one line above it.
+    expect(
+      validateEnvObject({
+        ...base,
+        DB_DIALECT: "",
+        DATABASE_URL: "mssql://u:p@h:1433/d",
       }).DB_DIALECT
     ).toBe("postgresql");
   });
