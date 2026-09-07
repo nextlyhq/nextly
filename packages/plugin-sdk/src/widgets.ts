@@ -14,54 +14,21 @@
  * plugin are consumers of one definition. Each of those three used to carry its
  * own copy, and the copies had already drifted.
  *
+ * Every export here is `@experimental`: they describe the widget contract, and
+ * that contract graduates only when a first-party plugin source has exercised
+ * it (D55). `STABILITY.md` is the authoritative ledger and lists them.
+ *
  * @module widgets
  */
 
-import type { WidgetSlot } from "nextly/widget-result";
-
+/**
+ * @experimental The widget component contract and the shapes its data arrives
+ * in. No compatibility guarantee until `contributes.admin.widgets` graduates.
+ */
 export type {
+  WidgetComponentProps,
   WidgetQueryBatchResponse,
   WidgetResult,
   WidgetResultField,
   WidgetSlot,
 } from "nextly/widget-result";
-
-/**
- * The props a widget component receives, whatever it draws.
- *
- * 🔴 Declared HERE and not in core, because it is a React contract between the
- * admin and a plugin author. Core produces the data and has no notion of a
- * component receiving it, so putting this beside the wire types would make the
- * server the author of a UI convention it cannot see.
- *
- * Nested rather than spread: a widget declaring a setting named `slot` would
- * otherwise overwrite the answer to its own query.
- */
-export interface WidgetComponentProps {
-  /** The widget definition's id — what the plugin registered. */
-  widgetId: string;
-  /**
-   * The CARD's id, which is what identifies this instance.
-   *
-   * 🔴 Not `widgetId`. One widget may sit on a dashboard twice — a "recent
-   * entries" card for posts beside one for pages — and everything belonging to
-   * a card, its settings and its answer included, is keyed by this.
-   */
-  placementId: string;
-  /**
-   * This card's settings, RESOLVED: the reader's stored values where they are
-   * usable and the declared defaults everywhere else, so a component never
-   * decides what a missing or unusable setting should have been.
-   */
-  settings: Record<string, unknown>;
-  /**
-   * This card's answer, or `undefined` when the widget declared no query.
-   *
-   * A failure arrives as a value with `ok: false`, never as a throw: the batch
-   * answers with every other widget's data intact, so one query failing colours
-   * one card rather than blanking the dashboard.
-   */
-  slot: WidgetSlot | undefined;
-  /** Whether a refresh is in flight. The first load is not distinguished. */
-  isFetching: boolean;
-}

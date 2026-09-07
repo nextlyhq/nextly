@@ -322,8 +322,10 @@ Your component receives five props, and you can name their types:
 ```ts
 import type { WidgetComponentProps } from "@nextlyhq/plugin-sdk/widgets";
 
-export function ChartWidget({ slot, settings, isFetching }: WidgetComponentProps) {
-  if (!slot) return null;                 // this widget declared no query
+export function ChartWidget({ slot, isFetching }: WidgetComponentProps) {
+  // `slot` is undefined in TWO cases, and `isFetching` tells them apart:
+  // the first request is still running, or this widget declared no query.
+  if (!slot) return isFetching ? <Skeleton /> : null;
   if (!slot.ok) return <p>{slot.error}</p>;
   if (slot.result.op !== "list") return null;
   return <Chart rows={slot.result.items} busy={isFetching} />;
@@ -335,8 +337,13 @@ export function ChartWidget({ slot, settings, isFetching }: WidgetComponentProps
 | `widgetId` | `string` | The id you registered the widget under. |
 | `placementId` | `string` | The **card's** id. One widget may sit on a dashboard twice, and everything belonging to a card — its settings and its answer — is keyed by this, not by `widgetId`. |
 | `settings` | `Record<string, unknown>` | This card's settings, already resolved: the reader's stored values where they are usable, your declared defaults everywhere else. |
-| `slot` | `WidgetSlot \| undefined` | This card's answer, or `undefined` when the widget declared no query. |
-| `isFetching` | `boolean` | Whether a refresh is in flight. |
+| `slot` | `WidgetSlot \| undefined` | This card's answer. `undefined` means either that the first request is still in flight **or** that the widget declared no query — see below. |
+| `isFetching` | `boolean` | Whether this card's query is in flight, the first request included. Always `false` for a widget with no query. |
+
+An absent `slot` has two causes and they need different UI: `isFetching` is `true` only
+for a card whose query is in the batch, so `slot === undefined && isFetching` is the
+first load — draw a skeleton — while `slot === undefined && !isFetching` means no answer
+is ever coming. Treating them alike draws an empty state over a running request.
 
 `slot` is a discriminated union — `{ ok: true, result }` or `{ ok: false, error }` — so
 narrowing on `slot.ok` gives you a typed `result`. A failing query is a value, not a

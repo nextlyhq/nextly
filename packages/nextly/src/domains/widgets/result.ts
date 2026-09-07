@@ -110,3 +110,62 @@ export type WidgetSlot =
 export interface WidgetQueryBatchResponse {
   results: WidgetSlot[];
 }
+
+/**
+ * The props a widget component is handed, whatever it draws.
+ *
+ * 🔴 Declared in core rather than in the admin that builds it or the plugin-sdk
+ * that publishes it, because those two cannot both see a third place: plugin-sdk
+ * already depends on the admin, so an admin dependency on plugin-sdk closes a
+ * cycle the build refuses. Core is the one package both already depend on, and
+ * it is not a stranger to presentation -- a widget definition here declares its
+ * `component`, its `chrome` and its default size.
+ *
+ * The admin ANNOTATES the object it builds with this type, so a renamed or
+ * dropped prop fails to compile rather than silently leaving plugin authors
+ * compiling against a contract nothing keeps.
+ *
+ * Nested rather than spread: a widget declaring a setting named `slot` would
+ * otherwise overwrite the answer to its own query.
+ *
+ * 🔴 A `type` and not an `interface`, for a reason the compiler enforces: an
+ * interface has no implicit index signature, so it is not assignable to the
+ * `Record<string, unknown>` that `PluginSlot` forwards props through -- the
+ * admin could not annotate the object it builds with it, which is the whole
+ * point of publishing it. Losing declaration merging is a second, smaller
+ * benefit: a plugin cannot widen a contract the host has to satisfy.
+ */
+export type WidgetComponentProps = {
+  /** The widget definition's id -- what the plugin registered. */
+  widgetId: string;
+  /**
+   * The CARD's id, which is what identifies this instance.
+   *
+   * 🔴 Not `widgetId`. One widget may sit on a dashboard twice -- a "recent
+   * entries" card for posts beside one for pages -- and everything belonging to
+   * a card, its settings and its answer included, is keyed by this.
+   */
+  placementId: string;
+  /**
+   * This card's settings, RESOLVED: the reader's stored values where they are
+   * usable and the declared defaults everywhere else, so a component never
+   * decides what a missing or unusable setting should have been.
+   */
+  settings: Record<string, unknown>;
+  /**
+   * This card's answer, when it has one.
+   *
+   * 🔴 `undefined` means TWO different things, and a component that treats them
+   * alike will draw an empty state over a request that is still running: the
+   * widget declared no query, so no answer is ever coming; or the batch carrying
+   * this card's query has not answered YET. `isFetching` tells them apart.
+   */
+  slot: WidgetSlot | undefined;
+  /**
+   * Whether this card's query is in flight, the FIRST request included.
+   *
+   * Always `false` for a widget that declared no query, which is what makes it
+   * the discriminator for an absent `slot`.
+   */
+  isFetching: boolean;
+};
