@@ -532,4 +532,116 @@ describe("useDocumentLock", () => {
       takeover: true,
     });
   });
+
+  it("does not re-take a claim the pending poll just won", async () => {
+    // 🔴 The holder can leave while a polite poll is open, so the poll returns
+    // `acquired`. Draining the queued take-over before that answer is stored
+    // fires a second acquire against a claim this editor already holds - and if
+    // THAT one rejects, the interface reports the document unavailable over a
+    // token that is held and still renewing.
+    post.mockResolvedValue(held);
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    let settlePoll: (value: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise(resolve => {
+        settlePoll = resolve;
+      })
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await act(async () => {
+      result.current.takeOver();
+    });
+    const duringPoll = post.mock.calls.length;
+
+    // The holder left, so the poll succeeds on its own.
+    await act(async () => {
+      settlePoll(acquired);
+    });
+
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(post.mock.calls.length).toBe(duringPoll);
+  });
+
+  it("hands back a claim the server may still be holding", async () => {
+    // 🔴 A renewal whose reply never arrived may still have reached the server
+    // and extended the lease by most of a TTL. Forgetting the token without
+    // releasing leaves colleagues seeing this editor as the holder long after
+    // its own interface says it is not.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    patch.mockReturnValue(new Promise(() => {}));
+    const beats =
+      Math.ceil(
+        DOCUMENT_LOCK_LOSS_AFTER_MS / DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS
+      ) + 1;
+    for (let beat = 0; beat < beats; beat += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+      });
+    }
+
+    await waitFor(() => expect(result.current.state.status).toBe("lost"));
+    expect(del).toHaveBeenCalledWith("/document-lock", {
+      ...ref,
+      claimToken: "t1",
+    });
+  });
+
+  it("spends a queued take-over rather than carrying it into a later claim", async () => {
+    // 🔴 A take-over queued behind a poll that then SUCCEEDS has already got what
+    // it asked for. Leaving the request outstanding spends it on the next
+    // acquire that happens to be refused, displacing a colleague nobody asked to
+    // displace.
+    post.mockResolvedValue(held);
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    let settlePoll: (value: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise(resolve => {
+        settlePoll = resolve;
+      })
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await act(async () => {
+      result.current.takeOver();
+    });
+    await act(async () => {
+      settlePoll(acquired);
+    });
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    // The claim is then taken away, so the editor is a contender again.
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "lost", holder: other },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() => expect(result.current.state.status).toBe("taken-over"));
+
+    // One deliberate take-over, refused because a colleague holds it now.
+    post.mockResolvedValue(held);
+    const before = post.mock.calls.length;
+    await act(async () => {
+      result.current.takeOver();
+    });
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    expect(post.mock.calls.length).toBe(before + 1);
+  });
 });

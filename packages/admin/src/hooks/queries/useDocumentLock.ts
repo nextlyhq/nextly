@@ -178,6 +178,28 @@ export function useDocumentLock({
         .delete("/document-lock", { ...ref, claimToken })
         .catch(() => undefined);
 
+    /** Store a claim this editor now holds. */
+    const installAcquired = (claimToken: string) => {
+      token = claimToken;
+      confirmedAt = Date.now();
+      holder = null;
+      surrendered = false;
+      // Already holding it: a queued take-over would only displace ourselves.
+      queuedTakeover = false;
+      setState({ status: "held-by-me" });
+    };
+
+    /** Store a refusal, quietly when the holder has not changed. */
+    const installHeld = (current: DocumentLockHolder) => {
+      token = null;
+      // This runs every beat while a colleague holds the document, and a fresh
+      // object each time re-renders the editor for no news.
+      if (holder === null || !sameHolder(holder, current)) {
+        holder = current;
+        setState({ status: "held-by-other", holder: current });
+      }
+    };
+
     const acquire = async (takeover: boolean) => {
       if (acquiring) {
         if (takeover) queuedTakeover = true;
@@ -200,8 +222,6 @@ export function useDocumentLock({
       }
       acquiring = false;
 
-      drainQueuedTakeover();
-
       if (cancelled) {
         // 🔴 The claim outlived the editor that asked for it: this reply landed
         // after cleanup, which found no token to release. Releasing it here is
@@ -212,22 +232,16 @@ export function useDocumentLock({
       }
 
       if (item.status === "acquired") {
-        token = item.claimToken;
-        confirmedAt = Date.now();
-        holder = null;
-        surrendered = false;
-        setState({ status: "held-by-me" });
+        installAcquired(item.claimToken);
         return;
       }
 
-      token = null;
-      // Quiet when nothing changed: this runs every beat while a colleague
-      // holds the document, and a fresh object each time re-renders the editor
-      // for no news.
-      if (holder === null || !sameHolder(holder, item.holder)) {
-        holder = item.holder;
-        setState({ status: "held-by-other", holder: item.holder });
-      }
+      installHeld(item.holder);
+      // 🔴 Only once the answer is stored, and only when it was a refusal.
+      // Draining first fires a second acquire against a claim this one may have
+      // just won, and if that one rejects it reports the claim unavailable over
+      // a token that is held and still renewing.
+      drainQueuedTakeover();
     };
 
     /** Run a take-over that arrived while another request held the slot. */
@@ -237,8 +251,14 @@ export function useDocumentLock({
       void acquire(true);
     };
 
-    /** Give the claim up locally, without asking the server for anything. */
+    /** Give the claim up, and hand back whatever the server may still be holding. */
     const surrender = (next: DocumentLockState) => {
+      // 🔴 Release before forgetting. A renewal whose reply never arrived may
+      // still have reached the server and extended the lease by most of a TTL,
+      // so dropping the token leaves colleagues seeing this editor as the holder
+      // long after its own interface says it is not. Release is token-scoped, so
+      // it deletes nothing when the claim really has moved on.
+      if (token !== null) release(token);
       token = null;
       surrendered = true;
       setState(next);
