@@ -841,6 +841,42 @@ function hideEach(
  * longer exists is ignored in silence: the element simply loses its name,
  * visibly to nobody who is not using assistive technology.
  */
+/** The three optional fields a relink can rewrite, plus the one it always does. */
+interface RelinkedFields {
+  attributes: ResolvedBlockNode["attributes"];
+  props: Record<string, unknown>;
+  bindings: ResolvedBlockNode["bindings"];
+  slots: ResolvedBlockNode["slots"];
+}
+
+/**
+ * One node with its rewritten fields, leaving ABSENT ones absent.
+ *
+ * Spread conditionally, the way `relinkOne` does for the same three fields.
+ * `{ ...node, bindings }` writes the key even when the value is `undefined`,
+ * and a key holding `undefined` is a value JSON cannot carry — `applyOp`
+ * refuses a whole insert for one. That went unnoticed while this output was
+ * only ever rendered; a resolved tree is now also what a detached instance is
+ * stored from, and an ordinary node with no attributes came out of here
+ * carrying `attributes: undefined`.
+ *
+ * Its own function so the walk that calls it stays inside the complexity the
+ * gate allows.
+ */
+function relinked(
+  node: ResolvedBlockNode,
+  fields: RelinkedFields
+): ResolvedBlockNode {
+  const { attributes, props, bindings, slots } = fields;
+  return {
+    ...node,
+    props,
+    ...(attributes === undefined ? {} : { attributes }),
+    ...(bindings === undefined ? {} : { bindings }),
+    ...(slots === undefined ? {} : { slots }),
+  };
+}
+
 function withRemappedIdReferences(
   roots: ResolvedBlockNode[] | null,
   ctx: InlineContext
@@ -881,7 +917,7 @@ function withRemappedIdReferences(
       ) {
         return node;
       }
-      return { ...node, attributes, props, bindings, slots };
+      return relinked(node, { attributes, props, bindings, slots });
     });
   const rewriteSlots = (
     slots: Record<string, ResolvedBlockNode[]>
@@ -945,7 +981,16 @@ function rollback(run: ResolveRun, mark: Savepoint): void {
   }
   run.minted.length = mark.minted;
   for (let i = run.mintedDomIds.length - 1; i >= mark.mintedDomIds; i -= 1) {
-    run.takenDomIds.delete(run.mintedDomIds[i]);
+    const id = run.mintedDomIds[i];
+    run.takenDomIds.delete(id);
+    // The record of what it was derived from goes back with the claim itself.
+    // An abandoned expansion leaves the ORIGINAL instance standing, so a rename
+    // it had begun to make describes nothing in the returned document — and a
+    // consumer reversing the map would rewrite a reference using a mapping for
+    // an id nothing renders. Released here rather than in a pass of its own,
+    // keyed on the same list, so the two cannot come to disagree about what was
+    // given back.
+    run.renamedDomIds.delete(id);
   }
   run.mintedDomIds.length = mark.mintedDomIds;
 }

@@ -284,6 +284,116 @@ describe("the author's own slot content moves through untouched", () => {
   });
 });
 
+describe("a condition-gated instance", () => {
+  const gate = {
+    conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+  } as BlockNode["visibility"];
+  const definitions = defs({
+    card: component([node("d1", { props: { mark: "body" } })]),
+    gatedInside: component([
+      node("g1", {
+        props: { mark: "body" },
+        visibility: {
+          conditions: [[{ field: "locale", op: "eq", value: "fr" }]],
+        },
+      }),
+    ]),
+  });
+
+  it("really detaches it, carrying the gate onto what replaces it", () => {
+    // The resolver declines to inline a gated instance — replacing it with
+    // roots that inherit no gate would show a reader content withheld from
+    // them — and it says so by returning the instance UNTOUCHED, with no
+    // `unresolved` entry. A planner reading only that list saw a clean
+    // resolution and planned to replace the instance with itself: success
+    // reported, still linked to the definition, and stamped with a provenance
+    // record claiming it had been detached.
+    //
+    // Gating is inherited, so the gate on each root gates everything beneath
+    // it and the page renders exactly as before.
+    const doc = page([instance("i1", "card", { visibility: gate })]);
+
+    const result = applied(doc, planDetach(doc, "i1", definitions, anyParent));
+
+    expect(flatten(result.nodes).map(n => n.type)).not.toContain(
+      COMPONENT_INSTANCE_TYPE
+    );
+    expect(result.nodes[0]?.visibility).toEqual(gate);
+    expect(marked(result.nodes, "body").props?.mark).toBe("body");
+  });
+
+  it("refuses when the content carries a gate of its own", () => {
+    // Two condition sets combine as a cross product of their groups, and
+    // quietly rewriting an author's visibility rules is not a detach's to make.
+    const doc = page([instance("i1", "gatedInside", { visibility: gate })]);
+
+    expect(planDetach(doc, "i1", definitions, anyParent).problem).toBe(
+      "condition-gated"
+    );
+  });
+
+  it("leaves ungated content alone", () => {
+    // The control: without a gate on the instance, nothing is stamped.
+    const doc = page([instance("i1", "card")]);
+
+    const result = applied(doc, planDetach(doc, "i1", definitions, anyParent));
+
+    expect(result.nodes[0]?.visibility).toBeUndefined();
+  });
+});
+
+describe("what the op group has to survive", () => {
+  it("unlocks a locked block for the insert and locks it again after", () => {
+    // `applyOp` refuses an insert whose subtree arrives locked: the inverse of
+    // an insert is a remove, and a remove refuses a locked subtree, so such an
+    // insert could never be undone. Building the ops by hand refused every
+    // definition holding a locked block, reported as a byte-cap failure.
+    const definitions = defs({
+      card: component([node("d1", { locked: true, props: { mark: "body" } })]),
+    });
+    const doc = page([instance("i1", "card")]);
+
+    const plan = planDetach(doc, "i1", definitions, anyParent);
+    const result = applied(doc, plan);
+
+    // It arrives unlocked and is locked where it landed.
+    expect(plan.pageOps?.some(op => op.kind === "update")).toBe(true);
+    expect(marked(result.nodes, "body").locked).toBe(true);
+  });
+
+  it("avoids a DOM id the author's own slot content will bring back", () => {
+    // The supplied content is RESTORED rather than copied, so it keeps the id
+    // it already has. Counting only the page outside the instance let the
+    // definition's id land on top of the author's — legal on the page today,
+    // because the definition's is rendered scoped — and the group was refused
+    // with a cause about size.
+    const definitions = defs({
+      shell: component(
+        [
+          node("s1", {
+            type: "core/box",
+            cssId: "shared",
+            slots: { children: [] },
+          }),
+        ],
+        { slots: { body: { label: "Body", nodeId: "s1", slot: "children" } } }
+      ),
+    });
+    const doc = page([
+      instance("i1", "shell", {
+        slots: { body: [node("mine", { cssId: "shared" })] },
+      }),
+    ]);
+
+    const result = applied(doc, planDetach(doc, "i1", definitions, anyParent));
+    const root = result.nodes[0];
+
+    // The author keeps theirs; the definition's copy moves aside.
+    expect(root?.slots?.children?.[0]?.cssId).toBe("shared");
+    expect(root?.cssId).toBe(mintDomId("shared", root!.id));
+  });
+});
+
 describe("what detach refuses", () => {
   const definitions = defs({ card: component([node("d1")]) });
 

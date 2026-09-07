@@ -242,7 +242,16 @@ export type PlanProblem =
    */
   | "self-reference"
   /** The document handed over is not a component definition. */
-  | "not-a-component";
+  | "not-a-component"
+  /**
+   * A gated instance whose content carries gates of its own.
+   *
+   * Its own cause because nothing is malformed and the remedy is the author's:
+   * the instance is shown conditionally and so is something the component
+   * draws, and the two sets of conditions cannot be combined into one without
+   * rewriting rules nobody asked to change.
+   */
+  | "condition-gated";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -2394,11 +2403,17 @@ export function planDetach(
     return { problem: "unusable-document" };
   }
 
+  // What the page will hold when this lands: everything outside the instance,
+  // AND the supplied slot content, which is restored into the result rather
+  // than copied and so keeps the ids it already has. Leaving it out let a
+  // definition id collide with one of the author's own after restoration —
+  // legal on the page today, because the definition's is rendered scoped — and
+  // the group was then refused with a cause about size.
   const inlined = detachedRoots(
     document,
     located.node,
     definitions,
-    domIdsIn(remaining.nodes),
+    domIdsIn([...remaining.nodes, ...suppliedContent(located.node)]),
     limits
   );
   if (inlined.problem !== undefined) return inlined;
@@ -2413,15 +2428,16 @@ export function planDetach(
     internalNestingRefusal(inlined.roots, nesting);
   if (refusal !== undefined) return refusal;
 
+  // Through the SHARED builder, not a second insert path. It takes the locks
+  // off on the way in and puts them back once the nodes have landed, because
+  // `applyOp` refuses an insert whose subtree arrives locked — the inverse of
+  // an insert is a remove, and a remove refuses a locked subtree, so such an
+  // insert could never be undone. A definition holding a locked block is
+  // ordinary, and building the ops by hand refused every one of them, reported
+  // as a byte-cap failure.
   const ops: BuilderOp[] = [
     removal,
-    ...inlined.roots.map(
-      (node, offset): BuilderOp => ({
-        kind: "insert",
-        node,
-        at: { ...position.at, index: position.at.index + offset },
-      })
-    ),
+    ...insertOps(inlined.roots, destination.place, document, position.at),
   ];
 
   // The byte cap, asked of the apply because the apply is the only thing that
@@ -2514,13 +2530,29 @@ function detachedRoots(
     return { problem: "invalid-source" };
   }
 
+  // A CONDITION-GATED instance is refused by the resolver on purpose: inlining
+  // it would replace it with roots that inherit no gate, and content shown to a
+  // reader it was withheld from cannot be taken back. It says so by returning
+  // the instance untouched — and, unlike every other refusal, WITHOUT an
+  // `unresolved` entry, so a planner reading only that list saw a clean
+  // resolution and planned to replace the instance with itself: an op group
+  // that reported success, stayed linked to the definition, and stamped a
+  // provenance record saying it had been detached.
+  //
+  // The gate is lifted for the resolution and put back on the roots, which
+  // preserves it exactly — gating is inherited, so a gate on each root gates
+  // everything beneath it. A root carrying a gate of its OWN is refused rather
+  // than merged: two condition sets combine as a cross product of their groups,
+  // and quietly rewriting an author's visibility rules is not something a
+  // detach should do.
+  const gate = instance.visibility;
   const held = suppliedSlots(instance);
   // The page's OWN envelope, with only this instance in it. Built from the
   // document rather than assembled, so the resolver reads the format version
   // and settings the page actually carries.
   const probe: BlockDocument = {
     ...document,
-    nodes: [{ ...instance, slots: held.slots }],
+    nodes: [ungated({ ...instance, slots: held.slots })],
   };
   const resolved = resolveComponentInstances(probe, definitions, {
     maxComposedDepth: 1,
@@ -2558,9 +2590,13 @@ function detachedRoots(
     held.byId,
     composed(authored.nodeIds, copied.nodeIds)
   );
+  if (gate !== undefined && roots.some(root => root.visibility !== undefined)) {
+    return { problem: "condition-gated" };
+  }
   return {
     roots: roots.map(root => ({
       ...root,
+      ...(gate === undefined ? {} : { visibility: gate }),
       origin: { from: "component" as const, id: componentId },
     })),
   };
@@ -2580,6 +2616,32 @@ function composed(
     if (to !== undefined) through.set(from, to);
   }
   return through;
+}
+
+/** The same node with any condition gate taken off. */
+function ungated(instance: BlockNode): BlockNode {
+  if (instance.visibility === undefined) return instance;
+  const copy: Record<string, unknown> = { ...instance };
+  delete copy.visibility;
+  return copy as unknown as BlockNode;
+}
+
+/**
+ * Every node an author supplied to this instance's slots, flattened.
+ *
+ * The roots only — {@link domIdsIn} walks what it is given — and read through
+ * the same guards {@link suppliedSlots} reads, so the ids counted as taken are
+ * exactly the nodes that will be restored.
+ */
+function suppliedContent(instance: BlockNode): BlockNode[] {
+  const source = instance.slots;
+  if (!isPlainRecord(source)) return [];
+  const all: BlockNode[] = [];
+  for (const name of ownKeys(source)) {
+    const content: unknown = source[name];
+    if (Array.isArray(content)) all.push(...(content as BlockNode[]));
+  }
+  return all;
 }
 
 /** The slot content an author supplied, lifted out and stood in for. */
