@@ -685,6 +685,9 @@ importers:
       '@nextlyhq/eslint-config':
         specifier: workspace:*
         version: link:../eslint-config
+      '@nextlyhq/module-specifiers':
+        specifier: workspace:*
+        version: link:../module-specifiers
       '@nextlyhq/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig
