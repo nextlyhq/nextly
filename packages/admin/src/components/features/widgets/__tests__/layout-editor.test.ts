@@ -200,6 +200,44 @@ describe("whether anything changed", () => {
     const resized = [{ ...before[0], size: "xl" }];
     expect(hasChanges(before, resized)).toBe(true);
   });
+
+  /*
+   * 🔴 `config` is the only field a settings edit touches, exactly as `column`
+   * is the only one a sideways move touches. Left out of the comparison, a
+   * card whose settings the reader just changed compares as untouched, Save
+   * stays disabled, and the value they typed refuses to persist with nothing
+   * on screen saying why.
+   */
+  it("notices a settings change alone", () => {
+    const before = placements("a");
+    const configured = [{ ...before[0], config: { limit: 12 } }];
+    expect(hasChanges(before, configured)).toBe(true);
+    // And a change to an EXISTING config, not only its arrival.
+    expect(
+      hasChanges(configured, [{ ...before[0], config: { limit: 3 } }])
+    ).toBe(true);
+  });
+
+  it("says no when a config holds the same values in another order", () => {
+    // The control, and the reason this is a value comparison rather than
+    // `JSON.stringify`. The server returns a stored config in whatever order it
+    // holds and the form rebuilds it in declaration order, so a text comparison
+    // reports a card nobody touched as dirty and leaves Save enabled forever.
+    const before = [
+      { ...placements("a")[0], config: { limit: 12, mode: "x" } },
+    ];
+    const same = [{ ...placements("a")[0], config: { mode: "x", limit: 12 } }];
+    expect(hasChanges(before, same)).toBe(false);
+  });
+
+  it("treats an absent config and an emptied one as the same state", () => {
+    // `setPlacementConfig` DROPS the key rather than storing `{}`, so these are
+    // one state. Compared as different, clearing the last setting would leave
+    // the card permanently dirty.
+    const before = placements("a");
+    const empty = [{ ...before[0], config: {} }];
+    expect(hasChanges(before, empty)).toBe(false);
+  });
 });
 
 describe("addPlacement at the write contract's ceiling", () => {

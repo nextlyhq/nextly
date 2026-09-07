@@ -31,3 +31,5 @@ A dashboard widget can declare `settings` — what a reader may change about tha
 A setting named `limit` and typed `number` sets how many rows its card asks for. Anything a widget does not declare is ignored, and a stored value the declaration no longer recognises falls back to the declared default rather than breaking the card.
 
 `WidgetSetting` is exported from `@nextlyhq/plugin-sdk`, and `contributes.admin.widgets` accepts `settings`, so a plugin declaring one can name its type. The same card placed twice keeps its own settings and its own data.
+
+A card with settings gains a settings control in the dashboard's edit mode, opening a panel drawn by the field renderer the rest of the admin uses. A widget that draws itself receives its resolved settings and its placement id as props, so a `text`, `checkbox` or `select` setting reaches the component that declared it rather than only the row count reaching the query.

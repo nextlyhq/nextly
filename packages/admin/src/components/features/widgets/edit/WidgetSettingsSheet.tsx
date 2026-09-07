@@ -76,9 +76,26 @@ export function initialValues(
  */
 export function toStoredConfig(
   settings: readonly WidgetSetting[],
-  values: Record<string, unknown>
+  values: Record<string, unknown>,
+  existing: Record<string, unknown> | undefined
 ): Record<string, unknown> {
   const stored: Record<string, unknown> = Object.create(null);
+
+  /*
+   * 🔴 A stored key the declaration does not know is CARRIED, not dropped.
+   * `resolveWidgetSettings` keeps such a key deliberately — a plugin that
+   * renames a setting or is uninstalled must not cost a reader the values they
+   * chose, because reinstalling it restores them. This form is built from the
+   * DECLARATION, so it never sees those keys; rebuilding the config from it
+   * alone, and writing that back over the whole `config`, discarded exactly
+   * what the reading layer went out of its way to preserve. Opening the panel
+   * and pressing Save was enough to lose them.
+   */
+  const declared = new Set(settings.map(setting => setting.name));
+  for (const key of Object.keys(existing ?? {})) {
+    if (!declared.has(key)) stored[key] = existing?.[key];
+  }
+
   for (const setting of settings) {
     /*
      * 🔴 Read through `hasOwn`, not by indexing. `values` comes back from the
@@ -113,10 +130,10 @@ export function WidgetSettingsSheet({
 
   const submit = useCallback(
     (values: Record<string, unknown>) => {
-      onSave(toStoredConfig(settings, values));
+      onSave(toStoredConfig(settings, values, config));
       onOpenChange(false);
     },
-    [onSave, onOpenChange, settings]
+    [onSave, onOpenChange, settings, config]
   );
 
   return (

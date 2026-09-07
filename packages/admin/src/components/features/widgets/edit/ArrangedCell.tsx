@@ -12,7 +12,8 @@
  * @module components/features/widgets/edit/ArrangedCell
  */
 
-import { useState } from "react";
+import { resolveWidgetSettings } from "nextly/config";
+import { useMemo, useState } from "react";
 
 import { cn } from "@admin/lib/utils";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
@@ -92,6 +93,19 @@ export function ArrangedCell({
   const hasSettings = (row.widget.settings?.length ?? 0) > 0;
 
   const widget = row.widget;
+  /*
+   * Resolved HERE, the one place a card's declaration and its reader's stored
+   * config are both in scope -- the same reason the grid applies settings to
+   * the query where it does. `resolveWidgetSettings` returns only DECLARED
+   * names, so a component cannot act on a key its widget never offered.
+   */
+  const placement = useMemo(
+    () => ({
+      id: row.placementId,
+      settings: resolveWidgetSettings(widget.settings, row.config),
+    }),
+    [row.placementId, widget.settings, row.config]
+  );
   /*
    * Bound once here rather than written inline in the JSX below. Each is the
    * cell supplying the one thing its caller's handler cannot know — which
@@ -208,7 +222,7 @@ export function ArrangedCell({
           a live one; the controls that act on it stay legible. */}
       {row.hidden ? (
         <div className="opacity-50">
-          <WidgetRenderer definition={widget} {...data} />
+          <WidgetRenderer definition={widget} placement={placement} {...data} />
         </div>
       ) : (
         // 🔴 A DIRECT child when nothing is dimmed, because the cell's
@@ -218,7 +232,7 @@ export function ArrangedCell({
         // blank slot with its margins. Nothing is lost by branching: a hidden
         // card is only ever drawn while editing, where the controls above are
         // themselves a child and the cell can never be empty anyway.
-        <WidgetRenderer definition={widget} {...data} />
+        <WidgetRenderer definition={widget} placement={placement} {...data} />
       )}
     </SortableWidgetCell>
   );

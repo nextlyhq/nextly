@@ -75,12 +75,12 @@ describe("a setting named __proto__ is data, both ways", () => {
       string,
       unknown
     >;
-    expect(toStoredConfig([odd], typed)["__proto__"]).toBe("typed");
+    expect(toStoredConfig([odd], typed, undefined)["__proto__"]).toBe("typed");
 
     // The other direction: an ordinary form object that never carried this key
     // answers `Object.prototype` when indexed, which is neither `undefined`
     // nor `""` and so reached storage.
-    expect(Object.keys(toStoredConfig([odd], {}))).toEqual([]);
+    expect(Object.keys(toStoredConfig([odd], {}, undefined))).toEqual([]);
   });
 });
 
@@ -92,20 +92,47 @@ describe("what is stored on save", () => {
    * later change to it, silently, and only for readers who opened the panel.
    */
   it("does not store a value that equals the declared default", () => {
-    expect(toStoredConfig([limit], { limit: 5 })).toEqual({});
+    expect(toStoredConfig([limit], { limit: 5 }, undefined)).toEqual({});
   });
 
   it("stores a value that departs from the default", () => {
-    expect(toStoredConfig([limit], { limit: 12 })).toEqual({ limit: 12 });
+    expect(toStoredConfig([limit], { limit: 12 }, undefined)).toEqual({
+      limit: 12,
+    });
   });
 
   it("drops an emptied field rather than storing a blank", () => {
-    expect(toStoredConfig([title], { title: "" })).toEqual({});
+    expect(toStoredConfig([title], { title: "" }, undefined)).toEqual({});
   });
 
   it("ignores a value for something the widget does not declare", () => {
-    expect(toStoredConfig([limit], { limit: 12, stray: "x" })).toEqual({
+    expect(
+      toStoredConfig([limit], { limit: 12, stray: "x" }, undefined)
+    ).toEqual({
       limit: 12,
     });
+  });
+
+  /*
+   * 🔴 A stored key the declaration does not know SURVIVES the save. The
+   * reading layer keeps such a key deliberately -- a plugin that renames a
+   * setting or is uninstalled must not cost a reader the values they chose,
+   * because reinstalling it restores them. This form is built from the
+   * DECLARATION and never sees those keys, so rebuilding the config from it
+   * alone discarded exactly what the reader was promised: opening the panel and
+   * pressing Save was enough to lose them.
+   */
+  it("carries a stored key the declaration no longer knows", () => {
+    expect(
+      toStoredConfig([limit], { limit: 12 }, { legacy: "kept", limit: 3 })
+    ).toEqual({ legacy: "kept", limit: 12 });
+  });
+
+  it("still lets the form clear a key the declaration DOES know", () => {
+    // The other half. Carrying the old config must not resurrect a value the
+    // reader just emptied, which is what a plain merge would do.
+    expect(
+      toStoredConfig([title], { title: "" }, { title: "old", legacy: "kept" })
+    ).toEqual({ legacy: "kept" });
   });
 });
