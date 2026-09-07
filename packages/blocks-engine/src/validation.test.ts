@@ -3327,6 +3327,46 @@ describe("a bag validation has already refused is never enumerated", () => {
     }
   );
 
+  it("sends a root that cannot answer the array question to the survey", () => {
+    // `Array.isArray` runs no trap, but it reads the array brand THROUGH a
+    // proxy and a revoked one throws rather than answering. Asking it bare took
+    // `validate()` out as a native `TypeError` on a root every other release
+    // reported as an issue list.
+    //
+    // A root that cannot answer that question is not thereby a non-record, so
+    // the refusal above is NOT the answer: it is unreadable, which is the
+    // survey's verdict to give, and it reaches the readability gate — which is
+    // also why the site's own duplicate id is still reported for it.
+    const { proxy, revoke } = Proxy.revocable(
+      {} as Record<string, unknown>,
+      {}
+    );
+    revoke();
+    const duplicated = {
+      viewport: [
+        { id: "base", label: "Desktop" },
+        { id: "base", label: "Again" },
+      ],
+      container: [],
+    } as unknown as typeof FIXTURE_BREAKPOINTS;
+
+    let escaped: unknown;
+    let codes: string[] = [];
+    try {
+      codes = validate(proxy as unknown as BlockDocument, {
+        breakpoints: duplicated,
+        mode: "strict",
+      }).map(issue => issue.code);
+    } catch (error) {
+      escaped = error;
+    }
+
+    expect(escaped).toBeUndefined();
+    expect(codes).toContain("document-unwritable");
+    expect(codes).toContain("breakpoint-id-not-unique");
+    expect(codes).not.toContain("invalid-document");
+  });
+
   it("still reports a fault in the site's own breakpoints", () => {
     // `collectBreakpointIds` judges the CALLER's settings, not the document, so
     // a duplicate id among them is true whatever the document turns out to be.

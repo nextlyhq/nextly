@@ -33,7 +33,12 @@ malformed-root refusal too, so a `null`, a primitive or an array — a value tha
 was never going to be validated — still caused the caller's breakpoint settings
 to be read, and an adversarial set escaped as a native error.
 
-The coarse root test asks nothing that can throw: `typeof`, a null comparison
-and `Array.isArray` run no user code, where asking for a prototype is something
-a hostile root can refuse. So the coarse question is settled first and the
-precise one stays where it was, after the survey has had its say.
+The coarse root test runs no user code: `typeof`, a null comparison and
+`Array.isArray` invoke no trap, where asking for a prototype is something a
+hostile root can refuse. So the coarse question is settled first and the precise
+one stays where it was, after the survey has had its say.
+
+`Array.isArray` can still throw even though it runs nothing — a revoked proxy
+refuses the array brand rather than answering it — so it is wrapped, and a root
+that cannot answer reaches the survey's readability verdict instead of being
+refused on a question nothing answered.

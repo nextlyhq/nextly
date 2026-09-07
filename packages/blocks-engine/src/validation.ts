@@ -350,6 +350,32 @@ export interface ValidationResult {
 }
 
 /**
+ * The coarse root question: is this value even a CANDIDATE for a record?
+ *
+ * `typeof` and the null comparison run no code at all. `Array.isArray` runs no
+ * trap either, but it reads the array brand THROUGH a proxy, and a revoked one
+ * throws rather than answering — `TypeError: Cannot perform 'IsArray' on a
+ * proxy that has been revoked`, which leaves a native error where an issue list
+ * is owed. `surveyDocument` wraps the same call for the same reason.
+ *
+ * A root that cannot answer the brand question is NOT thereby a non-record. It
+ * is unreadable, and that verdict belongs to the survey, which has already
+ * recorded it, and to the readability gate that reports it — so the throw
+ * resolves to "not an array" and the value falls through to them. Answering
+ * `true` instead would relabel as `invalid-document` a root the readability
+ * gate reports as `document-unwritable`, and would refuse it on the strength of
+ * a question that was never answered.
+ */
+function malformedRoot(doc: unknown): boolean {
+  if (typeof doc !== "object" || doc === null) return true;
+  try {
+    return Array.isArray(doc);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Issues only — the narrow view, DERIVED from {@link validateDocument} rather
  * than computed beside it.
  *
@@ -389,12 +415,11 @@ export function validateDocument(
   // document that was never going to be validated runs unrelated hostile input
   // for nothing.
   //
-  // Asked with tests that cannot themselves throw. `typeof`, a null comparison
-  // and `Array.isArray` run no user code; `isPlainRecord` asks for the
-  // prototype, and a root that refuses to answer that is exactly the case the
-  // readability gate below exists for. So the coarse question is asked here and
-  // the precise one stays in the envelope, after the survey has had its say.
-  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
+  // Coarse, and deliberately so: `isPlainRecord` asks for the prototype, and a
+  // root that refuses to answer that is exactly the case the readability gate
+  // below exists for. So the blunt question is settled here and the precise one
+  // stays in the envelope, after the survey has had its say.
+  if (malformedRoot(doc)) {
     issues.push({
       path: "",
       code: "invalid-document",
