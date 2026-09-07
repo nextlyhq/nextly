@@ -20,10 +20,17 @@ inside `packages/nextly`.
 
 - Direct API lists return `{ items, meta }`; mutations return a result with
   `.item`. There is no `docs`/`totalDocs` shape anywhere.
-- `overrideAccess` defaults to `true` (trusted server context). Enforcing
-  COLLECTION and DOCUMENT access requires `overrideAccess: false` plus a
-  `user` — a stored owner rule has nobody to compare against otherwise, so it
-  is skipped rather than failed.
+- `overrideAccess` defaults to `true` (trusted server context) and returns
+  before any check. Under `overrideAccess: false` there are TWO layers and a
+  missing `user` does opposite things to them. The coarse RBAC permission gate
+  needs a user to have permissions, so without one it does not run. The STORED
+  rules run either way, and an `owner-only` rule with no user is DENIED
+  (`Authentication required`), not skipped. So an anonymous caller is refused
+  by the rule rather than waved past the gate.
+- A collection with NO rule for an operation is public: `evaluateAccess`
+  returns `allowed: true` when `rules?.[operation]` is absent. Two exceptions
+  fail closed instead — `publish`/`unpublish` with no user and no explicit
+  rule, and `routeAuthorized` with no user.
 - FIELD-level rules are different: they run whenever `overrideAccess` is
   false, user or not. "Which fields may this writer set" has a perfectly good
   answer for nobody, and treating absence of a user as trust let an anonymous
