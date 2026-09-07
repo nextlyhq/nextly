@@ -41,6 +41,18 @@ scheduled-release banner already there, which the page renders on that branch fo
 the same reason: a custom view replaces the form, not the facts about the
 document.
 
+The view is also handed what the claim withholds, through the props every custom
+edit view already receives rather than an admin-internal hook it cannot import.
+The banner says in words that unsaved changes cannot be saved while a colleague
+holds the document, and a view that wrote anyway would make that sentence false
+and would overwrite the holder's row. The bundled form builder reads it, so its
+save is withheld and its Save button says so.
+
+The claim is taken only once the document is actually on screen. Taken while the
+entry is still loading, or after it failed to load, it would heartbeat a document
+the editor is not looking at, and colleagues would be told this person is editing
+a page that never appeared for them.
+
 Only that branch claims. The form still claims for the default editor, and
 claiming in both places would put two claims on one document under one author.
 The condition is the resolved component rather than the registered path, because

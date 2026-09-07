@@ -317,6 +317,9 @@ export default function EditEntryPage({
   );
   usePluginAutoRegistration(collectionsForRegistration);
 
+  const isLoading = isLoadingCollection || isLoadingEntry;
+  const error = collectionError || entryError;
+
   // Resolved here, above this component's loading and error returns, for the
   // reason the hooks above give: whether a custom view renders decides whether
   // THIS page claims the document, and a hook cannot be asked that after a
@@ -346,11 +349,21 @@ export default function EditEntryPage({
     scopeKind: "collection",
     slug: slug ?? "",
     entryId: id,
-    enabled: Boolean(CustomEditView && slug && id),
+    // 🔴 The same prerequisites the custom branch renders under, not merely a
+    // resolved component. A claim taken while the entry is still loading, or
+    // after it failed, heartbeats a document the editor is not looking at - and
+    // on a load failure that leaves the lock endpoint reachable, colleagues are
+    // told this person is editing a page that never appeared for them.
+    enabled: Boolean(
+      CustomEditView &&
+        slug &&
+        id &&
+        !isLoading &&
+        !error &&
+        collection &&
+        entry
+    ),
   });
-
-  const isLoading = isLoadingCollection || isLoadingEntry;
-  const error = collectionError || entryError;
 
   /**
    * The page's measure, on every branch.
@@ -506,6 +519,13 @@ export default function EditEntryPage({
       onSuccess: handleSuccess,
       onDelete: handleDelete,
       onCancel: handleCancel,
+      // The banner above says in words that changes cannot be saved while a
+      // colleague holds this. Passing the same decision the banner was derived
+      // from is what keeps that sentence true.
+      documentLock: {
+        readOnly: customViewLock.readOnly,
+        actionsDisabled: customViewLock.actionsDisabled,
+      },
     };
 
     return (

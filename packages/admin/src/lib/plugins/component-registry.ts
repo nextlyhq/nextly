@@ -75,6 +75,24 @@ export interface CustomEditViewProps {
   onCancel?: () => void;
   /** Callback to duplicate entry */
   onDuplicate?: () => void;
+  /**
+   * What a colleague's claim on this document withholds.
+   *
+   * A custom view replaces the FORM, not the facts about the document, and the
+   * strip above it says in words that unsaved changes cannot be saved while
+   * someone else holds the claim. A view that writes anyway makes that sentence
+   * false, so the two decisions travel together and reach the view through the
+   * props it already receives rather than an admin-internal hook it cannot
+   * import.
+   *
+   * Absent while creating, which has no document to claim.
+   */
+  documentLock?: {
+    /** Fields should render uneditable: the document is someone else's. */
+    readOnly: boolean;
+    /** Save, delete and every other write should be withheld. */
+    actionsDisabled: boolean;
+  };
 }
 
 /**
