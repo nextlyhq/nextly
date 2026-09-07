@@ -57,16 +57,13 @@ describe("AccessControlService role-based access (OR-membership)", () => {
 });
 
 describe("AccessControlService without a user", () => {
-  // `packages/nextly/AGENTS.md` states these two outcomes as the thing agents get
-  // wrong about enforcement, so they are pinned here: the doc said an owner rule
-  // with no user was skipped, and the service denies it. A claim in that file is
-  // read before any work happens, so it is worth a test rather than a reading.
   const service = new AccessControlService();
 
-  it("DENIES an owner-only rule rather than skipping it", async () => {
+  it("denies an owner-only rule rather than skipping it", async () => {
     // Nobody to compare an owner against is a refusal, not an absence of
     // opinion. What a missing user skips is the coarse RBAC gate, one layer up,
-    // which needs a user in order to have permissions to check.
+    // which needs a user in order to have permissions to check; the pairing is
+    // exercised end to end in `collection-access-anonymous.test.ts`.
     const result = await service.evaluateAccess(
       { update: { type: "owner-only" } } as CollectionAccessRules,
       "update",
@@ -78,8 +75,8 @@ describe("AccessControlService without a user", () => {
 
   it("allows an operation that has no rule at all", async () => {
     // The other half, and the one that surprises: absent means public here.
-    // `collection-access-service.ts` is what fails publish and unpublish closed
-    // on top of this, so the default is not the whole answer for those.
+    // `collection-access-service.ts` fails publish and unpublish closed on top
+    // of this, so the default is not the whole answer for those.
     const result = await service.evaluateAccess(
       { read: { type: "owner-only" } } as CollectionAccessRules,
       "update",
