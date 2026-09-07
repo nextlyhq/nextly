@@ -41,9 +41,11 @@ second copy of either number drifts from the first the moment one is tuned.
 `database/lease-timings`, which imports nothing. The clock module asks the
 database what time it is, so it loads the ORM at module top level, and anything
 reading the timings through it put that ORM into the import graph of every
-client that needed a number. A check now walks the source import graph of every
-published subpath an admin `"use client"` module imports and fails on one that
-can reach a database package.
+client that needed a number. A check now walks the whole module graph a browser
+bundle pulls in, starting from every admin `"use client"` module and crossing
+into workspace packages, and fails on one that can reach a database package. It
+reads source rather than a build, and parses rather than pattern-matches, so a
+module that prints an import as example text is not mistaken for one.
 
 No editor mounts the hook yet, so nothing about using the admin changes in this
 release. What ships is the mechanism the editor work builds on: the claim is

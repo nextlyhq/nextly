@@ -17,13 +17,13 @@
  * ## One claim, owned by one effect
  *
  * Every mutable thing about a claim — the token, when it was last confirmed,
- * and whether the editor is still mounted — lives in the effect that created
- * it, not in a ref shared across runs. That is what makes the awkward cases
- * fall out rather than needing to be handled one at a time: a reply belonging
- * to a superseded run closes over a `cancelled` that is already true, and a
- * reply belonging to a superseded CLAIM closes over a token that no longer
- * matches. React Strict Mode's double mount, a document switch and an unmount
- * are then the same case rather than three.
+ * whether a request is in flight, and whether the editor is still mounted —
+ * lives in the effect that created it, not in a ref shared across runs. That is
+ * what makes the awkward cases fall out rather than needing to be handled one at
+ * a time: a reply belonging to a superseded run closes over a `cancelled` that is
+ * already true, and a reply belonging to a superseded CLAIM closes over a token
+ * that no longer matches. React Strict Mode's double mount, a document switch
+ * and an unmount are then the same case rather than three.
  *
  * ## Every reply is fenced on the token that produced it
  *
@@ -32,15 +32,35 @@
  * was displaced would otherwise clear the claim the takeover just won, telling
  * an editor who holds the document that they do not.
  *
+ * ## One acquire at a time
+ *
+ * 🔴 A second acquire cannot start while one is pending. The server treats a
+ * live claim from the SAME owner as takeable, so a duplicate acquire mints a
+ * fresh token and invalidates the one still in flight; whichever reply lands
+ * second wins, and the editor can be left holding a token the server has already
+ * replaced — renewing into a takeover that names the editor themselves.
+ *
+ * ## The beat outlives the claim
+ *
+ * 🔴 The interval is cleared by cleanup and by nothing else. An editor who takes
+ * the document back needs it still running: stopping it on a loss and trusting
+ * the next acquire to start another hands them a claim nothing renews, which
+ * expires silently one lease later. Losing the claim sets a flag the beat reads,
+ * and taking over clears it.
+ *
  * ## A failed confirmation is a blip until the deadline, then it is a loss
  *
- * The lease outlives several beats, so one dropped packet resolves itself on
- * the next one and treating it as a takeover would move an editor to read-only
- * over nothing. 🔴 But silence is not proof of possession either: past
+ * The lease outlives several beats, so one dropped packet resolves itself on the
+ * next one, and treating it as a takeover would move an editor to read-only over
+ * nothing. 🔴 But silence is not proof of possession either: past
  * `DOCUMENT_LOCK_LOSS_AFTER_MS` without a CONFIRMED reply the lease has expired
- * server-side and a colleague may already hold the row, so the claim is
- * reported lost. The deadline leaves two intervals of lease in hand, so this
- * says so while the editor is still protected rather than after.
+ * server-side and a colleague may already hold the row.
+ *
+ * 🔴 That deadline is judged at the top of every beat rather than where a request
+ * rejects. A stalled connection never rejects at all, so a check that lived only
+ * in the failure path would let an editor keep writing against a lease that ran
+ * out minutes ago. The deadline leaves two intervals of lease in hand, so it
+ * lands while the editor is still protected.
  *
  * @module hooks/queries/useDocumentLock
  */
@@ -136,6 +156,15 @@ export function useDocumentLock({
     let token: string | null = null;
     let confirmedAt = Date.now();
     let holder: DocumentLockHolder | null = null;
+    let acquiring = false;
+    // A person pressing "take over" while a poll is mid-flight must not lose the
+    // click. Serialising without this turns their decision into silence, and the
+    // poll that displaced it only ever asks politely.
+    let queuedTakeover = false;
+    // Set when this editor stops being a contender: displaced by the server, or
+    // past its own deadline. The beat then waits for the person rather than
+    // re-taking a claim they were just told they had lost.
+    let surrendered = false;
 
     // 🔴 Reset before asking. The document may have changed under a mounted
     // editor, and leaving the previous one's answer on screen would name an
@@ -150,6 +179,11 @@ export function useDocumentLock({
         .catch(() => undefined);
 
     const acquire = async (takeover: boolean) => {
+      if (acquiring) {
+        if (takeover) queuedTakeover = true;
+        return;
+      }
+      acquiring = true;
       let item: AcquireDocumentLockOutcome;
       try {
         ({ item } = await protectedApi.post<
@@ -159,9 +193,14 @@ export function useDocumentLock({
         // 🔴 Reported, not swallowed. A rejected acquire leaves no token, and
         // every later beat would exit at its token guard, so an editor would
         // spend the whole session silently unprotected. The beat retries.
+        acquiring = false;
         if (!cancelled) setState({ status: "unavailable" });
+        drainQueuedTakeover();
         return;
       }
+      acquiring = false;
+
+      drainQueuedTakeover();
 
       if (cancelled) {
         // 🔴 The claim outlived the editor that asked for it: this reply landed
@@ -176,6 +215,7 @@ export function useDocumentLock({
         token = item.claimToken;
         confirmedAt = Date.now();
         holder = null;
+        surrendered = false;
         setState({ status: "held-by-me" });
         return;
       }
@@ -190,17 +230,44 @@ export function useDocumentLock({
       }
     };
 
+    /** Run a take-over that arrived while another request held the slot. */
+    const drainQueuedTakeover = () => {
+      if (!queuedTakeover || cancelled) return;
+      queuedTakeover = false;
+      void acquire(true);
+    };
+
+    /** Give the claim up locally, without asking the server for anything. */
+    const surrender = (next: DocumentLockState) => {
+      token = null;
+      surrendered = true;
+      setState(next);
+    };
+
     takeOverRef.current = () => void acquire(true);
     void acquire(false);
 
     const heartbeat = setInterval(() => {
       if (cancelled) return;
 
+      // 🔴 Judged before anything is sent, so a request that never settles
+      // cannot hold the claim open past the lease it rests on.
+      if (
+        token !== null &&
+        Date.now() - confirmedAt >= DOCUMENT_LOCK_LOSS_AFTER_MS
+      ) {
+        surrender({ status: "lost" });
+        return;
+      }
+
+      // Displaced, or past the deadline. The person decides what happens next.
+      if (surrendered) return;
+
       if (token === null) {
         // Nothing to confirm. Either a colleague holds it — and asking again is
         // how this editor learns they have left, since a plain acquire never
         // steals a live claim — or the last attempt failed and this is the
-        // retry. Once displaced or lost, the effect has stopped the beat.
+        // retry. `acquire` refuses to overlap with one already in flight.
         void acquire(false);
         return;
       }
@@ -217,18 +284,10 @@ export function useDocumentLock({
             confirmedAt = Date.now();
             return;
           }
-          // Taken over. Stop asking: a further acquire would re-take a claim the
-          // editor was just told they had lost.
-          token = null;
-          clearInterval(heartbeat);
-          setState({ status: "taken-over", holder: item.holder });
+          surrender({ status: "taken-over", holder: item.holder });
         })
         .catch(() => {
-          if (cancelled || sent !== token) return;
-          if (Date.now() - confirmedAt < DOCUMENT_LOCK_LOSS_AFTER_MS) return;
-          token = null;
-          clearInterval(heartbeat);
-          setState({ status: "lost" });
+          // A blip. The deadline above decides when it stops being one.
         });
     }, DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
 

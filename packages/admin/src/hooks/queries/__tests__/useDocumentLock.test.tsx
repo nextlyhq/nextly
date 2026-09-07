@@ -400,4 +400,136 @@ describe("useDocumentLock", () => {
 
     expect(result.current.state.status).toBe("acquiring");
   });
+
+  it("never runs two acquisitions at once", async () => {
+    // 🔴 The server treats a live claim from the SAME owner as takeable, so a
+    // second acquire mints a fresh token and invalidates the one still in
+    // flight. Whichever reply lands second wins, and the editor can end up
+    // renewing a token the server already replaced - reported as a takeover
+    // naming the editor themselves.
+    let settle: (value: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise(resolve => {
+        settle = resolve;
+      })
+    );
+
+    const { result } = renderHook(() => useDocumentLock(ref));
+    expect(post).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS * 3);
+    });
+
+    expect(post).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      settle(acquired);
+    });
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+  });
+
+  it("reaches the deadline even when no request ever settles", async () => {
+    // 🔴 A stalled connection never rejects. A deadline that lived only in the
+    // failure path would let an editor keep writing against a lease that ran out
+    // minutes ago, while another editor already holds the row.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    patch.mockReturnValue(new Promise(() => {}));
+
+    const beats =
+      Math.ceil(
+        DOCUMENT_LOCK_LOSS_AFTER_MS / DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS
+      ) + 1;
+    for (let beat = 0; beat < beats; beat += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+      });
+    }
+
+    await waitFor(() => expect(result.current.state.status).toBe("lost"));
+  });
+
+  it("keeps renewing after the editor takes the document back", async () => {
+    // 🔴 The beat must outlive the claim. Stopping it on a loss and trusting the
+    // next acquire to start another hands the editor a claim nothing renews,
+    // which expires silently one lease later - the exact state the lock exists
+    // to prevent.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "lost", holder: other },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() => expect(result.current.state.status).toBe("taken-over"));
+
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "t2" },
+    });
+    patch.mockResolvedValue({ message: "", item: { status: "renewed" } });
+    await act(async () => {
+      result.current.takeOver();
+    });
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    const before = patch.mock.calls.length;
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+
+    expect(patch.mock.calls.length).toBeGreaterThan(before);
+    expect(patch).toHaveBeenLastCalledWith("/document-lock", {
+      ...ref,
+      claimToken: "t2",
+    });
+    expect(result.current.state.status).toBe("held-by-me");
+  });
+
+  it("does not drop a take-over pressed while a poll is in flight", async () => {
+    // 🔴 Serialising acquisitions must not turn a person's decision into silence.
+    // The poll that holds the slot only ever asks politely, so dropping the click
+    // leaves them watching a colleague hold a document they asked to take.
+    post.mockResolvedValue(held);
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    let settlePoll: (value: unknown) => void = () => {};
+    post.mockReturnValueOnce(
+      new Promise(resolve => {
+        settlePoll = resolve;
+      })
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    const duringPoll = post.mock.calls.length;
+
+    // The click lands while that poll is still open.
+    await act(async () => {
+      result.current.takeOver();
+    });
+    expect(post.mock.calls.length).toBe(duringPoll);
+
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "t2" },
+    });
+    await act(async () => {
+      settlePoll(held);
+    });
+
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(post).toHaveBeenLastCalledWith("/document-lock", {
+      ...ref,
+      takeover: true,
+    });
+  });
 });
