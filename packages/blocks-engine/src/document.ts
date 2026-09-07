@@ -230,20 +230,6 @@ export type BlockOrigin =
     };
 
 /**
- * Whether a stored value is a whole provenance record.
- *
- * Beside the type rather than beside either caller, because a document reaches
- * storage by more than one road: an op through the edit vocabulary, and a field
- * write through the document validator. A record that one road admits and the
- * other refuses is a record that exists in the database and cannot be edited,
- * so both ask this.
- *
- * Whole means every field the arm needs. A pattern origin without a digest
- * cannot answer whether its source moved, which is the only question it exists
- * for — storing one would leave a later reader with a record it must special
- * case rather than trust.
- */
-/**
  * What a stored provenance record turned out to be.
  *
  * Four answers because a caller-supplied record can fail in three different
@@ -289,6 +275,25 @@ export function readBlockOrigin(value: unknown): OriginReading {
   }
 }
 
+/**
+ * Whether a stored value is a whole provenance record.
+ *
+ * Derived from {@link readBlockOrigin} rather than asking again: `whole` is
+ * the one reading this admits, and every other — malformed, computed, or a
+ * record reflection could not finish — is the same `false` to a caller that
+ * only needs to know whether it may trust the record.
+ *
+ * Beside the type rather than beside either caller, because a document reaches
+ * storage by more than one road: an op through the edit vocabulary, and a field
+ * write through the document validator. A record that one road admits and the
+ * other refuses is a record that exists in the database and cannot be edited,
+ * so both ask this.
+ *
+ * Whole means every field the arm needs. A pattern origin without a digest
+ * cannot answer whether its source moved, which is the only question it exists
+ * for — storing one would leave a later reader with a record it must special
+ * case rather than trust.
+ */
 export function isBlockOrigin(value: unknown): value is BlockOrigin {
   return readBlockOrigin(value) === "whole";
 }
