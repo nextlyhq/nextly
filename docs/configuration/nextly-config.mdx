@@ -48,10 +48,8 @@ export default defineConfig({
     s3Storage({
       bucket: process.env.S3_BUCKET!,
       region: process.env.AWS_REGION!,
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-      },
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
       collections: {
         media: true,
       },
@@ -381,10 +379,8 @@ export default defineConfig({
     s3Storage({
       bucket: process.env.S3_BUCKET!,
       region: process.env.AWS_REGION!,
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-      },
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
       collections: {
         media: true,
         "private-docs": {
@@ -526,18 +522,20 @@ Admin panel branding and per-plugin sidebar overrides.
 Override any plugin's sidebar placement and appearance without modifying the plugin's source.
 
 ```typescript
-import { AdminPlacement } from "nextly";
+import { defineConfig, AdminPlacement } from "nextly";
 
-admin: {
-  pluginOverrides: {
-    "form-builder": {
-      placement: AdminPlacement.SETTINGS, // "collections" | "singles" | "users" | "settings" | "plugins" | "standalone"
-      order: 80,
-      after: "settings",
-      appearance: { icon: "FileText" },
+export default defineConfig({
+  admin: {
+    pluginOverrides: {
+      "form-builder": {
+        placement: AdminPlacement.SETTINGS, // "collections" | "singles" | "users" | "settings" | "plugins" | "standalone"
+        order: 80,
+        after: "settings",
+        appearance: { icon: "FileText" },
+      },
     },
   },
-}
+});
 ```
 
 | Property | Type | Description |

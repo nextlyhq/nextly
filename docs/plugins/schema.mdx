@@ -11,17 +11,28 @@ app's own code-first schema and the Visual Schema Builder's schema (D3). The hos
 
 ```ts
 import { defineCollection, text, select } from "nextly";
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 
 const Redirects = defineCollection({
-  name: "redirects",
-  fields: {
-    fromPath: text({ required: true }),
-    toPath: text({ required: true }),
-    type: select({ options: ["301", "302"], defaultValue: "301" }),
-  },
+  slug: "redirects",
+  fields: [
+    text({ name: "fromPath", required: true }),
+    text({ name: "toPath", required: true }),
+    select({
+      name: "type",
+      options: [
+        { label: "301 (Permanent)", value: "permanent" },
+        { label: "302 (Temporary)", value: "temporary" },
+      ],
+      defaultValue: "permanent",
+    }),
+  ],
 });
 
 definePlugin({
+  name: "@acme/nextly-plugin-redirects",
+  version: "1.0.0",
+  nextly: "^1.0.0",
   // ...
   contributes: {
     collections: [Redirects], // also: singles, fieldGroups
@@ -40,7 +51,10 @@ tagged with your plugin's [provenance](#provenance) and locked from Builder edit
 ```ts
 contributes: {
   extend: [
-    { target: "posts", fields: { metaTitle: text(), metaDescription: text() } },
+    {
+      target: "posts",
+      fields: [text({ name: "metaTitle" }), text({ name: "metaDescription" })],
+    },
     // target can be an array to extend several at once
   ],
 }

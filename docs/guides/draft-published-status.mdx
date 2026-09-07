@@ -110,17 +110,16 @@ language moves every translation of its document when the release runs.
 Use the standard field-filter syntax with the column name `status`:
 
 ```typescript
-import { getNextly } from "nextly";
-
-const nextly = await getNextly();
+import { nextly } from "nextly";
 
 // Public list page — only published posts.
-const published = await nextly.find("posts", {
+const published = await nextly.find({
+  collection: "posts",
   where: { status: { equals: "published" } },
 });
 
 // Admin-only path — show all entries regardless of status.
-const all = await nextly.find("posts", {});
+const all = await nextly.find({ collection: "posts" });
 ```
 
 The query shape (`{ status: { equals: "published" } }`) works identically across all three dialects. The system column is indexed, so filtering by status is fast even on large tables.

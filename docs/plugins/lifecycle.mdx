@@ -49,6 +49,8 @@ dependency relationship, their **array order** in `defineConfig({ plugins: [...]
 breaks the tie.
 
 ```ts
+import { defineConfig } from "nextly";
+
 export default defineConfig({
   // a runs before b (array order), unless dependsOn says otherwise
   plugins: [a(), b()],

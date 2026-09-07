@@ -250,7 +250,8 @@ export default function AdminLayout({
 Create the admin API catch-all route:
 
 ```typescript title="src/app/admin/api/[[...params]]/route.ts"
-import { createDynamicHandlers, getNextly } from "nextly";
+import { getNextly } from "nextly";
+import { createDynamicHandlers } from "nextly/runtime";
 
 import nextlyConfig from "../../../../../nextly.config";
 

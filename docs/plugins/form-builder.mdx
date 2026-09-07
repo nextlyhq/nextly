@@ -241,16 +241,18 @@ Validate a form config before saving:
 ```typescript
 import { validateFormConfig, assertValidFormConfig } from '@nextlyhq/plugin-form-builder';
 
-const result = validateFormConfig(myFormConfig);
+const result = validateFormConfig(contactForm);
 if (!result.valid) {
   console.error(result.errors);
 }
 
 // Or throw on invalid config
-assertValidFormConfig(myFormConfig);
+assertValidFormConfig(contactForm);
 ```
 
 ## Form Submissions
+
+The handlers below take a `{ pluginContext, pluginConfig }` context. `pluginContext` is the `ctx` your code already receives from the plugin system -- for example a [plugin route handler](/docs/plugins/routes)'s `(req, ctx) => ...`, or your own plugin's `init(ctx)`. `pluginConfig` is the object `formBuilder()` returned (`fb.config`), or `getFormBuilderConfig(pluginContext)` if you only have the context.
 
 ### Handling Submissions
 
@@ -258,12 +260,21 @@ Use the `submitForm` handler to process submissions server-side. It runs the ful
 
 ```typescript
 import { submitForm } from '@nextlyhq/plugin-form-builder';
+import type { PluginContext } from 'nextly';
+import type { ResolvedFormBuilderConfig } from '@nextlyhq/plugin-form-builder';
+
+declare const request: Request;
+declare const pluginContext: PluginContext;
+declare const pluginConfig: ResolvedFormBuilderConfig;
 
 const result = await submitForm(
   {
     formSlug: 'contact',
     data: { firstName: 'Jane', email: 'jane@example.com', message: 'Hello!' },
-    metadata: { ipAddress: req.ip, userAgent: req.headers['user-agent'] },
+    metadata: {
+      ipAddress: request.headers.get('x-forwarded-for') || undefined,
+      userAgent: request.headers.get('user-agent') || undefined,
+    },
   },
   { pluginContext, pluginConfig }
 );
@@ -286,6 +297,11 @@ You can validate data without creating a submission:
 
 ```typescript
 import { validateSubmission } from '@nextlyhq/plugin-form-builder';
+import type { PluginContext } from 'nextly';
+import type { ResolvedFormBuilderConfig } from '@nextlyhq/plugin-form-builder';
+
+declare const pluginContext: PluginContext;
+declare const pluginConfig: ResolvedFormBuilderConfig;
 
 const { valid, errors } = await validateSubmission(
   'contact',
@@ -310,6 +326,11 @@ Admins can also add internal notes to any submission -- these are not visible to
 
 ```typescript
 import { getFormSubmissionStats } from '@nextlyhq/plugin-form-builder';
+import type { PluginContext } from 'nextly';
+import type { ResolvedFormBuilderConfig } from '@nextlyhq/plugin-form-builder';
+
+declare const pluginContext: PluginContext;
+declare const pluginConfig: ResolvedFormBuilderConfig;
 
 const stats = await getFormSubmissionStats('contact', { pluginContext, pluginConfig });
 // { total: 42, new: 5, read: 30, archived: 7 }
@@ -458,12 +479,16 @@ const isValid = crypto.timingSafeEqual(
 
 ## Exporting Submissions
 
-Export submissions to CSV or JSON from code or the admin UI.
+Export submissions to CSV or JSON from code or the admin UI. The examples below assume you already have `form` (a `FormDocument`) and `submissions` (a `SubmissionDocument[]`) -- for example, from `ctx.services.collections` in a plugin route or hook.
 
 ### CSV Export
 
 ```typescript
 import { exportToCSV, downloadFile, generateExportFilename } from '@nextlyhq/plugin-form-builder';
+import type { FormDocument, SubmissionDocument } from '@nextlyhq/plugin-form-builder';
+
+declare const form: FormDocument;
+declare const submissions: SubmissionDocument[];
 
 const csv = exportToCSV(submissions, form, {
   includeMetadata: true,
@@ -482,6 +507,10 @@ downloadFile(csv, filename, 'text/csv;charset=utf-8');
 
 ```typescript
 import { exportToJSON } from '@nextlyhq/plugin-form-builder';
+import type { FormDocument, SubmissionDocument } from '@nextlyhq/plugin-form-builder';
+
+declare const form: FormDocument;
+declare const submissions: SubmissionDocument[];
 
 const json = exportToJSON(submissions, form, {
   includeMetadata: true,
@@ -494,6 +523,10 @@ const json = exportToJSON(submissions, form, {
 
 ```typescript
 import { exportAndDownload } from '@nextlyhq/plugin-form-builder';
+import type { FormDocument, SubmissionDocument } from '@nextlyhq/plugin-form-builder';
+
+declare const form: FormDocument;
+declare const submissions: SubmissionDocument[];
 
 // In a React component
 const handleExport = (format: 'csv' | 'json') => {
@@ -563,27 +596,54 @@ const contactForm = createFormConfig('contact', [
 
 **3. Handle submissions in an API route:**
 
+Nextly plugins expose HTTP endpoints via [`contributes.routes`](/docs/plugins/routes) -- the route handler receives the plugin's `ctx` for free, which is what `submitForm` needs as `pluginContext`.
+
 ```typescript
-import { submitForm } from '@nextlyhq/plugin-form-builder';
+import { definePlugin } from 'nextly';
+import { submitForm, getFormBuilderConfig } from '@nextlyhq/plugin-form-builder';
 
-export async function POST(request: Request) {
-  const data = await request.json();
+export const contactRoutePlugin = definePlugin({
+  name: '@mysite/contact-route',
+  version: '1.0.0',
+  nextly: '^1',
+  contributes: {
+    routes: [
+      {
+        method: 'POST',
+        path: '/submit',
+        public: true, // anonymous visitors submit the contact form
+        handler: async (req, ctx) => {
+          const data = await req.json();
 
-  const result = await submitForm(
-    {
-      formSlug: 'contact',
-      data,
-      metadata: {
-        ipAddress: request.headers.get('x-forwarded-for') || undefined,
-        userAgent: request.headers.get('user-agent') || undefined,
+          const pluginConfig = getFormBuilderConfig(ctx);
+          if (!pluginConfig) {
+            return Response.json(
+              { success: false, error: 'Form Builder plugin not installed' },
+              { status: 500 }
+            );
+          }
+
+          const result = await submitForm(
+            {
+              formSlug: 'contact',
+              data,
+              metadata: {
+                ipAddress: req.headers.get('x-forwarded-for') || undefined,
+                userAgent: req.headers.get('user-agent') || undefined,
+              },
+            },
+            { pluginContext: ctx, pluginConfig }
+          );
+
+          return Response.json(result);
+        },
       },
-    },
-    { pluginContext, pluginConfig }
-  );
-
-  return Response.json(result);
-}
+    ],
+  },
+});
 ```
+
+Add `contactRoutePlugin` to `plugins` alongside `fb.plugin`, and the form now posts to `/api/plugins/@mysite/contact-route/submit`.
 
 ## Next Steps
 
