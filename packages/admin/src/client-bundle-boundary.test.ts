@@ -471,11 +471,13 @@ describe("the rule can fail", () => {
   });
 
   it("fails on a CommonJS load", () => {
-    // `require` and `import x = require` reach a module exactly as an import does, and a visitor
-    // written by hand forgets them.
+    // `require`, `import x = require` and `module.require` reach a module exactly as an import
+    // does, and a visitor written by hand forgets them.
     for (const form of [
       'const db = require("drizzle-orm");',
       'import db = require("drizzle-orm");',
+      'const db = module.require("drizzle-orm");',
+      'const db = module["require"]("drizzle-orm");',
     ]) {
       const { io, resolve } = build({
         "/repo/packages/admin/src/Entry.ts": `"use client";\n${form}`,

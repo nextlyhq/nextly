@@ -137,6 +137,14 @@ export function useDocumentLock({
   const takeOverRef = useRef<() => void>(() => {});
   const takeOver = useCallback(() => takeOverRef.current(), []);
 
+  // 🔴 The cross-RUN half of the fencing, which the token fence cannot cover. A
+  // run whose cleanup has already happened can still have a request in flight,
+  // and the server treats a claim from the same owner as takeable, so that late
+  // reply displaces the run that replaced it. This is how the run that got
+  // displaced hears about it; a run that has itself been cleaned up refuses the
+  // call, so an unmounted editor wakes nobody.
+  const reacquireRef = useRef<() => void>(() => {});
+
   const active = enabled && Boolean(entryId);
   // Memoised on the three primitives that identify the document. Rebuilt every
   // render it would be a new object each time, so the effect below would claim,
@@ -178,10 +186,18 @@ export function useDocumentLock({
         .delete("/document-lock", { ...ref, claimToken })
         .catch(() => undefined);
 
-    /** Store a claim this editor now holds. */
-    const installAcquired = (claimToken: string) => {
+    /**
+     * Store a claim this editor now holds.
+     *
+     * 🔴 `sentAt` is when the request was DISPATCHED, not when its reply arrived.
+     * The lease starts when the server processes the claim, so timing it from
+     * receipt credits this editor with however long the reply spent in transit —
+     * and a reply delayed past the margin has the hook reporting a claim that
+     * expired server-side while a colleague can already take the row.
+     */
+    const installAcquired = (claimToken: string, sentAt: number) => {
       token = claimToken;
-      confirmedAt = Date.now();
+      confirmedAt = sentAt;
       holder = null;
       surrendered = false;
       // Already holding it: a queued take-over would only displace ourselves.
@@ -206,33 +222,67 @@ export function useDocumentLock({
         return;
       }
       acquiring = true;
+      // 🔴 Bounded, because a request that never settles is not the same as one
+      // that fails. Nothing here would ever clear `acquiring`, so every later
+      // beat would return at the serialisation guard and the editor would sit in
+      // `acquiring` for the whole session with a take-over queued behind a
+      // request that is never coming back. One heartbeat is the bound: a claim
+      // that has not answered within a beat cannot help this beat.
+      const bound = new AbortController();
+      const boundTimer = setTimeout(
+        () => bound.abort(),
+        DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS
+      );
+      const sentAt = Date.now();
       let item: AcquireDocumentLockOutcome;
       try {
         ({ item } = await protectedApi.post<
           MutationResponse<AcquireDocumentLockOutcome>
-        >("/document-lock", { ...ref, takeover }));
+        >("/document-lock", { ...ref, takeover }, { signal: bound.signal }));
       } catch {
+        clearTimeout(boundTimer);
         // 🔴 Reported, not swallowed. A rejected acquire leaves no token, and
         // every later beat would exit at its token guard, so an editor would
         // spend the whole session silently unprotected. The beat retries.
         acquiring = false;
-        if (!cancelled) setState({ status: "unavailable" });
+        if (!cancelled) {
+          // 🔴 Forget the holder as well as the state. Kept, an identical reading
+          // on the next successful poll is suppressed as "nothing changed" and
+          // the editor stays on `unavailable` while the server is answering
+          // perfectly well — which is plausible whenever the holder renews on
+          // this same cadence.
+          holder = null;
+          setState({ status: "unavailable" });
+        }
         drainQueuedTakeover();
         return;
       }
+      clearTimeout(boundTimer);
       acquiring = false;
 
       if (cancelled) {
-        // 🔴 The claim outlived the editor that asked for it: this reply landed
+        // 🔴 The claim outlived the run that asked for it: this reply landed
         // after cleanup, which found no token to release. Releasing it here is
         // the difference between a colleague waiting one request and waiting a
         // whole lease.
-        if (item.status === "acquired") release(item.claimToken);
+        if (item.status === "acquired") {
+          release(item.claimToken);
+          // 🔴 And repair what winning it broke. The server treats a claim from
+          // the same owner as takeable, so this late reply DISPLACED whichever
+          // run replaced this one: releasing it now would leave that run holding
+          // a token the server has already forgotten, believing it is safe until
+          // a heartbeat says otherwise.
+          //
+          // Safe to call unconditionally. The signal is published by whichever
+          // run is live, and a run that has been cleaned up refuses it, so after
+          // an unmount there is nobody to wake and this does nothing.
+          reacquireRef.current();
+        }
         return;
       }
 
       if (item.status === "acquired") {
-        installAcquired(item.claimToken);
+        installAcquired(item.claimToken, sentAt);
         return;
       }
 
@@ -265,6 +315,11 @@ export function useDocumentLock({
     };
 
     takeOverRef.current = () => void acquire(true);
+    reacquireRef.current = () => {
+      if (cancelled) return;
+      surrendered = false;
+      void acquire(false);
+    };
     void acquire(false);
 
     const heartbeat = setInterval(() => {
@@ -293,6 +348,9 @@ export function useDocumentLock({
       }
 
       const sent = token;
+      // Timed from dispatch for the same reason a claim is: the lease the server
+      // grants starts when it processes this, not when the answer gets back.
+      const renewSentAt = Date.now();
       void protectedApi
         .patch<MutationResponse<RenewDocumentLockOutcome>>("/document-lock", {
           ...ref,
@@ -301,7 +359,7 @@ export function useDocumentLock({
         .then(({ item }) => {
           if (cancelled || sent !== token) return;
           if (item.status === "renewed") {
-            confirmedAt = Date.now();
+            confirmedAt = renewSentAt;
             return;
           }
           surrender({ status: "taken-over", holder: item.holder });
@@ -314,6 +372,8 @@ export function useDocumentLock({
     return () => {
       cancelled = true;
       takeOverRef.current = () => {};
+      // Left for the run that replaces this one to overwrite. Clearing it would
+      // drop the repair signal in exactly the window it exists for.
       clearInterval(heartbeat);
       if (token !== null) release(token);
     };
