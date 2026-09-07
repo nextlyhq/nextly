@@ -92,9 +92,9 @@ function readRef(source: {
  * colleague's claim on a collection it was never granted.
  *
  * Reading a lock needs READ on the document, because the holder's name and the
- * fact that they are editing it are both facts about a document. Claiming,
- * renewing and releasing need UPDATE, because a lock is a statement that you
- * are editing, and someone who cannot edit is not.
+ * fact that they are editing it are both facts about a document. Claiming and
+ * renewing need UPDATE, because a lock is a statement that you are editing, and
+ * someone who cannot edit is not.
  *
  * 🔴 UPDATE means THIS document, not documents of this kind. `update-<slug>` is
  * the coarse route permission and says only the latter, so a collection carrying
@@ -104,6 +104,14 @@ function readRef(source: {
  * own row. The gate the version routes already use runs here, for the reason its
  * own docblock gives.
  *
+ * A release stops at the coarse permission, because it is the opposite
+ * statement: that this editor has STOPPED editing. The stored rules read the
+ * document, so the holder's own save can flip them mid-claim, and asking them on
+ * the way out would refuse the departing editor's own DELETE and strand the
+ * claim until its lease lapsed, leaving colleagues a holder who has already
+ * left. What a release actually rests on is the claim token, which names the one
+ * acquisition being given up and fences the DELETE itself.
+ *
  * Both helpers are entity-generic and read the collection and single maps
  * alike, so a Single needs no branch here, and both delegate to the canonical
  * machinery rather than reproducing the API-key and super-admin rules that
@@ -112,7 +120,7 @@ function readRef(source: {
 async function authorize(
   auth: AuthContext,
   ref: DocumentRef,
-  intent: "read" | "write"
+  intent: "read" | "claim" | "release"
 ): Promise<void> {
   const authenticated = await readCaller(auth);
   const caller = readAccessCaller(authenticated);
@@ -129,7 +137,7 @@ async function authorize(
     });
   }
 
-  if (intent === "write") {
+  if (intent === "claim") {
     // Route authorization has just run, so the coarse re-check is skipped and
     // what runs here is the stored per-document rules this gate exists for.
     await assertDocumentUpdatable(
@@ -225,7 +233,7 @@ export const acquireLock = withErrorHandler(async (req: Request) => {
 
   const body = await readBody(req);
   const ref = readRef(body);
-  await authorize(auth, ref, "write");
+  await authorize(auth, ref, "claim");
 
   const outcome = await (
     await getDocumentLockService()
@@ -256,7 +264,7 @@ export const renewLock = withErrorHandler(async (req: Request) => {
 
   const body = await readBody(req);
   const ref = readRef(body);
-  await authorize(auth, ref, "write");
+  await authorize(auth, ref, "claim");
 
   const outcome = await (
     await getDocumentLockService()
@@ -275,7 +283,7 @@ export const releaseLock = withErrorHandler(async (req: Request) => {
 
   const body = await readBody(req);
   const ref = readRef(body);
-  await authorize(auth, ref, "write");
+  await authorize(auth, ref, "release");
 
   await (await getDocumentLockService()).release(ref, readClaimToken(body));
 

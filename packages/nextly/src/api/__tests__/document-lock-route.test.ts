@@ -291,6 +291,45 @@ describe("document lock route", () => {
     expect(service.acquire).not.toHaveBeenCalled();
   });
 
+  it("asks it of a renewal too, which restates the same claim", async () => {
+    // A renewal says the holder is STILL editing, so it has to answer the same
+    // question a claim does. Gating only the claim would let a lock outlive the
+    // rules that permitted it, for as long as the holder kept renewing.
+    service.renew.mockResolvedValue({ status: "renewed" });
+
+    await renewLock(post({ ...ref, claimToken: "t" }, "PATCH"));
+
+    expect(assertDocumentUpdatable).toHaveBeenCalledWith(
+      ref.scopeKind,
+      ref.slug,
+      ref.entryId,
+      auth,
+      undefined
+    );
+  });
+
+  it("does not ask it of a release, so a refused row can still be given up", async () => {
+    // Releasing is the opposite statement: this editor has STOPPED editing. The
+    // stored rules read the document, so the holder's own save can flip them
+    // mid-claim, and asking them here would refuse the departing editor's own
+    // DELETE and strand the claim until its lease lapsed - leaving colleagues a
+    // holder who has already left. The claim token names the one acquisition
+    // being given up, and the DELETE is fenced on it.
+    assertDocumentUpdatable.mockRejectedValue(
+      NextlyError.forbidden({
+        logContext: { reason: "document-not-updatable" },
+      })
+    );
+
+    const response = await releaseLock(
+      post({ ...ref, claimToken: "t" }, "DELETE")
+    );
+
+    expect(response.status).toBe(200);
+    expect(assertDocumentUpdatable).not.toHaveBeenCalled();
+    expect(service.release).toHaveBeenCalledWith(ref, "t");
+  });
+
   it("does not ask it of a read", async () => {
     // Reading who holds a document is not updating it, and running an update
     // gate here would hide the holder from everyone who may only read.
