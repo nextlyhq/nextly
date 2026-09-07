@@ -124,6 +124,19 @@ export interface UpdateApiKeyInput {
   description?: string | null;
 }
 
+/**
+ * The prefix every issued key carries.
+ *
+ * `scripts/check-docs-claims.mjs` reads this declaration and compares the
+ * documentation's bearer examples against it, so this is the one place the key
+ * format is stated and a second copy of it anywhere is a claim that can go
+ * stale. Nothing catches a wrong one at runtime: a key is looked up by hash, so
+ * a documented prefix that does not match this authenticates as an ordinary
+ * failure, with no hint that the format was the problem.
+ *
+ * Not exported. The guard reads the declaration rather than importing it,
+ * because it runs under plain Node before any TypeScript is built.
+ */
 const KEY_PREFIX = "nx_live_";
 
 /**

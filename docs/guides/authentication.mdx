@@ -7,7 +7,7 @@ Nextly ships a complete custom authentication system. It is **not** built on Nex
 
 - Email + password sign-up and login (bcrypt hashing, password-strength validation, email verification).
 - Stateless JWT access tokens (jose, HS256) plus opaque refresh tokens stored hashed in the database.
-- API key authentication (`Authorization: Bearer sk_...`) with read-only / full-access / role-based scopes.
+- API key authentication (`Authorization: Bearer nx_live_...`) with read-only / full-access / role-based scopes.
 - Role-Based Access Control (RBAC) with code-defined and database-managed permissions.
 - A super-admin bootstrap flow at `/admin/setup` that creates the first user.
 
@@ -159,7 +159,7 @@ export default defineCollection({
 
 ## API key authentication
 
-Nextly supports API keys via the `Authorization: Bearer sk_...` header (no `X-API-Key` header). Keys are created and managed in the admin UI at **Settings -> API Keys**.
+Nextly supports API keys via the `Authorization: Bearer nx_live_...` header (no `X-API-Key` header). Keys are created and managed in the admin UI at **Settings -> API Keys**.
 
 ### Token types
 
