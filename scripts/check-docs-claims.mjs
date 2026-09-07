@@ -20,7 +20,12 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import {
+  readFileSync,
+  readdirSync,
+  existsSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 
 /**
@@ -1121,7 +1126,14 @@ const blankSourceComments = text => partitionSource(text, "code");
 /** The file with its code padded out, leaving what a reader is shown of it. */
 const sourceComments = text => partitionSource(text, "comments");
 
-function documentedKeyPrefix(repoRoot, tracked, packages, findings, isExempt) {
+function documentedKeyPrefix(
+  repoRoot,
+  tracked,
+  packages,
+  findings,
+  isExempt,
+  repairs
+) {
   if (!tracked.includes(KEY_PREFIX_SOURCE)) {
     findings.push({
       check: "key-prefix-source-missing",
@@ -1289,6 +1301,19 @@ function documentedKeyPrefix(repoRoot, tracked, packages, findings, isExempt) {
         line,
         message: `documents \`${match[0].trim()}\`; keys are issued with the prefix "${prefix}"`,
       });
+      // The repair is recorded HERE, where the wrong example was found, rather
+      // than searched for again by something else. A second pass would be a
+      // second answer to "which tokens are key examples", and this one already
+      // carries the exemptions, the file scope and the placeholder rules.
+      //
+      // Only a token that HAS a prefix is repairable: swapping one prefix for
+      // another is a rewrite of what the example claims, while `Bearer abc123`
+      // states no format and inventing one for it would be writing the
+      // documentation rather than correcting it. Those stay findings.
+      const documented = DOCUMENTED_PREFIX.exec(token)?.[0];
+      if (repairs !== undefined && documented !== undefined) {
+        repairs.push({ file: rel, start, from: documented, to: prefix });
+      }
     }
   }
 
@@ -1336,6 +1361,9 @@ export async function runChecks({
   remoteRefs,
   hasLocalCommit,
   files,
+  // Present only when a caller intends to repair. Absent, every check behaves
+  // exactly as it did, so reporting is never changed by the ability to fix.
+  repairs,
 }) {
   const findings = [];
   const unverifiable = [];
@@ -1594,11 +1622,64 @@ export async function runChecks({
 
   readmeSkeleton(repoRoot, packages, findings);
   retiredKeywords(repoRoot, packages, findings);
-  documentedKeyPrefix(repoRoot, tracked, packages, findings, exemption("documented-key-prefix"));
+  documentedKeyPrefix(
+    repoRoot,
+    tracked,
+    packages,
+    findings,
+    exemption("documented-key-prefix"),
+    repairs
+  );
   internalLinks(repoRoot, tracked, findings);
   metaReachability(repoRoot, tracked, findings);
 
   return { findings, unverifiable };
+}
+
+/**
+ * Write the repairs a check recorded, and say what was rewritten.
+ *
+ * Applied back to front within each file, because a repair is addressed by the
+ * offset the check read it at and rewriting an earlier one first would move
+ * every later offset in that file by the difference in prefix lengths.
+ *
+ * Each write is checked against the text it claims to replace before it lands.
+ * The offsets come from the reading the checks scan, which pads comments rather
+ * than deleting them so that a match's offset still names its real position; if
+ * that ever stopped holding, this would silently corrupt a page. Refusing on a
+ * mismatch turns that into a stop rather than a rewrite of the wrong bytes.
+ *
+ * @param {string} repoRoot
+ * @param {{file: string, start: number, from: string, to: string}[]} repairs
+ * @returns {Map<string, number>} how many examples were rewritten per file
+ */
+export function applyRepairs(repoRoot, repairs) {
+  const byFile = new Map();
+  for (const repair of repairs) {
+    if (!byFile.has(repair.file)) byFile.set(repair.file, []);
+    byFile.get(repair.file).push(repair);
+  }
+
+  const counts = new Map();
+  for (const [rel, edits] of byFile) {
+    const absolute = join(repoRoot, rel);
+    let text = readFileSync(absolute, "utf-8");
+    for (const edit of [...edits].sort((a, b) => b.start - a.start)) {
+      const found = text.slice(edit.start, edit.start + edit.from.length);
+      if (found !== edit.from) {
+        throw new Error(
+          `${rel}: expected "${edit.from}" at ${String(edit.start)} and found "${found}"; refusing to rewrite`
+        );
+      }
+      text =
+        text.slice(0, edit.start) +
+        edit.to +
+        text.slice(edit.start + edit.from.length);
+    }
+    writeFileSync(absolute, text);
+    counts.set(rel, edits.length);
+  }
+  return counts;
 }
 
 const invokedDirectly =
@@ -1611,7 +1692,32 @@ if (invokedDirectly) {
     ? JSON.parse(readFileSync(allowlistPath, "utf-8"))
     : {};
 
-  const { findings, unverifiable } = await runChecks({ repoRoot, allowlist });
+  // Repairs are always COLLECTED and only written when asked for. Collecting
+  // costs an array the run already had the answers for, and it is what lets a
+  // plain run say how many of its findings a rewrite would settle instead of
+  // leaving the reader to guess.
+  const fix = process.argv.includes("--fix");
+  const repairs = [];
+  let { findings, unverifiable } = await runChecks({
+    repoRoot,
+    allowlist,
+    repairs,
+  });
+
+  if (fix && repairs.length > 0) {
+    const counts = applyRepairs(repoRoot, repairs);
+    const total = [...counts.values()].reduce((sum, n) => sum + n, 0);
+    console.log(
+      `docs claims: rewrote ${String(total)} key example(s) in ${String(counts.size)} file(s).`
+    );
+    for (const [rel, count] of counts) {
+      console.log(`  ${rel} (${String(count)})`);
+    }
+    // Re-read from disk. What is reported now is the state a reviewer will see,
+    // not the state that was found before the rewrite - and anything the repair
+    // could not settle is still a finding.
+    ({ findings, unverifiable } = await runChecks({ repoRoot, allowlist }));
+  }
 
   if (unverifiable.length > 0) {
     console.warn(
@@ -1636,5 +1742,13 @@ if (invokedDirectly) {
     }
   }
   console.error(`\n${findings.length} finding(s).`);
+  // Said where the failure is read, so it reaches a local run as well as CI.
+  // Only the examples whose prefix is merely wrong can be rewritten; the rest
+  // state no format and need someone to decide what they should say.
+  if (!fix && repairs.length > 0) {
+    console.error(
+      `${String(repairs.length)} of these name${repairs.length === 1 ? "s" : ""} a prefix that \`pnpm docs:fix\` can rewrite.`
+    );
+  }
   process.exit(1);
 }
