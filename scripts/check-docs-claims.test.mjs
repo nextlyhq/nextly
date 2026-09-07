@@ -1773,6 +1773,42 @@ describe("documented-key-prefix", () => {
     ).not.toContain("documented-key-prefix");
   });
 
+  it("is not derailed by an apostrophe in JSX text", async () => {
+    // An apostrophe is not a string delimiter here, and a quoted string cannot hold a raw
+    // newline, so the scan ends at the line. Running on would blank every doc comment until
+    // the next apostrophe in the file, and the bearer examples in them would never be judged
+    // while other files held the examined count above zero. Thirty files in this repository
+    // open such a span, the longest running 195 lines.
+    expect(
+      await checksFor(
+        tree({
+          "packages/nextly/src/admin/Panel.tsx":
+            "export const P = () => <p>don't</p>;\n" +
+            "/** Authenticate with `Authorization: Bearer sk_live_EXAMPLE`. */\n" +
+            "export const Q = () => <p>won't</p>;\n",
+        }),
+      ),
+    ).toContain("documented-key-prefix");
+  });
+
+  it("still reads a template literal across lines", async () => {
+    // The exception the rule needs, asserted on content INSIDE the literal, which is the
+    // only place the difference shows. A codegen module holding a sample is all code, so
+    // nothing in it is documentation this site publishes. Ending the literal at the first
+    // newline turns the rest of the sample back into ordinary source, and the comment in it
+    // is then read as a claim the package makes about its own keys.
+    const backtick = String.fromCharCode(96);
+    expect(
+      await checksFor(
+        tree({
+          "docs/guides/authentication.mdx": "Use Authorization: Bearer nx_live_EXAMPLE\n",
+          "packages/nextly/src/cli/templates.ts":
+            `const sample = ${backtick}\n/** Authorization: Bearer sk_live_EXAMPLE */\n${backtick};\n`,
+        }),
+      ),
+    ).not.toContain("documented-key-prefix");
+  });
+
   it("judges a doc comment, which is the form that gets published", async () => {
     // The other side of the same rule. Without it, restricting the scan to
     // JSDoc would read as "scan nothing" and pass just as well.

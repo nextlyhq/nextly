@@ -901,9 +901,22 @@ function partitionSource(text, keep) {
       continue;
     }
     if (here === '"' || here === "'" || here === "`") {
+      // Only a template literal spans lines. A quoted string cannot hold a raw newline, so
+      // ending the scan at one is exact, and it is what stops an apostrophe in JSX text from
+      // opening a span that never closes: `<p>don't</p>` would otherwise run to the next
+      // apostrophe in the file and blank every doc comment in between, which is a bearer
+      // example this never judges while other files hold the examined count above zero.
+      //
+      // A backslash-newline continuation is still a string, and stays one: the escape branch
+      // consumes that newline before this test can see it.
+      const spansLines = here === "`";
       out += emit(here, "code");
       index += 1;
-      while (index < text.length && text[index] !== here) {
+      while (
+        index < text.length &&
+        text[index] !== here &&
+        (spansLines || text[index] !== "\n")
+      ) {
         if (text[index] === "\\") {
           out += emit(text[index], "code");
           index += 1;
@@ -916,7 +929,10 @@ function partitionSource(text, keep) {
         out += emit(text[index], "code");
         index += 1;
       }
-      if (index < text.length) {
+      // Consumes the closing delimiter. An unterminated string stopped at a newline instead,
+      // and that newline belongs to the file rather than to the string, so it is left for the
+      // outer loop and the line count stays right.
+      if (index < text.length && text[index] === here) {
         out += emit(text[index], "code");
         index += 1;
       }
