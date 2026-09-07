@@ -25,6 +25,7 @@
  */
 import {
   COMPONENT_INSTANCE_TYPE,
+  isBlockOrigin,
   isComponentDocument,
   isComponentInstance,
   isPatternDocument,
@@ -3408,11 +3409,19 @@ function renamedIn(
  * pattern that renamed nothing carries no `renamed` at all, so the two answers
  * differ — and deriving the boundary from the map being non-empty is exactly
  * the defect that made a nested pattern inherit its host's renames.
+ *
+ * DERIVED from `isBlockOrigin`, which is the one answer to whether a stored
+ * record is whole: it refuses an origin missing the id or the digest, and one
+ * whose rename map is malformed. Checking only the discriminant here accepted a
+ * record no reader is meant to act on — measured, `{ from: "pattern", id: "",
+ * digest: "", renamed: … }` drove a restore — and a second, weaker reading of
+ * "is this a usable record" is the drift the validator and the planners exist
+ * to keep out.
  */
 function isPatternOrigin(
   origin: unknown
 ): origin is Extract<BlockOrigin, { from: "pattern" }> {
-  return isPlainRecord(origin) && origin.from === "pattern";
+  return isBlockOrigin(origin) && origin.from === "pattern";
 }
 
 /**
@@ -3449,19 +3458,39 @@ function restoredDomIds(
   // per DISTINCT record rather than one per node: an inherited scope is the
   // same map object on every node that inherits it.
   const applicable = new Set<ReadonlyMap<string, string>>();
+  // Which scope governs the node that RENDERS each id. At most one node in a
+  // selection renders a given id — `duplicateDomIdRefusal` refuses a save where
+  // two do — so this is a decision about that node and no other.
+  const holders = new Map<string, ReadonlyMap<string, string> | undefined>();
   walkNodes([...selected], node => {
     const scope = scopes.get(node);
     if (scope !== undefined) applicable.add(scope);
+    const rendered = renderedDomId(node);
+    if (rendered !== undefined && !holders.has(rendered)) {
+      holders.set(rendered, scope);
+    }
   });
 
-  // Outer before inner, because the walk reaches a host before what was
-  // inserted into it — so where two records name one current id, the innermost
-  // wins, which is the record that actually renamed that node. Two nodes cannot
-  // hold one rendered id and reach here: `duplicateDomIdRefusal` refuses the
-  // save first.
   const restore = new Map<string, string>();
   for (const renamed of applicable) {
-    for (const [was, now] of renamed) restore.set(now, was);
+    for (const [was, now] of renamed) {
+      // The node holding the id decides whether the record still applies to it.
+      // A node MOVED out of the run that renamed it is no longer governed by
+      // that record, and putting the id back would rewrite one the author now
+      // owns — the record describes a rename that happened somewhere this node
+      // no longer is.
+      //
+      // Where NOTHING in the selection renders the id, there is no such node to
+      // ask and the record can only be about a REFERENCE — a link saved without
+      // its target, whose href still has to come back. Those travel with
+      // whoever holds them, so the entry is admitted.
+      //
+      // This also settles two records naming one id, by construction rather
+      // than by iteration order: only the one governing the holder is admitted,
+      // and that is the record that actually renamed it.
+      if (holders.has(now) && holders.get(now) !== renamed) continue;
+      restore.set(now, was);
+    }
   }
   return restore;
 }

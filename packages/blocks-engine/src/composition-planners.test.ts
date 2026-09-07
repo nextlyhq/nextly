@@ -2984,6 +2984,73 @@ describe("a saved DESCENDANT of an inserted root", () => {
     expect(marked([...saved.nodes], "target").cssId).toBe("beta");
   });
 
+  it("leaves a node that was MOVED out of the run that renamed it", () => {
+    // The record describes a rename that happened somewhere this node no longer
+    // is. Its ancestry holds no record, so the id is the author's now, and
+    // putting it back rewrites one they own — while the record is still in the
+    // selection, on the sibling it was stamped on.
+    const doc = page([
+      node(
+        "outer",
+        {},
+        {
+          children: [
+            node(
+              "inserted",
+              {
+                origin: {
+                  from: "pattern",
+                  id: "hero-pattern",
+                  digest: "d",
+                  renamed: { pricing: "pricing-1" },
+                },
+              } as Partial<BlockNode>,
+              { children: [node("stayed", { props: { mark: "stayed" } })] }
+            ),
+            node("moved", { cssId: "pricing-1", props: { mark: "moved" } }),
+          ],
+        }
+      ),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["outer"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "moved").cssId).toBe("pricing-1");
+  });
+
+  it("refuses a record the document validator would not accept", () => {
+    // `isBlockOrigin` is the one answer to whether a stored record is whole,
+    // and it refuses an origin missing its id or its digest. A weaker reading
+    // here — the discriminant alone — accepted one and drove a restore off it,
+    // which is the planner and the validator disagreeing about the same record.
+    const doc = page([
+      withStoredOrigin(node("root"), {
+        from: "pattern",
+        id: "",
+        digest: "",
+        renamed: { pricing: "pricing-1" },
+      }),
+    ]);
+    const withChild = page([
+      {
+        ...doc.nodes[0]!,
+        slots: {
+          children: [
+            node("t", { cssId: "pricing-1", props: { mark: "target" } }),
+          ],
+        },
+      },
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(withChild, ["t"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("pricing-1");
+  });
+
   it("keeps every id when no ancestor was ever inserted from a pattern", () => {
     // The control for all three above: without a record in scope there is
     // nothing to put back, and an authored id is the author's to keep.
