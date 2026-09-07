@@ -399,6 +399,44 @@ describe("the schema registry is reloaded before the gate opens", () => {
     expect(reloadDynamicTables).not.toHaveBeenCalled();
   });
 
+  /*
+   * 🔴 `runFileMigrations` commits and records each migration file
+   * independently before propagating a later file's error, so a batch that
+   * failed part-way has already written whatever metadata its earlier files
+   * carried. This path swallows that error and goes on to SERVE, so skipping
+   * the reload here served exactly those entities against the pre-migration
+   * registry -- the defect reached through the error branch rather than the
+   * happy one.
+   */
+  it("reloads when a partly-applied batch fails and the app continues", async () => {
+    await runProdMigrationsIfEnabled(
+      args({
+        migrateCore: vi.fn(async () => {
+          throw new Error("0003_later.sql failed after 0002 committed");
+        }),
+      }) as never
+    );
+    expect(reloadDynamicTables).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT reload when the process refuses to serve", async () => {
+    // The control, and the distinction that makes the case above right: a
+    // refusal throws and the process wants restarting, so refreshing a registry
+    // nobody will read is work spent on a boot that is over.
+    await expect(
+      runProdMigrationsIfEnabled(
+        args({
+          migrateCore: vi.fn(async () => ({
+            applied: 0,
+            coreChanged: false,
+            ran: false,
+          })),
+        }) as never
+      )
+    ).rejects.toThrow();
+    expect(reloadDynamicTables).not.toHaveBeenCalled();
+  });
+
   it("does not reload outside production", async () => {
     // The control for the three above: a rule that reloaded unconditionally
     // would satisfy the first two while doing it on every dev boot as well.

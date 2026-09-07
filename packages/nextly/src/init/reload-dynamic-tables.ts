@@ -252,22 +252,39 @@ async function loadInto(
   table: "dynamic_collections" | "dynamic_singles"
 ): Promise<DynamicTableLoadResult> {
   const { loadDynamicTables } = await import("../di/load-dynamic-tables");
-  const { generateRuntimeSchema } = await import(
-    "../domains/schema/services/runtime-schema-generator"
+  const { registerDynamicEntitySchema } = await import(
+    "../domains/schema/services/register-dynamic-entity"
   );
+
+  /*
+   * 🔴 Through the SAME registrar `registerServices` uses, not a runtime schema
+   * built here. A localized entity is two Drizzle tables -- the main one omits
+   * the translatable columns, which live in `<table>_locales` -- and this
+   * registered only the first. `ensureSingleRuntimeTable` adopts an existing
+   * registration when both tables are present rather than rebuilding it, so
+   * nothing downstream repaired the stale companion: every read and write of a
+   * newly migrated localized field addressed a table without those columns
+   * until the next restart.
+   */
+  const kind = table === "dynamic_collections" ? "collection" : "single";
 
   return loadDynamicTables(
     deps.adapter,
     table,
-    (tableName, fields, hasStatus, localized) => {
-      const { table: runtime } = generateRuntimeSchema(
+    async (tableName, fields, hasStatus, localized, builderOwned) => {
+      await registerDynamicEntitySchema({
+        adapter: deps.adapter,
+        registry: deps.registry,
+        dialect: deps.dialect,
+        kind,
         tableName,
-        fields as Parameters<typeof generateRuntimeSchema>[1],
-        deps.dialect,
-        { status: hasStatus === true, localized: localized === true }
-      );
-      deps.registry.registerDynamicSchema(tableName, runtime);
-      return Promise.resolve();
+        fields: fields as Parameters<
+          typeof registerDynamicEntitySchema
+        >[0]["fields"],
+        status: hasStatus === true,
+        localized,
+        builderOwned,
+      });
     }
   );
 }

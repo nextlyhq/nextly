@@ -32,6 +32,14 @@ vi.mock("../../domains/schema/services/runtime-schema-generator", () => ({
   generateRuntimeSchema: () => ({ table: {} }),
 }));
 
+/** Typed with its argument, so the recorded calls carry one to assert on. */
+const registerDynamicEntitySchema = vi.hoisted(() =>
+  vi.fn(async (_args: { kind: string; localized: boolean }) => undefined)
+);
+vi.mock("../../domains/schema/services/register-dynamic-entity", () => ({
+  registerDynamicEntitySchema,
+}));
+
 const registerComponentSchemas = vi.hoisted(() => vi.fn(async () => 0));
 vi.mock(
   "../../domains/field-groups/services/register-field-group-schemas",
@@ -75,6 +83,8 @@ afterEach(() => {
   loadDynamicTables.mockReset();
   registerComponentSchemas.mockReset();
   registerComponentSchemas.mockResolvedValue(0);
+  registerDynamicEntitySchema.mockReset();
+  registerDynamicEntitySchema.mockResolvedValue(undefined);
 });
 
 describe("reloadDynamicTables", () => {
@@ -219,6 +229,39 @@ describe("reloadDynamicTables", () => {
    * path also resolves the storage rename's type column per table and
    * registers the `_locales` companion for a localized group.
    */
+  /*
+   * 🔴 Registered through the SAME registrar `registerServices` uses, so a
+   * localized entity's `<table>_locales` companion is refreshed with its main
+   * table. Building a runtime schema here instead registered only the main one,
+   * and nothing downstream repaired it: `ensureSingleRuntimeTable` ADOPTS an
+   * existing registration when both tables are present rather than rebuilding,
+   * so every read and write of a newly migrated localized field addressed a
+   * table without those columns until the next restart.
+   */
+  it("registers each entity through the shared registrar, with its kind", async () => {
+    ready();
+    loadDynamicTables.mockImplementation(
+      async (_adapter: unknown, table: string, register: never) => {
+        await (register as unknown as (...a: unknown[]) => Promise<void>)(
+          table === "dynamic_collections" ? "dc_posts" : "ds_settings",
+          [],
+          false,
+          true,
+          undefined
+        );
+        return ok(1);
+      }
+    );
+
+    await reloadDynamicTables("[t]");
+
+    const kinds = registerDynamicEntitySchema.mock.calls.map(c => c[0].kind);
+    expect(kinds).toEqual(["collection", "single"]);
+    // And the localization flag is carried, which is what decides whether the
+    // companion is registered at all.
+    expect(registerDynamicEntitySchema.mock.calls[0]?.[0].localized).toBe(true);
+  });
+
   it("registers field groups through the component path", async () => {
     ready();
     loadDynamicTables.mockResolvedValue(ok());

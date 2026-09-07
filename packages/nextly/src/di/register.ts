@@ -1442,112 +1442,50 @@ async function initializeSchemaRegistry(
       );
     }
 
-    // Step 2: Dynamic collections.
+    // Step 2: Dynamic collections. Main table and, for a localized one, its
+    // `_locales` companion — one registration through the shared registrar, so
+    // singles below and the boot-time reload cannot register a different half.
     await loadDynamicTables(
       adapter,
       "dynamic_collections",
       async (tableName, fields, hasStatus, localized, builderOwned) => {
-        const { generateRuntimeSchema } = await import(
-          "../domains/schema/services/runtime-schema-generator"
+        const { registerDynamicEntitySchema } = await import(
+          "../domains/schema/services/register-dynamic-entity"
         );
-        // Localized collections omit their translatable columns from the main
-        // runtime table (they live in the companion) — mirror the migration.
-        const { table } = generateRuntimeSchema(
-          tableName,
-          fields as FieldDefinition[],
+        await registerDynamicEntitySchema({
+          adapter,
+          registry,
           dialect,
-          { status: hasStatus === true, localized }
-        );
-        registry.registerDynamicSchema(tableName, table);
-        // Register the companion `_locales` table so queries can reach it (M4).
-        if (localized) {
-          // i18n: create the companion on boot/db:sync if a migration hasn't already
-          // (idempotent) so code-first localized entities work without a manual migrate.
-          const { ensureCompanionTable } = await import(
-            "../domains/i18n/runtime/companion-io"
-          );
-          await ensureCompanionTable(adapter, {
-            // These registries hold code-first and plugin rows as well as Builder ones, and their
-            // creators size a text column differently, so the row's own ownership decides.
-            builtBy: builtByFor("collection", builderOwned),
-            slug: tableName,
-            tableName,
-            fields: fields as { name: string; type: string }[],
-            dialect,
-            status: hasStatus === true,
-          });
-          const { buildCompanionRuntimeTable } = await import(
-            "../domains/i18n/runtime/companion-registration"
-          );
-          const companion = buildCompanionRuntimeTable({
-            slug: tableName,
-            tableName,
-            fields: fields as { name: string; type: string }[],
-            dialect,
-            localized: true,
-            // Carry `_status` so a Draft/Published localized collection's
-            // DI-registered companion matches loadCompanionSchema.
-            status: hasStatus === true,
-          });
-          if (companion) {
-            registry.registerDynamicSchema(
-              companion.companionTableName,
-              companion.table
-            );
-          }
-        }
+          kind: "collection",
+          tableName,
+          fields: fields as FieldDefinition[],
+          status: hasStatus === true,
+          localized,
+          builderOwned,
+        });
       }
     );
 
-    // Step 3: Dynamic singles. Localized singles omit their translatable columns
-    // from the main runtime table and register the companion `single_<slug>_locales`
-    // table for reads/writes — mirrors collections (Step 2).
+    // Step 3: Dynamic singles — the same registration as collections above,
+    // asked about a different owner.
     await loadDynamicTables(
       adapter,
       "dynamic_singles",
       async (tableName, fields, hasStatus, localized, builderOwned) => {
-        const { generateRuntimeSchema } = await import(
-          "../domains/schema/services/runtime-schema-generator"
+        const { registerDynamicEntitySchema } = await import(
+          "../domains/schema/services/register-dynamic-entity"
         );
-        const { table } = generateRuntimeSchema(
-          tableName,
-          fields as FieldDefinition[],
+        await registerDynamicEntitySchema({
+          adapter,
+          registry,
           dialect,
-          { status: hasStatus === true, localized }
-        );
-        registry.registerDynamicSchema(tableName, table);
-        if (localized) {
-          const { ensureCompanionTable } = await import(
-            "../domains/i18n/runtime/companion-io"
-          );
-          await ensureCompanionTable(adapter, {
-            // A single is built by the same service as a collection, but only when the Builder owns
-            // it — this registry carries code-first singles too, and those came from the pipeline.
-            builtBy: builtByFor("single", builderOwned),
-            slug: tableName,
-            tableName,
-            fields: fields as { name: string; type: string }[],
-            dialect,
-            status: hasStatus === true,
-          });
-          const { buildCompanionRuntimeTable } = await import(
-            "../domains/i18n/runtime/companion-registration"
-          );
-          const companion = buildCompanionRuntimeTable({
-            slug: tableName,
-            tableName,
-            fields: fields as { name: string; type: string }[],
-            dialect,
-            localized: true,
-            status: hasStatus === true,
-          });
-          if (companion) {
-            registry.registerDynamicSchema(
-              companion.companionTableName,
-              companion.table
-            );
-          }
-        }
+          kind: "single",
+          tableName,
+          fields: fields as FieldDefinition[],
+          status: hasStatus === true,
+          localized,
+          builderOwned,
+        });
       }
     );
 

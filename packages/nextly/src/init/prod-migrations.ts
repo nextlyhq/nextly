@@ -291,6 +291,23 @@ export async function runProdMigrationsIfEnabled(
         err instanceof Error ? err.message : String(err)
       }. The app will continue; run \`nextly migrate\` to resolve.`
     );
+
+    /*
+     * 🔴 Reloaded on the FAILING path too, because this process goes on to
+     * serve. `runFileMigrations` commits and records each migration file
+     * independently before propagating a later file's error, so a batch that
+     * failed part-way has already written whatever metadata its earlier files
+     * carried — and skipping the reload here served exactly those entities
+     * against the pre-migration registry, which is the defect this whole path
+     * exists to close, reached through the error branch instead of the happy
+     * one.
+     *
+     * Before `allowBootMigrations` for the same reason as the success path, and
+     * safe there for the same reason: the reload cannot throw.
+     */
+    const { reloadDynamicTables } = await import("./reload-dynamic-tables");
+    await reloadDynamicTables("[Nextly]");
+
     // The app continues on this path, so the gate must open — a swallowed
     // failure that left it pending would hang every consumer forever, turning a
     // recoverable error into a worse outage than the one being tolerated.
