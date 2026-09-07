@@ -665,6 +665,63 @@ function expandInstance(
   // slots — so a mark taken after it would leave a refused instance having
   // permanently charged the page for a tree nobody receives.
   const mark = savepoint(run);
+  let inlined: ResolvedBlockNode[] | null;
+  try {
+    inlined = inlinedDefinition(instance, definition, componentId, {
+      run,
+      scope,
+      depth,
+      presupplied,
+      owner,
+    });
+  } catch {
+    // Everything that follows CONSUMES the definition — its nodes, their props,
+    // their slots — and all of it is a caller's data. A field that computes
+    // itself and throws took that error out of a function promising a
+    // classification and a closed list of reasons. Guarding the envelope read
+    // was not enough: a NODE's fields are read later, by the clone.
+    //
+    // Contained at the expansion of ONE instance, which is the unit the
+    // savepoint already covers, so a definition that fails halfway gives back
+    // the ids and budget it had begun to claim — exactly as a refusal for the
+    // node budget does. `unreadable` is the reason this module already
+    // publishes for a supplied document it cannot read.
+    run.abort = undefined;
+    rollback(run, mark);
+    return [refuse(run, instance, componentId, "unreadable")];
+  }
+  if (inlined === null) {
+    const reason = run.abort ?? "budget";
+    run.abort = undefined;
+    rollback(run, mark);
+    return [refuse(run, instance, componentId, reason)];
+  }
+  return inlined;
+}
+
+/** Where an expansion sits, and what the host already composed for it. */
+interface InstancePlacement {
+  run: ResolveRun;
+  scope: ComposedScope;
+  depth: number;
+  presupplied?: Record<string, ResolvedBlockNode[]>;
+  owner?: string;
+}
+
+/**
+ * The definition's tree, inlined for one instance — the speculative half.
+ *
+ * Split from the refusal handling above so that everything which READS a
+ * caller's definition sits inside one boundary, and so the savepoint that pays
+ * for it is taken in exactly one place.
+ */
+function inlinedDefinition(
+  instance: ResolvedBlockNode,
+  definition: ComponentDocument,
+  componentId: string,
+  placement: InstancePlacement
+): ResolvedBlockNode[] | null {
+  const { run, scope, depth, presupplied, owner } = placement;
   // The instance node is REPLACED, so its own slot under the cap is freed for
   // what replaces it. Credited before the clone rather than after, or a
   // definition that exactly fills the remaining room is refused for needing
@@ -701,12 +758,7 @@ function expandInstance(
     cloneDefinitionForest(definition.nodes, ctx, 1),
     ctx
   );
-  if (inlined === null) {
-    const reason = run.abort ?? "budget";
-    run.abort = undefined;
-    rollback(run, mark);
-    return [refuse(run, instance, componentId, reason)];
-  }
+  if (inlined === null) return null;
   return withInstanceDevices(inlined, instance);
 }
 

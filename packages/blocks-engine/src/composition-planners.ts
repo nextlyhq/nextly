@@ -2481,10 +2481,17 @@ function resolvedDefinition(
     maxComposedDepth: 1,
     limits,
   });
-  // The instance itself left standing means there is nothing to inline: the
+  // THIS instance left standing means there is nothing to inline: the
   // definition is missing, unpublished, or refused. Detaching to nothing would
   // delete the author's section.
-  if (resolved.unresolved.some(one => one.componentId === componentId)) {
+  //
+  // Matched on the instance, not the component. A definition that nests an
+  // instance of ITSELF reports that nested one as a cycle — carrying the same
+  // `componentId` — while the outer expansion succeeded, and reading the
+  // component name refused a detach that had already worked. `instanceId` is
+  // the node as it appears in the returned document, which for the one being
+  // detached is the id it was selected by.
+  if (resolved.unresolved.some(one => one.instanceId === instance.id)) {
     return { problem: "not-a-component" };
   }
 
@@ -2645,8 +2652,25 @@ function detachedRoots(
   // expose is dropped by the resolver and never reaches the page, so counting
   // its ids renamed a definition's authored anchor to avoid something that will
   // not be there — breaking a fragment link or a selector for no collision.
+  if (gate !== undefined && authored.nodes.some(isConditionGated)) {
+    return { problem: "condition-gated" };
+  }
+  // The gate goes on BEFORE the ids are judged, not after. `domIdsIn` counts
+  // only what RENDERS, and a condition-gated subtree renders nothing — so a
+  // hidden variant's authored anchor collides with no one. Reminting it anyway
+  // gave the detached copy a permanent rename for a conflict that does not
+  // exist, and one that outlives the gate: remove the condition later and the
+  // fragment the author wrote is still pointing at a suffixed id.
+  //
+  // Applying it here also means the copier's own hidden-subtree rule is the
+  // thing deciding, rather than this planner reproducing it.
+  const gated = authored.nodes.map(root => ({
+    ...root,
+    ...gatedWith(root, gate),
+  }));
+
   const placed = placedContent(held, authored.nodeIds);
-  const copied = reidForestWithMap(authored.nodes, {
+  const copied = reidForestWithMap(gated, {
     avoid: domIdsIn([...remaining, ...placed]),
   });
   const roots = restoreSuppliedSlots(
@@ -2654,9 +2678,6 @@ function detachedRoots(
     held.byId,
     composed(authored.nodeIds, copied.nodeIds)
   );
-  if (gate !== undefined && roots.some(isConditionGated)) {
-    return { problem: "condition-gated" };
-  }
   // Two nodes rendering ONE id. Resolution scoped both to one runtime id, and
   // putting the authored one back gives the page a duplicate — which `applyOps`
   // does not police and strict validation, the gate this predicts, refuses. The
@@ -2664,7 +2685,6 @@ function detachedRoots(
   // succeeding into a page that cannot be published.
   const stamped = roots.map(root => ({
     ...root,
-    ...gatedWith(root, gate),
     origin: { from: "component" as const, id: componentId },
   }));
   return duplicateDomIdRefusal(stamped) ?? { roots: stamped };

@@ -524,6 +524,56 @@ describe("a slot name the format allows and JavaScript does not", () => {
   });
 });
 
+describe("a definition that nests an instance of itself", () => {
+  it("detaches the outer one, and leaves the nested one standing", () => {
+    // The nested instance is refused as a cycle and carries the SAME
+    // `componentId` as the one being detached, so a check reading the component
+    // name saw a refusal that belonged to a different node and rejected a
+    // detach that had in fact succeeded. The instance id is what tells them
+    // apart: it is the node as it appears in the returned document.
+    const definitions = defs({
+      card: component([
+        node("d1", { props: { mark: "body" } }),
+        instance("dn", "card"),
+      ]),
+    });
+    const doc = page([instance("i1", "card")]);
+
+    const result = applied(doc, planDetach(doc, "i1", definitions, anyParent));
+
+    expect(marked(result.nodes, "body").props?.mark).toBe("body");
+    // The nested one is still an instance: refused, not inlined, not dropped.
+    expect(
+      flatten(result.nodes).filter(n => n.type === COMPONENT_INSTANCE_TYPE)
+    ).toHaveLength(1);
+  });
+});
+
+describe("a gated instance keeps its authored ids", () => {
+  it("does not remint an id that renders nowhere", () => {
+    // `domIdsIn` counts only what RENDERS, and a condition-gated subtree
+    // renders nothing — so a hidden variant's anchor collides with no one.
+    // Deciding collisions before the gate was applied renamed it anyway, and
+    // the rename outlives the gate: remove the condition later and the author's
+    // fragment is still pointing at a suffixed id.
+    const definitions = defs({
+      card: component([node("d1", { cssId: "hero", props: { mark: "body" } })]),
+    });
+    const doc = page([
+      node("onpage", { cssId: "hero" }),
+      instance("i1", "card", {
+        visibility: {
+          conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+        },
+      }),
+    ]);
+
+    const result = applied(doc, planDetach(doc, "i1", definitions, anyParent));
+
+    expect(marked(result.nodes, "body").cssId).toBe("hero");
+  });
+});
+
 describe("what detach refuses", () => {
   const definitions = defs({ card: component([node("d1")]) });
 
@@ -577,6 +627,47 @@ describe("what detach refuses", () => {
     expect(escaped).toBeUndefined();
     expect(problem).toBe("not-a-component");
   });
+
+  it.each(["id", "type", "props", "slots", "visibility", "cssId"])(
+    "refuses a definition whose node computes its %s",
+    field => {
+      // One level past the envelope guard: the definition's NODES are read
+      // later, by the clone that builds the inlined tree, and a field computing
+      // itself there threw out of both the resolver and this planner. Contained
+      // at the expansion of one instance, which is the unit the resolver's
+      // savepoint already covers.
+      const bad: Record<string, unknown> = {
+        id: "d1",
+        type: "core/text",
+        version: 1,
+        props: {},
+      };
+      Object.defineProperty(bad, field, {
+        enumerable: true,
+        configurable: true,
+        get() {
+          throw new Error("boom");
+        },
+      });
+      const doc = page([instance("i1", "card")]);
+
+      let escaped: unknown;
+      let problem: string | undefined;
+      try {
+        problem = planDetach(
+          doc,
+          "i1",
+          defs({ card: component([bad as unknown as BlockNode]) }),
+          anyParent
+        ).problem;
+      } catch (error) {
+        escaped = error;
+      }
+
+      expect(escaped).toBeUndefined();
+      expect(problem).toBe("not-a-component");
+    }
+  );
 
   it("refuses an instance whose definition is missing", () => {
     // Inlining nothing would silently delete the author's section.

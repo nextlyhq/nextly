@@ -72,3 +72,19 @@ classification and a closed list of reasons — out of the renderer and the
 preview as much as out of detaching. Such a definition is now reported
 `unreadable`, which is what that reason already meant: a value that IS supplied
 and cannot be read.
+
+The containment reaches the definition's NODES, not only its envelope. A field
+that computes itself is read later too — by the clone that builds the inlined
+tree — and it threw out of the resolver and out of detaching alike. It is now
+contained at the expansion of ONE instance, the unit the resolver's savepoint
+already covers, so a definition that fails halfway gives back the ids and budget
+it had begun to claim, exactly as a refusal for the node budget does.
+
+A component whose definition nests an instance of ITSELF detaches. The nested
+one is refused as a cycle and carries the same component id, so reading the
+component name refused a detach that had already succeeded.
+
+A gated instance keeps its authored DOM ids. Collisions are decided after the
+gate is applied, because a condition-gated subtree renders nothing and collides
+with no one — and a rename made for a conflict that does not exist outlives the
+gate that excused it.
