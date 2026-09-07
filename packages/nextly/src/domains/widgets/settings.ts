@@ -108,26 +108,56 @@ export type WidgetSetting =
  * exactly when this table can judge its values, so adding a type here is the
  * whole of adding a type.
  */
+/**
+ * What a setting's own declaration narrows its values to, beyond the type.
+ *
+ * 🔴 The DECLARATION decides, not the type alone — and that is one rule rather
+ * than two. A stored select value stays a string after its option is renamed,
+ * and a stored number stays a number after its author narrows the range; both
+ * are a value the widget no longer offers, and both must fall back to the
+ * default the same way. Judging only the select case left the number one
+ * accepting `20` for a setting declared `{ min: 1, max: 10 }`, which then
+ * reached the query — the endpoint bounds its own global limit and has never
+ * heard of this author's.
+ */
+interface SettingLimits {
+  options?: readonly { value: string }[];
+  min?: number;
+  max?: number;
+}
+
 const USABLE_AS: Record<
   WidgetSetting["type"],
-  (value: unknown, options: readonly { value: string }[] | undefined) => boolean
+  (value: unknown, limits: SettingLimits) => boolean
 > = {
   text: value => typeof value === "string",
-  number: value => typeof value === "number" && Number.isFinite(value),
+  number: (value, limits) =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    withinBounds(value, limits),
   checkbox: value => typeof value === "boolean",
-  /*
-   * 🔴 The OPTIONS decide, not the type alone. A stored select value stays a
-   * string after its option is renamed or removed, so a type-only check went on
-   * accepting a choice the declaration no longer offers: the card drew a value
-   * its own settings form could not show, and the fall back to the default that
-   * this reading exists for never happened for the one type whose declaration
-   * can retire a value.
-   */
-  select: (value, options) =>
+  select: (value, limits) =>
     typeof value === "string" &&
-    options !== undefined &&
-    options.some(option => option.value === value),
+    limits.options !== undefined &&
+    limits.options.some(option => option.value === value),
 };
+
+/** Whether a finite number sits inside the range its setting declares. */
+function withinBounds(value: number, limits: SettingLimits): boolean {
+  // An absent bound is not a bound. Written as two independent tests rather
+  // than one range check so a setting may declare either end alone, which is
+  // the common case -- `{ min: 1 }` on a row count states the only end that
+  // has a meaning.
+  if (limits.min !== undefined && value < limits.min) return false;
+  return !(limits.max !== undefined && value > limits.max);
+}
+
+/** What this setting's declaration narrows its values to. */
+function limitsOf(setting: WidgetSetting): SettingLimits {
+  if (setting.type === "select") return { options: setting.options };
+  if (setting.type === "number") return { min: setting.min, max: setting.max };
+  return {};
+}
 
 /** Whether this is a type a setting may declare. */
 function isSettingType(value: unknown): value is WidgetSetting["type"] {
@@ -152,6 +182,14 @@ function isSelectOptions(
         option !== null &&
         "value" in option &&
         typeof option.value === "string" &&
+        // 🔴 A BLANK value is refused, not merely an absent one. These are
+        // drawn by `FieldRenderer`, whose `SelectInput` hands each option
+        // straight to a Radix `SelectItem` -- and Radix reserves the empty
+        // string for "nothing is selected", so it throws rather than
+        // rendering. Caught here, the plugin author sees it at boot; left to
+        // the renderer, the first reader to open the settings panel gets the
+        // crash.
+        option.value.trim() !== "" &&
         "label" in option &&
         typeof option.label === "string"
     )
@@ -167,6 +205,29 @@ function isSelectOptions(
  * opens the settings panel.
  */
 export const MAX_WIDGET_SETTINGS = 24;
+
+/**
+ * A value named in a diagnostic, without the formatter itself throwing.
+ *
+ * 🔴 `JSON.stringify` is not total. A BigInt throws `TypeError`, and so does a
+ * circular object — so a declaration carrying `defaultValue: 1n` produced a
+ * native `TypeError` from inside the message-building, BEFORE the refusal it
+ * was describing could be raised as a `NextlyError`. The author saw the wrong
+ * error, naming neither the widget nor the setting.
+ *
+ * `String()` is the fallback rather than a fixed placeholder, because it
+ * survives everything `JSON.stringify` does not and still names the value: a
+ * BigInt reads `1`, a symbol reads `Symbol(x)`.
+ */
+function describeValue(value: unknown): string {
+  try {
+    // `undefined` and a function both stringify to `undefined` rather than to
+    // text, so the fallback covers them too.
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
 
 /*
  * `invalidInput` rather than `validation`, matching the widget definition's own
@@ -226,11 +287,13 @@ function settingProblem(
   if (typeof setting !== "object" || setting === null) {
     return "every setting must be an object";
   }
-  const { name, type, defaultValue, options } = setting as {
+  const { name, type, defaultValue, ...rest } = setting as {
     name?: unknown;
     type?: unknown;
     defaultValue?: unknown;
     options?: unknown;
+    min?: unknown;
+    max?: unknown;
   };
 
   if (typeof name !== "string" || name === "") {
@@ -244,10 +307,10 @@ function settingProblem(
   seen.add(name);
 
   if (!isSettingType(type)) {
-    return `setting "${name}" has type ${JSON.stringify(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
+    return `setting "${name}" has type ${describeValue(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
   }
 
-  return problemForType(type, options, defaultValue, name);
+  return problemForType(type, rest, defaultValue, name);
 }
 
 /**
@@ -261,26 +324,58 @@ function settingProblem(
  */
 function problemForType(
   type: WidgetSetting["type"],
-  options: unknown,
+  setting: { options?: unknown; min?: unknown; max?: unknown },
   defaultValue: unknown,
   name: string
 ): string | undefined {
-  if (type === "select" && !isSelectOptions(options)) {
-    return `setting "${name}" is a select and needs a non-empty "options" array of { label, value } entries`;
-  }
+  const limits = declaredLimits(type, setting);
+  if (typeof limits === "string") return `setting "${name}" ${limits}`;
+  return defaultProblem(type, limits, defaultValue, name);
+}
 
-  return defaultProblem(
-    type,
-    isSelectOptions(options) ? options : undefined,
-    defaultValue,
-    name
+/**
+ * What this declaration narrows its values to, or why it cannot be read.
+ *
+ * Returns the LIMITS on success and a problem fragment on failure, because the
+ * two questions are one: a bound that cannot be read is not a bound to check
+ * against, and validating it separately would leave the predicate below
+ * comparing against a value it had never confirmed was a number.
+ */
+function declaredLimits(
+  type: WidgetSetting["type"],
+  setting: { options?: unknown; min?: unknown; max?: unknown }
+): SettingLimits | string {
+  if (type === "select") {
+    return isSelectOptions(setting.options)
+      ? { options: setting.options }
+      : 'is a select and needs a non-empty "options" array of { label, value } entries with non-blank values';
+  }
+  if (type !== "number") return {};
+
+  const { min, max } = setting;
+  if (!isOptionalFiniteNumber(min) || !isOptionalFiniteNumber(max)) {
+    return 'declares a "min" or "max" that is not a finite number';
+  }
+  // An empty range accepts nothing, so every stored value AND the declared
+  // default fall back -- and the default falls back to itself, leaving the
+  // setting permanently unusable with nothing on screen to say why.
+  if (min !== undefined && max !== undefined && min > max) {
+    return `declares min ${min} above max ${max}, a range no value can satisfy`;
+  }
+  return { min, max };
+}
+
+/** Whether an optional bound is absent or a number JSON can carry. */
+function isOptionalFiniteNumber(value: unknown): value is number | undefined {
+  return (
+    value === undefined || (typeof value === "number" && Number.isFinite(value))
   );
 }
 
 /** Why this setting's declared default is unusable, or `undefined`. */
 function defaultProblem(
   type: WidgetSetting["type"],
-  options: readonly { value: string }[] | undefined,
+  limits: SettingLimits,
   defaultValue: unknown,
   name: string
 ): string | undefined {
@@ -307,11 +402,15 @@ function defaultProblem(
    * left to correct it. The refusal is at boot because that is where the author
    * who wrote it is standing.
    */
-  if (USABLE_AS[type](defaultValue, options)) return undefined;
+  if (USABLE_AS[type](defaultValue, limits)) return undefined;
 
-  return type === "select"
-    ? `setting "${name}" defaults to ${JSON.stringify(defaultValue)}, which is not one of its options`
-    : `setting "${name}" is typed "${type}" but defaults to ${JSON.stringify(defaultValue)}`;
+  if (type === "select") {
+    return `setting "${name}" defaults to ${describeValue(defaultValue)}, which is not one of its options`;
+  }
+  const bounded = limits.min !== undefined || limits.max !== undefined;
+  return bounded && typeof defaultValue === "number"
+    ? `setting "${name}" defaults to ${defaultValue}, outside the range it declares`
+    : `setting "${name}" is typed "${type}" but defaults to ${describeValue(defaultValue)}`;
 }
 
 /**
@@ -333,10 +432,7 @@ export function validateWidgetSettings(
 
 /** Whether a stored value is usable as this setting's type. */
 function matchesType(setting: WidgetSetting, value: unknown): boolean {
-  return USABLE_AS[setting.type](
-    value,
-    setting.type === "select" ? setting.options : undefined
-  );
+  return USABLE_AS[setting.type](value, limitsOf(setting));
 }
 
 /** The default a setting declares, or `undefined` when it declares none. */
@@ -358,7 +454,18 @@ export function resolveWidgetSettings(
 ): Record<string, unknown> {
   if (!settings || settings.length === 0) return {};
 
-  const resolved: Record<string, unknown> = {};
+  /*
+   * 🔴 A record with NO prototype, because the KEYS are setting names a plugin
+   * chose. On a `{}` dictionary `__proto__` is not data: assigning it invokes
+   * the legacy prototype setter, so a declared setting of that name was
+   * silently dropped from the result and read back as `Object.prototype`. And
+   * a stored config reaches this from `JSON.parse`, which DOES create
+   * `__proto__` as an own property, so the value arrives to be assigned.
+   *
+   * The admin's query-slot map is prototype-free for exactly this reason;
+   * `constructor` and `toString` misbehave the same way without the confusion.
+   */
+  const resolved: Record<string, unknown> = Object.create(null);
   for (const setting of settings) {
     const value = stored?.[setting.name];
     if (value !== undefined && matchesType(setting, value)) {

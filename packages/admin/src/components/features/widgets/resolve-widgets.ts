@@ -352,7 +352,14 @@ function mergeCollision(
     size: contribution.size,
     requiredPermission: registration.requiredPermission,
     query: registration.query,
-    settings: registration.settings,
+    // 🔴 `preferRegistered`, not the registration alone. Both channels can
+    // declare settings, so taking the registration's unconditionally replaced a
+    // contributed declaration with `undefined` -- the merged widget offered no
+    // settings at all, and every stored config on its placements became a key
+    // nothing recognised. That is the defect the comment above this list warns
+    // about, arriving through a field added to the contract and not to this
+    // list.
+    settings: preferRegistered(registration.settings, contribution.settings),
     link: preferRegistered(registration.link, contribution.link),
     component: preferRegistered(registration.component, contribution.component),
     actions: preferRegistered(registration.actions, contribution.actions),

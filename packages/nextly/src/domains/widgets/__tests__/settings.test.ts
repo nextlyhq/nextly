@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   applyWidgetSettings,
   MAX_WIDGET_SETTINGS,
@@ -173,6 +174,84 @@ describe("validateWidgetSettings refuses what an author can fix", () => {
     ).not.toThrow();
   });
 
+  it("refuses a select option whose value is blank", () => {
+    // `FieldRenderer` hands each option to a Radix `SelectItem`, which reserves
+    // the empty string for "nothing selected" and throws rather than rendering
+    // -- so an author's blank value crashes the panel for the first reader to
+    // open it. Whitespace too: it is blank to everything except `!== ""`.
+    for (const value of ["", "   "]) {
+      expect(() =>
+        validateWidgetSettings(
+          [
+            {
+              name: "mode",
+              type: "select",
+              options: [{ label: "None", value }],
+            },
+          ],
+          "core/x"
+        )
+      ).toThrow(/options/);
+    }
+  });
+
+  it("refuses a number default outside the range the setting declares", () => {
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "limit", type: "number", min: 1, max: 10, defaultValue: 20 }],
+        "core/x"
+      )
+    ).toThrow(/range/);
+  });
+
+  it("accepts a number default inside the range", () => {
+    // The control for the pair: a bounds check that refused everything would
+    // satisfy the case above while making a bounded setting undeclarable.
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "limit", type: "number", min: 1, max: 10, defaultValue: 5 }],
+        "core/x"
+      )
+    ).not.toThrow();
+  });
+
+  it("refuses bounds that are not finite numbers, or a range nothing satisfies", () => {
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "limit", type: "number", min: "one" }],
+        "core/x"
+      )
+    ).toThrow(/finite number/);
+    // An empty range makes every value fall back -- including the default,
+    // which falls back to itself -- so the setting is permanently unusable.
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "limit", type: "number", min: 10, max: 1 }],
+        "core/x"
+      )
+    ).toThrow(/no value can satisfy/);
+  });
+
+  /*
+   * 🔴 The refusal must survive the value it is describing. `JSON.stringify`
+   * throws on a BigInt, so building the diagnostic threw a native `TypeError`
+   * before the `NextlyError` it was describing could be raised -- and the
+   * author saw an error naming neither the widget nor the setting.
+   */
+  it("refuses a BigInt default as a NextlyError, not a TypeError", () => {
+    let caught: unknown;
+    try {
+      validateWidgetSettings(
+        [{ name: "limit", type: "number", defaultValue: 1n }],
+        "core/x"
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(NextlyError);
+    expect((caught as Error).message).toMatch(/limit/);
+  });
+
   it("refuses more settings than the ceiling allows", () => {
     const many = Array.from({ length: MAX_WIDGET_SETTINGS + 1 }, (_, i) => ({
       name: `s${i}`,
@@ -263,6 +342,67 @@ describe("resolveWidgetSettings reads a stored value without punishing it", () =
     expect(resolveWidgetSettings([mode], { mode: "grid" })).toEqual({
       mode: "grid",
     });
+  });
+
+  it("falls back when a stored number leaves the declared range", () => {
+    // The same rule the select case follows: a value the declaration no longer
+    // accepts takes the default. An author narrowing a range, or a config
+    // written straight through the API, produces exactly this.
+    const bounded: WidgetSetting = {
+      name: "limit",
+      type: "number",
+      min: 1,
+      max: 10,
+      defaultValue: 5,
+    };
+    expect(resolveWidgetSettings([bounded], { limit: 20 })).toEqual({
+      limit: 5,
+    });
+    expect(resolveWidgetSettings([bounded], { limit: 0 })).toEqual({
+      limit: 5,
+    });
+  });
+
+  it("keeps a stored number inside the declared range", () => {
+    // The control. Refusing every bounded number would satisfy the case above
+    // while making the setting impossible to change.
+    const bounded: WidgetSetting = {
+      name: "limit",
+      type: "number",
+      min: 1,
+      max: 10,
+      defaultValue: 5,
+    };
+    expect(resolveWidgetSettings([bounded], { limit: 7 })).toEqual({
+      limit: 7,
+    });
+  });
+
+  /*
+   * 🔴 A setting NAME is chosen by a plugin, so the record it fills cannot be a
+   * plain object. `resolved["__proto__"] = v` invokes the legacy prototype
+   * setter rather than creating an own property, so the declared setting
+   * vanished from the result and read back as `Object.prototype`. A stored
+   * config reaches this through `JSON.parse`, which creates `__proto__` as a
+   * real own property -- so the value genuinely arrives.
+   */
+  it("resolves a setting named __proto__ as data", () => {
+    const odd: WidgetSetting = {
+      name: "__proto__",
+      type: "text",
+      defaultValue: "d",
+    };
+    const stored = JSON.parse('{"__proto__":"stored"}') as Record<
+      string,
+      unknown
+    >;
+
+    const resolved = resolveWidgetSettings([odd], stored);
+
+    expect(Object.keys(resolved)).toEqual(["__proto__"]);
+    expect(resolved["__proto__"]).toBe("stored");
+    // And nothing leaked onto the prototype every other object inherits.
+    expect(({} as Record<string, unknown>).stored).toBeUndefined();
   });
 
   it("answers empty for a widget that declares nothing", () => {

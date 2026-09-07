@@ -367,6 +367,76 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
     expect(widget.chrome).toBe("none");
   });
 
+  it("keeps settings the contribution declared and the registration does not", () => {
+    /*
+     * 🔴 The registration is authoritative only where it STATES a value. A
+     * plugin may register the widget for its query and contribute the settings,
+     * and taking `registration.settings` unconditionally replaced them with
+     * `undefined` -- the merged widget offered nothing to configure, and every
+     * stored config on its placements became a key nothing recognised. The
+     * same field-by-field rebuild the case above guards, one field along.
+     */
+    const contribution = {
+      id: "shared",
+      title: "Shared",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "@acme/p/admin#X",
+      settings: [{ name: "limit", type: "number", defaultValue: 5 }],
+    } as unknown as RegisteredWidgetMeta;
+
+    const registration = {
+      id: "shared",
+      title: "Shared",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "@acme/p/admin#X",
+    } as unknown as RegisteredWidgetMeta;
+
+    const [widget] = resolveDashboardWidgets(
+      contributing([contribution]),
+      [registration],
+      allow
+    );
+
+    expect(widget?.settings).toEqual([
+      { name: "limit", type: "number", defaultValue: 5 },
+    ]);
+  });
+
+  it("prefers the registration's settings when it declares its own", () => {
+    // The other half: `preferRegistered` must still prefer the registration,
+    // or the fix above would have inverted the rule rather than completed it.
+    const declared = (defaultValue: number) => [
+      { name: "limit", type: "number", defaultValue },
+    ];
+    const [widget] = resolveDashboardWidgets(
+      contributing([
+        {
+          id: "shared",
+          title: "Shared",
+          archetype: "custom",
+          defaultSize: "sm",
+          component: "@acme/p/admin#X",
+          settings: declared(5),
+        },
+      ] as unknown as RegisteredWidgetMeta[]),
+      [
+        {
+          id: "shared",
+          title: "Shared",
+          archetype: "custom",
+          defaultSize: "sm",
+          component: "@acme/p/admin#X",
+          settings: declared(9),
+        },
+      ] as unknown as RegisteredWidgetMeta[],
+      allow
+    );
+
+    expect(widget?.settings).toEqual(declared(9));
+  });
+
   it("sorts the merged widget by the order it kept", () => {
     // The consequence, asserted on the OUTCOME rather than on the merged
     // object: a dropped order is invisible until something reads it.
