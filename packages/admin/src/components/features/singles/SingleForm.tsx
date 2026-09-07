@@ -32,6 +32,7 @@ import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFr
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { AutosaveRecoveryBanner } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
 import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
+import { DocumentLockBanner } from "@admin/components/features/entries/EntryForm/DocumentLockBanner";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import {
   EntryFormContextProvider,
@@ -48,6 +49,7 @@ import {
   UnsavedWorkProvider,
   useFormUnsavedWork,
 } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
+import { useDocumentLockSurface } from "@admin/components/features/entries/EntryForm/useDocumentLockSurface";
 import {
   mapIntentToPayload,
   passwordFieldNames,
@@ -366,9 +368,27 @@ export function SingleForm({
   // Submit handler. The intent arg names the user's button click and
   // determines payload shape — same intent set as the collection
   // EntryForm (see EntryFormIntent). Mirrors the EntryForm pattern.
+  /*
+   * The advisory claim, derived before the first write is defined because every
+   * write has to be able to ask about it.
+   */
+  const lock = useDocumentLockSurface({
+    scopeKind: "single",
+    slug: schema.slug,
+    entryId: document.id,
+  });
+
   const handleSubmit = useCallback(
     async (e?: React.BaseSyntheticEvent, intent?: EntryFormIntent) => {
       e?.preventDefault();
+
+      // 🔴 The one gate every write passes through. Save, Publish, Unpublish, the
+      // keyboard shortcut and a native form submit all reach this function, and
+      // disabling the affordances one at a time is a list that the next write
+      // path gets added without. The affordances ARE disabled, so nothing offers
+      // what it cannot do - this is the guard that does not depend on anyone
+      // remembering.
+      if (lock.actionsDisabled) return;
 
       await form.handleSubmit(async rawData => {
         // Why: shared intent→payload helper mirrors the EntryForm
@@ -389,7 +409,7 @@ export function SingleForm({
         }
       })(e);
     },
-    [form, onSubmit, blankPasswordFields]
+    [form, onSubmit, blankPasswordFields, lock.actionsDisabled]
   );
 
   const handleCancel = useCallback(() => {
@@ -591,10 +611,19 @@ export function SingleForm({
     () => autosaveScopeFor("single", schema.slug, document?.id),
     [schema.slug, document?.id]
   );
+  /*
+   * The same advisory claim the entry editor holds, on the same terms. A single
+   * is addressed by its slug and the row behind it, and before that row exists
+   * there is nothing to claim and nobody else can be in it.
+   */
+
   const autosave = useDocumentAutosave({
     scope: autosaveScope,
     form,
     locale: locale ?? null,
+    // Held off while a colleague holds the document: the recovery point is a
+    // write to the same row, so leaving it running is the overwrite the claim
+    // exists to prevent.
     enabled: !isSubmitting,
   });
   const recovery = useAutosaveRecovery({
@@ -749,6 +778,9 @@ export function SingleForm({
                               void handleSubmit(undefined, "unpublish");
                             }}
                             onDiscardWorkingDraft={async () => {
+                              // Through the same gate: this reaches the row
+                              // directly and never passed `handleSubmit`.
+                              if (lock.actionsDisabled) return;
                               await discardMutation.mutateAsync();
                             }}
                             onCancel={handleCancel}
@@ -759,6 +791,7 @@ export function SingleForm({
                  instead of entryApi. */
                             scope="single"
                             lockIdentity
+                            documentLocked={lock.readOnly}
                             isRailCollapsed={railCollapsed}
                             onToggleRail={toggleRail}
                           />
@@ -774,6 +807,11 @@ export function SingleForm({
                   editor. Placed above the flex row it sat UNDER the sticky
                   header, which intercepted pointer events: the offer was
                   visible and its buttons were not clickable. */}
+                          <DocumentLockBanner
+                            notice={lock.notice}
+                            onTakeOver={lock.takeOver}
+                            className="mx-6 mt-3"
+                          />
                           {recovery.offer ? (
                             <AutosaveRecoveryBanner
                               savedAt={recovery.offer.savedAt}
@@ -797,6 +835,7 @@ export function SingleForm({
                               )}
                             >
                               <LanguagePanel
+                                actionsDisabled={lock.actionsDisabled}
                                 {...(singleTranslations === undefined
                                   ? {}
                                   : { translations: singleTranslations })}
@@ -816,6 +855,7 @@ export function SingleForm({
                               <EntryFormContent
                                 fields={mainFields}
                                 disabled={isSubmitting}
+                                readOnly={lock.readOnly}
                                 withCard
                               />
                             </div>

@@ -202,6 +202,15 @@ export interface EntrySystemHeaderProps {
    * so collection entry forms keep the editable, optionally-required title.
    */
   lockIdentity?: boolean;
+  /**
+   * Whether a colleague's claim withholds writing.
+   *
+   * Separate from `lockIdentity`, which is about a Single's fixed title: this one
+   * comes and goes while the editor is open. The title is a WRITE like any other,
+   * and it also drives the slug through `useAutoSlug`, so leaving it editable
+   * under someone else's claim contradicts the strip above it.
+   */
+  documentLocked?: boolean;
 
   /** Rail collapsed state. */
   isRailCollapsed?: boolean;
@@ -268,6 +277,7 @@ export function EntrySystemHeader({
   historyFields,
   historyEnabled,
   lockIdentity = false,
+  documentLocked = false,
   isRailCollapsed = false,
   onToggleRail,
   toolbarSlot,
@@ -444,10 +454,25 @@ export function EntrySystemHeader({
    * changed, which is the existing behaviour kept rather than re-decided.
    */
   const busyReason = isSubmitting ? "Saving…" : undefined;
+  /*
+   * Why every write verb is refused while a colleague holds the document.
+   *
+   * 🔴 The handlers already refuse, so this is not what makes the document safe —
+   * it is what stops the interface lying. A live Save beside a strip saying the
+   * document is somebody else's invites a click that silently does nothing, which
+   * reads as the editor being broken rather than as the lock working.
+   *
+   * Reading verbs are deliberately left alone: discarding your own unsaved
+   * changes, previewing and opening history are yours to do whoever holds the row.
+   */
+  const lockedReason = documentLocked
+    ? "Someone else is editing this document"
+    : undefined;
   const invalidReason = isInvalid
     ? "Fix the errors on this page first."
     : undefined;
   const saveReason =
+    lockedReason ??
     busyReason ??
     invalidReason ??
     (isPublishedEditState && isDirty !== true
@@ -481,18 +506,24 @@ export function EntrySystemHeader({
       : {
           publish: {
             onSelect: onPublish,
-            disabledReason: busyReason ?? invalidReason,
+            disabledReason: lockedReason ?? busyReason ?? invalidReason,
           },
         }),
     ...(onDuplicate === undefined
       ? {}
-      : { duplicate: { onSelect: onDuplicate, disabledReason: busyReason } }),
+      : {
+          duplicate: {
+            onSelect: onDuplicate,
+            // Duplicating WRITES a new document, so it is withheld too.
+            disabledReason: lockedReason ?? busyReason,
+          },
+        }),
     ...(onViewApi === undefined ? {} : { "view-api": { onSelect: onViewApi } }),
     ...(showDiscardDraft
       ? {
           "discard-draft": {
             onSelect: () => setDiscardDraftOpen(true),
-            disabledReason: busyReason,
+            disabledReason: lockedReason ?? busyReason,
           },
         }
       : {}),
@@ -515,12 +546,17 @@ export function EntrySystemHeader({
       : {
           unpublish: {
             onSelect: () => setUnpublishOpen(true),
-            disabledReason: busyReason,
+            disabledReason: lockedReason ?? busyReason,
           },
         }),
     ...(onDelete === undefined
       ? {}
-      : { delete: { onSelect: onDelete, disabledReason: busyReason } }),
+      : {
+          delete: {
+            onSelect: onDelete,
+            disabledReason: lockedReason ?? busyReason,
+          },
+        }),
   };
 
   /*
@@ -575,7 +611,7 @@ export function EntrySystemHeader({
             control={form.control}
             label={titleLabel}
             required={titleRequired && !isReadingHistory}
-            locked={lockIdentity || isReadingHistory}
+            locked={lockIdentity || isReadingHistory || documentLocked}
             submitting={isSubmitting}
             rtl={titleRtl}
             inputRef={(el: HTMLInputElement | null) => {

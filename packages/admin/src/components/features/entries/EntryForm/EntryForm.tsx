@@ -58,6 +58,7 @@ import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
 import { AutosaveRecoveryBanner } from "./AutosaveRecoveryBanner";
 import type { ContributedAction } from "./DocumentActionBar";
+import { DocumentLockBanner } from "./DocumentLockBanner";
 import {
   effectiveEntryStatus,
   isSlugPerLocale,
@@ -80,6 +81,7 @@ import { FormErrorSummary } from "./FormErrorSummary";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
+import { useDocumentLockSurface } from "./useDocumentLockSurface";
 import {
   useEntryForm,
   getCollectionFields,
@@ -306,9 +308,9 @@ export function EntryForm({
 
   const {
     form,
-    handleSubmit,
-    handleDelete,
-    handleDiscardWorkingDraft,
+    handleSubmit: submitEntry,
+    handleDelete: deleteEntry,
+    handleDiscardWorkingDraft: discardWorkingDraft,
     handleCancel,
     isSubmitting,
     isDirty,
@@ -371,6 +373,7 @@ export function EntryForm({
   });
 
   const collectionSlug = collection.slug ?? collection.name;
+
   const localeCtx = useEntryLocaleContext({
     locale,
     defaultLocale,
@@ -601,6 +604,47 @@ export function EntryForm({
   // once the entry has an id: a document that has never been saved has nothing
   // for the endpoint to address, and `null` turns recording off rather than
   // inventing one.
+
+  /*
+   * An advisory claim on the document, so two editors are told about each other
+   * rather than discovering it when one overwrites the other.
+   *
+   * Off while creating: a document with no id is nothing to claim, and nobody
+   * else can be in it.
+   *
+   * 🔴 Held THROUGH a past version, which reading alone would not need. The
+   * history view offers Restore, and restoring writes the live document — so
+   * dropping the claim here would let someone study an old snapshot, never see
+   * the colleague who arrived meanwhile, and overwrite them from a surface that
+   * looked read-only. The autosave is still held off while a version is on
+   * screen, which is a different question: what it would RECORD.
+   */
+  const lock = useDocumentLockSurface({
+    scopeKind: "collection",
+    slug: collectionSlug,
+    entryId: entry?.id,
+    enabled: mode === "edit",
+  });
+
+  /*
+   * The one gate every write passes through.
+   *
+   * 🔴 Not the controls. Save, Publish, Unpublish, Delete, discarding a working
+   * draft, the keyboard shortcut, a native form submit and the quick-edit modal
+   * all reach these three functions. Disabling the affordances one at a time is
+   * a list that the next write path gets added without, and the failure is
+   * silent: the banner says the document is somebody else's while the editor
+   * overwrites them. The affordances ARE disabled, so nothing offers what it
+   * cannot do — this is the guard that does not depend on remembering.
+   */
+  const handleSubmit: typeof submitEntry = (event, intent) =>
+    lock.actionsDisabled ? Promise.resolve() : submitEntry(event, intent);
+  const handleDelete = () => {
+    if (!lock.actionsDisabled) deleteEntry();
+  };
+  const handleDiscardWorkingDraft = () =>
+    lock.actionsDisabled ? Promise.resolve() : discardWorkingDraft();
+
   const autosaveScope = useMemo(
     () => autosaveScopeFor("collection", collection.name, savedEntryId),
     [savedEntryId, collection.name]
@@ -637,6 +681,11 @@ export function EntryForm({
      * reads "you have unsaved changes", and accepting it silently reverts the
      * document to whatever the reader happened to be looking at. Reading is not
      * editing, and the write is the only part of that which is recoverable.
+     */
+    /*
+     * And held off while a colleague holds the document. The recovery point is a
+     * write to the same row, so leaving it running is the overwrite the claim
+     * exists to prevent, made quieter by happening on a timer nobody watches.
      */
     enabled: !isSubmitting && viewingVersion === null,
   });
@@ -747,6 +796,15 @@ export function EntryForm({
           className={className}
         >
           <div className="space-y-6">
+            {/* 🔴 Here too, not only in the standalone layout. Quick-edit from a
+                relationship picker claims the related entry exactly as the full
+                editor does, so without this a colleague's claim renders every
+                field in the modal uneditable with nothing saying why and no way
+                to take it over — a locked form that reads as a broken one. */}
+            <DocumentLockBanner
+              notice={lock.notice}
+              onTakeOver={lock.takeOver}
+            />
             {/* Error summary at top of form */}
             <FormErrorSummary errors={errors} submitCount={submitCount} />
             {/* This branch renders every collection field, the editable slug among them, but not
@@ -767,6 +825,7 @@ export function EntryForm({
             <EntryFormContent
               fields={getCollectionFields(collection)}
               disabled={isSubmitting}
+              readOnly={lock.readOnly}
               mode={mode}
             />
             <EntryFormActions
@@ -877,6 +936,7 @@ export function EntryForm({
                                 ? {}
                                 : { onViewApi })}
                               mode={mode}
+                              documentLocked={lock.readOnly}
                               titleField={titleField}
                               hasStatus={hasStatus}
                               draftsEnabled={collection.draftsEnabled === true}
@@ -957,6 +1017,13 @@ export function EntryForm({
                                 mode === "edit" ? toggleRail : undefined
                               }
                             />
+                            {/* First of the strips: a document somebody else is in
+                      changes what every affordance below it means, so it is read
+                      before the offer to restore work into it. */}
+                            <DocumentLockBanner
+                              notice={lock.notice}
+                              onTakeOver={lock.takeOver}
+                            />
                             {/* Above the fields and below the header: the reader sees
                       the document it refers to without the offer covering it. */}
                             {recovery.offer ? (
@@ -979,7 +1046,8 @@ export function EntryForm({
                                 }
                                 // Offered only when the panel says this caller may write.
                                 onRestore={
-                                  restoreAffordance?.canRestore
+                                  restoreAffordance?.canRestore &&
+                                  !lock.actionsDisabled
                                     ? restoreAffordance.request
                                     : undefined
                                 }
@@ -992,6 +1060,8 @@ export function EntryForm({
                             <EntryMetaStrip
                               slugField={slugField}
                               hasStatus={hasStatus}
+                              // The slug is a write, and the same claim withholds it.
+                              lockSlug={lock.readOnly}
                               // The pill reports the language being edited, matching the header's submit
                               // affordances. Reading the main row instead would show "Published" beside a
                               // Publish button whenever a translation lags its default language.
@@ -1043,7 +1113,10 @@ export function EntryForm({
                                     ? {}
                                     : { onSelect: onLocaleChange })}
                                   hasStatus={hasStatus}
-                                  actionsDisabled={viewingVersion !== null}
+                                  actionsDisabled={
+                                    viewingVersion !== null ||
+                                    lock.actionsDisabled
+                                  }
                                 />
                               </div>
                             )}
@@ -1099,6 +1172,7 @@ export function EntryForm({
                                   <EntryFormContent
                                     fields={mainFields}
                                     disabled={isSubmitting}
+                                    readOnly={lock.readOnly}
                                     withCard
                                     mode={mode}
                                   />
@@ -1127,7 +1201,10 @@ export function EntryForm({
                                   {...(onLocaleChange === undefined
                                     ? {}
                                     : { onLocaleChange })}
-                                  actionsDisabled={viewingVersion !== null}
+                                  actionsDisabled={
+                                    viewingVersion !== null ||
+                                    lock.actionsDisabled
+                                  }
                                   isDirty={isDirty}
                                 />
                               </div>
