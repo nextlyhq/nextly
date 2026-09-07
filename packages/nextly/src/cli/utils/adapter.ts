@@ -8,6 +8,8 @@
  * @since 1.0.0
  */
 
+import { dialectFromUrl } from "../../shared/lib/env";
+
 import type { Logger } from "./logger";
 
 /**
@@ -60,21 +62,11 @@ export interface DatabaseEnvValidation {
 export function detectDialectFromUrl(
   url: string
 ): SupportedDialect | undefined {
-  if (url.startsWith("postgresql://") || url.startsWith("postgres://")) {
-    return "postgresql";
-  }
-  if (url.startsWith("mysql://")) {
-    return "mysql";
-  }
-  if (
-    url.startsWith("file:") ||
-    url.endsWith(".db") ||
-    url.endsWith(".sqlite") ||
-    url.endsWith(".sqlite3")
-  ) {
-    return "sqlite";
-  }
-  return undefined;
+  // Delegates rather than restating. The environment schema resolves the
+  // dialect for everything that reads `env.DB_DIALECT`, and a second copy of
+  // these rules here meant the CLI and the runtime could disagree about the
+  // same URL: this one accepted `.sqlite3` and that one did not.
+  return dialectFromUrl(url);
 }
 
 /**

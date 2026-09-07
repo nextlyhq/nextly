@@ -227,51 +227,17 @@ export async function createAdapterFromEnv(): Promise<DrizzleAdapter> {
  * @internal
  */
 function detectAdapterType(): AdapterType {
-  // Priority 1: Check DB_DIALECT env var (explicit)
-  const dialect = env.DB_DIALECT;
-  if (dialect) {
-    switch (dialect) {
-      case "postgresql":
-        return "postgresql";
-      case "mysql":
-        return "mysql";
-      case "sqlite":
-        return "sqlite";
-      default:
-        // TypeScript should prevent this, but include runtime check
-        throw new Error(
-          `Unknown DB_DIALECT: ${String(dialect)}. Must be "postgresql", "mysql", or "sqlite"`
-        );
-    }
-  }
-
-  // Priority 2: Fallback - detect from DATABASE_URL protocol
-  const url = env.DATABASE_URL;
-  if (url) {
-    // PostgreSQL URLs
-    if (url.startsWith("postgres://") || url.startsWith("postgresql://")) {
-      return "postgresql";
-    }
-    // MySQL URLs
-    if (url.startsWith("mysql://")) {
-      return "mysql";
-    }
-    // SQLite file URLs or file extensions
-    if (
-      url.startsWith("file:") ||
-      url.endsWith(".db") ||
-      url.endsWith(".sqlite")
-    ) {
-      return "sqlite";
-    }
-  }
-
-  // Priority 3: Default to PostgreSQL with warning
-  console.warn(
-    "⚠️  No DB_DIALECT or DATABASE_URL specified, defaulting to PostgreSQL. " +
-      "Set DB_DIALECT environment variable to avoid this warning."
-  );
-  return "postgresql";
+  // One answer, reached in `shared/lib/env`: an explicit DB_DIALECT if the
+  // operator stated one, otherwise the dialect the DATABASE_URL implies.
+  //
+  // This used to hold a second copy of the URL rules, behind a truthiness check
+  // on a value that carried a Zod default and so was never falsy. The copy
+  // could not run, which is why `DATABASE_URL=mysql://...` alone produced a
+  // PostgreSQL adapter. The warning that followed it, for an environment with
+  // neither variable set, could not run either: such an environment fails
+  // validation with "DATABASE_URL is required for postgresql dialect" before
+  // anything here reads it.
+  return env.DB_DIALECT;
 }
 
 /**
