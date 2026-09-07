@@ -67,6 +67,7 @@ import { isPlainRecord } from "./plain-record";
 import {
   componentIdsIn,
   resolveComponentInstances,
+  type ComponentUnresolvedReason,
   type DefinitionsById,
 } from "./resolve-instances";
 import { boundedOwnKeys, defineEntry, ownKeys } from "./safe-record";
@@ -2164,6 +2165,15 @@ interface FreshCopy {
    */
   readonly renamed: ReadonlyMap<string, string>;
   readonly nodes: BlockNode[];
+  /**
+   * Each node's id BEFORE the copy → the id it was given.
+   *
+   * Published because a caller may have put something into the forest it needs
+   * to find again afterwards — detaching stands a placeholder in for the
+   * author's slot content and has to know where it landed — and the copy is the
+   * only thing that knows.
+   */
+  readonly nodeIds: ReadonlyMap<string, string>;
   readonly problem?: undefined;
 }
 
@@ -2218,7 +2228,13 @@ function freshCopy(
     const clash =
       [...minted.domIds.values()].some(id => taken.has(id)) ||
       duplicateDomIdRefusal(minted.nodes) !== undefined;
-    if (!clash) return { nodes: minted.nodes, renamed: minted.domIds };
+    if (!clash) {
+      return {
+        nodes: minted.nodes,
+        renamed: minted.domIds,
+        nodeIds: minted.nodeIds,
+      };
+    }
   }
   return { problem: "dom-id-collision" };
 }
@@ -2448,6 +2464,30 @@ export function planDetach(
   return { pageOps: ops };
 }
 
+/**
+ * What each way of failing to inline an instance means to whoever asked.
+ *
+ * A RECORD over the reason type, not a condition, so the compiler asks for an
+ * answer the day a reason is added rather than letting it fall into whichever
+ * branch happens to be last. Collapsing them all to `"not-a-component"` told an
+ * author to publish or repair a component that was neither missing nor broken —
+ * only bigger than the limits this call was given.
+ *
+ * `budget` and `node-depth` are the page's ceilings, and `composed-depth` is
+ * the nesting one; all three are the size answer. The rest are faults in the
+ * component or in the instance naming it, which is a different screen and a
+ * different remedy.
+ */
+const DETACH_REFUSALS: Record<ComponentUnresolvedReason, PlanProblem> = {
+  budget: "exceeds-limits",
+  "node-depth": "exceeds-limits",
+  "composed-depth": "exceeds-limits",
+  missing: "not-a-component",
+  unreadable: "not-a-component",
+  cycle: "not-a-component",
+  malformed: "invalid-source",
+};
+
 /** One instance resolved into the nodes it renders, or why it could not be. */
 interface ResolvedDefinition {
   readonly nodes: BlockNode[];
@@ -2491,9 +2531,11 @@ function resolvedDefinition(
   // component name refused a detach that had already worked. `instanceId` is
   // the node as it appears in the returned document, which for the one being
   // detached is the id it was selected by.
-  if (resolved.unresolved.some(one => one.instanceId === instance.id)) {
-    return { problem: "not-a-component" };
-  }
+  const refused = resolved.unresolved.find(
+    one => one.instanceId === instance.id
+  );
+  if (refused !== undefined)
+    return { problem: DETACH_REFUSALS[refused.reason] };
 
   // TWO passes of the one copier, because two different things are being
   // undone and each has its own policy.
@@ -2669,10 +2711,26 @@ function detachedRoots(
     ...gatedWith(root, gate),
   }));
 
+  // The DEFINITION's own fault, asked before the copy and reported as itself.
+  // Two of its nodes rendering one id is a fault in the component, and
+  // `freshCopy` below would report it as `dom-id-collision` — which names the
+  // destination and sends an author to look at the page they are detaching
+  // ONTO rather than at the component. Asked of the authored form, since that
+  // is where two nodes sharing an id become visible: resolution had scoped them
+  // to one runtime id apiece.
+  const duplicated = duplicateDomIdRefusal(authored.nodes);
+  if (duplicated !== undefined) return duplicated;
+
+  // Through the CHECKED copier, not a second call to the raw one. `{avoid}`
+  // mints against the ids the destination holds, but a minted `hero-<suffix>`
+  // can itself land on an id the page already carries — `freshCopy` compares
+  // what was minted against that set, re-mints from fresh node ids when it
+  // clashes, and refuses as `dom-id-collision` rather than producing a page
+  // with two of one id. It also asks `duplicateDomIdRefusal` of the copy, which
+  // is the collision entirely inside the forest.
   const placed = placedContent(held, authored.nodeIds);
-  const copied = reidForestWithMap(gated, {
-    avoid: domIdsIn([...remaining, ...placed]),
-  });
+  const copied = freshCopy(gated, domIdsIn([...remaining, ...placed]));
+  if (copied.problem !== undefined) return copied;
   const roots = restoreSuppliedSlots(
     copied.nodes,
     held.byId,
@@ -2683,11 +2741,12 @@ function detachedRoots(
   // does not police and strict validation, the gate this predicts, refuses. The
   // pattern paths already ask this; asking it here is what keeps a plan from
   // succeeding into a page that cannot be published.
-  const stamped = roots.map(root => ({
-    ...root,
-    origin: { from: "component" as const, id: componentId },
-  }));
-  return duplicateDomIdRefusal(stamped) ?? { roots: stamped };
+  return {
+    roots: roots.map(root => ({
+      ...root,
+      origin: { from: "component" as const, id: componentId },
+    })),
+  };
 }
 
 /**

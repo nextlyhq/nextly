@@ -16,6 +16,8 @@ import { applyOps } from "./ops";
 import { COMPONENT_INSTANCE_TYPE, DOCUMENT_FORMAT_VERSION } from "./document";
 import type { BlockDocument, BlockNode, ComponentDocument } from "./document";
 import { mintDomId, walkNodes } from "./tree";
+import { DEFAULT_LIMITS } from "./limits";
+import type { DocumentLimits } from "./limits";
 
 const node = (id: string, extra: Partial<BlockNode> = {}): BlockNode => ({
   id,
@@ -687,6 +689,39 @@ describe("what detach refuses", () => {
       "invalid-source"
     );
   });
+
+  const overSized: [string, Partial<DocumentLimits>, "wide" | "deep"][] = [
+    ["a definition larger than the node budget", { maxNodes: 3 }, "wide"],
+    ["a definition deeper than the depth cap", { maxDepth: 3 }, "deep"],
+  ];
+
+  it.each(overSized)(
+    "says %s is too big, not that the component is wrong",
+    (_name, caps, shape) => {
+      // Collapsing every refusal of the selected instance to
+      // `not-a-component` told an author to publish or repair a component that
+      // was neither missing nor broken — only bigger than the limits this call
+      // was given. The remedy for a size is the page or the ceiling; the remedy
+      // for a bad component is a different screen entirely.
+      const big: BlockNode[] = [];
+      for (let i = 0; i < 8; i += 1) big.push(node(`b${String(i)}`));
+      let deep: BlockNode = node("leaf");
+      for (let i = 0; i < 8; i += 1) {
+        deep = box(`w${String(i)}`, [deep]);
+      }
+      const definitions = defs({
+        card: component(shape === "wide" ? big : [deep]),
+      });
+      const doc = page([instance("i1", "card")]);
+
+      expect(
+        planDetach(doc, "i1", definitions, anyParent, {
+          ...DEFAULT_LIMITS,
+          ...caps,
+        }).problem
+      ).toBe("exceeds-limits");
+    }
+  );
 
   it("refuses when the page is at its byte ceiling", () => {
     const doc = page([instance("i1", "card")]);
