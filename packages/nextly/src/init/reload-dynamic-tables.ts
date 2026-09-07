@@ -21,7 +21,10 @@
 // runtime: the specifier is erased, and the loader itself is still imported
 // dynamically below to keep it off the boot path until a reload actually runs.
 import type { SchemaRegistry } from "../database/schema-registry";
-import type { loadDynamicTables } from "../di/load-dynamic-tables";
+import type {
+  DynamicTableLoadResult,
+  loadDynamicTables,
+} from "../di/load-dynamic-tables";
 
 /**
  * The in-flight reload and the one queued behind it.
@@ -114,11 +117,29 @@ async function runReload(label: string): Promise<void> {
     let registered = 0;
     const failures: string[] = [];
     for (const table of ["dynamic_collections", "dynamic_singles"] as const) {
-      registered += await loadInto(deps, table, err => {
-        failures.push(
-          `${table}: ${err instanceof Error ? err.message : String(err)}`
-        );
-      });
+      const outcome = await loadInto(deps, table);
+      registered += outcome.registered;
+      for (const failure of outcome.failures) {
+        /*
+         * 🔴 A ROW failure counts as much as a read failure. The loader skips a
+         * row whose stored `fields` will not parse or whose schema will not
+         * generate -- right, because one corrupt row must not cost every other
+         * dynamic table its registration -- and the count merely comes back
+         * lower. Read off the count alone, one unregisterable collection looks
+         * exactly like a database holding one fewer, so the boot logged a
+         * completed reload and opened the gate while that entity stayed
+         * unqueryable: the defect this module exists to close, one level down
+         * from where it was first fixed.
+         */
+        const where = failure.tableName
+          ? `${table}.${failure.tableName}`
+          : table;
+        const why =
+          failure.error instanceof Error
+            ? failure.error.message
+            : String(failure.error);
+        failures.push(`${where}: ${why}`);
+      }
     }
 
     /*
@@ -219,26 +240,23 @@ async function resolveDeps(label: string): Promise<ReloadDeps | undefined> {
 }
 
 /**
- * Read one metadata table, register a runtime schema per row, and say how many.
+ * Read one metadata table and register a runtime schema per row.
  *
- * 🔴 Returns a COUNT rather than nothing, because `loadDynamicTables` resolves
- * whether or not it read anything — it swallows a failed read for the fresh
- * database it was written for. Reporting "reloaded" off its resolution alone
- * claimed a repair that may not have happened; the number is what this pass
- * actually did, and `onReadError` is what separates zero rows from no read.
+ * Hands the loader's own outcome straight back rather than reducing it here:
+ * what this pass registered and what it could not are one answer, and the
+ * CALLER is the party that decides whether a failure means the reload is
+ * incomplete.
  */
 async function loadInto(
   deps: ReloadDeps,
-  table: "dynamic_collections" | "dynamic_singles",
-  onReadError: (error: unknown) => void
-): Promise<number> {
+  table: "dynamic_collections" | "dynamic_singles"
+): Promise<DynamicTableLoadResult> {
   const { loadDynamicTables } = await import("../di/load-dynamic-tables");
   const { generateRuntimeSchema } = await import(
     "../domains/schema/services/runtime-schema-generator"
   );
 
-  let registered = 0;
-  await loadDynamicTables(
+  return loadDynamicTables(
     deps.adapter,
     table,
     (tableName, fields, hasStatus, localized) => {
@@ -249,10 +267,7 @@ async function loadInto(
         { status: hasStatus === true, localized: localized === true }
       );
       deps.registry.registerDynamicSchema(tableName, runtime);
-      registered += 1;
       return Promise.resolve();
-    },
-    onReadError
+    }
   );
-  return registered;
 }

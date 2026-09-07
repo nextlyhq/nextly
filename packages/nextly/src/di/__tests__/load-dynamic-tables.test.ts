@@ -201,12 +201,16 @@ describe("loadDynamicTables — SELECT shape", () => {
 
 describe("loadDynamicTables — fault tolerance", () => {
   it("does not throw if the source table doesn't exist (fresh DB)", async () => {
+    // Still resolves rather than throwing -- a fresh database has no registry
+    // table and that is the right answer for the caller this was written for.
+    // What it resolves WITH is the neighbouring test's subject; asserting
+    // `undefined` here only ever pinned the absence of a return value.
     const { adapter } = makeAdapter([], { throwOnSelect: true });
     const register = vi.fn(async () => {});
 
     await expect(
       loadDynamicTables(adapter, "dynamic_singles", register)
-    ).resolves.toBeUndefined();
+    ).resolves.not.toThrow();
     expect(register).not.toHaveBeenCalled();
   });
 
@@ -221,35 +225,87 @@ describe("loadDynamicTables — fault tolerance", () => {
    * module, so they can only show that it reacts to `onReadError` -- nothing
    * there says this function ever calls it.
    */
-  it("tells a caller that asked when the read itself failed", async () => {
+  it("reports the failed read rather than only swallowing it", async () => {
     const { adapter } = makeAdapter([], { throwOnSelect: true });
     const register = vi.fn(async () => {});
-    const onReadError = vi.fn();
 
-    await expect(
-      loadDynamicTables(adapter, "dynamic_singles", register, onReadError)
-    ).resolves.toBeUndefined();
+    const result = await loadDynamicTables(
+      adapter,
+      "dynamic_singles",
+      register
+    );
 
-    expect(onReadError).toHaveBeenCalledTimes(1);
+    expect(result.registered).toBe(0);
+    expect(result.failures.map(f => f.scope)).toEqual(["read"]);
     expect(register).not.toHaveBeenCalled();
   });
 
-  it("does not report a read error when the read succeeded", async () => {
-    // The control: a callback fired unconditionally would satisfy the case
-    // above while telling every healthy boot its registry is stale.
+  /*
+   * 🔴 A ROW failure has to be reportable too, and a lower count is not it: one
+   * unregisterable collection is indistinguishable from a database holding one
+   * fewer, so a caller reading the count alone calls its reload complete while
+   * that entity stays unaddressable.
+   */
+  it("reports a row whose register callback throws, naming it", async () => {
+    const { adapter } = makeAdapter([
+      { table_name: "single_bad", fields: "[]", slug: "bad", status: 0 },
+      { table_name: "single_ok", fields: "[]", slug: "ok", status: 0 },
+    ]);
+    const register = vi.fn(async (tableName: string) => {
+      if (tableName === "single_bad") throw new Error("synthetic");
+    });
+
+    const result = await loadDynamicTables(
+      adapter,
+      "dynamic_singles",
+      register
+    );
+
+    // The other row still registered: one bad row costs only itself.
+    expect(result.registered).toBe(1);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]?.scope).toBe("row");
+    expect(result.failures[0]?.tableName).toBe("single_bad");
+  });
+
+  it("reports a row whose stored fields are not an array", async () => {
+    // The other way a row goes unregistered, and it used to be a bare
+    // `continue` -- so it never even reached the per-row catch.
+    const { adapter } = makeAdapter([
+      {
+        table_name: "single_corrupt",
+        fields: '"not-an-array"',
+        slug: "c",
+        status: 0,
+      },
+    ]);
+
+    const result = await loadDynamicTables(
+      adapter,
+      "dynamic_singles",
+      vi.fn(async () => {})
+    );
+
+    expect(result.registered).toBe(0);
+    expect(result.failures[0]?.tableName).toBe("single_corrupt");
+  });
+
+  it("reports nothing when every row registered", async () => {
+    // The control for all three: an outcome that always carried a failure
+    // would satisfy them while telling every healthy boot its registry is
+    // stale.
     const { adapter } = makeAdapter([
       { table_name: "single_ok", fields: "[]", slug: "ok", status: 0 },
     ]);
-    const onReadError = vi.fn();
 
-    await loadDynamicTables(
+    const result = await loadDynamicTables(
       adapter,
       "dynamic_singles",
-      vi.fn(async () => {}),
-      onReadError
+      vi.fn(async () => {})
     );
 
-    expect(onReadError).not.toHaveBeenCalled();
+    expect(result.registered).toBe(1);
+    expect(result.failures).toEqual([]);
   });
 
   it("isolates failures per row — a thrown register continues with the next row", async () => {

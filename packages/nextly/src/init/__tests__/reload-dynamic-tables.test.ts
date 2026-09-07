@@ -14,6 +14,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { reloadDynamicTables } from "../reload-dynamic-tables";
 
+/**
+ * The loader's real return shape.
+ *
+ * Spelled once, because a mock that resolves something the real function never
+ * returns is the defect these tests exist to catch, one layer up.
+ */
+const ok = (registered = 0) => ({ registered, failures: [] });
+
 const containerGet = vi.hoisted(() => vi.fn());
 vi.mock("../../di/container", () => ({ container: { get: containerGet } }));
 
@@ -72,7 +80,7 @@ afterEach(() => {
 describe("reloadDynamicTables", () => {
   it("reads both metadata tables", () => {
     ready();
-    loadDynamicTables.mockResolvedValue(undefined);
+    loadDynamicTables.mockResolvedValue(ok());
     return reloadDynamicTables("[t]").then(() => {
       expect(loadDynamicTables.mock.calls.map(c => c[1])).toEqual([
         "dynamic_collections",
@@ -86,11 +94,11 @@ describe("reloadDynamicTables", () => {
     let release: (() => void) | undefined;
     loadDynamicTables.mockImplementationOnce(
       () =>
-        new Promise<void>(resolve => {
-          release = resolve;
+        new Promise(resolve => {
+          release = () => resolve(ok());
         })
     );
-    loadDynamicTables.mockResolvedValue(undefined);
+    loadDynamicTables.mockResolvedValue(ok());
 
     const first = reloadDynamicTables("[a]");
     // Arrives while the first is still reading, which is the boot whose rows
@@ -111,11 +119,11 @@ describe("reloadDynamicTables", () => {
     let release: (() => void) | undefined;
     loadDynamicTables.mockImplementationOnce(
       () =>
-        new Promise<void>(resolve => {
-          release = resolve;
+        new Promise(resolve => {
+          release = () => resolve(ok());
         })
     );
-    loadDynamicTables.mockResolvedValue(undefined);
+    loadDynamicTables.mockResolvedValue(ok());
 
     const first = reloadDynamicTables("[a]");
     const second = reloadDynamicTables("[b]");
@@ -140,22 +148,52 @@ describe("reloadDynamicTables", () => {
     ready();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    // The real loader's shape: resolve, having told the caller it read nothing.
-    loadDynamicTables.mockImplementation(
-      async (
-        _adapter: unknown,
-        _table: unknown,
-        _register: unknown,
-        onReadError?: (e: unknown) => void
-      ) => {
-        onReadError?.(new Error("relation does not exist"));
-      }
-    );
+    // The real loader's shape: RESOLVE, carrying the failure it swallowed.
+    loadDynamicTables.mockResolvedValue({
+      registered: 0,
+      failures: [
+        { scope: "read", error: new Error("relation does not exist") },
+      ],
+    });
 
     await reloadDynamicTables("[t]");
 
     expect(warn.mock.calls.flat().join(" ")).toMatch(/INCOMPLETE/);
     // And it did NOT also claim the reload finished.
+    expect(log.mock.calls.flat().join(" ")).not.toMatch(/reloaded:/);
+  });
+
+  /*
+   * 🔴 A ROW failure must reach the same warning a read failure does. The
+   * loader skips a row whose stored `fields` will not parse or whose schema
+   * will not generate, and the count merely comes back lower -- which is
+   * indistinguishable from a database holding one fewer entity. Reported off
+   * the count alone, the boot called the reload complete and opened the gate
+   * while that collection stayed unqueryable.
+   */
+  it("reports a row that could not be registered, naming it", async () => {
+    ready();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    loadDynamicTables.mockResolvedValue({
+      registered: 2,
+      failures: [
+        {
+          scope: "row",
+          tableName: "dc_posts",
+          error: new Error("stored `fields` is not an array"),
+        },
+      ],
+    });
+
+    await reloadDynamicTables("[t]");
+
+    const warned = warn.mock.calls.flat().join(" ");
+    expect(warned).toMatch(/INCOMPLETE/);
+    // Names the entity, so an operator knows WHICH one is unqueryable rather
+    // than that something is.
+    expect(warned).toMatch(/dc_posts/);
+    // And it did not also claim the reload finished, despite 2 registering.
     expect(log.mock.calls.flat().join(" ")).not.toMatch(/reloaded:/);
   });
 
@@ -165,7 +203,7 @@ describe("reloadDynamicTables", () => {
     ready();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    loadDynamicTables.mockResolvedValue(undefined);
+    loadDynamicTables.mockResolvedValue(ok());
 
     await reloadDynamicTables("[t]");
 
@@ -183,7 +221,7 @@ describe("reloadDynamicTables", () => {
    */
   it("registers field groups through the component path", async () => {
     ready();
-    loadDynamicTables.mockResolvedValue(undefined);
+    loadDynamicTables.mockResolvedValue(ok());
     registerComponentSchemas.mockResolvedValue(2);
 
     await reloadDynamicTables("[t]");
@@ -197,7 +235,7 @@ describe("reloadDynamicTables", () => {
     // before the boot gate opens.
     ready();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    loadDynamicTables.mockResolvedValue(undefined);
+    loadDynamicTables.mockResolvedValue(ok());
     registerComponentSchemas.mockRejectedValue(new Error("comp registry gone"));
 
     await expect(reloadDynamicTables("[t]")).resolves.toBeUndefined();
@@ -220,7 +258,7 @@ describe("reloadDynamicTables", () => {
     loadDynamicTables.mockRejectedValueOnce(new Error("transient"));
     await reloadDynamicTables("[t]");
 
-    loadDynamicTables.mockResolvedValue(undefined);
+    loadDynamicTables.mockResolvedValue(ok());
     await reloadDynamicTables("[t]");
     expect(loadDynamicTables.mock.calls.map(c => c[1])).toContain(
       "dynamic_singles"
