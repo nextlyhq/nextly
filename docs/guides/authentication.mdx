@@ -29,10 +29,9 @@ Cookies are scoped to `/admin/*` so Nextly auth never collides with frontend app
 ```typescript
 // app/api/my-route/route.ts
 import { getSession } from "nextly/auth";
-import { env } from "nextly/lib/env";
 
 export async function GET(req: Request) {
-  const result = await getSession(req, env.NEXTLY_SECRET ?? "");
+  const result = await getSession(req, process.env.NEXTLY_SECRET ?? "");
 
   if (!result.authenticated) {
     return Response.json({ error: "Not authenticated" }, { status: 401 });
@@ -63,11 +62,10 @@ Custom user fields defined via `defineConfig({ users: { fields } })` are also su
 
 ```typescript
 import { requireAuth } from "nextly/auth";
-import { env } from "nextly/lib/env";
 
 export async function GET(req: Request) {
   // Throws AuthenticationError if no valid session.
-  const user = await requireAuth(req, env.NEXTLY_SECRET ?? "");
+  const user = await requireAuth(req, process.env.NEXTLY_SECRET ?? "");
   return Response.json({ email: user.email });
 }
 ```
@@ -98,10 +96,9 @@ import {
   hasAnyRole,
   hasAllRoles,
 } from "nextly/auth";
-import { env } from "nextly/lib/env";
 
 export async function GET(req: Request) {
-  const result = await getSession(req, env.NEXTLY_SECRET ?? "");
+  const result = await getSession(req, process.env.NEXTLY_SECRET ?? "");
   if (!result.authenticated) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }

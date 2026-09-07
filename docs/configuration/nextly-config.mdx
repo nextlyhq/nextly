@@ -553,11 +553,11 @@ admin: {
 
 `defineConfig()` performs these checks at startup:
 
-- **Duplicate slugs** — collection, single, and field group slugs must be unique across all three.
-- **Cross-type conflicts** — a single cannot share a slug with a collection or field group.
-- **Field group nesting** — circular field group references and excessive nesting (max depth 3) are rejected.
-- **User config** — only the allowed scalar field types are accepted.
-- **API-key bounds** — `apiKeys.rateLimit.requestsPerHour` and `apiKeys.rateLimit.windowMs` must be positive.
+- **Duplicate slugs.** Collection, single, and field group slugs must be unique across all three.
+- **Cross-type conflicts.** A single cannot share a slug with a collection or field group.
+- **Field group nesting.** Circular field group references and excessive nesting (max depth 3) are rejected.
+- **User config.** Only the allowed scalar field types are accepted.
+- **API-key bounds.** `apiKeys.rateLimit.requestsPerHour` and `apiKeys.rateLimit.windowMs` must be positive.
 
 Validation failures throw a descriptive error at startup so misconfigurations surface immediately.
 

@@ -5,8 +5,8 @@ description: How Nextly prunes the webhook event ledger and delivery log, plus P
 
 Nextly records outbound webhook activity in two high-churn tables:
 
-- **`nextly_events`** — the event ledger (the outbox). A content change writes a row here **only when recording is active**: an enabled webhook endpoint exists, or the `webhooks.audit` seam is on. An install with no enabled endpoint and audit off records nothing, so the table does not grow.
-- **`nextly_webhook_deliveries`** — **one row per (endpoint, event)**, carrying the retry state. Each retry is appended to that row's in-row attempt log, not added as a new row, so more matching endpoints add rows while retries enlarge existing ones.
+- **`nextly_events`.** The event ledger (the outbox). A content change writes a row here **only when recording is active**: an enabled webhook endpoint exists, or the `webhooks.audit` seam is on. An install with no enabled endpoint and audit off records nothing, so the table does not grow.
+- **`nextly_webhook_deliveries`.** **One row per (endpoint, event)**, carrying the retry state. Each retry is appended to that row's in-row attempt log, not added as a new row, so more matching endpoints add rows while retries enlarge existing ones.
 
 When recording is active these tables fill continuously and are pruned automatically. This page explains the retention policy, the manual `nextly webhooks:prune` command, and how to keep the underlying tables from bloating on Postgres and SQLite.
 
@@ -70,7 +70,7 @@ The command reports how many webhook events, audit events, and terminal delivery
 
 **`webhooks:prune` is cleanup, not delivery.** It does not fan out or deliver anything. Its behaviour splits on whether an enabled endpoint exists:
 
-- **With an enabled endpoint,** an event that was never fanned out is **kept** — it may still be delivered — so prune only reclaims already-fanned-out events plus terminal (`delivered`/`failed`) deliveries. You still need the **drain running** to fan out and deliver; `webhooks:prune` supplements it with scheduled cleanup, it does not replace it.
+- **With an enabled endpoint,** an event that was never fanned out is **kept**. It may still be delivered, so prune only reclaims already-fanned-out events plus terminal (`delivered`/`failed`) deliveries. You still need the **drain running** to fan out and deliver; `webhooks:prune` supplements it with scheduled cleanup, it does not replace it.
 - **With no enabled endpoint** (an audit-only install, `webhooks.audit` on), there is nothing to deliver to, so aged un-fanned events are reclaimable and `webhooks:prune` is all you need to keep the ledger bounded.
 
 A daily cron is a good baseline where you want scheduled cleanup:
