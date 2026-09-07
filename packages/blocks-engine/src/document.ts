@@ -1135,6 +1135,23 @@ export function isComponentDocument(
   return doc.kind === "component";
 }
 
+/**
+ * True if a document declares itself a pattern.
+ *
+ * Reads the KIND only, for the reason {@link isComponentDocument} does:
+ * whether the tree inside it is usable is a question for validation, and
+ * answering it here would make a malformed pattern read as "not a pattern"
+ * rather than be reported as one that is broken.
+ *
+ * Published because two roads now ask it and they must agree: the planner
+ * refuses a document that is not a pattern outright, and a palette has to know
+ * not to offer one it would refuse. A second spelling of `kind === "pattern"`
+ * agrees until one of them learns about a kind the other does not.
+ */
+export function isPatternDocument(doc: BlockDocument): boolean {
+  return doc.kind === "pattern";
+}
+
 // ---------------------------------------------------------------------------
 // Locale overlays — per-locale prop values over one base tree
 // ---------------------------------------------------------------------------

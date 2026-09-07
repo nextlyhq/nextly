@@ -51,6 +51,7 @@
 import {
   allBlocks,
   getBlock,
+  planInsertPattern,
   registryNestingSource,
   type AnyBlockDefinition,
   type BlockNode,
@@ -78,11 +79,15 @@ import {
   groupByCategory,
   insertionPointFor,
   nodeForEntry,
+  patternEntriesFrom,
   registrySlotSource,
   type InsertGroup,
   type InsertionPoint,
   type InsertEntry,
+  type PatternInsertEntry,
+  type SavedPattern,
 } from "./inserter";
+import type { BuilderOp } from "./ops";
 
 export interface InsertPanelProps {
   /**
@@ -106,6 +111,18 @@ export interface InsertPanelProps {
    * up again at insert time.
    */
   definitions?: readonly AnyBlockDefinition[];
+  /**
+   * Saved patterns to offer beside the blocks. Defaults to none.
+   *
+   * Supplied rather than fetched, for the reason `definitions` is: this panel
+   * draws what it is given and reads nothing. A pattern lives in a plugin's
+   * collection, and how a host loads that — a route, a cache, a preloaded
+   * page — is the host's question, not one the palette should answer.
+   *
+   * Rows the planner could not place are dropped when the catalogue is built,
+   * so a caller may hand over whatever its query returned.
+   */
+  patterns?: readonly SavedPattern[];
   /** How nesting is resolved. Defaults to the live registry. */
   nesting?: NestingSource;
   /**
@@ -174,7 +191,7 @@ function DescriptionStrip({
   groups,
   tokens,
 }: {
-  groups: readonly InsertGroup[];
+  groups: readonly InsertGroup<InsertEntry>[];
   tokens: ReadonlyMap<string, string>;
 }): React.JSX.Element | null {
   // Empty string is the palette's "nothing highlighted", which is a different
@@ -341,7 +358,7 @@ function TouchGestureHint({
  * itself would be a second writer racing the primitives' own selection.
  */
 function describedEntry(
-  groups: readonly InsertGroup[],
+  groups: readonly InsertGroup<InsertEntry>[],
   tokens: ReadonlyMap<string, string>,
   active: string | undefined
 ): InsertEntry | undefined {
@@ -371,6 +388,7 @@ function placementLabel(point: InsertionPoint, label?: string): string {
 export function InsertPanel({
   editor,
   definitions,
+  patterns,
   nesting,
   categoryOrder,
   onInsert,
@@ -400,10 +418,21 @@ export function InsertPanel({
     () => definitions ?? allBlocks(),
     [definitions]
   );
-  const catalog = React.useMemo(() => catalogFrom(palette), [palette]);
   const source = React.useMemo(
     () => nesting ?? registryNestingSource(),
     [nesting]
+  );
+  // Blocks first, then whatever saved patterns the host supplied. One list
+  // rather than two, because the filter, the grouping and the keyboard all run
+  // across both — and a second list would have to be flattened by every one of
+  // them. `groupByCategory` puts each pattern under its own heading, so the two
+  // tiers read apart without the panel deciding anything about order.
+  const catalog = React.useMemo<InsertEntry[]>(
+    () => [
+      ...catalogFrom(palette),
+      ...patternEntriesFrom(patterns ?? [], source),
+    ],
+    [palette, patterns, source]
   );
 
   // Recomputed from the CURRENT document and selection on every render rather
@@ -512,6 +541,10 @@ export function InsertPanel({
 
   const insert = (entry: InsertEntry) => {
     if (point === null) return;
+    if (entry.kind === "pattern") {
+      insertPattern(entry);
+      return;
+    }
     // `nesting` rather than `source`. They differ exactly when the caller
     // supplied no rules: `source` has already defaulted to the REGISTRY, which
     // knows nothing about a supplied definition and so reports every one of its
@@ -529,6 +562,42 @@ export function InsertPanel({
     // it, so repeated inserts build downward instead of stacking at one point.
     editor.select(node.id);
     onInsert?.(node);
+  };
+
+  /**
+   * Place a saved pattern: a whole forest, re-identified, as ONE edit.
+   *
+   * Through `planInsertPattern` rather than by building ops here. The planner
+   * is the dry run — it mints ids that do not collide with the page, records
+   * where each root was copied from, and refuses everything the apply would —
+   * so a second construction in this file would be a second answer to what
+   * inserting a pattern means.
+   *
+   * `applyAll`, so the whole group is one undo step. A pattern placed as
+   * several inserts would come back one root at a time, which is not what the
+   * author did.
+   */
+  const insertPattern = (entry: PatternInsertEntry) => {
+    if (point === null) return;
+    const plan = planInsertPattern(
+      editor.document,
+      { id: entry.patternId, document: entry.document },
+      point.at,
+      source
+    );
+    // A refusal here means the document moved underneath the panel: the
+    // catalogue offers only patterns the planner accepts, judged against the
+    // same rules. Reported as no insert rather than as a failed one.
+    if (plan.pageOps === undefined) return;
+    if (editor.applyAll(plan.pageOps) === null) return;
+
+    // The FIRST root, so a second insert lands after the group rather than
+    // inside it — the same rule the block path follows by selecting what it
+    // just added.
+    const first = plan.pageOps.find((op: BuilderOp) => op.kind === "insert");
+    if (first === undefined || first.kind !== "insert") return;
+    editor.select(first.node.id);
+    onInsert?.(first.node);
   };
 
   if (point === null) {
@@ -647,6 +716,12 @@ export function InsertPanel({
                     event.currentTarget.dispatchEvent(
                       new PointerEvent("pointermove", { bubbles: true })
                     );
+                    // Blocks only. A drag carries ONE node to a drop target,
+                    // and a pattern is a forest placed as a group — so there is
+                    // no node to hand the drag, and offering the gesture would
+                    // start something that cannot finish. A pattern is inserted
+                    // by the click path, which places the whole group.
+                    if (entry.kind !== "block") return;
                     beginInsertDrag?.(event, {
                       blockName: entry.blockName,
                       makeNode: () => nodeForEntry(entry, blockSource, nesting),

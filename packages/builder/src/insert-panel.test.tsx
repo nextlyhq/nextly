@@ -80,6 +80,7 @@ function documentOf(nodes: BlockDocument["nodes"] = []): BlockDocument {
  */
 function editorSpy(document: BlockDocument): EditorState & {
   apply: ReturnType<typeof vi.fn>;
+  applyAll: ReturnType<typeof vi.fn>;
   select: ReturnType<typeof vi.fn>;
 } {
   return {
@@ -87,6 +88,7 @@ function editorSpy(document: BlockDocument): EditorState & {
     selectedId: null,
     select: vi.fn(),
     apply: vi.fn(() => document),
+    applyAll: vi.fn(() => document),
     undo: vi.fn(),
     redo: vi.fn(),
     canUndo: false,
@@ -94,6 +96,7 @@ function editorSpy(document: BlockDocument): EditorState & {
     undoDepth: 0,
   } as unknown as EditorState & {
     apply: ReturnType<typeof vi.fn>;
+    applyAll: ReturnType<typeof vi.fn>;
     select: ReturnType<typeof vi.fn>;
   };
 }
@@ -1169,5 +1172,100 @@ describe("the grid, and the strip that describes it", () => {
 
     expect(strip()).toBeNull();
     expect(screen.getByText(/No blocks match/)).toBeTruthy();
+  });
+});
+
+describe("InsertPanel and the pattern tier", () => {
+  /** A saved pattern of two roots, which is what makes the group observable. */
+  function heroPattern() {
+    return {
+      id: "hero",
+      title: "Hero",
+      category: "Sections",
+      document: {
+        formatVersion: 1,
+        kind: "pattern",
+        nodes: [
+          { id: "a", type: "acme/text", version: 1, props: {} },
+          { id: "b", type: "acme/text", version: 1, props: {} },
+        ],
+      } as unknown as BlockDocument,
+    };
+  }
+
+  it("offers a supplied pattern beside the blocks", () => {
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        patterns={[heroPattern()]}
+      />
+    );
+
+    // Both tiers reachable from one list, which is what the panel draws.
+    expect(tile("Text")).toBeTruthy();
+    expect(tile("Hero")).toBeTruthy();
+  });
+
+  it("places a chosen pattern as ONE edit, through the planner", () => {
+    registerBlocks([{ ...base, name: "acme/text" }] as never, {
+      source: "acme",
+    });
+    const editor = editorSpy(documentOf());
+    const onInsert = vi.fn();
+    render(
+      <InsertPanel
+        editor={editor}
+        patterns={[heroPattern()]}
+        onInsert={onInsert}
+      />
+    );
+
+    fireEvent.click(tile("Hero"));
+
+    // `applyAll` and not `apply`: a pattern is a forest, and placing it as
+    // several edits would undo one root at a time.
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    const ops = editor.applyAll.mock.calls[0][0] as { kind: string }[];
+    expect(ops.map(op => op.kind)).toEqual(["insert", "insert"]);
+
+    // Fresh ids, minted by the planner rather than the pattern's own, so the
+    // same pattern can be placed twice on one page.
+    const placed = ops as { kind: string; node: { id: string } }[];
+    expect(placed[0]?.node.id).not.toBe("a");
+    expect(editor.select).toHaveBeenCalledWith(placed[0]?.node.id);
+    expect(onInsert).toHaveBeenCalledWith(placed[0]?.node);
+  });
+
+  it("offers nothing for a pattern the planner would refuse", () => {
+    // The catalogue drops a row the planner cannot place, so the panel never
+    // draws a tile that accepts a click and then fails. The control is the
+    // usable pattern in the same render.
+    registerBlocks([{ ...base, name: "acme/text" }] as never, {
+      source: "acme",
+    });
+    const unusable = {
+      ...heroPattern(),
+      id: "broken",
+      title: "Broken",
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: heroPattern().document.nodes,
+      } as unknown as BlockDocument,
+    };
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        patterns={[unusable, heroPattern()]}
+      />
+    );
+
+    expect(tile("Hero")).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Broken" })).toBeNull();
   });
 });

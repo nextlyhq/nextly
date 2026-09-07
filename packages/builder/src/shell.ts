@@ -130,6 +130,11 @@ export type { StyleInspectorPanelProps } from "./style-inspector-panel";
 
 export { InsertPanel } from "./insert-panel";
 export type { InsertPanelProps } from "./insert-panel";
+// The shape a host hands the panel for the pattern tier. Published beside the
+// panel because supplying `patterns` is impossible without it: a caller loads
+// rows from a plugin's collection and has to know which fields the palette
+// reads before it can map them.
+export type { SavedPattern } from "./inserter";
 
 /**
  * The site's breakpoints, as a trigger and the dialog behind it.
