@@ -2719,12 +2719,14 @@ describe("an unstorable document does not have its values parsed", () => {
       )
     ).toBe(false);
 
-    // What this does NOT do, stated rather than implied: the property is still
-    // READ, so the getter still runs. Skipping the read entirely would mean not
-    // validating the node's shape at all, and a document is refused on its
-    // shape long before its style values matter. The exposure that closes is
-    // the parsing of whatever the getter returns, not the single invocation.
-    expect(reads).toBeGreaterThan(0);
+    // And the getter is never invoked AT ALL, which is stronger than this
+    // originally promised. It used to read the property and skip only the
+    // parsing, on the reasoning that a node still had to be checked for shape;
+    // the walk now stops for a document the survey could not read, so the
+    // document's own code is not executed inside the check deciding whether to
+    // trust it. Nothing about a document nobody can read is worth learning by
+    // running it.
+    expect(reads).toBe(0);
   });
 });
 
@@ -2946,16 +2948,21 @@ describe("a node's provenance record is checked on both roads to storage", () =>
       }
 
       expect(escaped).toBeUndefined();
-      // Reported, NOT deferred. See the case below for why the survey cannot be
-      // relied on to have covered it.
+      // The SURVEY's verdict, and WHICH verdict depends on where the trap
+      // bites. `getPrototypeOf` stops the survey from reading the document, so
+      // it is `document-unreadable` and the walk no longer runs at all.
+      // `ownKeys` and `getOwnPropertyDescriptor` stop it SERIALIZING one, which
+      // is `document-unwritable` — a different fact, and one the walk is not
+      // gated on, so those two still reach the per-record guard.
       //
-      // `ownKeys` is the exception the rule produces rather than an oversight:
-      // nothing enumerates the record's own keys any more, so that trap never
-      // fires for this check and the record reads as whole. The survey still
-      // meets it — it has to serialize the document — and refuses the document
-      // as unwritable, which is the verdict that covers it.
+      // That is worth stating because it is what keeps the guard necessary. It
+      // is not made redundant by the gate: two of these three traps get past
+      // it, and so does the case below — a trap that fires only for an ABSENT
+      // field, which the survey never asks for and therefore never meets.
       expect(codes).toContain(
-        trap === "ownKeys" ? "document-unwritable" : "invalid-origin"
+        trap === "getPrototypeOf"
+          ? "document-unreadable"
+          : "document-unwritable"
       );
     }
   );
@@ -3270,18 +3277,83 @@ describe("a bag validation has already refused is never enumerated", () => {
       })
     ).not.toThrow();
     expect(ran).toBe(false);
-    // And it is still REPORTED, rather than quietly skipped.
+    // And it is still REPORTED, rather than quietly skipped — as
+    // `document-unreadable` rather than `invalid-attributes`. The survey met
+    // this accessor too and refused the whole document, and the walk that would
+    // have named the field no longer runs on a document nobody can read.
     expect(
       validateDocument(doc, {
         breakpoints: FIXTURE_BREAKPOINTS,
         mode: "strict",
-      }).issues.some(issue => issue.code === "invalid-attributes")
+      }).issues.some(issue => issue.code === "document-unreadable")
     ).toBe(true);
   });
 
-  it("still registers the cssId of a node whose bag it refused", () => {
-    // The control for the fallback. With the bag unreadable `cssId` is the only
-    // place an id can come from, and dropping it would lose a real duplicate.
+  it.each([
+    "id",
+    "type",
+    "version",
+    "props",
+    "slots",
+    "attributes",
+    "cssId",
+    "styles",
+    "bindings",
+    "visibility",
+  ])(
+    "does not read a node's %s off a document the survey could not read",
+    field => {
+      // The whole point of the gate, measured field by field. `surveyDocument`
+      // refuses to invoke an accessor and reports the document unreadable; the
+      // walk then reached the same field by ordinary property access and
+      // invoked exactly what the survey declined to. Every one of these ten
+      // took the caller's error out of `validate()` as a native throw instead
+      // of the issue list it promises.
+      const node: Record<string, unknown> = {
+        id: "n1",
+        type: "core/text",
+        version: 1,
+        props: {},
+      };
+      Object.defineProperty(node, field, {
+        enumerable: true,
+        configurable: true,
+        get() {
+          throw new Error("a document should not get to run this");
+        },
+      });
+
+      let escaped: unknown;
+      let codes: string[] = [];
+      try {
+        codes = validate(
+          {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "page",
+            nodes: [node],
+          } as unknown as BlockDocument,
+          { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+        ).map(issue => issue.code);
+      } catch (error) {
+        escaped = error;
+      }
+
+      expect(escaped).toBeUndefined();
+      expect(codes).toContain("document-unreadable");
+    }
+  );
+
+  it("reports one verdict for the unreadable document, and the duplicate for a readable one", () => {
+    // The cost of stopping at the survey's verdict, stated rather than hidden:
+    // a document carrying an accessor is refused as a whole, so the duplicate
+    // DOM id inside it is not named separately. That is the trade — one honest
+    // verdict, and none of the document's own code run — and it is bounded to
+    // documents the survey could not read, which come from an import or a
+    // script rather than from the editor.
+    //
+    // The second half is what makes the first safe to accept: the same
+    // duplicate on an ORDINARY document is still reported, so the capability is
+    // intact rather than lost.
     const bag = Object.create({}, { id: { enumerable: true, get: () => "x" } });
     const doc = {
       formatVersion: DOCUMENT_FORMAT_VERSION,
@@ -3299,12 +3371,27 @@ describe("a bag validation has already refused is never enumerated", () => {
       ],
     } as unknown as BlockDocument;
 
+    const codes = validateDocument(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    }).issues.map(issue => issue.code);
+    expect(codes).toContain("document-unreadable");
+    expect(codes).not.toContain("duplicate-dom-id");
+
+    const readable = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/text", version: 1, props: {}, cssId: "hero" },
+        { id: "n2", type: "core/text", version: 1, props: {}, cssId: "hero" },
+      ],
+    } as unknown as BlockDocument;
     expect(
-      validateDocument(doc, {
+      validateDocument(readable, {
         breakpoints: FIXTURE_BREAKPOINTS,
         mode: "strict",
-      }).issues.some(issue => issue.code === "duplicate-dom-id")
-    ).toBe(true);
+      }).issues.map(issue => issue.code)
+    ).toContain("duplicate-dom-id");
   });
 });
 

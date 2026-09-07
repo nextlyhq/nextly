@@ -414,6 +414,34 @@ export function validateDocument(
   // bounded, and that is exactly what `traversed` reports.
   const overLimits = !survey.traversed;
 
+  // A document the survey could not READ is not one to read.
+  //
+  // `surveyDocument` refuses to invoke an accessor — it reports the document
+  // `document-unreadable` rather than run a getter it was handed — and
+  // everything below reaches those same fields by ordinary property access,
+  // invoking exactly what the survey declined to. Measured on this file before
+  // the gate: ten node fields did it — `id`, `type`, `version`, `props`,
+  // `slots`, `attributes`, `cssId`, `styles`, `bindings` and `visibility` —
+  // each taking a caller's error out of `validate()` as a native throw instead
+  // of the issue list it promises.
+  //
+  // `unreadable`, and NOT `overLimits`. They are different facts and only one
+  // of them is about reading: a document that merely exceeds `maxNodes` was
+  // read perfectly well, and its nodes are still worth checking under the cap —
+  // measured, such a survey reports `traversed: false` with `unreadable: false`.
+  // Stopping on the broader fact would silently drop every per-node issue on an
+  // oversized document.
+  //
+  // Stopping HERE rather than guarding each read is the point. Guarding reads
+  // is what this file kept trying: roughly twenty-three of thirty review
+  // findings across three pull requests were one site or one level of that, and
+  // two of them were introduced BY a fix for another. The verdict was already
+  // computed and already trustworthy; it was simply never consulted.
+  //
+  // `checkLimits` has already recorded `document-unreadable`, so the caller is
+  // told why — and gets the survey, which says the same thing in a field.
+  if (survey.unreadable) return { issues, survey };
+
   // Per-kind rules. Only `component` has any today, and it is the kind whose
   // extra fields nothing else in the document can check: `exposed` and `slots`
   // are pointers INTO the node forest, so this is the first point at which
