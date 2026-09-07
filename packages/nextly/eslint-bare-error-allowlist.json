@@ -9,7 +9,7 @@
   "src/cli/utils/adapter.ts": 2,
   "src/collections/config/define-config.ts": 9,
   "src/collections/config/validate-config.ts": 1,
-  "src/database/factory.ts": 4,
+  "src/database/factory.ts": 3,
   "src/database/index.ts": 1,
   "src/database/init.ts": 1,
   "src/database/seeders/permissions.ts": 1,
