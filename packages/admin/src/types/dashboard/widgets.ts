@@ -30,79 +30,28 @@ import type {
   WidgetSize,
   WidgetStatCell,
   WidgetChrome,
-  WidgetSourceFieldType,
 } from "nextly/config";
 
-/**
- * One executed query's payload, as `POST /api/dashboard/query` sends it.
+/*
+ * 🔴 RE-EXPORTED from core, not restated here. These describe what
+ * `POST /api/dashboard/query` sends, so the server that sends them declares
+ * them; this package and every plugin are consumers of one definition.
  *
- * Discriminated on `op` so a body that asked for a count and a body that asked
- * for a list cannot be read as each other — a renderer that reaches for
- * `total` on a list result must fail to compile, not print `undefined`.
+ * They were declared here for a real reason that has since been answered:
+ * `nextly/config` deliberately excludes the widget barrel, because it carries
+ * `executeWidgetQuery` and through it the Direct API graph. So a copy was made,
+ * and the copies drifted -- this one was STRICTER than the server's own, which
+ * declared a slot as `ok: boolean` with an optional `result?: unknown`, and so
+ * promised readers a guarantee the producer had never made. `nextly/widget-result`
+ * is a leaf entry carrying exactly these shapes and emitting a zero-byte
+ * runtime chunk, which is what makes importing them cost nothing.
  */
-/** One column of a list result, as the server described it. */
-export interface WidgetResultField {
-  name: string;
-  /** Absent when the source has no human label for this field. */
-  label?: string;
-  /**
-   * What KIND of value this column holds, as the source declared it.
-   *
-   * 🔴 Read so a cell can be PRESENTED rather than printed. Every source
-   * declares its date fields as dates, that declaration used to stop at the
-   * server, and the row drew the ISO string the value crossed as --
-   * `2026-09-01T07:00:00.000Z` on a card whose subject is when.
-   *
-   * Typed from CORE's vocabulary rather than restated here. Repeating the four
-   * strings meant the server could add a kind this build then erased on the way
-   * in -- the parser would drop it, the cell would fall back to raw text, and
-   * nothing would report that a presentation had been lost.
-   *
-   * Still optional, and an unrecognised kind arrives as absent rather than
-   * rejecting the result: a newer server may name a type this build predates,
-   * and refusing the whole field list over it would blank a card that could
-   * have rendered its values as text.
-   */
-  type?: WidgetSourceFieldType;
-}
-
-export type WidgetResult =
-  | {
-      op: "count";
-      total: number;
-      /**
-       * `total` is a FLOOR, not the whole answer.
-       *
-       * Some counts cannot be computed in the database: where a source's rows
-       * are filtered by a rule the query cannot express, the only honest count
-       * walks candidates and authorizes them, which is bounded work. Past that
-       * bound the card says `N+` rather than failing or showing a number that
-       * is quietly too small.
-       */
-      atLeast?: boolean;
-    }
-  | {
-      op: "list";
-      items: Record<string, unknown>[];
-      /** The selected columns, present only when the query declared `select`. */
-      fields?: WidgetResultField[];
-    };
-
-/**
- * One slot of the batch response, positionally matched to one query.
- *
- * A failure is a value here, not a thrown error, because the batch answers 200
- * with the other widgets' data intact: one widget's failure must colour one
- * card, not blank the dashboard.
- */
-export type WidgetSlot =
-  | { ok: true; result: WidgetResult }
-  | { ok: false; error: string };
-
-/** The whole batch response body. */
-export interface WidgetQueryBatchResponse {
-  results: WidgetSlot[];
-}
+export type {
+  WidgetQueryBatchResponse,
+  WidgetResult,
+  WidgetResultField,
+  WidgetSlot,
+} from "nextly/widget-result";
 
 /**
  * A widget as the grid renders it: every field the card and the archetype need,

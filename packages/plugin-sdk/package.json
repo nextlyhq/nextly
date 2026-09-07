@@ -46,6 +46,11 @@
       "types": "./dist/routing.d.ts",
       "import": "./dist/routing.mjs",
       "default": "./dist/routing.mjs"
+    },
+    "./widgets": {
+      "types": "./dist/widgets.d.ts",
+      "import": "./dist/widgets.mjs",
+      "default": "./dist/widgets.mjs"
     }
   },
   "files": [

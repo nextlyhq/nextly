@@ -80,3 +80,33 @@ export type WidgetResult =
        */
       fields?: WidgetResultField[];
     };
+
+/**
+ * One slot of the dashboard batch response: what ONE widget's query answered.
+ *
+ * 🔴 A failure is a VALUE here, not a thrown error, because the batch answers
+ * 200 with every other widget's data intact -- one widget failing must colour
+ * one card, never blank the dashboard.
+ *
+ * 🔴 A discriminated union, not an object with three optional fields. The loose
+ * shape could describe a slot that reports success and carries no result, or
+ * reports failure and says nothing about why -- neither of which any producer
+ * here means to send, and both of which a consumer would have to defend against
+ * on every read. Declared this way, the compiler refuses the malformed slot at
+ * the point it would be constructed rather than leaving every reader to
+ * discover it.
+ */
+export type WidgetSlot =
+  | { ok: true; result: WidgetResult }
+  | { ok: false; error: string };
+
+/**
+ * The dashboard batch response body, positionally matched to the queries asked.
+ *
+ * Positional rather than keyed, because two placements may ask the SAME widget
+ * different questions; a key would have to be invented and agreed by both ends,
+ * and the array index already is one.
+ */
+export interface WidgetQueryBatchResponse {
+  results: WidgetSlot[];
+}

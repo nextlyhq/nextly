@@ -317,6 +317,35 @@ contributes: {
 A component-drawn widget may ALSO declare a `query`: the host runs it in the same batch
 and hands your component the result, so you do not fetch it again.
 
+Your component receives five props, and you can name their types:
+
+```ts
+import type { WidgetComponentProps } from "@nextlyhq/plugin-sdk/widgets";
+
+export function ChartWidget({ slot, settings, isFetching }: WidgetComponentProps) {
+  if (!slot) return null;                 // this widget declared no query
+  if (!slot.ok) return <p>{slot.error}</p>;
+  if (slot.result.op !== "list") return null;
+  return <Chart rows={slot.result.items} busy={isFetching} />;
+}
+```
+
+| Prop | Type | What it is |
+|---|---|---|
+| `widgetId` | `string` | The id you registered the widget under. |
+| `placementId` | `string` | The **card's** id. One widget may sit on a dashboard twice, and everything belonging to a card — its settings and its answer — is keyed by this, not by `widgetId`. |
+| `settings` | `Record<string, unknown>` | This card's settings, already resolved: the reader's stored values where they are usable, your declared defaults everywhere else. |
+| `slot` | `WidgetSlot \| undefined` | This card's answer, or `undefined` when the widget declared no query. |
+| `isFetching` | `boolean` | Whether a refresh is in flight. |
+
+`slot` is a discriminated union — `{ ok: true, result }` or `{ ok: false, error }` — so
+narrowing on `slot.ok` gives you a typed `result`. A failing query is a value, not a
+thrown error: the batch answers with every other widget's data intact, so one query
+failing colours one card rather than blanking the dashboard.
+
+These types come from `@nextlyhq/plugin-sdk/widgets`, which carries no runtime code —
+importing them adds nothing to your bundle.
+
 Widgets are rendered on the admin dashboard by `WidgetGrid`, in a 12-column grid that
 collapses to one column on small screens, and are hidden from users who lack
 `requiredPermission`. Every widget on the page is fetched in a single batched request.
@@ -326,8 +355,10 @@ the rest of the dashboard alone — whether it is one of the four above or a nam
 newer core this admin has never heard of. A plugin ahead of its host degrades one card
 rather than breaking the admin.
 
-The contract is still `@experimental` and is expected to grow: charts, a per-instance
-config schema, and saved layouts. Pin your Nextly version while it settles.
+The contract is still `@experimental` and is expected to grow: charts, and richer
+archetypes. Per-widget settings and saved layouts have since shipped — a widget declares
+`settings`, the reader edits them per card, and your component is handed the resolved
+values. Pin your Nextly version while it settles.
 
 `requiredPermission` gates whether the widget renders. It does **not** constrain the data
 your widget reads — fetch through the access-controlled API so a viewer only ever sees
