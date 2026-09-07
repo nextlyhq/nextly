@@ -21,6 +21,7 @@ import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 import {
   movePlacementTo,
   removePlacement,
+  setPlacementConfig,
   resolveDrop,
   type DropTarget,
   togglePlacementHidden,
@@ -29,6 +30,14 @@ import {
 import type { LayoutDraft } from "./useLayoutEditor";
 
 export interface PlacementMutations {
+  /**
+   * Records what a reader chose for one card.
+   *
+   * Takes the WHOLE answer rather than one field, because the form that calls
+   * it knows every setting it drew — and a per-field write could not express
+   * clearing one, since an emptied field arrives as an absent key.
+   */
+  setConfig: (placementId: string, config: Record<string, unknown>) => void;
   move: (fromId: string, toId: string) => void;
   dropOn: (activeId: string, target: DropTarget | null) => void;
   toggleHidden: (placementId: string) => void;
@@ -86,5 +95,13 @@ export function usePlacementMutations(
     [mutatePlacements]
   );
 
-  return { move, dropOn, toggleHidden, remove };
+  const setConfig = useCallback(
+    (placementId: string, config: Record<string, unknown>) =>
+      mutatePlacements(placements =>
+        setPlacementConfig(placements, placementId, config)
+      ),
+    [mutatePlacements]
+  );
+
+  return { move, dropOn, toggleHidden, remove, setConfig };
 }

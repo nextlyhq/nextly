@@ -19,6 +19,7 @@ import {
   newPlacementId,
   removePlacement,
   renumber,
+  setPlacementConfig,
   togglePlacementHidden,
 } from "../layout-editor";
 
@@ -756,5 +757,61 @@ describe("which side of a card a drop landed on", () => {
     // that cannot be taken costs the old behaviour rather than an arbitrary one.
     expect(dropSide(null, { top: 100, height: 40 })).toBe("before");
     expect(dropSide({ top: 100, height: 40 }, undefined)).toBe("before");
+  });
+});
+
+describe("recording what a reader chose for one card", () => {
+  const one = (config?: Record<string, unknown>): WidgetPlacement[] => [
+    {
+      id: "a",
+      widgetId: "core/a",
+      order: 0,
+      hidden: false,
+      ...(config === undefined ? {} : { config }),
+    },
+    { id: "b", widgetId: "core/b", order: 1, hidden: false },
+  ];
+
+  it("stores the answer against its own placement", () => {
+    const next = setPlacementConfig(one(), "a", { limit: 12 });
+    expect(next[0].config).toEqual({ limit: 12 });
+    // The control: the card next to it is untouched, so a settings save
+    // cannot quietly rewrite a neighbour.
+    expect(next[1].config).toBeUndefined();
+  });
+
+  /*
+   * 🔴 REPLACES rather than merges. A merge cannot express clearing a setting —
+   * a reader who empties a field sends a key that is simply absent, and merging
+   * leaves the old value in place, so the field would refuse to be cleared with
+   * nothing on screen explaining why.
+   */
+  it("replaces the stored answer rather than merging into it", () => {
+    const next = setPlacementConfig(one({ limit: 12, compact: true }), "a", {
+      limit: 3,
+    });
+    expect(next[0].config).toEqual({ limit: 3 });
+    expect("compact" in (next[0].config ?? {})).toBe(false);
+  });
+
+  it("drops the key entirely when nothing is left", () => {
+    // A missing config and an empty one read identically, so keeping `{}`
+    // would be a difference the layout carries and nothing can observe — and
+    // it would make a card look edited for having been opened.
+    const next = setPlacementConfig(one({ limit: 12 }), "a", {});
+    expect(next[0].config).toBeUndefined();
+    expect("config" in next[0]).toBe(false);
+  });
+
+  it("leaves the arrangement alone when no placement matches", () => {
+    const before = one({ limit: 1 });
+    const next = setPlacementConfig(before, "missing", { limit: 9 });
+    expect(next).toEqual(before);
+  });
+
+  it("does not mutate the placements it was given", () => {
+    const before = one({ limit: 1 });
+    setPlacementConfig(before, "a", { limit: 2 });
+    expect(before[0].config).toEqual({ limit: 1 });
   });
 });

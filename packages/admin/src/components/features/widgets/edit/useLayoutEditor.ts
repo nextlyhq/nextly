@@ -109,6 +109,8 @@ export interface LayoutEditor {
    */
   columnCount: number;
   toggleHidden: (placementId: string) => void;
+  /** Records what a reader chose for one card's settings. */
+  setConfig: (placementId: string, config: Record<string, unknown>) => void;
   remove: (placementId: string) => void;
   add: (widgetId: string) => void;
 }
@@ -192,10 +194,8 @@ export function useLayoutEditor(
     []
   );
 
-  const { move, dropOn, toggleHidden, remove } = usePlacementMutations(
-    setDraft,
-    columnCount
-  );
+  const { move, dropOn, toggleHidden, remove, setConfig } =
+    usePlacementMutations(setDraft, columnCount);
 
   const add = useCallback(
     (widgetId: string) =>
@@ -259,6 +259,7 @@ export function useLayoutEditor(
     setColumnCount,
     columnCount,
     toggleHidden,
+    setConfig,
     remove,
     add,
   };

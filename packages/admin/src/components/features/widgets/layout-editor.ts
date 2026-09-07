@@ -110,6 +110,36 @@ export function togglePlacementHidden(
   );
 }
 
+/**
+ * Records what a reader chose for ONE card.
+ *
+ * 🔴 Replaces the whole `config` rather than merging into it, because a merge
+ * cannot express clearing a setting: a reader who empties a field would send
+ * a key whose value is absent, and merging leaves the old value in place. The
+ * caller holds the full answer for that card — the settings form knows every
+ * field it drew — so replacement is the honest write.
+ *
+ * An EMPTY object is stored as no config at all. `resolveWidgetSettings` reads
+ * a missing config and an empty one identically, so keeping `{}` would be a
+ * difference the layout carries and nothing can observe — and it would make
+ * `hasChanges` report a card as edited for having been opened.
+ */
+export function setPlacementConfig(
+  placements: readonly WidgetPlacement[],
+  placementId: string,
+  config: Record<string, unknown>
+): WidgetPlacement[] {
+  const empty = Object.keys(config).length === 0;
+  return placements.map(placement => {
+    if (placement.id !== placementId) return placement;
+    if (empty) {
+      const { config: _dropped, ...rest } = placement;
+      return rest;
+    }
+    return { ...placement, config };
+  });
+}
+
 /** Drops a card from the arrangement entirely. */
 export function removePlacement(
   placements: readonly WidgetPlacement[],

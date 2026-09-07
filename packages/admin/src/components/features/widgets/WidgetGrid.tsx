@@ -292,6 +292,7 @@ export function WidgetGrid() {
           onMoveColumn={moveColumn}
           onToggleHidden={editor.toggleHidden}
           onRemove={editor.remove}
+          onSaveSettings={editor.setConfig}
         />
       </DndContext>
 
