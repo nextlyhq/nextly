@@ -34,4 +34,6 @@ The record is now INHERITED rather than stamped more widely. A node uses its own
 
 The scope is keyed by the node, not by its id: a document reaching a planner is untrusted and may spell one id twice, and an id-keyed scope hands a node under one container the record belonging to a different container of the same name. Where one node OBJECT occurs in two places, nothing can say which occurrence a selection meant, so no record is applied and every id is kept.
 
+Every record the selection CONTAINS is applied, not only the selected roots': a run inserted from one pattern can hold a second pattern inserted into it later, and reading only the roots stored that nested copy's page-specific ids. Where two records name one current id, the innermost decides — it is the one that renamed that node.
+
 Inheritance stops at any node carrying a pattern record, whether or not that record renamed anything — a collision is the exception, so the ordinary insert writes no rename map at all. And a malformed record on a node nothing selected no longer takes the save down: the walk reaches the whole document now, and provenance is read as the untrusted stored data it is.

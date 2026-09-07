@@ -2885,6 +2885,105 @@ describe("a saved DESCENDANT of an inserted root", () => {
     expect(marked([...saved.nodes], "target").cssId).toBe("pricing-1");
   });
 
+  it("restores a pattern nested INSIDE the selection, not only the roots'", () => {
+    // A run inserted from one pattern can hold a second pattern inserted into
+    // it later, with a rename map of its own. Reading only the selected roots'
+    // records stores that nested copy's page-specific id — the growth the
+    // restore exists to stop, left running for one subtree — while the outer
+    // half looks correct, which is why selecting the inner node alone does not
+    // catch it.
+    const doc = page([
+      node(
+        "outer",
+        {
+          origin: {
+            from: "pattern",
+            id: "outer-pattern",
+            digest: "d",
+            renamed: { hero: "hero-1" },
+          },
+        } as Partial<BlockNode>,
+        {
+          children: [
+            node("a", { cssId: "hero-1", props: { mark: "outerTarget" } }),
+            node(
+              "inner",
+              {
+                origin: {
+                  from: "pattern",
+                  id: "inner-pattern",
+                  digest: "d2",
+                  renamed: { pricing: "pricing-1" },
+                },
+              } as Partial<BlockNode>,
+              {
+                children: [
+                  node("b", {
+                    cssId: "pricing-1",
+                    props: { mark: "innerTarget" },
+                  }),
+                ],
+              }
+            ),
+          ],
+        }
+      ),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["outer"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "outerTarget").cssId).toBe("hero");
+    expect(marked([...saved.nodes], "innerTarget").cssId).toBe("pricing");
+  });
+
+  it("lets the INNERMOST record decide an id two of them name", () => {
+    // Reachable rather than hypothetical: an outer record keeps naming an id
+    // whose node has since been deleted, and a pattern inserted afterwards
+    // mints the same suffixed name for a node of its own. One node holds it,
+    // and the record that actually renamed THAT node is the inner one.
+    const doc = page([
+      node(
+        "outer",
+        {
+          origin: {
+            from: "pattern",
+            id: "outer-pattern",
+            digest: "d",
+            renamed: { alpha: "shared-1" },
+          },
+        } as Partial<BlockNode>,
+        {
+          children: [
+            node(
+              "inner",
+              {
+                origin: {
+                  from: "pattern",
+                  id: "inner-pattern",
+                  digest: "d2",
+                  renamed: { beta: "shared-1" },
+                },
+              } as Partial<BlockNode>,
+              {
+                children: [
+                  node("t", { cssId: "shared-1", props: { mark: "target" } }),
+                ],
+              }
+            ),
+          ],
+        }
+      ),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["outer"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("beta");
+  });
+
   it("keeps every id when no ancestor was ever inserted from a pattern", () => {
     // The control for all three above: without a record in scope there is
     // nothing to put back, and an authored id is the author's to keep.

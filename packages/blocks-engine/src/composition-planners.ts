@@ -3438,10 +3438,29 @@ function restoredDomIds(
   selected: readonly BlockNode[]
 ): ReadonlyMap<string, string> {
   const scopes = renameScopes(document.nodes);
+
+  // Every scope the selection CONTAINS, not just the roots'. A run inserted
+  // from one pattern can hold a second pattern inserted into it later, with a
+  // rename map of its own — and reading only the roots stores that nested
+  // copy's page-specific ids, which is the growth this exists to stop, left
+  // running for one subtree.
+  //
+  // Collected by identity, so the whole of a large selection costs one entry
+  // per DISTINCT record rather than one per node: an inherited scope is the
+  // same map object on every node that inherits it.
+  const applicable = new Set<ReadonlyMap<string, string>>();
+  walkNodes([...selected], node => {
+    const scope = scopes.get(node);
+    if (scope !== undefined) applicable.add(scope);
+  });
+
+  // Outer before inner, because the walk reaches a host before what was
+  // inserted into it — so where two records name one current id, the innermost
+  // wins, which is the record that actually renamed that node. Two nodes cannot
+  // hold one rendered id and reach here: `duplicateDomIdRefusal` refuses the
+  // save first.
   const restore = new Map<string, string>();
-  for (const root of selected) {
-    const renamed = scopes.get(root);
-    if (renamed === undefined) continue;
+  for (const renamed of applicable) {
     for (const [was, now] of renamed) restore.set(now, was);
   }
   return restore;
