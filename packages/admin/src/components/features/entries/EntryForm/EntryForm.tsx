@@ -610,15 +610,20 @@ export function EntryForm({
    * rather than discovering it when one overwrites the other.
    *
    * Off while creating: a document with no id is nothing to claim, and nobody
-   * else can be in it. Off while a past version is on screen for the reason the
-   * autosave is — reading is not editing, and holding a claim against a document
-   * nobody is typing into keeps it from a colleague who would.
+   * else can be in it.
+   *
+   * 🔴 Held THROUGH a past version, which reading alone would not need. The
+   * history view offers Restore, and restoring writes the live document — so
+   * dropping the claim here would let someone study an old snapshot, never see
+   * the colleague who arrived meanwhile, and overwrite them from a surface that
+   * looked read-only. The autosave is still held off while a version is on
+   * screen, which is a different question: what it would RECORD.
    */
   const lock = useDocumentLockSurface({
     scopeKind: "collection",
     slug: collectionSlug,
     entryId: entry?.id,
-    enabled: mode === "edit" && viewingVersion === null,
+    enabled: mode === "edit",
   });
 
   /*
@@ -791,6 +796,15 @@ export function EntryForm({
           className={className}
         >
           <div className="space-y-6">
+            {/* 🔴 Here too, not only in the standalone layout. Quick-edit from a
+                relationship picker claims the related entry exactly as the full
+                editor does, so without this a colleague's claim renders every
+                field in the modal uneditable with nothing saying why and no way
+                to take it over — a locked form that reads as a broken one. */}
+            <DocumentLockBanner
+              notice={lock.notice}
+              onTakeOver={lock.takeOver}
+            />
             {/* Error summary at top of form */}
             <FormErrorSummary errors={errors} submitCount={submitCount} />
             {/* This branch renders every collection field, the editable slug among them, but not
@@ -1032,7 +1046,8 @@ export function EntryForm({
                                 }
                                 // Offered only when the panel says this caller may write.
                                 onRestore={
-                                  restoreAffordance?.canRestore
+                                  restoreAffordance?.canRestore &&
+                                  !lock.actionsDisabled
                                     ? restoreAffordance.request
                                     : undefined
                                 }

@@ -42,7 +42,17 @@ export function useDocumentLockSurface(
   // lease. Cleared only by an answer that says nobody has it.
   const lastKnownHolder = useRef<DocumentLockHolder | null>(null);
   if (state.status === "held-by-other") lastKnownHolder.current = state.holder;
-  else if (state.status === "held-by-me" || state.status === "idle") {
+  else if (
+    state.status === "held-by-me" ||
+    state.status === "idle" ||
+    // 🔴 And `acquiring`, which is how a NEW document announces itself. Both
+    // editors reuse the mounted hook when the id changes, so carrying the last
+    // document's holder into the next one renders a document read-only over a
+    // colleague who was never in it. A heartbeat retry on the SAME document does
+    // not pass through `acquiring`, so the holder still outlives a failed
+    // refresh, which is the case this ref exists for.
+    state.status === "acquiring"
+  ) {
     lastKnownHolder.current = null;
   }
 

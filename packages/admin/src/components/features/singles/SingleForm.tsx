@@ -778,6 +778,9 @@ export function SingleForm({
                               void handleSubmit(undefined, "unpublish");
                             }}
                             onDiscardWorkingDraft={async () => {
+                              // Through the same gate: this reaches the row
+                              // directly and never passed `handleSubmit`.
+                              if (lock.actionsDisabled) return;
                               await discardMutation.mutateAsync();
                             }}
                             onCancel={handleCancel}
@@ -788,6 +791,7 @@ export function SingleForm({
                  instead of entryApi. */
                             scope="single"
                             lockIdentity
+                            documentLocked={lock.readOnly}
                             isRailCollapsed={railCollapsed}
                             onToggleRail={toggleRail}
                           />
@@ -831,6 +835,7 @@ export function SingleForm({
                               )}
                             >
                               <LanguagePanel
+                                actionsDisabled={lock.actionsDisabled}
                                 {...(singleTranslations === undefined
                                   ? {}
                                   : { translations: singleTranslations })}

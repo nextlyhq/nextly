@@ -242,4 +242,43 @@ describe("SingleForm under a document lock", () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
   });
+
+  it("shows the write controls as refused, not merely inert", async () => {
+    // 🔴 The handlers already refuse, so this is not what makes the document
+    // safe - it is what stops the interface lying. A live Save beside a strip
+    // saying the document is somebody else's invites a click that silently does
+    // nothing, which reads as the editor being broken rather than the lock
+    // working.
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-other", holder: bob },
+      takeOver,
+    });
+
+    render(
+      <SingleForm schema={schema} document={document} onSubmit={vi.fn()} />
+    );
+
+    const write = screen.getAllByRole("button", { name: /save|publish/i });
+    expect(write.length, "the editor renders a write control").toBeGreaterThan(
+      0
+    );
+    for (const control of write) {
+      expect(control, control.textContent ?? "").toBeDisabled();
+    }
+  });
+
+  it("leaves the write controls alone when this editor holds it", async () => {
+    // The other direction, so the rule cannot be satisfied by disabling always.
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-me" },
+      takeOver,
+    });
+
+    render(
+      <SingleForm schema={schema} document={document} onSubmit={vi.fn()} />
+    );
+
+    const write = screen.getAllByRole("button", { name: /save|publish/i });
+    expect(write.some(control => !control.hasAttribute("disabled"))).toBe(true);
+  });
 });
