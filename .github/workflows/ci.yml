@@ -231,6 +231,14 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:comments
 
+      # A "use client" module is compiled into a browser bundle, so anything it
+      # imports ships to the browser. This reads the SOURCE import graph rather
+      # than dist: a bundler can split a leak into a conditionally-loaded chunk,
+      # and a check that reads dist passes whenever dist is stale.
+      - name: Client entries stay out of the database graph
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:client-entry-graph
+
       - name: Docs and README claims
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:docs-claims

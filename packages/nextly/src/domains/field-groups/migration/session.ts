@@ -32,11 +32,8 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
 import { safeCode } from "../../../database/errors";
-import {
-  deriveLeaseTimings,
-  futureExpression,
-  nowExpression,
-} from "../../../database/lease-clock";
+import { futureExpression, nowExpression } from "../../../database/lease-clock";
+import { deriveLeaseTimings } from "../../../database/lease-timings";
 import { isMissingColumnError } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
 import { fieldGroupLockColumnTypes } from "../../../schemas/field-group-lock";
