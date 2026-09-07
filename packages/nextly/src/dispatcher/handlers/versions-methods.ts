@@ -13,7 +13,7 @@ import type { PaginationMeta } from "../../api/response-shapes";
 import {
   assertDiffVersionPair,
   assertVersionDocumentReadable,
-  assertVersionDocumentUpdatable,
+  assertDocumentUpdatable,
   diffDocumentVersions,
   hydrateVersionSnapshot,
   redactSnapshotForUser,
@@ -507,7 +507,7 @@ export async function setVersionLabelForDocument(
   // route earned. Applied even when the request turns out to write nothing:
   // this is a write endpoint, and gating only the writing case would let the
   // no-op be used to discover what the caller is allowed to change.
-  await assertVersionDocumentUpdatable(
+  await assertDocumentUpdatable(
     args.scopeKind,
     args.slug,
     args.entryId,
@@ -670,7 +670,7 @@ export async function discardWorkingDraftForDocument(
     args.user,
     authenticatedScope
   );
-  await assertVersionDocumentUpdatable(
+  await assertDocumentUpdatable(
     args.scopeKind,
     args.slug,
     args.entryId,
@@ -739,7 +739,7 @@ export async function autosaveForDocument(
     args.user,
     authenticatedScope
   );
-  await assertVersionDocumentUpdatable(
+  await assertDocumentUpdatable(
     args.scopeKind,
     args.slug,
     args.entryId,

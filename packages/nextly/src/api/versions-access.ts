@@ -164,7 +164,7 @@ export async function assertVersionDocumentReadable(
  * Both entity kinds are covered deliberately. A gate that reached only one
  * would read as complete and would not be.
  */
-export async function assertVersionDocumentUpdatable(
+export async function assertDocumentUpdatable(
   scopeKind: VersionScopeKind,
   slug: string,
   entryId: string,
@@ -191,7 +191,7 @@ export async function assertVersionDocumentUpdatable(
   if (!allowed) {
     throw NextlyError.forbidden({
       logContext: {
-        reason: "version-document-not-updatable",
+        reason: "document-not-updatable",
         scopeKind,
         scopeSlug: slug,
         entryId,

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
+import { NextlyError } from "../../errors/nextly-error";
+
 const service = {
   read: vi.fn(),
   acquire: vi.fn(),
@@ -27,14 +29,23 @@ vi.mock("../../auth/middleware", () => ({
 const canReadEntity = vi.fn();
 const callerHoldsPermission = vi.fn();
 vi.mock("../../auth/entity-read-access", () => ({
-  readAccessCaller: (caller: unknown) => caller,
+  readAccessCaller: (caller: { user: unknown }) => caller.user,
   canReadEntity: (slug: string, caller: unknown) =>
     canReadEntity(slug, caller) as unknown,
   callerHoldsPermission: (slug: string, caller: unknown) =>
     callerHoldsPermission(slug, caller) as unknown,
 }));
+// The stored per-document update rules, which the coarse permission above does
+// not run. Spied rather than executed: what this file establishes is that the
+// route asks, and with which document.
+const assertDocumentUpdatable = vi.fn();
+vi.mock("../versions-access", () => ({
+  assertDocumentUpdatable: (...args: unknown[]) =>
+    assertDocumentUpdatable(...args) as unknown,
+}));
+
 vi.mock("../authenticated-read", () => ({
-  readCaller: (auth: unknown) => Promise.resolve(auth),
+  readCaller: (auth: unknown) => Promise.resolve({ user: auth }),
   PRIVATE_NO_STORE_HEADERS: {
     "Cache-Control": "private, no-store",
     Vary: "Cookie",
@@ -57,6 +68,7 @@ beforeEach(() => {
   requireAuthentication.mockResolvedValue(auth);
   canReadEntity.mockResolvedValue(true);
   callerHoldsPermission.mockResolvedValue(true);
+  assertDocumentUpdatable.mockResolvedValue(undefined);
 });
 
 describe("document lock route", () => {
@@ -242,5 +254,54 @@ describe("document lock route", () => {
 
     expect(body).toHaveProperty("message");
     expect(body.item).toMatchObject({ status: "acquired" });
+  });
+
+  it("asks whether THIS document may be updated, not documents of its kind", async () => {
+    // 🔴 `update-<slug>` is the coarse route permission and says only the latter.
+    // A collection carrying an owner-only stored rule refuses the row while that
+    // permission still stands, so without this a non-owner claims a document
+    // every real update denies them - and the owner is shown a false holder and
+    // pushed to take over their own row.
+    service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
+
+    await acquireLock(post({ ...ref }));
+
+    expect(assertDocumentUpdatable).toHaveBeenCalledWith(
+      ref.scopeKind,
+      ref.slug,
+      ref.entryId,
+      auth,
+      undefined
+    );
+  });
+
+  it("refuses the claim when the stored rules refuse the row", async () => {
+    // The real refusal, not a stand-in: the handler branches on what a
+    // `NextlyError` is, and a look-alike is reported as a 500 while the
+    // assertion below still reads "the claim did not happen".
+    assertDocumentUpdatable.mockRejectedValue(
+      NextlyError.forbidden({
+        logContext: { reason: "document-not-updatable" },
+      })
+    );
+
+    const response = await acquireLock(post({ ...ref }));
+
+    expect(response.status).toBe(403);
+    expect(service.acquire).not.toHaveBeenCalled();
+  });
+
+  it("does not ask it of a read", async () => {
+    // Reading who holds a document is not updating it, and running an update
+    // gate here would hide the holder from everyone who may only read.
+    service.read.mockResolvedValue(null);
+
+    await readLock(
+      new Request(
+        "https://x.test/api/document-lock?scopeKind=collection&slug=posts&entryId=42"
+      )
+    );
+
+    expect(assertDocumentUpdatable).not.toHaveBeenCalled();
   });
 });

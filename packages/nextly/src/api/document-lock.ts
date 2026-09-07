@@ -37,6 +37,7 @@ import { getCachedNextly } from "../init";
 
 import { PRIVATE_NO_STORE_HEADERS, readCaller } from "./authenticated-read";
 import { respondData, respondMutation } from "./response-shapes";
+import { assertDocumentUpdatable } from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
 
 async function getDocumentLockService(): Promise<DocumentLockService> {
@@ -95,6 +96,14 @@ function readRef(source: {
  * renewing and releasing need UPDATE, because a lock is a statement that you
  * are editing, and someone who cannot edit is not.
  *
+ * 🔴 UPDATE means THIS document, not documents of this kind. `update-<slug>` is
+ * the coarse route permission and says only the latter, so a collection carrying
+ * an owner-only stored rule refuses the row while that permission still stands.
+ * Without the second gate a non-owner claims a document every real update denies
+ * them, and the owner is then shown a false holder and pushed to take over their
+ * own row. The gate the version routes already use runs here, for the reason its
+ * own docblock gives.
+ *
  * Both helpers are entity-generic and read the collection and single maps
  * alike, so a Single needs no branch here, and both delegate to the canonical
  * machinery rather than reproducing the API-key and super-admin rules that
@@ -105,7 +114,8 @@ async function authorize(
   ref: DocumentRef,
   intent: "read" | "write"
 ): Promise<void> {
-  const caller = readAccessCaller(await readCaller(auth));
+  const authenticated = await readCaller(auth);
+  const caller = readAccessCaller(authenticated);
   const allowed =
     intent === "read"
       ? await canReadEntity(ref.slug, caller)
@@ -117,6 +127,18 @@ async function authorize(
     throw NextlyError.forbidden({
       logContext: { slug: ref.slug, scopeKind: ref.scopeKind, intent },
     });
+  }
+
+  if (intent === "write") {
+    // Route authorization has just run, so the coarse re-check is skipped and
+    // what runs here is the stored per-document rules this gate exists for.
+    await assertDocumentUpdatable(
+      ref.scopeKind,
+      ref.slug,
+      ref.entryId,
+      authenticated.user,
+      authenticated.authenticatedScope
+    );
   }
 }
 
