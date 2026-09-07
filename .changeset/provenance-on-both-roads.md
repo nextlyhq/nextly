@@ -41,3 +41,13 @@ other refuses — one that exists in the database and cannot be edited — is no
 representable. It is an error in both validation modes: a half-written record is
 not a value a future build understands, it is a claim about history with a piece
 missing.
+
+The check reads nothing the record computes for itself, and reflection failures
+do not escape. A stored `origin` may be a caller-supplied object with accessors
+or a Proxy whose own reflection traps throw; `surveyDocument` refuses to invoke
+an accessor and already reports such a document unreadable, so the check defers
+to that verdict rather than adding a second one about a record nothing can read.
+
+It also inspects a fixed set of fields rather than every key the record carries,
+so a document already refused by the byte cap cannot be made to do work
+proportional to content the bounded survey deliberately never traversed.
