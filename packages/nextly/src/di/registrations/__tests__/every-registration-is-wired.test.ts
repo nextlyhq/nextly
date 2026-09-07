@@ -1,39 +1,48 @@
-import { readFileSync } from "node:fs";
-
-import { describe, expect, it } from "vitest";
-
-import * as registrations from "../index";
+import { describe, expect, it, vi } from "vitest";
 
 /**
  * A registration nothing calls is how document locking came to ship as three
- * unused tables: the domain, its schemas and its tests were all present and
- * complete, and the orchestrator never invoked them, so no consumer could
- * reach any of it.
+ * unused tables: the domain, its schemas and its tests were all complete, and
+ * the orchestrator never invoked them, so no consumer could reach any of it.
  *
- * Asserted against the orchestrator's source because that is where the calls
- * are. Constructing the real context would exercise every other domain to
- * learn one fact about this one.
+ * Checked by RUNNING the wiring. Every export of the barrel is replaced with a
+ * spy, `registerDomainServices` is called, and each spy must have fired. A
+ * source scan for the characters of a call cannot tell a live one from a call
+ * inside a dead branch or a mention in a comment, and would fail on
+ * reformatting that changes nothing.
  */
-const orchestrator = readFileSync(
-  new URL("../../register.ts", import.meta.url),
-  "utf-8"
-);
+const spies = new Map<string, ReturnType<typeof vi.fn>>();
 
-/** Exports that register something, as opposed to resets and type re-exports. */
-const registrars = Object.keys(registrations).filter(name =>
-  name.startsWith("register")
-);
+vi.mock("../index", async importOriginal => {
+  const real = await importOriginal<Record<string, unknown>>();
+  const mocked: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(real)) {
+    if (typeof value === "function" && name.startsWith("register")) {
+      const spy = vi.fn();
+      spies.set(name, spy);
+      mocked[name] = spy;
+    } else {
+      mocked[name] = value;
+    }
+  }
+  return mocked;
+});
+
+const { registerDomainServices } = await import("../../register");
 
 describe("the DI orchestrator", () => {
-  it("exports registrations to check, so this cannot pass on an empty list", () => {
-    // The control. An absence test over nothing is satisfied by everything.
-    expect(registrars.length).toBeGreaterThan(10);
+  it("has registrations to check, so this cannot pass on an empty list", () => {
+    // The control. An absence test over nothing is satisfied by everything,
+    // and a mock that failed to intercept would leave this map empty.
+    expect(spies.size).toBeGreaterThan(10);
   });
 
   it("calls every registration the barrel exports", () => {
-    const uncalled = registrars.filter(
-      name => !orchestrator.includes(`${name}(ctx)`)
-    );
+    registerDomainServices({} as never);
+
+    const uncalled = [...spies]
+      .filter(([, spy]) => spy.mock.calls.length === 0)
+      .map(([name]) => name);
 
     expect(uncalled).toEqual([]);
   });

@@ -14,7 +14,16 @@
  * @module api/document-lock
  */
 
-import { isErrorResponse, requireAuthentication } from "../auth/middleware";
+import {
+  callerHoldsPermission,
+  canReadEntity,
+  readAccessCaller,
+} from "../auth/entity-read-access";
+import {
+  isErrorResponse,
+  requireAuthentication,
+  type AuthContext,
+} from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di/container";
 import {
@@ -26,7 +35,8 @@ import {
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 
-import { respondData } from "./response-shapes";
+import { PRIVATE_NO_STORE_HEADERS, readCaller } from "./authenticated-read";
+import { respondData, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 async function getDocumentLockService(): Promise<DocumentLockService> {
@@ -69,6 +79,45 @@ function readRef(source: {
     });
   }
   return { scopeKind: scopeKind as DocumentScopeKind, slug, entryId };
+}
+
+/**
+ * Whether this caller may see, or take, a claim on this document.
+ *
+ * Authentication is not enough. This route is direct-dispatched, so it never
+ * reaches the central authorization path, and without this any signed-in
+ * account or scoped API key could read who is editing a document it cannot
+ * open, claim rows it has no business in, or use `takeover` to displace a
+ * colleague's claim on a collection it was never granted.
+ *
+ * Reading a lock needs READ on the document, because the holder's name and the
+ * fact that they are editing it are both facts about a document. Claiming,
+ * renewing and releasing need UPDATE, because a lock is a statement that you
+ * are editing, and someone who cannot edit is not.
+ *
+ * Both helpers are entity-generic and read the collection and single maps
+ * alike, so a Single needs no branch here, and both delegate to the canonical
+ * machinery rather than reproducing the API-key and super-admin rules that
+ * `canReadEntity` documents at length.
+ */
+async function authorize(
+  auth: AuthContext,
+  ref: DocumentRef,
+  intent: "read" | "write"
+): Promise<void> {
+  const caller = readAccessCaller(await readCaller(auth));
+  const allowed =
+    intent === "read"
+      ? await canReadEntity(ref.slug, caller)
+      : await callerHoldsPermission(`update-${ref.slug}`, caller);
+
+  if (!allowed) {
+    // The same refusal either way. Distinguishing "no such document" from "not
+    // yours" would answer whether a slug exists to someone with no access to it.
+    throw NextlyError.forbidden({
+      logContext: { slug: ref.slug, scopeKind: ref.scopeKind, intent },
+    });
+  }
 }
 
 /** The claim token a renew or release must present. */
@@ -127,10 +176,17 @@ export const readLock = withErrorHandler(async (req: Request) => {
     entryId: url.searchParams.get("entryId") ?? undefined,
   });
 
+  await authorize(auth, ref, "read");
+
   const holder = await (await getDocumentLockService()).read(ref);
   // `null` rather than an omitted key: "nobody holds this" is the answer, and a
   // missing field reads as a response that failed to say.
-  return respondData({ holder: holder ?? null });
+  // Shaped by WHO asked, and it names a colleague and what they are doing, so
+  // it must not sit in a shared cache or be replayed to the next session.
+  return respondData(
+    { holder: holder ?? null },
+    { headers: PRIVATE_NO_STORE_HEADERS }
+  );
 });
 
 /**
@@ -147,6 +203,8 @@ export const acquireLock = withErrorHandler(async (req: Request) => {
 
   const body = await readBody(req);
   const ref = readRef(body);
+  await authorize(auth, ref, "write");
+
   const outcome = await (
     await getDocumentLockService()
   ).acquire(
@@ -158,7 +216,15 @@ export const acquireLock = withErrorHandler(async (req: Request) => {
     { takeover: body.takeover === true }
   );
 
-  return respondData({ ...outcome });
+  // The canonical mutation envelope, so a client reads this with the same
+  // handling as every other write. The outcome IS the item: "held" is an
+  // answer about the document, not a failure of the request.
+  return respondMutation(
+    outcome.status === "acquired"
+      ? "Document claimed."
+      : "Document is being edited by someone else.",
+    outcome
+  );
 });
 
 /** Extend a claim this caller still believes it holds. */
@@ -167,11 +233,17 @@ export const renewLock = withErrorHandler(async (req: Request) => {
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
   const body = await readBody(req);
+  const ref = readRef(body);
+  await authorize(auth, ref, "write");
+
   const outcome = await (
     await getDocumentLockService()
-  ).renew(readRef(body), readClaimToken(body));
+  ).renew(ref, readClaimToken(body));
 
-  return respondData({ ...outcome });
+  return respondMutation(
+    outcome.status === "renewed" ? "Claim extended." : "Claim lost.",
+    outcome
+  );
 });
 
 /** Give up a claim. Releasing one already lost is not an error. */
@@ -180,9 +252,10 @@ export const releaseLock = withErrorHandler(async (req: Request) => {
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
   const body = await readBody(req);
-  await (
-    await getDocumentLockService()
-  ).release(readRef(body), readClaimToken(body));
+  const ref = readRef(body);
+  await authorize(auth, ref, "write");
 
-  return respondData({ released: true });
+  await (await getDocumentLockService()).release(ref, readClaimToken(body));
+
+  return respondMutation("Claim released.", { released: true });
 });

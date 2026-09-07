@@ -15,7 +15,30 @@ vi.mock("../../init", () => ({
 vi.mock("../../di/container", () => ({ container: { get: () => service } }));
 vi.mock("../../auth/middleware", () => ({
   requireAuthentication: (req: Request) => requireAuthentication(req),
-  isErrorResponse: (value: unknown) => value instanceof Response,
+  // The real predicate, not a stand-in. It keys on `statusCode`, and a mock
+  // recognising a `Response` instead sends the fixture down the wrong branch:
+  // `toNextlyAuthError` sees no status, produces a 500, and a loose `>= 400`
+  // assertion calls that a pass.
+  isErrorResponse: (value: unknown) =>
+    typeof value === "object" && value !== null && "statusCode" in value,
+}));
+
+// Every operation is authorized against the document it names.
+const canReadEntity = vi.fn();
+const callerHoldsPermission = vi.fn();
+vi.mock("../../auth/entity-read-access", () => ({
+  readAccessCaller: (caller: unknown) => caller,
+  canReadEntity: (slug: string, caller: unknown) =>
+    canReadEntity(slug, caller) as unknown,
+  callerHoldsPermission: (slug: string, caller: unknown) =>
+    callerHoldsPermission(slug, caller) as unknown,
+}));
+vi.mock("../authenticated-read", () => ({
+  readCaller: (auth: unknown) => Promise.resolve(auth),
+  PRIVATE_NO_STORE_HEADERS: {
+    "Cache-Control": "private, no-store",
+    Vary: "Cookie",
+  },
 }));
 
 const { readLock, acquireLock, renewLock, releaseLock } = await import(
@@ -32,6 +55,8 @@ const post = (body: unknown, method = "POST") =>
 beforeEach(() => {
   vi.clearAllMocks();
   requireAuthentication.mockResolvedValue(auth);
+  canReadEntity.mockResolvedValue(true);
+  callerHoldsPermission.mockResolvedValue(true);
 });
 
 describe("document lock route", () => {
@@ -77,7 +102,9 @@ describe("document lock route", () => {
     const response = await acquireLock(post(ref));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ status: "held" });
+    // In the canonical envelope: "held" is an answer about the document, not a
+    // failure of the request, so it is the item rather than an error.
+    expect(await response.json()).toMatchObject({ item: { status: "held" } });
   });
 
   it("answers an unheld document with an explicit null", async () => {
@@ -118,10 +145,17 @@ describe("document lock route", () => {
     expect(service.release).not.toHaveBeenCalled();
   });
 
-  it("refuses every operation without a session", async () => {
-    requireAuthentication.mockResolvedValue(
-      new Response(null, { status: 401 })
-    );
+  it("answers 401, not 500, without a session", async () => {
+    // The middleware reports a failure as this object, not a Response.
+    // Asserting the exact status is what separates a refusal from a crash: a
+    // fixture of the wrong shape produces an internal error, and a loose
+    // `>= 400` calls that a pass.
+    requireAuthentication.mockResolvedValue({
+      statusCode: 401,
+      error: "Unauthorized",
+      message: "Authentication required",
+      data: null,
+    });
 
     for (const call of [
       () => readLock(new Request("https://x.test/api/document-lock")),
@@ -129,10 +163,84 @@ describe("document lock route", () => {
       () => renewLock(post({ ...ref, claimToken: "t" }, "PATCH")),
       () => releaseLock(post({ ...ref, claimToken: "t" }, "DELETE")),
     ]) {
-      const response = await call();
-      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect((await call()).status).toBe(401);
     }
     expect(service.read).not.toHaveBeenCalled();
     expect(service.acquire).not.toHaveBeenCalled();
+  });
+
+  it("refuses a document the caller cannot read", async () => {
+    // Authentication is not authorization. This route is direct-dispatched, so
+    // it never reaches the central path, and without its own gate any signed-in
+    // account could read who is editing a collection it cannot open.
+    canReadEntity.mockResolvedValue(false);
+
+    const response = await readLock(
+      new Request(
+        "https://x.test/api/document-lock?scopeKind=collection&slug=posts&entryId=42"
+      )
+    );
+
+    expect(response.status).toBe(403);
+    expect(service.read).not.toHaveBeenCalled();
+  });
+
+  it("requires UPDATE to claim, renew or release, not merely read", async () => {
+    // A lock is a statement that you are editing. Someone who may read a
+    // document but not change it is not editing it, and must not be able to
+    // displace a colleague with `takeover`.
+    callerHoldsPermission.mockResolvedValue(false);
+
+    for (const call of [
+      () => acquireLock(post({ ...ref, takeover: true })),
+      () => renewLock(post({ ...ref, claimToken: "t" }, "PATCH")),
+      () => releaseLock(post({ ...ref, claimToken: "t" }, "DELETE")),
+    ]) {
+      expect((await call()).status).toBe(403);
+    }
+    expect(service.acquire).not.toHaveBeenCalled();
+    expect(service.renew).not.toHaveBeenCalled();
+    expect(service.release).not.toHaveBeenCalled();
+  });
+
+  it("asks about the document it was given, not a fixed one", async () => {
+    // A gate that always asked about the same slug would pass every case above
+    // while authorizing the wrong thing.
+    service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
+
+    await acquireLock(post({ ...ref, slug: "invoices" }));
+
+    expect(callerHoldsPermission).toHaveBeenCalledWith(
+      "update-invoices",
+      expect.anything()
+    );
+  });
+
+  it("keeps a lock read out of every cache", async () => {
+    // Shaped by who asked, and it names a colleague and what they are doing.
+    service.read.mockResolvedValue(undefined);
+
+    const response = await readLock(
+      new Request(
+        "https://x.test/api/document-lock?scopeKind=collection&slug=posts&entryId=42"
+      )
+    );
+
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response.headers.get("Vary")).toBe("Cookie");
+  });
+
+  it("returns mutations in the canonical envelope", async () => {
+    // `{ message, item }`, so a client reads these with the same handling as
+    // every other write rather than a shape invented here.
+    service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
+
+    const body = (await (await acquireLock(post(ref))).json()) as Record<
+      string,
+      unknown
+    >;
+
+    expect(body).toHaveProperty("message");
+    expect(body.item).toMatchObject({ status: "acquired" });
   });
 });

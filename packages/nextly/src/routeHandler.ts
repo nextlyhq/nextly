@@ -543,10 +543,13 @@ async function handleDocumentLockRequest(
     case "releaseDocumentLock":
       return releaseLock(req);
     default:
-      return new Response(
-        JSON.stringify({ error: "Unknown document lock operation" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
+      // Reached only if the parser and this switch disagree, which is a new or
+      // mistyped route rather than anything the caller did. A canonical error
+      // carries the code and request id a client needs to report it; an ad hoc
+      // `{ error }` body is unreadable exactly when someone is debugging.
+      throw NextlyError.notFound({
+        logContext: { service: "documentLock", method },
+      });
   }
 }
 
