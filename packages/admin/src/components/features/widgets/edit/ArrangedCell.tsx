@@ -12,6 +12,9 @@
  * @module components/features/widgets/edit/ArrangedCell
  */
 
+import { resolveWidgetSettings } from "nextly/config";
+import { useMemo, useState } from "react";
+
 import { cn } from "@admin/lib/utils";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
 
@@ -23,54 +26,100 @@ import { WidgetRenderer } from "../WidgetRenderer";
 import { SortableWidgetCell } from "./SortableWidgetCell";
 import type { ArrangedWidget } from "./useDashboardArrangement";
 import { WidgetEditControls } from "./WidgetEditControls";
+import { WidgetSettingsSheet } from "./WidgetSettingsSheet";
 
 export interface ArrangedCellProps {
   row: ArrangedWidget;
-  index: number;
-  count: number;
   isEditing: boolean;
-  slot: WidgetSlot | undefined;
-  /** How a `stats` card reaches each cell's answer; absent for other archetypes. */
-  slotFor?: CellSlotLookup;
-  /** `null` when this card took no part in the batch. */
-  updatedAt: Date | null;
-  isFetching: boolean;
   /**
-   * Move this card one step within ITS OWN column.
+   * Where this card sits, and among how many.
    *
-   * 🔴 Bound by the caller rather than resolved from an index here. `index` is
-   * a position within the rendered column, and the cell has no way to turn one
-   * into the neighbour it should swap with -- the arrangement is interleaved
-   * across columns, so the card before this one in the whole sequence usually
-   * sits in a different column entirely.
+   * Grouped because the four are one fact read four ways: they decide which
+   * moves are possible, and they are what the controls announce. `index` and
+   * `count` are positions within THIS column rather than the whole
+   * arrangement — the sequence is interleaved across columns, so a global
+   * index would offer a move whose neighbour the reader cannot see.
    */
-  onMove: (delta: number) => void;
-  /** How many columns the dashboard is drawn in, for the sideways controls. */
-  columnCount: number;
-  /** The column this card is DRAWN in, which a stored value may differ from. */
-  column: number;
-  onMoveColumn: (placementId: string, targetColumn: number) => void;
-  onToggleHidden: (placementId: string) => void;
-  onRemove: (placementId: string) => void;
+  at: { index: number; count: number; column: number; columnCount: number };
+  /**
+   * What the batch answered for this card, or its absence.
+   *
+   * One group because it is one answer: the renderer takes all four together,
+   * and `updatedAt`/`isFetching` are `null`/`false` for a card that took no
+   * part in the batch rather than being separately meaningful.
+   */
+  data: {
+    slot: WidgetSlot | undefined;
+    /** How a `stats` card reaches each cell's answer; absent otherwise. */
+    slotFor?: CellSlotLookup;
+    /** `null` when this card took no part in the batch. */
+    updatedAt: Date | null;
+    isFetching: boolean;
+  };
+  /**
+   * What acting on this card does.
+   *
+   * 🔴 Every one is bound by the CALLER rather than resolved here. `at.index`
+   * is a position within the rendered column, and the cell has no way to turn
+   * one into the neighbour it should swap with; the writes are keyed by
+   * placement, and the cell should not have to know how the editor addresses
+   * one.
+   */
+  on: {
+    /** Move this card one step within ITS OWN column. */
+    move: (delta: number) => void;
+    moveColumn: (placementId: string, targetColumn: number) => void;
+    toggleHidden: (placementId: string) => void;
+    remove: (placementId: string) => void;
+    /** Records what a reader chose for THIS card. */
+    saveSettings: (config: Record<string, unknown>) => void;
+  };
 }
 
 export function ArrangedCell({
   row,
-  index,
-  count,
   isEditing,
-  slot,
-  slotFor,
-  updatedAt,
-  isFetching,
-  onMove,
-  columnCount,
-  column,
-  onMoveColumn,
-  onToggleHidden,
-  onRemove,
+  at,
+  data,
+  on,
 }: ArrangedCellProps) {
+  const { index, count, column, columnCount } = at;
+  /*
+   * Open state lives with the CELL rather than with the grid: the sheet belongs
+   * to one card, and hoisting it would make the grid track which of many is
+   * open for no benefit to either.
+   */
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const hasSettings = (row.widget.settings?.length ?? 0) > 0;
+
   const widget = row.widget;
+  /*
+   * Resolved HERE, the one place a card's declaration and its reader's stored
+   * config are both in scope -- the same reason the grid applies settings to
+   * the query where it does. `resolveWidgetSettings` returns only DECLARED
+   * names, so a component cannot act on a key its widget never offered.
+   */
+  const placement = useMemo(
+    () => ({
+      id: row.placementId,
+      settings: resolveWidgetSettings(widget.settings, row.config),
+    }),
+    [row.placementId, widget.settings, row.config]
+  );
+  /*
+   * Bound once here rather than written inline in the JSX below. Each is the
+   * cell supplying the one thing its caller's handler cannot know — which
+   * placement, or which direction — and inline they turned a flat list of
+   * controls into seven nested closures a reader has to step into to see what
+   * each button does.
+   */
+  const moveUp = () => on.move(-1);
+  const moveDown = () => on.move(1);
+  const moveLeft = () => on.moveColumn(row.placementId, column - 1);
+  const moveRight = () => on.moveColumn(row.placementId, column + 1);
+  const toggleHidden = () => on.toggleHidden(row.placementId);
+  const remove = () => on.remove(row.placementId);
+  const openSettings = () => setSettingsOpen(true);
   const { canMoveUp, canMoveDown } = moveAffordance(index, count);
   // Derived from the column this card is DRAWN in. A card stored past the
   // current count is folded into the last column, so computing from the stored
@@ -124,22 +173,45 @@ export function ArrangedCell({
     >
       {isEditing ? (
         <WidgetEditControls
+          card={{
+            title: widget.title,
+            position: index + 1,
+            count,
+            // 1-based for the labels, which say "column 2 of 3" to a reader
+            // who counts from one.
+            column: column + 1,
+            columnCount,
+            hidden: row.hidden,
+          }}
+          can={{
+            up: canMoveUp,
+            down: canMoveDown,
+            left: canMoveLeft,
+            right: canMoveRight,
+          }}
+          on={{
+            moveUp,
+            moveDown,
+            moveLeft,
+            moveRight,
+            toggleHidden,
+            remove,
+            ...(hasSettings ? { openSettings } : {}),
+          }}
+        />
+      ) : null}
+      {/* Mounted whenever the widget offers settings, not only while editing.
+          A closed `Sheet` renders nothing, so this costs a card nothing — and
+          it is what lets the panel outlive edit mode rather than being torn
+          out from under a reader who is still filling it in. */}
+      {hasSettings ? (
+        <WidgetSettingsSheet
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
           title={widget.title}
-          position={index + 1}
-          count={count}
-          hidden={row.hidden}
-          canMoveUp={canMoveUp}
-          canMoveDown={canMoveDown}
-          column={column + 1}
-          columnCount={columnCount}
-          canMoveLeft={canMoveLeft}
-          canMoveRight={canMoveRight}
-          onMoveUp={() => onMove(-1)}
-          onMoveDown={() => onMove(1)}
-          onMoveLeft={() => onMoveColumn(row.placementId, column - 1)}
-          onMoveRight={() => onMoveColumn(row.placementId, column + 1)}
-          onToggleHidden={() => onToggleHidden(row.placementId)}
-          onRemove={() => onRemove(row.placementId)}
+          settings={widget.settings ?? []}
+          config={row.config}
+          onSave={on.saveSettings}
         />
       ) : null}
       {/* The dimming wraps the BODY only. Applied to the cell it composited
@@ -150,13 +222,7 @@ export function ArrangedCell({
           a live one; the controls that act on it stay legible. */}
       {row.hidden ? (
         <div className="opacity-50">
-          <WidgetRenderer
-            definition={widget}
-            slot={slot}
-            slotFor={slotFor}
-            updatedAt={updatedAt}
-            isFetching={isFetching}
-          />
+          <WidgetRenderer definition={widget} placement={placement} {...data} />
         </div>
       ) : (
         // 🔴 A DIRECT child when nothing is dimmed, because the cell's
@@ -166,13 +232,7 @@ export function ArrangedCell({
         // blank slot with its margins. Nothing is lost by branching: a hidden
         // card is only ever drawn while editing, where the controls above are
         // themselves a child and the cell can never be empty anyway.
-        <WidgetRenderer
-          definition={widget}
-          slot={slot}
-          slotFor={slotFor}
-          updatedAt={updatedAt}
-          isFetching={isFetching}
-        />
+        <WidgetRenderer definition={widget} placement={placement} {...data} />
       )}
     </SortableWidgetCell>
   );

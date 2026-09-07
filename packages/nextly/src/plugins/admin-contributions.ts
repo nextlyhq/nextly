@@ -7,6 +7,7 @@ import type {
   QuerylessWidgetArchetype,
   WidgetArchetype,
   WidgetQuery,
+  WidgetSetting,
   WidgetSize,
 } from "../domains/widgets";
 
@@ -229,6 +230,16 @@ interface PluginAdminWidgetBase {
    * resolver's channel ordering happened to leave it.
    */
   defaultOrder?: number;
+  /**
+   * What a reader may change about this card, drawn by the settings panel.
+   *
+   * On the BASE for the same reason `defaultOrder` is: any widget may offer
+   * settings, whatever draws its body. Declaring it only on the archetypes core
+   * draws would leave a plugin shipping its own component unable to expose one
+   * through the supported surface — while `validatedAdminWidgets` published the
+   * field anyway, so the contract would be narrower than the channel.
+   */
+  settings?: WidgetSetting[];
 }
 
 /**

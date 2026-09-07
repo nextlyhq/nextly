@@ -234,6 +234,58 @@ describe("WidgetRenderer — custom", () => {
     expect(screen.getByText("Acme panel")).toBeInTheDocument();
   });
 
+  /*
+   * 🔴 A plugin's component is the ONLY thing that can consume a `text`,
+   * `checkbox` or `select` setting -- core reads just the `limit` query knob.
+   * `plugin-sdk` is an author's only stable import surface, so a value it
+   * cannot receive as a prop it cannot observe at all: a reader could choose
+   * one and the card drawing it would never learn of it.
+   *
+   * The placement id travels with them because `widgetId` does not identify a
+   * card. The same widget can sit on a dashboard twice with different
+   * settings, and a component keying local state or a fetch on the widget id
+   * would have the two copies overwrite each other -- the defect the batch
+   * already had, one layer along.
+   */
+  it("hands the plugin component its placement and resolved settings", () => {
+    registerComponent(
+      "@acme/admin#Panel",
+      ({
+        placementId,
+        settings,
+      }: {
+        placementId?: string;
+        settings?: Record<string, unknown>;
+      }) => <div>{`${placementId}:${JSON.stringify(settings)}`}</div>
+    );
+    render(
+      <WidgetRenderer
+        definition={custom}
+        slot={undefined}
+        placement={{ id: "p-2", settings: { mode: "grid" } }}
+      />
+    );
+    expect(screen.getByText('p-2:{"mode":"grid"}')).toBeInTheDocument();
+  });
+
+  it("falls back to the widget id when rendered outside an arrangement", () => {
+    // The layout's own rule rather than a guess: `defaultPlacements` names each
+    // placement after its widget, because an unarranged dashboard is the one
+    // case where the two are genuinely one-to-one.
+    registerComponent(
+      "@acme/admin#Panel",
+      ({
+        placementId,
+        settings,
+      }: {
+        placementId?: string;
+        settings?: Record<string, unknown>;
+      }) => <div>{`${placementId}:${JSON.stringify(settings)}`}</div>
+    );
+    render(<WidgetRenderer definition={custom} slot={undefined} />);
+    expect(screen.getByText("acme/panel:{}")).toBeInTheDocument();
+  });
+
   it("isolates a throwing plugin component behind the boundary", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     registerComponent("@acme/admin#Panel", () => {

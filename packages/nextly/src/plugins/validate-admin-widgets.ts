@@ -31,6 +31,7 @@ import {
   widgetValueProblem,
   WIDGET_ARCHETYPES,
 } from "../domains/widgets/definition";
+import { widgetSettingsProblem } from "../domains/widgets/settings";
 import { getNextlyLogger } from "../observability/logger";
 
 import type { PluginAdminWidget } from "./admin-contributions";
@@ -316,6 +317,14 @@ const FIELD_RULES: ReadonlyArray<
   // as equal to whatever it was measured against and the explicit orders around
   // it quietly stopped holding.
   widget => defaultOrderProblem(widget.defaultOrder),
+
+  // Through the SAME rule the registry applies, and it is the rule ITSELF
+  // rather than a second spelling of it. This channel had no settings check at
+  // all, so `settings: {}` from an untyped declaration passed the JSON gate,
+  // travelled to the admin, and threw out of `applyWidgetSettings` while the
+  // grid was rendering -- taking the whole dashboard down rather than the one
+  // install that declared it.
+  widget => widgetSettingsProblem(widget.settings),
 
   // Through the SAME rule the registry applies. Without it a contributed
   // `{ archetype: "metric", chrome: "none" }` passed boot while the registry

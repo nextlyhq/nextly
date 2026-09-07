@@ -503,6 +503,7 @@ export {
   MAX_WIDGET_LIMIT,
   type WidgetDefinition,
   type WidgetAction,
+  type WidgetSetting,
   type WidgetStatCell,
   type WidgetQuery,
   type WidgetSize,

@@ -19,6 +19,7 @@ import {
   newPlacementId,
   removePlacement,
   renumber,
+  setPlacementConfig,
   togglePlacementHidden,
 } from "../layout-editor";
 
@@ -198,6 +199,44 @@ describe("whether anything changed", () => {
     const before = placements("a");
     const resized = [{ ...before[0], size: "xl" }];
     expect(hasChanges(before, resized)).toBe(true);
+  });
+
+  /*
+   * 🔴 `config` is the only field a settings edit touches, exactly as `column`
+   * is the only one a sideways move touches. Left out of the comparison, a
+   * card whose settings the reader just changed compares as untouched, Save
+   * stays disabled, and the value they typed refuses to persist with nothing
+   * on screen saying why.
+   */
+  it("notices a settings change alone", () => {
+    const before = placements("a");
+    const configured = [{ ...before[0], config: { limit: 12 } }];
+    expect(hasChanges(before, configured)).toBe(true);
+    // And a change to an EXISTING config, not only its arrival.
+    expect(
+      hasChanges(configured, [{ ...before[0], config: { limit: 3 } }])
+    ).toBe(true);
+  });
+
+  it("says no when a config holds the same values in another order", () => {
+    // The control, and the reason this is a value comparison rather than
+    // `JSON.stringify`. The server returns a stored config in whatever order it
+    // holds and the form rebuilds it in declaration order, so a text comparison
+    // reports a card nobody touched as dirty and leaves Save enabled forever.
+    const before = [
+      { ...placements("a")[0], config: { limit: 12, mode: "x" } },
+    ];
+    const same = [{ ...placements("a")[0], config: { mode: "x", limit: 12 } }];
+    expect(hasChanges(before, same)).toBe(false);
+  });
+
+  it("treats an absent config and an emptied one as the same state", () => {
+    // `setPlacementConfig` DROPS the key rather than storing `{}`, so these are
+    // one state. Compared as different, clearing the last setting would leave
+    // the card permanently dirty.
+    const before = placements("a");
+    const empty = [{ ...before[0], config: {} }];
+    expect(hasChanges(before, empty)).toBe(false);
   });
 });
 
@@ -756,5 +795,61 @@ describe("which side of a card a drop landed on", () => {
     // that cannot be taken costs the old behaviour rather than an arbitrary one.
     expect(dropSide(null, { top: 100, height: 40 })).toBe("before");
     expect(dropSide({ top: 100, height: 40 }, undefined)).toBe("before");
+  });
+});
+
+describe("recording what a reader chose for one card", () => {
+  const one = (config?: Record<string, unknown>): WidgetPlacement[] => [
+    {
+      id: "a",
+      widgetId: "core/a",
+      order: 0,
+      hidden: false,
+      ...(config === undefined ? {} : { config }),
+    },
+    { id: "b", widgetId: "core/b", order: 1, hidden: false },
+  ];
+
+  it("stores the answer against its own placement", () => {
+    const next = setPlacementConfig(one(), "a", { limit: 12 });
+    expect(next[0].config).toEqual({ limit: 12 });
+    // The control: the card next to it is untouched, so a settings save
+    // cannot quietly rewrite a neighbour.
+    expect(next[1].config).toBeUndefined();
+  });
+
+  /*
+   * 🔴 REPLACES rather than merges. A merge cannot express clearing a setting —
+   * a reader who empties a field sends a key that is simply absent, and merging
+   * leaves the old value in place, so the field would refuse to be cleared with
+   * nothing on screen explaining why.
+   */
+  it("replaces the stored answer rather than merging into it", () => {
+    const next = setPlacementConfig(one({ limit: 12, compact: true }), "a", {
+      limit: 3,
+    });
+    expect(next[0].config).toEqual({ limit: 3 });
+    expect("compact" in (next[0].config ?? {})).toBe(false);
+  });
+
+  it("drops the key entirely when nothing is left", () => {
+    // A missing config and an empty one read identically, so keeping `{}`
+    // would be a difference the layout carries and nothing can observe — and
+    // it would make a card look edited for having been opened.
+    const next = setPlacementConfig(one({ limit: 12 }), "a", {});
+    expect(next[0].config).toBeUndefined();
+    expect("config" in next[0]).toBe(false);
+  });
+
+  it("leaves the arrangement alone when no placement matches", () => {
+    const before = one({ limit: 1 });
+    const next = setPlacementConfig(before, "missing", { limit: 9 });
+    expect(next).toEqual(before);
+  });
+
+  it("does not mutate the placements it was given", () => {
+    const before = one({ limit: 1 });
+    setPlacementConfig(before, "a", { limit: 2 });
+    expect(before[0].config).toEqual({ limit: 1 });
   });
 });

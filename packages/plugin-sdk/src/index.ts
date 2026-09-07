@@ -464,6 +464,7 @@ export {
   registerSource,
   type WidgetDefinition,
   type WidgetAction,
+  type WidgetSetting,
   type WidgetQuery,
   type WidgetSize,
   type WidgetChrome,

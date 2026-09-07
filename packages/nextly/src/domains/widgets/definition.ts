@@ -13,6 +13,14 @@ import { NextlyError } from "../../errors/nextly-error";
 
 import { requiredPermissionSlugs } from "./gate";
 import type { WidgetQuery } from "./query";
+import { validateWidgetSettings, type WidgetSetting } from "./settings";
+
+/*
+ * Re-exported from the contract's home so a caller reading a definition finds
+ * the type of one of its fields in the same place, rather than having to know
+ * which module the validation happens to live in.
+ */
+export type { WidgetSetting } from "./settings";
 
 // The gate rule lives in a module with no imports so the BROWSER can read it
 // too (`nextly/widget-gate`). Validation asks the same reader the gate asks,
@@ -198,6 +206,15 @@ export interface WidgetDefinition {
   /** Groups the widget in the "add widget" picker. */
   category?: string;
   archetype: WidgetArchetype;
+  /**
+   * What a reader may change about THIS card, per placement.
+   *
+   * Declared as field configs so the admin draws them with the renderer it
+   * already has and a plugin author needs no new vocabulary. The stored values
+   * live on the placement, not here: this is the offer, and the placement is
+   * one reader's answer to it.
+   */
+  settings?: WidgetSetting[];
   defaultSize: WidgetSize;
   /**
    * Where this widget sits by default, ascending. Omitted means "after
@@ -1093,4 +1110,5 @@ export function validateWidgetDefinition(
   validateCells(d);
   validateDefaultOrder(d);
   validateChrome(d);
+  validateWidgetSettings(d.settings, d.id ?? "widget");
 }

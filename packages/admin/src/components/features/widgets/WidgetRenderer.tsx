@@ -70,12 +70,34 @@ export interface WidgetRendererProps {
    * way to know the dashboard was reading again.
    */
   isFetching?: boolean;
+  /**
+   * Which CARD this render is, and what its reader configured.
+   *
+   * 🔴 Handed to a plugin's own component, because nothing else can reach it.
+   * `plugin-sdk` is an author's only stable import surface, so a component that
+   * cannot receive its settings as props cannot observe them at all — a widget
+   * could declare a `text`, `checkbox` or `select` setting, a reader could
+   * choose a value, and the component drawing the card would never learn of it.
+   * Only `limit` reaches anything otherwise, through the query.
+   *
+   * The ID travels with them because `widgetId` does not identify a card. The
+   * same widget can sit on a dashboard twice with different settings, and a
+   * component keying anything — local state, a fetch, a chart instance — on the
+   * widget id would have the two copies overwrite each other.
+   *
+   * Optional, and the fallback is the layout's own rule rather than a guess:
+   * `defaultPlacements` names each placement after its widget, because an
+   * unarranged dashboard is the one case where the two are genuinely
+   * one-to-one. A render outside an arrangement is exactly that case.
+   */
+  placement?: { id: string; settings: Record<string, unknown> };
 }
 
 export function WidgetRenderer({
   definition,
   slot,
   slotFor,
+  placement,
   updatedAt = null,
   isFetching = false,
 }: WidgetRendererProps) {
@@ -86,6 +108,16 @@ export function WidgetRenderer({
   };
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);
+
+  // Built once, so the two `chrome` branches below cannot drift into handing a
+  // component different props depending on whether its card is framed.
+  const componentProps = {
+    widgetId: definition.id,
+    placementId: placement?.id ?? definition.id,
+    settings: placement?.settings ?? {},
+    slot,
+    isFetching,
+  };
 
   // The escape hatch. A plugin component draws its own body, so the card
   // asserts nothing about its loading or empty states -- the component knows
@@ -127,12 +159,7 @@ export function WidgetRenderer({
     // `empty:hidden` can collapse it. Anything drawn here to "help" would fill
     // the cell and reinstate the blank row.
     if (definition.chrome === "none") {
-      return (
-        <PluginSlot
-          path={definition.component}
-          props={{ widgetId: definition.id, slot, isFetching }}
-        />
-      );
+      return <PluginSlot path={definition.component} props={componentProps} />;
     }
 
     return (
@@ -149,10 +176,7 @@ export function WidgetRenderer({
         updatedAt={slot?.ok === false ? null : updatedAt}
         isLoading={isFetching}
       >
-        <PluginSlot
-          path={definition.component}
-          props={{ widgetId: definition.id, slot, isFetching }}
-        />
+        <PluginSlot path={definition.component} props={componentProps} />
       </WidgetCard>
     );
   }

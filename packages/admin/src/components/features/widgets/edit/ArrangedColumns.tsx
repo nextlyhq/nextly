@@ -37,6 +37,11 @@ export interface ArrangedColumnsProps {
   onMoveColumn: (placementId: string, targetColumn: number) => void;
   onToggleHidden: (placementId: string) => void;
   onRemove: (placementId: string) => void;
+  /** Records what a reader chose for one card's settings. */
+  onSaveSettings: (
+    placementId: string,
+    config: Record<string, unknown>
+  ) => void;
 }
 
 function EmptyArrangement({
@@ -74,6 +79,7 @@ export function ArrangedColumns({
   onMoveColumn,
   onToggleHidden,
   onRemove,
+  onSaveSettings,
 }: ArrangedColumnsProps) {
   return (
     <section
@@ -105,53 +111,57 @@ export function ArrangedColumns({
             <ArrangedCell
               key={row.placementId}
               row={row}
-              // 🔴 The SAME list the click resolves against. Derived from the
-              // global sequence instead, the first card of column 2 gets an
-              // enabled Up whose neighbour is not in its column -- an enabled
-              // control that does nothing, which is the failure SC 2.5.7 is
-              // about rather than a cosmetic one.
-              index={indexInColumn}
-              count={rowsInColumn.length}
               isEditing={isEditing}
-              slot={slots[row.widget.id]}
-              // Built HERE, where the whole record is, so the composite key
-              // format stays with the batch that writes it rather than being
-              // spelled again inside an archetype.
-              // This card's own answers, by cell key. Nested rather than a
-              // composite string, so no id can collide with another.
-              slotFor={key => cellSlots[row.widget.id]?.[key]}
-              // Only a widget that actually ASKED can be waiting on an answer. A
-              // card drawn entirely by a plugin component took no part in the
-              // batch, and neither did one whose archetype nothing can draw, so a
-              // refetch says nothing about either.
-              updatedAt={requested.has(row.widget.id) ? updatedAt : null}
-              isFetching={requested.has(row.widget.id) ? isFetching : false}
-              // The arrangement hook announces, because it is the one that
-              // resolves the destination -- announcing here would name a
-              // position computed a second time, and the two would drift.
-              // 🔴 Resolved against THIS column, not the whole arrangement.
-              // The sequence is interleaved across columns, so the row before
-              // this one globally is usually in a different column, and moving
-              // toward it swaps two cards a reader cannot see move.
-              onMove={(delta: number) => {
-                const neighbour = rowsInColumn[indexInColumn + delta];
-                // The delta already says which way the reader asked to go, so
-                // it says which side of that neighbour the card lands on. Up
-                // is above it, down is below -- and below is the side that
-                // makes the bottom of a column reachable at all.
-                if (neighbour) {
-                  onMove(
-                    row.placementId,
-                    neighbour.placementId,
-                    delta < 0 ? "before" : "after"
-                  );
-                }
+              at={{
+                // 🔴 The SAME list the click resolves against. Derived from
+                // the global sequence instead, the first card of column 2 gets
+                // an enabled Up whose neighbour is not in its column -- an
+                // enabled control that does nothing, which is the failure SC
+                // 2.5.7 is about rather than a cosmetic one.
+                index: indexInColumn,
+                count: rowsInColumn.length,
+                column: columnIndex,
+                columnCount,
               }}
-              columnCount={columnCount}
-              column={columnIndex}
-              onMoveColumn={onMoveColumn}
-              onToggleHidden={onToggleHidden}
-              onRemove={onRemove}
+              data={{
+                slot: slots[row.placementId],
+                // This card's own answers, by cell key. Nested rather than a
+                // composite string, so no id can collide with another.
+                slotFor: key => cellSlots[row.placementId]?.[key],
+                // Only a card that actually ASKED can be waiting on an answer.
+                // One drawn entirely by a plugin component took no part in the
+                // batch, and neither did one whose archetype nothing can draw,
+                // so a refetch says nothing about either.
+                updatedAt: requested.has(row.placementId) ? updatedAt : null,
+                isFetching: requested.has(row.placementId) ? isFetching : false,
+              }}
+              on={{
+                // 🔴 Resolved against THIS column, not the whole arrangement.
+                // The sequence is interleaved across columns, so the row
+                // before this one globally is usually in a different column,
+                // and moving toward it swaps two cards a reader cannot see
+                // move. The arrangement hook announces, because it is the one
+                // that resolves the destination -- announcing here would name
+                // a position computed a second time, and the two would drift.
+                move: (delta: number) => {
+                  const neighbour = rowsInColumn[indexInColumn + delta];
+                  // The delta already says which way the reader asked to go,
+                  // so it says which side of that neighbour the card lands on.
+                  // Up is above it, down is below -- and below is the side
+                  // that makes the bottom of a column reachable at all.
+                  if (neighbour) {
+                    onMove(
+                      row.placementId,
+                      neighbour.placementId,
+                      delta < 0 ? "before" : "after"
+                    );
+                  }
+                },
+                moveColumn: onMoveColumn,
+                toggleHidden: onToggleHidden,
+                remove: onRemove,
+                saveSettings: config => onSaveSettings(row.placementId, config),
+              }}
             />
           ))}
         </WidgetColumn>

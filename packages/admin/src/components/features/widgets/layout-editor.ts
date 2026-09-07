@@ -110,6 +110,36 @@ export function togglePlacementHidden(
   );
 }
 
+/**
+ * Records what a reader chose for ONE card.
+ *
+ * 🔴 Replaces the whole `config` rather than merging into it, because a merge
+ * cannot express clearing a setting: a reader who empties a field would send
+ * a key whose value is absent, and merging leaves the old value in place. The
+ * caller holds the full answer for that card — the settings form knows every
+ * field it drew — so replacement is the honest write.
+ *
+ * An EMPTY object is stored as no config at all. `resolveWidgetSettings` reads
+ * a missing config and an empty one identically, so keeping `{}` would be a
+ * difference the layout carries and nothing can observe — and it would make
+ * `hasChanges` report a card as edited for having been opened.
+ */
+export function setPlacementConfig(
+  placements: readonly WidgetPlacement[],
+  placementId: string,
+  config: Record<string, unknown>
+): WidgetPlacement[] {
+  const empty = Object.keys(config).length === 0;
+  return placements.map(placement => {
+    if (placement.id !== placementId) return placement;
+    if (empty) {
+      const { config: _dropped, ...rest } = placement;
+      return rest;
+    }
+    return { ...placement, config };
+  });
+}
+
 /** Drops a card from the arrangement entirely. */
 export function removePlacement(
   placements: readonly WidgetPlacement[],
@@ -211,27 +241,95 @@ export function renumber(
  * every editor operation returns new objects and a reference check would report
  * a change for a move that put a card back where it started.
  */
+/**
+ * Whether two stored configs hold the same values.
+ *
+ * By VALUE, not by identity and not by serialised text. The draft's config is
+ * rebuilt from the form on every save, so identity always differs; and
+ * `JSON.stringify` is key-ORDER sensitive, so a config the server returned in
+ * one order and the form rebuilt in another would compare as changed and leave
+ * Save enabled on a card nobody touched.
+ *
+ * The values are whatever survived the layout writer, which admits any JSON the
+ * placement's size and depth caps allow -- so this walks arrays and nested
+ * objects rather than assuming the scalars the settings contract writes today.
+ * A shallow comparison would be right for the values this form produces and
+ * wrong the moment a refetch replaces the saved config with fresh objects,
+ * which `refetchOnWindowFocus` does mid-edit.
+ */
+function sameConfig(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) return sameItems(a, b);
+  if (isRecord(a) && isRecord(b)) return sameEntries(a, b);
+  return false;
+}
+
+/** Whether two arrays hold equal values in the same order. */
+function sameItems(a: readonly unknown[], b: readonly unknown[]): boolean {
+  return a.length === b.length && a.every((it, i) => sameConfig(it, b[i]));
+}
+
+/** Whether two records carry the same keys, each holding an equal value. */
+function sameEntries(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>
+): boolean {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  // `hasOwn` rather than an index check: a config key comes from a plugin's
+  // setting name, and `b["__proto__"]` answers on any ordinary object.
+  return keys.every(key => Object.hasOwn(b, key) && sameConfig(a[key], b[key]));
+}
+
+/** A non-null object that is not an array. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * A placement reduced to the values a comparison should see.
+ *
+ * 🔴 The return type names EVERY field of `WidgetPlacement`, so the compiler
+ * refuses a field added to the placement and not normalised here. That refusal
+ * is the point: this comparison is rebuilt field by field, and a field left out
+ * of it compares as untouched — an arrangement the reader can see changed, with
+ * Save disabled and nothing saying why. It has happened twice, for `column` and
+ * again for `config`, and a list nothing enforces would let it happen a third
+ * time.
+ *
+ * The defaults fold the states that are one state: a card in no stated column
+ * is in column 0, and a config that was emptied is DROPPED rather than stored
+ * as `{}`, so absent and empty must compare equal or clearing the last setting
+ * would leave the card permanently dirty. `null` for the absent geometry so an
+ * explicit `undefined` and a missing key do not read as two different values.
+ */
+function comparable(
+  placement: WidgetPlacement
+): Record<keyof WidgetPlacement, unknown> {
+  return {
+    id: placement.id,
+    widgetId: placement.widgetId,
+    order: placement.order,
+    column: placement.column ?? 0,
+    hidden: placement.hidden,
+    size: placement.size ?? null,
+    height: placement.height ?? null,
+    config: placement.config ?? {},
+  };
+}
+
 export function hasChanges(
   original: readonly WidgetPlacement[],
   edited: readonly WidgetPlacement[]
 ): boolean {
   if (original.length !== edited.length) return true;
-  return renumber(original).some((placement, index) => {
-    const other = renumber(edited)[index];
-    return (
-      placement.id !== other.id ||
-      placement.widgetId !== other.widgetId ||
-      placement.order !== other.order ||
-      // 🔴 `column` is the only field a sideways move touches. Left out, an
-      // arrangement whose cards changed columns compares as untouched, Save
-      // stays disabled, and the reader watches work they can see refuse to
-      // persist.
-      (placement.column ?? 0) !== (other.column ?? 0) ||
-      placement.hidden !== other.hidden ||
-      placement.size !== other.size ||
-      placement.height !== other.height
-    );
-  });
+  // Renumbered ONCE. Read inside the loop it was recomputed for every
+  // placement, which is the whole list rebuilt per card.
+  const after = renumber(edited);
+  return renumber(original).some(
+    (placement, index) =>
+      !sameConfig(comparable(placement), comparable(after[index]))
+  );
 }
 
 /** Whether a card at `column` may move left or right, given the count. */

@@ -21,6 +21,7 @@
  */
 
 import { DndContext, closestCorners } from "@dnd-kit/core";
+import { applyWidgetSettings } from "nextly/config";
 import { useCallback, useMemo, useRef } from "react";
 
 import {
@@ -174,7 +175,39 @@ export function WidgetGrid() {
     [declared]
   );
 
-  const widgets = useMemo(() => visible.map(row => row.widget), [visible]);
+  /*
+   * The cards the batch asks for, with each reader's own settings applied.
+   *
+   * Applied HERE rather than inside the batch, because the stored config
+   * belongs to the placement and the batch has no reason to read a layout. The
+   * ROW is carried through rather than the widget alone, so the answer comes
+   * back keyed to the placement that asked: the same widget placed twice with
+   * different settings asks two different questions, and keying those by widget
+   * filed both under one entry.
+   *
+   * `applyWidgetSettings` returns the query it was given when nothing applies,
+   * so a card with no settings keeps its identity through this map and the
+   * batch's memoisation does not see a new object every render.
+   */
+  const cards = useMemo(
+    () =>
+      visible.map(row =>
+        row.widget.query
+          ? {
+              ...row,
+              widget: {
+                ...row.widget,
+                query: applyWidgetSettings(
+                  row.widget.query,
+                  row.widget.settings,
+                  row.config
+                ),
+              },
+            }
+          : row
+      ),
+    [visible]
+  );
 
   const {
     slots,
@@ -185,7 +218,7 @@ export function WidgetGrid() {
     counted,
     failed,
     settling,
-  } = useWidgetBatch(widgets);
+  } = useWidgetBatch(cards);
 
   const { announcement, announceColumn: announceSettledColumn } =
     useGridAnnouncer(settling, counted, failed);
@@ -259,6 +292,7 @@ export function WidgetGrid() {
           onMoveColumn={moveColumn}
           onToggleHidden={editor.toggleHidden}
           onRemove={editor.remove}
+          onSaveSettings={editor.setConfig}
         />
       </DndContext>
 
