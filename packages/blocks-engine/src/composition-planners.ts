@@ -1038,15 +1038,33 @@ export function planDuplicateComponent<TFields>(
   // A pattern duplicated through here would be stored as a component and
   // refused by the collection it landed in, having reported success.
   if (!isComponentDocument(definition)) return { problem: "not-a-component" };
+  // The NODE contracts, which `forestRefusal` does not reach: it establishes
+  // that the forest holds plain serializable records, not that each is a node
+  // this engine would carry. A legacy `type: "box"` survives it, and the copy
+  // then reports success for a definition strict validation refuses. The
+  // pattern paths ask this of every root they lift; so does this.
+  const shape = shapeRefusal(definition.nodes);
+  if (shape !== undefined) return shape;
 
-  const source: ComponentDocument = definition;
-  const copied = reidForestWithMap([...source.nodes], "keep");
+  const copied = reidForestWithMap([...definition.nodes], "keep");
+  // The envelope, DEEP-COPIED, minus the nodes the copier already rebuilt.
+  // Spreading the source left `variants`, `settings`, `assets` and every nested
+  // `options` array shared with it, so editing the duplicate edited the
+  // component it came from — measured, renaming the copy's variant renamed the
+  // original's. A duplicate is a row of its own or it is not a duplicate.
+  //
+  // Safe to clone because `documentRefusal` has already refused anything JSON
+  // cannot write, which is what `structuredClone` refuses too.
+  const carried = structuredClone({
+    ...definition,
+    nodes: [],
+  }) as ComponentDocument;
   const duplicate = {
-    ...source,
+    ...carried,
     kind: "component" as const,
     nodes: copied.nodes,
-    ...aimedExposed(source.exposed, copied.nodeIds),
-    ...aimedSlotMap(source.slots, copied.nodeIds),
+    ...aimedExposed(carried.exposed, copied.nodeIds),
+    ...aimedSlotMap(carried.slots, copied.nodeIds),
   } satisfies ComponentDocument;
 
   const issues = componentEnvelopeIssues(duplicate, limits);
@@ -1860,13 +1878,12 @@ export function planInsertPattern(
   // a root can arrive carrying a record from an earlier copy. The digest is
   // taken from the pattern as it stands now, so a later reader can tell whether
   // the source has moved on since this copy was made.
-  const marked = withOrigin(
+  const marked = withInsertOrigin(
     copy.nodes,
-    insertOrigin(
-      pattern.id,
-      patternDigest(pattern.document.nodes),
-      copy.renamed
-    )
+    pattern.document.nodes,
+    pattern.id,
+    patternDigest(pattern.document.nodes),
+    copy.renamed
   );
 
   const refusal =
@@ -2345,20 +2362,48 @@ function withoutOrigin(roots: readonly BlockNode[]): BlockNode[] {
 }
 
 /**
- * The inserted roots, each recording the pattern it came from.
+ * The inserted roots, each recording the pattern AND the renames that are its
+ * own.
  *
- * OVERWRITTEN, never filled in only where absent: a root can arrive carrying a
- * record from an earlier copy, and leaving that in place would attribute this
- * insertion to a pattern it has nothing to do with. Only the ROOTS are marked,
- * because the run is what was inserted — a descendant did not come from the
- * pattern separately, and marking every node would make an author detaching one
- * child look like a second insertion.
+ * Per root, not one map repeated. The copy renames across the whole forest, so
+ * attaching the complete map to every root makes the stored document and the op
+ * group grow with the SQUARE of the pattern's width — measured, a 40-root
+ * pattern landing beside a colliding copy carried 1600 entries where 40 were
+ * meant, and a 250-root one produced an op group the default document cap
+ * refuses outright. The feature would then break exactly the large patterns it
+ * is most useful for.
+ *
+ * Matched by POSITION, because `reidForestWithMap` rebuilds the forest in the
+ * order it was given and this is the same list. Read off the SOURCE roots, since
+ * the map is keyed on the ids as the source spells them.
  */
-function withOrigin(
-  roots: readonly BlockNode[],
-  origin: BlockOrigin
+function withInsertOrigin(
+  copied: readonly BlockNode[],
+  source: readonly BlockNode[],
+  patternId: string,
+  digest: string,
+  renamed: ReadonlyMap<string, string>
 ): BlockNode[] {
-  return roots.map(root => ({ ...root, origin }));
+  return copied.map((root, index) => ({
+    ...root,
+    origin: insertOrigin(patternId, digest, renamedFor(source[index], renamed)),
+  }));
+}
+
+/** The entries naming a DOM id this one root actually carried. */
+function renamedFor(
+  source: BlockNode | undefined,
+  renamed: ReadonlyMap<string, string>
+): ReadonlyMap<string, string> {
+  if (source === undefined || renamed.size === 0) return new Map();
+  const mine = new Map<string, string>();
+  // Through the shared walk that answers what reaches the page, so this and the
+  // copier cannot come to disagree about which ids a root carries.
+  walkRenderedIds([source], id => {
+    const now = renamed.get(id);
+    if (now !== undefined) mine.set(id, now);
+  });
+  return mine;
 }
 
 /**

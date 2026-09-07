@@ -278,12 +278,37 @@ function isRenameRecord(value: unknown): boolean {
   // change nobody made.
   const current = new Set<string>();
   for (const name of ownKeys(value)) {
-    if (name === "") return false;
-    const now = ownEntry(value, name);
-    if (typeof now !== "string" || now === "") return false;
-    if (current.has(now)) return false;
-    current.add(now);
+    if (!isRenameEntry(value, name, current)) return false;
   }
+  return true;
+}
+
+/**
+ * One entry of a rename map: stored data, non-empty on both sides, and naming a
+ * current id no other entry claims.
+ *
+ * The DESCRIPTOR, before the value. An entry can be an accessor, and reading one
+ * runs the document's own code inside a published guard — where a throwing
+ * getter escapes as a native error rather than the `false` this promises. A
+ * computed entry is not stored data, which is the same answer the document and
+ * node guards give it.
+ *
+ * `current` is threaded rather than gathered afterwards so one pass answers
+ * both questions, and it is mutated here for the same reason: a second walk to
+ * find duplicates would read every entry twice.
+ */
+function isRenameEntry(
+  value: object,
+  name: string,
+  current: Set<string>
+): boolean {
+  if (name === "") return false;
+  const descriptor = Object.getOwnPropertyDescriptor(value, name);
+  if (descriptor === undefined || descriptor.get !== undefined) return false;
+  const now: unknown = descriptor.value;
+  if (typeof now !== "string" || now === "") return false;
+  if (current.has(now)) return false;
+  current.add(now);
   return true;
 }
 

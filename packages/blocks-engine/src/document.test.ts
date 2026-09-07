@@ -305,6 +305,18 @@ describe("renderedDomId: which of a node's two spellings reaches the page", () =
   });
 });
 
+/** A rename map whose only entry is an accessor. */
+function computedRenameEntry(): Record<string, unknown> {
+  const renamed: Record<string, unknown> = {};
+  Object.defineProperty(renamed, "authored", {
+    enumerable: true,
+    get() {
+      throw new Error("boom");
+    },
+  });
+  return renamed;
+}
+
 describe("a provenance record's rename map", () => {
   const base = { from: "pattern" as const, id: "p1", digest: "d1" };
 
@@ -328,6 +340,7 @@ describe("a provenance record's rename map", () => {
     ["an empty current id", { pricing: "" }],
     ["an empty original", { "": "pricing" }],
     ["two sources claiming one current id", { a: "same", b: "same" }],
+    ["an entry that computes itself", computedRenameEntry()],
   ])("refuses %s", (_name, renamed) => {
     // A half-record is read as "these are the originals" and puts back an id
     // that was never there, which is worse than having no record at all — the

@@ -2136,3 +2136,137 @@ describe("a polluted prototype is not provenance", () => {
     }
   });
 });
+
+describe("what an insert records stays proportional to the pattern", () => {
+  it("records only the renames each root carried", () => {
+    // The complete map on every root makes the stored document and the op group
+    // grow with the SQUARE of the pattern's width. Measured before this: a
+    // 40-root pattern landing beside a colliding copy carried 1600 entries
+    // where 40 were meant, and a 250-root one produced an op group the default
+    // document cap refuses outright — the feature breaking exactly the large
+    // patterns it is most useful for.
+    const roots = Array.from({ length: 40 }, (_, i) =>
+      node(`r${String(i)}`, { cssId: `id${String(i)}` })
+    );
+    const stored = created(
+      planSaveAsPattern(
+        page(roots),
+        roots.map(root => root.id),
+        target,
+        anyParent
+      )
+    ).document;
+
+    const destination = page(
+      roots.map((_, i) => node(`d${String(i)}`, { cssId: `id${String(i)}` }))
+    );
+    const placed = pageOps(
+      planInsertPattern(
+        destination,
+        { id: "hero-pattern", document: stored },
+        { index: 40 },
+        anyParent
+      )
+    ).flatMap(op => (op.kind === "insert" ? [op.node] : []));
+
+    expect(placed).toHaveLength(40);
+    for (const one of placed) {
+      const origin = one.origin;
+      expect(
+        Object.keys(
+          (origin?.from === "pattern" ? origin.renamed : undefined) ?? {}
+        )
+      ).toHaveLength(1);
+    }
+  });
+
+  it("still restores through a per-root map", () => {
+    // The control for the narrowing: keeping only each root's own entries must
+    // not cost the restore, which is what the whole record is for.
+    const authored = page([
+      node("t", { cssId: "pricing", props: { mark: "target" } }),
+    ]);
+    const stored = created(
+      planSaveAsPattern(authored, ["t"], target, anyParent)
+    ).document;
+    const destination = page([node("existing", { cssId: "pricing" })]);
+    const inserted = applyOps(
+      destination,
+      pageOps(
+        planInsertPattern(
+          destination,
+          { id: "hero-pattern", document: stored },
+          { index: 1 },
+          anyParent
+        )
+      )
+    ).document;
+
+    const saved = planUpdatePatternFromSelection(
+      inserted,
+      [inserted.nodes[1]!.id],
+      { collection: "patterns", id: "hero-pattern" },
+      anyParent
+    );
+
+    expect(marked(saved.update!.document.nodes, "target").cssId).toBe(
+      "pricing"
+    );
+  });
+});
+
+describe("a duplicate is a row of its own", () => {
+  it("shares no mutable envelope data with its source", () => {
+    // The spread left `variants`, `assets`, `settings` and every nested
+    // `options` array shared with the source, so editing the duplicate edited
+    // the component it came from.
+    const options = [{ value: "a", label: "A" }];
+    const source = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component" as const,
+      nodes: [node("a")],
+      exposed: [
+        {
+          id: "p1",
+          label: "L",
+          nodeId: "a",
+          propPath: "t",
+          type: "select" as const,
+          options,
+        },
+      ],
+      assets: { mediaIds: ["m1"] },
+    } as unknown as BlockDocument;
+
+    const copy = definition(
+      planDuplicateComponent(source, componentTarget)
+    ) as unknown as {
+      exposed: { options: { label: string }[] }[];
+      assets: { mediaIds: string[] };
+    };
+
+    copy.exposed[0]!.options[0]!.label = "MUTATED";
+    copy.assets.mediaIds.push("m2");
+
+    expect(options[0]!.label).toBe("A");
+    expect(
+      (source as unknown as { assets: { mediaIds: string[] } }).assets.mediaIds
+    ).toHaveLength(1);
+  });
+
+  it("refuses a source whose node breaks the node contract", () => {
+    // `forestRefusal` establishes that the forest holds plain serializable
+    // records, not that each is a node this engine would carry. A legacy
+    // `type: "box"` survives it, and the copy then reports success for a
+    // definition strict validation refuses.
+    const legacy = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component" as const,
+      nodes: [{ id: "a", type: "box", version: 1, props: {} }],
+    } as unknown as BlockDocument;
+
+    expect(planDuplicateComponent(legacy, componentTarget).problem).toBe(
+      "invalid-node"
+    );
+  });
+});
