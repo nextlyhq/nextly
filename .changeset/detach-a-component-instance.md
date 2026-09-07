@@ -88,3 +88,10 @@ A gated instance keeps its authored DOM ids. Collisions are decided after the
 gate is applied, because a condition-gated subtree renders nothing and collides
 with no one — and a rename made for a conflict that does not exist outlives the
 gate that excused it.
+
+`resolveComponentInstances` also refuses a definition written in a format this
+build cannot read. It checked only that `nodes` was an array and `kind` was
+`component`, so a definition from a future or corrupt writer was inlined and,
+for a surface that persists what it inlines, written into a page under rules
+this build does not implement. `unreadable` already meant "an envelope this
+build does not understand"; nothing had asked the question.

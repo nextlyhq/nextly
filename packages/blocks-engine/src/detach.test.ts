@@ -505,19 +505,18 @@ describe("a slot name the format allows and JavaScript does not", () => {
     expect(marked(result.nodes, "m").id).toBe("mine");
   });
 
-  it("refuses a `__proto__` slot rather than dropping it silently", () => {
-    // Locks the OUTCOME, and it does not discriminate: such a document is
-    // refused upstream today whichever way the slots were written, so this
-    // passes with or without the fix beside it. Kept because the failure it
-    // guards against is a silent one — a future change that let this document
-    // through would produce a plan reporting success with the author's content
-    // quietly gone, and nothing else here would notice.
+  it("refuses a document whose slot key JSON cannot carry", () => {
+    // What this asserts, and what it does NOT. It asserts the outcome: such a
+    // document is refused, so the author's content is never quietly dropped on
+    // the floor. It is NOT coverage of the placeholder write — `documentRefusal`
+    // rejects this document before `suppliedSlots` is reached, so it passes
+    // whether that write uses `defineEntry` or a plain assignment. The reason
+    // `defineEntry` is used there anyway is stated where the code is, not
+    // implied by a test that cannot see it.
     //
-    // The write itself goes through `defineEntry` regardless: `slots[name] = …`
-    // with this name sets the object's PROTOTYPE instead of creating the key,
-    // so the placeholder is never written and the resolver places nothing.
     // `validate` calls such a document `document-lossy` and the pattern paths
-    // call it `invalid-node`.
+    // call it `invalid-node`; this path calls it `unusable-document`. All three
+    // agree it does not round-trip.
     const doc = supplying("__proto__");
 
     expect(
@@ -628,6 +627,24 @@ describe("what detach refuses", () => {
 
     expect(escaped).toBeUndefined();
     expect(problem).toBe("not-a-component");
+  });
+
+  it("refuses a definition written in a format this build cannot read", () => {
+    // The resolver checked only that `nodes` is an array and `kind` is
+    // `component`, so a definition from a future or corrupt writer was inlined
+    // and its content persisted into the page under rules this build does not
+    // implement. `unreadable` already meant "an envelope this build does not
+    // understand"; nothing asked the question.
+    const definition = {
+      formatVersion: 999,
+      kind: "component",
+      nodes: [node("d1")],
+    } as unknown as BlockDocument;
+    const doc = page([instance("i1", "card")]);
+
+    expect(
+      planDetach(doc, "i1", defs({ card: definition }), anyParent).problem
+    ).toBe("not-a-component");
   });
 
   it.each(["id", "type", "props", "slots", "visibility", "cssId"])(

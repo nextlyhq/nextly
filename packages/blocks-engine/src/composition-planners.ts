@@ -2863,9 +2863,16 @@ function suppliedSlots(instance: BlockNode): SuppliedSlots {
     byId.set(placeholder.id, content as readonly BlockNode[]);
     // `defineEntry`, never assignment. A slot literally named `__proto__` is a
     // key a stored document may carry, and `slots[name] = …` sets the object's
-    // PROTOTYPE instead of creating that key — so the placeholder was never
-    // written, the resolver placed nothing, and the author's content was
-    // dropped without a word.
+    // PROTOTYPE instead of creating that key — so the placeholder would never
+    // be written, the resolver would place nothing, and the author's content
+    // would be dropped without a word.
+    //
+    // No document reaches here carrying that key today: `documentRefusal`
+    // rejects one, because an own `__proto__` does not survive the round trip
+    // this format is stored through. That makes the guard CHEAP rather than
+    // unnecessary — reachability is a property of the call graph, and the call
+    // graph moves. The cost is one function call on a path that already builds
+    // an object.
     defineEntry(slots, name, [placeholder]);
   }
   return { slots, byId };

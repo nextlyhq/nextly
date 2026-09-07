@@ -46,6 +46,7 @@
  */
 import {
   COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
   isComponentDocument,
   isUnsetOverride,
   renderedDomId,
@@ -1121,6 +1122,17 @@ function readSuppliedDefinition(
   // and slots meaning nothing. The kind is what the engine already publishes
   // an answer for.
   if (!isComponentDocument(definition)) return "unreadable";
+  // The FORMAT, on the same read. `unreadable` already means "an envelope this
+  // build does not understand" — the reason existed and nothing asked the
+  // question. A definition written in a format this build cannot interpret was
+  // inlined regardless, so a surface that persists what it inlines wrote
+  // content read under the wrong rules into a page.
+  //
+  // Asked HERE rather than by the caller, because the lookup is a caller's
+  // object and nothing in its contract makes it pure: validating one `get` and
+  // expanding a second means the document that was checked is not the document
+  // that is used.
+  if (definition.formatVersion !== DOCUMENT_FORMAT_VERSION) return "unreadable";
   return definition;
 }
 
