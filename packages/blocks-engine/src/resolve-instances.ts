@@ -1035,6 +1035,27 @@ function readDefinition(
   // document fault, so it takes `unreadable`: offering the publish remedy for
   // corrupt component data sends an author to the wrong screen, which is the
   // whole reason these reasons are a closed list rather than a message.
+  // Every read below is a caller's: the lookup is an object this module was
+  // handed, and the document it returns came from an import, a script or a
+  // database. A `kind` that computes itself and throws took the caller's error
+  // out of `resolveComponentInstances`, which promises a classification and a
+  // closed list of reasons — and out of every planner built on it.
+  //
+  // `unreadable` is the answer this function already declares for exactly this:
+  // "a value that IS supplied and cannot be read is a document fault". Nothing
+  // new is being invented, only made reachable.
+  try {
+    return readSuppliedDefinition(componentId, run);
+  } catch {
+    return "unreadable";
+  }
+}
+
+/** The lookup's answer for one component, read as the caller supplied it. */
+function readSuppliedDefinition(
+  componentId: string,
+  run: ResolveRun
+): ComponentDocument | ComponentUnresolvedReason {
   if (!run.definitions.has(componentId)) return "missing";
   // Read ONCE and carried out, so expansion never asks again.
   const definition = run.definitions.get(componentId);

@@ -543,6 +543,41 @@ describe("what detach refuses", () => {
     );
   });
 
+  it("refuses a definition whose fields compute themselves", () => {
+    // The resolver reads a supplied definition's `kind` to tell a component
+    // from a page, and an accessor there threw straight out of this planner,
+    // which promises a refusal. Contained where the read happens, so every
+    // caller of the resolver gets the classification rather than the error.
+    const definition: Record<string, unknown> = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      nodes: [node("d1")],
+    };
+    Object.defineProperty(definition, "kind", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        throw new Error("boom");
+      },
+    });
+    const doc = page([instance("i1", "card")]);
+
+    let escaped: unknown;
+    let problem: string | undefined;
+    try {
+      problem = planDetach(
+        doc,
+        "i1",
+        defs({ card: definition as unknown as BlockDocument }),
+        anyParent
+      ).problem;
+    } catch (error) {
+      escaped = error;
+    }
+
+    expect(escaped).toBeUndefined();
+    expect(problem).toBe("not-a-component");
+  });
+
   it("refuses an instance whose definition is missing", () => {
     // Inlining nothing would silently delete the author's section.
     const doc = page([instance("i1", "gone")]);

@@ -63,3 +63,12 @@ Provenance goes on the existing `origin` record's `component` arm, which the
 format already describes as "detached from a component, severing the link
 deliberately" — no digest, because detaching is the act of declining further
 change.
+
+`resolveComponentInstances` also stops letting a supplied definition's own
+accessors escape. It reads a definition's `kind` to tell a component from a page
+and its `nodes` to tell a document from anything else, and a field that computes
+itself and throws took the caller's error out of a function that promises a
+classification and a closed list of reasons — out of the renderer and the
+preview as much as out of detaching. Such a definition is now reported
+`unreadable`, which is what that reason already meant: a value that IS supplied
+and cannot be read.

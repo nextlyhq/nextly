@@ -569,6 +569,49 @@ describe("resolveComponentInstances refusals", () => {
     expect(result.document.nodes[1]!.id).not.toBe("i2");
   });
 
+  it.each(["kind", "nodes"])(
+    "classifies a definition whose %s computes itself, rather than throwing",
+    field => {
+      // The lookup is an object this module was handed, and the document it
+      // returns came from an import, a script or a database. A field that
+      // computes itself and throws took the caller's error out of a function
+      // that promises a classification and a closed list of reasons — and out
+      // of every planner built on it.
+      //
+      // `unreadable` is what this already calls a supplied document it cannot
+      // read; the reason existed and was simply unreachable.
+      const definition: Record<string, unknown> = {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "component",
+        nodes: [node("d1")],
+      };
+      Object.defineProperty(definition, field, {
+        enumerable: true,
+        configurable: true,
+        get() {
+          throw new Error("boom");
+        },
+      });
+      const doc = page([instance("i1", "card")]);
+
+      let escaped: unknown;
+      let result: ReturnType<typeof resolveComponentInstances> | undefined;
+      try {
+        result = resolveComponentInstances(
+          doc,
+          defs({ card: definition as unknown as BlockDocument })
+        );
+      } catch (error) {
+        escaped = error;
+      }
+
+      expect(escaped).toBeUndefined();
+      expect(result?.unresolved).toEqual([
+        { instanceId: "i1", componentId: "card", reason: "unreadable" },
+      ]);
+    }
+  );
+
   it("gives back the rename records of an abandoned expansion", () => {
     // The claim and the record of what it came from are released together. An
     // expansion that scopes a DOM id and then runs out of budget leaves the
