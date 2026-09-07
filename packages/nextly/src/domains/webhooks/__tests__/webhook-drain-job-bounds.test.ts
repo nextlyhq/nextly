@@ -76,12 +76,23 @@ describe("the drain job's bounds", () => {
     );
 
     const REMAINING_MS = 3_000;
+    /*
+     * 🔴 ONE clock read, with the deadline derived from it. Written as two --
+     * `new Date()` for `now` and a separate `Date.now()` for the deadline --
+     * any scheduling delay BETWEEN those two adjacent property initialisers
+     * lands inside what the handler computes: `remainingPassMs` is
+     * `deadline - now`, so a 1ms gap makes it 3001, the budget split gives
+     * 1500 + 1501, and the assertion below compares that against the constant
+     * 3000 and fails. The production arithmetic is correct at every step; the
+     * fixture was asserting against a number it had not actually handed over.
+     */
+    const now = new Date();
     const job = create({} as never, {} as never);
     await job.handler(null, {
       user: null,
-      now: new Date(),
+      now,
       content: {} as never,
-      deadline: new Date(Date.now() + REMAINING_MS),
+      deadline: new Date(now.getTime() + REMAINING_MS),
     });
 
     const [, , options] = runWebhookDrain.mock.calls[0] as unknown as [
