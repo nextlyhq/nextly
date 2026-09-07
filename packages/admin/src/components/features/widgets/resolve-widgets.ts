@@ -19,6 +19,7 @@ import type {
   WidgetSize,
   WidgetStatCell,
   WidgetChrome,
+  WidgetSetting,
 } from "nextly/config";
 import { widgetGateHolds } from "nextly/widget-gate";
 
@@ -79,6 +80,11 @@ function readableActions(
  * below as the things that actually refuse a declaration that says nothing.
  */
 export interface ReadableWidgetDeclaration {
+  /**
+   * The settings this widget offers, carried from whichever channel declared
+   * it. The reader's stored answers live on the placement.
+   */
+  settings?: WidgetSetting[];
   id: string;
   size?: "full" | "half";
   requiredPermission?: string | readonly string[];
@@ -219,6 +225,7 @@ function resolveOne(
     size: meta.defaultSize ?? legacySizeToWidgetSize(meta.size),
     ...(meta.defaultHeight === undefined ? {} : { height: meta.defaultHeight }),
     query: meta.query,
+    settings: meta.settings,
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
     cells: meta.cells,
@@ -264,6 +271,7 @@ function resolveRegistered(
     size: meta.defaultSize,
     ...(meta.defaultHeight === undefined ? {} : { height: meta.defaultHeight }),
     query: meta.query,
+    settings: meta.settings,
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
     cells: meta.cells,
@@ -344,6 +352,7 @@ function mergeCollision(
     size: contribution.size,
     requiredPermission: registration.requiredPermission,
     query: registration.query,
+    settings: registration.settings,
     link: preferRegistered(registration.link, contribution.link),
     component: preferRegistered(registration.component, contribution.component),
     actions: preferRegistered(registration.actions, contribution.actions),

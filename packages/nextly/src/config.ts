@@ -215,6 +215,7 @@ export type {
   QuerylessWidgetArchetype,
   CellWidgetArchetype,
   WidgetDefinition,
+  WidgetSetting,
   WidgetAction,
   WidgetStatCell,
   WidgetHeight,
@@ -228,6 +229,15 @@ export type { WidgetQuery } from "./domains/widgets/query";
 // copies of that mapping is two answers to one question, and the copies had
 // already drifted -- only one of them existed.
 export { legacySizeToWidgetSize } from "./domains/widgets/definition";
+/*
+ * The admin applies a reader's stored settings to the query it composes, so the
+ * rule that decides which setting drives which knob is exported rather than
+ * restated there — one implementation of a question two layers ask.
+ */
+export {
+  applyWidgetSettings,
+  resolveWidgetSettings,
+} from "./domains/widgets/settings";
 // Which field NAMES an entry. The admin draws a column with it, the activity
 // feed labels a row with it, and the dashboard's generated list widgets pick a
 // row label with it -- so it is one answer here rather than one per consumer.

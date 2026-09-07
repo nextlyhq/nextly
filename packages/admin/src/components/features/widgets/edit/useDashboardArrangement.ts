@@ -47,6 +47,17 @@ export interface ArrangedWidget {
   /** Which column this card is drawn in. Absent on a pre-column arrangement. */
   column?: number;
   /**
+   * The settings this reader stored for this card, as stored.
+   *
+   * Carried RAW rather than resolved, for the reason `size` is carried as a
+   * string: it may have been written against a newer core, or by a plugin whose
+   * settings have since changed, and the reading that turns it into values is
+   * the widget's declaration — which lives with the widget, not here. This
+   * layer's job is to keep a placement's answer attached to the card it
+   * answers for.
+   */
+  config?: Record<string, unknown>;
+  /**
    * Its position within that column.
    *
    * Carried so the ONE grouping helper can order these rows, rather than the
@@ -185,6 +196,7 @@ export function useDashboardArrangement(
         hidden: placement.hidden,
         ...(placement.size === undefined ? {} : { size: placement.size }),
         ...(placement.column === undefined ? {} : { column: placement.column }),
+        ...(placement.config === undefined ? {} : { config: placement.config }),
         order: placement.order,
       });
     }

@@ -21,6 +21,7 @@
  */
 
 import { DndContext, closestCorners } from "@dnd-kit/core";
+import { applyWidgetSettings } from "nextly/config";
 import { useCallback, useMemo, useRef } from "react";
 
 import {
@@ -174,7 +175,35 @@ export function WidgetGrid() {
     [declared]
   );
 
-  const widgets = useMemo(() => visible.map(row => row.widget), [visible]);
+  /*
+   * The cards the batch asks for, with each reader's own settings applied.
+   *
+   * 🔴 Applied HERE rather than inside the batch, because this is the last
+   * place a card and the placement that put it there are both in scope: the
+   * batch takes widgets, and a widget does not know which placement it is being
+   * drawn for — the same widget can sit on the dashboard twice with different
+   * settings.
+   *
+   * `applyWidgetSettings` returns the query it was given when nothing applies,
+   * so a card with no settings keeps its identity through this map and the
+   * batch's memoisation does not see a new object every render.
+   */
+  const widgets = useMemo(
+    () =>
+      visible.map(row =>
+        row.widget.query
+          ? {
+              ...row.widget,
+              query: applyWidgetSettings(
+                row.widget.query,
+                row.widget.settings,
+                row.config
+              ),
+            }
+          : row.widget
+      ),
+    [visible]
+  );
 
   const {
     slots,

@@ -22,6 +22,7 @@
  */
 
 import type {
+  WidgetSetting,
   WidgetAction,
   WidgetArchetype,
   WidgetHeight,
@@ -131,6 +132,15 @@ export interface DashboardWidget {
   height?: WidgetHeight;
   /** Present for the data archetypes; absent for `text`, `actions`, `custom`. */
   query?: WidgetQuery;
+  /**
+   * What a reader may change about this card, as the widget declared it.
+   *
+   * The OFFER, not one reader's answer: the stored values live on the
+   * placement, and `applyWidgetSettings` reads one against the other. Carried
+   * here because the declaration is what says whether a stored key means
+   * anything at all.
+   */
+  settings?: WidgetSetting[];
   /**
    * Present for `stats`: one entry per number the card draws.
    *
