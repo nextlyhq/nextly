@@ -112,6 +112,20 @@ export interface StoredLayout {
   /** How many columns the reader arranged these placements into. */
   columnCount: ColumnCount;
   placements: WidgetPlacement[];
+  /**
+   * Ids this row holds more than once, absent when it is sound.
+   *
+   * 🔴 Metadata ABOUT the read, not content of the row, and deliberately not
+   * serialized -- `serializeLayout` takes the placements rather than this
+   * object. It reports what was FOUND rather than what was fixed, because the
+   * fixing happens later, per caller, in `partitionPlacements`; this is the one
+   * view of the whole row, and it never leaves the server.
+   *
+   * It exists because the repair is otherwise invisible: the reader's dashboard
+   * is whole either way, so nothing on screen ever says the row is malformed,
+   * and whatever wrote the duplicate goes on writing them unobserved.
+   */
+  duplicatePlacementIds?: readonly string[];
 }
 
 /**
@@ -249,6 +263,93 @@ export function placementProblem(value: unknown): string | undefined {
 }
 
 /**
+ * One pass over a set of placements, answering everything anyone asks about
+ * their ids: whether one repeats, and the same placements with any repeat
+ * resolved.
+ *
+ * 🔴 ONE analysis, because the refusal and the repair must agree. The endpoint
+ * refuses a submission holding a repeat and a reader resolves one it finds
+ * stored; asking that question in two places lets a later change to id
+ * semantics accept a collision one end tolerates and the other rewrites, and
+ * the row that results is one neither end predicts.
+ *
+ * A COLLECTION-level question, which is why it is not one of
+ * `PLACEMENT_RULES`: every rule there judges one placement against itself, and
+ * uniqueness is the one property no placement can satisfy alone.
+ *
+ * `seed` is the set already claimed by placements this call is not looking at
+ * -- what a write has already accepted from its caller, against which carried
+ * placements must find their own ids. It is COPIED rather than mutated, so a
+ * caller's set is not changed underneath it.
+ *
+ * Downstream readers assume the answer holds. `ArrangedColumns` uses the id as
+ * its React key and as the `items` identity dnd-kit sorts by, and dnd-kit
+ * resolves an item through `items.indexOf(id)`, which answers with the FIRST
+ * match -- so a repeat silently drags the wrong card. The widget batch is keyed
+ * by placement id too, so two cards sharing one answer each other's queries.
+ */
+export function resolvePlacementIds(
+  placements: readonly WidgetPlacement[],
+  seed: ReadonlySet<string> = new Set()
+): {
+  /** The first id already claimed when it was reached, if any. */
+  duplicate?: string;
+  /** The placements, with every repeat re-keyed. */
+  placements: WidgetPlacement[];
+  /** The ORIGINAL ids that had to be re-keyed, in the order met. */
+  rekeyed: string[];
+} {
+  const taken = new Set(seed);
+  const rekeyed: string[] = [];
+  let duplicate: string | undefined;
+
+  const resolved = placements.map(placement => {
+    if (!taken.has(placement.id)) {
+      taken.add(placement.id);
+      return placement;
+    }
+    duplicate ??= placement.id;
+    rekeyed.push(placement.id);
+    const id = repairedPlacementId(placement.id, taken);
+    taken.add(id);
+    return { ...placement, id };
+  });
+
+  return {
+    ...(duplicate === undefined ? {} : { duplicate }),
+    placements: resolved,
+    rekeyed,
+  };
+}
+
+/**
+ * The id a repeat is given: DERIVED from the one it repeats, never minted.
+ *
+ * 🔴 Stable across reads, which is the property that makes repairing on read
+ * safe at all. A fresh `crypto.randomUUID()` would answer a different id on
+ * every GET, so a client that round-trips what it was handed submits an id the
+ * server no longer recognises -- and the write path, which inherits a
+ * placement's column from the stored row BY ID for any client that states
+ * none, would miss its lookup and move that card to the first column. Derived
+ * from the original, the same row answers the same ids until it is rewritten.
+ *
+ * The suffix climbs only to clear ids already taken, so the result is a pure
+ * function of the original id and the set it must not collide with.
+ */
+function repairedPlacementId(
+  original: string,
+  taken: ReadonlySet<string>
+): string {
+  let ordinal = 2;
+  let candidate = `${original}~${ordinal}`;
+  while (taken.has(candidate)) {
+    ordinal += 1;
+    candidate = `${original}~${ordinal}`;
+  }
+  return candidate;
+}
+
+/**
  * Whether a caller's placement NAMED a column, as opposed to omitting one.
  *
  * 🔴 The two are different answers and the stored type cannot hold the
@@ -345,9 +446,10 @@ export function readStoredLayout(raw: string): StoredLayout {
   // from a NEWER core and holds fields we would silently drop on the next
   // write; a version below ours means a migrator is missing. Neither is a
   // shape to guess at. When v2 arrives this is where `migrateLayout` runs.
-  if (decoded.schemaVersion === 1) return migrateV1(decoded);
-
-  if (decoded.schemaVersion !== LAYOUT_SCHEMA_VERSION) {
+  if (
+    decoded.schemaVersion !== 1 &&
+    decoded.schemaVersion !== LAYOUT_SCHEMA_VERSION
+  ) {
     throw NextlyError.internal({
       logContext: {
         reason: "stored dashboard layout names an unknown schema version",
@@ -357,11 +459,26 @@ export function readStoredLayout(raw: string): StoredLayout {
     });
   }
 
-  return {
-    schemaVersion: LAYOUT_SCHEMA_VERSION,
-    columnCount: readColumnCount(decoded.columnCount),
-    placements: readPlacements(decoded.placements),
-  };
+  // 🔴 ONE exit, and it REPORTS a repeat rather than resolving one. Resolving
+  // here would resolve across the whole row, where a placement this caller may
+  // not know exists could claim an id and push a placement they CAN see onto a
+  // different one -- the id they are handed would then depend on the existence
+  // of a card that was filtered precisely so they could not learn of it. The
+  // resolution happens per caller in `partitionPlacements`, which is the
+  // function that already decides what a caller may know. This report is the
+  // whole row's view, and it never leaves the server.
+  const layout =
+    decoded.schemaVersion === 1
+      ? migrateV1(decoded)
+      : {
+          schemaVersion: LAYOUT_SCHEMA_VERSION,
+          columnCount: readColumnCount(decoded.columnCount),
+          placements: readPlacements(decoded.placements),
+        };
+  const { rekeyed } = resolvePlacementIds(layout.placements);
+  return rekeyed.length === 0
+    ? layout
+    : { ...layout, duplicatePlacementIds: rekeyed };
 }
 
 /** The stored column count, or the default when it names none this core has. */
@@ -539,7 +656,25 @@ export function partitionPlacements(
     else invisible.push(placement);
   }
   visible.sort(byPosition);
-  return { visible, invisible };
+  /*
+   * 🔴 Each half resolves its repeats AGAINST ITSELF, never against the other,
+   * and that separation is the trust boundary this function exists to draw. A
+   * row that holds one id twice is resolved by position, so resolving across
+   * both halves would let an invisible placement keep the id and hand the
+   * visible one a different id than it would have had -- an existence oracle
+   * over any id a caller can name, and default placement ids are widget ids, so
+   * the probe space is guessable. What a caller is handed now depends only on
+   * placements that caller can see.
+   *
+   * The two halves may therefore still share an id between them. That is the
+   * writer's question, not the reader's: nothing draws both halves, and
+   * `mergePreservingHidden` resolves the carried half against what the caller
+   * submitted before anything is stored.
+   */
+  return {
+    visible: resolvePlacementIds(visible).placements,
+    invisible: resolvePlacementIds(invisible).placements,
+  };
 }
 
 /** A fresh, opaque placement id. Used when a copy of a widget is placed. */
@@ -577,16 +712,7 @@ export function mergePreservingHidden(
   // Oldest-positioned first, so the cap keeps a stable, order-derived subset
   // rather than whichever ones happened to arrive last.
   const bounded = [...invisible].sort(byPosition).slice(0, room);
-  const carried = bounded.map(placement => {
-    if (!taken.has(placement.id)) {
-      taken.add(placement.id);
-      return placement;
-    }
-    let fresh = newPlacementId();
-    while (taken.has(fresh)) fresh = newPlacementId();
-    taken.add(fresh);
-    return { ...placement, id: fresh };
-  });
+  const carried = resolvePlacementIds(bounded, taken).placements;
   return [...submitted, ...carried];
 }
 

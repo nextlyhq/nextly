@@ -262,6 +262,28 @@ describe("GET /api/dashboard/layout", () => {
     expect(body.placements?.map(p => p.id)).toEqual(["p2", "p1"]);
   });
 
+  it("serves a row whose ids collide, without leaking the repair onto the wire", async () => {
+    // The repair is internal bookkeeping the service logs. A response that
+    // carried it would make it public API by accident, and the next reader
+    // would have to decide what it means.
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(widget({ id: "core/b" }));
+    stored = {
+      version: 4,
+      layout: serializeLayout([
+        { id: "same", widgetId: "core/a", column: 0, order: 0, hidden: false },
+        { id: "same", widgetId: "core/b", column: 0, order: 10, hidden: false },
+      ]),
+    };
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.source).toBe("own");
+    expect(body.placements).toHaveLength(2);
+    expect(new Set(body.placements?.map(p => p.id)).size).toBe(2);
+    expect(body).not.toHaveProperty("duplicatePlacementIds");
+  });
+
   it("drops a stored placement whose widget is gone, without saying so", async () => {
     registerWidget(widget({ id: "core/a" }));
     stored = {
@@ -643,6 +665,110 @@ describe("PUT /api/dashboard/layout", () => {
     const res = await putWidgetLayout(putReq(body));
     expect(res.status).toBe(400);
     expect(saved).toBeUndefined();
+  });
+
+  it("refuses two DIFFERENT widgets sharing one placement id", async () => {
+    // The case above sends one widget twice, so it cannot tell a duplicate-id
+    // rule from a duplicate-widget one. Two distinct, visible widgets isolate
+    // the id as the reason.
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(widget({ id: "core/b" }));
+
+    const res = await putWidgetLayout(
+      putReq({
+        placements: [
+          { id: "dup", widgetId: "core/a", column: 0, order: 0, hidden: false },
+          { id: "dup", widgetId: "core/b", column: 0, order: 1, hidden: false },
+        ],
+        version: 0,
+        scope: scopeFor(),
+      })
+    );
+
+    expect(res.status).toBe(400);
+    expect(saved).toBeUndefined();
+  });
+
+  it("ACCEPTS the same two widgets once their ids differ", async () => {
+    // The control for the test above: everything else about that submission is
+    // legal, so a refusal there is the id and nothing else.
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(widget({ id: "core/b" }));
+
+    const res = await putWidgetLayout(
+      putReq({
+        placements: [
+          { id: "one", widgetId: "core/a", column: 0, order: 0, hidden: false },
+          { id: "two", widgetId: "core/b", column: 0, order: 1, hidden: false },
+        ],
+        version: 0,
+        scope: scopeFor(),
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(saved).toBeDefined();
+  });
+
+  it("keeps a resolved placement's column across the read/write round trip", async () => {
+    /*
+     * 🔴 The failure a freshly minted repair id causes, at the level it causes
+     * it. A client that states no column inherits the one the stored row holds
+     * for that placement, looked up BY ID. If the id it was handed on GET is
+     * not the id this PUT's own read produces, the lookup misses and the card
+     * silently moves to the first column. The repair id is derived from the id
+     * it repeats precisely so both reads answer the same thing.
+     */
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(widget({ id: "core/b" }));
+    stored = {
+      version: 4,
+      layout: serializeLayout(
+        [
+          {
+            id: "same",
+            widgetId: "core/a",
+            column: 0,
+            order: 0,
+            hidden: false,
+          },
+          {
+            id: "same",
+            widgetId: "core/b",
+            column: 1,
+            order: 10,
+            hidden: false,
+          },
+        ],
+        2
+      ),
+    };
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    const handed = body.placements ?? [];
+    expect(new Set(handed.map(p => p.id)).size).toBe(2);
+    const moved = handed.find(p => p.widgetId === "core/b");
+    expect(moved?.id).not.toBe("same");
+    expect(moved?.column).toBe(1);
+
+    // A client written before columns echoes what it was handed and states no
+    // column of its own.
+    const res = await putWidgetLayout(
+      putReq({
+        placements: handed.map(p => ({
+          id: p.id,
+          widgetId: p.widgetId,
+          order: p.order,
+          hidden: p.hidden,
+        })),
+        version: 4,
+        scope: body.scope,
+      })
+    );
+
+    expect(res.status).toBe(200);
+    const stayed = saved?.placements.find(p => p.widgetId === "core/b");
+    expect(stayed?.column).toBe(1);
   });
 
   it("refuses a body that is not an object", async () => {

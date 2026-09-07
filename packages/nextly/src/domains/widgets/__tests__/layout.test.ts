@@ -11,6 +11,7 @@ import {
   MAX_CONFIG_DEPTH,
   MAX_PLACEMENTS,
   defaultPlacements,
+  resolvePlacementIds,
   layoutSizeProblem,
   visibilityToken,
   mergePreservingHidden,
@@ -601,5 +602,201 @@ describe("a v1 arrangement survives the move to columns", () => {
     // had put away — the one field whose loss is invisible until it reappears.
     const { placements } = readStoredLayout(V1);
     expect(placements.find(p => p.widgetId === "w-c")?.hidden).toBe(true);
+  });
+});
+
+describe("two placements may not share an id", () => {
+  const at = (
+    id: string,
+    widgetId: string,
+    order: number
+  ): WidgetPlacement => ({
+    id,
+    widgetId,
+    column: 0,
+    order,
+    hidden: false,
+  });
+
+  it("names the id that repeats", () => {
+    expect(
+      resolvePlacementIds([
+        at("a", "core/one", 0),
+        at("b", "core/two", 1),
+        at("a", "core/three", 2),
+      ]).duplicate
+    ).toBe("a");
+  });
+
+  it("says nothing about a set whose ids are all distinct", () => {
+    expect(
+      resolvePlacementIds([at("a", "core/one", 0), at("b", "core/two", 1)])
+        .duplicate
+    ).toBeUndefined();
+  });
+
+  it("says nothing about an empty set", () => {
+    expect(resolvePlacementIds([]).duplicate).toBeUndefined();
+  });
+
+  it("answers the refusal and the repair in ONE pass", () => {
+    // The endpoint reads `duplicate` and a reader reads `placements`. Asking
+    // twice is what lets the two ends drift into disagreeing.
+    const answer = resolvePlacementIds([
+      at("a", "core/one", 0),
+      at("a", "core/two", 1),
+    ]);
+    expect(answer.duplicate).toBe("a");
+    expect(new Set(answer.placements.map(p => p.id)).size).toBe(2);
+    expect(answer.rekeyed).toEqual(["a"]);
+  });
+
+  it("leaves the FIRST holder of the id untouched", () => {
+    const answer = resolvePlacementIds([
+      at("a", "core/one", 0),
+      at("a", "core/two", 1),
+    ]);
+    expect(answer.placements[0]).toEqual(at("a", "core/one", 0));
+    expect(answer.placements[1]?.id).not.toBe("a");
+  });
+
+  it("keeps everything the re-keyed placement carried except its id", () => {
+    const answer = resolvePlacementIds([
+      at("a", "core/one", 0),
+      { ...at("a", "core/two", 5), column: 1, hidden: true, size: "md" },
+    ]);
+    expect(answer.placements[1]).toMatchObject({
+      widgetId: "core/two",
+      column: 1,
+      order: 5,
+      hidden: true,
+      size: "md",
+    });
+  });
+
+  it("gives a repeat the SAME id every time it resolves the same set", () => {
+    // 🔴 The property that makes resolving on read safe. A freshly minted id
+    // would differ on every read, so a client round-tripping what it was handed
+    // submits an id the server no longer knows -- and the write path, which
+    // inherits a placement's column BY ID for a client that states none, misses
+    // its lookup and moves that card to the first column.
+    const input = [at("a", "core/one", 0), at("a", "core/two", 1)];
+    const first = resolvePlacementIds(input).placements.map(p => p.id);
+    const second = resolvePlacementIds(input).placements.map(p => p.id);
+    expect(first).toEqual(second);
+    expect(first[1]).not.toBe("a");
+  });
+
+  it("steps past an id that is already taken rather than colliding with it", () => {
+    const answer = resolvePlacementIds([
+      at("a", "core/one", 0),
+      at("a~2", "core/two", 1),
+      at("a", "core/three", 2),
+    ]);
+    expect(new Set(answer.placements.map(p => p.id)).size).toBe(3);
+  });
+
+  it("resolves against a seed of ids claimed elsewhere", () => {
+    const answer = resolvePlacementIds(
+      [at("a", "core/one", 0)],
+      new Set(["a"])
+    );
+    expect(answer.placements[0]?.id).not.toBe("a");
+    expect(answer.duplicate).toBe("a");
+  });
+
+  it("does not mutate the seed it was given", () => {
+    const seed = new Set(["a"]);
+    resolvePlacementIds([at("a", "core/one", 0)], seed);
+    expect([...seed]).toEqual(["a"]);
+  });
+});
+
+describe("resolving a repeat cannot disclose a hidden placement", () => {
+  const visibleIds = new Set(["core/seen"]);
+  const seen: WidgetPlacement = {
+    id: "shared",
+    widgetId: "core/seen",
+    column: 0,
+    order: 10,
+    hidden: false,
+  };
+  const unseen: WidgetPlacement = {
+    id: "shared",
+    widgetId: "core/hidden",
+    column: 0,
+    order: 0,
+    hidden: false,
+  };
+
+  it("hands the visible placement the SAME id whether or not a hidden one shares it", () => {
+    // 🔴 Resolved across the whole row, the hidden placement would claim
+    // "shared" -- it sorts first -- and the visible one would come back re-keyed
+    // whenever it existed. The id a caller is handed would then answer whether a
+    // card they may not know about is there, and default placement ids are
+    // widget ids, so the probe space is guessable.
+    const withHidden = partitionPlacements([unseen, seen], visibleIds).visible;
+    const withoutHidden = partitionPlacements([seen], visibleIds).visible;
+
+    expect(withHidden.map(p => p.id)).toEqual(withoutHidden.map(p => p.id));
+    expect(withHidden[0]?.id).toBe("shared");
+  });
+
+  it("still keeps the ids WITHIN the visible half distinct", () => {
+    const twice = partitionPlacements(
+      [seen, { ...seen, order: 20, widgetId: "core/seen" }],
+      visibleIds
+    ).visible;
+    expect(twice).toHaveLength(2);
+    expect(new Set(twice.map(p => p.id)).size).toBe(2);
+  });
+
+  it("keeps the ids within the invisible half distinct too", () => {
+    const carried = partitionPlacements(
+      [unseen, { ...unseen, order: 5 }],
+      visibleIds
+    ).invisible;
+    expect(new Set(carried.map(p => p.id)).size).toBe(2);
+  });
+});
+
+describe("a stored row that holds one id twice", () => {
+  const collided: WidgetPlacement[] = [
+    { id: "same", widgetId: "core/first", column: 0, order: 0, hidden: false },
+    { id: "same", widgetId: "core/second", column: 1, order: 5, hidden: false },
+  ];
+
+  it("is read WITHOUT being rewritten, so the whole-row view stays honest", () => {
+    // The resolution belongs to `partitionPlacements`, which knows what this
+    // caller may see. This layer only reports.
+    const read = readStoredLayout(serializeLayout(collided));
+    expect(read.placements.map(p => p.id)).toEqual(["same", "same"]);
+  });
+
+  it("reports the repeated id, so the row is findable in a log", () => {
+    expect(
+      readStoredLayout(serializeLayout(collided)).duplicatePlacementIds
+    ).toEqual(["same"]);
+  });
+
+  it("CONTROL: a sound row reports nothing", () => {
+    const sound: WidgetPlacement[] = [
+      { id: "a", widgetId: "core/first", column: 0, order: 0, hidden: false },
+      { id: "b", widgetId: "core/second", column: 0, order: 1, hidden: false },
+    ];
+    const read = readStoredLayout(serializeLayout(sound));
+    expect(read.placements).toEqual(sound);
+    expect(read.duplicatePlacementIds).toBeUndefined();
+  });
+
+  it("reports a v1 row's repeat too, which leaves by the other branch", () => {
+    const raw = JSON.stringify({
+      schemaVersion: 1,
+      placements: [
+        { id: "same", widgetId: "core/first", order: 0, hidden: false },
+        { id: "same", widgetId: "core/second", order: 1, hidden: false },
+      ],
+    });
+    expect(readStoredLayout(raw).duplicatePlacementIds).toEqual(["same"]);
   });
 });
