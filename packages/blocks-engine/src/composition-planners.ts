@@ -711,7 +711,7 @@ function restampOps(
   // Decided WITHOUT reading the document, so a plan that turns out to edit
   // nothing never has to be right about a page it will not touch.
   const stale = selected.filter(root => {
-    const origin = root.origin;
+    const origin = ownOrigin(root);
     if (origin === undefined || origin.from !== "pattern") return false;
     return origin.id === patternId && origin.digest !== digest;
   });
@@ -750,7 +750,7 @@ function restampOps(
       // resumed growing it. The round trip held once and failed on the second
       // pass, which is why a test that never applied these ops could not see it.
       patch: {
-        origin: insertOrigin(patternId, digest, renamedIn(root.origin)),
+        origin: insertOrigin(patternId, digest, renamedIn(ownOrigin(root))),
       },
     })),
   };
@@ -2388,6 +2388,33 @@ function insertOrigin(
  * insert that did the renaming knows it — recovering it from the values is the
  * inference this feature exists instead of.
  */
+/**
+ * A node's provenance record, when the NODE itself holds one.
+ *
+ * An ordinary read walks the prototype chain, so a polluted
+ * `Object.prototype.origin` makes every node on a page look copied from
+ * somewhere. Measured: a selection of one ordinary node came back stale against
+ * a pattern it had never seen, and the plan emitted an update stamping that
+ * false provenance onto it.
+ *
+ * The document validator answers this question about OWN properties only, and
+ * the two have to agree — a record one road sees and the other does not is
+ * exactly the asymmetry these planners exist to close. `structuredClone` and
+ * object spreads copy own properties too, so an inherited value is not what
+ * would be stored either way.
+ *
+ * An accessor is treated as absent for the reason the validator treats it so:
+ * reading it runs the document's own code inside the decision about whether to
+ * trust it.
+ */
+function ownOrigin(node: BlockNode): BlockOrigin | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(node, "origin");
+  if (descriptor === undefined || descriptor.get !== undefined) {
+    return undefined;
+  }
+  return descriptor.value as BlockOrigin | undefined;
+}
+
 function renamedIn(
   origin: BlockOrigin | undefined
 ): ReadonlyMap<string, string> {
@@ -2420,7 +2447,7 @@ function restoredDomIds(
 ): ReadonlyMap<string, string> {
   const restore = new Map<string, string>();
   for (const root of selected) {
-    const origin = root.origin;
+    const origin = ownOrigin(root);
     if (origin === undefined || origin.from !== "pattern") continue;
     const renamed = origin.renamed;
     if (renamed === undefined) continue;

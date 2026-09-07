@@ -2084,3 +2084,55 @@ describe("a duplicate is refused what strict validation would refuse", () => {
     expect(result?.problem).toBe("unusable-document");
   });
 });
+
+describe("a polluted prototype is not provenance", () => {
+  it("does not treat an inherited origin as a record this page holds", () => {
+    // An ordinary read walks the prototype chain. With `Object.prototype.origin`
+    // polluted, every node on the page looked copied from somewhere — and this
+    // planner emitted an update stamping that false provenance onto a root that
+    // had none. Measured: one op where none is correct.
+    //
+    // The document validator answers this about OWN properties only, so an
+    // ordinary read here also put the two roads back into disagreement, which is
+    // the asymmetry these planners exist to close.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.origin = { from: "pattern", id: "ghost", digest: "d" };
+    try {
+      const doc = page([node("a", { props: { mark: "plain" } })]);
+
+      const plan = planUpdatePatternFromSelection(
+        doc,
+        ["a"],
+        { collection: "patterns", id: "ghost" },
+        anyParent
+      );
+
+      expect(pageOps(plan)).toEqual([]);
+    } finally {
+      delete polluted.origin;
+    }
+  });
+
+  it("does not restore DOM ids from an inherited rename map", () => {
+    // The same read, on the other consumer: a polluted record would hand the
+    // save a map it never recorded and put back ids nobody renamed.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.origin = {
+      from: "pattern",
+      id: "ghost",
+      digest: "d",
+      renamed: { authored: "minted" },
+    };
+    try {
+      const doc = page([node("a", { cssId: "minted", props: { mark: "t" } })]);
+
+      const saved = created(
+        planSaveAsPattern(doc, ["a"], target, anyParent)
+      ).document;
+
+      expect(marked(saved.nodes, "t").cssId).toBe("minted");
+    } finally {
+      delete polluted.origin;
+    }
+  });
+});
