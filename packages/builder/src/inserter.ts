@@ -26,19 +26,19 @@
 
 import {
   allBlocks,
-  canBeRoot,
-  canNest,
-  canNestInSlot,
   expandSlotDefaults,
   findNode,
+  isPatternDocument,
   getBlock,
   locateNode,
   makeNode,
+  placementVerdict,
   type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
   type NestingSource,
   type NestingVerdict,
+  type PlacementTarget,
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
@@ -134,9 +134,32 @@ export interface SavedPattern {
   readonly title: string;
   readonly description?: string;
   readonly category?: string;
-  /** The author's own search terms, however they separated them. */
-  readonly keywords?: string;
-  /** The pattern's document, carried whole. */
+  /**
+   * The author's own search terms, however they separated them.
+   *
+   * `null` as well as absent, because that is what a stored row holds: the
+   * field is not required, and Nextly writes an unset non-required field as SQL
+   * `NULL` and reads it back with the KEY PRESENT. A pattern saved without
+   * keywords — the ordinary case — arrives here as `null`, so an
+   * undefined-only check would reach `null.split` and take catalog
+   * construction down with it.
+   */
+  readonly keywords?: string | null;
+  /**
+   * The pattern's document, carried whole.
+   *
+   * Held BY REFERENCE, and treated as immutable, which is how a stored row is
+   * treated everywhere else it travels. Cloning each one instead would copy
+   * every pattern's whole forest on each build of the catalogue, and the
+   * catalogue is rebuilt whenever the palette opens — against a library the
+   * design sizes at three thousand entries.
+   *
+   * What that costs is bounded, because the planner judges the forest AGAIN
+   * before it plans: a row mutated between being offered and being clicked can
+   * make the insert refuse, and cannot make it place something the nesting
+   * rules forbid. And the value it would then place is the row as it stands
+   * now, which for a live library is the better of the two answers.
+   */
   readonly document: BlockDocument;
 }
 
@@ -337,6 +360,13 @@ export function patternEntriesFrom(
 ): PatternInsertEntry[] {
   const entries: PatternInsertEntry[] = [];
   for (const pattern of patterns) {
+    // The planner refuses a document that is not a pattern outright, as
+    // `not-a-pattern`, and the type admits one: `SavedPattern.document` is a
+    // `BlockDocument`, so a page or a component row handed to this by mistake
+    // is a legal value. Offering it produces a tile that accepts a click and
+    // cannot succeed, which is the disagreement between the palette and the
+    // insert that this module exists to prevent.
+    if (!isPatternDocument(pattern.document)) continue;
     if (pattern.document.nodes.length === 0) continue;
     entries.push({
       kind: "pattern",
@@ -374,8 +404,11 @@ export const PATTERN_ENTRY_PREFIX = "pattern:";
  * separators produce nothing rather than an empty term that matches every
  * query.
  */
-function keywordsOf(stored: string | undefined): readonly string[] {
-  if (stored === undefined) return [];
+function keywordsOf(stored: string | null | undefined): readonly string[] {
+  // Both absences, and they arrive by different roads: `undefined` from a
+  // caller that omitted the field, `null` from a stored row whose author never
+  // filled it in.
+  if (stored === undefined || stored === null) return [];
   return stored
     .split(/[\s,;]+/u)
     .map(word => word.trim())
@@ -484,11 +517,11 @@ function patternAllowedAt(
   target: InsertTarget,
   source: NestingSource
 ): NestingVerdict {
-  for (const root of document.nodes) {
-    const verdict = blockAllowedAt(root.type, target, source);
-    if (!verdict.allowed) return verdict;
-  }
-  return { allowed: true };
+  return placementVerdict(
+    document.nodes.map(root => root.type),
+    placedAt(target),
+    source
+  );
 }
 
 /**
@@ -514,10 +547,24 @@ export function blockAllowedAt(
   target: InsertTarget,
   source: NestingSource
 ): NestingVerdict {
-  if (target.at === "root") return canBeRoot(blockName, source);
-  const child = canNest(blockName, target.parentType, source);
-  if (!child.allowed) return child;
-  return canNestInSlot(blockName, target.parentType, target.slot, source);
+  return placementVerdict([blockName], placedAt(target), source);
+}
+
+/**
+ * This module's target, in the vocabulary the rule is written in.
+ *
+ * Two names for one idea, and the translation is here so it happens ONCE.
+ * `InsertTarget` is published by this package and spells the discriminant
+ * `at`; the engine's `PlacementTarget` spells it `kind`. Converging them is a
+ * change to a published type across every drag, drop and refusal surface that
+ * reads one, so the rule is shared first and the spelling after — a second
+ * implementation of the RULE is what produces a palette that offers what the
+ * insert refuses, where two spellings of the target produce a rename.
+ */
+function placedAt(target: InsertTarget): PlacementTarget {
+  return target.at === "root"
+    ? { kind: "root" }
+    : { kind: "slot", parentType: target.parentType, slot: target.slot };
 }
 
 /**

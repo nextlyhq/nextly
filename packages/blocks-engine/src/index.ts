@@ -238,6 +238,7 @@ export type { OriginReading } from "./document";
 // two ways and emits at most one, so anything asking "what ids are on this
 // page" — a planner steering an insert around collisions, a duplicate check —
 // has to ask this rather than read the two fields independently.
+export { isPatternDocument } from "./document";
 export { renderedDomId, renderedDomIdIn } from "./document";
 
 export { selectNodes } from "./select-nodes";
@@ -287,6 +288,7 @@ export type {
 // noticed: a module the entry does not name is absent from `dist` however
 // thoroughly it is tested.
 export { canNest, canBeRoot, canNestInSlot } from "./nesting";
+export { placementVerdict } from "./nesting";
 export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
 // The measurement's return type travels with the function. Without it a
 // consumer naming `measureBytes`'s result has to rebuild the union by hand or

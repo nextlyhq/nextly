@@ -201,3 +201,78 @@ export function canBeRoot(
   if (parents === undefined) return ALLOWED;
   return { allowed: false, reason: "restricted-at-root", permitted: parents };
 }
+
+/**
+ * Where a placement is being judged: the document's roots, or a named slot.
+ *
+ * The root case is NOT a special case of the slot case — one asks whether a
+ * block may stand alone, the other asks two questions about a container — so
+ * the target says which to ask rather than passing an optional parent that
+ * means both. An optional parent turns a lookup that failed into a confident
+ * verdict about the root.
+ */
+export type PlacementTarget =
+  | { readonly kind: "root" }
+  | {
+      readonly kind: "slot";
+      readonly parentType: string;
+      readonly slot: string;
+    };
+
+/**
+ * Whether every one of these block types may sit at a target.
+ *
+ * **The one implementation of that question, for every caller and every
+ * destination.** A planner asks it of a pattern's roots before it plans, a
+ * palette asks it of a row before offering it, and a canvas asks it of a block
+ * being dropped. Asking it more than one way is how a palette comes to offer a
+ * placement the insert refuses — the author is handed something, clicks it, and
+ * is told no.
+ *
+ * TYPES rather than nodes, because the three callers hold different things: a
+ * planner has a forest, a palette has a catalogue row, a drag has a name. The
+ * rule only ever reads the type, so taking the narrowest input is what lets all
+ * three reach the same implementation instead of two of them wrapping it.
+ *
+ * The FIRST refusal is the answer, and its reason travels: a verdict naming one
+ * restriction and the set that produced it tells an author where the thing they
+ * picked can go, where a summary of three refusals names none of them.
+ *
+ * An empty list is allowed. Nothing is being placed, so nothing can refuse it —
+ * and a caller that has nothing to place has a different question to ask.
+ */
+export function placementVerdict(
+  types: readonly string[],
+  where: PlacementTarget,
+  nesting: NestingSource
+): NestingVerdict {
+  for (const type of types) {
+    const verdict =
+      where.kind === "root"
+        ? canBeRoot(type, nesting)
+        : bothHalves(type, where.parentType, where.slot, nesting);
+    if (!verdict.allowed) return verdict;
+  }
+  return ALLOWED;
+}
+
+/**
+ * Both halves of the nesting rule, in the order that reports the more
+ * actionable refusal first.
+ *
+ * The child naming its permitted parents is the sharper answer — it names
+ * somewhere the block CAN go — where a slot's allow-list only says this one
+ * will not have it. Both are asked because a placement needs both to agree and
+ * neither is derivable from the other.
+ */
+function bothHalves(
+  childType: string,
+  parentType: string,
+  slot: string,
+  nesting: NestingSource
+): NestingVerdict {
+  const child = canNest(childType, parentType, nesting);
+  return child.allowed
+    ? canNestInSlot(childType, parentType, slot, nesting)
+    : child;
+}

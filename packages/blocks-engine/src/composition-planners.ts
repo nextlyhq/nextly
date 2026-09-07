@@ -27,6 +27,7 @@ import {
   COMPONENT_INSTANCE_TYPE,
   isComponentDocument,
   isComponentInstance,
+  isPatternDocument,
   renderedDomId,
 } from "./document";
 import type {
@@ -43,12 +44,10 @@ import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import type { DocumentLimits } from "./limits";
 import { surveyDocument, type DocumentSurvey } from "./measure-bytes";
 import {
-  canBeRoot,
-  canNest,
-  canNestInSlot,
+  placementVerdict,
   type NestingRefusal,
   type NestingSource,
-  type NestingVerdict,
+  type PlacementTarget,
 } from "./nesting";
 import {
   applyOps,
@@ -1846,21 +1845,7 @@ function replacementPosition(
   return { at: { parentId: at.parentId, slot: at.slot, index: at.index } };
 }
 
-/**
- * Where a block is being put, in the terms the nesting rule judges.
- *
- * A closed pair rather than a nullable parent, for the reason `canBeRoot` is a
- * separate function from `canNest`: a parent variable that is accidentally
- * undefined would otherwise turn a lookup that failed into a confident verdict
- * about the root.
- */
-export type PlacementTarget =
-  | { readonly kind: "root" }
-  | {
-      readonly kind: "slot";
-      readonly parentType: string;
-      readonly slot: string;
-    };
+export type { PlacementTarget } from "./nesting";
 
 /**
  * The first block that may not sit where it is being put, phrased as a refusal.
@@ -1881,40 +1866,21 @@ function placementRefusal(
   where: PlacementTarget,
   nesting: NestingSource
 ): PlanRefusal | undefined {
-  for (const block of blocks) {
-    const verdict =
-      where.kind === "root"
-        ? canBeRoot(block.type, nesting)
-        : bothHalves(block.type, where.parentType, where.slot, nesting);
-    if (verdict.allowed) continue;
-    return {
-      problem: verdict.reason,
-      ...(verdict.permitted === undefined
-        ? {}
-        : { permitted: verdict.permitted }),
-    };
-  }
-  return undefined;
-}
-
-/**
- * Both halves of the nesting rule, in the order that reports the more
- * actionable refusal first.
- *
- * The child naming its permitted parents is the sharper answer — it names
- * somewhere the block CAN go — where a slot's allow-list only says this one
- * will not have it.
- */
-function bothHalves(
-  childType: string,
-  parentType: string,
-  slot: string,
-  nesting: NestingSource
-): NestingVerdict {
-  const child = canNest(childType, parentType, nesting);
-  return child.allowed
-    ? canNestInSlot(childType, parentType, slot, nesting)
-    : child;
+  // The rule itself lives with the rest of the nesting rule, where the palette
+  // and the canvas reach it too. This function is the translation from its
+  // verdict into the refusal a plan carries, and nothing more.
+  const verdict = placementVerdict(
+    blocks.map(block => block.type),
+    where,
+    nesting
+  );
+  if (verdict.allowed) return undefined;
+  return {
+    problem: verdict.reason,
+    ...(verdict.permitted === undefined
+      ? {}
+      : { permitted: verdict.permitted }),
+  };
 }
 
 /**
@@ -2050,7 +2016,7 @@ function storedRefusal(
   document: BlockDocument,
   pattern: BlockDocument
 ): PlanRefusal | undefined {
-  if (pattern.kind !== "pattern") return { problem: "not-a-pattern" };
+  if (!isPatternDocument(pattern)) return { problem: "not-a-pattern" };
   if (pattern.nodes.length === 0) return { problem: "empty" };
   // BOTH envelopes, judged by the apply's own document rule rather than by a
   // field of it. The ops are built from one document and applied to the other,

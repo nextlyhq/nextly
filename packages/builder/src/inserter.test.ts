@@ -71,6 +71,10 @@ function documentOf(nodes: BlockDocument["nodes"]): BlockDocument {
   return { formatVersion: 1, kind: "page", nodes } as BlockDocument;
 }
 
+function patternOf(nodes: BlockDocument["nodes"]): BlockDocument {
+  return { formatVersion: 1, kind: "pattern", nodes } as BlockDocument;
+}
+
 describe("catalogFrom", () => {
   it("offers every registered block, named by its editor label", () => {
     const entries = catalog([
@@ -983,7 +987,10 @@ describe("the pattern tier", () => {
     return {
       id: "hero",
       title: "Hero",
-      document: documentOf([
+      // A PATTERN document, which is what a row in the patterns collection
+      // holds: the field refuses any other kind, and the planner refuses one
+      // too.
+      document: patternOf([
         { id: "a", type: "acme/text", version: 1, props: {} },
       ]),
       ...overrides,
@@ -1010,6 +1017,35 @@ describe("the pattern tier", () => {
 
     expect(empty).toEqual([]);
     expect(populated).toHaveLength(1);
+  });
+
+  it("treats a stored NULL keyword field as no keywords", () => {
+    // Not a hypothetical shape: `keywords` is not required, Nextly writes an
+    // unset non-required field as SQL NULL and reads it back with the key
+    // present, so the ordinary pattern — one saved without keywords — arrives
+    // as null. An undefined-only check reached `null.split` and took catalog
+    // construction down with it.
+    const [pattern] = patternEntriesFrom([saved({ keywords: null })]);
+
+    expect(pattern?.keywords).toEqual([]);
+  });
+
+  it("offers nothing for a document that is not a pattern", () => {
+    // `SavedPattern.document` is a `BlockDocument`, so a page or a component
+    // row handed to this by mistake is a legal value — and the planner refuses
+    // exactly that as `not-a-pattern`. A tile for one accepts a click and
+    // cannot succeed.
+    const offered = patternEntriesFrom([
+      saved({ id: "a-page", document: { ...saved().document, kind: "page" } }),
+      saved({
+        id: "a-component",
+        document: { ...saved().document, kind: "component" },
+      }),
+    ]);
+    const control = patternEntriesFrom([saved()]);
+
+    expect(offered).toEqual([]);
+    expect(control).toHaveLength(1);
   });
 
   it("splits the stored keyword string on every separator an author uses", () => {
@@ -1042,7 +1078,7 @@ describe("the pattern tier", () => {
     ]);
     const [pattern] = patternEntriesFrom([
       saved({
-        document: documentOf([
+        document: patternOf([
           { id: "a", type: "acme/text", version: 1, props: {} },
           { id: "b", type: "acme/column", version: 1, props: {} },
         ]),
@@ -1066,7 +1102,7 @@ describe("the pattern tier", () => {
     catalog([{ ...base, name: "acme/text" }]);
     const [pattern] = patternEntriesFrom([
       saved({
-        document: documentOf([
+        document: patternOf([
           { id: "a", type: "acme/text", version: 1, props: {} },
           { id: "b", type: "acme/text", version: 1, props: {} },
         ]),
@@ -1088,7 +1124,7 @@ describe("the pattern tier", () => {
       saved({ id: "ok" }),
       saved({
         id: "bad",
-        document: documentOf([
+        document: patternOf([
           { id: "b", type: "acme/column", version: 1, props: {} },
         ]),
       }),
