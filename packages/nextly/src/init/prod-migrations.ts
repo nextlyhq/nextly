@@ -215,6 +215,32 @@ export async function runProdMigrationsIfEnabled(
       throw bootMigrationsNotRun(adapter.dialect);
     }
     logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);
+
+    /*
+     * 🔴 Reloaded whenever migrations RAN, never on how many entities this
+     * process registered. `registerServices` built this registry before the
+     * lock was ever taken, so it predates the rows regardless of who wrote
+     * them — and `migrateCore` reports `collectionsRegistered` for the work
+     * THIS process did, not for whether its own view is current.
+     *
+     * The two differ on a rolling deploy, which is the case that matters. A
+     * replica that waits on the lock and acquires it after another replica has
+     * already migrated runs `migrateCore` against a settled database: `ran` is
+     * true, `applied` and the registration counts are 0, and its registry is
+     * exactly as stale as the migrating replica's was. Gated on those counts it
+     * would never reload, and would serve the entities it can see but not
+     * query. `ran === true` is the condition every replica that goes on to
+     * SERVE satisfies — the ones that do not throw a few lines above rather
+     * than reaching here.
+     *
+     * Before `allowBootMigrations`, so nothing waiting on that gate is released
+     * onto a registry this boot already knows is behind. It cannot throw, which
+     * is what makes that ordering safe: an exception here would leave the gate
+     * closed and hang every consumer of it.
+     */
+    const { reloadDynamicTables } = await import("./reload-dynamic-tables");
+    await reloadDynamicTables("[Nextly]");
+
     allowBootMigrations();
   } catch (err) {
     // A refusal is not a failure to swallow. Every other error here is

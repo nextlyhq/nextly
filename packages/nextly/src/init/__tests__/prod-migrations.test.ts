@@ -8,6 +8,17 @@ import {
 
 const shutdownServices = vi.fn();
 vi.mock("../../di", () => ({ shutdownServices: () => shutdownServices() }));
+
+/*
+ * The registry reload is observed through its OWN module rather than through
+ * the container, because what this file is about is WHEN the production path
+ * asks for a reload -- and the container would let a reload that never happened
+ * look the same as one that found nothing to do.
+ */
+const reloadDynamicTables = vi.fn(async () => undefined);
+vi.mock("../reload-dynamic-tables", () => ({
+  reloadDynamicTables: (label: string) => reloadDynamicTables(label),
+}));
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -326,5 +337,111 @@ describe("runProdMigrationsIfEnabled", () => {
       runProdMigrationsIfEnabled(a as never)
     ).resolves.toBeUndefined();
     expect(a.logger.error).toHaveBeenCalled();
+  });
+});
+
+/*
+ * `registerServices` builds the runtime schema registry BEFORE this path runs,
+ * so a migration that registers an entity leaves the process holding a registry
+ * that predates it -- the collection is addressable in metadata and drawn on a
+ * dashboard card while every query against it fails.
+ */
+describe("the schema registry is reloaded before the gate opens", () => {
+  beforeEach(() => {
+    reloadDynamicTables.mockClear();
+    _resetBootMigrationsGateForTest();
+  });
+
+  it("reloads after migrations ran", async () => {
+    await runProdMigrationsIfEnabled(args() as never);
+    expect(reloadDynamicTables).toHaveBeenCalledTimes(1);
+  });
+
+  /*
+   * 🔴 The case that decides the CONDITION, and the reason it is not the
+   * registration counts. On a rolling deploy a second replica waits on the
+   * migrate lock, acquires it once the first has finished, and runs against a
+   * settled database: `ran` is true while `applied` and the registration counts
+   * are 0. Its registry is exactly as stale as the migrating replica's was.
+   * Gated on "did I register anything", this replica never reloads and serves
+   * entities it can see but cannot query.
+   */
+  it("reloads on a replica that applied and registered nothing", async () => {
+    await runProdMigrationsIfEnabled(
+      args({
+        migrateCore: vi.fn(async () => ({
+          applied: 0,
+          coreChanged: false,
+          ran: true,
+          collectionsRegistered: 0,
+          singlesRegistered: 0,
+        })),
+      }) as never
+    );
+    expect(reloadDynamicTables).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT reload when migrations did not run", async () => {
+    // `ran: false` means the lock stayed held, and this path refuses to serve
+    // rather than reloading anything -- a registry refreshed for a process
+    // that is about to throw is work spent on a boot nobody will use.
+    await expect(
+      runProdMigrationsIfEnabled(
+        args({
+          migrateCore: vi.fn(async () => ({
+            applied: 0,
+            coreChanged: false,
+            ran: false,
+          })),
+        }) as never
+      )
+    ).rejects.toThrow();
+    expect(reloadDynamicTables).not.toHaveBeenCalled();
+  });
+
+  it("does not reload outside production", async () => {
+    // The control for the three above: a rule that reloaded unconditionally
+    // would satisfy the first two while doing it on every dev boot as well.
+    process.env.NODE_ENV = "development";
+    await runProdMigrationsIfEnabled(args() as never);
+    expect(reloadDynamicTables).not.toHaveBeenCalled();
+  });
+
+  /*
+   * 🔴 The reload runs BEFORE `allowBootMigrations`, so nothing waiting on that
+   * gate is released onto a registry this boot already knows is behind. The
+   * ordering is only safe because the reload cannot throw; asserted here so a
+   * later move of either line fails rather than silently reopening the window.
+   */
+  it("opens the boot gate only after the reload has finished", async () => {
+    // 🔴 The gate is OPENED first, because `awaitBootMigrations` resolves
+    // immediately when nothing is pending -- so without this the assertion
+    // below is satisfied by there being no gate at all rather than by the
+    // ordering it names.
+    openBootMigrationsGate(true);
+
+    // The control for exactly that: the gate must be genuinely pending before
+    // the run, or "not yet open during the reload" means nothing.
+    let openedEarly = false;
+    void awaitBootMigrations().then(() => {
+      openedEarly = true;
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(openedEarly).toBe(false);
+
+    let gateOpenDuringReload: boolean | undefined;
+    reloadDynamicTables.mockImplementationOnce(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      gateOpenDuringReload = openedEarly;
+      return undefined;
+    });
+
+    await runProdMigrationsIfEnabled(args() as never);
+
+    expect(gateOpenDuringReload).toBe(false);
+    // And it DID open afterwards, or the assertion above would pass on a path
+    // that simply never opens the gate.
+    await expect(awaitBootMigrations()).resolves.toBeUndefined();
+    expect(openedEarly).toBe(true);
   });
 });
