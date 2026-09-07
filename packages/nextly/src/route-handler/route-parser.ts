@@ -2576,6 +2576,58 @@ function parseDashboardRoutes(
 }
 
 // ============================================================================
+// Document Lock Routes Parser
+// ============================================================================
+
+/**
+ * Parse advisory document-lock routes.
+ *
+ *   GET    /api/document-lock → who holds it
+ *   POST   /api/document-lock → claim it
+ *   PATCH  /api/document-lock → extend a claim
+ *   DELETE /api/document-lock → give it up
+ *
+ * One resource and no id segment: the document is named by `scopeKind`, `slug`
+ * and `entryId` together, and a slug carrying the path separator would be a
+ * document this could not address. They travel in the query for the read and
+ * the body for the rest, which the handler validates through the same function
+ * the repository keys rows with.
+ *
+ * The method table is a closed record rather than a lookup on the URL's own
+ * string, so no prototype key can reach it and there is nothing for
+ * `Object.hasOwn` to guard.
+ */
+function parseDocumentLockRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // Nothing deeper than the resource exists, so a longer path 404s rather than
+  // matching this and silently ignoring its tail.
+  if (id !== undefined || subresource !== undefined) return null;
+
+  const method =
+    httpMethod === "GET"
+      ? "readDocumentLock"
+      : httpMethod === "POST"
+        ? "acquireDocumentLock"
+        : httpMethod === "PATCH"
+          ? "renewDocumentLock"
+          : httpMethod === "DELETE"
+            ? "releaseDocumentLock"
+            : null;
+  if (method === null) return null;
+
+  return {
+    service: "documentLock",
+    operation: httpMethod === "GET" ? "single" : "update",
+    method,
+    routeParams,
+  };
+}
+
+// ============================================================================
 // Schema Routes Parser
 // ============================================================================
 
@@ -2908,6 +2960,17 @@ export function parseRestRoute(
   // Handle Dashboard endpoints
   if (resource === "dashboard") {
     const result = parseDashboardRoutes(
+      id,
+      subresource,
+      httpMethod,
+      routeParams
+    );
+    if (result) return result;
+  }
+
+  // Handle advisory document locking
+  if (resource === "document-lock") {
+    const result = parseDocumentLockRoutes(
       id,
       subresource,
       httpMethod,

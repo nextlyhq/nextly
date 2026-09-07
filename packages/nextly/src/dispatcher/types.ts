@@ -30,6 +30,7 @@ export type ServiceType =
   | "previewUrl"
   | "imageSizes"
   | "dashboard"
+  | "documentLock"
   | "translations"
   | "email"
   | "schema";
