@@ -7,6 +7,7 @@ import { renderedDomId, renderedDomIdIn } from "./document";
 import {
   COMPONENT_INSTANCE_TYPE,
   isBlockOrigin,
+  patternRenames,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   isComponentInstance,
@@ -388,6 +389,70 @@ describe("a provenance record's rename map", () => {
       },
     });
     expect(isBlockOrigin(origin)).toBe(false);
+  });
+
+  it.each(["id", "from", "digest", "renamed"])(
+    "refuses a record whose %s storage would not keep",
+    field => {
+      // A non-enumerable field is dropped by every road this record travels to
+      // storage — `JSON.stringify`, an object spread, `structuredClone` — so a
+      // guard that admits one has trusted a record whose persisted form is a
+      // different record. Absent is the honest reading of it, which for `id`,
+      // `from` and `digest` is a refusal on its own; the map's own arm is
+      // asserted separately, because absent is VALID there and the consequence
+      // is a restore rather than a verdict.
+      const origin: Record<string, unknown> = { ...base };
+      Object.defineProperty(origin, field, {
+        value: field === "renamed" ? { pricing: "pricing-1" } : "x",
+        enumerable: false,
+        configurable: true,
+      });
+
+      expect(JSON.parse(JSON.stringify(origin))[field]).toBeUndefined();
+      expect(isBlockOrigin(origin)).toBe(field === "renamed");
+    }
+  );
+
+  it("reads no renames from a map storage would not keep", () => {
+    // The record stays whole — `renamed` may be absent — and what it SAYS is
+    // that nothing was renamed, so a planner restoring from it puts nothing
+    // back rather than acting on metadata the saved document will not carry.
+    const origin: Record<string, unknown> = { ...base };
+    Object.defineProperty(origin, "renamed", {
+      value: { pricing: "pricing-1" },
+      enumerable: false,
+      configurable: true,
+    });
+
+    expect(patternRenames(origin)?.size).toBe(0);
+  });
+
+  it("says what a whole pattern record renamed", () => {
+    // The control for the two refusals above: the same question, asked of a
+    // record with nothing wrong with it, answers with the map.
+    expect([
+      ...(patternRenames({ ...base, renamed: { pricing: "pricing-1" } }) ?? []),
+    ]).toEqual([["pricing", "pricing-1"]]);
+  });
+
+  it("hands out a map of its own for a record that renamed nothing", () => {
+    // `ReadonlyMap` is readonly to TypeScript and nothing else: `.set` is still
+    // there at runtime, and this is a published function. A consumer writing to
+    // a module-wide empty singleton would make every later origin that renamed
+    // NOTHING claim that rename, and silently rewrite ids on a save with
+    // nothing to restore.
+    const whole = { ...base };
+    const first = patternRenames(whole);
+    (first as Map<string, string>).set("pricing", "pricing-1");
+
+    expect(patternRenames({ ...base })?.size).toBe(0);
+  });
+
+  it("says nothing about a record it would not trust, or one that renames none", () => {
+    // Undefined covers both, because a caller that must tell them apart is
+    // asking `readBlockOrigin`, which answers in four.
+    expect(patternRenames({ ...base, renamed: null })).toBeUndefined();
+    expect(patternRenames({ from: "component", id: "c1" })).toBeUndefined();
   });
 
   it("ignores a rename map on a component record", () => {
