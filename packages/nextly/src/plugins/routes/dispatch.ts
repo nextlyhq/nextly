@@ -1,5 +1,6 @@
 import { buildErrorResponse } from "../../api/error-response";
 import { readOrGenerateRequestId } from "../../api/request-id";
+import { applySessionCacheHeaders } from "../../api/response-shapes";
 import {
   isErrorResponse,
   requireAuthentication,
@@ -8,6 +9,7 @@ import {
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { NextlyError } from "../../errors/nextly-error";
 import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
+import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
 
 import { composeMiddleware } from "./middleware";
@@ -85,6 +87,54 @@ function permissionArgs(slug: string): [string, string] {
 }
 
 /**
+ * What every plugin-route response says about itself, whoever wrote it.
+ *
+ * Both properties are decided HERE rather than by the plugin, because neither
+ * header is on the surface a plugin may import: a plugin wanting either would
+ * have to hardcode an internal string, which is the same defect one
+ * indirection along. This is the one place every plugin response converges on.
+ *
+ * ## The body is opaque, so it must survive verbatim
+ *
+ * Every JSON response passes through the framework's timezone rewriting, which
+ * walks nested values and rewrites any string matching its ISO pattern BY
+ * VALUE, whatever the key is called. A plugin's body is whatever that plugin
+ * defined and the framework knows nothing about its shape, so a block prop or
+ * a description holding text like `2026-09-08T12:34Z` arrived already
+ * rewritten — and inserting then saving it persists content the author never
+ * wrote. The same reason a webhook delivery's captured text opts out.
+ *
+ * A plugin that wants timestamps normalised can normalise them; a plugin whose
+ * text is silently altered has no way back to what it stored.
+ *
+ * ## An authenticated answer belongs to one session
+ *
+ * Secure-by-default decides the auth; this is the same rule reaching the
+ * cache. A route that required a session answers from that caller's own
+ * access, so a shared proxy holding one authorized response could serve it to
+ * the next request without the authentication check running again. Applied to
+ * the REFUSAL as well, which is the direction that looks like a working gate.
+ *
+ * A `public: true` route is deliberately left alone: it serves the same bytes
+ * to everyone, and forcing `no-store` would throw away caching it is entitled
+ * to.
+ *
+ * Headers are REBUILT rather than set in place. A handler may return a
+ * response whose headers are immutable — one that came from `fetch`, say —
+ * and setting a header on that throws, turning a marking step into a 500.
+ */
+function markPluginResponse(response: Response, route: PluginRoute): Response {
+  const headers = new Headers(response.headers);
+  headers.set(SKIP_TIMEZONE_FORMAT_HEADER, "1");
+  if (route.public !== true) applySessionCacheHeaders(headers);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+/**
  * Run a matched plugin route. Enforces secure-by-default auth,
  * builds the per-request {@link PluginRouteContext} (the plugin's boot context
  * plus `user`/`params`), and invokes the handler, isolating any thrown error
@@ -96,10 +146,13 @@ export async function runPluginRoute(
 ): Promise<Response> {
   const auth = await resolvePluginRouteAuth(req, matched.route);
   if ("error" in auth) {
-    return buildErrorResponse(auth.error, {
-      requestId: readOrGenerateRequestId(req),
-      flattened: currentFlattenedErrors(),
-    });
+    return markPluginResponse(
+      buildErrorResponse(auth.error, {
+        requestId: readOrGenerateRequestId(req),
+        flattened: currentFlattenedErrors(),
+      }),
+      matched.route
+    );
   }
 
   const ctx: PluginRouteContext = {
@@ -114,8 +167,8 @@ export async function runPluginRoute(
   );
 
   try {
-    return await run(req, ctx);
+    return markPluginResponse(await run(req, ctx), matched.route);
   } catch (err) {
-    return toErrorResponse(req, err);
+    return markPluginResponse(toErrorResponse(req, err), matched.route);
   }
 }

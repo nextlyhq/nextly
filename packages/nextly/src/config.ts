@@ -169,6 +169,13 @@ export {
   type PluginCategory,
 } from "./plugins/plugin-categories";
 export { pluginAdminSlug } from "./plugins/plugin-slug";
+// And the same for a plugin's HTTP routes, for the same reason and with a
+// sharper consequence. `pluginAdminSlug` derived twice produces a dead link;
+// this derived twice produces a request to a path nothing serves, which the
+// caller sees as an empty answer rather than as an error. The admin needs it
+// because a plugin's own UI calling its own route has to address it, and the
+// dispatcher is the only thing that knows where that is.
+export { pluginRouteFullPath } from "./plugins/routes/route-path";
 
 // The admin CONTRIBUTION shapes, published so the admin panel can DERIVE its
 // `/admin-meta` types from the declaration the server serializes rather than

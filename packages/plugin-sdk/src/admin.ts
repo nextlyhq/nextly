@@ -465,6 +465,32 @@ export { useUploadMedia } from "@nextlyhq/admin";
 export { usePluginClientConfig } from "@nextlyhq/admin";
 
 /**
+ * @experimental Read a route this plugin contributed, from this plugin's own
+ * admin components.
+ *
+ * The two halves of a plugin could not reach each other: a plugin may serve an
+ * HTTP route and may render admin components, and there was no client for the
+ * second to call the first with. An author's choice was to hand-roll the
+ * session, its refresh and the error envelope, or to read something else.
+ *
+ * The path is built from the plugin's package NAME through the dispatcher's own
+ * `pluginRouteFullPath`, so a caller cannot address a namespace the server does
+ * not serve — a mistake that does not raise, because a request to a path
+ * nothing serves answers with nothing and reads as an empty result.
+ *
+ * The plugin names ITSELF. There is no ambient plugin identity in the admin: a
+ * component is rendered through a registry by string path, so nothing in its
+ * React context says which plugin contributed it — which is why
+ * `usePluginClientConfig` takes the name too.
+ *
+ * `pending` is a REAL third state beside the data. `undefined` is both "the
+ * route answered nothing" and "the route has not answered", and a surface that
+ * cannot tell them apart draws its empty state over a read in flight.
+ */
+export { usePluginRoute } from "@nextlyhq/admin";
+export type { PluginRouteRead, PluginRouteRequest } from "@nextlyhq/admin";
+
+/**
  * @experimental Read and write a Single this plugin owns, through the same
  * client the admin's own Single form uses.
  *

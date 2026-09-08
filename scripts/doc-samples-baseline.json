@@ -2,7 +2,7 @@
   "coverage": {
     "pages": 49,
     "samples": 330,
-    "compiled": 199
+    "compiled": 200
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -163,7 +163,7 @@
     },
     "docs/plugins/index.mdx": {
       "samples": 6,
-      "compiled": 5
+      "compiled": 6
     },
     "docs/plugins/lifecycle.mdx": {
       "samples": 5,
@@ -208,7 +208,7 @@
     "docs/guides/routing-and-seo.mdx": 6,
     "docs/plugins/admin-ui.mdx": 2,
     "docs/plugins/auth.mdx": 3,
-    "docs/plugins/author-guide.mdx": 3,
+    "docs/plugins/author-guide.mdx": 2,
     "docs/plugins/distribution.mdx": 1,
     "docs/plugins/form-builder.mdx": 6,
     "docs/plugins/index.mdx": 7,
@@ -243,15 +243,16 @@
     "docs/plugins/admin-ui.mdx": {
       "#9 error TS2304: Cannot find name 'Skeleton'.": 1,
       "#9 error TS2304: Cannot find name 'Chart'.": 1,
+      "uninstalled #11 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
       "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1
     },
     "docs/plugins/auth.mdx": {
       "#1 error TS2304: Cannot find name 'verifyGoogleToken'.": 1,
       "#2 error TS2304: Cannot find name 'isTotpEnabled'.": 1,
-      "#2 error TS2304: Cannot find name 'verifyTotp'.": 1
+      "#2 error TS2304: Cannot find name 'verifyTotp'.": 1,
+      "uninstalled #0 error TS2307: Cannot find module '@acme/nextly-plugin-google' or its corresponding type declarations.": 1
     },
     "docs/plugins/author-guide.mdx": {
-      "#0 error TS2304: Cannot find name 'MyPluginOptions'.": 1,
       "#4 error TS2593: Cannot find name 'describe'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.": 1,
       "#4 error TS2593: Cannot find name 'it'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.": 1,
       "reader-file #1 error TS2307: Cannot find module '../package.json' or its corresponding type declarations.": 1,
@@ -276,7 +277,8 @@
       "#1 error TS2304: Cannot find name 'Users'.": 1,
       "#1 error TS2304: Cannot find name 'Media'.": 1,
       "#2 error TS2304: Cannot find name 'MyCollection'.": 1,
-      "suppressed #3 error TS2339: Property 'id' does not exist on type '{}'.": 1
+      "suppressed #3 error TS2339: Property 'id' does not exist on type '{}'.": 1,
+      "reader-file #4 error TS2307: Cannot find module './collections/my-collection' or its corresponding type declarations.": 1
     },
     "docs/plugins/lifecycle.mdx": {
       "#1 error TS2304: Cannot find name 'a'.": 1,

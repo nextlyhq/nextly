@@ -80,9 +80,9 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 // passed. The closing run is a backreference, so a fence still has to close with
 // what it opened with.
 const RAW_FENCE =
-  /(?:^|\n)([ \t]*(?:>[ \t]*)*)(```+|~~~+)(\w*)[^\n]*\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2[`~]*[ \t\r]*(?=\n|$)/g;
+  /(?:^|\n)([ \t]*(?:>[ \t]*)*)(```+|~~~+)(\w*)([^\n]*)\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2[`~]*[ \t\r]*(?=\n|$)/g;
 const ESCAPED_FENCE =
-  /(?:^|\n)([ \t]*(?:>[ \t]*)*)((?:\\`){3,})(\w*)[^\n]*\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2(?:\\`)*[ \t\r]*(?=\n|$)/g;
+  /(?:^|\n)([ \t]*(?:>[ \t]*)*)((?:\\`){3,})(\w*)([^\n]*)\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2(?:\\`)*[ \t\r]*(?=\n|$)/g;
 
 /**
  * Take the blockquote markers off a body, and only when it had them.
@@ -108,11 +108,46 @@ const isTypeScript = lang =>
 /** JSX needs a .tsx extension or the parser reads `<` as a type argument. */
 const looksLikeJsx = code => /<\/[A-Za-z]|\/>/.test(code);
 
+/**
+ * A TypeScript fence that opens and never closes.
+ *
+ * `matchAll` yields nothing for one, so the sample is not extracted, not
+ * counted and not compiled. On an existing page the coverage ratchet catches
+ * the loss; on a NEW page, or one that had no TypeScript before, there is no
+ * held count to fall below, so a malformed block changes no protected value and
+ * passes while the rest of the page renders as code. Breaking a fence and then
+ * rewriting the baseline over the broken tree is how this gate was defeated
+ * once already, from the inside.
+ *
+ * Returns the opening lines, one per unterminated fence, so the report can say
+ * where to look.
+ */
+export function unterminatedFences(text) {
+  const opener = /^[ \t]*(?:>[ \t]*)*(```+|~~~+)(\w*)/;
+  const open = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(opener);
+    if (!m) continue;
+    const last = open[open.length - 1];
+    // A closer carries the delimiter and nothing else. Checking only that the
+    // language capture was empty accepted ```` ```{.foo} ```` as one, because
+    // `\w*` matches nothing before a brace; `extractFrom` rejects that line, so
+    // the fence went neither extracted nor reported.
+    const closes =
+      last &&
+      m[1].startsWith(last.delimiter) &&
+      /^[ \t]*(?:>[ \t]*)*(?:```+|~~~+)[ \t\r]*$/.test(line);
+    if (closes) open.pop();
+    else if (!last) open.push({ delimiter: m[1], lang: m[2], line });
+  }
+  return open.filter(f => isTypeScript(f.lang)).map(f => f.line.trim());
+}
+
 export function extractFrom(kind, text, file) {
   const out = [];
-  const push = (code, index, lang) => {
+  const push = (code, index, lang, meta = "") => {
     const trimmed = code.trim();
-    if (trimmed) out.push({ file, index, code: trimmed, lang });
+    if (trimmed) out.push({ file, index, code: trimmed, lang, meta });
   };
   if (kind === "fenced-in-template-literal" || kind === "markdown-dir") {
     // A Markdown FILE is not a template literal, so its backslashes are already
@@ -123,10 +158,10 @@ export function extractFrom(kind, text, file) {
     const literal = kind === "fenced-in-template-literal";
     for (const m of text.matchAll(literal ? ESCAPED_FENCE : RAW_FENCE)) {
       // 1 is the container prefix, 2 the delimiter, 3 the language token,
-      // 4 the body.
+      // 4 the rest of the info string, 5 the body.
       if (!isTypeScript(m[3])) continue;
-      const body = stripContainer(m[4], m[1]);
-      push(literal ? unescapeTemplate(body) : body, out.length, m[3]);
+      const body = stripContainer(m[5], m[1]);
+      push(literal ? unescapeTemplate(body) : body, out.length, m[3], m[4]);
     }
   } else if (kind === "template-literal-consts") {
     // Exported const NAME = `...`; where the body is TypeScript, not Markdown.
@@ -156,8 +191,24 @@ export function extractFrom(kind, text, file) {
  * sample advertised as tsx would have been checked under rules a reader
  * pasting it never gets.
  */
-export const extensionFor = sample =>
-  sample.lang === "tsx" || looksLikeJsx(sample.code) ? "tsx" : "ts";
+export const extensionFor = sample => {
+  // A stated filename wins over anything inferred from the body. A fence
+  // headed `ts title="nextly.config.ts"` advertises the file a reader is meant
+  // to paste it into, and compiling it as TSX because it happens to contain
+  // angle brackets checks it under rules that reader never gets. 46 fences in
+  // these pages name a file, and the names carry real extensions.
+  //
+  // Not for a file this harness built, though. A rebuilt sample carries the
+  // original fence's metadata, and the concatenation of earlier fences in front
+  // of it is not the file that title names: forcing `.ts` on it when the pasted
+  // part contains JSX makes it fail to parse for a reason the page does not
+  // have. `prependedLines` is only set on a rebuild.
+  const stated = sample.prependedLines
+    ? undefined
+    : sample.meta?.match(/\.(tsx?)\b/)?.[1];
+  if (stated) return stated;
+  return sample.lang === "tsx" || looksLikeJsx(sample.code) ? "tsx" : "ts";
+};
 
 /**
  * A file the sample quotes and the reader writes: ./collections/Posts, or the
@@ -219,15 +270,76 @@ export const SUPPLIED_BY_THE_READER = [
  * own, and ten fences in the current tree do exactly that. Requiring a `from`
  * filed all ten as fragments, so the API mistakes inside them were never read;
  * the missing name they open with is what the continuation pass is for.
+ *
+ * Asked of the compiler, then widened by the two cases the compiler answers
+ * "no" to and this gate still wants compiled. Each is named with the reason it
+ * is asked separately, so the next addition has to state one too.
  */
-export const isModule = code =>
-  /^\s*import\b/m.test(code) ||
-  /^\s*export\b/m.test(code) ||
-  // CommonJS counts. A fence opening `const crypto = require("crypto")` is a
-  // program a reader runs, and requiring ESM syntax filed it as a fragment so
-  // nothing compiled it: the webhook-verification example on the form-builder
-  // page is exactly that shape, and its undefined names were never read.
-  /(?:^|[^.\w])require\s*\(/m.test(code);
+export const isModule = (code, extension = "tsx") => {
+  const parsed = parseSample(code, extension);
+  // The compiler's own answer, rather than a list of the node kinds that count.
+  // `externalModuleIndicator` is what TypeScript itself sets when it decides a
+  // file is a module, and it is the answer that governs how this fence would be
+  // compiled. Listing the kinds instead left the list one short in both
+  // directions: `import.meta.url` alone is a module to TypeScript and was read
+  // here as a fragment, and `import A = N.M` is an alias for a namespace rather
+  // than a load and was read here as a module. A list has a next omission and
+  // this does not.
+  if (ts.isExternalModule(parsed)) return true;
+
+  // A call to `require` or to `import`, anywhere in the tree. Both load a
+  // package exactly as a declaration does, and a fence opening
+  // `const crypto = require("crypto")` is a program a reader runs; requiring
+  // ESM syntax filed those as fragments so nothing compiled them. TypeScript
+  // does not call a CommonJS file an external module, so this is asked
+  // separately rather than left to the indicator.
+  //
+  // From the tree rather than from the text, because the text cannot tell a
+  // call from a mention: `// dynamically import("nextly")` in a comment, or
+  // `"import(x)"` in a string, made a fragment look like a module and had the
+  // audit compile a block it deliberately excludes. A property access named
+  // `require` or `import` is not a load either, and is not an identifier call.
+  let loads = false;
+  const walk = node => {
+    if (loads) return;
+    if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === "require"))
+    ) {
+      loads = true;
+      return;
+    }
+    ts.forEachChild(node, walk);
+  };
+  ts.forEachChild(parsed, walk);
+  if (loads) return true;
+
+  // A fence whose only module syntax is `export as namespace X` stays a
+  // fragment, deliberately.
+  //
+  // It reads like a hole: the fence is never compiled, so nothing in it is
+  // checked. It is not one. A fence that is not compiled still counts in its
+  // page's `samples`, and coverage is ratcheted per page in BOTH directions, so
+  // adding one fails the gate with `samples was 1, now 2` until somebody
+  // rewrites the baseline. Measured, by adding such a fence to a page and
+  // running the gate with this branch absent.
+  //
+  // Compiling it instead would cost more than it returns. The syntax belongs to
+  // a declaration file, and this harness cannot check one: `compileOnce` runs
+  // with `skipLibCheck`, under which a `.d.ts` body reports NOTHING — measured,
+  // a `.d.ts` declaring a field of a nonexistent type is silent while the same
+  // text as `.ts` reports TS2304. It also appends `export {}` to every sample,
+  // which makes a namespace-only declaration file valid and erases the one
+  // error a reader would meet. So compiling one would raise coverage while
+  // checking nothing, which is the defect this gate already has filed against
+  // `require()` fences.
+  //
+  // Doing it properly means a second program for declaration samples, with its
+  // own options and no appended export. Worth building when a page has one; no
+  // page does.
+  return false;
+};
 
 /**
  * The documentation this repository owns and publishes.
@@ -252,12 +364,30 @@ export function collectDocSamples() {
           ? [join(dir, e.name)]
           : []
     );
-  return walk(root).flatMap(full =>
-    extractFrom(
-      "markdown-dir",
-      readFileSync(full, "utf-8"),
-      relative(ROOT, full)
-    )
+  const pages = walk(root).map(full => ({
+    file: relative(ROOT, full),
+    text: readFileSync(full, "utf-8"),
+  }));
+  // A fence that never closes is checked here rather than inferred from a
+  // count, because on a page with no held count there is nothing for a count to
+  // fall below.
+  const broken = pages.flatMap(page =>
+    unterminatedFences(page.text).map(line => `${page.file}: ${line}`)
+  );
+  if (broken.length > 0) {
+    const detail = broken.map(line => `  ${line}`).join("\n");
+    const err = new Error(
+      `these TypeScript fences open and never close, so the samples in them ` +
+        `are not extracted and the rest of each page renders as code:\n${detail}`
+    );
+    // Marked, because the caller treats a failure to read the tree as a reason
+    // to stop quietly. This is the opposite: a page IS readable and is wrong,
+    // and stopping quietly is how a broken fence gets recorded as normal.
+    err.brokenFences = broken;
+    throw err;
+  }
+  return pages.flatMap(page =>
+    extractFrom("markdown-dir", page.text, page.file)
   );
 }
 
@@ -734,7 +864,10 @@ export function exportsMapAnswers(exports, subpath) {
  */
 export function declaredEarlier(name, file, index, samples) {
   return samples.some(
-    s => s.file === file && s.index < index && declaresName(s.code, name)
+    s =>
+      s.file === file &&
+      s.index < index &&
+      declaresName(s.code, name, extensionFor(s))
   );
 }
 
@@ -749,8 +882,8 @@ export function declaredEarlier(name, file, index, samples) {
  * and then not found when the rebuild went looking for it. The continuation was
  * never compiled.
  */
-export function declaresName(code, name) {
-  if (declaredNamesIn(code).includes(name)) return true;
+export function declaresName(code, name, extension = "tsx") {
+  if (declaredNamesIn(code, extension).includes(name)) return true;
   // An arrow or method bound without a declaration keyword: `handler: (req) =>`
   // in an object literal, or a property assignment. Not something
   // `declaredNamesIn` collects, because it is not a declaration, but a later
@@ -910,7 +1043,42 @@ function topLevelOnly(code) {
   return chars.join("");
 }
 
-export function declaredNamesIn(source) {
+/**
+ * The import declarations a source actually has.
+ *
+ * Parsed as TSX, because these samples are, and a parse never throws here: on
+ * malformed input TypeScript produces a tree with diagnostics rather than an
+ * exception, and a statement list that is short of a broken import is the right
+ * answer anyway.
+ */
+export function parseSample(source, extension = "tsx") {
+  return ts.createSourceFile(
+    `sample.${extension}`,
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    extension === "tsx" ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+}
+
+/**
+ * The import declarations a source actually has, read under the grammar the
+ * compiler will use for it.
+ *
+ * The two grammars disagree before they agree: `const id = <T>(x: T) => x;` is
+ * a generic arrow in `.ts` and an unclosed element in `.tsx`, and parsing a
+ * `.ts` sample as TSX produces a recovery tree that can drop every import after
+ * it. The fence still compiles, because compilation uses the right extension,
+ * so the names simply went missing and a later fence using one was reported as
+ * undefined rather than rebuilt with its context.
+ */
+function importsIn(source, extension) {
+  return parseSample(source, extension).statements.filter(
+    ts.isImportDeclaration
+  );
+}
+
+export function declaredNamesIn(source, extension = "tsx") {
   const code = topLevelOnly(source);
   const names = new Set();
   const add = n => {
@@ -947,27 +1115,23 @@ export function declaredNamesIn(source) {
       add(renamed ? renamed[1] : piece.match(/^[A-Za-z_$][\w$]*/)?.[0]);
     }
   }
-  // Imports are read from the ORIGINAL source, not the top-level view. An
-  // import clause spans lines and opens a brace, so blanking by depth erased
-  // the middle of `import {\n  defineConfig,\n} from "nextly"` and a later
-  // fence using the name was reported as undefined. An import binding is
-  // top-level wherever its clause happens to wrap.
-  for (const m of source.matchAll(/^\s*import\s+([^;]*?)\s+from\s/gms)) {
-    // `import type { Foo }` and `import type Foo`: the keyword belongs to the
-    // whole clause and is not a binding. Stripped here, before the braces
-    // become commas, so that what survives inside them is only bindings.
-    const clause = m[1].replace(/^type\s+/, "");
-    for (const part of clause.replace(/[{}]/g, ",").split(",")) {
-      // `import { type Foo }` binds Foo. Taking the first identifier recorded
-      // `type` and lost the name, so a later fence using it was reported as a
-      // missing name rather than rebuilt with its context: a false finding on a
-      // common syntax. The keyword is dropped only when an identifier follows
-      // it, because `import { type }` legally binds something called `type`.
-      const piece = part.trim().replace(/^type\s+(?=[A-Za-z_$])/, "");
-      if (!piece) continue;
-      const alias = piece.match(/\bas\s+([A-Za-z_$][\w$]*)$/);
-      add(alias ? alias[1] : piece.match(/^[A-Za-z_$][\w$]*/)?.[0]);
-    }
+  // Imports come from the PARSE, not from a pattern over the text. They cannot
+  // be read from the top-level view either: an import clause opens a brace, so
+  // masking by depth erases the middle of `import {\n  defineConfig,\n} from
+  // "nextly"` and a later fence using the name reads as undefined. Reading the
+  // raw text instead recorded an `import { ghost } from "pkg"` written inside a
+  // block comment or a template literal as a real binding, which then excused a
+  // fence that used `ghost` as a continuation of a page that never bound it. A
+  // parser has neither problem: a comment produces no statement, and a wrapped
+  // clause is one statement however it is laid out.
+  for (const statement of importsIn(source, extension)) {
+    const clause = statement.importClause;
+    if (!clause) continue;
+    if (clause.name) add(clause.name.text);
+    const bindings = clause.namedBindings;
+    if (!bindings) continue;
+    if (ts.isNamespaceImport(bindings)) add(bindings.name.text);
+    else for (const element of bindings.elements) add(element.name.text);
   }
   return [...names];
 }
@@ -991,7 +1155,7 @@ export function declaredNamesIn(source) {
  * program a reader pastes. `await nextly.logout()` calls a value an earlier
  * fence built, and is.
  */
-export function declaredValuesIn(source) {
+export function declaredValuesIn(source, extension = "tsx") {
   const code = topLevelOnly(source);
   const names = new Set();
   for (const m of code.matchAll(
@@ -1037,7 +1201,9 @@ export function inheritedNames(sample, samples) {
     // `radio({ ... })` on the field catalogue out: it mentions `option`, which
     // an earlier fence imported, and is a shape being illustrated rather than a
     // program a reader pastes.
-    const values = earlier.flatMap(s => declaredValuesIn(s.code));
+    const values = earlier.flatMap(s =>
+      declaredValuesIn(s.code, extensionFor(s))
+    );
     const callsOne = values.some(name =>
       new RegExp(
         `\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[.(]`
@@ -1045,11 +1211,13 @@ export function inheritedNames(sample, samples) {
     );
     if (!callsOne) return [];
   }
-  const declared = new Set(earlier.flatMap(s => declaredNamesIn(s.code)));
+  const declared = new Set(
+    earlier.flatMap(s => declaredNamesIn(s.code, extensionFor(s)))
+  );
   const used = new Set(
     [...sample.code.matchAll(/[A-Za-z_$][\w$]*/g)].map(m => m[0])
   );
-  const own = new Set(declaredNamesIn(sample.code));
+  const own = new Set(declaredNamesIn(sample.code, extensionFor(sample)));
   return [...declared].filter(n => used.has(n) && !own.has(n));
 }
 
@@ -1098,7 +1266,7 @@ export function withEarlierContext(sample, missingNames, samples) {
   // identifiers — a fence is pulled in only when the page really does define
   // what it is being pulled in for.
   const declaredEarlierOnThePage = new Set(
-    earlier.flatMap(s => declaredNamesIn(s.code))
+    earlier.flatMap(s => declaredNamesIn(s.code, extensionFor(s)))
   );
   const chosen = new Map();
   const wanted = [...missingNames];
@@ -1112,7 +1280,7 @@ export function withEarlierContext(sample, missingNames, samples) {
     );
     if (!nearest || chosen.has(nearest.index)) continue;
     chosen.set(nearest.index, nearest);
-    const own = new Set(declaredNamesIn(nearest.code));
+    const own = new Set(declaredNamesIn(nearest.code, extensionFor(nearest)));
     for (const m of nearest.code.matchAll(/[A-Za-z_$][\w$]*/g)) {
       const used = m[0];
       if (!own.has(used) && declaredEarlierOnThePage.has(used)) {
@@ -1123,10 +1291,29 @@ export function withEarlierContext(sample, missingNames, samples) {
   const needed = [...chosen.values()].sort((a, b) => a.index - b.index);
   if (needed.length === 0) return null;
   const prefix = needed.map(s => s.code).join("\n\n");
+  // Which fence each prepended line came from, as line ranges over the prefix.
+  // A diagnostic landing up there is about one of these blocks, and without
+  // this the only thing known about it is that it was not the reader's fence,
+  // which is not enough to report it against anything.
+  //
+  // The join puts one blank line between blocks, so each block advances the
+  // cursor by its own line count plus that separator.
+  const pastedFrom = [];
+  let cursor = 1;
+  for (const block of needed) {
+    const lines = block.code.split("\n").length;
+    pastedFrom.push({
+      origin: `${block.file}#${String(block.index)}`,
+      from: cursor,
+      to: cursor + lines - 1,
+    });
+    cursor += lines + 1;
+  }
   return {
     ...sample,
     code: `${prefix}\n\n${sample.code}`,
     prependedLines: prefix.split("\n").length + 1,
+    pastedFrom,
   };
 }
 
@@ -1256,6 +1443,13 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
     uncheckedSamples,
     readerFiles,
     implicitAny,
+    // Every diagnostic that came in, so a caller can prove it kept them all.
+    // The buckets above are a partition, and the audit's job is to record each
+    // one somewhere the ratchet can see. Four times a bucket was reported to
+    // the console and left out of the baseline, and each fix enumerated the
+    // buckets it knew about, which is why a fifth kept being available. A count
+    // the caller can check does not depend on anybody remembering.
+    total: diagnostics.length,
   };
 }
 
@@ -1286,16 +1480,28 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
 export const clashingName = line =>
   line.match(/error TS(?:2300|2451|2528): [^']*'([^']+)'/)?.[1];
 
-export function rebaseContextDiagnostics({ lines, prependedByOrigin }) {
+export function rebaseContextDiagnostics({
+  lines,
+  prependedByOrigin,
+  pastedFromByOrigin = new Map(),
+}) {
   const out = [];
   const unresolvedInContext = new Set();
   // Names that clash because a declaration was PASTED IN. A clash the fence
   // already had with itself is the page's own defect and is reported.
   const clashesFromPasting = new Set();
+  // The lines those names came from, kept so the partition below can be counted
+  // rather than trusted: two clashes on one name collapse into a single set
+  // entry, and a set cannot say how many lines it consumed.
+  const artefacts = [];
   // An implicit `any` on a parameter of an INHERITED block. It says nothing
   // about whether the rebuild worked, so it must not make the sample unchecked,
   // and it is still a diagnostic somebody should see.
   const implicitAnyInContext = [];
+  // Diagnostics about the pasted region that this construction did not invent.
+  // The origin alone used to come back and the line was dropped, which named
+  // the sample unchecked in the report and put nothing anywhere the gate reads.
+  const contextOnly = [];
   for (const line of lines) {
     const [where, ...rest] = line.split("  ");
     const cut = where.lastIndexOf(":");
@@ -1322,22 +1528,63 @@ export function rebaseContextDiagnostics({ lines, prependedByOrigin }) {
       // own code is never read at all. Enumerating error codes missed that
       // third one, so the rule is the complement instead.
       if (CONCATENATION_ARTEFACT.test(line)) {
+        artefacts.push(line);
         const name = clashingName(line);
         if (name) clashesFromPasting.add(`${origin}\u0000${name}`);
       } else if (IMPLICIT_ANY_PARAMETER.test(line)) {
         implicitAnyInContext.push(line);
       } else {
         unresolvedInContext.add(origin);
+        // Reported against the block that produced it, at that block's own line
+        // number, which is the same line it would carry had the block been
+        // compiled alone. Charging it to the fence that merely inherited the
+        // declaration points a reader at code that is not the problem, and
+        // leaves the diagnostic with an identity no other pass can match.
+        const source = (pastedFromByOrigin.get(origin) ?? []).find(
+          range => lineNo >= range.from && lineNo <= range.to
+        );
+        contextOnly.push(
+          source
+            ? `${source.origin}:${String(lineNo - source.from + 1)}  ${rest.join("  ")}`
+            : line
+        );
       }
       continue;
     }
     out.push(`${origin}:${String(lineNo - prepended)}  ${rest.join("  ")}`);
   }
+  // Every line in, exactly once out. This partition runs BEFORE the classifier,
+  // so the conservation check the classifier's own output is held to cannot see
+  // it: a line dropped here was never in the total that check compares. That is
+  // how the origin-only branch above hid a real diagnostic behind a sample the
+  // report merely called unchecked.
+  //
+  // EXACT, not "at least", for the same reason as the one downstream: a bucket
+  // added later is caught by the equality breaking rather than by anybody
+  // remembering to extend a list.
+  const partitioned =
+    out.length +
+    artefacts.length +
+    implicitAnyInContext.length +
+    contextOnly.length;
+  if (partitioned !== lines.length) {
+    throw new Error(
+      `doc samples: the context recompile produced ${String(lines.length)} ` +
+        `diagnostic(s) and ${String(partitioned)} were partitioned. One is ` +
+        `going nowhere, and nothing downstream can see a line this pass drops.`
+    );
+  }
   return {
     lines: out,
     unresolvedInContext,
     clashesFromPasting,
+    // The artefact lines themselves, not only the names taken from them, so the
+    // four-way partition can be counted from outside as well as inside. An
+    // invariant only its own function can check is one nobody else can hold it
+    // to when a fifth bucket is added.
+    artefacts,
     implicitAnyInContext,
+    contextOnly,
   };
 }
 
@@ -1352,6 +1599,44 @@ export function rebaseContextDiagnostics({ lines, prependedByOrigin }) {
  * rather than about this checker. So the report states its own basis, and a
  * finding can be weighed against it.
  */
+/**
+ * The context-only diagnostics a recompile is the first pass to see.
+ *
+ * Deduped on the DECLARING fence and the message, which is what an identity is,
+ * rather than on the message alone. These lines carry the origin of the block
+ * that produced them, so a repeat is a repeat about the same fence. Matching on
+ * message text across the whole corpus threw away a real diagnostic whenever any
+ * other page happened to say `Cannot find name 'Foo'`, which is ratcheting on
+ * counts rather than on identities, one level down.
+ *
+ * Still a dedup rather than nothing: a pasted block that was itself a module was
+ * compiled and judged on its own in the first pass, and a block pasted into four
+ * continuations arrives here four times.
+ */
+export function contextOnlyWorthRecording({ contextOnly, firstPass }) {
+  // The whole rebased line: page, fence, LINE NUMBER and message.
+  //
+  // Not the baseline identity, which drops the line number on purpose so a
+  // finding that moves down a fence stays the same finding. Used as a dedup key
+  // that is wrong in both directions: `docs/a.mdx#1` and `docs/elsewhere.mdx#1`
+  // become one diagnostic, and one fence saying `Cannot find name 'Foo'` on two
+  // lines becomes one occurrence, while the fingerprint downstream counts
+  // occurrences. A second identical error would then move nothing.
+  //
+  // The line numbers do match across the two passes: a pasted block is its own
+  // code verbatim, and these lines have already been rebased onto it, so the
+  // location a first-pass compile reported is the location this one reports.
+  const reportedAlready = new Set(firstPass);
+  const seen = new Set();
+  const worth = [];
+  for (const line of contextOnly) {
+    if (reportedAlready.has(line) || seen.has(line)) continue;
+    seen.add(line);
+    worth.push(line);
+  }
+  return worth;
+}
+
 export function auditBasis() {
   let pkg = "an unreadable nextly";
   try {
@@ -1388,11 +1673,39 @@ export const pageOf = line => {
  * on the next fetch, so a red here would be a red this repository cannot clear,
  * and a check that cannot be cleared teaches people to ignore it.
  */
+/**
+ * How many diagnostics the classifier produced that nobody kept.
+ *
+ * Zero is the only acceptable answer: `real` is charged to a page, the other
+ * buckets are set aside by identity, and `continued` comes back through this
+ * same partition after its recompile. Anything else is a class of diagnostic
+ * the gate cannot see, which is the shape of every bucket that has escaped.
+ *
+ * `unchecked` is deliberately not a term: the classifier appends it to `real`
+ * before returning, so counting it again would inflate the sum and let a
+ * missing bucket hide behind the surplus. That is the same mistake as comparing
+ * against the whole set-aside list, which carries entries added before
+ * classification.
+ */
+export function unaccountedFor({
+  total,
+  real,
+  continued,
+  readerFiles,
+  uninstalled,
+  implicitAny,
+}) {
+  return total - (real + continued + readerFiles + uninstalled + implicitAny);
+}
+
 async function auditDocs() {
   let all;
   try {
     all = collectDocSamples();
   } catch (err) {
+    // A malformed page is a finding, not a reason to stop looking. Only an
+    // unreadable tree is the latter.
+    if (err.brokenFences) throw err;
     console.log(
       `docs: the tree is present but incomplete, so nothing was audited.\n  ${String(err.message ?? err)}`
     );
@@ -1411,7 +1724,7 @@ async function auditDocs() {
   // that introduces a value in a fence with no import of its own, and uses it
   // in the next one, is a documentation shape, and reading it as an undefined
   // name would put a finding on the page that a reader never meets.
-  const samples = all.filter(s => isModule(s.code));
+  const samples = all.filter(s => isModule(s.code, extensionFor(s)));
   // Everything the gate ignores EXCEPT the reader's own files: those are kept
   // so the samples carrying them can be named unchecked rather than counted as
   // compiled clean.
@@ -1479,7 +1792,7 @@ async function auditDocs() {
   // keeps this from compiling things that are not programs.
   const continuedWithoutImports = new Set();
   for (const sample of all) {
-    if (isModule(sample.code)) continue;
+    if (isModule(sample.code, extensionFor(sample))) continue;
     const names = inheritedNames(sample, all);
     if (names.length === 0) continue;
     const withContext = withEarlierContext(sample, names, all);
@@ -1521,10 +1834,14 @@ async function auditDocs() {
       unresolvedInContext,
       clashesFromPasting,
       implicitAnyInContext,
+      contextOnly,
     } = rebaseContextDiagnostics({
       lines: contextDiagnostics,
       prependedByOrigin: new Map(
         rebuilt.map(s => [`${s.file}#${String(s.index)}`, s.prependedLines])
+      ),
+      pastedFromByOrigin: new Map(
+        rebuilt.map(s => [`${s.file}#${String(s.index)}`, s.pastedFrom ?? []])
       ),
     });
     for (const origin of unresolvedInContext) notReallyRebuilt.add(origin);
@@ -1539,6 +1856,28 @@ async function auditDocs() {
     for (const line of implicitAnyInContext) {
       if (!seen.has(messageOf(line))) fromInheritedBlocks.push(line);
     }
+    // Everything else the recompile said about a pasted declaration, set aside
+    // by identity under the same rule. Only the origin used to come back: the
+    // report named the sample unchecked and the line went nowhere, so a new
+    // diagnostic in an inherited declaration moved no number the gate compares
+    // and a fence could stop being checked while the baseline still passed.
+    //
+    // Deduped on the DECLARING fence and the message, not on the message alone.
+    // These lines now carry the origin of the block that produced them, so a
+    // repeat is a repeat about the same fence. Matching on message text across
+    // the whole corpus would have thrown away a real diagnostic whenever any
+    // other page happened to say `Cannot find name 'Foo'`, which is the same
+    // mistake as ratcheting on counts rather than identities.
+    //
+    // Still a dedup rather than nothing: a pasted block that was itself a
+    // module was compiled and judged on its own in the first pass, and a block
+    // pasted into four continuations arrives four times here.
+    setAside.push(
+      ...contextOnlyWorthRecording({ contextOnly, firstPass }).map(text => ({
+        mark: "context",
+        text,
+      }))
+    );
     // Deduped against the first pass, because the recompile exists to surface
     // what could not be seen before, not to repeat what could. Except the
     // survivors above: their first-pass copy was filed as a continuation, so
@@ -1610,6 +1949,7 @@ async function auditDocs() {
     uncheckedSamples,
     readerFiles,
     implicitAny,
+    total: classified,
   } = await classifyDocDiagnostics({
     diagnostics: [...firstPass, ...fromContext],
     samples: all,
@@ -1625,6 +1965,12 @@ async function auditDocs() {
     // not see.
     ...implicitAny.map(text => ({ mark: "implicit-any", text })),
     ...fromInheritedBlocks.map(text => ({ mark: "implicit-any", text })),
+    // An import of a package that is published but not installed here. The
+    // reader has it and this checkout does not, so the page is not charged.
+    // TypeScript types everything reached through that import as `any` all the
+    // same, so misspelling a package name removed a fence's checking while
+    // moving no number: the fourth bucket to do exactly that.
+    ...uninstalled.map(text => ({ mark: "uninstalled", text })),
     // An import of a file only the reader has. It is right not to charge the
     // page, since the file legitimately is not here. But the binding becomes
     // `any`, so everything reached through it stops being checked while the
@@ -1632,6 +1978,36 @@ async function auditDocs() {
     // is what stops one quietly joining them.
     ...readerFiles.map(text => ({ mark: "reader-file", text }))
   );
+
+  // Nothing may be dropped on the floor. `real` is charged to a page, the
+  // classifier's other buckets are set aside by identity, and `continued` is
+  // recompiled and comes back through this same partition; a diagnostic in
+  // none of them is one the gate cannot see, which is the shape of every
+  // bucket that has escaped so far.
+  //
+  // EXACT, not "at least". Comparing against the whole of `setAside` counted
+  // entries added before classification, the first pass's suppressions among
+  // them, and that surplus could cover for a bucket left out of both sides. An
+  // equality over the classifier's own output has nothing to hide behind.
+  //
+  // `unchecked` is not added: the classifier appends it to `real` before
+  // returning, so counting it again would be the same surplus one line down.
+  const missing = unaccountedFor({
+    total: classified,
+    real: real.length,
+    continued: continued.length,
+    readerFiles: readerFiles.length,
+    uninstalled: uninstalled.length,
+    implicitAny: implicitAny.length,
+  });
+  if (missing !== 0) {
+    throw new Error(
+      `doc samples: the classifier produced ${String(classified)} diagnostic(s) ` +
+        `and ${String(classified - missing)} were accounted for. A bucket has ` +
+        `to be charged to a page or recorded by identity, not just reported: ` +
+        `the gate cannot see one that is neither.`
+    );
+  }
 
   // The survivors are actionable, and their first-pass copies stop counting as
   // continuations: the same page and the same name, whatever line each landed
@@ -1817,6 +2193,7 @@ export function compareToBaseline({
   const mine = file => only === null || file === only;
 
   const lost = [];
+  const gained = [];
   if (only === null) {
     const seen = {
       pages: coverage.files.length,
@@ -1826,6 +2203,14 @@ export function compareToBaseline({
     for (const [what, was] of Object.entries(baseline.coverage ?? {})) {
       if ((seen[what] ?? 0) < was) {
         lost.push(`${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`);
+      }
+      // A GAIN has to be recorded too, or it is not protected. Accepting one
+      // silently meant a fence added today could be deleted tomorrow, returning
+      // every count to what the baseline holds, and both changes passed: a
+      // ratchet that only resists decreases from a number nobody updates
+      // protects the corpus as it was and nothing since.
+      if ((seen[what] ?? 0) > was) {
+        gained.push(`${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`);
       }
     }
   }
@@ -1838,6 +2223,18 @@ export function compareToBaseline({
           `${file}: ${what} was ${String(was[what])}, now ${String(now[what] ?? 0)}`
         );
       }
+      if ((now[what] ?? 0) > (was[what] ?? 0)) {
+        gained.push(
+          `${file}: ${what} was ${String(was[what])}, now ${String(now[what] ?? 0)}`
+        );
+      }
+    }
+  }
+  // A page the baseline has never seen is a gain as well.
+  for (const file of coverage.files) {
+    if (!mine(file)) continue;
+    if (!(baseline.samplesPerPage ?? {})[file]) {
+      gained.push(`${file}: not in the baseline`);
     }
   }
 
@@ -1875,7 +2272,7 @@ export function compareToBaseline({
       better.push(`${file}: allowed ${String(cap)}, found ${String(count)}`);
   }
 
-  return { lost, appeared, gone, worse, better };
+  return { lost, gained, appeared, gone, worse, better };
 }
 
 /**
@@ -1883,7 +2280,10 @@ export function compareToBaseline({
  * Shared by the repository-wide and single-page paths so the two cannot drift
  * into telling a contributor different things about the same state.
  */
-function reportComparison({ lost, appeared, gone, worse, better }, findings) {
+function reportComparison(
+  { lost, gained, appeared, gone, worse, better },
+  findings
+) {
   if (lost.length > 0) {
     console.error(
       "\ndoc samples: fewer samples are being checked than the baseline records. " +
@@ -1891,6 +2291,16 @@ function reportComparison({ lost, appeared, gone, worse, better }, findings) {
         "was fixed. If the loss is intended, rewrite the baseline and say why.\n"
     );
     for (const line of lost) console.error(`  ${line}`);
+    return true;
+  }
+
+  if ((gained ?? []).length > 0) {
+    console.error(
+      "\ndoc samples: more samples are being checked than the baseline records, " +
+        "which is good news it has not been told. Rewrite it so the gate starts " +
+        "protecting them; until then they can be deleted again for free.\n"
+    );
+    for (const line of gained) console.error(`  ${line}`);
     return true;
   }
 

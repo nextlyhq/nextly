@@ -256,3 +256,161 @@ export function respondBulkUpload<T>(
     init
   );
 }
+
+/**
+ * Say that a response belongs to ONE caller's session.
+ *
+ * A session-gated response is otherwise an ordinary cacheable one, so a shared
+ * proxy may retain one caller's payload and serve it to the next request
+ * without the authentication check running again. `Vary: Cookie` states what
+ * the response depends on, for any cache that stores it regardless.
+ *
+ * Applied to the REFUSAL as well as the answer, wherever it is used. A cached
+ * 401 replayed to a request that does carry a session is the same defect
+ * pointing the other way, and it is the direction that looks like a working
+ * gate.
+ *
+ * Over HEADERS rather than over a Response, because the two callers hold
+ * different things: one owns a response it may mutate, and the plugin-route
+ * dispatch is rebuilding headers it does not own — a handler may return a
+ * response whose headers are immutable, and setting one on that throws. Both
+ * go through here so "private" has one definition rather than two that agree
+ * until someone edits one.
+ */
+export function applySessionCacheHeaders(headers: Headers): void {
+  headers.set(
+    "Cache-Control",
+    privateCacheControl(headers.get("Cache-Control"))
+  );
+  headers.set("Vary", varyingOnCredentials(headers.get("Vary")));
+}
+
+/**
+ * Directives that cannot stand beside `private, no-store`.
+ *
+ * `public` is its opposite. The freshness family describes how long a stored
+ * response stays usable, which is a statement about a response that may be
+ * stored — so leaving them beside `no-store` publishes two rules that
+ * contradict each other and lets a cache follow whichever it prefers.
+ *
+ * Everything NOT listed survives, which is the point of listing rather than
+ * replacing: `no-transform` forbids a proxy rewriting the body and remains
+ * meaningful, and so does `must-revalidate`. A handler that asked for one had a
+ * reason this boundary does not know.
+ */
+const CACHE_DIRECTIVES_REPLACED = new Set([
+  "public",
+  "max-age",
+  "s-maxage",
+  "immutable",
+  "stale-while-revalidate",
+  "stale-if-error",
+]);
+
+/** The directive's name, without whatever value it carries. */
+function directiveName(directive: string): string {
+  return (directive.split("=", 1)[0] ?? "").trim().toLowerCase();
+}
+
+/**
+ * One header's comma-separated members, respecting quoted values.
+ *
+ * A plain `split(",")` is wrong for `Cache-Control`, because a directive may
+ * carry a QUOTED field list: `private="Set-Cookie, X-User"` is one directive
+ * and splitting it produced two — the first discarded as `private`, the second
+ * surviving as the fragment `X-User"`, so this boundary emitted a malformed
+ * header and a strict intermediary could reject the privacy directives along
+ * with it. Measured on that input before the fix: `private, no-store, X-User"`.
+ *
+ * Backslash escapes are honoured inside a quoted string, so a quote written as
+ * part of a value does not end it.
+ */
+function splitOutsideQuotes(value: string): string[] {
+  const members: string[] = [];
+  let current = "";
+  let quoted = false;
+  let escaped = false;
+  for (const char of value) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+    } else if (quoted && char === "\\") {
+      current += char;
+      escaped = true;
+    } else if (char === '"') {
+      quoted = !quoted;
+      current += char;
+    } else if (char === "," && !quoted) {
+      members.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  members.push(current);
+  return members.map(member => member.trim()).filter(member => member !== "");
+}
+
+/**
+ * `Cache-Control` that says private, keeping what the handler already said.
+ *
+ * Merged rather than replaced. A handler that had set `no-transform` lost it,
+ * and it is orthogonal to privacy — the response is still not to be rewritten
+ * in flight whether or not a cache may keep it.
+ */
+function privateCacheControl(existing: string | null): string {
+  const kept = splitOutsideQuotes(existing ?? "").filter(directive => {
+    const name = directiveName(directive);
+    return (
+      !CACHE_DIRECTIVES_REPLACED.has(name) &&
+      name !== "private" &&
+      name !== "no-store"
+    );
+  });
+  // The privacy directives lead, so a reader sees the binding rule first.
+  return ["private", "no-store", ...kept].join(", ");
+}
+
+/**
+ * The credentials a session-gated response can depend on.
+ *
+ * BOTH, because either can identify the caller. A cookie is the browser's way
+ * in; `Authorization: Bearer` is an API key's, and `requireAuthentication`
+ * accepts one — with that key's own user, roles and permissions. Naming only
+ * the cookie gives two different API keys the same cache key, so for any
+ * intermediary that stores despite `no-store` — the fallback this header exists
+ * for — the first key's answer can be replayed to the second.
+ */
+const SESSION_CREDENTIAL_FIELDS = ["Cookie", "Authorization"] as const;
+
+/**
+ * `Vary` naming every credential the answer depends on, keeping what the
+ * response already varied on.
+ *
+ * Replacing it was the defect: a response varying on `Accept-Language` became
+ * one varying only on `Cookie`, so a cache could answer a second language from
+ * the first one's stored copy — the same session, the wrong representation.
+ *
+ * `*` is left alone. It already means "vary on everything", and narrowing it to
+ * a list would widen what may be shared.
+ */
+function varyingOnCredentials(existing: string | null): string {
+  const fields = (existing ?? "")
+    .split(",")
+    .map(field => field.trim())
+    .filter(field => field !== "");
+  if (fields.includes("*")) return "*";
+  const seen = new Set(fields.map(field => field.toLowerCase()));
+  for (const field of SESSION_CREDENTIAL_FIELDS) {
+    if (seen.has(field.toLowerCase())) continue;
+    fields.push(field);
+    seen.add(field.toLowerCase());
+  }
+  return fields.join(", ");
+}
+
+/** {@link applySessionCacheHeaders} for a response the caller owns. */
+export function withSessionCacheHeaders(response: Response): Response {
+  applySessionCacheHeaders(response.headers);
+  return response;
+}
