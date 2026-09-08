@@ -3829,6 +3829,40 @@ describe("a document whose branches share one object", () => {
     expect(deep / Math.max(shallow, 0.05)).toBeLessThan(8);
   });
 
+  it("refuses a NaN cap before walking, not after", () => {
+    // `NaN + 1` is `NaN`, and every `read >= NaN` is false — so a caller's bad
+    // configuration REMOVES the budget rather than exceeding it, and the walk
+    // this bound exists to stop runs in full before anything rejects the
+    // configuration. The published limit rule already refuses that.
+    //
+    // Asserted as a RATIO between two depths, not as a throw: the configuration
+    // is rejected later in the component planner too, so `toThrow` alone passes
+    // just as well on the unbounded version — after it has done the work.
+    const spent = (depth: number): number => {
+      const doc = pageWith(depth);
+      const start = performance.now();
+      try {
+        planSaveAsComponent(
+          doc,
+          ["mine"],
+          componentTarget,
+          { properties: [] },
+          anyParent,
+          { ...DEFAULT_LIMITS, maxNodes: Number.NaN }
+        );
+      } catch {
+        // The refusal is the point; what this measures is when it arrives.
+      }
+      return performance.now() - start;
+    };
+    spent(10);
+
+    const shallow = spent(12);
+    const deep = spent(18);
+
+    expect(deep / Math.max(shallow, 0.05)).toBeLessThan(8);
+  });
+
   it("still plans when the sharing is somewhere the save is not", () => {
     // The control, and it has to put the sharing OUTSIDE the run: a shared
     // object inside the selection is one id on two nodes, which the shape rule

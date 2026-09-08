@@ -43,7 +43,11 @@ import type {
 } from "./document";
 import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import type { DocumentLimits } from "./limits";
-import { surveyDocument, type DocumentSurvey } from "./measure-bytes";
+import {
+  boundedLimit,
+  surveyDocument,
+  type DocumentSurvey,
+} from "./measure-bytes";
 import {
   placementVerdict,
   type NestingRefusal,
@@ -3803,6 +3807,15 @@ function renameScopes(
   //
   // `maxNodes + 1`, so reading the last one is proof there are more than the
   // cap rather than proof the document ends exactly at it.
+  //
+  // Through the PUBLISHED limit rule, not a comparison of this file's own. A
+  // `NaN` cap fails in the silent direction: `NaN + 1` is `NaN`, every
+  // `read >= NaN` is false, and the budget is REMOVED rather than exceeded — so
+  // the exponential walk this bound exists to stop runs in full, before the
+  // caller's configuration is rejected anywhere else. `boundedLimit` already
+  // refuses that, and admits `Infinity`, which is the supported way to ask for
+  // no cap at all.
+  const cap = boundedLimit(limits.maxNodes, "maxNodes", "renameScopes");
   walkNodes(
     [...nodes],
     (node, parent) => {
@@ -3863,7 +3876,7 @@ function renameScopes(
       if (inherited !== undefined) scopes.set(node, inherited);
     },
     {
-      maxNodes: limits.maxNodes + 1,
+      maxNodes: cap + 1,
       onBudgetSpent: () => {
         overCap = true;
       },
