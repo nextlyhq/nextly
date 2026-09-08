@@ -1,3 +1,7 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
@@ -5,6 +9,7 @@ import {
   compareToBaseline,
   compile,
   contextOnlyWorthRecording,
+  deprecatedPropertiesIn,
   declaredNamesIn,
   extensionFor,
   extractFrom,
@@ -930,5 +935,157 @@ describe("contextOnlyWorthRecording deduplicates on identity", () => {
   it("records a block pasted into several continuations once", () => {
     const contextOnly = [missingFoo("docs/a.mdx#1", 3), missingFoo("docs/a.mdx#1", 3)];
     expect(contextOnlyWorthRecording({ contextOnly, firstPass: [] })).toHaveLength(1);
+  });
+});
+
+describe("a sample that writes a property the API has deprecated", () => {
+  /** A two-file program: one declaring the API, one writing against it. */
+  const program = source => {
+    const dir = mkdtempSync(join(tmpdir(), "deprecated-"));
+    writeFileSync(
+      join(dir, "api.ts"),
+      [
+        "export interface Plugin {",
+        "  /** @deprecated Prefer contributes.collections */",
+        "  collections?: string[];",
+        "  contributes?: { collections?: string[] };",
+        "  admin?: { order?: number };",
+        "}",
+        "",
+      ].join("\n")
+    );
+    writeFileSync(join(dir, "use.ts"), source);
+    const files = [join(dir, "api.ts"), join(dir, "use.ts")];
+    const built = ts.createProgram(files, {
+      noEmit: true,
+      strict: true,
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.ESNext,
+      skipLibCheck: true,
+    });
+    return {
+      dir,
+      sourceFile: built.getSourceFile(join(dir, "use.ts")),
+      checker: built.getTypeChecker(),
+      program: built,
+      files,
+    };
+  };
+
+  const namesFlaggedIn = source => {
+    const { sourceFile, checker, dir } = program(source);
+    try {
+      return deprecatedPropertiesIn(sourceFile, checker).map(d => d.name);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it("names the deprecated property and leaves its siblings alone", () => {
+    expect(
+      namesFlaggedIn(
+        'import type { Plugin } from "./api";\n' +
+          'export const p: Plugin = { collections: ["a"], admin: { order: 1 } };\n'
+      )
+    ).toEqual(["collections"]);
+  });
+
+  it("judges a nested literal against its own property's type", () => {
+    // `contributes.collections` is a different property from the one beside
+    // it, and only one of the two is deprecated. A check that matched on the
+    // name would fail this.
+    expect(
+      namesFlaggedIn(
+        'import type { Plugin } from "./api";\n' +
+          'export const p: Plugin = { contributes: { collections: ["a"] } };\n'
+      )
+    ).toEqual([]);
+  });
+
+  it("skips a literal with no declared shape to be judged against", () => {
+    // Nothing contextual, so nothing can be deprecated against it. This is
+    // what keeps the check narrow rather than matching every property named
+    // `collections` in the corpus.
+    expect(
+      namesFlaggedIn('export const p = { collections: ["a"] };\n')
+    ).toEqual([]);
+  });
+
+  it("carries the deprecation's own note, which is where the fix is written", () => {
+    const { sourceFile, checker, dir } = program(
+      'import type { Plugin } from "./api";\n' +
+        'export const p: Plugin = { collections: ["a"] };\n'
+    );
+    try {
+      expect(deprecatedPropertiesIn(sourceFile, checker)[0].note).toBe(
+        "Prefer contributes.collections"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("is not something TypeScript already reports", () => {
+    // The control, and the whole reason this function exists. Adding
+    // suggestion diagnostics was the obvious answer and does not work: a
+    // deprecated FUNCTION is reported, a deprecated property written in an
+    // object literal is not, and the corpus's suggestions are otherwise
+    // "declared but never read" on samples that show a shape rather than run.
+    const { files, program: built, dir } = program(
+      'import type { Plugin } from "./api";\n' +
+        'export const p: Plugin = { collections: ["a"] };\n'
+    );
+    try {
+      const service = ts.createLanguageService({
+        getScriptFileNames: () => files,
+        getScriptVersion: () => "1",
+        getScriptSnapshot: f =>
+          ts.ScriptSnapshot.fromString(readFileSync(f, "utf-8")),
+        getCurrentDirectory: () => dir,
+        getCompilationSettings: () => built.getCompilerOptions(),
+        getDefaultLibFileName: o => ts.getDefaultLibFilePath(o),
+        fileExists: ts.sys.fileExists,
+        readFile: ts.sys.readFile,
+        readDirectory: ts.sys.readDirectory,
+        directoryExists: ts.sys.directoryExists,
+        getDirectories: ts.sys.getDirectories,
+      });
+      const reported = files.flatMap(f =>
+        service.getSuggestionDiagnostics(f).filter(d => d.reportsDeprecated)
+      );
+      expect(reported).toEqual([]);
+      // And the control on the control: the same service DOES report a
+      // deprecated call, so the empty result above is a limit of what
+      // TypeScript reports rather than a service that answers nothing.
+      const fnDir = mkdtempSync(join(tmpdir(), "deprecated-fn-"));
+      const fnFile = join(fnDir, "fn.ts");
+      writeFileSync(
+        fnFile,
+        "/** @deprecated */\nfunction old(): void {}\nold();\nexport {};\n"
+      );
+      const fnProgram = ts.createProgram([fnFile], { noEmit: true });
+      const fnService = ts.createLanguageService({
+        getScriptFileNames: () => [fnFile],
+        getScriptVersion: () => "1",
+        getScriptSnapshot: f =>
+          ts.ScriptSnapshot.fromString(readFileSync(f, "utf-8")),
+        getCurrentDirectory: () => fnDir,
+        getCompilationSettings: () => fnProgram.getCompilerOptions(),
+        getDefaultLibFileName: o => ts.getDefaultLibFilePath(o),
+        fileExists: ts.sys.fileExists,
+        readFile: ts.sys.readFile,
+        readDirectory: ts.sys.readDirectory,
+        directoryExists: ts.sys.directoryExists,
+        getDirectories: ts.sys.getDirectories,
+      });
+      expect(
+        fnService
+          .getSuggestionDiagnostics(fnFile)
+          .filter(d => d.reportsDeprecated).length
+      ).toBeGreaterThan(0);
+      rmSync(fnDir, { recursive: true, force: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

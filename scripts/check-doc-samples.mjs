@@ -680,6 +680,25 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
 
     // The API's own split. Nothing here guesses from the error code.
     const unparsed = program.getSyntacticDiagnostics().map(render).filter(keep);
+    // Deprecations, asked of the checker rather than read off the diagnostics,
+    // for the reason written on `deprecatedPropertiesIn`. Rendered in the same
+    // shape as everything else and put in the same list, so the classifier
+    // charges the page and the conservation count downstream sees it without a
+    // bucket of its own. TS6385 is TypeScript's own code for this sentence,
+    // used rather than an invented one so a reader can look it up.
+    const checker = program.getTypeChecker();
+    const deprecated = fileNames.flatMap(file => {
+      const sourceFile = program.getSourceFile(file);
+      if (!sourceFile) return [];
+      const where = origin.get(file) ?? file;
+      return deprecatedPropertiesIn(sourceFile, checker).map(d => ({
+        origin: where,
+        text:
+          `${where}:${String(sourceFile.getLineAndCharacterOfPosition(d.start).line + 1)}  ` +
+          `error TS6385: '${d.name}' is deprecated.` +
+          (d.note ? ` ${d.note}` : ""),
+      }));
+    });
     const diagnostics = [
       ...setup.map(d => d.text),
       ...unparsed.map(d => d.text),
@@ -688,11 +707,63 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
         .map(render)
         .filter(keep)
         .map(d => d.text),
+      ...deprecated.filter(keep).map(d => d.text),
     ];
     return { unparsed, diagnostics };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Properties a sample writes that the API it is writing them for has deprecated.
+ *
+ * TypeScript reports a deprecated FUNCTION as a suggestion diagnostic, and this
+ * audit reads semantic ones, so adding suggestions was the obvious answer. It
+ * was measured and it was wrong twice over: the corpus's suggestions are 24
+ * "declared but never read" and a handful of others, all of them expected in a
+ * sample that shows a shape rather than a program, and TypeScript does not
+ * report this class at all. `{ collections: [...] }` written against a type
+ * whose `collections` carries `@deprecated` produces no suggestion, no error and
+ * no warning. A documented example taught the deprecated spelling of a plugin's
+ * collections for as long as anyone had been reading it, and the gate compiled
+ * it clean every time.
+ *
+ * So it is asked of the checker rather than read off the diagnostics. Every
+ * object literal that has a contextual type is one the reader is filling in for
+ * a declared API, and the property they wrote either exists on that type
+ * carrying a `@deprecated` tag or it does not.
+ *
+ * The contextual type is what makes this narrow. A bare literal with no
+ * declared shape has nothing to be deprecated against and is skipped, and a
+ * nested literal is judged against its own property's type, so the `collections`
+ * inside `contributes` is a different property from the one beside it.
+ */
+export function deprecatedPropertiesIn(sourceFile, checker) {
+  const found = [];
+  const walk = node => {
+    if (ts.isObjectLiteralExpression(node)) {
+      const contextual = checker.getContextualType(node);
+      if (contextual) {
+        for (const property of node.properties) {
+          if (!property.name || !ts.isIdentifier(property.name)) continue;
+          const target = contextual.getProperty(property.name.text);
+          const tag = target
+            ?.getJsDocTags(checker)
+            .find(t => t.name === "deprecated");
+          if (!tag) continue;
+          found.push({
+            name: property.name.text,
+            start: property.getStart(sourceFile),
+            note: (tag.text ?? []).map(part => part.text).join("").trim(),
+          });
+        }
+      }
+    }
+    ts.forEachChild(node, walk);
+  };
+  ts.forEachChild(sourceFile, walk);
+  return found;
 }
 
 /**
