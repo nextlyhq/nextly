@@ -26,7 +26,7 @@ import {
   asSubmissionDocuments,
 } from "./document-shapes";
 import {
-  currentSubmissionMarks,
+  takeSubmissionMarks,
   prepareSubmission,
 } from "./handlers/prepare-submission";
 import type {
@@ -521,13 +521,18 @@ export function formBuilder(
       const formsSlug =
         nextly.self.collections[declaredFormsSlug] ?? declaredFormsSlug;
 
-      // `beforeChange` rather than `beforeCreate`: it is the last mutating
-      // phase before the insert. Core runs stored `beforeCreate` hooks after
-      // the code-registered ones, so a host hook could put undeclared keys or
-      // markup back into the payload after a `beforeCreate` check had passed
-      // it. Field-level `beforeChange` transforms still run after this, which
-      // is a boundary rather than a hole: those transform one declared value at
-      // a time and cannot reshape the JSON.
+      // `beforeChange` rather than `beforeCreate`: it is the last
+      // COLLECTION-level mutating phase before the insert. Core runs stored
+      // `beforeCreate` hooks after the code-registered ones, so a host hook
+      // could put undeclared keys or markup back into a payload a
+      // `beforeCreate` check had just passed.
+      //
+      // Field-level `beforeChange` hooks run after this one and are handed the
+      // whole record, so a host that registers one on this collection can still
+      // reshape `data` afterwards. No collection phase follows them to register
+      // on, and core's own sanitizer sits earlier still, on `beforeCreate`.
+      // This is the latest point a plugin can check from, which is not the same
+      // as a point nothing can follow.
       nextly.hooks.on(
         "beforeChange",
         submissionSlug,
@@ -903,20 +908,46 @@ export async function prepareSubmissionForWrite(
   const ctx = context as {
     data?: Record<string, unknown>;
     operation?: string;
+    originalData?: Record<string, unknown>;
   };
   const submission = ctx.data;
   if (!submission || typeof submission !== "object") return ctx.data;
-  // Creates only. `beforeChange` also runs for updates, where `data` is a
-  // partial: an admin changing a submission's status sends no payload at all,
-  // and preparing that would store an empty submission over a real one.
-  if (ctx.operation !== "create") return ctx.data;
+  // An update carrying no payload is left alone. `beforeChange` runs for
+  // updates too, where `data` is a partial: an admin changing a submission's
+  // status sends no payload at all, and preparing that would store an empty
+  // submission over a real one.
+  //
+  // An update that does carry one is replacing what the visitor sent, so it is
+  // checked exactly as the create was. Exempting every update meant a caller
+  // who may edit a submission could put undeclared keys, values the form's
+  // schema rejects, and markup into the row a moment after the create had
+  // refused to accept them.
+  if (ctx.operation !== "create" && submission.data === undefined) {
+    return ctx.data;
+  }
 
-  const formId = parentFormId(submission);
+  // A patch need not repeat the relationship, so the stored row is what says
+  // which form this payload has to match.
+  const formId =
+    parentFormId(submission) ??
+    (ctx.originalData ? parentFormId(ctx.originalData) : null);
   if (!formId) return ctx.data;
 
   const incoming = submittedPayload(submission.data);
 
-  const form = await fetchParentForm(formsSlug, formId, nextly);
+  // Taken once, and not before here: an early return above would spend a mark
+  // on a write that never used it, and the next write in the same call would
+  // find it gone.
+  const marks = takeSubmissionMarks();
+
+  // The handler that already read this form hands it over rather than have the
+  // write read it a second time. That read is not free: `findEntryById` runs
+  // the forms collection's `afterRead` hooks, and this plugin registers one
+  // that COUNTs the form's submissions, so a write was paying for a count of
+  // every write before it. Only ever the form this row names, because the id
+  // has to match.
+  const handedOver = marks?.form?.id === formId ? marks.form : null;
+  const form = handedOver ?? (await fetchParentForm(formsSlug, formId, nextly));
   if (!form || !Array.isArray(form.fields)) {
     throw NextlyError.validation({
       errors: [
@@ -941,7 +972,7 @@ export async function prepareSubmissionForWrite(
   const prepared = prepareSubmission({
     data: incoming,
     fields: form.fields as AnyFormField[],
-    validate: currentSubmissionMarks()?.keepAsEvidence !== true,
+    validate: marks?.keepAsEvidence !== true,
   });
 
   if (prepared.validationErrors) {

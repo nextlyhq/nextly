@@ -311,7 +311,12 @@ export async function submitForm(
     // write-seam hook knows a flagged row is evidence this handler chose to
     // keep rather than a caller asking for validation to be skipped.
     const submission = await asPluginSubmission(
-      { keepAsEvidence: isContentSpam },
+      // The form is handed to the write seam rather than re-read there: reading
+      // a form runs its `afterRead` hooks, one of which counts submissions.
+      {
+        keepAsEvidence: isContentSpam,
+        form: { id: form.id, fields: form.fields },
+      },
       () =>
         collections.createEntry(
           pluginConfig.formSubmissionOverrides.slug,

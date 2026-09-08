@@ -26,4 +26,10 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Form submissions are transformed, validated and sanitized on a `beforeChange` hook on the submissions collection, the last mutating phase before the insert, so every path that writes one gets the same treatment. `nextly.forms.submit()` and a record created from the admin previously stored whatever the caller sent: undeclared keys, values that never met the form schema, and markup intact, because core skips `json` fields when it sanitizes. Spam protection stays on the HTTP route, where a honeypot and a rate limit are facts about a request rather than about a row.
+Form submissions are transformed, sanitized and validated on a `beforeChange` hook on the submissions collection, the last collection-level mutating phase before the insert, so every path that writes one gets the same treatment: the built-in `POST /api/forms/:slug/submit`, `nextly.forms.submit()`, a host route calling `submitForm`, the admin, and an update that replaces a stored payload. Those paths previously stored whatever the caller sent, because core skips `json` fields when it sanitizes: undeclared keys, values that never met the form schema, and markup intact.
+
+Sanitizing now runs before validation, so a rule judges the value that will actually be stored. `<b></b>` no longer satisfies a required field and then reduces to an empty string.
+
+Stripping markup no longer removes text that only looks like a tag. A `<` opens a tag only when what follows could name one, which is the HTML tokenizer's own rule, so an answer containing `2 < 3` survives intact.
+
+Spam protection stays on `submitForm`, where a honeypot and a rate limit are facts about a request rather than about a row. The built-in submit route does not reach it, and the guide now says so.

@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   asPluginSubmission,
   prepareSubmission,
+  takeSubmissionMarks,
 } from "../handlers/prepare-submission";
 import { formBuilder, prepareSubmissionForWrite } from "../plugin";
 import type { AnyFormField } from "../types";
@@ -71,6 +72,69 @@ describe("prepareSubmission", () => {
     expect(validationErrors).toBeUndefined();
     expect(data.name).toBe("bot");
     expect(data.email).toBe("not-an-email");
+  });
+
+  it("leaves a less-than sign that is not a tag alone", () => {
+    // A `<` opens a tag only when what follows could name one. Treating every
+    // `<` as a tag deleted from the middle of a visitor's own words, and this
+    // sanitizer now runs on writes that were never sanitized before, so the
+    // loss would have been silent and new.
+    const { data } = prepareSubmission({
+      data: {
+        name: "2 < 3 and 5 > 4",
+        email: "ada@example.com",
+      },
+      fields,
+      validate: true,
+    });
+    expect(data.name).toBe("2 < 3 and 5 > 4");
+  });
+
+  it("still removes what a browser would read as a tag", () => {
+    // The control for the test above: narrowing the pattern must not stop it
+    // removing markup. Each of these is tag-open syntax, including the one
+    // left unclosed at the end, which a browser completes rather than shows.
+    const cases: Array<[string, string]> = [
+      ["<b>bold</b>", "bold"],
+      ["</p>closing", "closing"],
+      ["hello <script", "hello"],
+      ["<!-- comment -->text", "text"],
+      ["<?php echo 1; ?>x", "x"],
+      ["<IMG SRC=x onerror=alert(1)>done", "done"],
+    ];
+    for (const [input, expected] of cases) {
+      const { data } = prepareSubmission({
+        data: { name: input, email: "ada@example.com" },
+        fields,
+        validate: false,
+      });
+      expect(data.name).toBe(expected);
+    }
+  });
+
+  it("judges the value it is about to store, not the one that arrived", () => {
+    // `<b></b>` satisfied a required field and was then reduced to an empty
+    // string, so the row stored a value the form's own schema rejects. A rule
+    // that runs before sanitizing is a rule about a value nobody keeps.
+    const { data, validationErrors } = prepareSubmission({
+      data: { name: "<b></b>", email: "ada@example.com" },
+      fields,
+      validate: true,
+    });
+    expect(Object.keys(validationErrors ?? {})).toContain("name");
+    expect(data.name).toBe("");
+  });
+
+  it("accepts a value that is only valid once the markup is gone", () => {
+    // The control: the reorder must not turn sanitizing into a rejection
+    // machine. Markup around real content still leaves a valid answer.
+    const { data, validationErrors } = prepareSubmission({
+      data: { name: "<b>Ada</b>", email: "ada@example.com" },
+      fields,
+      validate: true,
+    });
+    expect(validationErrors).toBeUndefined();
+    expect(data.name).toBe("Ada");
   });
 
   it("is idempotent, which is what lets the hook run after the handler", () => {
@@ -220,6 +284,144 @@ describe("the write-seam hook on submissions", () => {
     expect(await prepareSubmissionForWrite(ctx, formsSlug, withForm)).toBe(
       ctx.data
     );
+  });
+
+  it("checks an update that replaces the stored payload", async () => {
+    // The create is checked and the update was not, so a caller who may edit a
+    // submission could put undeclared keys, values the schema rejects and
+    // markup into the row a moment after the create had refused them. The
+    // patch need not repeat the relationship, so the stored row says which
+    // form to check against.
+    const ctx = {
+      data: { data: { name: "<b>Ada</b>", email: "ada@example.com", x: 1 } },
+      operation: "update",
+      originalData: { id: "sub1", form: "form1" },
+    };
+    const out = await prepareSubmissionForWrite(ctx, formsSlug, withForm);
+    expect(out?.data).toEqual({ name: "Ada", email: "ada@example.com" });
+  });
+
+  it("refuses an update whose replacement payload the schema rejects", async () => {
+    await expect(
+      prepareSubmissionForWrite(
+        {
+          data: { data: { name: "Ada", email: "not-an-email" } },
+          operation: "update",
+          originalData: { id: "sub1", form: "form1" },
+        },
+        formsSlug,
+        withForm
+      )
+    ).rejects.toThrow();
+  });
+
+  it("uses the form the handler already read rather than reading it again", async () => {
+    // Reading a form runs the forms collection's `afterRead` hooks, one of
+    // which COUNTs that form's submissions, so a write was paying for a count
+    // of every write before it.
+    const nextly = nextlyWith({ id: "form1", fields });
+    const out = await asPluginSubmission(
+      { keepAsEvidence: false, form: { id: "form1", fields } },
+      () =>
+        prepareSubmissionForWrite(
+          {
+            data: {
+              form: "form1",
+              data: { name: "Ada", email: "ada@example.com" },
+            },
+            operation: "create",
+          },
+          formsSlug,
+          nextly
+        )
+    );
+    expect(out?.data).toEqual({ name: "Ada", email: "ada@example.com" });
+    expect(
+      (
+        nextly as unknown as {
+          services: {
+            collections: { findEntryById: { mock: { calls: unknown[] } } };
+          };
+        }
+      ).services.collections.findEntryById.mock.calls
+    ).toHaveLength(0);
+  });
+
+  it("reads the form when the one handed over is a different form", async () => {
+    // The control: a handed-over form is only ever used for the row that names
+    // it, so a mismatch falls back to the read rather than checking a payload
+    // against the wrong schema.
+    const nextly = nextlyWith({ id: "form1", fields });
+    await asPluginSubmission(
+      { keepAsEvidence: false, form: { id: "other-form", fields: [] } },
+      () =>
+        prepareSubmissionForWrite(
+          {
+            data: {
+              form: "form1",
+              data: { name: "Ada", email: "ada@example.com" },
+            },
+            operation: "create",
+          },
+          formsSlug,
+          nextly
+        )
+    );
+    expect(
+      (
+        nextly as unknown as {
+          services: {
+            collections: { findEntryById: { mock: { calls: unknown[] } } };
+          };
+        }
+      ).services.collections.findEntryById.mock.calls
+    ).toHaveLength(1);
+  });
+
+  it("spends the evidence exception on the one write it was granted for", async () => {
+    // `createEntry` does not resolve until its `afterCreate` hooks have run, so
+    // a hook that writes a second submission runs inside the same store. The
+    // second write must not inherit an exception granted to the first.
+    await asPluginSubmission({ keepAsEvidence: true }, async () => {
+      const kept = await prepareSubmissionForWrite(
+        {
+          data: {
+            form: "form1",
+            data: { name: "<b>bot</b>", email: "not-an-email" },
+          },
+          operation: "create",
+        },
+        formsSlug,
+        withForm
+      );
+      expect((kept?.data as Record<string, unknown>).email).toBe(
+        "not-an-email"
+      );
+
+      await expect(
+        prepareSubmissionForWrite(
+          {
+            data: {
+              form: "form1",
+              data: { name: "Ada", email: "also-not-an-email" },
+            },
+            operation: "create",
+          },
+          formsSlug,
+          withForm
+        )
+      ).rejects.toThrow();
+    });
+  });
+
+  it("hands the marks to the first taker only", async () => {
+    // The mechanism under the test above, stated directly.
+    await asPluginSubmission({ keepAsEvidence: true }, () => {
+      expect(takeSubmissionMarks()?.keepAsEvidence).toBe(true);
+      expect(takeSubmissionMarks()).toBeUndefined();
+    });
+    // The control: outside a marked call there is nothing to take.
+    expect(takeSubmissionMarks()).toBeUndefined();
   });
 
   it("refuses rather than emptying when the form cannot be read", async () => {

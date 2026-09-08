@@ -46,15 +46,23 @@ const TEXT_FORM_FIELDS = new Set([
 ]);
 
 /**
- * Remove all HTML tags from a string, collapse whitespace, and trim.
+ * Remove HTML tags from a string, collapse whitespace, and trim.
  *
- * Uses a regex that matches both complete tags (`<b>`) and unclosed tags
- * at end-of-string (`<script`) to prevent browsers from interpreting
- * incomplete markup.
+ * A `<` opens a tag only when what follows it could name one: an ASCII letter,
+ * `/` for a closing tag, or `!` and `?` for comments and doctypes. That is the
+ * HTML tokenizer's own rule, so what survives here is what a browser would have
+ * shown as text anyway. Treating every `<` as a tag cut `2 < 3` down to `2`,
+ * which is silent loss in the one column a visitor's own words live in.
+ *
+ * `<name>` is still removed. Nothing distinguishes it from a tag, and a browser
+ * reads it as an unknown element too.
+ *
+ * A tag left unclosed at end of string is still removed: handed `hello <script`
+ * a browser completes it rather than showing it.
  */
 function stripHtmlTags(input: string): string {
   return input
-    .replace(/<[^>]*(?:>|$)/g, "")
+    .replace(/<[a-zA-Z/!?][^>]*(?:>|$)/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -110,21 +118,45 @@ export interface SubmissionOriginMarks {
    * write seam sanitizes it but does not require it to be valid.
    */
   keepAsEvidence: boolean;
+  /**
+   * The parent form the handler has already read, so the write seam can check
+   * the payload against it without reading it again. Used only when its id is
+   * the one the row names.
+   */
+  form?: Record<string, unknown>;
 }
 
-const submissionOrigin = new AsyncLocalStorage<SubmissionOriginMarks>();
+/** One marked write, and whether it has already been made. */
+interface SubmissionOriginScope {
+  marks: SubmissionOriginMarks;
+  spent: boolean;
+}
+
+const submissionOrigin = new AsyncLocalStorage<SubmissionOriginScope>();
 
 /** Run `write` marked as the plugin's own, so the write seam can trust it. */
 export function asPluginSubmission<T>(
   marks: SubmissionOriginMarks,
   write: () => T
 ): T {
-  return submissionOrigin.run(marks, write);
+  return submissionOrigin.run({ marks, spent: false }, write);
 }
 
-/** What the current write was marked as, or nothing when it is somebody else's. */
-export function currentSubmissionMarks(): SubmissionOriginMarks | undefined {
-  return submissionOrigin.getStore();
+/**
+ * The marks for the write being made now, taken once.
+ *
+ * They describe ONE row, and the scope outlives it: `createEntry` does not
+ * resolve until the `afterCreate` hooks have run, so a hook that writes a
+ * second submission runs inside the same store and would otherwise inherit an
+ * exception granted to the first. Spending them on the first taker is enough,
+ * because the row they were granted for reaches `beforeChange` before anything
+ * `afterCreate` can start.
+ */
+export function takeSubmissionMarks(): SubmissionOriginMarks | undefined {
+  const scope = submissionOrigin.getStore();
+  if (!scope || scope.spent) return undefined;
+  scope.spent = true;
+  return scope.marks;
 }
 
 /** A submission ready to store, or the reasons it is not. */
@@ -142,11 +174,12 @@ export interface PreparedSubmission {
 /**
  * Bring a submission to the shape the form declares.
  *
- * Transform, then validate, then sanitize, in that order and for reasons:
- * transforming projects the payload onto the declared fields, so an undeclared
- * key never reaches the schema or the row; validating before sanitizing means a
- * length rule counts the characters the visitor typed rather than what stripping
- * left behind.
+ * Transform, then sanitize, then validate, in that order and for reasons.
+ * Transforming projects the payload onto the declared fields, so an undeclared
+ * key never reaches the schema or the row. Sanitizing before validating is what
+ * makes every rule judge the value that will actually be stored: the other
+ * order let `<b></b>` satisfy a required field and then reduced it to an empty
+ * string, and made a length rule count markup the visitor never sees.
  *
  * `validate: false` is for content the plugin has already decided to keep as
  * evidence. A honeypot hit is stored flagged rather than dropped so a false
@@ -168,9 +201,9 @@ export function prepareSubmission({
   validate: boolean;
 }): PreparedSubmission {
   const transformed = transformFormData(data, fields);
+  sanitizeSubmissionData(transformed, fields);
 
   if (!validate) {
-    sanitizeSubmissionData(transformed, fields);
     return { data: transformed };
   }
 
@@ -179,10 +212,8 @@ export function prepareSubmission({
     // The transformed payload comes back with the errors rather than nothing,
     // so a caller that wants to store it anyway has the same value the valid
     // path would have produced, minus the schema's blessing.
-    sanitizeSubmissionData(transformed, fields);
     return { data: transformed, validationErrors: getValidationErrors(result) };
   }
 
-  sanitizeSubmissionData(result.data, fields);
   return { data: result.data };
 }
