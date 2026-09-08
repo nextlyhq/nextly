@@ -8,6 +8,7 @@ import {
   identityOf,
   isModule,
   pageOf,
+  unaccountedFor,
   unterminatedFences,
 } from "./check-doc-samples.mjs";
 
@@ -543,5 +544,96 @@ describe("compareToBaseline and coverage gains", () => {
 
     expect(gained).toEqual([]);
     expect(lost).toEqual([]);
+  });
+});
+
+describe("isModule reads the tree, not the text", () => {
+  const cases = [
+    ['// dynamically import("nextly")\nconst a = { b: 1 };', false, "a mention in a comment"],
+    ['const s = "import(x)";', false, "a mention in a string"],
+    ['const nx = await import("nextly");', true, "a real dynamic import"],
+    ['const c = require("crypto");', true, "a require call"],
+    ["registry.require(thing);", false, "a property access named require"],
+    ['import x from "nextly";', true, "a declaration"],
+    ["export const a = 1;", true, "an export modifier"],
+    ["export default {};", true, "an export assignment"],
+    ['export { a } from "m";', true, "a re-export"],
+    ["const a = 1;", false, "a plain fragment"],
+  ];
+
+  for (const [code, want, what] of cases) {
+    it(`answers ${String(want)} for ${what}`, () => {
+      expect(isModule(code)).toBe(want);
+    });
+  }
+
+  it("differs from the text pattern it replaced", () => {
+    // The control. A pattern cannot tell a call from a mention, so a comment
+    // made a fragment look like a module and the audit compiled a block it
+    // deliberately excludes.
+    const mention = '// dynamically import("nextly")\nconst a = { b: 1 };';
+    expect(/(?:^|[^.\w])import\s*\(/m.test(mention)).toBe(true);
+    expect(isModule(mention)).toBe(false);
+  });
+});
+
+describe("declaredNamesIn under the right grammar", () => {
+  const code = ['const id = <T>(x: T) => x;', 'import { defineConfig } from "nextly";'].join("\n");
+
+  it("keeps the imports of a .ts sample that TSX would misparse", () => {
+    // `<T>(x: T) => x` is a generic arrow in .ts and an unclosed element in
+    // .tsx. Parsing a .ts sample as TSX yields a recovery tree that drops every
+    // import after it, so the names went missing while the fence still
+    // compiled, and a later fence using one was reported as undefined.
+    expect(declaredNamesIn(code, "ts").sort()).toEqual(["defineConfig", "id"]);
+    // The control: the grammar this used unconditionally loses the import.
+    expect(declaredNamesIn(code, "tsx")).toEqual(["id"]);
+  });
+});
+
+describe("unaccountedFor", () => {
+  const complete = {
+    total: 10,
+    real: 4,
+    continued: 2,
+    readerFiles: 2,
+    uninstalled: 1,
+    implicitAny: 1,
+  };
+
+  it("is zero when every diagnostic went somewhere", () => {
+    expect(unaccountedFor(complete)).toBe(0);
+  });
+
+  it("counts what a forgotten bucket would leave behind", () => {
+    // The case this exists for: a future bucket reported to the console and
+    // left out of both the findings and the set-aside list.
+    expect(unaccountedFor({ ...complete, uninstalled: 0 })).toBe(1);
+  });
+
+  it("would not have noticed with a surplus term in the sum", () => {
+    // Why the comparison is exact rather than "at least". Adding a term that
+    // is not part of the partition, as counting the whole set-aside list did,
+    // lets a missing bucket hide behind it.
+    const withSurplus = { ...complete, uninstalled: 0, real: complete.real + 1 };
+    expect(unaccountedFor(withSurplus)).toBe(0);
+  });
+});
+
+describe("unterminatedFences and closing lines", () => {
+  it("does not accept a delimiter carrying attributes as a closer", () => {
+    // ```` ```{.foo} ```` has an empty language capture, so checking only that
+    // capture treated it as a closer. `extractFrom` rejects the same line,
+    // because a closing fence may hold only the delimiter and whitespace, so
+    // the sample went neither extracted nor reported.
+    const page = ["```ts", "const a = 1;", "```{.foo}", "", "prose"].join("\n");
+
+    expect(unterminatedFences(page)).toEqual(["```ts"]);
+    expect(extractFrom("markdown-dir", page, "d.mdx")).toEqual([]);
+  });
+
+  it("still accepts a plain closer, and one with trailing whitespace", () => {
+    expect(unterminatedFences(["```ts", "const a = 1;", "```", ""].join("\n"))).toEqual([]);
+    expect(unterminatedFences(["```ts", "const a = 1;", "```   ", ""].join("\n"))).toEqual([]);
   });
 });

@@ -129,9 +129,15 @@ export function unterminatedFences(text) {
     const m = line.match(opener);
     if (!m) continue;
     const last = open[open.length - 1];
-    // A closer is the same delimiter run with no language after it. Anything
-    // else opens a nested block, which Markdown allows only with a longer run.
-    if (last && m[1].startsWith(last.delimiter) && !m[2]) open.pop();
+    // A closer carries the delimiter and nothing else. Checking only that the
+    // language capture was empty accepted ```` ```{.foo} ```` as one, because
+    // `\w*` matches nothing before a brace; `extractFrom` rejects that line, so
+    // the fence went neither extracted nor reported.
+    const closes =
+      last &&
+      m[1].startsWith(last.delimiter) &&
+      /^[ \t]*(?:>[ \t]*)*(?:```+|~~~+)[ \t\r]*$/.test(line);
+    if (closes) open.pop();
     else if (!last) open.push({ delimiter: m[1], lang: m[2], line });
   }
   return open.filter(f => isTypeScript(f.lang)).map(f => f.line.trim());
@@ -265,20 +271,45 @@ export const SUPPLIED_BY_THE_READER = [
  * filed all ten as fragments, so the API mistakes inside them were never read;
  * the missing name they open with is what the continuation pass is for.
  */
-export const isModule = code =>
-  /^\s*import\b/m.test(code) ||
-  /^\s*export\b/m.test(code) ||
-  // CommonJS counts. A fence opening `const crypto = require("crypto")` is a
-  // program a reader runs, and requiring ESM syntax filed it as a fragment so
-  // nothing compiled it: the webhook-verification example on the form-builder
-  // page is exactly that shape, and its undefined names were never read.
-  /(?:^|[^.\w])require\s*\(/m.test(code) ||
-  // So does a dynamic one. `const nx = await import("nextly")` loads a package
-  // exactly as the declaration form does, and reading only declarations left
-  // such a fence extracted, never compiled, and free to call methods that do
-  // not exist. `.import(` is excluded for the same reason `require` is: a
-  // property access of that name is not a module load.
-  /(?:^|[^.\w])import\s*\(/m.test(code);
+export const isModule = (code, extension = "tsx") => {
+  const parsed = parseSample(code, extension);
+  // A call to `require` or to `import`, anywhere in the tree. Both load a
+  // package exactly as a declaration does, and a fence opening
+  // `const crypto = require("crypto")` is a program a reader runs; requiring
+  // ESM syntax filed those as fragments so nothing compiled them.
+  //
+  // From the tree rather than from the text, because the text cannot tell a
+  // call from a mention: `// dynamically import("nextly")` in a comment, or
+  // `"import(x)"` in a string, made a fragment look like a module and had the
+  // audit compile a block it deliberately excludes. A property access named
+  // `require` or `import` is not a load either, and is not an identifier call.
+  let loads = false;
+  const walk = node => {
+    if (loads) return;
+    if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === "require"))
+    ) {
+      loads = true;
+      return;
+    }
+    ts.forEachChild(node, walk);
+  };
+  ts.forEachChild(parsed, walk);
+  if (loads) return true;
+
+  return parsed.statements.some(
+    statement =>
+      ts.isImportDeclaration(statement) ||
+      ts.isImportEqualsDeclaration(statement) ||
+      ts.isExportDeclaration(statement) ||
+      ts.isExportAssignment(statement) ||
+      (ts.getModifiers?.(statement) ?? statement.modifiers ?? []).some(
+        modifier => modifier.kind === ts.SyntaxKind.ExportKeyword
+      )
+  );
+};
 
 /**
  * The documentation this repository owns and publishes.
@@ -803,7 +834,10 @@ export function exportsMapAnswers(exports, subpath) {
  */
 export function declaredEarlier(name, file, index, samples) {
   return samples.some(
-    s => s.file === file && s.index < index && declaresName(s.code, name)
+    s =>
+      s.file === file &&
+      s.index < index &&
+      declaresName(s.code, name, extensionFor(s))
   );
 }
 
@@ -818,8 +852,8 @@ export function declaredEarlier(name, file, index, samples) {
  * and then not found when the rebuild went looking for it. The continuation was
  * never compiled.
  */
-export function declaresName(code, name) {
-  if (declaredNamesIn(code).includes(name)) return true;
+export function declaresName(code, name, extension = "tsx") {
+  if (declaredNamesIn(code, extension).includes(name)) return true;
   // An arrow or method bound without a declaration keyword: `handler: (req) =>`
   // in an object literal, or a property assignment. Not something
   // `declaredNamesIn` collects, because it is not a declaration, but a later
@@ -987,18 +1021,34 @@ function topLevelOnly(code) {
  * exception, and a statement list that is short of a broken import is the right
  * answer anyway.
  */
-function importsIn(source) {
-  const parsed = ts.createSourceFile(
-    "sample.tsx",
+export function parseSample(source, extension = "tsx") {
+  return ts.createSourceFile(
+    `sample.${extension}`,
     source,
     ts.ScriptTarget.Latest,
     false,
-    ts.ScriptKind.TSX
+    extension === "tsx" ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   );
-  return parsed.statements.filter(ts.isImportDeclaration);
 }
 
-export function declaredNamesIn(source) {
+/**
+ * The import declarations a source actually has, read under the grammar the
+ * compiler will use for it.
+ *
+ * The two grammars disagree before they agree: `const id = <T>(x: T) => x;` is
+ * a generic arrow in `.ts` and an unclosed element in `.tsx`, and parsing a
+ * `.ts` sample as TSX produces a recovery tree that can drop every import after
+ * it. The fence still compiles, because compilation uses the right extension,
+ * so the names simply went missing and a later fence using one was reported as
+ * undefined rather than rebuilt with its context.
+ */
+function importsIn(source, extension) {
+  return parseSample(source, extension).statements.filter(
+    ts.isImportDeclaration
+  );
+}
+
+export function declaredNamesIn(source, extension = "tsx") {
   const code = topLevelOnly(source);
   const names = new Set();
   const add = n => {
@@ -1044,7 +1094,7 @@ export function declaredNamesIn(source) {
   // fence that used `ghost` as a continuation of a page that never bound it. A
   // parser has neither problem: a comment produces no statement, and a wrapped
   // clause is one statement however it is laid out.
-  for (const statement of importsIn(source)) {
+  for (const statement of importsIn(source, extension)) {
     const clause = statement.importClause;
     if (!clause) continue;
     if (clause.name) add(clause.name.text);
@@ -1075,7 +1125,7 @@ export function declaredNamesIn(source) {
  * program a reader pastes. `await nextly.logout()` calls a value an earlier
  * fence built, and is.
  */
-export function declaredValuesIn(source) {
+export function declaredValuesIn(source, extension = "tsx") {
   const code = topLevelOnly(source);
   const names = new Set();
   for (const m of code.matchAll(
@@ -1121,7 +1171,9 @@ export function inheritedNames(sample, samples) {
     // `radio({ ... })` on the field catalogue out: it mentions `option`, which
     // an earlier fence imported, and is a shape being illustrated rather than a
     // program a reader pastes.
-    const values = earlier.flatMap(s => declaredValuesIn(s.code));
+    const values = earlier.flatMap(s =>
+      declaredValuesIn(s.code, extensionFor(s))
+    );
     const callsOne = values.some(name =>
       new RegExp(
         `\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[.(]`
@@ -1129,11 +1181,13 @@ export function inheritedNames(sample, samples) {
     );
     if (!callsOne) return [];
   }
-  const declared = new Set(earlier.flatMap(s => declaredNamesIn(s.code)));
+  const declared = new Set(
+    earlier.flatMap(s => declaredNamesIn(s.code, extensionFor(s)))
+  );
   const used = new Set(
     [...sample.code.matchAll(/[A-Za-z_$][\w$]*/g)].map(m => m[0])
   );
-  const own = new Set(declaredNamesIn(sample.code));
+  const own = new Set(declaredNamesIn(sample.code, extensionFor(sample)));
   return [...declared].filter(n => used.has(n) && !own.has(n));
 }
 
@@ -1182,7 +1236,7 @@ export function withEarlierContext(sample, missingNames, samples) {
   // identifiers — a fence is pulled in only when the page really does define
   // what it is being pulled in for.
   const declaredEarlierOnThePage = new Set(
-    earlier.flatMap(s => declaredNamesIn(s.code))
+    earlier.flatMap(s => declaredNamesIn(s.code, extensionFor(s)))
   );
   const chosen = new Map();
   const wanted = [...missingNames];
@@ -1196,7 +1250,7 @@ export function withEarlierContext(sample, missingNames, samples) {
     );
     if (!nearest || chosen.has(nearest.index)) continue;
     chosen.set(nearest.index, nearest);
-    const own = new Set(declaredNamesIn(nearest.code));
+    const own = new Set(declaredNamesIn(nearest.code, extensionFor(nearest)));
     for (const m of nearest.code.matchAll(/[A-Za-z_$][\w$]*/g)) {
       const used = m[0];
       if (!own.has(used) && declaredEarlierOnThePage.has(used)) {
@@ -1479,6 +1533,31 @@ export const pageOf = line => {
  * on the next fetch, so a red here would be a red this repository cannot clear,
  * and a check that cannot be cleared teaches people to ignore it.
  */
+/**
+ * How many diagnostics the classifier produced that nobody kept.
+ *
+ * Zero is the only acceptable answer: `real` is charged to a page, the other
+ * buckets are set aside by identity, and `continued` comes back through this
+ * same partition after its recompile. Anything else is a class of diagnostic
+ * the gate cannot see, which is the shape of every bucket that has escaped.
+ *
+ * `unchecked` is deliberately not a term: the classifier appends it to `real`
+ * before returning, so counting it again would inflate the sum and let a
+ * missing bucket hide behind the surplus. That is the same mistake as comparing
+ * against the whole set-aside list, which carries entries added before
+ * classification.
+ */
+export function unaccountedFor({
+  total,
+  real,
+  continued,
+  readerFiles,
+  uninstalled,
+  implicitAny,
+}) {
+  return total - (real + continued + readerFiles + uninstalled + implicitAny);
+}
+
 async function auditDocs() {
   let all;
   try {
@@ -1505,7 +1584,7 @@ async function auditDocs() {
   // that introduces a value in a fence with no import of its own, and uses it
   // in the next one, is a documentation shape, and reading it as an undefined
   // name would put a finding on the page that a reader never meets.
-  const samples = all.filter(s => isModule(s.code));
+  const samples = all.filter(s => isModule(s.code, extensionFor(s)));
   // Everything the gate ignores EXCEPT the reader's own files: those are kept
   // so the samples carrying them can be named unchecked rather than counted as
   // compiled clean.
@@ -1573,7 +1652,7 @@ async function auditDocs() {
   // keeps this from compiling things that are not programs.
   const continuedWithoutImports = new Set();
   for (const sample of all) {
-    if (isModule(sample.code)) continue;
+    if (isModule(sample.code, extensionFor(sample))) continue;
     const names = inheritedNames(sample, all);
     if (names.length === 0) continue;
     const withContext = withEarlierContext(sample, names, all);
@@ -1734,19 +1813,33 @@ async function auditDocs() {
     ...readerFiles.map(text => ({ mark: "reader-file", text }))
   );
 
-  // Nothing may be dropped on the floor. `real` is charged to a page and
-  // `setAside` is ratcheted by identity; a diagnostic in neither is one the
-  // gate cannot see, which is the shape of every bucket that has escaped so
-  // far. Counted rather than enumerated, because enumerating is what kept
-  // leaving room for the next one. `continued` is excluded: those are
-  // recompiled with their context and come back through this same partition.
-  const accountedFor = real.length + setAside.length + continued.length;
-  if (accountedFor < classified) {
+  // Nothing may be dropped on the floor. `real` is charged to a page, the
+  // classifier's other buckets are set aside by identity, and `continued` is
+  // recompiled and comes back through this same partition; a diagnostic in
+  // none of them is one the gate cannot see, which is the shape of every
+  // bucket that has escaped so far.
+  //
+  // EXACT, not "at least". Comparing against the whole of `setAside` counted
+  // entries added before classification, the first pass's suppressions among
+  // them, and that surplus could cover for a bucket left out of both sides. An
+  // equality over the classifier's own output has nothing to hide behind.
+  //
+  // `unchecked` is not added: the classifier appends it to `real` before
+  // returning, so counting it again would be the same surplus one line down.
+  const missing = unaccountedFor({
+    total: classified,
+    real: real.length,
+    continued: continued.length,
+    readerFiles: readerFiles.length,
+    uninstalled: uninstalled.length,
+    implicitAny: implicitAny.length,
+  });
+  if (missing !== 0) {
     throw new Error(
-      `doc samples: ${String(classified - accountedFor)} diagnostic(s) were ` +
-        `classified into neither the findings nor the set-aside list, so the ` +
-        `gate cannot see them. A new bucket has to be recorded, not just ` +
-        `reported.`
+      `doc samples: the classifier produced ${String(classified)} diagnostic(s) ` +
+        `and ${String(classified - missing)} were accounted for. A bucket has ` +
+        `to be charged to a page or recorded by identity, not just reported: ` +
+        `the gate cannot see one that is neither.`
     );
   }
 
