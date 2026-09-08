@@ -551,6 +551,19 @@ export function SingleForm({
   //
   const submissionLatch = useRef(false);
 
+  // Throwing away this language's pending change. Scoped to the active locale:
+  // a localized Single holds one per language, so discarding without naming one
+  // would remove work in a language the author never opened. Declared beside
+  // the busy state because the busy state counts its in-flight flag — restore
+  // racing a discard would let completion order decide which document state
+  // survives, exactly as with a save.
+  const discardMutation = useDiscardSingleWorkingDraft({
+    slug: schema.slug,
+    documentId: document.id,
+    locale,
+  });
+  const busy = isSubmitting || discardMutation.isPending;
+
   const handleSubmit = useCallback(
     async (e?: React.BaseSyntheticEvent, intent?: EntryFormIntent) => {
       e?.preventDefault();
@@ -564,7 +577,7 @@ export function SingleForm({
       // handler acts on the live document, which is not what is on screen. And
       // so is a submit already in flight — parallel writes would let completion
       // order decide which contents survive.
-      if (writesHeld || isSubmitting || submissionLatch.current) return;
+      if (writesHeld || busy || submissionLatch.current) return;
       submissionLatch.current = true;
 
       try {
@@ -590,7 +603,7 @@ export function SingleForm({
         submissionLatch.current = false;
       }
     },
-    [form, onSubmit, blankPasswordFields, isSubmitting, writesHeld]
+    [form, onSubmit, blankPasswordFields, busy, writesHeld]
   );
 
   const handleCancel = useCallback(() => {
@@ -685,15 +698,6 @@ export function SingleForm({
       _translations?: Record<string, { translated: boolean; status?: string }>;
     }
   )._translations;
-
-  // Throwing away this language's pending change. Scoped to the active locale:
-  // a localized Single holds one per language, so discarding without naming one
-  // would remove work in a language the author never opened.
-  const discardMutation = useDiscardSingleWorkingDraft({
-    slug: schema.slug,
-    documentId: document.id,
-    locale,
-  });
 
   // Adapt the SingleDocumentData shape into what EntrySystemHeader and the
   // rail panels expect (entry.id / entry.status / entry.created_at /
@@ -796,7 +800,7 @@ export function SingleForm({
     // rule, and the entry editor records on exactly the same terms. A
     // colleague's claim deliberately does not stop it: the recovery point is
     // this author's own work, which is what a takeover preserves.
-    enabled: mayRecordRecovery(isSubmitting, viewingVersion),
+    enabled: mayRecordRecovery(busy, viewingVersion),
   });
   const recovery = useAutosaveRecovery({
     scope: autosaveScope,
@@ -895,6 +899,7 @@ export function SingleForm({
                               hasStatus={hasStatus}
                               isSubmitting={isSubmitting}
                               isDirty={isDirty}
+                              hasUnsavedWork={hasUnsavedWork}
                               entry={entryLike}
                               collectionSlug={schema.slug}
                               /* The active language, which the header reads to decide
@@ -955,7 +960,7 @@ export function SingleForm({
                               onDiscardWorkingDraft={async () => {
                                 // Through the same gate: this reaches the row
                                 // directly and never passed `handleSubmit`.
-                                if (writesHeld) return;
+                                if (writesHeld || busy) return;
                                 await discardMutation.mutateAsync();
                               }}
                               onCancel={handleCancel}
@@ -1008,9 +1013,7 @@ export function SingleForm({
                               too — a restore racing the ordinary save would let
                               completion order decide which contents survive. */}
                             <ViewedVersionBanner
-                              actionsDisabled={
-                                lock.actionsDisabled || isSubmitting
-                              }
+                              actionsDisabled={lock.actionsDisabled || busy}
                             />
 
                             {/* The language panel, inline: the exact complement

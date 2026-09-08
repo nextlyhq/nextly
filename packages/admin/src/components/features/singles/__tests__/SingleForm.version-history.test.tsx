@@ -31,6 +31,7 @@ import type { ViewedVersion } from "@admin/components/features/versions/document
 const {
   viewed,
   sidebarProps,
+  headerProps,
   useDocumentLock,
   useDocumentAutosave,
   useAutosaveRecovery,
@@ -39,6 +40,7 @@ const {
   sidebarProps: {
     current: null as { actionsDisabled?: boolean } | null,
   },
+  headerProps: { current: null as { hasUnsavedWork?: boolean } | null },
   useDocumentLock: vi.fn(),
   useDocumentAutosave: vi.fn(() => ({ status: "idle", lastSavedAt: null })),
   useAutosaveRecovery: vi.fn<
@@ -87,7 +89,8 @@ vi.mock(
 vi.mock(
   "@admin/components/features/entries/EntryForm/EntrySystemHeader",
   () => ({
-    EntrySystemHeader: () => {
+    EntrySystemHeader: (props: { hasUnsavedWork?: boolean }) => {
+      headerProps.current = props;
       const { setViewing, setRestore } = useDocumentHistory();
       useEffect(() => {
         setViewing(viewed.current);
@@ -149,6 +152,7 @@ beforeEach(() => {
   // previous test would leak into this one's first render.
   viewed.current = null;
   sidebarProps.current = null;
+  headerProps.current = null;
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
     takeOver: vi.fn(),
@@ -314,6 +318,20 @@ describe("SingleForm — a published version replaces the document", () => {
       await new Promise(resolve => setTimeout(resolve, 50));
     });
     expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the whole unsaved-work state to the restore confirmation", async () => {
+    // The page builder commits on exit, so its pending document never sets
+    // form dirtiness — the editor's combined state is what the restore
+    // confirmation must be told about, not the form's flag alone.
+    const user = userEvent.setup();
+    render(
+      <SingleForm schema={schema} document={document} onSubmit={vi.fn()} />
+    );
+
+    expect(headerProps.current?.hasUnsavedWork).toBe(false);
+    await user.type(screen.getByLabelText("Hero Title"), "work");
+    expect(headerProps.current?.hasUnsavedWork).toBe(true);
   });
 
   it("keeps the submit path working while the live document is on screen", async () => {

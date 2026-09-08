@@ -902,6 +902,9 @@ export function EntryForm({
                               draftsEnabled={collection.draftsEnabled === true}
                               isSubmitting={isSubmitting}
                               isDirty={isDirty}
+                              // The whole unsaved-work state, so the restore
+                              // confirmation covers builder-held work too.
+                              hasUnsavedWork={hasUnsavedWork}
                               autosaveEnabled={autosaveScope !== null}
                               autosaveStatus={autosave.status}
                               autosaveLastSavedAt={autosave.lastSavedAt}

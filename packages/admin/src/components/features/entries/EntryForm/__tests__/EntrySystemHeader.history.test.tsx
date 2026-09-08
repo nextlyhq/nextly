@@ -108,6 +108,26 @@ describe("EntrySystemHeader version history", () => {
     );
   });
 
+  it("tells the restore confirmation whether the editor holds unsaved work", () => {
+    // The confirmation discloses unsaved work; the header forwards whatever
+    // the editor reported rather than re-deriving it.
+    renderHeader({ isDirty: true, hasUnsavedWork: true });
+
+    expect(sheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ liveDirty: true })
+    );
+  });
+
+  it("does not count plain form dirtiness as the forwarded unsaved-work state", () => {
+    // hasUnsavedWork is the richer flag — form dirtiness plus state a field
+    // holds outside the form. isDirty alone must not satisfy the restore
+    // confirmation's disclosure.
+    renderHeader({ isDirty: true });
+
+    expect(sheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ liveDirty: false })
+    );
+  });
   it("addresses a Single by slug alone", () => {
     // A Single has one document and the server resolves its id, so no entry id
     // is sent even though the header has one.
