@@ -379,18 +379,19 @@ The list endpoint is permission-gated by `read-settings`; mutation endpoints req
 
 ### Using sizes from your frontend
 
-Where the variants reach you depends on how you read the media file, so it is worth
-being exact about it.
-
-A media file **populated as a relationship** on an entry or a single carries its
-variants under `sizes`, keyed by the name you configured:
+A media file carries its generated variants under `sizes`, keyed by the name you
+configured. It does so however you read it: populated as a relationship on an entry
+or a single, fetched on its own with `media.findByID()`, or returned by
+`GET /api/media/:id`.
 
 ```json
 {
   "id": "abc-123",
-  "url": "/uploads/2026/04/photo.jpg",
+  "url": "https://example.com/uploads/2026/04/photo.jpg",
   "width": 3000,
   "height": 2000,
+  "focalX": 50,
+  "focalY": 50,
   "sizes": {
     "thumbnail": { "url": "...", "width": 150, "height": 150 },
     "medium": { "url": "...", "width": 768, "height": 512 },
@@ -399,13 +400,13 @@ variants under `sizes`, keyed by the name you configured:
 }
 ```
 
-`media.findByID()` does not. It returns a `MediaFile`, which declares no `sizes`
-field, so a variant read straight off that result does not exist at runtime and does
-not compile either.
+Every URL in that response is absolute, the variants included, so a mobile client
+or an edge worker can resolve one without knowing where your storage adapter puts
+things. `sizes` is `null` for a file with no variants: a non-image, or an image
+uploaded before you configured any size.
 
-So a variant can only be selected from a value that carries one. Give that value to
-`getMediaVariant`, which asks for a name, tries your fallback name next, then
-`thumbnailUrl`, then the original:
+Select one with `getMediaVariant`, which asks for a name, tries your fallback name
+next, then `thumbnailUrl`, then the original:
 
 ```tsx
 // app/(site)/media-image.tsx
@@ -424,9 +425,8 @@ export function MediaImage({ media, alt }: { media: MediaLike; alt: string }) {
 }
 ```
 
-Hand it the media value off a populated relationship, not a `findByID` result. Called on
-a `MediaFile` the helper still returns a URL, but it can only ever be the thumbnail or the
-original, because the variants are not on that object to choose from.
+Hand it either kind of media value. `MediaLike` is the narrow shape the helper needs,
+and both a populated relationship and a `MediaFile` satisfy it.
 
 Reading a media record on its own is still a `findByID`, and it still needs a runtime:
 
