@@ -150,8 +150,22 @@ jobs:
           # run only inside the gated ci job — so an edit to either must not
           # skip the very job that checks it. They are re-added after the
           # inert filter rather than encoded in it, because ERE cannot negate.
+          #
+          # `docs/` is re-added for the same reason and it is a newer one: the
+          # published pages carry TypeScript the `Doc samples compile` step
+          # checks, and that step lives in the gated job because it needs the
+          # packages built. Left inert, the one check that reads these pages
+          # would be the one thing a change to them skipped.
+          #
+          # The cost is real: a prose-only edit under docs/ now runs the whole
+          # job. A path filter cannot tell prose from a code fence, and a gate
+          # that does not run for the changes it exists to ratchet is worth
+          # nothing, which this repository learned the expensive way when a
+          # change that could not compile reached production because no check
+          # built the app.
           NOT_INERT=$({ printf '%s\n' "$CHANGED" | grep -vE "$INERT" || true
-                        printf '%s\n' "$CHANGED" | grep -xE 'AGENTS(\.measured)?\.md' || true; } | sort -u | grep . || true)
+                        printf '%s\n' "$CHANGED" | grep -xE 'AGENTS(\.measured)?\.md' || true
+                        printf '%s\n' "$CHANGED" | grep -E '^docs/' || true; } | sort -u | grep . || true)
 
           {
             echo "### CI scope"
@@ -523,6 +537,20 @@ jobs:
 
       # `./e2e` is named explicitly: it is a workspace member but sits under
       # neither glob, being neither something we publish nor something we run.
+      # After Build, deliberately: the samples resolve `nextly` and `@nextlyhq/*`
+      # through the real exports map of the packages in this commit, which
+      # exists only once they are built. Mapped paths would have answered for a
+      # subpath the package does not export, and the exports map is exactly what
+      # a sample can get wrong: three snippets in the authentication guide
+      # imported `nextly/lib/env`, which is not in it.
+      #
+      # It ratchets rather than gates outright, because the pages already carry
+      # findings and a check that is red when nothing is wrong teaches people to
+      # re-run reds instead of reading them.
+      - name: Doc samples compile
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
+        run: pnpm check:doc-samples
+
       - name: Lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: pnpm turbo lint --continue --filter='./packages/*' --filter='./apps/*' --filter='./e2e'

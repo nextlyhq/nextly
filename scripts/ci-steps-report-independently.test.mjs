@@ -111,6 +111,11 @@ const SETUP_STEPS = new Set([
  * exists to check.
  */
 const BUILD_DEPENDENT = new Set([
+  // Compiles the documentation's samples against the packages in this commit,
+  // resolving them through the real exports map of `packages/*/dist`. Without a
+  // build there is nothing to resolve, and every sample would report its
+  // imports as untyped — a verdict about the tree, not about the pages.
+  "Doc samples compile",
   "Lint",
   "Typecheck",
   "publint",
@@ -264,7 +269,9 @@ describe("the ci job reports every gate, not only the first to fail", () => {
           !s.ifCondition.includes(NOT_CANCELLED) ||
           calledStatusFunctions(s.ifCondition).join() !== "cancelled"
       )
-      .map(s => `${s.name || "(unnamed step)"}: ${s.ifCondition || "(no if:)"}`);
+      .map(
+        s => `${s.name || "(unnamed step)"}: ${s.ifCondition || "(no if:)"}`
+      );
 
     expect(
       wrong,
@@ -323,7 +330,10 @@ describe("the ci job reports every gate, not only the first to fail", () => {
     const tooEarly = steps.flatMap((s, index) =>
       referencedStepIds(s.ifCondition)
         .filter(id => !resolvesBefore(declaredAt.get(id), index))
-        .map(id => `${label(s, index)} references ${id}, declared at ${where(declaredAt.get(id))}`)
+        .map(
+          id =>
+            `${label(s, index)} references ${id}, declared at ${where(declaredAt.get(id))}`
+        )
     );
 
     expect(
