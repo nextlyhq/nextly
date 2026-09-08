@@ -216,7 +216,13 @@ export const SUPPLIED_BY_THE_READER = [
  * the missing name they open with is what the continuation pass is for.
  */
 export const isModule = code =>
-  /^\s*import\b/m.test(code) || /^\s*export\b/m.test(code);
+  /^\s*import\b/m.test(code) ||
+  /^\s*export\b/m.test(code) ||
+  // CommonJS counts. A fence opening `const crypto = require("crypto")` is a
+  // program a reader runs, and requiring ESM syntax filed it as a fragment so
+  // nothing compiled it: the webhook-verification example on the form-builder
+  // page is exactly that shape, and its undefined names were never read.
+  /(?:^|[^.\w])require\s*\(/m.test(code);
 
 /**
  * The documentation this repository owns and publishes.
@@ -316,6 +322,36 @@ export function compile(samples, label, ignore = SUPPLIED_BY_THE_READER) {
  * names the wrong cause is worse than one that does not run.
  */
 function requireBuiltPackages() {
+  // EVERY publishable package, not just `nextly`. A partial build such as
+  // `pnpm --filter nextly... build` satisfied a check that looked only at the
+  // core: imports from an unbuilt sibling then emitted TS2307, the local
+  // manifest showed the subpath as declared, and the diagnostic was filed
+  // against the page. The tree was at fault, and the page took the blame.
+  const unbuilt = [];
+  for (const dirent of readdirSync(join(ROOT, "packages"), {
+    withFileTypes: true,
+  })) {
+    if (!dirent.isDirectory()) continue;
+    const dir = join(ROOT, "packages", dirent.name);
+    try {
+      const manifest = JSON.parse(
+        readFileSync(join(dir, "package.json"), "utf-8")
+      );
+      if (manifest.private || !manifest.name || !manifest.types) continue;
+      if (!existsSync(join(dir, manifest.types))) unbuilt.push(manifest.name);
+    } catch {
+      // Unreadable manifests are not packages a sample can import.
+    }
+  }
+  if (unbuilt.length > 0) {
+    console.error(
+      `doc samples: ${String(unbuilt.length)} workspace package(s) have no built types, ` +
+        "so a sample importing one cannot resolve it and the page would take " +
+        "the blame.\n  Build first: pnpm turbo build --filter='./packages/*'\n"
+    );
+    for (const name of unbuilt) console.error(`  ${name}`);
+    process.exit(1);
+  }
   const types = join(ROOT, "packages", "nextly", "dist", "index.d.ts");
   if (existsSync(types)) return;
   console.error(
@@ -1410,6 +1446,35 @@ async function main() {
   );
 
   if (process.argv.includes("--write-baseline")) {
+    // Refuses to record LESS coverage than the baseline already holds, unless
+    // told to. Rewriting the baseline after a change is exactly how the
+    // coverage ratchet gets defeated: an unclosed code fence dropped a sample
+    // from extraction, the baseline was rewritten with the tree in that state,
+    // and the loss became the new normal — the gate then passed while a page
+    // rendered as one long code block. The escape hatch has to be harder to
+    // reach than the honest path.
+    const held = readBaseline().coverage ?? {};
+    const shrunk = Object.entries(held).filter(
+      ([what, was]) =>
+        ({
+          pages: coverage.files.length,
+          samples: coverage.samples,
+          compiled: coverage.compiled,
+        })[what] < was
+    );
+    if (shrunk.length > 0 && !process.argv.includes("--allow-coverage-loss")) {
+      console.error(
+        "doc samples: this would record LESS coverage than the baseline holds, " +
+          "which is what a lost fence looks like. Check that no fence was " +
+          "broken or deleted; pass --allow-coverage-loss if the loss is real " +
+          "and intended.\n"
+      );
+      for (const [what, was] of shrunk) {
+        console.error(`  ${what}: baseline ${String(was)}`);
+      }
+      process.exit(1);
+    }
+
     writeFileSync(
       BASELINE,
       `${JSON.stringify({ coverage: { pages: coverage.files.length, samples: coverage.samples, compiled: coverage.compiled }, pages: counted }, null, 2)}\n`

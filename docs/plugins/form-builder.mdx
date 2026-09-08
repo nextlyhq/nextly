@@ -596,19 +596,18 @@ const contactForm = createFormConfig('contact', [
 
 **3. Handle submissions in an API route:**
 
-Nextly plugins expose HTTP endpoints via [`contributes.routes`](/docs/plugins/routes) -- the route handler receives the plugin's `ctx` for free, which is what `submitForm` needs as `pluginContext`.
+Nextly plugins expose HTTP endpoints via [`contributes.routes`](/docs/plugins/routes), and a contributed route receives the plugin's `ctx`, which is what `submitForm` takes as `pluginContext`.
+
+`pluginConfig` is the harder half, and worth saying plainly before you copy anything: the form-builder resolves its config during its own `init` and stores it on the Nextly instance, and no exported accessor reaches it from another plugin's context. So the snippet below is the **shape** `submitForm` expects, not a route you can paste and run — the two context values are declared rather than obtained, because today there is no supported way to obtain them outside the plugin itself.
 
 ```ts
-import type { PluginContext } from "nextly";
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { submitForm } from "@nextlyhq/plugin-form-builder";
 import type { ResolvedFormBuilderConfig } from "@nextlyhq/plugin-form-builder";
 
-// Both values belong to the form-builder plugin's own context. There is no
-// supported way to reach them from a plain Next.js route handler: the resolved
-// config is stored on the Nextly instance during the plugin's init, and
-// `getFormBuilderConfig` is not reachable from another plugin's context. Call
-// `submitForm` from inside the form-builder's own seam, or use the route the
-// plugin contributes, rather than rebuilding this by hand.
+// Declared, not obtained: see the note above. `declare` types these for the
+// example and produces nothing at runtime, so this file will not run as
+// written.
 declare const pluginContext: PluginContext;
 declare const pluginConfig: ResolvedFormBuilderConfig;
 
@@ -629,6 +628,7 @@ export async function POST(request: Request) {
 
   return Response.json(result);
 }
+```
 
 
 Add `contactRoutePlugin` to `plugins` alongside `fb.plugin`, and the form now posts to `/api/plugins/@mysite/contact-route/submit`.

@@ -1,8 +1,8 @@
 {
   "coverage": {
     "pages": 49,
-    "samples": 326,
-    "compiled": 185
+    "samples": 327,
+    "compiled": 187
   },
   "pages": {
     "docs/getting-started/quick-start.mdx": 1,
@@ -11,7 +11,7 @@
     "docs/plugins/auth.mdx": 3,
     "docs/plugins/author-guide.mdx": 3,
     "docs/plugins/distribution.mdx": 1,
-    "docs/plugins/form-builder.mdx": 6,
+    "docs/plugins/form-builder.mdx": 9,
     "docs/plugins/index.mdx": 7,
     "docs/plugins/lifecycle.mdx": 2
   }
