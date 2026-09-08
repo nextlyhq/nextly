@@ -3746,6 +3746,20 @@ function renameScopes(
 ): ReadonlyMap<BlockNode, ReadonlyMap<string, string>> {
   const scopes = new Map<BlockNode, ReadonlyMap<string, string>>();
   const seen = new Set<BlockNode>();
+  // One reading per node OBJECT, not one per visit. A node placed in two slots
+  // is reached twice, and a stored node can be a Proxy whose reflection answers
+  // differently each time — so reading again would let one node be a scope
+  // boundary on one occurrence and not on the other, and carry two different
+  // rename maps. Which of them its descendants inherited would then depend on
+  // walk order.
+  const readings = new Map<BlockNode, NodeOrigin>();
+  const ownOf = (node: BlockNode): NodeOrigin => {
+    const known = readings.get(node);
+    if (known !== undefined) return known;
+    const read = nodeOrigin(node);
+    readings.set(node, read);
+    return read;
+  };
   walkNodes([...nodes], (node, parent) => {
     // A node carrying provenance of its OWN is where inheritance stops, and the
     // test is the RECORD rather than the size of its map. An insert that
@@ -3774,11 +3788,10 @@ function renameScopes(
     // of this function, and one descriptor read is cheap enough that not
     // depending on that ordering costs nothing.
     //
-    // The map is remembered rather than rebuilt, because the walk compares
-    // scopes by IDENTITY and a fresh map on a second visit of one node object
-    // reads as a disagreement with itself — which downgraded every descendant
-    // of it to no scope at all.
-    const own = nodeOrigin(node);
+    // The map is remembered rather than rebuilt, so a node reached twice keeps
+    // one scope object. `answerOf` memoises its inverse per map object, so a
+    // rebuilt equal map is a second cache entry for an answer already computed.
+    const own = ownOf(node);
     if (own.claims) {
       scopes.set(node, scopes.get(node) ?? renamedIn(own.origin));
       return;
@@ -3830,8 +3843,10 @@ function sameRenames(
 /**
  * The scope of a node whose own is unknowable, and of one that inherits none.
  *
- * A shared empty map rather than a fresh one per node: the walk compares scopes
- * by IDENTITY to notice that two occurrences of one node disagree, and a new
- * empty map on each visit would read as a disagreement with itself.
+ * A shared empty map rather than a fresh one per node, because it is the
+ * ordinary case — a collision is the exception, so most inserts rename nothing
+ * — and because `answerOf` memoises its inverse per map OBJECT. One map here is
+ * one cache entry for the whole document; a fresh one per node would be an
+ * allocation and a cache entry each, for the same empty answer.
  */
 const NO_RENAMES: ReadonlyMap<string, string> = new Map();

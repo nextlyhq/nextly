@@ -3885,6 +3885,49 @@ describe("provenance is read once, and only where storage would keep it", () => 
     expect(marked([...saved.nodes], "target").cssId).toBe("pricing-1");
   });
 
+  it("reads one node object's origin once, not once per occurrence", () => {
+    // A node placed in two slots is REACHED twice — the shared walk counts it
+    // as two elements of the document deliberately. Reading its record again on
+    // the second visit would let one node object be a scope boundary on one
+    // occurrence and not on the other, carrying two different rename maps, with
+    // walk order deciding which one its descendants inherited.
+    let reads = 0;
+    const shared = new Proxy(node("shared", { cssId: "pricing-1" }), {
+      getOwnPropertyDescriptor(held, key) {
+        if (key !== "origin") {
+          return Reflect.getOwnPropertyDescriptor(held, key);
+        }
+        reads += 1;
+        return {
+          value:
+            reads === 1
+              ? { from: "pattern", id: "hero-pattern", digest: "d" }
+              : {
+                  from: "pattern",
+                  id: "hero-pattern",
+                  digest: "d",
+                  renamed: { pricing: "pricing-1" },
+                },
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        };
+      },
+    }) as BlockNode;
+    const doc = page([
+      node("left", {}, { children: [shared] }),
+      node("right", {}, { children: [shared] }),
+      node("mine", { cssId: "hero", props: { mark: "target" } }),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["mine"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("hero");
+    expect(reads).toBe(1);
+  });
+
   it("saves past a revoked proxy nothing selected", () => {
     // `Array.isArray` THROWS on a revoked proxy, so classifying the entry took
     // the walk out before either guarded slots read could contain it — and the
