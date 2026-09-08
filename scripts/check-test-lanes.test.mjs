@@ -304,6 +304,15 @@ describe("commandCoverage", () => {
     ).toBeNull();
   });
 
+  it("does not count a bare vitest run that is only printed", () => {
+    // The vitest half of the same rule. Covered on its own because the two
+    // branches gate independently: removing only the vitest one left every
+    // other case passing, which is a guard nothing would have reported.
+    expect(
+      commandCoverage("echo pnpm --filter playground exec vitest run", "test")
+    ).toBeNull();
+  });
+
   it("does not count files handed through turbo to the task", () => {
     // 🔴 turbo passes everything after a bare `--` to the task, so this runs
     // one file of nextly's suite while wearing the shape of a whole-task run.
