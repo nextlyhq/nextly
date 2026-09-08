@@ -82,6 +82,7 @@ import {
 } from "../../../shared/lib/field-level-registry";
 import {
   assertFilterableFields,
+  assertGroupableField,
   assertSortableField,
   filterSearchableFields,
 } from "../../../shared/lib/filterable-fields";
@@ -278,6 +279,30 @@ function fieldTrustOf(params: {
 }
 
 /**
+ * How many buckets one grouped read may return.
+ *
+ * A group key with unbounded cardinality -- an id, a title, a timestamp --
+ * produces one bucket per row, so an uncapped GROUP BY is a full table read
+ * wearing an aggregate's name. The cap bounds the ANSWER, never the scan: the
+ * database groups every matching row and this decides how many of the finished
+ * buckets travel back.
+ */
+export const MAX_GROUP_BUCKETS = 50;
+
+/** Distinct values of one field with how many rows carry each. */
+interface GroupedRows {
+  buckets: { value: string | null; count: number }[];
+  /**
+   * Whether buckets were left out because the cap was reached.
+   *
+   * Reported for the reason `atLeast` is reported on a bounded count: a chart
+   * that silently omits categories reads as the whole picture, and a reader
+   * acts on the category it shows as largest.
+   */
+  truncated: boolean;
+}
+
+/**
  * Everything a filtered read needs to settle the row set a caller is allowed
  * to see.
  *
@@ -374,6 +399,15 @@ interface FilteredReadParams {
   resolvedComponentTypeColumns?: Map<string, string>;
   /** Arbitrary data passed to hooks via context */
   context?: Record<string, unknown>;
+  /**
+   * The field whose distinct values become buckets.
+   *
+   * Judged by `assertQueryReadable` alongside `where` and `sort`, because the
+   * bucket set IS the distinct values of the column: grouping by a field the
+   * caller may not read hands back the whole value set at once, where a
+   * `where` yields it one probe at a time.
+   */
+  groupBy?: string;
 }
 
 export class CollectionQueryService extends BaseService {
@@ -637,6 +671,7 @@ export class CollectionQueryService extends BaseService {
     collectionName: string;
     where?: WhereFilter;
     sort?: string;
+    groupBy?: string;
     overrideAccess?: boolean;
     frameworkFilter?: boolean;
   }): void {
@@ -656,6 +691,15 @@ export class CollectionQueryService extends BaseService {
       opts
     );
     assertSortableField("collection", params.collectionName, params.sort, opts);
+    // A group key discloses by a third route: the buckets it returns ARE the
+    // distinct values of the column, so grouping by a field the caller may not
+    // read hands back the value set directly rather than one probe at a time.
+    assertGroupableField(
+      "collection",
+      params.collectionName,
+      params.groupBy,
+      opts
+    );
   }
 
   /**
@@ -2686,6 +2730,151 @@ export class CollectionQueryService extends BaseService {
         data: null,
         // Same reason as listEntries: without the code the boundary rebuilds a
         // typed refusal as a generic internal error.
+        ...errorEnvelopeFields(error),
+      };
+    }
+  }
+
+  /**
+   * How many rows carry each distinct value of one field, over exactly the
+   * rows a `countEntries` with the same request would have counted.
+   *
+   * Shares `resolveReadPlan` with the count rather than assembling its own
+   * filters. An aggregate that built its own could describe a wider row set
+   * than a count of the same query, which is the shape of the aggregate
+   * permission failures reported against other systems: a rule narrowed the
+   * rows and the aggregate counted past it.
+   *
+   * Ranking and the cap both happen IN THE DATABASE, after grouping is
+   * complete, so the cap decides only which finished buckets travel back and
+   * never which rows were aggregated. A cap applied to the SCAN instead --
+   * reading part of the table and grouping whatever it saw -- can reorder the
+   * buckets themselves, making the largest one whichever the read order
+   * reached first. That answer is indistinguishable from the true one and
+   * wrong in the direction a reader acts on.
+   *
+   * One row past the cap is fetched so "there are more" is observed rather
+   * than assumed, then dropped before answering.
+   */
+  async groupEntries(
+    params: FilteredReadParams & { groupBy: string; bucketLimit?: number }
+  ): Promise<CollectionServiceResult<GroupedRows>> {
+    try {
+      const plan = await this.resolveReadPlan<GroupedRows>(params);
+      if (!plan.allowed) return plan.denied;
+      const { schema, whereConditions } = plan;
+
+      const requested = params.groupBy;
+      const snake = toSnakeCase(requested);
+
+      // Stripped from responses and excluded from sort, because ordering by it
+      // lets a caller target rows by creator. Grouping by it is that
+      // disclosure in a single request: one bucket per author, with how much
+      // each of them wrote. `assertGroupableField` does not reach it -- that
+      // guard judges fields carrying a read rule, and this is a system column
+      // that carries none.
+      if (
+        requested === "created_by" ||
+        requested === "createdBy" ||
+        snake === "created_by"
+      ) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: `groupBy.${requested}`,
+              code: "FIELD_NOT_GROUPABLE",
+              message:
+                "Rows cannot be grouped by their creator. The buckets would report how many rows each user owns.",
+            },
+          ],
+        });
+      }
+
+      // Refused rather than skipped, which is the deliberate difference from
+      // the sort path. An unresolved sort column drops the ORDER BY and
+      // returns the right rows in the wrong order; an unresolved group column
+      // would drop the GROUP BY, collapse every bucket into one row, and
+      // answer with a single total that reads exactly like a real one.
+      const column = schema[requested] ?? schema[snake];
+      if (!column) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: `groupBy.${requested}`,
+              code: "FIELD_NOT_GROUPABLE",
+              message: `"${requested}" is not a column on this collection, so there is nothing to group by.`,
+            },
+          ],
+        });
+      }
+
+      const cap = Math.min(
+        Math.max(1, Math.trunc(params.bucketLimit ?? MAX_GROUP_BUCKETS)),
+        MAX_GROUP_BUCKETS
+      );
+
+      let query = this.db
+        .select({ value: column, total: sql<number>`count(*)` })
+        .from(schema);
+
+      if (whereConditions.length > 0) {
+        query = query.where(
+          whereConditions.length === 1
+            ? whereConditions[0]
+            : and(...whereConditions)
+        );
+      }
+
+      const rows = await query
+        .groupBy(column)
+        // The value breaks ties, so two buckets of equal size come back in a
+        // fixed order and the cap cannot drop a different one per request.
+        .orderBy(desc(sql`count(*)`), asc(column))
+        .limit(cap + 1);
+
+      return {
+        success: true,
+        statusCode: 200,
+        message: "Buckets retrieved successfully",
+        data: {
+          // Annotated because the group column is resolved from a dynamic
+          // schema, so the row shape cannot be inferred from the select.
+          buckets: rows
+            .slice(0, cap)
+            .map(
+              (row: {
+                value: string | number | boolean | Date | null;
+                total: number | string | null;
+              }) => ({
+                // A date bucket travels as ISO rather than through the
+                // platform's default rendering, so the same row groups to the
+                // same label on every runtime.
+                value:
+                  row.value == null
+                    ? null
+                    : row.value instanceof Date
+                      ? row.value.toISOString()
+                      : String(row.value),
+                count: Number(row.total ?? 0),
+              })
+            ),
+          truncated: rows.length > cap,
+        },
+      };
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Failed to group entries";
+      this.logger.error("Error grouping entries", {
+        collectionName: params.collectionName,
+        error: message,
+      });
+      return {
+        success: false,
+        // Mirrors countEntries: a refused access constraint is a 403 and a
+        // refused group key a 400, not a server fault.
+        statusCode: NextlyError.is(error) ? error.statusCode : 500,
+        message,
+        data: null,
         ...errorEnvelopeFields(error),
       };
     }
