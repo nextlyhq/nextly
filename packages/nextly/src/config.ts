@@ -193,6 +193,16 @@ export type { RouteMethod } from "./plugins/routes/route-types";
 // they meant.
 export type { JsonValue } from "./plugins/admin-contributions";
 
+// And what a plugin route may have to say about a write that already
+// committed. Published here for the same reason the two above are: a plugin
+// route reporting a post-commit hook failure and the plugin UI reading that
+// report are two halves of one package, and only one of them may load the
+// framework. Without a shared name the browser half either restates the shape
+// -- a second definition that drifts the first time a field is added -- or
+// types the field as `unknown` and stops being able to say anything about it.
+// A pure interface of strings, so this costs the browser nothing.
+export type { HookWarning } from "./hooks/side-effect-warnings";
+
 // The admin CONTRIBUTION shapes, published so the admin panel can DERIVE its
 // `/admin-meta` types from the declaration the server serializes rather than
 // restating them. `buildPluginAdminMeta` copies a contributed widget verbatim

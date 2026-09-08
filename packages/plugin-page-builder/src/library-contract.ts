@@ -1,8 +1,11 @@
 /**
  * What the pattern library route answers, named where both ends can read it.
  *
- * IMPORT-FREE, deliberately, and that is the whole reason this file is separate
- * from the route that implements it. The route reaches the collection through
+ * FREE OF RUNTIME IMPORTS, deliberately, and that is the whole reason this file
+ * is separate from the route that implements it. Types are the exception and
+ * cost nothing — they are erased before a browser sees them — so the shapes
+ * both ends must agree on can be named here without either end's runtime
+ * arriving with them. The route reaches the collection through
  * `nextly/config`, which pulls the Direct API — server-only, and it says so at
  * load time. A browser module importing the route for one path constant brings
  * that with it: measured, importing it from the admin client took eleven test
@@ -15,7 +18,9 @@
  *
  * @module library-contract
  */
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { SavedPattern } from "@nextlyhq/builder";
+import type { HookWarning } from "nextly/config";
 
 /**
  * The name this plugin registers under, which is also how its routes are
@@ -140,4 +145,80 @@ export interface LibraryResponse {
     /** Whether the ceiling stopped the read before the collection ended. */
     readonly truncated: boolean;
   };
+}
+
+/**
+ * Where the editor sends a selection to be stored as a pattern.
+ *
+ * Named for the VERB rather than for a resource, because the verbs that follow
+ * it are not all creations. `Save as component` creates a definition, and
+ * `Convert to component` and `Detach` also hand back ops that change the page
+ * the author is editing — so a resource path would fit the first two and have
+ * nothing to address for the others. One shape for the whole family is what
+ * lets a reader of `contributes.routes` see them as one family.
+ */
+export const SAVE_PATTERN_ROUTE_PATH = "/save-as-pattern";
+
+/**
+ * The metadata a saved pattern carries, as the surface that saves it states
+ * them.
+ *
+ * These are the `patterns` collection's own fields, and the route does not
+ * trust this list at runtime: it takes the field names from the collection
+ * itself, so a caller cannot reach a column the collection never declared.
+ * What this type is for is the DIALOG — the surface filling the form needs to
+ * know what to ask for, and it runs in a browser that cannot load the
+ * collection module.
+ *
+ * A type naming a source of truth it cannot track is how a contract goes quietly
+ * stale, so `save-pattern-contract.test.ts` compares these keys against the
+ * collection's declared fields and fails when they part company.
+ */
+export interface SavePatternFields {
+  readonly title: string;
+  readonly slug: string;
+  readonly granularity: PatternGranularity;
+  readonly description?: string;
+  readonly category?: string;
+  readonly keywords?: string;
+}
+
+/**
+ * What the editor sends to store a selection as a pattern.
+ *
+ * The DOCUMENT and the SELECTION, not a pattern the browser already built. The
+ * planner decides what a saved pattern is — which nodes travel, what is
+ * re-identified, which selections are refusable — and it decides it against the
+ * block registry, which is not the same registry at both ends: the browser
+ * registers the core blocks, while the server also holds every block another
+ * plugin declared. A browser that planned the save would answer a nesting
+ * question about blocks it has never heard of, and store a pattern nothing can
+ * place.
+ *
+ * It is also the difference between a rule and a convention. A pattern posted
+ * ready-made would be whatever its caller decided to send, and the guarantee the
+ * insert panel leans on — that a stored pattern is one the planner would place —
+ * would hold only for callers that chose to honour it.
+ */
+export interface SavePatternRequest {
+  /** The document the selection was made in. */
+  readonly document: BlockDocument;
+  /** The nodes to lift out of it, in the editor's own vocabulary. */
+  readonly selectedIds: readonly string[];
+  readonly fields: SavePatternFields;
+}
+
+/**
+ * What a completed save answers.
+ *
+ * The id, because the surface that saved has nothing else to address the new
+ * pattern by, and the warnings, because a post-commit hook can fail after the
+ * row is durable. Dropping those would report a save as wholly successful when
+ * part of it was not — and the row cannot be un-saved, so the only remedy is to
+ * say so.
+ */
+export interface SavePatternResponse {
+  readonly id: string;
+  /** Side effects that failed after the row committed, when any did. */
+  readonly warnings?: readonly HookWarning[];
 }

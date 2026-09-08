@@ -361,6 +361,28 @@ export interface PlanRefusal {
 export type PlanResult<TFields> = CompositionPlan<TFields> | PlanRefusal;
 
 /**
+ * A plan that is guaranteed to have created something, or the cause it did not.
+ *
+ * {@link CompositionPlan.create} is optional because a composition action need
+ * not create anything — `planDetach` only edits the page — so the shared shape
+ * cannot promise a row. A planner whose whole purpose is to fill the library
+ * always does, and saying so in the type is what stops every caller writing a
+ * branch for a state its planner cannot reach: an impossible branch is one that
+ * can never be exercised, so nothing ever proves it does the right thing, and
+ * the first reader to simplify it has no way to tell whether it was defensive
+ * or load-bearing.
+ *
+ * It narrows nothing else, and it is applied per planner rather than to a group
+ * of them. Each planner's guarantee is its own — a `create` here, a `create` and
+ * `pageOps` for a convert, an `update` for a save-over — and one alias spanning
+ * them would assert whichever guarantee its name suggested for planners that
+ * were never checked against it.
+ */
+export type CreatePlanResult<TFields> =
+  | (CompositionPlan<TFields> & { readonly create: PlannedCreate<TFields> })
+  | PlanRefusal;
+
+/**
  * Where a saved selection is stored, in the caller's vocabulary.
  *
  * One type for all three library kinds rather than one per planner. A pattern,
@@ -424,7 +446,7 @@ export function planSaveAsPattern<TFields>(
   selectedIds: readonly string[],
   target: LibraryTarget<TFields>,
   nesting: NestingSource
-): PlanResult<TFields> {
+): CreatePlanResult<TFields> {
   const saved = plannedSave(document, selectedIds, nesting);
   if (saved.problem !== undefined) return saved;
 
