@@ -454,6 +454,10 @@ describe("useWidgetQueries", () => {
     await waitFor(() =>
       expect(result.current.fetchingPlacementIds.size).toBe(0)
     );
+    // The batch-wide flag is DERIVED from that set, so it has to fall with it.
+    // Asserted because nothing else did: a flag stuck at `true` left every
+    // card's busy affordance on forever and no test noticed.
+    expect(result.current.isFetching).toBe(false);
   });
 
   describe("a member of results that is not a slot", () => {

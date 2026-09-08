@@ -525,7 +525,21 @@ export function useWidgetQueries(
     slots,
     cellSlots,
     isLoading: results.some(answer => answer.isLoading),
-    isFetching: results.some(answer => answer.isFetching),
+    /*
+     * 🔴 DERIVED from the set, not reduced a second time from the same results.
+     * The two answer one question -- "is anything still loading" -- and
+     * computing it twice is how they come to disagree: a later change to which
+     * partitions count as in flight would have to be made in both places, and
+     * the grid-wide affordance and the per-card one would drift apart silently.
+     *
+     * Equivalent by construction, not by coincidence: `partitionRequests`
+     * advances while `start < queries.length`, so every partition it emits
+     * holds at least one request, and an empty input produces no partitions at
+     * all. A fetching partition therefore always contributes at least one
+     * placement, and the set is non-empty exactly when some partition is
+     * fetching.
+     */
+    isFetching: fetchingPlacementIds.size > 0,
     fetchingPlacementIds,
     // The FIRST failure, which is enough for the grid: what a reader needs per
     // widget is already in that widget's slot, and this says only that
