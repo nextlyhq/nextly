@@ -154,6 +154,7 @@ import { readSiteStyleRecord } from "../site-style-record";
 import { DocumentStatusPill } from "./DocumentStatusPill";
 import { pageRenderInputs, readDocumentLimits } from "./page-render-inputs";
 import { PageBuilderCard } from "./PageBuilderCard";
+import { usePatternLibrary } from "./pattern-library-client";
 /* The save state, which the status pill cannot carry: it renders nothing on a
    collection with no publish lifecycle, and took the only reading of unsaved
    work down with it. */
@@ -1687,6 +1688,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     [shownStyleState]
   );
   const drag = useCanvasDrag({ editor, slots, nesting, canvasRoot });
+  // The saved patterns this site's authors may insert. Read here rather than
+  // inside the panel because the panel is a pure surface over what it is given
+  // — it takes a registry and a list, and asking for its own data would make
+  // every host that renders it depend on this plugin's route.
+  const patternLibrary = usePatternLibrary();
   /*
    * Is a drag happening — of EITHER kind.
    *
@@ -2530,6 +2536,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 editor={editor}
                 categoryOrder={CORE_CATEGORIES}
                 beginInsertDrag={drag.beginInsertDrag}
+                patterns={patternLibrary.patterns}
               />
             ),
             /*

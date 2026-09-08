@@ -24,6 +24,14 @@ import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
+/**
+ * What the library route answers, for the one case that cares.
+ *
+ * `undefined` is the ordinary state here — a site with no saved patterns — and
+ * every other case in this file was written against it.
+ */
+let libraryAnswer: { items: unknown[]; meta: unknown } | undefined;
+
 /** Props the recorders captured on the most recent render. */
 const seen: {
   inspector: Record<string, unknown> | undefined;
@@ -191,6 +199,22 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    */
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
+  /*
+   * The library read. Absent here rather than stubbed with patterns, because
+   * these cases are about other surfaces and an offered pattern would change
+   * what the palette contains. `pending: false` says the read ANSWERED with
+   * nothing, which is the site with an empty library — the state every one of
+   * these cases was written against.
+   */
+  // The library read. Mutable so one case can put a pattern in it: what the
+  // panel is GIVEN is this file's subject, and the tier was unreachable for as
+  // long as the answer never reached the prop.
+  usePluginRoute: () => ({
+    data: libraryAnswer,
+    pending: false,
+    error: null,
+    refetch: () => {},
+  }),
   useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
@@ -241,6 +265,9 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // A leaked answer would make the next case's palette offer a pattern it was
+  // not written for.
+  libraryAnswer = undefined;
 });
 
 describe("what makes a palette drag reachable at all", () => {
@@ -290,5 +317,47 @@ describe("what makes a palette drag reachable at all", () => {
     // The same function the drag returned, so a row's press reaches THIS
     // gesture rather than some other callback that merely has the right name.
     expect(seen.insertPanel?.beginInsertDrag).toBe(beginInsertDrag);
+  });
+});
+
+describe("what makes the saved pattern tier reachable at all", () => {
+  it("hands the panel the patterns the library answered with", () => {
+    // The panel has accepted a `patterns` prop since the tier landed, and
+    // nothing supplied one — so an author could save a pattern and never see it
+    // again. Every other assertion in this file stays green with the prop
+    // absent, because the palette still draws its blocks.
+    //
+    // Asserted as IDENTITY with what the read returned, not as "some patterns
+    // arrived": a component that built its own list would satisfy presence.
+    const items = [
+      {
+        id: "hero",
+        title: "Hero",
+        granularity: "section",
+        content: { formatVersion: 1, kind: "pattern", nodes: [] },
+      },
+    ];
+    libraryAnswer = { items, meta: { count: 1, truncated: false } };
+
+    openEditor();
+
+    // Population first: an assertion about `undefined` reads as a passing
+    // wiring check.
+    expect(seen.insertPanel).toBeDefined();
+    expect(seen.insertPanel?.patterns).toBe(items);
+  });
+
+  it("gives it an empty list, not undefined, before the read answers", () => {
+    // The panel builds its catalogue in a memo keyed on this prop, running the
+    // planner's preflight over every pattern in the library. A fresh `[]` each
+    // render is a new identity, so that whole catalogue would rebuild on every
+    // keystroke of the panel's own filter.
+    openEditor();
+    const first = seen.insertPanel?.patterns;
+    cleanup();
+    openEditor();
+
+    expect(first).toEqual([]);
+    expect(seen.insertPanel?.patterns).toBe(first);
   });
 });

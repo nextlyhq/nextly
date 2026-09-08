@@ -32,9 +32,11 @@
  * @module library-route
  */
 import { PATTERNS_SLUG } from "./collections/patterns";
-
-/** Where the panel finds this, under the plugin's own namespace. */
-export const LIBRARY_ROUTE_PATH = "/library";
+import {
+  LIBRARY_ROUTE_PATH,
+  type LibraryPattern,
+  type LibraryResponse,
+} from "./library-contract";
 
 /**
  * How many rows one read of the collection asks for.
@@ -68,40 +70,6 @@ export const MAX_LIBRARY_PATTERNS = 3000;
  * on the kept count spun until the process died.
  */
 const MAX_LIBRARY_PAGES = Math.ceil(MAX_LIBRARY_PATTERNS / LIBRARY_PAGE_SIZE);
-
-/**
- * One pattern, as the panel needs it.
- *
- * The DOCUMENT travels, which is what makes this bigger than an index. The
- * palette runs the planner's whole preflight over each pattern before offering
- * it — a stored row can be the wrong kind, hold no nodes, or nest in a way the
- * rules no longer allow — so a tile exists only for a pattern the planner would
- * actually place. A metadata-only index cannot answer that, and a panel that
- * guessed would offer tiles that accept a click and then refuse.
- */
-export interface LibraryPattern {
-  readonly id: string;
-  readonly title: string;
-  readonly description?: string;
-  readonly category?: string;
-  /** The author's own search terms, as stored — one string, or unset. */
-  readonly keywords?: string | null;
-  /** How much of a page this covers; the panel offers `page` differently. */
-  readonly granularity?: string;
-  /** The stored pattern document, or absent as a stored row's may be. */
-  readonly content?: unknown;
-}
-
-/** What one library read answers. */
-export interface LibraryResponse {
-  readonly items: readonly LibraryPattern[];
-  readonly meta: {
-    /** How many were returned. */
-    readonly count: number;
-    /** Whether the ceiling stopped the read before the collection ended. */
-    readonly truncated: boolean;
-  };
-}
 
 /** The capabilities this route uses, named rather than imported whole. */
 export interface LibraryRouteContext {
@@ -192,23 +160,41 @@ function readLibraryRow(row: unknown): LibraryPattern | undefined {
   // title is the only thing a tile can be found by.
   if (typeof id !== "string" || id === "") return undefined;
   if (typeof title !== "string" || title === "") return undefined;
+  return { id, title, ...describedBy(record) };
+}
+
+/**
+ * The fields a pattern may or may not carry, read off one row.
+ *
+ * Separate from the identity check above because they answer different
+ * questions — whether this row is a pattern at all, and what it says about
+ * itself — and because reading them is where all the branching is.
+ */
+function describedBy(record: Record<string, unknown>): Partial<LibraryPattern> {
   return {
-    id,
-    title,
     ...optionalText(record.description, "description"),
     ...optionalText(record.category, "category"),
     ...optionalText(record.granularity, "granularity"),
-    // `null` is carried through rather than dropped, because it is what the
-    // panel's keyword reader is written to meet.
-    ...(record.keywords === null || typeof record.keywords === "string"
-      ? { keywords: record.keywords }
-      : {}),
+    ...storedKeywords(record.keywords),
     // Carried whole and unread. What a pattern document must be is the
     // planner's question, and it asks it before offering the pattern; a second
     // reading here would be a narrower one that disagrees the first time the
     // format gains a field.
     ...(record.content === undefined ? {} : { content: record.content }),
   };
+}
+
+/**
+ * The author's search terms, including the `null` a stored row really holds.
+ *
+ * `null` is carried through rather than normalised away: Nextly writes an unset
+ * non-required field as SQL `NULL` and reads it back with the KEY PRESENT, so
+ * the ordinary pattern saved without keywords arrives as `null` — and the
+ * panel's own keyword reader is written to meet exactly that.
+ */
+function storedKeywords(value: unknown): { keywords?: string | null } {
+  if (value === null) return { keywords: null };
+  return typeof value === "string" ? { keywords: value } : {};
 }
 
 /** One optional string field, present only when it is actually a string. */

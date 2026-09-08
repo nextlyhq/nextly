@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { LIBRARY_ROUTE_PATH } from "./library-route";
+import { LIBRARY_ROUTE_PATH } from "./library-contract";
 import { pageBuilder } from "./plugin";
 
 describe("the library route is contributed, not merely written", () => {
