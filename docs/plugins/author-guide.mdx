@@ -46,6 +46,8 @@ Author with `definePlugin` from `@nextlyhq/plugin-sdk`:
 ```ts
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 
+type MyPluginOptions = { greeting?: string };
+
 export const myPlugin = (opts: MyPluginOptions = {}) =>
   definePlugin({
     name: "@acme/nextly-plugin-greetings",

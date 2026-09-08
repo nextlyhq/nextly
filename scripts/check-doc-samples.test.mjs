@@ -1,3 +1,4 @@
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,6 +9,8 @@ import {
   identityOf,
   isModule,
   pageOf,
+  parseSample,
+  rebaseContextDiagnostics,
   unaccountedFor,
   unterminatedFences,
 } from "./check-doc-samples.mjs";
@@ -635,5 +638,106 @@ describe("unterminatedFences and closing lines", () => {
   it("still accepts a plain closer, and one with trailing whitespace", () => {
     expect(unterminatedFences(["```ts", "const a = 1;", "```", ""].join("\n"))).toEqual([]);
     expect(unterminatedFences(["```ts", "const a = 1;", "```   ", ""].join("\n"))).toEqual([]);
+  });
+});
+
+describe("isModule asks the compiler rather than listing node kinds", () => {
+  /**
+   * The kinds this used to enumerate, as the control.
+   *
+   * A list answers only for what somebody thought of, and this one was short in
+   * both directions at once, which is the shape a list always fails in.
+   */
+  const byKindList = (code, extension = "ts") =>
+    parseSample(code, extension).statements.some(
+      statement =>
+        ts.isImportDeclaration(statement) ||
+        ts.isImportEqualsDeclaration(statement) ||
+        ts.isExportDeclaration(statement) ||
+        ts.isExportAssignment(statement) ||
+        (ts.getModifiers?.(statement) ?? statement.modifiers ?? []).some(
+          modifier => modifier.kind === ts.SyntaxKind.ExportKeyword
+        )
+    );
+
+  it("compiles a fence that only exports a namespace", () => {
+    // `export as namespace X` parses as a NamespaceExportDeclaration, which no
+    // kind in the list matched, so such a fence was never compiled and carried
+    // whatever else it said into the baseline unread. TypeScript's own error
+    // for it, TS1314, says the syntax may only appear in a module file.
+    const code = "export as namespace Nextly;\ndeclare const a: number;\n";
+    expect(isModule(code, "ts")).toBe(true);
+    expect(byKindList(code)).toBe(false);
+  });
+
+  it("compiles a fence whose only module syntax is import.meta", () => {
+    // TypeScript sets its module indicator for `import.meta`, so this fence is
+    // a module to the compiler that would compile it while the list read it as
+    // a fragment. Neither the reviewer nor the list found this one.
+    const code = 'const here = import.meta.url;\nconsole.log(here);\n';
+    expect(isModule(code, "ts")).toBe(true);
+    expect(byKindList(code)).toBe(false);
+  });
+
+  it("leaves a namespace alias alone", () => {
+    // `import A = N.M` names an existing namespace rather than loading a
+    // module, and TypeScript does not call the file a module for it. The list
+    // matched every ImportEqualsDeclaration, so it read this as a program.
+    const code = "import A = N.M;\n";
+    expect(isModule(code, "ts")).toBe(false);
+    expect(byKindList(code)).toBe(true);
+  });
+
+  it("still answers for the cases the list got right", () => {
+    // The control on the control: a predicate that answered false to
+    // everything would satisfy two of the three assertions above.
+    expect(isModule('import x from "nextly";', "ts")).toBe(true);
+    expect(isModule("export const a = 1;", "ts")).toBe(true);
+    expect(isModule("const a = 1;", "ts")).toBe(false);
+  });
+});
+
+describe("rebaseContextDiagnostics accounts for every line", () => {
+  const prependedByOrigin = new Map([["docs/p.mdx#3", 4]]);
+  const at = (lineNo, message) => `docs/p.mdx#3:${String(lineNo)}  ${message}`;
+
+  it("returns a diagnostic about a pasted declaration instead of dropping it", () => {
+    // Line 2 is inside the four prepended lines, and the message is neither an
+    // artefact of pasting nor an implicit any. Only the origin used to come
+    // back: the report named the sample unchecked and the line itself reached
+    // nothing the gate compares, so a fence could stop being checked while
+    // every number stood still.
+    const line = at(2, "error TS2304: Cannot find name 'PluginDefinition'.");
+    const result = rebaseContextDiagnostics({ lines: [line], prependedByOrigin });
+    expect(result.contextOnly).toEqual([line]);
+    expect([...result.unresolvedInContext]).toEqual(["docs/p.mdx#3"]);
+    // The control: it is still not rebased onto the reader's page, because it
+    // belongs to a block that is not the one being reported.
+    expect(result.lines).toEqual([]);
+  });
+
+  it("puts every line in exactly one bucket", () => {
+    const lines = [
+      at(1, "error TS2300: Duplicate identifier 'adapter'."),
+      at(2, "error TS7006: Parameter 'doc' implicitly has an 'any' type."),
+      at(3, "error TS2304: Cannot find name 'PluginDefinition'."),
+      at(9, "error TS2551: Property 'connectTypo' does not exist."),
+    ];
+    const result = rebaseContextDiagnostics({ lines, prependedByOrigin });
+    const partitioned =
+      result.lines.length +
+      result.artefacts.length +
+      result.implicitAnyInContext.length +
+      result.contextOnly.length;
+    expect(partitioned).toBe(lines.length);
+    // Named, not just counted: four equal totals can be reached by putting two
+    // lines in one bucket and none in another.
+    expect(result.artefacts).toHaveLength(1);
+    expect(result.implicitAnyInContext).toHaveLength(1);
+    expect(result.contextOnly).toHaveLength(1);
+    expect(result.lines).toHaveLength(1);
+    // The one past the prepended region is the reader's, rebased onto their
+    // own line numbering.
+    expect(result.lines[0]).toContain("docs/p.mdx#3:5");
   });
 });

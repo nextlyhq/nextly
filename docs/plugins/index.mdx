@@ -113,8 +113,13 @@ See the **[Plugin Author Guide](/docs/plugins/author-guide)** for the full workf
 Plugins can control where their collections appear in the admin sidebar and customize their visual appearance.
 
 ```typescript
+import type { PluginDefinition } from 'nextly';
+import { MyCollection } from './collections/my-collection';
+
 const plugin: PluginDefinition = {
   name: 'my-plugin',
+  version: '0.1.0',
+  nextly: '>=0.0.2-alpha.63',
   collections: [MyCollection],
 
   admin: {
