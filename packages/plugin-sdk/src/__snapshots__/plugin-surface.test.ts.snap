@@ -115,6 +115,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "ValidationRuleValues (type)",
   "ValidationRulesEditor (value)",
   "ValidationRulesEditorProps (type)",
+  "apiErrorMessage (value)",
   "drawsAnyValidationRule (value)",
   "isApiError (value)",
   "loadInlineRichTextEditor (value)",
