@@ -44,7 +44,13 @@ Nothing is toasted from the hook. The admin's own mutation hooks raise a toast b
 
 **Every write is reported, not only the newest.** TanStack's observer follows the most recent call, so with two writes in flight — a double submit, an autosave overlapping a save — the older one's rejection reached no observer: `error` never saw it and `pending` went false while that request was still running.
 
-`TBody` is bounded to `JsonValue`, published from `nextly/config` beside `RouteMethod`. Every sender applies `JSON.stringify`, so a `Date`, a `Map`, `FormData`, a function or a bigint is silently changed, dropped, or throws — the compiler refuses them now, where the author can still see what they meant.
+`TBody` DEFAULTS to `JsonValue` rather than being constrained by it. A constraint rejects an ordinary `interface SaveBody { title: string }`, because an interface has no implicit index signature in TypeScript — the error lands on correct code and the only fix is "rewrite your interface as a type alias", which teaches nothing about serialization. That is the reasoning this codebase already recorded for `clientConfig`, and the constraint contradicted it. Every sender applies `JSON.stringify`, and the docblock says so.
+
+**A write may carry no body at all.** A contributed `DELETE /items/:id` legitimately has none, and inventing one — `null`, `{}` — is a different request that a handler requiring an empty body can reject.
+
+**A write refreshes the reads it was SUBMITTED with.** The target was already snapshotted; the invalidation keys were not, so a write held while the hook re-pointed refreshed the new selection's reads and left its own stale.
+
+**A later success clears an earlier failure.** `error` reports the last write, and left set, a plugin showed "could not save" beside a save that had just worked.
 
 The write verbs are `Exclude<RouteMethod, "GET">` rather than a second list of methods. Spelled out, that was a narrower view of the route contract that would stop covering it the moment a method was added: a plugin could declare the route and this could not call it, and nothing would fail. `RouteMethod` is published from `nextly/config` for that, beside `pluginRouteFullPath` and for the same reason — the admin has to agree with the dispatcher about what a route is.
 

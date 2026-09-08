@@ -68,10 +68,7 @@ export interface PluginRouteWrite {
 }
 
 /** What a write reports back while and after it runs. */
-export interface PluginRouteWriter<
-  TBody extends JsonValue,
-  TResult extends object | null,
-> {
+export interface PluginRouteWriter<TBody, TResult extends object | null> {
   /**
    * Send the body, and resolve with what the route answered.
    *
@@ -84,7 +81,7 @@ export interface PluginRouteWriter<
    * `undefined` also means "answered with no body", which a 204 legitimately
    * does. `error` is what separates the two.
    */
-  readonly write: (body: TBody) => Promise<TResult | undefined>;
+  readonly write: (body?: TBody) => Promise<TResult | undefined>;
   /** Whether a write is in flight. */
   readonly pending: boolean;
   /** The failure of the last write, or `null`. */
@@ -106,7 +103,7 @@ export interface PluginRouteWriter<
  * someone else's feature.
  */
 export function usePluginRouteMutation<
-  TBody extends JsonValue,
+  TBody = JsonValue,
   TResult extends object | null = Record<string, unknown>,
 >({
   plugin,
@@ -138,14 +135,13 @@ export function usePluginRouteMutation<
     // caller is told about and may repeat deliberately, and a write that is
     // retried wrongly costs duplicate data nothing can identify afterwards.
     retry: false,
-    onSuccess: async () => {
-      // The plugin's OWN reads, keyed exactly as `usePluginRoute` keys them.
+    onSuccess: async (_answered, sent: PluginWrite<TBody>) => {
+      // The keys THIS write carried, not the ones the hook points at now. A
+      // callback reading the latest render refreshes the wrong plugin's reads
+      // when the target changed while the request was in flight, and leaves
+      // the data it did change stale.
       await Promise.all(
-        (invalidates ?? []).map(target =>
-          client.invalidateQueries({
-            queryKey: ["plugin-route", pluginRouteFullPath(plugin, target)],
-          })
-        )
+        sent.invalidates.map(queryKey => client.invalidateQueries({ queryKey }))
       );
     },
   });
@@ -162,11 +158,26 @@ export function usePluginRouteMutation<
   const inFlightRef = useRef(0);
 
   const write = useCallback(
-    async (body: TBody) => {
+    async (body?: TBody) => {
       inFlightRef.current += 1;
       setInFlight(inFlightRef.current);
       try {
-        const answered = await mutateAsync({ body, method, route });
+        const answered = await mutateAsync({
+          body,
+          method,
+          route,
+          // Resolved HERE, against this render's plugin and paths, so the write
+          // carries the keys it was submitted with.
+          invalidates: (invalidates ?? []).map(target => [
+            "plugin-route",
+            pluginRouteFullPath(plugin, target),
+          ]),
+        });
+        // A write that succeeded clears the last failure. Without this, one
+        // failed save left `error` set for the rest of the session — a plugin
+        // showing "could not save" beside a save that had just worked, which
+        // contradicts what this field says it is.
+        setError(null);
         return answered;
       } catch (cause) {
         // Every failed write is reported, not only the newest.
@@ -178,17 +189,26 @@ export function usePluginRouteMutation<
         setInFlight(inFlightRef.current);
       }
     },
-    [mutateAsync, method, route]
+    [mutateAsync, method, route, plugin, invalidates]
   );
 
   return { write, pending: inFlight > 0, error };
 }
 
 /** One write, with the target it was submitted against. */
-interface PluginWrite<TBody extends JsonValue> {
-  readonly body: TBody;
+interface PluginWrite<TBody> {
+  readonly body: TBody | undefined;
   readonly method: PluginRouteMethod;
   readonly route: string;
+  /**
+   * The read keys this write refreshes, resolved when it was SUBMITTED.
+   *
+   * Snapshotted for the same reason the route is. TanStack updates a pending
+   * mutation's options, so a callback reading the latest render would refresh
+   * the reads of whatever the hook points at now — leaving the data this write
+   * actually changed stale, and invalidating a list it never touched.
+   */
+  readonly invalidates: readonly (readonly unknown[])[];
 }
 
 /**

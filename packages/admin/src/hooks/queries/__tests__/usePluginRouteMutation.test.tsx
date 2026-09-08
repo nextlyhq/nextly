@@ -5,7 +5,11 @@
  * themselves: that the request goes to the namespace the dispatcher actually
  * serves, and that a failure cannot escape as an unhandled rejection.
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  onlineManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { renderHook, waitFor, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -219,34 +223,120 @@ describe("usePluginRouteMutation", () => {
   });
 
   it("sends a paused write to the target it was SUBMITTED against", async () => {
-    // The target travels with the body. Closed over, a write held while the
-    // hook re-rendered with a different route would go to whichever one it was
-    // rendered with by the time it ran — a different endpoint for a body the
-    // author approved for neither.
-    let release: (value: { id: string }) => void = () => {};
-    postSpy.mockReturnValueOnce(
-      new Promise<{ id: string }>(resolve => {
-        release = resolve;
-      })
-    );
-    const { result, rerender } = renderHook(
-      (props: { path: string }) =>
-        usePluginRouteMutation({ plugin: "@acme/p", path: props.path }),
-      { wrapper: wrapper(), initialProps: { path: "/patterns" } }
-    );
+    // GENUINELY PAUSED, through TanStack's own online manager.
+    //
+    // Holding the transport's promise unresolved is not the same thing and does
+    // not test this: the mutation function has already RUN by then, so it has
+    // already read the route, and a closed-over implementation passes. What has
+    // to be delayed is dispatch, not the response — offline, TanStack holds the
+    // mutation before calling the function, and applies the options the hook
+    // has when it reconnects.
+    onlineManager.setOnline(false);
+    try {
+      const { result, rerender } = renderHook(
+        (props: { path: string }) =>
+          usePluginRouteMutation({ plugin: "@acme/p", path: props.path }),
+        { wrapper: wrapper(), initialProps: { path: "/patterns" } }
+      );
 
-    let held: Promise<unknown> | undefined;
-    act(() => {
-      held = result.current.write({ title: "Hero" });
+      let held: Promise<unknown> | undefined;
+      act(() => {
+        held = result.current.write({ title: "Hero" });
+      });
+      // Nothing has been dispatched: that is what makes the rerender below the
+      // event this test is about.
+      expect(postSpy).not.toHaveBeenCalled();
+
+      // The hook is now pointed somewhere else while that write is held.
+      rerender({ path: "/somewhere-else" });
+
+      await act(async () => {
+        onlineManager.setOnline(true);
+        await held;
+      });
+
+      expect(postSpy).toHaveBeenCalledTimes(1);
+      expect(postSpy.mock.calls[0]?.[0]).toBe("/plugins/@acme/p/patterns");
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
+  it("refreshes the reads the write was SUBMITTED with, not the newest", async () => {
+    // The same snapshot question one layer along. The target was carried and
+    // the invalidation keys were not, so a write held while the hook re-pointed
+    // refreshed the new selection's reads and left its own stale.
+    const invalidate = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    onlineManager.setOnline(false);
+    try {
+      const { result, rerender } = renderHook(
+        (props: { plugin: string }) =>
+          usePluginRouteMutation({
+            plugin: props.plugin,
+            path: "/patterns",
+            invalidates: ["/library"],
+          }),
+        { wrapper: wrapper(), initialProps: { plugin: "@acme/p" } }
+      );
+
+      let held: Promise<unknown> | undefined;
+      act(() => {
+        held = result.current.write({ title: "Hero" });
+      });
+      rerender({ plugin: "@other/q" });
+
+      await act(async () => {
+        onlineManager.setOnline(true);
+        await held;
+      });
+
+      const keys = invalidate.mock.calls.map(
+        ([arg]) => (arg as { queryKey: unknown[] }).queryKey
+      );
+      expect(keys).toEqual([["plugin-route", "/plugins/@acme/p/library"]]);
+      invalidate.mockRestore();
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
+  it("clears an earlier failure once a later write succeeds", async () => {
+    // `error` says it is the failure of the LAST write. Left set, a plugin
+    // shows "could not save" beside a save that has just worked, for the rest
+    // of the session.
+    postSpy.mockRejectedValueOnce(new Error("first one failed"));
+    postSpy.mockResolvedValueOnce({ id: "second" });
+    const { result } = renderHook(() => usePluginRouteMutation(write), {
+      wrapper: wrapper(),
     });
-    // The hook is now pointed somewhere else while that write is unresolved.
-    rerender({ path: "/somewhere-else" });
+
     await act(async () => {
-      release({ id: "p1" });
-      await held;
+      await result.current.write({ title: "first" });
+    });
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+
+    await act(async () => {
+      await result.current.write({ title: "second" });
     });
 
-    expect(postSpy.mock.calls[0]?.[0]).toBe("/plugins/@acme/p/patterns");
+    await waitFor(() => expect(result.current.error).toBeNull());
+  });
+
+  it("sends NO body when the caller has none to send", async () => {
+    // A contributed `DELETE /items/:id` legitimately has no request body, and
+    // inventing one — `null`, `{}` — is a different request that a handler
+    // requiring an empty body can reject.
+    const { result } = renderHook(
+      () => usePluginRouteMutation({ ...write, method: "DELETE" }),
+      { wrapper: wrapper() }
+    );
+
+    await act(async () => {
+      await result.current.write();
+    });
+
+    expect(deleteSpy).toHaveBeenCalledTimes(1);
+    expect(deleteSpy.mock.calls[0]?.[1]).toBeUndefined();
   });
 
   it("uses the verb the caller asked for", async () => {
