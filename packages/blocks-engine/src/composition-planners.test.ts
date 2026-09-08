@@ -3800,21 +3800,69 @@ describe("a document whose branches share one object", () => {
     ]);
   }
 
-  it("is refused for its SIZE rather than walked", () => {
-    // THIRTY levels — thirty-one objects, and 2^30 entries to anything that
-    // walks them. The selection is one unrelated top-level node, found
-    // immediately; what has to be bounded is the scan that goes looking for the
-    // scope it sits in.
-    //
-    // The DEPTH is the evidence, and it is why this needs no timing threshold.
-    // Bounded, the scan reads at most `maxNodes + 1` entries and returns in
-    // under a millisecond. Unbounded, it reads a billion — measured, the cost
-    // doubles per level from 47ms at depth 18, so this depth is minutes. So the
-    // two implementations differ by RETURNING and NOT RETURNING, and a test
-    // that completes at all separates them. Nothing here measures the machine.
-    const plan = planSaveAsPattern(pageWith(30), ["mine"], target, anyParent);
+  /**
+   * A DAG whose nodes COUNT how many times the walk asked them for children,
+   * and stop answering once the count passes `stopAfter`.
+   *
+   * The tripwire is what makes this test safe to keep. A regression here is an
+   * unbounded walk over 2^30 entries, and vitest's per-test timeout cannot
+   * interrupt synchronous JavaScript — `format-boundary.test.ts` documents the
+   * same limitation for the same reason — so a test that merely waited would
+   * hang the worker for hours where it should report in milliseconds. Past the
+   * cap these nodes report no children, the walk unwinds, and the count is the
+   * evidence.
+   */
+  function counted(
+    depth: number,
+    stopAfter: number
+  ): { root: BlockNode; reads: () => number } {
+    let reads = 0;
+    const watch = (node: BlockNode): BlockNode =>
+      new Proxy(node, {
+        get(held, key, receiver) {
+          if (key !== "slots") return Reflect.get(held, key, receiver);
+          reads += 1;
+          // Past the bound the node has nothing to offer, which ends the walk
+          // rather than letting it run to the end of an exponential document.
+          if (reads > stopAfter) return undefined;
+          return Reflect.get(held, key, receiver);
+        },
+      }) as BlockNode;
 
-    expect(plan.problem).toBe("exceeds-limits");
+    let built = watch(node("leaf"));
+    for (let i = 0; i < depth; i += 1) {
+      built = watch(node(`n${String(i)}`, {}, { a: [built], b: [built] }));
+    }
+    return { root: built, reads: () => reads };
+  }
+
+  /** One save against a counted DAG of this depth. */
+  function scanOf(depth: number): { problem: unknown; reads: number } {
+    const cap = DEFAULT_LIMITS.maxNodes;
+    const { root, reads } = counted(depth, cap);
+    const doc = page([node("mine", { props: { mark: "target" } }), root]);
+    const plan = planSaveAsPattern(doc, ["mine"], target, anyParent);
+    return { problem: plan.problem, reads: reads() };
+  }
+
+  it("reads no more of the document than the cap allows, at any depth", () => {
+    // The selection is one unrelated top-level node, found immediately; what
+    // has to be bounded is the scan that goes looking for the scope it sits in.
+    //
+    // Asserted as a COUNT rather than as elapsed time. The bound made the old
+    // timing comparison meaningless — once both depths stop at the cap they do
+    // identical sub-millisecond work, so a ratio between them reported
+    // scheduler noise and went red on CI at 9.32 against a threshold of 8.
+    // What the bound actually promises is a number, and this is that number.
+    const cap = DEFAULT_LIMITS.maxNodes;
+    const shallow = scanOf(12);
+    const deep = scanOf(30);
+
+    expect(deep.problem).toBe("exceeds-limits");
+    expect(deep.reads).toBeLessThanOrEqual(cap);
+    // INDEPENDENT of depth, which is the whole property. Eighteen more levels
+    // is 2^18 times the document and must be the same amount of reading.
+    expect(deep.reads).toBe(shallow.reads);
   });
 
   it("refuses a NaN cap before walking, not after", () => {
@@ -3823,14 +3871,18 @@ describe("a document whose branches share one object", () => {
     // this bound exists to stop runs in full before anything rejects the
     // configuration. The published limit rule already refuses that.
     //
-    // At THIRTY levels the throw is the evidence, which it is not at a shallow
-    // depth: the component planner rejects the same configuration later anyway,
-    // so a shallow `toThrow` passes on the unbounded version too — after it has
-    // done the work. Here the unbounded version has a billion entries to read
-    // before it reaches that rejection, so it does not arrive at all.
+    // ZERO reads is the assertion, and it is what `toThrow` could not give.
+    // The component planner rejects this configuration later anyway, so a throw
+    // says nothing about WHEN — it is equally true of a run that walked the
+    // whole document first. A count of zero says the document was never
+    // touched.
+    const cap = DEFAULT_LIMITS.maxNodes;
+    const { root, reads } = counted(30, cap);
+    const doc = page([node("mine", { props: { mark: "target" } }), root]);
+
     expect(() =>
       planSaveAsComponent(
-        pageWith(30),
+        doc,
         ["mine"],
         componentTarget,
         { properties: [] },
@@ -3838,6 +3890,7 @@ describe("a document whose branches share one object", () => {
         { ...DEFAULT_LIMITS, maxNodes: Number.NaN }
       )
     ).toThrow(RangeError);
+    expect(reads()).toBe(0);
   });
 
   it("still plans when the sharing is somewhere the save is not", () => {
