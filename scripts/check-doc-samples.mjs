@@ -80,9 +80,9 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 // passed. The closing run is a backreference, so a fence still has to close with
 // what it opened with.
 const RAW_FENCE =
-  /(?:^|\n)([ \t]*(?:>[ \t]*)*)(```+|~~~+)(\w*)[^\n]*\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2[`~]*[ \t\r]*(?=\n|$)/g;
+  /(?:^|\n)([ \t]*(?:>[ \t]*)*)(```+|~~~+)(\w*)([^\n]*)\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2[`~]*[ \t\r]*(?=\n|$)/g;
 const ESCAPED_FENCE =
-  /(?:^|\n)([ \t]*(?:>[ \t]*)*)((?:\\`){3,})(\w*)[^\n]*\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2(?:\\`)*[ \t\r]*(?=\n|$)/g;
+  /(?:^|\n)([ \t]*(?:>[ \t]*)*)((?:\\`){3,})(\w*)([^\n]*)\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2(?:\\`)*[ \t\r]*(?=\n|$)/g;
 
 /**
  * Take the blockquote markers off a body, and only when it had them.
@@ -108,11 +108,46 @@ const isTypeScript = lang =>
 /** JSX needs a .tsx extension or the parser reads `<` as a type argument. */
 const looksLikeJsx = code => /<\/[A-Za-z]|\/>/.test(code);
 
+/**
+ * A TypeScript fence that opens and never closes.
+ *
+ * `matchAll` yields nothing for one, so the sample is not extracted, not
+ * counted and not compiled. On an existing page the coverage ratchet catches
+ * the loss; on a NEW page, or one that had no TypeScript before, there is no
+ * held count to fall below, so a malformed block changes no protected value and
+ * passes while the rest of the page renders as code. Breaking a fence and then
+ * rewriting the baseline over the broken tree is how this gate was defeated
+ * once already, from the inside.
+ *
+ * Returns the opening lines, one per unterminated fence, so the report can say
+ * where to look.
+ */
+export function unterminatedFences(text) {
+  const opener = /^[ \t]*(?:>[ \t]*)*(```+|~~~+)(\w*)/;
+  const open = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(opener);
+    if (!m) continue;
+    const last = open[open.length - 1];
+    // A closer carries the delimiter and nothing else. Checking only that the
+    // language capture was empty accepted ```` ```{.foo} ```` as one, because
+    // `\w*` matches nothing before a brace; `extractFrom` rejects that line, so
+    // the fence went neither extracted nor reported.
+    const closes =
+      last &&
+      m[1].startsWith(last.delimiter) &&
+      /^[ \t]*(?:>[ \t]*)*(?:```+|~~~+)[ \t\r]*$/.test(line);
+    if (closes) open.pop();
+    else if (!last) open.push({ delimiter: m[1], lang: m[2], line });
+  }
+  return open.filter(f => isTypeScript(f.lang)).map(f => f.line.trim());
+}
+
 export function extractFrom(kind, text, file) {
   const out = [];
-  const push = (code, index, lang) => {
+  const push = (code, index, lang, meta = "") => {
     const trimmed = code.trim();
-    if (trimmed) out.push({ file, index, code: trimmed, lang });
+    if (trimmed) out.push({ file, index, code: trimmed, lang, meta });
   };
   if (kind === "fenced-in-template-literal" || kind === "markdown-dir") {
     // A Markdown FILE is not a template literal, so its backslashes are already
@@ -123,10 +158,10 @@ export function extractFrom(kind, text, file) {
     const literal = kind === "fenced-in-template-literal";
     for (const m of text.matchAll(literal ? ESCAPED_FENCE : RAW_FENCE)) {
       // 1 is the container prefix, 2 the delimiter, 3 the language token,
-      // 4 the body.
+      // 4 the rest of the info string, 5 the body.
       if (!isTypeScript(m[3])) continue;
-      const body = stripContainer(m[4], m[1]);
-      push(literal ? unescapeTemplate(body) : body, out.length, m[3]);
+      const body = stripContainer(m[5], m[1]);
+      push(literal ? unescapeTemplate(body) : body, out.length, m[3], m[4]);
     }
   } else if (kind === "template-literal-consts") {
     // Exported const NAME = `...`; where the body is TypeScript, not Markdown.
@@ -156,8 +191,24 @@ export function extractFrom(kind, text, file) {
  * sample advertised as tsx would have been checked under rules a reader
  * pasting it never gets.
  */
-export const extensionFor = sample =>
-  sample.lang === "tsx" || looksLikeJsx(sample.code) ? "tsx" : "ts";
+export const extensionFor = sample => {
+  // A stated filename wins over anything inferred from the body. A fence
+  // headed `ts title="nextly.config.ts"` advertises the file a reader is meant
+  // to paste it into, and compiling it as TSX because it happens to contain
+  // angle brackets checks it under rules that reader never gets. 46 fences in
+  // these pages name a file, and the names carry real extensions.
+  //
+  // Not for a file this harness built, though. A rebuilt sample carries the
+  // original fence's metadata, and the concatenation of earlier fences in front
+  // of it is not the file that title names: forcing `.ts` on it when the pasted
+  // part contains JSX makes it fail to parse for a reason the page does not
+  // have. `prependedLines` is only set on a rebuild.
+  const stated = sample.prependedLines
+    ? undefined
+    : sample.meta?.match(/\.(tsx?)\b/)?.[1];
+  if (stated) return stated;
+  return sample.lang === "tsx" || looksLikeJsx(sample.code) ? "tsx" : "ts";
+};
 
 /**
  * A file the sample quotes and the reader writes: ./collections/Posts, or the
@@ -220,14 +271,45 @@ export const SUPPLIED_BY_THE_READER = [
  * filed all ten as fragments, so the API mistakes inside them were never read;
  * the missing name they open with is what the continuation pass is for.
  */
-export const isModule = code =>
-  /^\s*import\b/m.test(code) ||
-  /^\s*export\b/m.test(code) ||
-  // CommonJS counts. A fence opening `const crypto = require("crypto")` is a
-  // program a reader runs, and requiring ESM syntax filed it as a fragment so
-  // nothing compiled it: the webhook-verification example on the form-builder
-  // page is exactly that shape, and its undefined names were never read.
-  /(?:^|[^.\w])require\s*\(/m.test(code);
+export const isModule = (code, extension = "tsx") => {
+  const parsed = parseSample(code, extension);
+  // A call to `require` or to `import`, anywhere in the tree. Both load a
+  // package exactly as a declaration does, and a fence opening
+  // `const crypto = require("crypto")` is a program a reader runs; requiring
+  // ESM syntax filed those as fragments so nothing compiled them.
+  //
+  // From the tree rather than from the text, because the text cannot tell a
+  // call from a mention: `// dynamically import("nextly")` in a comment, or
+  // `"import(x)"` in a string, made a fragment look like a module and had the
+  // audit compile a block it deliberately excludes. A property access named
+  // `require` or `import` is not a load either, and is not an identifier call.
+  let loads = false;
+  const walk = node => {
+    if (loads) return;
+    if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === "require"))
+    ) {
+      loads = true;
+      return;
+    }
+    ts.forEachChild(node, walk);
+  };
+  ts.forEachChild(parsed, walk);
+  if (loads) return true;
+
+  return parsed.statements.some(
+    statement =>
+      ts.isImportDeclaration(statement) ||
+      ts.isImportEqualsDeclaration(statement) ||
+      ts.isExportDeclaration(statement) ||
+      ts.isExportAssignment(statement) ||
+      (ts.getModifiers?.(statement) ?? statement.modifiers ?? []).some(
+        modifier => modifier.kind === ts.SyntaxKind.ExportKeyword
+      )
+  );
+};
 
 /**
  * The documentation this repository owns and publishes.
@@ -252,12 +334,30 @@ export function collectDocSamples() {
           ? [join(dir, e.name)]
           : []
     );
-  return walk(root).flatMap(full =>
-    extractFrom(
-      "markdown-dir",
-      readFileSync(full, "utf-8"),
-      relative(ROOT, full)
-    )
+  const pages = walk(root).map(full => ({
+    file: relative(ROOT, full),
+    text: readFileSync(full, "utf-8"),
+  }));
+  // A fence that never closes is checked here rather than inferred from a
+  // count, because on a page with no held count there is nothing for a count to
+  // fall below.
+  const broken = pages.flatMap(page =>
+    unterminatedFences(page.text).map(line => `${page.file}: ${line}`)
+  );
+  if (broken.length > 0) {
+    const detail = broken.map(line => `  ${line}`).join("\n");
+    const err = new Error(
+      `these TypeScript fences open and never close, so the samples in them ` +
+        `are not extracted and the rest of each page renders as code:\n${detail}`
+    );
+    // Marked, because the caller treats a failure to read the tree as a reason
+    // to stop quietly. This is the opposite: a page IS readable and is wrong,
+    // and stopping quietly is how a broken fence gets recorded as normal.
+    err.brokenFences = broken;
+    throw err;
+  }
+  return pages.flatMap(page =>
+    extractFrom("markdown-dir", page.text, page.file)
   );
 }
 
@@ -734,7 +834,10 @@ export function exportsMapAnswers(exports, subpath) {
  */
 export function declaredEarlier(name, file, index, samples) {
   return samples.some(
-    s => s.file === file && s.index < index && declaresName(s.code, name)
+    s =>
+      s.file === file &&
+      s.index < index &&
+      declaresName(s.code, name, extensionFor(s))
   );
 }
 
@@ -749,8 +852,8 @@ export function declaredEarlier(name, file, index, samples) {
  * and then not found when the rebuild went looking for it. The continuation was
  * never compiled.
  */
-export function declaresName(code, name) {
-  if (declaredNamesIn(code).includes(name)) return true;
+export function declaresName(code, name, extension = "tsx") {
+  if (declaredNamesIn(code, extension).includes(name)) return true;
   // An arrow or method bound without a declaration keyword: `handler: (req) =>`
   // in an object literal, or a property assignment. Not something
   // `declaredNamesIn` collects, because it is not a declaration, but a later
@@ -910,7 +1013,42 @@ function topLevelOnly(code) {
   return chars.join("");
 }
 
-export function declaredNamesIn(source) {
+/**
+ * The import declarations a source actually has.
+ *
+ * Parsed as TSX, because these samples are, and a parse never throws here: on
+ * malformed input TypeScript produces a tree with diagnostics rather than an
+ * exception, and a statement list that is short of a broken import is the right
+ * answer anyway.
+ */
+export function parseSample(source, extension = "tsx") {
+  return ts.createSourceFile(
+    `sample.${extension}`,
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    extension === "tsx" ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+}
+
+/**
+ * The import declarations a source actually has, read under the grammar the
+ * compiler will use for it.
+ *
+ * The two grammars disagree before they agree: `const id = <T>(x: T) => x;` is
+ * a generic arrow in `.ts` and an unclosed element in `.tsx`, and parsing a
+ * `.ts` sample as TSX produces a recovery tree that can drop every import after
+ * it. The fence still compiles, because compilation uses the right extension,
+ * so the names simply went missing and a later fence using one was reported as
+ * undefined rather than rebuilt with its context.
+ */
+function importsIn(source, extension) {
+  return parseSample(source, extension).statements.filter(
+    ts.isImportDeclaration
+  );
+}
+
+export function declaredNamesIn(source, extension = "tsx") {
   const code = topLevelOnly(source);
   const names = new Set();
   const add = n => {
@@ -947,27 +1085,23 @@ export function declaredNamesIn(source) {
       add(renamed ? renamed[1] : piece.match(/^[A-Za-z_$][\w$]*/)?.[0]);
     }
   }
-  // Imports are read from the ORIGINAL source, not the top-level view. An
-  // import clause spans lines and opens a brace, so blanking by depth erased
-  // the middle of `import {\n  defineConfig,\n} from "nextly"` and a later
-  // fence using the name was reported as undefined. An import binding is
-  // top-level wherever its clause happens to wrap.
-  for (const m of source.matchAll(/^\s*import\s+([^;]*?)\s+from\s/gms)) {
-    // `import type { Foo }` and `import type Foo`: the keyword belongs to the
-    // whole clause and is not a binding. Stripped here, before the braces
-    // become commas, so that what survives inside them is only bindings.
-    const clause = m[1].replace(/^type\s+/, "");
-    for (const part of clause.replace(/[{}]/g, ",").split(",")) {
-      // `import { type Foo }` binds Foo. Taking the first identifier recorded
-      // `type` and lost the name, so a later fence using it was reported as a
-      // missing name rather than rebuilt with its context: a false finding on a
-      // common syntax. The keyword is dropped only when an identifier follows
-      // it, because `import { type }` legally binds something called `type`.
-      const piece = part.trim().replace(/^type\s+(?=[A-Za-z_$])/, "");
-      if (!piece) continue;
-      const alias = piece.match(/\bas\s+([A-Za-z_$][\w$]*)$/);
-      add(alias ? alias[1] : piece.match(/^[A-Za-z_$][\w$]*/)?.[0]);
-    }
+  // Imports come from the PARSE, not from a pattern over the text. They cannot
+  // be read from the top-level view either: an import clause opens a brace, so
+  // masking by depth erases the middle of `import {\n  defineConfig,\n} from
+  // "nextly"` and a later fence using the name reads as undefined. Reading the
+  // raw text instead recorded an `import { ghost } from "pkg"` written inside a
+  // block comment or a template literal as a real binding, which then excused a
+  // fence that used `ghost` as a continuation of a page that never bound it. A
+  // parser has neither problem: a comment produces no statement, and a wrapped
+  // clause is one statement however it is laid out.
+  for (const statement of importsIn(source, extension)) {
+    const clause = statement.importClause;
+    if (!clause) continue;
+    if (clause.name) add(clause.name.text);
+    const bindings = clause.namedBindings;
+    if (!bindings) continue;
+    if (ts.isNamespaceImport(bindings)) add(bindings.name.text);
+    else for (const element of bindings.elements) add(element.name.text);
   }
   return [...names];
 }
@@ -991,7 +1125,7 @@ export function declaredNamesIn(source) {
  * program a reader pastes. `await nextly.logout()` calls a value an earlier
  * fence built, and is.
  */
-export function declaredValuesIn(source) {
+export function declaredValuesIn(source, extension = "tsx") {
   const code = topLevelOnly(source);
   const names = new Set();
   for (const m of code.matchAll(
@@ -1037,7 +1171,9 @@ export function inheritedNames(sample, samples) {
     // `radio({ ... })` on the field catalogue out: it mentions `option`, which
     // an earlier fence imported, and is a shape being illustrated rather than a
     // program a reader pastes.
-    const values = earlier.flatMap(s => declaredValuesIn(s.code));
+    const values = earlier.flatMap(s =>
+      declaredValuesIn(s.code, extensionFor(s))
+    );
     const callsOne = values.some(name =>
       new RegExp(
         `\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[.(]`
@@ -1045,11 +1181,13 @@ export function inheritedNames(sample, samples) {
     );
     if (!callsOne) return [];
   }
-  const declared = new Set(earlier.flatMap(s => declaredNamesIn(s.code)));
+  const declared = new Set(
+    earlier.flatMap(s => declaredNamesIn(s.code, extensionFor(s)))
+  );
   const used = new Set(
     [...sample.code.matchAll(/[A-Za-z_$][\w$]*/g)].map(m => m[0])
   );
-  const own = new Set(declaredNamesIn(sample.code));
+  const own = new Set(declaredNamesIn(sample.code, extensionFor(sample)));
   return [...declared].filter(n => used.has(n) && !own.has(n));
 }
 
@@ -1098,7 +1236,7 @@ export function withEarlierContext(sample, missingNames, samples) {
   // identifiers — a fence is pulled in only when the page really does define
   // what it is being pulled in for.
   const declaredEarlierOnThePage = new Set(
-    earlier.flatMap(s => declaredNamesIn(s.code))
+    earlier.flatMap(s => declaredNamesIn(s.code, extensionFor(s)))
   );
   const chosen = new Map();
   const wanted = [...missingNames];
@@ -1112,7 +1250,7 @@ export function withEarlierContext(sample, missingNames, samples) {
     );
     if (!nearest || chosen.has(nearest.index)) continue;
     chosen.set(nearest.index, nearest);
-    const own = new Set(declaredNamesIn(nearest.code));
+    const own = new Set(declaredNamesIn(nearest.code, extensionFor(nearest)));
     for (const m of nearest.code.matchAll(/[A-Za-z_$][\w$]*/g)) {
       const used = m[0];
       if (!own.has(used) && declaredEarlierOnThePage.has(used)) {
@@ -1256,6 +1394,13 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
     uncheckedSamples,
     readerFiles,
     implicitAny,
+    // Every diagnostic that came in, so a caller can prove it kept them all.
+    // The buckets above are a partition, and the audit's job is to record each
+    // one somewhere the ratchet can see. Four times a bucket was reported to
+    // the console and left out of the baseline, and each fix enumerated the
+    // buckets it knew about, which is why a fifth kept being available. A count
+    // the caller can check does not depend on anybody remembering.
+    total: diagnostics.length,
   };
 }
 
@@ -1388,11 +1533,39 @@ export const pageOf = line => {
  * on the next fetch, so a red here would be a red this repository cannot clear,
  * and a check that cannot be cleared teaches people to ignore it.
  */
+/**
+ * How many diagnostics the classifier produced that nobody kept.
+ *
+ * Zero is the only acceptable answer: `real` is charged to a page, the other
+ * buckets are set aside by identity, and `continued` comes back through this
+ * same partition after its recompile. Anything else is a class of diagnostic
+ * the gate cannot see, which is the shape of every bucket that has escaped.
+ *
+ * `unchecked` is deliberately not a term: the classifier appends it to `real`
+ * before returning, so counting it again would inflate the sum and let a
+ * missing bucket hide behind the surplus. That is the same mistake as comparing
+ * against the whole set-aside list, which carries entries added before
+ * classification.
+ */
+export function unaccountedFor({
+  total,
+  real,
+  continued,
+  readerFiles,
+  uninstalled,
+  implicitAny,
+}) {
+  return total - (real + continued + readerFiles + uninstalled + implicitAny);
+}
+
 async function auditDocs() {
   let all;
   try {
     all = collectDocSamples();
   } catch (err) {
+    // A malformed page is a finding, not a reason to stop looking. Only an
+    // unreadable tree is the latter.
+    if (err.brokenFences) throw err;
     console.log(
       `docs: the tree is present but incomplete, so nothing was audited.\n  ${String(err.message ?? err)}`
     );
@@ -1411,7 +1584,7 @@ async function auditDocs() {
   // that introduces a value in a fence with no import of its own, and uses it
   // in the next one, is a documentation shape, and reading it as an undefined
   // name would put a finding on the page that a reader never meets.
-  const samples = all.filter(s => isModule(s.code));
+  const samples = all.filter(s => isModule(s.code, extensionFor(s)));
   // Everything the gate ignores EXCEPT the reader's own files: those are kept
   // so the samples carrying them can be named unchecked rather than counted as
   // compiled clean.
@@ -1479,7 +1652,7 @@ async function auditDocs() {
   // keeps this from compiling things that are not programs.
   const continuedWithoutImports = new Set();
   for (const sample of all) {
-    if (isModule(sample.code)) continue;
+    if (isModule(sample.code, extensionFor(sample))) continue;
     const names = inheritedNames(sample, all);
     if (names.length === 0) continue;
     const withContext = withEarlierContext(sample, names, all);
@@ -1610,6 +1783,7 @@ async function auditDocs() {
     uncheckedSamples,
     readerFiles,
     implicitAny,
+    total: classified,
   } = await classifyDocDiagnostics({
     diagnostics: [...firstPass, ...fromContext],
     samples: all,
@@ -1625,6 +1799,12 @@ async function auditDocs() {
     // not see.
     ...implicitAny.map(text => ({ mark: "implicit-any", text })),
     ...fromInheritedBlocks.map(text => ({ mark: "implicit-any", text })),
+    // An import of a package that is published but not installed here. The
+    // reader has it and this checkout does not, so the page is not charged.
+    // TypeScript types everything reached through that import as `any` all the
+    // same, so misspelling a package name removed a fence's checking while
+    // moving no number: the fourth bucket to do exactly that.
+    ...uninstalled.map(text => ({ mark: "uninstalled", text })),
     // An import of a file only the reader has. It is right not to charge the
     // page, since the file legitimately is not here. But the binding becomes
     // `any`, so everything reached through it stops being checked while the
@@ -1632,6 +1812,36 @@ async function auditDocs() {
     // is what stops one quietly joining them.
     ...readerFiles.map(text => ({ mark: "reader-file", text }))
   );
+
+  // Nothing may be dropped on the floor. `real` is charged to a page, the
+  // classifier's other buckets are set aside by identity, and `continued` is
+  // recompiled and comes back through this same partition; a diagnostic in
+  // none of them is one the gate cannot see, which is the shape of every
+  // bucket that has escaped so far.
+  //
+  // EXACT, not "at least". Comparing against the whole of `setAside` counted
+  // entries added before classification, the first pass's suppressions among
+  // them, and that surplus could cover for a bucket left out of both sides. An
+  // equality over the classifier's own output has nothing to hide behind.
+  //
+  // `unchecked` is not added: the classifier appends it to `real` before
+  // returning, so counting it again would be the same surplus one line down.
+  const missing = unaccountedFor({
+    total: classified,
+    real: real.length,
+    continued: continued.length,
+    readerFiles: readerFiles.length,
+    uninstalled: uninstalled.length,
+    implicitAny: implicitAny.length,
+  });
+  if (missing !== 0) {
+    throw new Error(
+      `doc samples: the classifier produced ${String(classified)} diagnostic(s) ` +
+        `and ${String(classified - missing)} were accounted for. A bucket has ` +
+        `to be charged to a page or recorded by identity, not just reported: ` +
+        `the gate cannot see one that is neither.`
+    );
+  }
 
   // The survivors are actionable, and their first-pass copies stop counting as
   // continuations: the same page and the same name, whatever line each landed
@@ -1817,6 +2027,7 @@ export function compareToBaseline({
   const mine = file => only === null || file === only;
 
   const lost = [];
+  const gained = [];
   if (only === null) {
     const seen = {
       pages: coverage.files.length,
@@ -1826,6 +2037,14 @@ export function compareToBaseline({
     for (const [what, was] of Object.entries(baseline.coverage ?? {})) {
       if ((seen[what] ?? 0) < was) {
         lost.push(`${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`);
+      }
+      // A GAIN has to be recorded too, or it is not protected. Accepting one
+      // silently meant a fence added today could be deleted tomorrow, returning
+      // every count to what the baseline holds, and both changes passed: a
+      // ratchet that only resists decreases from a number nobody updates
+      // protects the corpus as it was and nothing since.
+      if ((seen[what] ?? 0) > was) {
+        gained.push(`${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`);
       }
     }
   }
@@ -1838,6 +2057,18 @@ export function compareToBaseline({
           `${file}: ${what} was ${String(was[what])}, now ${String(now[what] ?? 0)}`
         );
       }
+      if ((now[what] ?? 0) > (was[what] ?? 0)) {
+        gained.push(
+          `${file}: ${what} was ${String(was[what])}, now ${String(now[what] ?? 0)}`
+        );
+      }
+    }
+  }
+  // A page the baseline has never seen is a gain as well.
+  for (const file of coverage.files) {
+    if (!mine(file)) continue;
+    if (!(baseline.samplesPerPage ?? {})[file]) {
+      gained.push(`${file}: not in the baseline`);
     }
   }
 
@@ -1875,7 +2106,7 @@ export function compareToBaseline({
       better.push(`${file}: allowed ${String(cap)}, found ${String(count)}`);
   }
 
-  return { lost, appeared, gone, worse, better };
+  return { lost, gained, appeared, gone, worse, better };
 }
 
 /**
@@ -1883,7 +2114,10 @@ export function compareToBaseline({
  * Shared by the repository-wide and single-page paths so the two cannot drift
  * into telling a contributor different things about the same state.
  */
-function reportComparison({ lost, appeared, gone, worse, better }, findings) {
+function reportComparison(
+  { lost, gained, appeared, gone, worse, better },
+  findings
+) {
   if (lost.length > 0) {
     console.error(
       "\ndoc samples: fewer samples are being checked than the baseline records. " +
@@ -1891,6 +2125,16 @@ function reportComparison({ lost, appeared, gone, worse, better }, findings) {
         "was fixed. If the loss is intended, rewrite the baseline and say why.\n"
     );
     for (const line of lost) console.error(`  ${line}`);
+    return true;
+  }
+
+  if ((gained ?? []).length > 0) {
+    console.error(
+      "\ndoc samples: more samples are being checked than the baseline records, " +
+        "which is good news it has not been told. Rewrite it so the gate starts " +
+        "protecting them; until then they can be deleted again for free.\n"
+    );
+    for (const line of gained) console.error(`  ${line}`);
     return true;
   }
 
