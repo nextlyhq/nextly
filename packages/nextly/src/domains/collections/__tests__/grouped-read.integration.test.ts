@@ -14,7 +14,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import { defineCollection, password, text } from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
@@ -61,6 +61,14 @@ async function boot(
           // Readable rows, one unreadable column -- the shape a field rule
           // exists for, and the shape a group key must not defeat.
           text({ name: "secret", access: { read: () => false } }),
+          // Declared in SNAKE case on purpose. The guard converted a name to
+          // camel only, and the camel form of an already-camel string is
+          // itself, so a camel-spelled probe missed a snake-declared field
+          // while the column resolver found it under either spelling.
+          text({ name: "secret_answer", access: { read: () => false } }),
+          // Its guarantee comes from its TYPE, not from an access rule, so the
+          // field-rule guard never sees it.
+          password({ name: "vaultKey" }),
         ],
       }),
     ],
@@ -188,5 +196,122 @@ describe("a grouped read", () => {
 
     expect(res.data?.buckets).toHaveLength(2);
     expect(res.data?.truncated).toBe(true);
+  });
+});
+
+describe("a group key that resolves by an alias", () => {
+  it("refuses a camel-spelled probe at a snake-declared protected field", async () => {
+    const h = await boot([
+      { region: "emea", secret: "a" },
+      { region: "apac", secret: "b" },
+    ]);
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "secretAnswer",
+      user: { id: "u1", email: "u1@example.com" },
+    });
+
+    expect(res.success).toBe(false);
+    expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
+  });
+
+  it("still refuses the snake spelling it always refused", async () => {
+    // The control for the direction that already worked, so a change swapping
+    // one alias for the other cannot pass as a fix.
+    const h = await boot([{ region: "emea", secret: "a" }]);
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "secret_answer",
+      user: { id: "u1", email: "u1@example.com" },
+    });
+
+    expect(res.success).toBe(false);
+    expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
+  });
+
+  it("refuses a protected group key even on a framework-built read", async () => {
+    // `frameworkFilter` attests that the WHERE was built by the framework from
+    // a route it was asked to render. It says nothing about a grouping key, so
+    // forwarding it would let that exemption publish the distinct values of a
+    // field the caller may not read.
+    const h = await boot([{ region: "emea", secret: "alpha" }]);
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "secret",
+      frameworkFilter: true,
+      user: { id: "u1", email: "u1@example.com" },
+    });
+
+    expect(res.success).toBe(false);
+    expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
+    expect(JSON.stringify(res)).not.toContain("alpha");
+  });
+});
+
+describe("a group key whose value never leaves the server", () => {
+  it("refuses a password field, which carries no read rule to be caught by", async () => {
+    // `stripPasswordFieldValues` protects ROWS. An aggregate returns none, so
+    // a grouped read selecting the column directly would hand the stored
+    // hashes back as bucket labels with nothing on that path to clear them.
+    const h = await boot([{ region: "emea", secret: "a" }]);
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "vaultKey",
+    });
+
+    expect(res.success).toBe(false);
+    expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
+  });
+
+  it("refuses it under its column spelling too", async () => {
+    const h = await boot([{ region: "emea", secret: "a" }]);
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "vault_key",
+    });
+
+    expect(res.success).toBe(false);
+    expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
+  });
+});
+
+describe("bucket labels", () => {
+  it("bounds the buckets by the limit the caller asked for", async () => {
+    const h = await boot(
+      Array.from({ length: 6 }, (_, i) => ({ region: `r${i}`, secret: "s" }))
+    );
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "region",
+      bucketLimit: 3,
+    });
+
+    expect(res.data?.buckets).toHaveLength(3);
+    expect(res.data?.truncated).toBe(true);
+  });
+
+  it("falls back to the server bound when the limit is not a number", async () => {
+    // `Math.trunc`, `Math.max` and `Math.min` all preserve `NaN`, so an
+    // unguarded clamp reaches the query builder as `.limit(NaN)` and fails the
+    // read instead of applying the documented bound.
+    const h = await boot([
+      { region: "emea", secret: "a" },
+      { region: "apac", secret: "b" },
+    ]);
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "region",
+      bucketLimit: Number.NaN,
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.data?.buckets).toHaveLength(2);
   });
 });

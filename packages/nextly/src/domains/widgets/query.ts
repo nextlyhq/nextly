@@ -351,11 +351,25 @@ function assertGeoOperatorCountable(
   field: string,
   operator: string
 ): void {
-  if (op !== "count" || !GEO_OPERATORS.has(operator)) return;
+  // Keyed on the op that FETCHES rows rather than on a list of ops that do
+  // not, for the same reason this is keyed on `GEO_OPERATORS`: an aggregate
+  // added to the vocabulary returns no rows either, and naming the aggregates
+  // here would mean remembering to add it a second time. `groupBy` reached
+  // execution and was refused there while this only knew about `count` —
+  // accepted by the validator and failed in a batch slot, which is precisely
+  // what this guard exists to prevent.
+  if (op === "list" || !GEO_OPERATORS.has(operator)) return;
+  if (op === "count") {
+    fail(
+      `where operator "${operator}" on field "${field}" cannot be counted. ` +
+        `Geo predicates are evaluated over fetched rows, so they apply to a ` +
+        `list but not to a count`
+    );
+  }
   fail(
-    `where operator "${operator}" on field "${field}" cannot be counted. ` +
+    `where operator "${operator}" on field "${field}" cannot be aggregated. ` +
       `Geo predicates are evaluated over fetched rows, so they apply to a ` +
-      `list but not to a count`
+      `list but not to an aggregate`
   );
 }
 

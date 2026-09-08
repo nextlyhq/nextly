@@ -88,6 +88,7 @@ import {
 } from "../../../shared/lib/filterable-fields";
 import {
   hasPasswordField,
+  isPasswordFieldName,
   stripPasswordFieldValues,
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
@@ -443,7 +444,11 @@ function declaredFieldsOf(collection: unknown): Array<{
  * the wrong order; a dropped GROUP BY collapses every bucket into one row and
  * answers with a single total that reads exactly like a real one.
  */
-function assertGroupKeyUsable(groupBy: string, column: unknown): void {
+function assertGroupKeyUsable(
+  groupBy: string,
+  column: unknown,
+  declaredFields: Array<{ name: string; type: string }>
+): void {
   const snake = toSnakeCase(groupBy);
   const isOwner =
     groupBy === "created_by" ||
@@ -472,6 +477,24 @@ function assertGroupKeyUsable(groupBy: string, column: unknown): void {
       ],
     });
   }
+
+  // A password value never leaves the server, and the strip that enforces that
+  // works on ROWS. An aggregate returns none, so a bucket label would carry the
+  // stored hash out through a path with nothing on it to clear the value.
+  // `assertGroupableField` does not reach this: it judges fields carrying an
+  // `access.read` rule, and a password field's guarantee comes from its type.
+  if (isPasswordFieldName(declaredFields, groupBy)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `groupBy.${groupBy}`,
+          code: "FIELD_NOT_GROUPABLE",
+          message:
+            "A password field cannot be grouped by. Its stored value never leaves the server, and buckets would carry it as their labels.",
+        },
+      ],
+    });
+  }
 }
 
 /**
@@ -482,19 +505,44 @@ function assertGroupKeyUsable(groupBy: string, column: unknown): void {
  * travels as ISO rather than through the platform's default rendering, so the
  * same row groups to the same label on every runtime.
  */
+/**
+ * One bucket's label, keeping values distinct that the database kept distinct.
+ *
+ * A JSON-backed column (`json`, `repeater`, `group`, `blocks`, a `hasMany`
+ * relationship) comes back from PostgreSQL and MySQL as an object or an array.
+ * `String()` renders every object as `[object Object]` and flattens arrays to
+ * lossy comma-joined text, so two buckets the database grouped apart would
+ * arrive wearing the same label — a chart that silently merges categories and
+ * whose numbers no longer add up to the rows behind them.
+ *
+ * A date travels as ISO rather than through the platform's default rendering,
+ * so the same row groups to the same label on every runtime.
+ */
+function bucketLabel(value: unknown): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string") return value;
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  // Everything else is structured. `JSON.stringify` answers `undefined` for a
+  // value it cannot represent, which becomes the null bucket rather than the
+  // string "undefined" sitting among real labels.
+  return JSON.stringify(value) ?? null;
+}
+
 function toBuckets(
   rows: Array<{
-    value: string | number | boolean | Date | null;
+    value: unknown;
     total: number | string | null;
   }>
 ): Array<{ value: string | null; count: number }> {
   return rows.map(row => ({
-    value:
-      row.value == null
-        ? null
-        : row.value instanceof Date
-          ? row.value.toISOString()
-          : String(row.value),
+    value: bucketLabel(row.value),
     count: Number(row.total ?? 0),
   }));
 }
@@ -783,12 +831,17 @@ export class CollectionQueryService extends BaseService {
     // A group key discloses by a third route: the buckets it returns ARE the
     // distinct values of the column, so grouping by a field the caller may not
     // read hands back the value set directly rather than one probe at a time.
-    assertGroupableField(
-      "collection",
-      params.collectionName,
-      params.groupBy,
-      opts
-    );
+    //
+    // 🔴 WITHOUT `frameworkFilter`. That flag attests that a `where` was built
+    // by the framework from a route it was asked to render, which is a claim
+    // about the FILTER and says nothing about a grouping key travelling beside
+    // it. Forwarding it here would let a framework-built read publish the
+    // distinct values of a field its caller may not read — the exemption
+    // widening past the thing it was granted for. Trust still exempts, because
+    // `overrideAccess` is a claim about the caller rather than about one clause.
+    assertGroupableField("collection", params.collectionName, params.groupBy, {
+      overrideAccess: opts.overrideAccess,
+    });
   }
 
   /**
@@ -2936,12 +2989,25 @@ export class CollectionQueryService extends BaseService {
 
       const column =
         schema[params.groupBy] ?? schema[toSnakeCase(params.groupBy)];
-      assertGroupKeyUsable(params.groupBy, column);
-
-      const cap = Math.min(
-        Math.max(1, Math.trunc(params.bucketLimit ?? MAX_GROUP_BUCKETS)),
-        MAX_GROUP_BUCKETS
+      assertGroupKeyUsable(
+        params.groupBy,
+        column,
+        declaredFieldsOf(
+          await this.collectionService.getCollection(params.collectionName)
+        )
       );
+
+      // `Number.isFinite` first, because `Math.trunc`, `Math.max` and
+      // `Math.min` all PRESERVE `NaN`: a computed bucket limit that arrived as
+      // one would reach the query builder as `.limit(NaN)` and fail the read
+      // rather than fall back to the documented bound.
+      const requestedCap = params.bucketLimit;
+      const cap = Number.isFinite(requestedCap)
+        ? Math.min(
+            Math.max(1, Math.trunc(requestedCap as number)),
+            MAX_GROUP_BUCKETS
+          )
+        : MAX_GROUP_BUCKETS;
 
       let query = this.db
         .select({ value: column, total: sql<number>`count(*)` })

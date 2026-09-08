@@ -17,6 +17,8 @@
 import { hashPassword } from "../../auth/password";
 import { systemColumnNames } from "../../lib/system-columns";
 
+import { toCamelCase, toSnakeCase } from "./case-conversion";
+
 /** The minimal field shape both FieldConfig and FieldDefinition satisfy. */
 interface NamedField {
   name?: string;
@@ -162,6 +164,33 @@ export function hasPasswordField(fields: NamedField[]): boolean {
       field.type === "password" ||
       (Boolean(field.fields) && hasPasswordField(field.fields!))
   );
+}
+
+/**
+ * Whether a name addresses a password field, in any spelling it may arrive in.
+ *
+ * A caller naming one is asking for a value this module exists to make sure
+ * never leaves the server, so the answer has to hold wherever such a name can
+ * reach a column. `stripPasswordFieldValues` protects a ROW; an aggregate
+ * returns no rows, so a grouped read that selected the column directly would
+ * publish the stored hashes as bucket labels with nothing on that path to
+ * clear them.
+ *
+ * Every spelling is compared because the resolvers that turn a name into a
+ * column try more than one, so matching only the incoming string would leave
+ * an alias around this check.
+ */
+export function isPasswordFieldName(
+  fields: NamedField[],
+  name: string
+): boolean {
+  const wanted = new Set([name, toCamelCase(name), toSnakeCase(name)]);
+  return fields.some(field => {
+    if (field.type === "password" && field.name && wanted.has(field.name)) {
+      return true;
+    }
+    return Boolean(field.fields) && isPasswordFieldName(field.fields!, name);
+  });
 }
 
 /**

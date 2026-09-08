@@ -164,7 +164,13 @@ export interface WidgetStatCell {
    * muted dash forever -- a declaration mistake wearing the appearance of
    * unavailable data, which is the one reading nobody investigates.
    */
-  query: WidgetQuery & { op: "count" };
+  /**
+   * `groupBy?: never` alongside the op, because `groupBy` is optional on
+   * `WidgetQuery`: the intersection pins the op and would still have accepted
+   * a group key beside it, which the registration check does not look at and
+   * the executor would drop.
+   */
+  query: WidgetQuery & { op: "count"; groupBy?: never };
   /** Where this number navigates. A cell without one draws as plain text. */
   link?: { label: string; href: string };
 }

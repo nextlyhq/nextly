@@ -15,7 +15,7 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 
-import { toCamelCase } from "./case-conversion";
+import { toCamelCase, toSnakeCase } from "./case-conversion";
 import { getFieldFunctions, type FieldFunctions } from "./field-level-registry";
 
 type EntityKind = "collection" | "single";
@@ -90,8 +90,13 @@ function carriesReadRule(fn: FieldFunctions | undefined): boolean {
  * through. Judging both closes the alias without needing the schema here.
  */
 function spellings(name: string): string[] {
-  const camel = toCamelCase(name);
-  return camel === name ? [name] : [name, camel];
+  // BOTH directions. Converting only to camel closed the snake-spelled probe
+  // against a camel-declared field and left its mirror open: a field declared
+  // `secret_answer` is missed by `groupBy=secretAnswer`, because the camel form
+  // of an already-camel string is itself and the registry key is the snake one.
+  // The resolvers downstream try both spellings when they look up a column, so
+  // a guard that tries one is a guard with an alias around it.
+  return [...new Set([name, toCamelCase(name), toSnakeCase(name)])];
 }
 
 /** Field names the caller may not use to select or order rows. */

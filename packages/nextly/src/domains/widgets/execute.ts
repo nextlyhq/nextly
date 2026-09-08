@@ -133,6 +133,10 @@ async function runGroupBy(
   const result = await getNextly().group({
     collection,
     groupBy,
+    // The query's own limit bounds the BUCKETS, which is what a limit means for
+    // a grouped read: `validateWidgetQuery` clamps it and defaults it, so
+    // ignoring it here let a card asking for two categories receive fifty.
+    bucketLimit: query.limit,
     ...sharedReadArgs(query, caller),
   });
   return {

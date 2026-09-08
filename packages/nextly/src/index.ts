@@ -179,11 +179,13 @@ export type {
   UpdateArgs,
   DeleteArgs,
   CountArgs,
+  GroupArgs,
   BulkDeleteArgs,
   DuplicateArgs,
   FindSingleArgs,
   UpdateSingleArgs,
   CountResult,
+  GroupResult,
   DeleteResult,
   BulkOperationResult as DirectAPIBulkOperationResult,
   // Templates and downstream consumers import these to type Direct API

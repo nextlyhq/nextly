@@ -342,6 +342,42 @@ function asCount(total: unknown, atLeast: unknown): WidgetResult | undefined {
   };
 }
 
+/**
+ * The buckets of a grouped result, or `undefined` when the payload is not one.
+ *
+ * Every MEMBER is checked, not just the array, for the reason the list arm
+ * checks its rows: a chart dereferences `count` per bucket and sorts on it, so
+ * `[null]` or a bucket whose count is a string fails where it is drawn rather
+ * than here, with nothing left to say why.
+ *
+ * A non-finite count is refused for the same reason a non-finite total is:
+ * `1e400` is valid JSON, parses to `Infinity`, and renders as a lone infinity
+ * sign in a bar that would otherwise dwarf every real bucket.
+ *
+ * A null `value` is KEPT. It is the bucket of rows whose column is empty --
+ * "how many have no region" is a real answer, and dropping it would silently
+ * remove rows from a chart that claims to account for all of them.
+ */
+function asBuckets(
+  value: unknown
+): { value: string | null; count: number }[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const buckets: { value: string | null; count: number }[] = [];
+  for (const raw of value) {
+    if (!isObject(raw)) return undefined;
+    const bucket = raw as { value?: unknown; count?: unknown };
+    if (bucket.value !== null && typeof bucket.value !== "string") {
+      return undefined;
+    }
+    if (typeof bucket.count !== "number" || !Number.isFinite(bucket.count)) {
+      return undefined;
+    }
+    buckets.push({ value: bucket.value, count: bucket.count });
+  }
+  return buckets;
+}
+
 function asResult(value: unknown): WidgetResult | undefined {
   if (!isObject(value)) return undefined;
 
@@ -351,6 +387,8 @@ function asResult(value: unknown): WidgetResult | undefined {
     atLeast?: unknown;
     items?: unknown;
     fields?: unknown;
+    buckets?: unknown;
+    truncated?: unknown;
   };
 
   if (result.op === "count") return asCount(result.total, result.atLeast);
@@ -364,6 +402,19 @@ function asResult(value: unknown): WidgetResult | undefined {
     if (!items.every(isObject)) return undefined;
     const fields = asResultFields(result.fields);
     return { op: "list", items, ...(fields && { fields }) };
+  }
+
+  if (result.op === "groupBy") {
+    const buckets = asBuckets(result.buckets);
+    if (!buckets) return undefined;
+    // `truncated` is carried through rather than dropped, for the reason
+    // `atLeast` is: it says the bucket set is PARTIAL, and a chart that loses
+    // it presents the categories it happens to hold as the whole picture.
+    return {
+      op: "groupBy",
+      buckets,
+      ...(result.truncated === true ? { truncated: true } : {}),
+    };
   }
 
   return undefined;

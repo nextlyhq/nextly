@@ -53,6 +53,17 @@ aggregated. When buckets are left out the result says so, for the reason a
 bounded count says `atLeast`: a chart drawn from a silently capped set reads
 as the whole picture.
 
+The admin reads the grouped answer as its own result kind, so a card receives
+buckets rather than the malformed-response error every unrecognised payload
+becomes. A capped bucket set says so on the way through, for the reason a
+bounded count carries `atLeast`.
+
+A group key is refused wherever its values would otherwise escape: a field
+carrying a read rule under any spelling it can be reached by, the owner column,
+a password field — whose guarantee comes from its type rather than from an
+access rule, and whose row-level strip an aggregate never passes through — and
+a key naming no column at all.
+
 For TypeScript authors, a widget's query now refuses at compile time to pair a
 group key with an operation that would ignore it, or to declare the grouping
 operation with no key.
