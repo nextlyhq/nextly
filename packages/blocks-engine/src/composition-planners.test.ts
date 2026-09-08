@@ -3777,6 +3777,72 @@ describe("a saved DESCENDANT of an inserted root", () => {
   });
 });
 
+describe("a document whose branches share one object", () => {
+  /**
+   * A chain of DISTINCT objects where each holds the next TWICE.
+   *
+   * Compact on disk and enormous to walk: the shared walk counts a node object
+   * in two slots as two elements — deliberately, since counting it once reports
+   * half a real size — so `depth` objects expand to 2^depth entries.
+   */
+  function sharedChain(depth: number): BlockNode {
+    let built = node("leaf");
+    for (let i = 0; i < depth; i += 1) {
+      built = node(`n${String(i)}`, {}, { a: [built], b: [built] });
+    }
+    return built;
+  }
+
+  function pageWith(depth: number): BlockDocument {
+    return page([
+      node("mine", { props: { mark: "target" } }),
+      sharedChain(depth),
+    ]);
+  }
+
+  it("is refused for its SIZE rather than walked", () => {
+    // Nineteen objects, half a million entries. The selection is one unrelated
+    // top-level node and was found immediately; what has to be bounded is the
+    // scan that goes looking for the scope it sits in.
+    const plan = planSaveAsPattern(pageWith(18), ["mine"], target, anyParent);
+
+    expect(plan.problem).toBe("exceeds-limits");
+  });
+
+  it("costs the same at six levels deeper", () => {
+    // A RATIO between two runs in one process, never a wall-clock ceiling: a
+    // ceiling measures the machine, and the exponential version passed a
+    // generous one at small depths. Six more levels is 64x the entries, so
+    // anything proportional to the document is unmissable here — measured at
+    // 17x before the bound, and the walk stops at the cap either way now.
+    const time = (depth: number): number => {
+      const doc = pageWith(depth);
+      const start = performance.now();
+      planSaveAsPattern(doc, ["mine"], target, anyParent);
+      return performance.now() - start;
+    };
+    time(10);
+
+    const shallow = time(12);
+    const deep = time(18);
+
+    expect(deep / Math.max(shallow, 0.05)).toBeLessThan(8);
+  });
+
+  it("still plans when the sharing is somewhere the save is not", () => {
+    // The control, and it has to put the sharing OUTSIDE the run: a shared
+    // object inside the selection is one id on two nodes, which the shape rule
+    // refuses as `invalid-node` before any of this is reached. What the scan
+    // meets is sharing in a branch nobody selected — and SIZE is the only thing
+    // refused there, so a shallow one saves normally.
+    const doc = pageWith(4);
+
+    const plan = planSaveAsPattern(doc, ["mine"], target, anyParent);
+
+    expect(plan.problem).toBeUndefined();
+  });
+});
+
 describe("provenance is read once, and only where storage would keep it", () => {
   it("ignores a rename map storage would not keep", () => {
     // The enclosing `origin` is enumerable and whole; the `renamed` INSIDE it

@@ -501,6 +501,21 @@ export interface WalkOptions {
    */
   maxNodes?: number;
   /**
+   * Called when the budget ran out, rather than the forest ending.
+   *
+   * The walk is the only place that knows, which is the reason `onCycle` is
+   * here too: a caller counting its own callbacks cannot see the entries the
+   * walk read and skipped, so a bound with no report is one that answers "I
+   * finished" and "I gave up" identically — and it fails in the PASSING
+   * direction, returning a partial answer as a whole one.
+   *
+   * It reports that `maxNodes` entries were READ and the walk stopped there.
+   * Whether anything remained is a different question this cannot answer, so a
+   * caller needing "more than N exist" bounds at N + 1 and reads this as the
+   * proof: N + 1 entries read is N + 1 entries that exist.
+   */
+  onBudgetSpent?: () => void;
+  /**
    * Called for each node skipped because it is its own ancestor.
    *
    * The walk is the only place that knows — detecting a cycle is a property of
@@ -573,9 +588,13 @@ export function walkNodes(
 ): void {
   const options = toWalkOptions(third);
   const limit = options.maxNodes ?? Number.POSITIVE_INFINITY;
-  if (limit <= 0) return;
+  if (limit <= 0) {
+    options.onBudgetSpent?.();
+    return;
+  }
 
   let read = 0;
+  let spent = false;
   walkForest(nodes, entry => {
     // Every entry READ spends the budget, not every entry that turned out to be
     // a node. Reading is the work being bounded, so a forest beginning with a
@@ -583,6 +602,7 @@ export function walkNodes(
     // sat untouched — the callback never fires, and a bound counting callbacks
     // cannot see it. `selectNodes` bounds the same quantity for the same reason.
     read += 1;
+    if (read >= limit) spent = true;
     // The WALK's own classification, not a second one beside it. An entry the
     // walk declined to descend into is exactly an entry no caller can read
     // fields off, and the two spellings this file used to carry differed in
@@ -601,6 +621,7 @@ export function walkNodes(
     fn(entry.node, entry.parent ?? options.parent);
     return read >= limit ? "stop" : "descend";
   });
+  if (spent) options.onBudgetSpent?.();
 }
 
 /** Find a node anywhere in the forest by id. */
