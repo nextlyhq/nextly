@@ -1422,12 +1422,12 @@ async function auditDocs() {
   // Every diagnostic this audit decides not to charge a page for, in one place
   // and marked with the reason it was set aside.
   //
-  // Three separate buckets escaped the ratchet, one review round each, and each
-  // was the same defect: a class of diagnostic reported to the console and left
-  // out of the fingerprint, so a NEW instance of it moved nothing the gate
-  // reads. Fixing them one at a time would have invited the fourth. Nothing is
-  // set aside now without being recorded, so the escape has to be added
-  // deliberately rather than by forgetting.
+  // Three separate buckets used to escape the ratchet, and each was the same
+  // defect: a class of diagnostic reported to the console and left out of the
+  // fingerprint, so a NEW instance of it moved nothing the gate reads. Holding
+  // them in one list is what stops a fourth joining them: nothing is set aside
+  // without being recorded, so an escape has to be added deliberately rather
+  // than by forgetting.
   const setAside = [];
   // Read straight after the compile it belongs to, before any later one
   // overwrites it.
