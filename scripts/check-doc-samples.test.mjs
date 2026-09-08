@@ -1183,14 +1183,22 @@ describe("a sample that writes a property the API has deprecated", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
 
 describe("a missing name the reader owns", () => {
+  // An explicit set, so these state the RULE rather than the workspace. Reading
+  // the workspace here made them depend on whether a build had run: CI runs the
+  // script suite before the build step, the set came back empty, and every name
+  // read as the reader's.
+  const exported = new Set(["Media", "Skeleton", "Nextly", "NextlyError"]);
+  const owned = name => readerOwnedName(name, exported);
+
   it("sets aside a type the reader's own project declares", () => {
     // `nextly generate:types` writes these into a reader's project, and a
     // component is theirs to write. Nothing in this workspace can define one,
     // so a page mentioning it is not broken.
     for (const name of ["Posts", "Users", "Page", "MyCollection", "Chart"]) {
-      expect(readerOwnedName(name)).toBe(true);
+      expect(owned(name)).toBe(true);
     }
   });
 
@@ -1201,7 +1209,7 @@ describe("a missing name the reader owns", () => {
     // defect a reader meets. A rule keyed on the shape alone would have
     // silenced five findings in the current corpus.
     for (const name of ["Media", "Skeleton", "Nextly", "NextlyError"]) {
-      expect(readerOwnedName(name)).toBe(false);
+      expect(owned(name)).toBe(false);
     }
   });
 
@@ -1210,7 +1218,7 @@ describe("a missing name the reader owns", () => {
     // `orderData` or a bare `a` is an example that was left unfinished, which
     // is a finding.
     for (const name of ["orderData", "where", "a", "getPostBySlug"]) {
-      expect(readerOwnedName(name)).toBe(false);
+      expect(owned(name)).toBe(false);
     }
   });
 
@@ -1220,8 +1228,24 @@ describe("a missing name the reader owns", () => {
     // alone accepts `orderData`.
     const looksOwned = name => /^[A-Z][A-Za-z0-9]*$/.test(name);
     expect(looksOwned("Media")).toBe(true);
-    expect(readerOwnedName("Media")).toBe(false);
+    expect(owned("Media")).toBe(false);
     expect(looksOwned("orderData")).toBe(false);
-    expect(readerOwnedName("orderData")).toBe(false);
+    expect(owned("orderData")).toBe(false);
+  });
+});
+
+describe("the workspace's own exported names", () => {
+  // The rule above is stated against a fixture, so this is what ties it to
+  // reality. Read from `src`, which is present whether or not a build has run,
+  // so it answers the same on a clean checkout as on a laptop.
+  it("knows what this workspace publishes and what it does not", () => {
+    expect(readerOwnedName("Media")).toBe(false);
+    expect(readerOwnedName("Skeleton")).toBe(false);
+    // Published from a subpath and deliberately kept out of the root barrel.
+    expect(readerOwnedName("BuilderShell")).toBe(false);
+    // The reader's, and the control: a set that answered "exported" to
+    // everything would satisfy the three above.
+    expect(readerOwnedName("Posts")).toBe(true);
+    expect(readerOwnedName("MyCollection")).toBe(true);
   });
 });

@@ -1532,7 +1532,7 @@ function workspaceManifest(pkg) {
  * those hid real defects.
  */
 /**
- * Every name the workspace publishes, from its built type entries.
+ * Every name the workspace publishes, read from its SOURCE entries.
  *
  * The question a missing PascalCase name raises is not what it looks like but
  * whether the reader could have imported it. `Posts`, `Users` and `Page` are
@@ -1545,11 +1545,59 @@ function workspaceManifest(pkg) {
  * Measured rather than assumed, which is the whole point of asking the exports:
  * a rule keyed on the shape alone would have silenced those two.
  *
- * Read from the built `.d.ts` entries in ONE program, because the same question
- * asked twenty times costs twenty type-checker startups. An unbuilt tree is
- * refused before any of this runs.
+ * From `src`, not from `dist`. Reading the built types made this answer depend
+ * on whether a build had run, and CI runs the script suite BEFORE the build
+ * step: the set came back empty there, every name read as the reader's, and the
+ * unit tests failed on a clean checkout while passing on a laptop. The two
+ * sources agree exactly, 2386 names either way, so nothing is given up by
+ * asking the one that is always there.
+ *
+ * EVERY typed entry a package declares, not only `"."`. A symbol published from
+ * a subpath is still published: `@nextlyhq/builder` exports `BuilderShell` from
+ * `./shell` and keeps it out of the root barrel, and reading the barrel alone
+ * called it the reader's.
  */
 const exportedNames = new Set();
+
+/** `./dist/shell.d.ts` as its source, since that is what is always present. */
+function sourceCandidatesFor(typesPath) {
+  const built = typesPath.replace(/^\.\//, "").match(/^dist\/(.+)\.d\.ts$/);
+  return built ? [`src/${built[1]}.ts`, `src/${built[1]}.tsx`] : [];
+}
+
+/** Every typed entry a package declares, resolved to a file that exists. *
+ * The export set is a parameter with the workspace as its default, so the rule
+ * can be stated as a test without a build having run. That mattered: reading it
+ * unconditionally made the unit tests depend on build state, and they failed on
+ * a clean CI checkout while passing on a laptop.
+ */
+function typedEntriesOf(packageDir, manifest) {
+  const declared = [];
+  const map = manifest.exports;
+  if (map && typeof map === "object") {
+    for (const target of Object.values(map)) {
+      if (!target || typeof target !== "object") continue;
+      const types = target.types ?? target.import?.types ?? target.default?.types;
+      if (typeof types === "string") declared.push(types);
+    }
+  }
+  const root = manifest.types ?? manifest.typings;
+  if (typeof root === "string") declared.push(root);
+  if (declared.length === 0) declared.push("dist/index.d.ts");
+
+  const resolved = [];
+  for (const entry of new Set(declared)) {
+    for (const candidate of [...sourceCandidatesFor(entry), entry]) {
+      const full = join(packageDir, candidate.replace(/^\.\//, ""));
+      if (existsSync(full)) {
+        resolved.push(full);
+        break;
+      }
+    }
+  }
+  return resolved;
+}
+
 function workspaceExports() {
   if (exportedNames.size > 0) return exportedNames;
   const entries = [];
@@ -1557,7 +1605,8 @@ function workspaceExports() {
     withFileTypes: true,
   })) {
     if (!dirent.isDirectory()) continue;
-    const manifestPath = join(ROOT, "packages", dirent.name, "package.json");
+    const packageDir = join(ROOT, "packages", dirent.name);
+    const manifestPath = join(packageDir, "package.json");
     if (!existsSync(manifestPath)) continue;
     let manifest;
     try {
@@ -1566,20 +1615,16 @@ function workspaceExports() {
       continue;
     }
     if (!manifest.name || manifest.private) continue;
-    const declared =
-      manifest.types ??
-      manifest.typings ??
-      manifest.exports?.["."]?.types ??
-      manifest.exports?.["."]?.import?.types ??
-      "dist/index.d.ts";
-    const full = join(ROOT, "packages", dirent.name, declared);
-    if (existsSync(full)) entries.push(full);
+    entries.push(...typedEntriesOf(packageDir, manifest));
   }
   if (entries.length === 0) return exportedNames;
+  // One program over every entry, because the same question asked twenty times
+  // costs twenty type-checker startups.
   const program = ts.createProgram(entries, {
     noEmit: true,
     skipLibCheck: true,
     target: ts.ScriptTarget.ES2022,
+    jsx: ts.JsxEmit.ReactJSX,
     module: ts.ModuleKind.ESNext,
     moduleResolution: ts.ModuleResolutionKind.Bundler,
   });
@@ -1596,24 +1641,8 @@ function workspaceExports() {
   return exportedNames;
 }
 
-/**
- * A missing name that belongs to the reader rather than to this documentation.
- *
- * Two conditions, both load-bearing. The shape narrows the question to names a
- * reader declares: a generated collection type or a component of their own,
- * which is what PascalCase means in these pages, and it is why `orderData` and
- * a bare `a` stay findings. The exports answer it: a name the workspace
- * publishes is one the sample should have imported, and setting that aside
- * would silence a defect rather than a false alarm.
- *
- * Set aside, not excused. These stay ratcheted by identity, so a page cannot
- * quietly start mentioning a new one. What stops is charging a page for them,
- * which is what made completing an example read as a regression: a routing
- * example fetched an entry and rendered nothing, giving a reader a blank page,
- * and adding the render RAISED the count.
- */
-export const readerOwnedName = name =>
-  /^[A-Z][A-Za-z0-9]*$/.test(name) && !workspaceExports().has(name);
+export const readerOwnedName = (name, exported = workspaceExports()) =>
+  /^[A-Z][A-Za-z0-9]*$/.test(name) && !exported.has(name);
 
 export async function classifyDocDiagnostics({ diagnostics, samples }) {
   const uninstalled = [];
