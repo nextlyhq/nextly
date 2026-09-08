@@ -3188,6 +3188,162 @@ describe("a saved DESCENDANT of an inserted root", () => {
     expect(marked([...saved.nodes], "target").cssId).toBe("hero");
   });
 
+  it("does not admit an outer rename for a NESTED scope's own reference", () => {
+    // The inner pattern authored this reference itself. The outer record is
+    // about the run the outer root was copied as, which the inner pattern is
+    // not part of — so a scan that descended through the boundary would rewrite
+    // a reference its own author wrote.
+    const doc = page([
+      node(
+        "outer",
+        {
+          origin: {
+            from: "pattern",
+            id: "outer-pattern",
+            digest: "d",
+            renamed: { pricing: "pricing-1" },
+          },
+        } as Partial<BlockNode>,
+        {
+          children: [
+            node(
+              "inner",
+              {
+                origin: { from: "pattern", id: "inner-pattern", digest: "d2" },
+              } as Partial<BlockNode>,
+              {
+                children: [
+                  node("ref", {
+                    attributes: { "aria-describedby": "pricing-1" },
+                    props: { mark: "ref" },
+                  }),
+                ],
+              }
+            ),
+          ],
+        }
+      ),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["outer"], target, anyParent)
+    ).document;
+
+    expect(
+      marked([...saved.nodes], "ref").attributes?.["aria-describedby"]
+    ).toBe("pricing-1");
+  });
+
+  it("saves past an origin whose own reads throw", () => {
+    // `isBlockOrigin` establishes the record is whole through descriptors, and
+    // an ordinary read of a field afterwards runs the `get` trap that check
+    // just avoided — validating defensively and then reading naively is the
+    // same crash one line later.
+    const origin = new Proxy(
+      { from: "pattern", id: "p", digest: "d" },
+      {
+        get() {
+          throw new Error("the record is not for reading");
+        },
+      }
+    );
+    const doc = page([
+      withStoredOrigin(node("hostile"), origin),
+      node("mine", { cssId: "hero", props: { mark: "target" } }),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["mine"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("hero");
+  });
+
+  it("refuses a selection holding provenance it cannot trust", () => {
+    // The reachable answer for an untrusted record INSIDE a selection: the
+    // shape rule refuses the save outright, so no scope decision is ever taken
+    // on one. The boundary treats a claimed record as a boundary whatever it
+    // says, which is what keeps that from depending on this ordering.
+    const doc = page([
+      node(
+        "outer",
+        {
+          origin: {
+            from: "pattern",
+            id: "outer-pattern",
+            digest: "d",
+            renamed: { pricing: "pricing-1" },
+          },
+        } as Partial<BlockNode>,
+        {
+          children: [
+            {
+              ...withStoredOrigin(node("odd"), {
+                from: "elsewhere",
+                id: "x",
+                digest: "d",
+              }),
+              slots: {
+                children: [node("t", { cssId: "pricing-1" })],
+              },
+            },
+          ],
+        }
+      ),
+    ]);
+
+    expect(planSaveAsPattern(doc, ["outer"], target, anyParent).problem).toBe(
+      "invalid-node"
+    );
+  });
+
+  it("costs no more for a thousand departed ids than for one", () => {
+    // A stored pattern accumulates rename entries whose targets were later
+    // removed. Asking about them one at a time rebuilt the governed region per
+    // entry — quadratic in entries times nodes, on a save with nothing wrong
+    // with it.
+    //
+    // A RATIO between two saves in the same run, not a wall-clock ceiling: a
+    // ceiling measures whichever machine happens to be running the suite, and
+    // this has to fail on the shape. Both saves walk the same forest and differ
+    // only in how many entries the record carries, so the linear form answers
+    // in about the same time for both and the per-entry form does not.
+    function timeSave(entries: number): number {
+      const renamed: Record<string, string> = {};
+      for (let index = 0; index < entries; index += 1) {
+        renamed[`was-${index}`] = `now-${index}`;
+      }
+      const children: BlockNode[] = [];
+      for (let index = 0; index < 2_000; index += 1) {
+        children.push(node(`k${index}`));
+      }
+      const doc = page([
+        node(
+          "root",
+          {
+            origin: { from: "pattern", id: "p", digest: "d", renamed },
+          } as Partial<BlockNode>,
+          { children }
+        ),
+      ]);
+
+      const started = performance.now();
+      const plan = planSaveAsPattern(doc, ["root"], target, anyParent);
+      const elapsed = performance.now() - started;
+      expect(plan.problem).toBeUndefined();
+      return elapsed;
+    }
+
+    const one = timeSave(1);
+    const many = timeSave(2_000);
+
+    // Measured on this fixture: the one-pass form takes about the same for
+    // both, the per-entry form roughly forty times longer for the second. The
+    // constant absorbs a fast machine, where both readings are small enough
+    // that scheduling noise dominates the ratio.
+    expect(many).toBeLessThan(one * 10 + 200);
+  });
+
   it("keeps every id when no ancestor was ever inserted from a pattern", () => {
     // The control for all three above: without a record in scope there is
     // nothing to put back, and an authored id is the author's to keep.

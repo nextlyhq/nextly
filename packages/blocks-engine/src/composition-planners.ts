@@ -3352,6 +3352,28 @@ function insertOrigin(
  * inference this feature exists instead of.
  */
 /**
+ * Whether a node CLAIMS provenance of its own, readable or not.
+ *
+ * The boundary question, and deliberately not the same as whether the record is
+ * usable. A node carrying a malformed or unreadable origin is a node saying it
+ * came from somewhere — and an ancestor's rename map is about the run the
+ * ancestor was copied as, which this node is announcing it is not part of.
+ * Applying it anyway rewrites an id on the strength of uncertainty.
+ *
+ * The presence test runs no user code: a `get` accessor is a record present but
+ * not readable, which is exactly the case that must still bound the scope.
+ */
+function claimsOrigin(node: BlockNode): boolean {
+  try {
+    return Object.getOwnPropertyDescriptor(node, "origin") !== undefined;
+  } catch {
+    // A node that will not answer whether it has a record is one nothing can
+    // say is part of the ancestor's run either.
+    return true;
+  }
+}
+
+/**
  * A node's provenance record, when the NODE itself holds one.
  *
  * An ordinary read walks the prototype chain, so a polluted
@@ -3391,8 +3413,8 @@ function ownOrigin(node: BlockNode): BlockOrigin | undefined {
 function renamedIn(
   origin: BlockOrigin | undefined
 ): ReadonlyMap<string, string> {
-  if (!isPatternOrigin(origin)) return new Map();
-  const renamed: unknown = origin.renamed;
+  if (origin === undefined || !isPatternOrigin(origin)) return new Map();
+  const renamed: unknown = storedField(origin, "renamed");
   if (!isPlainRecord(renamed)) return new Map();
   const map = new Map<string, string>();
   // Own keys, and a string on both sides. The record is stored data: a
@@ -3428,10 +3450,36 @@ function renamedIn(
  * "is this a usable record" is the drift the validator and the planners exist
  * to keep out.
  */
-function isPatternOrigin(
-  origin: unknown
-): origin is Extract<BlockOrigin, { from: "pattern" }> {
-  return isBlockOrigin(origin) && origin.from === "pattern";
+function isPatternOrigin(origin: unknown): boolean {
+  // The DISCRIMINANT is read the way the validator reads it, off the property
+  // descriptor. `isBlockOrigin` establishes the record is whole without running
+  // anything, and an ordinary `origin.from` afterwards would run a `get` trap
+  // the check just avoided — validating defensively and then reading naively is
+  // the same crash one line later.
+  return isBlockOrigin(origin) && storedField(origin, "from") === "pattern";
+}
+
+/**
+ * One field of a stored record, without running the record's own code.
+ *
+ * Every read of a provenance record goes through this. A stored origin can be a
+ * Proxy whose `get` trap throws, and a planner that reads a field naively takes
+ * a valid save out with a native error — on behalf of a node nothing selected,
+ * now that the walk reaches the whole document.
+ *
+ * An accessor answers `undefined` for the reason the validator treats one as
+ * absent: reading it runs the document's own code inside the decision about
+ * whether to trust it.
+ */
+function storedField(record: object, key: string): unknown {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(record, key);
+  } catch {
+    return undefined;
+  }
+  if (descriptor === undefined || !("value" in descriptor)) return undefined;
+  return descriptor.value;
 }
 
 /**
@@ -3457,88 +3505,133 @@ function restoredDomIds(
   selected: readonly BlockNode[]
 ): ReadonlyMap<string, string> {
   const scopes = renameScopes(document.nodes);
+  const survey = surveyedSelection(selected, scopes);
 
-  // Every scope the selection CONTAINS, not just the roots'. A run inserted
-  // from one pattern can hold a second pattern inserted into it later, with a
-  // rename map of its own — and reading only the roots stores that nested
-  // copy's page-specific ids, which is the growth this exists to stop, left
-  // running for one subtree.
-  //
-  // Collected by identity, so the whole of a large selection costs one entry
-  // per DISTINCT record rather than one per node: an inherited scope is the
-  // same map object on every node that inherits it.
-  const applicable = new Set<ReadonlyMap<string, string>>();
-  // Which scope governs the node that RENDERS each id. At most one node in a
-  // selection renders a given id — `duplicateDomIdRefusal` refuses a save where
-  // two do — so this is a decision about that node and no other.
-  const holders = new Map<string, ReadonlyMap<string, string> | undefined>();
-  // The TOP of each governed region: a node whose parent is under a different
-  // scope. Enough to reach every node the scope governs, and few enough that
-  // asking about references costs one pass per region rather than one per node.
-  const tops = new Map<ReadonlyMap<string, string>, BlockNode[]>();
-  walkNodes([...selected], (node, parent) => {
-    const scope = scopes.get(node);
-    if (scope !== undefined) {
-      applicable.add(scope);
-      if (parent === undefined || scopes.get(parent) !== scope) {
-        const found = tops.get(scope);
-        if (found === undefined) tops.set(scope, [node]);
-        else found.push(node);
-      }
-    }
-    const rendered = renderedDomId(node);
-    if (rendered !== undefined && !holders.has(rendered)) {
-      holders.set(rendered, scope);
-    }
-  });
+  // Every id any record names, asked of every node at once.
+  const named = new Map<string, string>();
+  for (const renamed of survey.applicable) {
+    for (const now of renamed.values()) named.set(now, now);
+  }
+  const referencing = referencesByScope(survey.nodes, scopes, named);
 
   const restore = new Map<string, string>();
-  for (const renamed of applicable) {
+  for (const renamed of survey.applicable) {
     for (const [was, now] of renamed) {
-      // The node holding the id decides whether the record still applies to it.
-      // A node MOVED out of the run that renamed it is no longer governed by
-      // that record, and putting the id back would rewrite one the author now
-      // owns — the record describes a rename that happened somewhere this node
-      // no longer is.
-      //
-      // This also settles two records naming one id, by construction rather
-      // than by iteration order: only the one governing the holder is admitted,
-      // and that is the record that actually renamed it.
-      if (holders.has(now)) {
-        if (holders.get(now) !== renamed) continue;
+      if (governs(renamed, now, survey.holders, referencing)) {
         restore.set(now, was);
-        continue;
       }
-      // Nothing in the selection renders it, so the record can only be about a
-      // REFERENCE — a link saved without its target, whose href still has to
-      // come back. That is a real case and it is not a blanket one: a node
-      // MOVED out of the run keeps its reference too, and rewriting it points
-      // it somewhere the saved forest never had. So the reference has to be
-      // held by a node this record governs, which is what the region is for.
-      if (referencedUnder(tops.get(renamed) ?? [], now)) restore.set(now, was);
     }
   }
   return restore;
 }
 
+/** What one pass over the selection tells the restore. */
+interface SelectionSurvey {
+  /** Every node in it, for the reference probe. */
+  readonly nodes: BlockNode[];
+  /** Every DISTINCT record in scope anywhere in it. */
+  readonly applicable: Set<ReadonlyMap<string, string>>;
+  /**
+   * The scope governing whichever node RENDERS each id.
+   *
+   * At most one node in a selection renders a given id —
+   * `duplicateDomIdRefusal` refuses a save where two do — so this is a decision
+   * about that node and no other.
+   */
+  readonly holders: Map<string, ReadonlyMap<string, string> | undefined>;
+}
+
+function surveyedSelection(
+  selected: readonly BlockNode[],
+  scopes: ReadonlyMap<BlockNode, ReadonlyMap<string, string>>
+): SelectionSurvey {
+  const nodes: BlockNode[] = [];
+  // Collected by identity, so the whole of a large selection costs one entry
+  // per DISTINCT record rather than one per node: an inherited scope is the
+  // same map object on every node that inherits it.
+  const applicable = new Set<ReadonlyMap<string, string>>();
+  const holders = new Map<string, ReadonlyMap<string, string> | undefined>();
+  walkNodes([...selected], node => {
+    nodes.push(node);
+    const scope = scopes.get(node);
+    if (scope !== undefined) applicable.add(scope);
+    const rendered = renderedDomId(node);
+    if (rendered !== undefined && !holders.has(rendered)) {
+      holders.set(rendered, scope);
+    }
+  });
+  return { nodes, applicable, holders };
+}
+
 /**
- * Whether anything under these roots REFERENCES a DOM id.
+ * Whether this record still applies to the id it renamed.
  *
- * Through `referencedDomIds`, which runs the relink pass with an instrumented
- * candidate map — so what counts as a reference is whatever the relink itself
- * would follow, rather than a second list of attributes and props to keep in
- * step with it.
+ * The node HOLDING the id decides. A node moved out of the run that renamed it
+ * is no longer governed by that record, and putting the id back would rewrite
+ * one the author now owns — the record describes a rename that happened
+ * somewhere this node no longer is. That also settles two records naming one
+ * id, by construction rather than by iteration order.
  *
- * The roots are the tops of ONE scope's region, so a reference found here
- * belongs to a node that record governs. A region can still contain a
- * differently-scoped descendant — a pattern inserted into it later — and a
- * reference held by one of those is admitted along with the rest; bounded to
- * that region, which is the part a single flat restore map can express.
+ * Where nothing in the selection RENDERS it, the record can only be about a
+ * reference — a link saved without its target, whose href still has to come
+ * back. Not a blanket case either: a node moved out keeps its reference too, so
+ * the node holding THAT has to be one this record governs.
  */
-function referencedUnder(roots: readonly BlockNode[], domId: string): boolean {
-  if (roots.length === 0) return false;
-  const candidates = new Map([[domId, domId]]);
-  return referencedDomIds([...roots], candidates).some(hits => hits.size > 0);
+function governs(
+  renamed: ReadonlyMap<string, string>,
+  now: string,
+  holders: ReadonlyMap<string, ReadonlyMap<string, string> | undefined>,
+  referencing: ReadonlyMap<string, Set<ReadonlyMap<string, string>>>
+): boolean {
+  if (holders.has(now)) return holders.get(now) === renamed;
+  return referencing.get(now)?.has(renamed) === true;
+}
+
+/**
+ * Which scopes hold a node that REFERENCES each of these ids.
+ *
+ * One traversal for every id and every node, rather than a scan per rename
+ * entry: a stored pattern can carry thousands of entries whose targets were
+ * removed, and asking about them one at a time rebuilds the whole region each
+ * time — quadratic in entries times nodes, on a save that is perfectly valid.
+ *
+ * Attributed PER NODE, which is what makes it exact. Each node is probed with
+ * its children removed, so a reference is credited to the node that actually
+ * holds it and the walk cannot cross a scope boundary: a pattern nested inside
+ * another has its own scope, and an authored reference of its own must not
+ * admit the outer pattern's rename.
+ *
+ * `referencedDomIds` is still what reads them, so what counts as a reference
+ * stays whatever the relink itself would follow rather than a second list of
+ * attributes and props to keep in step.
+ */
+function referencesByScope(
+  nodes: readonly BlockNode[],
+  scopes: ReadonlyMap<BlockNode, ReadonlyMap<string, string>>,
+  candidates: ReadonlyMap<string, string>
+): Map<string, Set<ReadonlyMap<string, string>>> {
+  const found = new Map<string, Set<ReadonlyMap<string, string>>>();
+  if (candidates.size === 0 || nodes.length === 0) return found;
+
+  // Childless copies, so each root the probe walks IS one node. `slots` is
+  // dropped rather than emptied because an empty record is still a container
+  // the copier rebuilds.
+  const alone = nodes.map(node => {
+    const { slots: _slots, ...rest } = node;
+    return rest;
+  });
+
+  referencedDomIds(alone, new Map(candidates)).forEach((hits, index) => {
+    const held = nodes[index];
+    const scope = held === undefined ? undefined : scopes.get(held);
+    if (scope === undefined) return;
+    for (const domId of hits.keys()) {
+      const holders = found.get(domId);
+      if (holders === undefined) found.set(domId, new Set([scope]));
+      else holders.add(scope);
+    }
+  });
+  return found;
 }
 
 /**
@@ -3580,19 +3673,32 @@ function renameScopes(
     // lets a nested pattern inherit its host's renames and store its own
     // content under the host pattern's spelling.
     //
-    // ANY whole record, not only a pattern's. A component detached inside an
-    // inserted pattern gets a `{ from: "component" }` origin, and that is
-    // independent provenance too: its subtree did not come from the host
-    // pattern, so the host's renames are not about it. Only a pattern record
-    // carries a map, so every other kind stops inheritance with an empty one.
+    // ANY record at all, whatever it says and whether or not it can be read.
+    // The question here is not what a record CONTAINS — it is whether this node
+    // is somewhere the ancestor's rename is about, and a node claiming
+    // provenance of its own is not. A component detached inside an inserted
+    // pattern carries `{ from: "component" }`; a stored record can be malformed
+    // or refuse to be read at all. None of those came from the host pattern, so
+    // none of them should inherit its renames — and only a whole pattern record
+    // supplies a map, so every other case stops inheritance with an empty one.
+    //
+    // Trusting the record to decide the boundary is the mistake this has now
+    // been three times: the test kept being for the thing that CARRIES the data
+    // rather than the thing that BOUNDS the scope.
+    //
+    // The untrusted case is UNREACHABLE from here today and the test is kept
+    // anyway: a selection holding a malformed record is refused by the shape
+    // rule as `invalid-node` long before a scope is decided, which is asserted
+    // below. Unreachability is a property of the current call graph rather than
+    // of this function, and one descriptor read is cheap enough that not
+    // depending on that ordering costs nothing.
     //
     // The map is remembered rather than rebuilt, because the walk compares
     // scopes by IDENTITY and a fresh map on a second visit of one node object
     // reads as a disagreement with itself — which downgraded every descendant
     // of it to no scope at all.
-    const own = ownOrigin(node);
-    if (isBlockOrigin(own)) {
-      scopes.set(node, scopes.get(node) ?? renamedIn(own));
+    if (claimsOrigin(node)) {
+      scopes.set(node, scopes.get(node) ?? renamedIn(ownOrigin(node)));
       return;
     }
 
