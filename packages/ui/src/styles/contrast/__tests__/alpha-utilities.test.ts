@@ -58,10 +58,21 @@ function scanTracked(pattern: string, paths: readonly string[]): string {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-  const files = listed.split("\0").filter(Boolean);
-  if (files.length === 0) {
+  const tracked = listed.split("\0").filter(Boolean);
+  if (tracked.length === 0) {
     throw new Error(`no tracked files under: ${paths.join(", ")}`);
   }
+  // Tracked and STILL THERE. `git ls-files` lists the index, so a file deleted
+  // from the working tree is still named until that deletion is staged — and
+  // handing grep a path that is not there exits 2, which this treats as a real
+  // failure and rethrows. Deleting a file and running the suite before staging
+  // is an ordinary thing to do mid-change, and it made this scanner fail with
+  // "No such file or directory" rather than scanning what remained.
+  //
+  // Skipped rather than refused: a file that is gone renders nothing, so it has
+  // no bearing on what these rules measure. The empty-list guard above still
+  // catches a pathspec that names nothing at all.
+  const files = tracked.filter(file => existsSync(resolve(repo, file)));
 
   // Batched and invoked DIRECTLY rather than piped through `xargs`, so each
   // grep's own status is read.
