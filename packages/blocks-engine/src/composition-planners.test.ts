@@ -17,6 +17,7 @@ import {
   planInsertPattern,
   planSaveAsComponent,
   planSaveAsPattern,
+  saveAsPatternRefusal,
   planUpdatePatternFromSelection,
 } from "./composition-planners";
 import type {
@@ -96,6 +97,81 @@ function marked(nodes: BlockNode[], mark: string): BlockNode {
   if (found === undefined) throw new Error(`no node marked ${mark}`);
   return found;
 }
+
+describe("whether a selection may be saved at all", () => {
+  it("answers NOTHING for a selection the planner would accept", () => {
+    // The positive control, and the one that matters most: a preflight that
+    // refused everything would satisfy every assertion below while disabling a
+    // button that should work.
+    const doc = page([node("a"), node("b"), node("c")]);
+
+    expect(saveAsPatternRefusal(doc, ["a", "b"], anyParent)).toBeUndefined();
+  });
+
+  it("refuses a selection that is not one contiguous run, and says so", () => {
+    // The reason a surface cannot keep its own copy of this list: it is not a
+    // short list, and each entry is a way a page that RENDERS can still hold a
+    // selection no pattern can be made from.
+    const doc = page([node("a"), node("b"), node("c")]);
+
+    const refusal = saveAsPatternRefusal(doc, ["a", "c"], anyParent);
+
+    expect(refusal?.problem).toBeDefined();
+  });
+
+  it("agrees with the PLANNER, which is the whole point of publishing it", () => {
+    // Asked both ways over the same selections. A preflight that answered
+    // differently from the planner would be a button enabled for a save that
+    // fails, or disabled for one that would have worked — and the drift would
+    // be silent either way.
+    const doc = page([node("a"), node("b"), node("c")]);
+    for (const selection of [["a"], ["a", "b"], ["a", "c"], ["b", "c"], []]) {
+      const refused =
+        saveAsPatternRefusal(doc, selection, anyParent) !== undefined;
+      const planned = planSaveAsPattern(doc, selection, target, anyParent);
+      expect(refused).toBe(planned.problem !== undefined);
+    }
+  });
+
+  it("refuses a valid RUN whose stored document could not be saved", () => {
+    // The case that decides which preflight this is. `savableRun` alone asks
+    // only whether the selection is one contiguous, liftable run — it never
+    // builds the document, so a run that is perfectly well formed and whose
+    // pattern would blow the byte cap reads as savable. The button would enable
+    // and the save would then fail, which is the exact defect this exists to
+    // stop.
+    //
+    // Two adjacent nodes rendering ONE DOM id. The selection is a perfectly
+    // good run — contiguous, liftable, both valid roots — and the document it
+    // would store is not, because two nodes cannot answer to one id once the
+    // pattern is inserted somewhere.
+    const clashing = page([
+      node("a", { cssId: "hero" }),
+      node("b", { cssId: "hero" }),
+    ]);
+
+    expect(saveAsPatternRefusal(clashing, ["a", "b"], anyParent)).toBeDefined();
+    // The control: the SAME shape of selection over nodes that do not clash is
+    // savable — so the refusal above is the stored document talking, not the
+    // run.
+    const distinct = page([
+      node("a", { cssId: "hero" }),
+      node("b", { cssId: "pricing" }),
+    ]);
+    expect(
+      saveAsPatternRefusal(distinct, ["a", "b"], anyParent)
+    ).toBeUndefined();
+  });
+
+  it("asks without a target, which is what a caller has before it saves", () => {
+    // The gap this closes. Asking the planner meant inventing a collection name
+    // and a field set, which a surface deciding whether to OFFER the save does
+    // not have yet — so the only way to ask was to answer a different question.
+    const doc = page([node("a")]);
+
+    expect(() => saveAsPatternRefusal(doc, ["a"], anyParent)).not.toThrow();
+  });
+});
 
 describe("what a saved pattern is", () => {
   it("creates a pattern document in the collection the caller named", () => {

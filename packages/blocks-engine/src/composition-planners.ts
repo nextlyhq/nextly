@@ -2099,6 +2099,49 @@ function storedPatternRefusal(pattern: BlockDocument): PlanRefusal | undefined {
  * questions about somewhere the pattern is going — asked per placement, by
  * {@link placementVerdict} and the planner itself.
  */
+/**
+ * Whether this selection could be saved as a pattern, and why not.
+ *
+ * The counterpart to {@link patternRefusal}, published for the same reason and
+ * against the opposite mistake. That one stops a palette OFFERING a stored
+ * pattern the planner would reject; this one stops a surface offering to SAVE a
+ * selection the planner would reject — a button that accepts a click and then
+ * fails, which is the same defect on the write side.
+ *
+ * Asked of the PLANNER rather than restated. The ways a selection can be
+ * unsavable are not a short list a toolbar should keep its own copy of: a
+ * selection that is not one contiguous run, a block that may not be a document
+ * root, a node whose shape the op layer will not carry, a descendant nested
+ * somewhere the rules no longer allow, one DOM id on two of the run's own
+ * nodes, and a document that will not fit the byte cap. A surface enumerating
+ * those drifts the first time the planner learns a new way to say no, and it
+ * drifts SILENTLY — the button stays enabled and the save fails.
+ *
+ * Before this, the only way to ask was to call {@link planSaveAsPattern} with a
+ * `target` invented for the purpose, which is a collection name and a field set
+ * a caller asking "may I?" does not have yet.
+ *
+ * A THIN VIEW over the planner's own preflight rather than a second walk: the
+ * same `plannedSave` the two save planners call, so a question answered here
+ * and a save attempted afterwards cannot disagree. It therefore does the same
+ * work a save does, up to building the stored document — which is what makes it
+ * exact, and what makes it worth memoising on the selection rather than calling
+ * per render.
+ *
+ * `limits` is threaded for the reason it is threaded everywhere else here: a
+ * host may raise `maxNodes`, and a selection legitimate under a raised cap must
+ * not be refused by a bound this file chose for itself.
+ */
+export function saveAsPatternRefusal(
+  document: BlockDocument,
+  selectedIds: readonly string[],
+  nesting: NestingSource,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): PlanRefusal | undefined {
+  const saved = plannedSave(document, selectedIds, nesting, limits);
+  return saved.problem === undefined ? undefined : saved;
+}
+
 export function patternRefusal(
   pattern: BlockDocument,
   nesting: NestingSource

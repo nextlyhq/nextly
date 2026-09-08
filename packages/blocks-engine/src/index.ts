@@ -203,6 +203,7 @@ export {
   planInsertPattern,
   internalNestingVerdict,
   patternRefusal,
+  saveAsPatternRefusal,
   planSaveAsComponent,
   planSaveAsPattern,
   planUpdatePatternFromSelection,
