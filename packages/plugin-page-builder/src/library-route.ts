@@ -41,7 +41,7 @@
  *
  * @module library-route
  */
-import { documentBytes } from "@nextlyhq/blocks-engine";
+import { measureBytes } from "@nextlyhq/blocks-engine";
 
 import { PATTERNS_SLUG } from "./collections/patterns";
 import {
@@ -97,38 +97,45 @@ const MAX_LIBRARY_PAGES = Math.ceil(MAX_LIBRARY_PATTERNS / LIBRARY_PAGE_SIZE);
  * than let an author search for a pattern that was silently left out.
  *
  * An upper bound on what comes back, not a line the last row is allowed to
- * cross: every row is weighed before it is kept, so the documents in a response
- * never total more than this.
+ * cross: every row is weighed before it is kept, so a response never totals
+ * more than this.
  */
 export const MAX_LIBRARY_BYTES = 16 * 1024 * 1024;
 
 /**
- * What one pattern will cost on the wire.
+ * What one row costs on the wire, or nothing when it cannot be sent at all.
  *
- * The DOCUMENT only, because that is the part with no bound of its own — the
- * title, category and keywords are short columns. Measured by serialising,
- * which is what the response does anyway; an estimate from node count would be
- * a second model of the same thing and would disagree the first time a block
- * gained a large prop.
+ * THE WHOLE ROW, not the document. Charging only the document meant charging
+ * the one field that happened to have no bound of its own, and `description` is
+ * a `textarea` on the patterns collection with no length either — so a library
+ * of long descriptions and absent documents was scored at exactly zero and no
+ * ceiling was ever consulted. Measured, sixty such rows serialised to 24.0 MB
+ * against a 16 MiB ceiling. A budget on what is SENT has to weigh what is sent.
  *
- * The ENGINE's measurement, not a second definition of a byte. `String.length`
- * counts UTF-16 code units, so a CJK character counts one here and travels as
- * three — a library measured that way passes roughly three times its nominal
- * ceiling onto the wire. `documentBytes` encodes, and is the same measurement
- * document validation bounds a stored document by, so the two ceilings a
- * pattern passes through agree about what it weighs.
+ * The ENGINE's measurement, not a second definition of a byte, and the generic
+ * one rather than `documentBytes`: that takes a document, while what travels
+ * here is a row. `measureBytes` is the same survey the canonical validator asks
+ * its size question through, so this agrees with the ceiling a stored document
+ * already passed rather than disagreeing the first time a block gains a prop.
+ * It counts UTF-8, which is what a byte means on the wire — `String.length`
+ * counts UTF-16 code units, and a library measured that way passed roughly
+ * three times its nominal ceiling.
  *
- * A document that cannot be serialised counts as nothing rather than refusing
- * the library, and the ceiling exists to bound bytes actually sent.
+ * It is also BOUNDED: it stops at the limit rather than walking a row that is
+ * already too big, so weighing a hundred-mebibyte row does not itself cost a
+ * hundred mebibytes.
+ *
+ * A row that cannot be serialised is REFUSED rather than counted as free. An
+ * `afterRead` hook may hand back a document holding a bigint or a cycle;
+ * counting that as costing nothing kept it, and the serialisation of the
+ * assembled library then threw — so one malformed row answered the author with
+ * a failed request instead of a shorter list. `undefined` says so, and the
+ * caller drops the row exactly as it drops one it could not key or label.
  */
-function documentBytesOf(pattern: LibraryPattern): number {
-  try {
-    const document = pattern.document;
-    if (document === undefined || document === null) return 0;
-    return documentBytes(document);
-  } catch {
-    return 0;
-  }
+function rowCost(pattern: LibraryPattern): number | undefined {
+  const measured = measureBytes(pattern, MAX_LIBRARY_BYTES);
+  if (measured.exceeded && measured.reason === "unwritable") return undefined;
+  return measured.bytes;
 }
 
 /** The capabilities this route uses, named rather than imported whole. */
@@ -272,7 +279,8 @@ function admits(size: number, spent: number, kept: number): RowVerdict {
  * An unreadable ROW is dropped rather than refusing the whole library, which
  * moves in the same direction the remote-pattern reader moves in: one pattern
  * stops being offered instead of all of them. A row with no id or no title is
- * one the panel could neither key nor label.
+ * one the panel could neither key nor label; a row that cannot be serialised is
+ * one the response could not carry even if it were kept.
  */
 function collectPage(
   rows: readonly unknown[],
@@ -284,7 +292,13 @@ function collectPage(
   for (const row of rows) {
     const pattern = readLibraryRow(row);
     if (pattern === undefined) continue;
-    const size = documentBytesOf(pattern);
+    const size = rowCost(pattern);
+    // Unsendable, so it is not a question of budget: dropped like a row that
+    // could be neither keyed nor labelled, and the read goes on.
+    if (size === undefined) {
+      omitted = true;
+      continue;
+    }
     const verdict = admits(size, bytes, into.length);
     if (verdict === "stop") return { bytes, full: true, omitted };
     if (verdict === "omit") {

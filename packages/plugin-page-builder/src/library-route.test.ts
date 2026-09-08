@@ -278,6 +278,13 @@ describe("how much of the library travels, by weight", () => {
    * different implementation of "UTF-8 bytes" than the one under test and can
    * disagree with it.
    */
+  /** The same oracle over the whole row, which is what the wire carries. */
+  const rowWireBytes = (items: readonly unknown[]) =>
+    items.reduce<number>(
+      (n, p) => n + Buffer.byteLength(JSON.stringify(p), "utf8"),
+      0
+    );
+
   const documentWireBytes = (
     items: readonly { readonly document?: unknown }[]
   ) =>
@@ -353,6 +360,57 @@ describe("how much of the library travels, by weight", () => {
       MAX_LIBRARY_BYTES
     );
     expect(library.meta.truncated).toBe(true);
+  });
+
+  it("charges a row for the WHOLE of it, not only its document", async () => {
+    // `description` is a `textarea` on the patterns collection with no length
+    // of its own, so a library of rows carrying long descriptions and NO
+    // document spent nothing at all: the budget measured the one field that
+    // happened to have no bound, and every other field rode along unmeasured.
+    // Three thousand of those assemble and serialise without a ceiling ever
+    // being consulted.
+    //
+    // Each row carries a SMALL but real document, which is what makes the two
+    // readers disagree. With no document at all a reader charging only the
+    // document measures `undefined`, reports it unserialisable and drops every
+    // row — the library comes back empty and within budget, so the assertion
+    // holds for a reason that has nothing to do with what was charged.
+    const description = "d".repeat(400_000);
+    const { ctx } = contextOver([
+      Array.from({ length: 60 }, (_, i) =>
+        row(`m${String(i)}`, { description })
+      ),
+    ]);
+
+    const library = await readPatternLibrary(ctx);
+
+    expect(rowWireBytes(library.items)).toBeLessThanOrEqual(MAX_LIBRARY_BYTES);
+    expect(library.meta.truncated).toBe(true);
+  });
+
+  it("drops a row it cannot serialise rather than answering 500", async () => {
+    // A document reaching a reader is not necessarily serialisable: an
+    // `afterRead` hook may put a bigint or a cycle in one. Counting that row as
+    // costing NOTHING kept it, and `Response.json` then threw on the assembled
+    // library — so one malformed row took every usable pattern with it and the
+    // author saw a failed request rather than a shorter list.
+    //
+    // The same direction every other unreadable row moves in: one pattern
+    // dropped instead of all of them.
+    const poisoned = row("bad");
+    (poisoned.content as { nodes: unknown[] }).nodes.push({
+      id: "n",
+      type: "core/box",
+      version: 1,
+      props: { count: BigInt(1) },
+    });
+    const { ctx } = contextOver([[poisoned, row("good")]]);
+
+    const library = await readPatternLibrary(ctx);
+
+    expect(library.items.map(pattern => pattern.id)).toEqual(["good"]);
+    // And the answer is one the route can actually send.
+    expect(() => JSON.stringify(library)).not.toThrow();
   });
 
   it("cuts a SINGLE oversized page rather than calling it complete", async () => {
