@@ -3514,13 +3514,61 @@ function restoredDomIds(
   }
   const referencing = referencesByScope(survey.nodes, scopes, named);
 
-  const restore = new Map<string, string>();
+  const claims = new Map<string, Claim>();
   for (const renamed of survey.applicable) {
     for (const [was, now] of renamed) {
       if (governs(renamed, now, survey.holders, referencing)) {
-        restore.set(now, was);
+        claim(claims, now, was, renamed);
       }
     }
+  }
+  return settled(claims);
+}
+
+/** What the records in a selection say one current id used to be called. */
+interface Claim {
+  /** Every source spelling offered for it. */
+  readonly was: Set<string>;
+  /** Every record offering one. */
+  readonly scopes: Set<ReadonlyMap<string, string>>;
+}
+
+function claim(
+  claims: Map<string, Claim>,
+  now: string,
+  was: string,
+  renamed: ReadonlyMap<string, string>
+): void {
+  const found = claims.get(now);
+  if (found === undefined) {
+    claims.set(now, { was: new Set([was]), scopes: new Set([renamed]) });
+    return;
+  }
+  found.was.add(was);
+  found.scopes.add(renamed);
+}
+
+/**
+ * The claims that are not contested, as the restore map.
+ *
+ * Two records can each hold a reference to one current id and disagree about
+ * what it was called — measured, two patterns whose maps both name `shared-1`,
+ * one from `alpha` and one from `beta`. A single restore map has room for one
+ * answer, so applying either rewrites the other scope's reference to a name it
+ * never had.
+ *
+ * Keeping the id is the honest outcome rather than a fallback: nothing in the
+ * selection renders a contested one, so both references already point outside
+ * the saved forest, and leaving them is the only answer that corrupts neither.
+ * Restoring per scope needs a per-node policy, which is a change to
+ * {@link DomIdPolicy} rather than to this reading of it.
+ */
+function settled(claims: ReadonlyMap<string, Claim>): Map<string, string> {
+  const restore = new Map<string, string>();
+  for (const [now, entry] of claims) {
+    if (entry.scopes.size !== 1 || entry.was.size !== 1) continue;
+    const [only] = entry.was;
+    if (only !== undefined) restore.set(now, only);
   }
   return restore;
 }

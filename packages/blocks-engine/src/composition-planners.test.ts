@@ -3344,6 +3344,75 @@ describe("a saved DESCENDANT of an inserted root", () => {
     expect(many).toBeLessThan(one * 10 + 200);
   });
 
+  it("leaves an id two records disagree about", () => {
+    // Each record holds a reference to one current id and calls it something
+    // different. A single restore map has room for one answer, so applying
+    // either rewrites the other scope's reference to a name it never had —
+    // measured, both came back as `beta`.
+    //
+    // Nothing renders the id, so both references already point outside the
+    // saved forest; leaving them is the only answer that corrupts neither.
+    const doc = page([
+      node(
+        "outer",
+        {},
+        {
+          children: [
+            node(
+              "a",
+              {
+                origin: {
+                  from: "pattern",
+                  id: "pattern-a",
+                  digest: "d",
+                  renamed: { alpha: "shared-1" },
+                },
+              } as Partial<BlockNode>,
+              {
+                children: [
+                  node("refA", {
+                    attributes: { "aria-describedby": "shared-1" },
+                    props: { mark: "refA" },
+                  }),
+                ],
+              }
+            ),
+            node(
+              "b",
+              {
+                origin: {
+                  from: "pattern",
+                  id: "pattern-b",
+                  digest: "d",
+                  renamed: { beta: "shared-1" },
+                },
+              } as Partial<BlockNode>,
+              {
+                children: [
+                  node("refB", {
+                    attributes: { "aria-describedby": "shared-1" },
+                    props: { mark: "refB" },
+                  }),
+                ],
+              }
+            ),
+          ],
+        }
+      ),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["outer"], target, anyParent)
+    ).document;
+
+    expect(
+      marked([...saved.nodes], "refA").attributes?.["aria-describedby"]
+    ).toBe("shared-1");
+    expect(
+      marked([...saved.nodes], "refB").attributes?.["aria-describedby"]
+    ).toBe("shared-1");
+  });
+
   it("keeps every id when no ancestor was ever inserted from a pattern", () => {
     // The control for all three above: without a record in scope there is
     // nothing to put back, and an authored id is the author's to keep.
