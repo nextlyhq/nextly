@@ -659,85 +659,6 @@ export function exportsMapAnswers(exports, subpath) {
 }
 
 /**
- * How long to wait on the registry before calling the answer unknown.
- *
- * A registry that accepts the connection and then stalls has no rejection for
- * the catch below to see, and the audit is a serial loop, so one stalled
- * request holds the whole report open with nothing printed. An abort lands in
- * the same catch and is reported as unknown, which is the honest answer.
- */
-export const REGISTRY_TIMEOUT_MS = 10_000;
-
-const registryCache = new Map();
-
-/**
- * The manifest of a package this workspace publishes, or null for anything else.
- *
- * Read from the checkout rather than cached across runs: the point is to answer
- * for the code in this commit.
- */
-const workspaceManifests = new Map();
-function workspaceManifest(pkg) {
-  if (workspaceManifests.size === 0) {
-    for (const dirent of readdirSync(join(ROOT, "packages"), {
-      withFileTypes: true,
-    })) {
-      if (!dirent.isDirectory()) continue;
-      try {
-        const manifest = JSON.parse(
-          readFileSync(
-            join(ROOT, "packages", dirent.name, "package.json"),
-            "utf-8"
-          )
-        );
-        if (manifest.name && !manifest.private) {
-          workspaceManifests.set(manifest.name, manifest);
-        }
-      } catch {
-        // A package without a readable manifest is not one a sample can import.
-      }
-    }
-  }
-  return workspaceManifests.get(pkg) ?? null;
-}
-export async function resolvesForAReader(
-  specifier,
-  fetchImpl = fetch,
-  cache = registryCache
-) {
-  const pkg = packageOf(specifier);
-
-  // A package this workspace publishes is answered from this commit, never the
-  // registry. The registry describes the LAST RELEASE, so a pull request that
-  // removes an export leaves it still advertised there: the local compile
-  // reports TS2307 correctly and this would then classify it as "published but
-  // not installed here" and drop it from the gate. Removing an export a
-  // documented example imports is exactly the breakage this exists to catch,
-  // and it is the one case the registry cannot see.
-  const local = workspaceManifest(pkg);
-  if (local) return exportsMapAnswers(local.exports, subpathOf(specifier));
-
-  if (!cache.has(pkg)) {
-    let manifest;
-    try {
-      const res = await fetchImpl(
-        `https://registry.npmjs.org/${pkg.replace("/", "%2f")}/latest`,
-        { signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS) }
-      );
-      manifest = res.ok ? await res.json() : res.status === 404 ? false : null;
-    } catch {
-      manifest = null;
-    }
-    cache.set(pkg, manifest);
-  }
-  const manifest = cache.get(pkg);
-  if (manifest === null) return null;
-  if (manifest === false) return false;
-
-  return exportsMapAnswers(manifest.exports, subpathOf(specifier));
-}
-
-/**
  * Was this name defined by an earlier block on the same page?
  *
  * Compiling each block on its own is what makes the API claims checkable, and
@@ -925,17 +846,46 @@ export function withEarlierContext(sample, missingNames, samples) {
 }
 
 /**
+ * The manifest of a package this workspace publishes, or null for anything else.
+ *
+ * Read from the checkout, because the point is to answer for the code in this
+ * commit. The npm registry describes the last RELEASE, so it cannot see a
+ * subpath a pull request has just removed — which is the breakage most worth
+ * catching, and the reason nothing here asks it anything.
+ */
+const workspaceManifests = new Map();
+function workspaceManifest(pkg) {
+  if (workspaceManifests.size === 0) {
+    for (const dirent of readdirSync(join(ROOT, "packages"), {
+      withFileTypes: true,
+    })) {
+      if (!dirent.isDirectory()) continue;
+      try {
+        const manifest = JSON.parse(
+          readFileSync(
+            join(ROOT, "packages", dirent.name, "package.json"),
+            "utf-8"
+          )
+        );
+        if (manifest.name && !manifest.private) {
+          workspaceManifests.set(manifest.name, manifest);
+        }
+      } catch {
+        // A package without a readable manifest is not one a sample can import.
+      }
+    }
+  }
+  return workspaceManifests.get(pkg) ?? null;
+}
+
+/**
  * Sort diagnostics into what a reader would hit and what this harness caused.
  *
  * Pure and injectable so each rule can be tested on its own. Every branch here
  * was once a pattern match asserting something nobody had checked, and each of
  * those hid real defects.
  */
-export async function classifyDocDiagnostics({
-  diagnostics,
-  samples,
-  resolve = resolvesForAReader,
-}) {
+export async function classifyDocDiagnostics({ diagnostics, samples }) {
   const uninstalled = [];
   const continued = [];
   const real = [];
@@ -962,15 +912,37 @@ export async function classifyDocDiagnostics({
         uncheckedSamples.add(line.split("  ")[0].split(":")[0]);
         continue;
       }
-      const resolves = await resolve(missing[1]);
-      if (resolves === true) {
-        uninstalled.push(line);
-        uncheckedSamples.add(line.split("  ")[0].split(":")[0]);
-      } else if (resolves === null) {
-        unchecked.push(line);
-        uncheckedSamples.add(line.split("  ")[0].split(":")[0]);
+      // Decided from this checkout alone. This used to ask the npm registry
+      // whether a reader would have the package, and the answer changed the
+      // COUNT: `true` and `null` excused a diagnostic, `false` gated it. A
+      // network call is not a fact about a commit — the same tree scored 35
+      // here and 37 in CI, because `next`'s manifest is large enough to time
+      // out locally while CI fetched it. A gate whose verdict depends on the
+      // weather is not a gate.
+      //
+      // So: a package THIS WORKSPACE publishes is judged by its own exports
+      // map, which is the case that matters, because a subpath this commit
+      // does not publish is a broken example a reader would hit today.
+      // Anything else is a dependency a reader's project has and this checkout
+      // may not, and the sample is reported unchecked rather than counted.
+      //
+      // The cost is that a misspelled third-party package name is no longer
+      // gated. That is worth a reproducible verdict, and the sample still shows
+      // up as unchecked rather than passing silently.
+      const origin = line.split("  ")[0].split(":")[0];
+      const published = workspaceManifest(packageOf(missing[1]));
+      if (published) {
+        if (exportsMapAnswers(published.exports, subpathOf(missing[1]))) {
+          // Declared here and still unresolved: the tree is not built the way
+          // this expects, which is about the checkout and not about the page.
+          unchecked.push(line);
+          uncheckedSamples.add(origin);
+        } else {
+          real.push(line);
+        }
       } else {
-        real.push(line);
+        uninstalled.push(line);
+        uncheckedSamples.add(origin);
       }
       continue;
     }

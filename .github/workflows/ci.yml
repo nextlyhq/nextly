@@ -546,7 +546,7 @@ jobs:
       # findings and a check that is red when nothing is wrong teaches people to
       # re-run reds instead of reading them.
       - name: Doc samples compile
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: pnpm check:doc-samples
 
       - name: Lint
