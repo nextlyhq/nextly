@@ -3365,7 +3365,16 @@ function insertOrigin(
  */
 function claimsOrigin(node: BlockNode): boolean {
   try {
-    return Object.getOwnPropertyDescriptor(node, "origin") !== undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(node, "origin");
+    if (descriptor === undefined) return false;
+    // An accessor is a claim that cannot be read, which still bounds the scope.
+    if (!("value" in descriptor)) return true;
+    // `origin: undefined` is NOT a claim. The field is optional and JSON omits
+    // it, so an own property holding `undefined` is how "no origin" is spelled
+    // in memory — the validator reads it that way, and treating it as a
+    // boundary would stop an ancestor's rename reaching a node that never
+    // announced anything.
+    return descriptor.value !== undefined;
   } catch {
     // A node that will not answer whether it has a record is one nothing can
     // say is part of the ancestor's run either.
@@ -3526,12 +3535,22 @@ function restoredDomIds(
   for (const renamed of survey.applicable) {
     for (const now of renamed.values()) named.set(now, now);
   }
-  const referencing = referencesByScope(survey.nodes, scopes, named);
+  const carrying = referencesByScope(survey.nodes, scopes, named);
+  // The nodes that RENDER one of these ids answer the same question, so they go
+  // into the same map: a rendered id and a referenced one are both a node
+  // carrying it, and a record has to govern every carrier to be applied.
+  for (const { node, domId } of survey.rendering) {
+    if (!named.has(domId)) continue;
+    const said = answerOf(scopes.get(node), domId);
+    const holders = carrying.get(domId);
+    if (holders === undefined) carrying.set(domId, new Set([said]));
+    else holders.add(said);
+  }
 
   const claims = new Map<string, Claim>();
   for (const renamed of survey.applicable) {
     for (const [was, now] of renamed) {
-      if (governs(renamed, now, survey.holders, referencing)) {
+      if (governs(renamed, now, carrying)) {
         claim(claims, now, was);
       }
     }
@@ -3592,13 +3611,14 @@ interface SelectionSurvey {
   /** Every DISTINCT record in scope anywhere in it. */
   readonly applicable: Set<ReadonlyMap<string, string>>;
   /**
-   * The scope governing whichever node RENDERS each id.
+   * Every node that RENDERS an id a record might name, with the id it renders.
    *
-   * At most one node in a selection renders a given id —
-   * `duplicateDomIdRefusal` refuses a save where two do — so this is a decision
-   * about that node and no other.
+   * All of them, not the first. `duplicateDomIdRefusal` only refuses a save
+   * where two nodes render one id — a condition-gated node carrying the same
+   * id renders nothing and is permitted — so "the holder" is not a single node,
+   * and picking the first made the result depend on walk order.
    */
-  readonly holders: Map<string, ReadonlyMap<string, string> | undefined>;
+  readonly rendering: { node: BlockNode; domId: string }[];
 }
 
 function surveyedSelection(
@@ -3610,17 +3630,15 @@ function surveyedSelection(
   // per DISTINCT record rather than one per node: an inherited scope is the
   // same map object on every node that inherits it.
   const applicable = new Set<ReadonlyMap<string, string>>();
-  const holders = new Map<string, ReadonlyMap<string, string> | undefined>();
+  const rendering: { node: BlockNode; domId: string }[] = [];
   walkNodes([...selected], node => {
     nodes.push(node);
     const scope = scopes.get(node);
     if (scope !== undefined) applicable.add(scope);
     const rendered = renderedDomId(node);
-    if (rendered !== undefined && !holders.has(rendered)) {
-      holders.set(rendered, scope);
-    }
+    if (rendered !== undefined) rendering.push({ node, domId: rendered });
   });
-  return { nodes, applicable, holders };
+  return { nodes, applicable, rendering };
 }
 
 /**
@@ -3640,18 +3658,49 @@ function surveyedSelection(
 function governs(
   renamed: ReadonlyMap<string, string>,
   now: string,
-  holders: ReadonlyMap<string, ReadonlyMap<string, string> | undefined>,
-  referencing: ReadonlyMap<string, Set<string | undefined>>
+  carrying: ReadonlyMap<string, Set<string | undefined>>
 ): boolean {
-  if (holders.has(now)) return holders.get(now) === renamed;
-  // EVERY node referencing it has to give the SAME answer, and it has to be
-  // this record's. The restore carries a single map for the whole forest, so an
-  // id another node also names comes back rewritten there too — one legitimate
-  // hit is not licence to rewrite an unrelated author's reference, and a holder
-  // under no record at all answers `undefined`, which is a disagreement.
-  const said = referencing.get(now);
+  // EVERY node carrying the id — rendering it or referencing it — has to give
+  // the SAME answer, and it has to be this record's. The restore is a single
+  // map for the whole forest, so an id another node also carries comes back
+  // rewritten there too: one governed carrier is not licence to rewrite an
+  // unrelated author's, and a carrier under no record answers `undefined`,
+  // which is a disagreement.
+  //
+  // Rendering and referencing are one question here for the same reason. A
+  // node moved out of the run that renamed it and a node that merely names the
+  // id both stop the record applying, and which of the two it is changes
+  // nothing about the answer.
+  const said = carrying.get(now);
   if (said === undefined) return false;
   return said.size === 1 && said.has(sourceOf(renamed, now));
+}
+
+/**
+ * What a node's scope says a current id used to be, or nothing.
+ *
+ * The inverse of the direction a record is written in, memoised per record so a
+ * large selection pays for each distinct one once rather than searching it per
+ * carrier.
+ */
+const inverses = new WeakMap<
+  ReadonlyMap<string, string>,
+  ReadonlyMap<string, string>
+>();
+
+function answerOf(
+  scope: ReadonlyMap<string, string> | undefined,
+  now: string
+): string | undefined {
+  if (scope === undefined) return undefined;
+  let inverse = inverses.get(scope);
+  if (inverse === undefined) {
+    const built = new Map<string, string>();
+    for (const [was, minted] of scope) built.set(minted, was);
+    inverses.set(scope, built);
+    inverse = built;
+  }
+  return inverse.get(now);
 }
 
 /** What one record says a current id used to be, or nothing. */
@@ -3692,24 +3741,7 @@ function referencesByScope(
   // What each scope says a current id USED to be, which is the inverse of the
   // direction a record is written in. Built once per distinct record rather
   // than searched per hit.
-  const sources = new Map<
-    ReadonlyMap<string, string>,
-    ReadonlyMap<string, string>
-  >();
-  const sourceIn = (
-    scope: ReadonlyMap<string, string> | undefined,
-    now: string
-  ): string | undefined => {
-    if (scope === undefined) return undefined;
-    let inverse = sources.get(scope);
-    if (inverse === undefined) {
-      const built = new Map<string, string>();
-      for (const [was, minted] of scope) built.set(minted, was);
-      sources.set(scope, built);
-      inverse = built;
-    }
-    return inverse.get(now);
-  };
+
   if (candidates.size === 0 || nodes.length === 0) return found;
 
   // Childless copies, so each root the probe walks IS one node. `slots` is
@@ -3734,7 +3766,7 @@ function referencesByScope(
       // with one record hold two equal maps rather than one — the record is
       // copied onto each — so identity would read agreement as conflict. What
       // decides is whether the holders say the same thing.
-      const said = sourceIn(scope, domId);
+      const said = answerOf(scope, domId);
       const holders = found.get(domId);
       if (holders === undefined) found.set(domId, new Set([said]));
       else holders.add(said);
@@ -3818,13 +3850,40 @@ function renameScopes(
       // which occurrence was meant — and restoring against the wrong one
       // rewrites ids the author wrote. Declining leaves every id alone, which
       // is what a node with no record in scope gets anyway.
-      if (scopes.get(node) !== inherited) scopes.set(node, NO_RENAMES);
+      //
+      // Compared by what the two scopes SAY, not by which map object they are.
+      // Two inserted roots carry two copies of one record, so equal maps are
+      // the ordinary case for a node reached under both — and there is no
+      // ambiguity to decline when both occurrences give the same answer.
+      if (!sameRenames(scopes.get(node), inherited)) {
+        scopes.set(node, NO_RENAMES);
+      }
       return;
     }
     seen.add(node);
     if (inherited !== undefined) scopes.set(node, inherited);
   });
   return scopes;
+}
+
+/**
+ * Whether two scopes give the same answer for every id.
+ *
+ * Content and not identity. A record is copied onto each root an insert placed,
+ * so two roots governed by one insert hold two equal maps rather than one — and
+ * a node reached under both is not ambiguous, it is told the same thing twice.
+ */
+function sameRenames(
+  one: ReadonlyMap<string, string> | undefined,
+  other: ReadonlyMap<string, string> | undefined
+): boolean {
+  if (one === other) return true;
+  if (one === undefined || other === undefined) return false;
+  if (one.size !== other.size) return false;
+  for (const [was, now] of one) {
+    if (other.get(was) !== now) return false;
+  }
+  return true;
 }
 
 /**

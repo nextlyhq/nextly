@@ -3626,6 +3626,134 @@ describe("a saved DESCENDANT of an inserted root", () => {
     expect(marked([...saved.nodes], "target").cssId).toBe("hero");
   });
 
+  it("counts a GATED node as a holder, whichever order it is walked in", () => {
+    // `duplicateDomIdRefusal` only refuses two nodes that RENDER one id, and a
+    // condition-gated node renders nothing — so a second holder is permitted
+    // and the record has to account for it. Reading only the first made the
+    // saved content depend on walk order.
+    const gated = (): BlockNode =>
+      node("hid", {
+        cssId: "pricing-1",
+        props: { mark: "hid" },
+        visibility: {
+          conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+        },
+      } as Partial<BlockNode>);
+    const governed = (): BlockNode =>
+      node(
+        "root",
+        {
+          origin: {
+            from: "pattern",
+            id: "hero-pattern",
+            digest: "d",
+            renamed: { pricing: "pricing-1" },
+          },
+        } as Partial<BlockNode>,
+        {
+          children: [
+            node("vis", { cssId: "pricing-1", props: { mark: "vis" } }),
+          ],
+        }
+      );
+    const theirs = (): BlockNode =>
+      node(
+        "theirs",
+        { origin: { from: "component", id: "def-1" } } as Partial<BlockNode>,
+        { children: [gated()] }
+      );
+
+    for (const children of [
+      [governed(), theirs()],
+      [theirs(), governed()],
+    ]) {
+      const saved = created(
+        planSaveAsPattern(
+          page([node("outer", {}, { children })]),
+          ["outer"],
+          target,
+          anyParent
+        )
+      ).document;
+
+      // Neither moves: the two holders sit under different records and
+      // disagree, and the answer is the same whichever was reached first.
+      expect(marked([...saved.nodes], "vis").cssId).toBe("pricing-1");
+      expect(marked([...saved.nodes], "hid").cssId).toBe("pricing-1");
+    }
+  });
+
+  it("reads an own `origin: undefined` as no record at all", () => {
+    // The field is optional and JSON omits it, so an own property holding
+    // `undefined` is how "no origin" is spelled in memory. Treating it as a
+    // boundary stopped an ancestor's rename reaching a node that never
+    // announced anything.
+    const middle = node(
+      "mid",
+      {},
+      {
+        children: [
+          node("t", { cssId: "pricing-1", props: { mark: "target" } }),
+        ],
+      }
+    );
+    Object.defineProperty(middle, "origin", {
+      value: undefined,
+      enumerable: true,
+      configurable: true,
+    });
+    const doc = page([
+      node(
+        "root",
+        {
+          origin: {
+            from: "pattern",
+            id: "hero-pattern",
+            digest: "d",
+            renamed: { pricing: "pricing-1" },
+          },
+        } as Partial<BlockNode>,
+        { children: [middle] }
+      ),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["t"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("pricing");
+  });
+
+  it("restores a repeated node whose two parents say the same thing", () => {
+    // One insert copies its record onto each root it placed, so a node reached
+    // under two of them is told the same thing twice rather than told two
+    // things. There is no placement ambiguity to decline.
+    const record = () => ({
+      from: "pattern",
+      id: "hero-pattern",
+      digest: "d",
+      renamed: { pricing: "pricing-1" },
+    });
+    const shared = node("shared", {
+      cssId: "pricing-1",
+      props: { mark: "target" },
+    });
+    const doc = page([
+      node("r1", { origin: record() } as Partial<BlockNode>, {
+        children: [shared],
+      }),
+      node("r2", { origin: record() } as Partial<BlockNode>, {
+        children: [shared],
+      }),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["shared"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("pricing");
+  });
+
   it("keeps every id when no ancestor was ever inserted from a pattern", () => {
     // The control for all three above: without a record in scope there is
     // nothing to put back, and an authored id is the author's to keep.
