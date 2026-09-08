@@ -14,6 +14,9 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { registerHook, unregisterHook } from "../../../hooks";
+import type { HookHandler } from "../../../hooks/types";
+
 import { defineCollection, group, json, password, text } from "../../../config";
 import {
   createTestNextly,
@@ -412,5 +415,44 @@ describe("a group key whose read value is not its stored value", () => {
     });
 
     expect(res.success).toBe(true);
+  });
+});
+
+describe("a refused group key costs nothing before it is refused", () => {
+  it("does not run read hooks for a key it was never going to accept", async () => {
+    // `beforeRead` is ordinary user code: it records audit entries and spends
+    // rate-limit budget. Running it for a request that could not be answered
+    // charges the caller for work and leaves a trail of a read that never
+    // happened. Collection authorization still runs first — whether the
+    // collection is readable at all outranks what was asked of it.
+    const h = await boot([{ region: "emea", secret: "a" }]);
+
+    let ran = 0;
+    const counting: HookHandler = ctx => {
+      ran += 1;
+      return ctx.data as Record<string, unknown>;
+    };
+    registerHook("beforeRead", ORDERS, counting);
+
+    try {
+      const refused = await h.groupEntries({
+        collectionName: ORDERS,
+        groupBy: "payload",
+      });
+      expect(refused.success).toBe(false);
+      expect(ran).toBe(0);
+
+      // The control: the hook IS reachable on this collection, so the zero
+      // above is the refusal arriving first rather than the hook never being
+      // registered.
+      const answered = await h.groupEntries({
+        collectionName: ORDERS,
+        groupBy: "region",
+      });
+      expect(answered.success).toBe(true);
+      expect(ran).toBeGreaterThan(0);
+    } finally {
+      unregisterHook("beforeRead", ORDERS, counting);
+    }
   });
 });

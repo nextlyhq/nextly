@@ -133,6 +133,7 @@ import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
+import { classifyFieldKind } from "../../schema/services/field-column-descriptor";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   draftDocumentFacts,
@@ -421,48 +422,39 @@ interface FilteredReadParams {
  * while every answer looks ordinary. A label chosen here cannot fix that: the
  * grouping already happened in the database.
  */
-const STRUCTURED_FIELD_TYPES: ReadonlySet<string> = new Set([
-  "json",
-  "repeater",
-  "group",
-  "blocks",
-  "chips",
-]);
-
-/** Whether a declared field's column holds a structure rather than a value. */
-function holdsStructure(field: {
-  type: string;
-  hasMany?: boolean;
-  relationTo?: unknown;
-}): boolean {
-  if (STRUCTURED_FIELD_TYPES.has(field.type)) return true;
-  // A relationship or upload is a plain foreign key unless it points at many,
-  // in which case it is stored as a JSON array of ids.
-  if (field.type === "relationship" || field.type === "upload") {
-    return Boolean(field.hasMany) || Array.isArray(field.relationTo);
+/**
+ * Why a declared field cannot be a group key, or `undefined` if it can.
+ *
+ * Asked of the CANONICAL classifier the DDL is built from, rather than of a
+ * list of type names kept here. A plugin field type declaring `storage: "json"`
+ * is mapped to a JSON column by that classifier and would be invisible to such
+ * a list — so it would group, and answer differently per adapter.
+ *
+ * `skip` is a field whose values live in another table (a component, a
+ * many-to-many), so this collection has no column to group by. `json` is a
+ * structure: two rows holding the same content with their keys written in a
+ * different order are ONE bucket under PostgreSQL's `jsonb`, which normalises,
+ * and TWO under SQLite, which compares the stored text. The grouping happens in
+ * the database, so no label chosen afterwards reconciles them.
+ */
+function ungroupableKind(field: FieldDefinition): string | undefined {
+  const kind = classifyFieldKind(field, "collection");
+  if (kind === "skip") {
+    return "keeps its values in another table, so this collection has no column for it";
   }
-  return false;
+  if (kind === "json") {
+    return "holds a structure rather than a value, so its buckets would depend on how the database compares stored JSON";
+  }
+  return undefined;
 }
 
 /** The declared fields of a collection, wherever this record happens to carry them. */
-function declaredFieldsOf(collection: unknown): Array<{
-  name: string;
-  type: string;
-  hasMany?: boolean;
-  relationTo?: unknown;
-  component?: string;
-  components?: string[];
-}> {
+function declaredFieldsOf(collection: unknown): FieldDefinition[] {
   const record = collection as Record<string, unknown>;
   const fromDefinition = (
     record.schemaDefinition as Record<string, unknown> | undefined
   )?.fields;
-  return (fromDefinition || record.fields || []) as Array<{
-    name: string;
-    type: string;
-    component?: string;
-    components?: string[];
-  }>;
+  return (fromDefinition || record.fields || []) as FieldDefinition[];
 }
 
 /**
@@ -482,12 +474,7 @@ function declaredFieldsOf(collection: unknown): Array<{
 function assertGroupKeyUsable(
   groupBy: string,
   column: unknown,
-  declaredFields: Array<{
-    name: string;
-    type: string;
-    hasMany?: boolean;
-    relationTo?: unknown;
-  }>
+  declaredFields: FieldDefinition[]
 ): void {
   const snake = toSnakeCase(groupBy);
   const isOwner =
@@ -529,13 +516,14 @@ function assertGroupKeyUsable(
     toCamelCase(groupBy),
   ]);
   const declared = declaredFields.find(field => spelled.has(field.name));
-  if (declared && holdsStructure(declared)) {
+  const ungroupable = declared ? ungroupableKind(declared) : undefined;
+  if (ungroupable !== undefined) {
     throw NextlyError.validation({
       errors: [
         {
           path: `groupBy.${groupBy}`,
           code: "FIELD_NOT_GROUPABLE",
-          message: `"${groupBy}" holds a structure rather than a value, so its buckets would depend on how the database compares stored JSON. Group by a scalar field instead.`,
+          message: `"${groupBy}" ${ungroupable}. Group by a scalar field instead.`,
         },
       ],
     });
@@ -2855,6 +2843,34 @@ export class CollectionQueryService extends BaseService {
     });
   }
 
+  /**
+   * The column a group key names, once it has earned the right to name one.
+   *
+   * Resolved here rather than by the caller so the refusal happens before the
+   * read hooks run, and so a plan that came back allowed carries a column its
+   * consumer does not have to look up a second time.
+   */
+  private async assertGroupKeyResolvable(
+    groupBy: string,
+    collectionName: string,
+    schema: Record<string, unknown>
+  ): Promise<void> {
+    // The spelling this schema actually carries. OWN properties only: `schema`
+    // is an ordinary object, so a key like `toString` resolves to a prototype
+    // method rather than `undefined`, which read as a column and failed inside
+    // the query builder as a 500 where the contract promises a named refusal.
+    const key = [groupBy, toSnakeCase(groupBy)].find(name =>
+      Object.prototype.hasOwnProperty.call(schema, name)
+    );
+    assertGroupKeyUsable(
+      groupBy,
+      key === undefined ? undefined : schema[key],
+      declaredFieldsOf(
+        await this.collectionService.getCollection(collectionName)
+      )
+    );
+  }
+
   private async resolveReadPlan<TData>(params: FilteredReadParams) {
     const accessUser = params.overrideAccess ? undefined : params.user;
 
@@ -2883,6 +2899,21 @@ export class CollectionQueryService extends BaseService {
     const schema = await this.fileManager.loadDynamicSchema(
       params.collectionName
     );
+
+    // BEFORE the hooks. A refused group key is refused whatever the hooks
+    // settle on, and `beforeOperation`/`beforeRead` are ordinary user code:
+    // they record audit entries and spend rate-limit budget. Running them for
+    // a request that was never going to be answered charges the caller for
+    // work and leaves a trail of reads that did not happen. Authorization
+    // stays first, because whether the collection is readable at all outranks
+    // what was asked of it.
+    if (params.groupBy !== undefined) {
+      await this.assertGroupKeyResolvable(
+        params.groupBy,
+        params.collectionName,
+        schema
+      );
+    }
 
     const countWhere = await this.hookSettledWhere(params);
 
@@ -3049,22 +3080,13 @@ export class CollectionQueryService extends BaseService {
       // `toString` resolves to a prototype method rather than `undefined`,
       // which read as a column and reached the query builder -- answering a
       // 500 where the contract promises a named `FIELD_NOT_GROUPABLE`.
-      // The spelling this schema actually carries, chosen before the lookup so
-      // the column is read once. OWN properties only: `schema` is an ordinary
-      // object, so a key like `toString` resolves to a prototype method rather
-      // than `undefined`, which read as a column and failed inside the query
-      // builder as a 500 where the contract promises a named refusal.
+      // The RULE ran inside the plan, before the read hooks. This is the same
+      // lookup reaching the column that plan already approved, kept beside the
+      // query so the schema's own type reaches the builder.
       const key = [params.groupBy, toSnakeCase(params.groupBy)].find(name =>
         Object.prototype.hasOwnProperty.call(schema, name)
       );
       const column = key === undefined ? undefined : schema[key];
-      assertGroupKeyUsable(
-        params.groupBy,
-        column,
-        declaredFieldsOf(
-          await this.collectionService.getCollection(params.collectionName)
-        )
-      );
 
       // `Number.isFinite` first, because `Math.trunc`, `Math.max` and
       // `Math.min` all PRESERVE `NaN`: a computed bucket limit that arrived as
