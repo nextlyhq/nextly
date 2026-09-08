@@ -563,44 +563,39 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
-      # Unit tests for everything under `packages/`, selected by LOCATION
-      # rather than by a written-out list of names. `turbo test` skips a package
-      # that declares no `test` script, so the glob and a correct list run the
-      # same commands - measured on this tree, both select the same 22 - and
-      # only one of them can fall out of step with the packages. It fell out of
-      # step: `nextly` (907 files, 11562 tests) and `@nextlyhq/admin` (407,
-      # 4061) passed for weeks outside the list, gating nothing, on
-      # `e6797c5d1`. Twelve `nextly` files ran by name in the two steps above,
-      # which is 1.3% of its suite and enough to make the package look present.
-      # A package added under `packages/` now gates on the commit that adds it.
+      # Unit tests. WHAT runs is not written here: `lane:test` in the root
+      # manifest holds it, and `check:test-lanes` asks turbo what that script
+      # selects rather than reading this file. A workflow is a poor place to
+      # keep a selection — it cannot be run on a laptop, and a checker that
+      # wants to know what CI runs has to parse a shell command out of YAML,
+      # which was tried and produced twelve ways to be wrong.
       #
-      # `./packages/*` and not `./apps/*`: the Build and Lint steps above name
-      # both because an app is built and linted, but `test` dependsOn `^build`
-      # and an app is a leaf depending on nearly every package, so filtering
-      # turbo to one pulls the whole graph into a step that needs only what
-      # Build already produced. The playground runs its own suites below.
+      # The script selects `./packages/*` MINUS `nextly`, which has a runner to
+      # itself below; the same location idiom Build and Lint above
+      # already use, so a package added there gates on the commit that adds it.
+      # It was a written-out list of twenty-two names until `nextly` (907 files,
+      # 11562 tests) and `@nextlyhq/admin` (407, 4061) were found passing
+      # outside it, gating nothing, on `e6797c5d1`.
       #
       # NOT gated on Build, unlike the four steps around it: turbo.jsonc gives
-      # `test` `dependsOn: ["^build"]`, so `turbo test` rebuilds the dependency
-      # subgraph of whatever it is filtered to. A Build failure in a package
-      # none of these depends on - an app, which is a leaf - would otherwise
-      # silence every suite here for no reason, and a failure in one they DO
-      # depend on is reported as an attributed `#build` failure here rather
-      # than as the type-aware noise the others would produce.
+      # `test` `dependsOn: ["^build"]`, so it rebuilds the dependency subgraph
+      # of whatever it is filtered to. A Build failure in a package none of
+      # these depends on - an app, which is a leaf - would otherwise silence
+      # every suite here for no reason, and a failure in one they DO depend on
+      # is reported as an attributed `#build` failure rather than as the
+      # type-aware noise the others would produce.
       #
-      # `--concurrency` is what makes room for the full set. turbo defaults to
-      # 10 tasks at once and a runner here has 4 vCPUs, and each task's vitest
-      # spawns cores-1 workers of its own, so the step was asking for about 30
-      # processes on 4 cores. Wall-clock timeouts measure per-test CPU, so
-      # oversubscription that deep pushed jsdom component suites in `admin` and
-      # `plugin-form-builder` past their budgets the first time the full set
-      # ran. At 50% the step completes in 15m39s with 35 tasks. A percentage
-      # rather than a count: it follows the runner rather than being a number
-      # that is right on one machine size. Capping WORKERS instead would not
-      # have helped, since cores-1 on a 4-vCPU runner is already 3.
+      # The script also carries `--concurrency=50%`, which is what makes room
+      # for the full set: turbo defaults to 10 tasks at once, a runner here has
+      # 4 vCPUs, and each task's vitest spawns cores-1 workers of its own, so
+      # the step was asking for about 30 processes on 4 cores. Wall-clock
+      # timeouts measure per-test CPU, and oversubscription that deep pushed
+      # jsdom component suites past their budgets the first time the full set
+      # ran. At 50% the step completes in 15m39s with 35 tasks. Capping WORKERS
+      # instead would not have helped, since cores-1 on a 4-vCPU runner is 3.
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: pnpm turbo test --concurrency=50% --filter='./packages/*'
+        run: pnpm lane:test
         env:
           TURBO_CACHE_DIR: .turbo
 
@@ -617,7 +612,7 @@ jobs:
       # that needs only what the Build step has already produced.
       - name: Playground tests
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
-        run: pnpm --filter playground exec vitest run
+        run: pnpm lane:test:playground
         env:
           TURBO_CACHE_DIR: .turbo
 
@@ -664,6 +659,80 @@ jobs:
       # cancelled job saves nothing. That is not a detail — it is what makes the Playwright cache
       # guard above safe, because an install killed by its step timeout can never
       # persist a half-populated browser cache for later runs to skip.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # `nextly`'s unit suite, on a runner of its own.
+  #
+  # It is 907 files and 11562 tests, and inside the `ci` job's Test step it was
+  # 811s of 1804s — 45% of the work and the critical path on its own. Sharing a
+  # 4-vCPU runner with everything else, it took that step from 3.4 to 15.7
+  # minutes and the whole job from 13.1 to 28.5, which every contributor waits
+  # for on every push.
+  #
+  # `needs: changes` and NOT `needs: ci`, which is the point: this runs beside
+  # the lint, typecheck and build rather than after them, so the wall clock is
+  # the longer of the two jobs instead of their sum.
+  #
+  # WHAT it runs is not written here. `lane:test:nextly` in the root manifest
+  # holds it, `lane:test` excludes the same package, and `check:test-lanes`
+  # asks turbo what each selects — so the two cannot drift into running nextly
+  # twice or not at all.
+  #
+  # A plain job rather than a matrix over package names, deliberately: the lane
+  # check reads the workflow only to confirm the script is NAMED in it, and
+  # `pnpm lane:test:${{ matrix.package }}` would hide that name behind an
+  # expression. A second package moving here is a copy of this job, which is
+  # cheap and stays legible to the check.
+  unit-tests-nextly:
+    name: Unit tests (nextly)
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # Scoped to the JOB like every other `.turbo` cache in these workflows:
+      # this one builds only nextly's dependency subgraph, and an entry keyed on
+      # the commit alone would be read by jobs that built something else.
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `test` dependsOn `^build`, so turbo builds what nextly needs and nothing
+      # else. No separate Build step: this job has one question to answer.
+      - name: Test
+        run: pnpm lane:test:nextly
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Only a job that finished its work publishes what it learned.
       - name: Save Turbo cache
         if: success()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
