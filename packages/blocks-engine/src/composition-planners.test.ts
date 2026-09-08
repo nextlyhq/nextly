@@ -133,6 +133,27 @@ describe("whether a selection may be saved at all", () => {
     }
   });
 
+  it("refuses a selection whose stored document would be too LARGE", () => {
+    // The cap the field will apply, applied where the author can still act on
+    // it. Without this the plan succeeded and the WRITE failed — after they had
+    // named the pattern, filled the form and pressed save.
+    //
+    // Sized past the default byte cap on purpose, so nothing about the
+    // selection explains the refusal: it is one adjacent node, a perfectly good
+    // run.
+    const huge = page([
+      node("a", { props: { filler: "x".repeat(DEFAULT_LIMITS.maxBytes) } }),
+      node("b"),
+    ]);
+
+    expect(saveAsPatternRefusal(huge, ["a"], anyParent)).toBeDefined();
+    // The control: the same shape, small, is savable — so the refusal is the
+    // CAP talking rather than the selection.
+    expect(
+      saveAsPatternRefusal(page([node("a"), node("b")]), ["a"], anyParent)
+    ).toBeUndefined();
+  });
+
   it("refuses a valid RUN whose stored document could not be saved", () => {
     // The case that decides which preflight this is. `savableRun` alone asks
     // only whether the selection is one contiguous, liftable run — it never

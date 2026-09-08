@@ -684,6 +684,22 @@ function savedPatternDocument(
   const duplicate = duplicateDomIdRefusal(stored.nodes);
   if (duplicate !== undefined) return duplicate;
 
+  // The stored document against the caps it will be WRITTEN under. Asked of
+  // what is stored rather than of the page, like the questions either side of
+  // it: only some of what the page holds travels, so a selection lifted out of
+  // a document at its ceiling is usually well within one.
+  //
+  // Without this a plan succeeded and the write then failed. The blocks field
+  // validates what it is handed, so a pattern over the byte cap or deeper than
+  // the depth cap is refused there — after the author has named it, filled the
+  // form and pressed save. Refusing at plan time is the same verdict, arriving
+  // where they can still do something about it, and it is what lets the
+  // published preflight promise that a save it permits will not fail on size.
+  const storedSurvey = surveyDocument(stored, limits);
+  if (storedSurvey.tooLarge || overIndexBound(storedSurvey)) {
+    return { problem: "exceeds-limits" };
+  }
+
   // Asked of what is STORED, not of the page it came from. Only some of the
   // source envelope travels: `formatVersion` is carried, and a page holding one
   // the apply does not accept would produce a pattern refused as
@@ -2099,6 +2115,16 @@ function storedPatternRefusal(pattern: BlockDocument): PlanRefusal | undefined {
  * questions about somewhere the pattern is going — asked per placement, by
  * {@link placementVerdict} and the planner itself.
  */
+export function patternRefusal(
+  pattern: BlockDocument,
+  nesting: NestingSource
+): PlanRefusal | undefined {
+  return (
+    storedPatternRefusal(pattern) ??
+    internalNestingRefusal(pattern.nodes, nesting)
+  );
+}
+
 /**
  * Whether this selection could be saved as a pattern, and why not.
  *
@@ -2128,28 +2154,20 @@ function storedPatternRefusal(pattern: BlockDocument): PlanRefusal | undefined {
  * exact, and what makes it worth memoising on the selection rather than calling
  * per render.
  *
- * `limits` is threaded for the reason it is threaded everywhere else here: a
- * host may raise `maxNodes`, and a selection legitimate under a raised cap must
- * not be refused by a bound this file chose for itself.
+ * It takes NO limits of its own, deliberately. {@link planSaveAsPattern} has
+ * none either — it plans under the defaults — so a preflight that accepted them
+ * would answer a question the planner never asks: a caller passing a lower
+ * `maxNodes` would see a save disabled that the planner then accepts, and a
+ * higher one the reverse. A preflight whose whole purpose is to agree with the
+ * planner must not take an input the planner cannot take.
  */
 export function saveAsPatternRefusal(
   document: BlockDocument,
   selectedIds: readonly string[],
-  nesting: NestingSource,
-  limits: DocumentLimits = DEFAULT_LIMITS
-): PlanRefusal | undefined {
-  const saved = plannedSave(document, selectedIds, nesting, limits);
-  return saved.problem === undefined ? undefined : saved;
-}
-
-export function patternRefusal(
-  pattern: BlockDocument,
   nesting: NestingSource
 ): PlanRefusal | undefined {
-  return (
-    storedPatternRefusal(pattern) ??
-    internalNestingRefusal(pattern.nodes, nesting)
-  );
+  const saved = plannedSave(document, selectedIds, nesting);
+  return saved.problem === undefined ? undefined : saved;
 }
 
 /**
