@@ -65,6 +65,22 @@ export function staticallyDisabled(condition) {
   return bare === "false";
 }
 
+/**
+ * Whether a step's failure is allowed to leave the job green.
+ *
+ * The opposite stance to `staticallyDisabled`, and deliberately: that one errs
+ * towards a lane still running, because reporting a live lane dead is the
+ * expensive mistake there. Here the expensive mistake is the other way. This
+ * check exists to say that these suites GATE, so an advisory step's coverage
+ * is coverage nobody gets — and an expression only the run can settle cannot
+ * be shown to gate. Absent, or a literal `false`, is the only gating answer.
+ */
+export function failuresIgnored(condition) {
+  if (condition === undefined) return false;
+  const bare = String(condition).trim().replace(/^\$\{\{(.*)\}\}$/s, "$1").trim();
+  return bare !== "false";
+}
+
 /** Shell lines ending in a backslash are one command, so join them. */
 export function joinContinuations(lines) {
   const commands = [];
@@ -113,7 +129,12 @@ export function workflowSteps(workflow) {
     const line = lines[index];
     const item = /^(\s*)-\s+\S/.exec(line);
     if (item) {
-      step = { indent: item[1].length, condition: undefined, commands: [] };
+      step = {
+        indent: item[1].length,
+        condition: undefined,
+        advisory: undefined,
+        commands: [],
+      };
       steps.push(step);
     }
     if (step === undefined) continue;
@@ -129,6 +150,10 @@ export function workflowSteps(workflow) {
     const [, key, rest] = own;
     if (key === "if") {
       step.condition = rest.trim();
+      continue;
+    }
+    if (key === "continue-on-error") {
+      step.advisory = rest.trim();
       continue;
     }
     if (key !== "run") continue;
@@ -198,16 +223,57 @@ export function fileArguments(rest) {
     .filter(token => token.includes("/") || /\.(test|spec)\.[cm]?[jt]sx?$/.test(token));
 }
 
+/**
+ * The program a shell statement actually runs.
+ *
+ * A package runner and its own options come first in every invocation here
+ * (`pnpm turbo test`, `pnpm --filter playground exec vitest run`), so they are
+ * stepped over to reach the executable. Only `--filter` spends the token after
+ * it; treating every bare option that way could step over the executable
+ * itself.
+ *
+ * 🔴 Matching `turbo test` anywhere in the line credits `echo pnpm turbo test
+ * --filter=nextly`, where the shell runs `echo` and the suite runs nowhere.
+ * A command that is printed, stored or commented into a variable is not a
+ * command that ran.
+ */
+export function executableOf(command) {
+  const tokens = command.trim().split(/\s+/).filter(Boolean);
+  const runners = new Set(["pnpm", "npm", "npx", "yarn", "bun", "exec", "run", "dlx"]);
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (runners.has(token)) continue;
+    if (token.startsWith("-")) {
+      if ((token === "--filter" || token === "-F") && index + 1 < tokens.length) {
+        index++;
+      }
+      continue;
+    }
+    return token;
+  }
+  return null;
+}
+
 export function commandCoverage(command, task) {
+  const executable = executableOf(command);
   const runsTask =
-    task === "test"
+    executable === "turbo" &&
+    (task === "test"
       ? /\bturbo\s+test(?![:\w])/.test(command)
-      : new RegExp(`\\bturbo\\s+${task.replace(":", ":")}\\b`).test(command);
-  const vitest = /\bvitest\s+run\b(.*)$/.exec(command);
-  const wholeSuite =
-    task === "test" && vitest !== null && fileArguments(vitest[1]).length === 0;
+      : new RegExp(`\\bturbo\\s+${task.replace(":", ":")}\\b`).test(command));
+  const vitest =
+    executable === "vitest" ? /\bvitest\s+run\b(.*)$/.exec(command) : null;
+  const wholeSuite = task === "test" && vitest !== null && fileArguments(vitest[1]).length === 0;
   if (!runsTask && !wholeSuite) return null;
   if (/--dir\b/.test(command)) return null;
+  // 🔴 turbo hands everything after a bare `--` to the task it runs, so
+  // `turbo test --filter=nextly -- src/a.test.ts` runs one file of the
+  // package's suite. That is a partial run wearing the shape of a whole one,
+  // which is the same mistake as counting twelve of 907 files by name.
+  const [, passedThrough] = command.split(/(?:^|\s)--(?=\s|$)/);
+  if (passedThrough !== undefined && fileArguments(` ${passedThrough}`).length > 0) {
+    return null;
+  }
   return filtersIn(command);
 }
 
@@ -238,7 +304,13 @@ export function filtersIn(command) {
       continue;
     }
     if (filter.includes("*")) continue;
-    names.push(filter.replace(/[\^.]+\.\.\.$|\.\.\.$/, ""));
+    // 🔴 `nextly...` and `...nextly` include the package; `nextly^...` and
+    // `...^nextly` are its dependents or dependencies WITHOUT it. Stripping
+    // both alike credited a package whose task turbo never runs, which is the
+    // whole suite vanishing behind a green gate. A caret means this cannot say
+    // what was selected, so it claims nothing.
+    if (filter.includes("^")) continue;
+    names.push(filter.replace(/^\.\.\.|\.\.\.$/g, ""));
   }
   return { names, locations };
 }
@@ -337,6 +409,10 @@ export function taskInvocations(workflow, task) {
     // A step that cannot run covers nothing, however completely its command
     // describes the lane.
     if (staticallyDisabled(step.condition)) continue;
+    // A step GitHub lets fail is not coverage: the suite runs, reports red, and
+    // the job stays green, which is exactly what this check promises cannot
+    // happen to the packages it names.
+    if (failuresIgnored(step.advisory)) continue;
     for (const command of step.commands) {
       // A disabled command is not an invocation either. Anchored at the start,
       // so a `#` cannot precede what it disables.

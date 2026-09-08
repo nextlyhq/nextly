@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   commandCoverage,
+  executableOf,
+  failuresIgnored,
   fileArguments,
   filtersIn,
   joinContinuations,
@@ -122,6 +124,31 @@ describe("filtersIn", () => {
     });
   });
 
+  it("keeps a selector that includes the package it names", () => {
+    expect(filtersIn("pnpm turbo test --filter=nextly...")).toEqual({
+      names: ["nextly"],
+      locations: [],
+    });
+    expect(filtersIn("pnpm turbo test --filter=...nextly")).toEqual({
+      names: ["nextly"],
+      locations: [],
+    });
+  });
+
+  it("claims nothing for a selector that excludes the package it names", () => {
+    // 🔴 `nextly^...` selects nextly's DEPENDENTS and not nextly, so turbo
+    // never runs its task. Stripping the caret alongside the dots credited the
+    // package anyway, and 907 files would have vanished behind a green gate.
+    expect(filtersIn("pnpm turbo test --filter=nextly^...")).toEqual({
+      names: [],
+      locations: [],
+    });
+    expect(filtersIn("pnpm turbo test --filter=...^nextly")).toEqual({
+      names: [],
+      locations: [],
+    });
+  });
+
   it("drops a name pattern it cannot enumerate", () => {
     // 🔴 A NAME glob selects a set this cannot resolve without knowing which
     // names exist. Guessing would report coverage that may not exist, which is
@@ -196,6 +223,33 @@ describe("shellStatements", () => {
   });
 });
 
+describe("executableOf", () => {
+  it("steps over a package runner to the program it runs", () => {
+    expect(executableOf("pnpm turbo test --filter=nextly")).toBe("turbo");
+    expect(executableOf("pnpm --filter playground exec vitest run")).toBe("vitest");
+    expect(executableOf("pnpm exec vitest run --dir scripts")).toBe("vitest");
+  });
+
+  it("names the program that actually runs, not one being printed", () => {
+    expect(executableOf("echo pnpm turbo test --filter=nextly")).toBe("echo");
+  });
+});
+
+describe("failuresIgnored", () => {
+  it("is false when the step gates", () => {
+    expect(failuresIgnored(undefined)).toBe(false);
+    expect(failuresIgnored("false")).toBe(false);
+  });
+
+  it("is true for anything that may let a failure through", () => {
+    // 🔴 The opposite stance to `staticallyDisabled`, because the expensive
+    // mistake points the other way: this check promises the suites GATE, and
+    // an expression only the run can settle has not been shown to.
+    expect(failuresIgnored("true")).toBe(true);
+    expect(failuresIgnored("${{ github.event_name == 'schedule' }}")).toBe(true);
+  });
+});
+
 describe("commandCoverage", () => {
   it("counts a turbo run of the task", () => {
     expect(commandCoverage("pnpm turbo test --filter=nextly", "test")).toEqual({
@@ -239,6 +293,35 @@ describe("commandCoverage", () => {
         "test"
       )
     ).toBeNull();
+  });
+
+  it("does not count a command that is only printed", () => {
+    // 🔴 Matching `turbo test` anywhere in the line credited a suite the shell
+    // never ran, so a command parked behind `echo` while something was debugged
+    // would have kept the lane green with nothing running.
+    expect(
+      commandCoverage("echo pnpm turbo test --filter=nextly", "test")
+    ).toBeNull();
+  });
+
+  it("does not count files handed through turbo to the task", () => {
+    // 🔴 turbo passes everything after a bare `--` to the task, so this runs
+    // one file of nextly's suite while wearing the shape of a whole-task run.
+    expect(
+      commandCoverage("pnpm turbo test --filter=nextly -- src/a.test.ts", "test")
+    ).toBeNull();
+  });
+
+  it("counts a turbo run whose flags merely contain dashes", () => {
+    // The positive control for the pass-through rule: `--concurrency=50%` is
+    // not a `--` separator, and the real Test step would otherwise stop
+    // counting.
+    expect(
+      commandCoverage(
+        "pnpm turbo test --concurrency=50% --filter='./packages/*'",
+        "test"
+      )
+    ).toEqual({ names: [], locations: ["./packages/*"] });
   });
 
   it("does not count a run scoped to a directory", () => {
@@ -309,6 +392,34 @@ describe("taskInvocations", () => {
       "      - name: Test",
       "        run: |",
       "          pnpm turbo test --filter=nextly #--filter=@scope/a",
+    ].join("\n");
+
+    expect(taskInvocations(workflow, "test")).toEqual([
+      {
+        line: "pnpm turbo test --filter=nextly",
+        filters: { names: ["nextly"], locations: [] },
+      },
+    ]);
+  });
+
+  it("does not count a step whose failure is ignored", () => {
+    // 🔴 GitHub lets a `continue-on-error` step fail with the job still green.
+    // Crediting it would be this check reporting a gate that does not gate,
+    // which is the one claim it exists to make.
+    const workflow = [
+      "      - name: Test",
+      "        continue-on-error: true",
+      "        run: pnpm turbo test --filter=nextly",
+    ].join("\n");
+
+    expect(taskInvocations(workflow, "test")).toEqual([]);
+  });
+
+  it("counts a step that explicitly does not ignore failures", () => {
+    const workflow = [
+      "      - name: Test",
+      "        continue-on-error: false",
+      "        run: pnpm turbo test --filter=nextly",
     ].join("\n");
 
     expect(taskInvocations(workflow, "test")).toEqual([
