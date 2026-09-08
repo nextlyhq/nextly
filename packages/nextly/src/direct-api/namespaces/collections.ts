@@ -18,6 +18,8 @@ import type {
   CollectionSlug,
   CountArgs,
   CountResult,
+  GroupArgs,
+  GroupResult,
   CreateArgs,
   RowFromCollectionSlug,
   DeleteArgs,
@@ -425,6 +427,47 @@ export async function count(
   // canonical `{ total }` envelope at this Direct-API boundary.
   const legacy = result.data as { totalDocs?: number; total?: number };
   return { total: legacy.total ?? legacy.totalDocs ?? 0 };
+}
+
+/**
+ * How many documents carry each distinct value of one field.
+ *
+ * Reaches the same resolved row set `count` does — one pipeline settles which
+ * rows a caller may read, and each operation only decides what to compute over
+ * them — so buckets can never describe rows a count of the same arguments
+ * would have excluded.
+ */
+export async function group(
+  ctx: NextlyContext,
+  args: GroupArgs
+): Promise<GroupResult> {
+  const config = mergeConfig(ctx.defaultConfig, args);
+
+  const result = await ctx.collectionsHandler.groupEntries({
+    collectionName: args.collection,
+    groupBy: args.groupBy,
+    where: args.where,
+    // From `args`, never `config`, for the reason `count` takes it from
+    // `args`: an inheritable exemption would reach nested reads.
+    frameworkFilter: args.frameworkFilter,
+    status: args.status,
+    ...accessOptions(config),
+    locale: config.locale,
+    fallbackLocale: config.fallbackLocale,
+    context: config.context,
+    ...(args.bucketLimit === undefined
+      ? {}
+      : { bucketLimit: args.bucketLimit }),
+  });
+
+  if (!result.success) {
+    throw createErrorFromResult(result);
+  }
+
+  return {
+    buckets: result.data?.buckets ?? [],
+    truncated: result.data?.truncated ?? false,
+  };
 }
 
 /**

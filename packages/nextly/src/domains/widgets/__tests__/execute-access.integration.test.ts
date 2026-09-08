@@ -172,3 +172,76 @@ describe("executeWidgetQuery against a real instance", () => {
     expect(result).toEqual({ op: "count", total: 1 });
   });
 });
+
+describe("a grouped widget query against a real instance", () => {
+  it("answers buckets to a caller the collection admits", async () => {
+    // The positive control for the grouped path: without it, the refusals
+    // below are satisfied by a path that is simply broken for everyone.
+    current = await boot(true);
+
+    const result = await executeWidgetQuery(
+      validateWidgetQuery({
+        source: `collection:${EMPLOYEES}`,
+        op: "groupBy",
+        groupBy: "title",
+      }),
+      editor
+    );
+
+    expect(result).toEqual({
+      op: "groupBy",
+      buckets: [
+        { value: "alice", count: 1 },
+        { value: "bob", count: 1 },
+      ],
+    });
+  });
+
+  it("denies a grouped query from a caller the read rule refuses", async () => {
+    // The buckets would otherwise describe rows this caller cannot list at
+    // all, which is the aggregate version of the same disclosure.
+    current = await boot(false);
+
+    await expect(
+      executeWidgetQuery(
+        validateWidgetQuery({
+          source: `collection:${EMPLOYEES}`,
+          op: "groupBy",
+          groupBy: "title",
+        }),
+        editor
+      )
+    ).rejects.toThrow();
+  });
+
+  it("REFUSES grouping by a field carrying a read rule", async () => {
+    current = await boot(true);
+
+    // Grouping by `salary` would return its distinct values AS the bucket
+    // labels -- the whole set in one request, where a `where` yields one value
+    // per probe, and redaction never sees either because no row carries it.
+    const probe = validateWidgetQuery({
+      source: `collection:${EMPLOYEES}`,
+      op: "groupBy",
+      groupBy: "salary",
+    });
+
+    // Serialized rather than matched on `.message`: a validation refusal
+    // carries a generic public message and keeps the per-field reason in
+    // `errors`, so asserting the message would assert nothing about WHY.
+    const refusal = await executeWidgetQuery(probe, editor).then(
+      () => "the grouped query was answered",
+      (error: unknown) => {
+        const raised = error as { code?: unknown; publicData?: unknown };
+        return JSON.stringify({
+          code: raised.code,
+          publicData: raised.publicData,
+        });
+      }
+    );
+
+    expect(refusal).toContain("FIELD_NOT_GROUPABLE");
+    // The value itself must not travel in the refusal either.
+    expect(refusal).not.toContain("120000");
+  });
+});

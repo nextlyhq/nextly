@@ -12,7 +12,7 @@
 import { NextlyError } from "../../errors/nextly-error";
 
 import { requiredPermissionSlugs } from "./gate";
-import type { WidgetQuery } from "./query";
+import type { WidgetQuery, WidgetQuerySpec } from "./query";
 import { validateWidgetSettings, type WidgetSetting } from "./settings";
 
 /*
@@ -271,8 +271,14 @@ export interface WidgetDefinition {
    * shortcut rather than a card, and nothing has asked it for more.
    */
   requiredPermission?: string | readonly string[];
-  /** Required for every data archetype; forbidden for `text` and `actions`. */
-  query?: WidgetQuery;
+  /**
+   * Required for every data archetype; forbidden for `text` and `actions`.
+   *
+   * Typed as {@link WidgetQuerySpec} so a declaration pairing `groupBy` with an
+   * op that ignores it, or a `groupBy` op carrying no key, fails to compile
+   * rather than booting and failing on every request the card makes.
+   */
+  query?: WidgetQuerySpec;
   /** Required for `custom`; forbidden otherwise. */
   component?: string;
   /** Required for `actions`; forbidden otherwise. */

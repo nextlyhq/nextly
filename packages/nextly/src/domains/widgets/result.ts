@@ -79,6 +79,26 @@ export type WidgetResult =
        * widget chose and nothing honest to head them with.
        */
       fields?: WidgetResultField[];
+    }
+  | {
+      op: "groupBy";
+      /**
+       * Distinct values of the grouped field, largest bucket first.
+       *
+       * `value` is null where the column is null, which is a bucket in its own
+       * right rather than an absence: "how many rows have no region" is a real
+       * answer and folding it into another bucket would misreport both.
+       */
+      buckets: { value: string | null; count: number }[];
+      /**
+       * Whether buckets were left out because a cap was reached.
+       *
+       * The bucket set is ranked and capped after grouping completes, so the
+       * ones returned are genuinely the largest -- but a chart drawn from a
+       * capped set is not the whole picture, and saying so is the same choice
+       * `atLeast` makes for a bounded count. Absent means every bucket is here.
+       */
+      truncated?: boolean;
     };
 
 /**

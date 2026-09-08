@@ -50,6 +50,27 @@ export interface WidgetQuery {
 }
 
 /**
+ * A query as an AUTHOR declares it, with the op/key dependency enforced.
+ *
+ * `WidgetQuery` stays flat, and this narrows it at the position a person
+ * writes one. Written as an intersection per member rather than by turning
+ * `WidgetQuery` itself into a union: `keyof` over a union keeps only the keys
+ * every member shares, so `groupBy` would drop out of `keyof WidgetQuery` and
+ * silently shrink the exhaustive `Record<keyof WidgetQuery, ...>` tables that
+ * make each fixed-question source state a position on every field. Those
+ * tables failing to compile is how a new field gets considered at all, and a
+ * union would have removed that without any error.
+ *
+ * `groupBy?: never` on the other ops is what makes the wrong pairing a compile
+ * error rather than a value the validator refuses at request time. Runtime
+ * validation stays regardless: a request body is untyped, and this reaches
+ * only the authors who write TypeScript.
+ */
+export type WidgetQuerySpec =
+  | (WidgetQuery & { op: Exclude<WidgetOp, "groupBy">; groupBy?: never })
+  | (WidgetQuery & { op: "groupBy"; groupBy: string });
+
+/**
  * Product code in `packages/nextly/**` throws `NextlyError`, never a bare
  * `Error` (repo lint rule). `.message` is set verbatim from this string, so
  * the tests' regex assertions match unchanged.
