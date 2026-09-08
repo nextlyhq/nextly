@@ -8,7 +8,6 @@ import {
   rmSync,
   realpathSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, parse, resolve } from "node:path";
@@ -83,8 +82,6 @@ const ROOT_ENTRY = "index.mjs";
 interface EntryRun {
   readonly ok: boolean;
   readonly stderr: string;
-  /** Each specifier the resolver was asked for, with what it answered. */
-  readonly resolved: readonly { specifier: string; url: string }[];
 }
 
 /**
@@ -143,29 +140,10 @@ function isolatedRoot(): string {
 }
 
 let sandbox = "";
-let hooks = "";
-let record = "";
 
 beforeAll(() => {
   sandbox = mkdtempSync(join(isolatedRoot(), "nextly-format-boundary-"));
   cpSync(DIST, join(sandbox, "dist"), { recursive: true });
-
-  record = join(sandbox, "resolved.jsonl");
-  hooks = join(sandbox, "hooks.mjs");
-  // A resolution hook rather than a reading of the emitted text. It records
-  // what the resolver was ASKED and what it ANSWERED, so a specifier written in
-  // a form no pattern anticipates is still seen — there is no form to miss.
-  writeFileSync(
-    hooks,
-    [
-      `import { appendFileSync } from "node:fs";`,
-      `export async function resolve(specifier, context, next) {`,
-      `  const result = await next(specifier, context);`,
-      `  appendFileSync(process.env.NEXTLY_RESOLVE_RECORD, JSON.stringify({ specifier, url: result.url }) + "\\n");`,
-      `  return result;`,
-      `}`,
-    ].join("\n")
-  );
 });
 
 afterAll(() => {
@@ -173,29 +151,20 @@ afterAll(() => {
 });
 
 /**
- * Import one entry point in a child process, optionally recording what the
- * resolver did.
+ * Import one entry point in a child process, and report whether it loaded.
  *
  * A child rather than this process, because the question is what happens on a
  * fresh resolution from a particular directory — and the test runner has
  * already loaded this package, its dependencies and its own graph.
+ *
+ * Whether it loaded is the whole answer. WHAT it loaded is a different question
+ * and a different instrument: the build's metafile, which sees the edges an
+ * import never follows.
  */
-function runEntry(
-  from: string,
-  entry: string,
-  { instrumented }: { instrumented: boolean }
-): EntryRun {
+function runEntry(from: string, entry: string): EntryRun {
   const url = pathToFileURL(join(from, entry)).href;
-  const bootstrap = instrumented
-    ? [
-        `import { register } from "node:module";`,
-        `import { pathToFileURL } from "node:url";`,
-        `register(pathToFileURL(${JSON.stringify(hooks)}));`,
-        `await import(${JSON.stringify(url)});`,
-      ].join("\n")
-    : `await import(${JSON.stringify(url)});`;
+  const bootstrap = `await import(${JSON.stringify(url)});`;
 
-  if (instrumented) writeFileSync(record, "");
   const result = spawnSync(
     process.execPath,
     ["--input-type=module", "--eval", bootstrap],
@@ -204,7 +173,6 @@ function runEntry(
       // The child's own cwd, so a bare specifier is looked up from the
       // directory holding the entry rather than from wherever vitest was run.
       cwd: from,
-      env: { ...process.env, NEXTLY_RESOLVE_RECORD: record },
       // A ceiling, because this call is SYNCHRONOUS: an entry point that opens
       // a handle or deadlocks while initialising would otherwise block the
       // vitest worker itself, and vitest's own per-test timeout cannot fire on
@@ -222,49 +190,7 @@ function runEntry(
     .filter(part => part !== "")
     .join("\n");
 
-  const resolved = !instrumented
-    ? []
-    : readFileSync(record, "utf8")
-        .split("\n")
-        .filter(line => line !== "")
-        .map(line => JSON.parse(line) as { specifier: string; url: string });
-
-  return { ok: result.status === 0, stderr, resolved };
-}
-
-const isRelative = (specifier: string) => specifier.startsWith(".");
-
-/**
- * The bare package specifiers a run actually resolved.
- *
- * A specifier carrying a SCHEME is not one of them, and excluding it is not
- * cosmetic: the bootstrap imports the entry by its own `file:` URL, so a run
- * that resolved nothing at all would otherwise report one external and every
- * empty-set assertion below would fail on the harness rather than on the
- * boundary. Built-ins are excluded for the reason the boundary is about
- * bundle weight: `node:path` costs a consumer nothing to load.
- */
-function externals(run: EntryRun): string[] {
-  const found = new Set<string>();
-  for (const { specifier } of run.resolved) {
-    if (isRelative(specifier) || URL.canParse(specifier)) continue;
-    if (specifier.startsWith("node:")) continue;
-    found.add(specifier);
-  }
-  return [...found].sort();
-}
-
-/** The bytes of every emitted file a run loaded from `dist`. */
-function bytesOf(run: EntryRun): number {
-  const files = new Set<string>();
-  for (const { url } of run.resolved) {
-    if (!url.startsWith("file:")) continue;
-    const file = fileURLToPath(url);
-    if (file.startsWith(DIST)) files.add(file);
-  }
-  let total = 0;
-  for (const file of files) total += statSync(file).size;
-  return total;
+  return { ok: result.status === 0, stderr };
 }
 
 describe("the format entry point's boundary", () => {
@@ -295,9 +221,7 @@ describe("the format entry point's boundary", () => {
     // The boundary itself. Not "no import matched a pattern" — the resolver was
     // given the entry with nothing to resolve a bare specifier from, and it
     // loaded. Anything reaching a runtime dependency cannot.
-    const run = runEntry(join(sandbox, "dist"), FORMAT_ENTRY, {
-      instrumented: false,
-    });
+    const run = runEntry(join(sandbox, "dist"), FORMAT_ENTRY);
 
     expect(run.ok, run.stderr).toBe(true);
   });
@@ -308,9 +232,7 @@ describe("the format entry point's boundary", () => {
     // silently exited 0, an entry file that does not exist. The root reaches
     // the CSS parser, so it must fail here, and its failure is what proves the
     // format entry's success means something.
-    const run = runEntry(join(sandbox, "dist"), ROOT_ENTRY, {
-      instrumented: false,
-    });
+    const run = runEntry(join(sandbox, "dist"), ROOT_ENTRY);
 
     expect(run.ok).toBe(false);
     expect(run.stderr).toContain("ERR_MODULE_NOT_FOUND");
