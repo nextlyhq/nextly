@@ -991,12 +991,38 @@ export function withEarlierContext(sample, missingNames, samples) {
   const earlier = samples
     .filter(s => s.file === sample.file && s.index < sample.index)
     .sort((a, b) => b.index - a.index);
+  // The closure, not just the nearest block per name. Fence A imports a type,
+  // B declares a value using it, C uses that value: pasting only B left A's
+  // binding missing, B's value became `any`, and everything C did with it went
+  // unchecked while C was labelled merely unresolved. Following what each
+  // chosen block itself needs closes that.
+  //
+  // Bounded by what some earlier fence actually declares, so chasing a name
+  // cannot wander into keywords, property names or the reader's own
+  // identifiers — a fence is pulled in only when the page really does define
+  // what it is being pulled in for.
+  const declaredEarlierOnThePage = new Set(
+    earlier.flatMap(s => declaredNamesIn(s.code))
+  );
   const chosen = new Map();
-  for (const name of missingNames) {
+  const wanted = [...missingNames];
+  const asked = new Set();
+  while (wanted.length > 0) {
+    const name = wanted.pop();
+    if (asked.has(name)) continue;
+    asked.add(name);
     const nearest = earlier.find(s =>
       declaredEarlier(name, s.file, s.index + 1, [s])
     );
-    if (nearest) chosen.set(nearest.index, nearest);
+    if (!nearest || chosen.has(nearest.index)) continue;
+    chosen.set(nearest.index, nearest);
+    const own = new Set(declaredNamesIn(nearest.code));
+    for (const m of nearest.code.matchAll(/[A-Za-z_$][\w$]*/g)) {
+      const used = m[0];
+      if (!own.has(used) && declaredEarlierOnThePage.has(used)) {
+        wanted.push(used);
+      }
+    }
   }
   const needed = [...chosen.values()].sort((a, b) => a.index - b.index);
   if (needed.length === 0) return null;
