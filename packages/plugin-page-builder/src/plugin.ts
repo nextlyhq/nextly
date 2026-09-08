@@ -44,6 +44,7 @@ import { hostFetchPolicy } from "./host-policy";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import { patternLibraryRoute } from "./library-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
+import { savePatternRoute } from "./save-pattern-route";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleSingle } from "./site-style-storage";
@@ -542,7 +543,13 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // not exported from `@nextlyhq/plugin-sdk/admin`, which is the only
       // surface this package may import from, so there is no browser-side
       // collection read available to it at all.
-      routes: [patternLibraryRoute()],
+      //
+      // And the one write that fills it. Contributed beside the read rather
+      // than left to the collection API, because what a saved pattern IS is
+      // the planner's answer and the planner needs the server's block
+      // registry — the browser holds the core blocks and not the ones another
+      // plugin declared.
+      routes: [patternLibraryRoute(), savePatternRoute()],
 
       // No `publish` permission. One was declared here and nothing ever read
       // it: publishing a page is a status change on the entry, which

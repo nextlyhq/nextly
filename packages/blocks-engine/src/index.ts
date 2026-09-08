@@ -211,6 +211,7 @@ export {
 export type {
   ComponentExposure,
   CompositionPlan,
+  CreatePlanResult,
   InsertTarget,
   StoredPattern,
   PlacementTarget,

@@ -1,8 +1,11 @@
 /**
  * What the pattern library route answers, named where both ends can read it.
  *
- * IMPORT-FREE, deliberately, and that is the whole reason this file is separate
- * from the route that implements it. The route reaches the collection through
+ * FREE OF RUNTIME IMPORTS, deliberately, and that is the whole reason this file
+ * is separate from the route that implements it. Types are the exception and
+ * cost nothing — they are erased before a browser sees them — so the shapes
+ * both ends must agree on can be named here without either end's runtime
+ * arriving with them. The route reaches the collection through
  * `nextly/config`, which pulls the Direct API — server-only, and it says so at
  * load time. A browser module importing the route for one path constant brings
  * that with it: measured, importing it from the admin client took eleven test
@@ -15,7 +18,9 @@
  *
  * @module library-contract
  */
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { SavedPattern } from "@nextlyhq/builder";
+import type { HookWarning } from "nextly/config";
 
 /**
  * The name this plugin registers under, which is also how its routes are
@@ -140,4 +145,123 @@ export interface LibraryResponse {
     /** Whether the ceiling stopped the read before the collection ended. */
     readonly truncated: boolean;
   };
+}
+
+/**
+ * Where the editor sends a selection to be stored as a pattern.
+ *
+ * Named for the VERB rather than for a resource, because the verbs that follow
+ * it are not all creations. `Save as component` creates a definition, and
+ * `Convert to component` and `Detach` also hand back ops that change the page
+ * the author is editing — so a resource path would fit the first two and have
+ * nothing to address for the others. One shape for the whole family is what
+ * lets a reader of `contributes.routes` see them as one family.
+ */
+export const SAVE_PATTERN_ROUTE_PATH = "/save-as-pattern";
+
+/**
+ * The metadata a saved pattern carries, as the surface that saves it states
+ * them.
+ *
+ * These are the `patterns` collection's own fields, and the route does not trust
+ * this list at runtime: it takes the field names from the collection itself, so
+ * a caller cannot reach a column the collection never declared. What this type
+ * is for is the DIALOG — the surface filling the form needs to know what to ask
+ * for, and it runs in a browser that cannot load the collection module.
+ *
+ * A type naming a source of truth it cannot track is how a contract goes quietly
+ * stale, so {@link SAVE_PATTERN_FIELD_NAMES} carries these keys as a VALUE and
+ * `save-pattern-contract.test.ts` compares that value against the collection's
+ * declared fields.
+ */
+export interface SavePatternFields {
+  readonly title: string;
+  /**
+   * The identifier the library keys this pattern by, when the caller has one.
+   *
+   * OPTIONAL, and the dialog does not ask for it. It is not a URL — nothing
+   * resolves a pattern by slug — so it is an identity rather than an address,
+   * and asking an author to type one is a second field that restates the name
+   * they already gave. The route derives it from the title, which is also the
+   * only place that could ever disambiguate one.
+   */
+  readonly slug?: string;
+  readonly granularity: PatternGranularity;
+  readonly description?: string;
+  readonly category?: string;
+  readonly keywords?: string;
+}
+
+/**
+ * The keys of {@link SavePatternFields}, as a value something can compare.
+ *
+ * The `satisfies` is the whole point: it is checked by `tsc`, in a file the
+ * package's type program actually reads, so a property added to or removed from
+ * the interface fails the build here until this list moves with it. The obvious
+ * place for a witness like this is the test that uses it, and in this package
+ * that would not work — `tsconfig.tests.json` deliberately keeps `*.test.ts` out
+ * of the program, so a `Record<keyof …>` written there is transpiled and never
+ * evaluated, and the guard silently checks nothing.
+ *
+ * With both halves in place the drift is caught from either side: this fails to
+ * compile when the interface moves, and the contract test fails when the
+ * collection moves.
+ */
+export const SAVE_PATTERN_FIELD_NAMES = Object.keys({
+  title: true,
+  slug: true,
+  granularity: true,
+  description: true,
+  category: true,
+  keywords: true,
+} satisfies Record<
+  keyof SavePatternFields,
+  true
+>) as readonly (keyof SavePatternFields)[];
+
+/**
+ * What the editor sends to store a selection as a pattern.
+ *
+ * The DOCUMENT and the SELECTION, not a pattern the browser already built. The
+ * planner decides what a saved pattern is — which nodes travel, what is
+ * re-identified, which selections are refusable — and it decides it against the
+ * block registry, which is not the same registry at both ends: the browser
+ * registers the core blocks, while the server also holds every block another
+ * plugin declared. A browser that planned the save would answer a nesting
+ * question about blocks it has never heard of, and store a pattern nothing can
+ * place.
+ *
+ * It is also the difference between a rule and a convention. A pattern posted
+ * ready-made would be whatever its caller decided to send, and the guarantee the
+ * insert panel leans on — that a stored pattern is one the planner would place —
+ * would hold only for callers that chose to honour it.
+ */
+export interface SavePatternRequest {
+  /** The document the selection was made in. */
+  readonly document: BlockDocument;
+  /** The nodes to lift out of it, in the editor's own vocabulary. */
+  readonly selectedIds: readonly string[];
+  readonly fields: SavePatternFields;
+}
+
+/**
+ * What a completed save answers.
+ *
+ * The CANONICAL mutation envelope, which is what every other write in this
+ * codebase answers with — `{ message, item }`, and `warnings` when a hook failed
+ * after the row was already durable. A route inventing its own shape here would
+ * make a plugin's write the one write a shared client cannot read, and the
+ * warnings are the part that goes wrong quietly: a post-commit failure cannot be
+ * undone, so a body that omits it reports a partial success as a whole one.
+ *
+ * Built by `respondMutation` rather than assembled, so it cannot drift from the
+ * envelope and so the warnings come from the request's own scope rather than
+ * from a second path to the same list.
+ */
+export interface SavePatternResponse {
+  readonly message: string;
+  /** The row that was created, as the collection stored it. */
+  readonly item: { readonly id: string } & Record<string, unknown>;
+  /** Side effects that failed after the row committed, when any did. */
+  readonly warnings?: readonly HookWarning[];
 }

@@ -361,6 +361,28 @@ export interface PlanRefusal {
 export type PlanResult<TFields> = CompositionPlan<TFields> | PlanRefusal;
 
 /**
+ * A plan that is guaranteed to have created something, or the cause it did not.
+ *
+ * {@link CompositionPlan.create} is optional because a composition action need
+ * not create anything — `planDetach` only edits the page — so the shared shape
+ * cannot promise a row. A planner whose whole purpose is to fill the library
+ * always does, and saying so in the type is what stops every caller writing a
+ * branch for a state its planner cannot reach: an impossible branch is one that
+ * can never be exercised, so nothing ever proves it does the right thing, and
+ * the first reader to simplify it has no way to tell whether it was defensive
+ * or load-bearing.
+ *
+ * It narrows nothing else, and it is applied per planner rather than to a group
+ * of them. Each planner's guarantee is its own — a `create` here, a `create` and
+ * `pageOps` for a convert, an `update` for a save-over — and one alias spanning
+ * them would assert whichever guarantee its name suggested for planners that
+ * were never checked against it.
+ */
+export type CreatePlanResult<TFields> =
+  | (CompositionPlan<TFields> & { readonly create: PlannedCreate<TFields> })
+  | PlanRefusal;
+
+/**
  * Where a saved selection is stored, in the caller's vocabulary.
  *
  * One type for all three library kinds rather than one per planner. A pattern,
@@ -424,7 +446,7 @@ export function planSaveAsPattern<TFields>(
   selectedIds: readonly string[],
   target: LibraryTarget<TFields>,
   nesting: NestingSource
-): PlanResult<TFields> {
+): CreatePlanResult<TFields> {
   const saved = plannedSave(document, selectedIds, nesting);
   if (saved.problem !== undefined) return saved;
 
@@ -472,6 +494,30 @@ function plannedSave(
   // host's cap rather than the default.
   limits: DocumentLimits = DEFAULT_LIMITS
 ): PlannedSave | PlanRefusal {
+  // The one thing the SOURCE has to be for the search to happen at all: a list
+  // of roots. `contiguousRun` walks `document.nodes` to locate the selection, so
+  // a document whose `nodes` is absent or is not a list fails there as a native
+  // `TypeError` rather than as the refusal this returns — and that difference
+  // reaches a caller. A route reports it as a server fault instead of a bad
+  // request, and the published preflight throws where it promised a verdict, so
+  // a toolbar asking whether a save is possible crashes instead of disabling a
+  // button.
+  //
+  // Deliberately NOT `documentRefusal`, which is what `planInsertPattern` asks
+  // of the document it EDITS. That one also judges the source's `formatVersion`
+  // and `kind`, and a save reads neither: `kind` is written here, so a page
+  // whose own kind is unreadable still yields a perfectly good pattern —
+  // {@link savedPatternDocument} says so, and refusing it would be asking about
+  // the origin rather than about the thing.
+  //
+  // Not `forestRefusal` either, which walks every entry. An insert applies ops
+  // across the whole forest, so a malformed node the selection never touched
+  // still throws on apply; a save applies nothing to the page, and refusing on
+  // rubbish elsewhere would stop an author rescuing the part of their page that
+  // is still good. Measured: a `null` beside good roots already answers rather
+  // than throwing.
+  if (!Array.isArray(document.nodes)) return { problem: "unusable-document" };
+
   const run = savableRun(document, selectedIds, nesting);
   if (run.problem !== undefined) return run;
 
