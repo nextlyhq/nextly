@@ -185,6 +185,10 @@ export function planForScript(script, cwd, run = execFileSync) {
  * the operators is a containment test on one JSON string, not a reading of a
  * shell, which is the whole difference from the parser this replaced.
  */
+export function runsWholeTask(laneScript, packageCommand) {
+  return laneScript.trimEnd().endsWith(packageCommand.trim());
+}
+
 export function namesScript(source, script) {
   // 🔴 Anchored at the END of the name, because these names nest:
   // `lane:test:playground` CONTAINS `lane:test`, so a plain containment test
@@ -229,6 +233,7 @@ if (invokedDirectly) {
 
   const readManifest = path => readFileSync(join(root, path), "utf8");
   const rootScripts = JSON.parse(readManifest("package.json")).scripts ?? {};
+  const workspace = readWorkspace(readManifest, manifestPaths);
 
   const failures = [];
   const summary = [];
@@ -302,7 +307,39 @@ if (invokedDirectly) {
       }
       for (const name of packagesInPlan(plan, task)) covered.add(name);
     }
-    for (const entry of direct) covered.add(entry.package);
+    /*
+     * A `direct` entry is a claim that a script runs the package's WHOLE task,
+     * and the claim is checked against the package rather than trusted.
+     *
+     * 🔴 Derived from the package's own task command, not from a list of the
+     * vitest flags that narrow a run. Such a list would be a second, ageing
+     * copy of vitest's options — `--changed`, `--shard`, `--project`,
+     * `--testNamePattern` today, and whatever is added next. Requiring the lane
+     * script to END with the command the package declares needs no such list:
+     * anything appended stops matching, and a package that changes how it runs
+     * its suites drags the lane with it.
+     */
+    for (const entry of direct) {
+      const declaredBy = workspace.find(pkg => pkg.name === entry.package);
+      const command = declaredBy?.scripts?.[task];
+      if (typeof command !== "string") {
+        failures.push(
+          `${entry.package} is listed as run directly by \`${entry.script}\`, ` +
+            `and it declares no \`${task}\` script for that to be running.`
+        );
+        continue;
+      }
+      if (!runsWholeTask(rootScripts[entry.script], command)) {
+        failures.push(
+          `\`${entry.script}\` does not end with ${entry.package}'s own ` +
+            `\`${task}\` command (\`${command}\`), so it runs some of that ` +
+            "package's suites rather than the task. Part of a suite is not the " +
+            "task, which is the coverage this check refuses to credit."
+        );
+        continue;
+      }
+      covered.add(entry.package);
+    }
 
     if (covered.size === 0) {
       console.error(

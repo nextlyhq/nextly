@@ -11,6 +11,7 @@ import {
   packagesWithTask,
   planForScript,
   readWorkspace,
+  runsWholeTask,
   unrunPackages,
   workspaceManifests,
 } from "./check-test-lanes.mjs";
@@ -57,6 +58,38 @@ describe("unrunPackages", () => {
 
   it("is silent when every declared package is covered", () => {
     expect(unrunPackages(["a", "b"], ["b", "a", "extra"])).toEqual([]);
+  });
+});
+
+describe("runsWholeTask", () => {
+  it("accepts a script that ends with the package's own command", () => {
+    expect(
+      runsWholeTask("pnpm --filter playground exec vitest run", "vitest run")
+    ).toBe(true);
+  });
+
+  it("refuses a run narrowed by a selective flag", () => {
+    // 🔴 Derived from the package's own command rather than from a list of the
+    // vitest options that narrow a run: such a list would be a second, ageing
+    // copy of vitest's own, and `--changed` runs only what a diff touched.
+    expect(
+      runsWholeTask(
+        "pnpm --filter playground exec vitest run --changed",
+        "vitest run"
+      )
+    ).toBe(false);
+    expect(
+      runsWholeTask(
+        "pnpm --filter playground exec vitest run --shard=1/4",
+        "vitest run"
+      )
+    ).toBe(false);
+  });
+
+  it("refuses a script that runs something else entirely", () => {
+    expect(runsWholeTask("pnpm --filter playground exec jest", "vitest run")).toBe(
+      false
+    );
   });
 });
 
@@ -144,6 +177,19 @@ describe("this repository", () => {
     expect(manifests).toContain("packages/nextly/package.json");
     expect(manifests).toContain("apps/playground/package.json");
     expect(manifests).not.toContain("package.json");
+  });
+
+  it("has each direct lane script run its package's whole task", () => {
+    const packages = readWorkspace(readManifest, manifests);
+    const direct = LANES.flatMap(lane =>
+      lane.direct.map(entry => ({ ...entry, task: lane.task }))
+    );
+    expect(direct.length).toBeGreaterThan(0);
+    for (const entry of direct) {
+      const command = packages.find(p => p.name === entry.package)?.scripts?.[entry.task];
+      expect(typeof command).toBe("string");
+      expect(runsWholeTask(rootScripts[entry.script], command)).toBe(true);
+    }
   });
 
   it("keeps every lane script a single command", () => {
