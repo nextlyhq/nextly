@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { compareToBaseline, identityOf } from "./check-doc-samples.mjs";
+import {
+  compareToBaseline,
+  declaredNamesIn,
+  identityOf,
+  pageOf,
+} from "./check-doc-samples.mjs";
 
 /**
  * Each guard is asserted against a CONTROL that reproduces what the checker did
@@ -258,5 +263,71 @@ describe("compareToBaseline", () => {
 
       expect(appeared).toEqual([]);
     });
+  });
+});
+
+describe("pageOf", () => {
+  it("takes the page off an attributed diagnostic", () => {
+    expect(pageOf("docs/a.mdx#3:12  error TS2304: Cannot find name 'Post'.")).toBe(
+      "docs/a.mdx"
+    );
+  });
+
+  it("groups an unattributed diagnostic under `?` rather than under its own message", () => {
+    // A diagnostic the compiler could not place carries `?:0` and no `#`, so
+    // splitting the raw line on `#` returned the whole line. That made a page
+    // key out of an error message, and the gate then reported that message as a
+    // page over an allowance of zero.
+    const line = "?:0  error TS5055: Would overwrite input file.";
+
+    expect(pageOf(line)).toBe("?");
+    // The control: the old grouping kept the entire diagnostic.
+    expect(line.split("#")[0]).toBe(line);
+  });
+});
+
+describe("declaredNamesIn scope tracking", () => {
+  // What the character count did, reproduced exactly, as the control.
+  const blankNestedByCounting = code => {
+    let depth = 0;
+    return code
+      .split("\n")
+      .map(line => {
+        const here = depth;
+        for (const ch of line) {
+          if (ch === "{" || ch === "(" || ch === "[") depth += 1;
+          else if (ch === "}" || ch === ")" || ch === "]")
+            depth = Math.max(0, depth - 1);
+        }
+        return here === 0 ? line : "";
+      })
+      .join("\n");
+  };
+
+  it("does not promote a nested name when a string contains a closing brace", () => {
+    const code = 'function setup() { const marker = "}"; const hidden = {}; }';
+
+    expect(declaredNamesIn(code).includes("setup")).toBe(true);
+    expect(declaredNamesIn(code).includes("hidden")).toBe(false);
+    // The control: counting characters closes on the string, so the rest of
+    // the line reads as top level and `hidden` looks page-scoped. A later
+    // import-free fence using it is then excused as a continuation.
+    expect(blankNestedByCounting(code)).toContain("hidden");
+  });
+
+  it("does not promote a nested name when a comment contains a closing brace", () => {
+    const code = ["function setup() {", "  // closes here: }", "  const hidden = 1;", "}"].join(
+      "\n"
+    );
+
+    expect(declaredNamesIn(code).includes("hidden")).toBe(false);
+    expect(blankNestedByCounting(code)).toContain("hidden");
+  });
+
+  it("still reads a genuinely top-level declaration", () => {
+    const code = ['const marker = "}";', "const shown = 1;"].join("\n");
+
+    expect(declaredNamesIn(code).includes("marker")).toBe(true);
+    expect(declaredNamesIn(code).includes("shown")).toBe(true);
   });
 });

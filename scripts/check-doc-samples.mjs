@@ -797,21 +797,74 @@ export function declaresName(code, name) {
  * turns a name the page does define into one it appears not to — loud, and
  * caught by the continuation pass — rather than excusing one it does not.
  */
+const OPENS = new Set([
+  ts.SyntaxKind.OpenBraceToken,
+  ts.SyntaxKind.OpenParenToken,
+  ts.SyntaxKind.OpenBracketToken,
+]);
+const CLOSES = new Set([
+  ts.SyntaxKind.CloseBraceToken,
+  ts.SyntaxKind.CloseParenToken,
+  ts.SyntaxKind.CloseBracketToken,
+]);
+
+/**
+ * Brackets that are really brackets, from the TypeScript scanner rather than
+ * from counting characters.
+ *
+ * Counting characters read a closing brace inside a string or a comment as a
+ * real one. The comment here used to argue that the mistake was safe because it
+ * fires loudly: over-closing blanks a line that was top level, so a name the
+ * page defines looks undefined and becomes a finding. That is only one
+ * direction. `function setup() { const marker = "}"; const hidden = {}; }`
+ * closes early on the string, which leaves `hidden` looking page-scoped, and a
+ * later import-free fence calling `hidden.nonexistent()` is then treated as a
+ * continuation and filed as unchecked instead of as a finding. The quiet
+ * direction was the one that mattered.
+ *
+ * Trivia is skipped, so comments contribute nothing. A template literal's text
+ * is inside its own token, and `${`/`}` are part of the head/middle/tail
+ * tokens, so template expressions balance without special handling. A regex
+ * literal still needs `reScanSlashToken` to be recognised and does not get it,
+ * so a `}` inside one is read as a brace; that is the same hazard the character
+ * count had, narrowed from every string and comment to regex literals alone.
+ */
 function topLevelOnly(code) {
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    true,
+    ts.LanguageVariant.JSX,
+    code
+  );
+  // UTF-16 units, because that is what the scanner's offsets count. Splitting
+  // by code point desynchronises on the first non-ASCII character, and these
+  // pages have plenty.
+  const chars = code.split("");
+  const blank = (from, to) => {
+    for (let i = from; i < to && i < chars.length; i += 1) {
+      if (chars[i] !== "\n") chars[i] = " ";
+    }
+  };
+
+  // Per token, not per line. Blanking whole lines cannot see
+  // `function setup() { const hidden = {}; }`, where the nesting opens and
+  // closes within one line and the line therefore starts at depth 0.
   let depth = 0;
-  return code
-    .split("\n")
-    .map(line => {
-      const here = depth;
-      for (const ch of line) {
-        if (ch === "{" || ch === "(" || ch === "[") depth += 1;
-        else if (ch === "}" || ch === ")" || ch === "]") {
-          depth = Math.max(0, depth - 1);
-        }
-      }
-      return here === 0 ? line : "";
-    })
-    .join("\n");
+  let prevEnd = 0;
+  for (
+    let kind = scanner.scan();
+    kind !== ts.SyntaxKind.EndOfFileToken;
+    kind = scanner.scan()
+  ) {
+    const end = scanner.getTokenEnd();
+    // A closing bracket belongs to the depth it returns to, and an opening one
+    // to the depth it leaves, so both stay visible while their contents do not.
+    if (CLOSES.has(kind)) depth = Math.max(0, depth - 1);
+    if (depth > 0) blank(prevEnd, end);
+    if (OPENS.has(kind)) depth += 1;
+    prevEnd = end;
+  }
+  return chars.join("");
 }
 
 export function declaredNamesIn(source) {
@@ -1272,6 +1325,28 @@ export const originOf = line => line.split("  ")[0].split(":")[0];
 export const nameIn = line => line.match(MISSING_NAME)?.[1];
 
 /**
+ * The page a diagnostic belongs to, for grouping and for the baseline's keys.
+ *
+ * Through `originOf`, which already answers `?` for a diagnostic the compiler
+ * could not attribute to a fence. Splitting the raw line on `#` instead handed
+ * back the WHOLE message for that shape, because it contains no `#`: the page
+ * key became a diagnostic, and the gate then reported an error message as a
+ * page over its allowance, with no baseline entry anyone could write for it.
+ */
+export const pageOf = line => {
+  const at = originOf(line);
+  return at.includes("#") ? at.split("#")[0] : at;
+};
+
+/**
+ * Prefix for a suppressed diagnostic's identity in the baseline, so a reader
+ * can tell one from a finding at a glance and neither is mistaken for the
+ * other. A suppression is something this checker decided not to charge a page
+ * for; recording it is how a NEW one gets seen.
+ */
+export const SUPPRESSED_MARK = "suppressed ";
+
+/**
  * Report on the documentation without gating on it.
  *
  * Never fails the run. These pages come from the monorepo and are overwritten
@@ -1491,8 +1566,7 @@ async function auditDocs() {
 
   const byFile = new Map();
   for (const line of real) {
-    const file = line.split("#")[0];
-    byFile.set(file, [...(byFile.get(file) ?? []), line]);
+    byFile.set(pageOf(line), [...(byFile.get(pageOf(line)) ?? []), line]);
   }
   console.log(
     `\ndocs, ${auditBasis()}: ` +
@@ -1550,6 +1624,13 @@ async function auditDocs() {
   // report names, so a page cannot read clean here and fail there.
   return {
     byFile,
+    // The suppressions travel with the report so the baseline can hold them
+    // too. They were counted for the console and then dropped, which left the
+    // broadest rules — TS2322 and TS2339, keyed on `unknown` — able to absorb a
+    // newly broken sample without moving any number the gate reads. Held by
+    // identity, they still do not charge a page a finding, and a NEW one now
+    // has to be looked at rather than absorbed.
+    suppressed,
     coverage: {
       files: [...new Set(all.map(sample => sample.file))].sort(),
       samples: all.length,
@@ -1785,7 +1866,13 @@ async function main() {
   // checkout does not, is not something a reader meets, and counting those
   // would fill the baseline with the harness's own artefacts.
   requireBuiltPackages();
-  const { byFile, coverage } = await auditDocs();
+  // `auditDocs` returns nothing on the two paths it treats as graceful: a
+  // partial tree, and no docs/ at all. Both print why and stop. Destructuring
+  // the result unconditionally turned each of those into a TypeError one line
+  // after the message explaining that nothing was audited.
+  const audit = await auditDocs();
+  if (!audit) return;
+  const { byFile, coverage } = audit;
   const findings = [...byFile.values()].flat();
   // The build can finish or restart while this runs, so the post-condition is
   // asserted too: a workspace package reported as untyped means the tree moved
@@ -1821,6 +1908,17 @@ async function main() {
       return [file, counts];
     })
   );
+  // Suppressed diagnostics ratchet alongside the findings, marked so a reader
+  // can tell the two apart. They are NOT findings: they do not raise a page's
+  // count and the page is not charged for them. What they now cannot do is
+  // change without anybody noticing, which is what let the two broadest rules
+  // absorb a newly broken sample while every number the gate reads stood still.
+  for (const d of audit.suppressed) {
+    const file = pageOf(d.text);
+    const key = `${SUPPRESSED_MARK}${identityOf(d.text)}`;
+    fingerprint[file] = fingerprint[file] ?? {};
+    fingerprint[file][key] = (fingerprint[file][key] ?? 0) + 1;
+  }
 
   if (process.argv.includes("--write-baseline")) {
     // Refuses to record LESS coverage than the baseline already holds, unless

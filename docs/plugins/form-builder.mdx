@@ -272,7 +272,9 @@ const result = await submitForm(
     formSlug: 'contact',
     data: { firstName: 'Jane', email: 'jane@example.com', message: 'Hello!' },
     metadata: {
-      ipAddress: request.headers.get('x-forwarded-for') || undefined,
+      // No ipAddress here on purpose: see "Where the IP has to come from"
+      // below. Reading `x-forwarded-for` straight off the request is the one
+      // thing not to do.
       userAgent: request.headers.get('user-agent') || undefined,
     },
   },
@@ -288,6 +290,44 @@ if (result.success) {
   // result.error and result.validationErrors describe what went wrong
 }
 ```
+
+### Where the IP has to come from
+
+`submitForm` keys two protections on `metadata.ipAddress`: the per-IP rate limit,
+and the one-submission-per-visitor check when `allowMultipleSubmissions` is off. It
+also stores the value on the submission.
+
+That makes the header a control input, not a log field. `x-forwarded-for` is
+client-supplied on a direct request and on any proxy that forwards it verbatim, so
+a bot that varies it on every request gets a fresh rate-limit bucket each time and
+walks past a limit that looks configured. Nextly closed exactly this in its own
+auth and rate-limit paths, which is why `getTrustedClientIp` exists:
+
+```ts
+// nextly.config.ts, or anywhere the application itself runs
+import { getTrustedClientIp, parseTrustedProxyIpsEnv } from "nextly";
+
+declare const request: Request;
+declare const trustProxy: boolean;
+
+const ipAddress =
+  getTrustedClientIp(request, {
+    trustProxy,
+    trustedProxyIps: parseTrustedProxyIpsEnv(process.env.TRUSTED_PROXY_IPS),
+  }) ?? undefined;
+```
+
+It walks the forwarded chain from the right, skipping hops in `TRUSTED_PROXY_IPS`,
+and returns the first one you did not vouch for. It returns `null` when it cannot
+identify a client, and passing `undefined` on is the correct thing to do with that:
+the limiter skips a submission it cannot attribute rather than filing every unknown
+caller in one bucket.
+
+Two consequences worth stating plainly. `security.trustProxy` defaults to `false`,
+so until you set it and list your proxies the resolver returns `null` and the rate
+limit does not run. And `getTrustedClientIp` ships from `nextly`, not from
+`@nextlyhq/plugin-sdk`, so a distributed plugin cannot reach it through the surface
+it is supposed to depend on. An application that hosts its own route, as below, can.
 
 ### Validation
 
@@ -464,17 +504,33 @@ Supported events: `submission.created`, `submission.updated`, `submission.delete
 When a `secret` is configured, the request includes an `X-Webhook-Signature` header with an HMAC-SHA256 signature (`sha256=<hex>`). Verify it on the receiving end:
 
 ```typescript
-const crypto = require('crypto');
+// app/api/form-webhook/route.ts
+import { createHmac, timingSafeEqual } from "node:crypto";
 
-const signature = 'sha256=' + crypto
-  .createHmac('sha256', secret)
-  .update(JSON.stringify(req.body))
-  .digest('hex');
+export async function POST(request: Request) {
+  const secret = process.env.FORM_WEBHOOK_SECRET ?? "";
 
-const isValid = crypto.timingSafeEqual(
-  Buffer.from(req.headers['x-webhook-signature']),
-  Buffer.from(signature)
-);
+  // The RAW body, read once. Signing a re-serialised object instead compares a
+  // signature against bytes the sender never sent: `JSON.parse` then
+  // `JSON.stringify` is free to reorder keys and drop whitespace, so a correct
+  // signature fails whenever the two disagree.
+  const raw = await request.text();
+  const expected = `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`;
+  const sent = request.headers.get("x-webhook-signature") ?? "";
+
+  // Lengths first: `timingSafeEqual` throws on a mismatch, which turns a forged
+  // signature into a 500 rather than a rejection.
+  const a = Buffer.from(sent);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return new Response("Invalid signature", { status: 401 });
+  }
+
+  const payload: unknown = JSON.parse(raw);
+  // ... handle the verified payload
+
+  return Response.json({ received: true });
+}
 ```
 
 ## Exporting Submissions
@@ -607,7 +663,11 @@ So the endpoint is a small plugin of your own, declared beside the form-builder 
 
 ```ts
 // nextly.config.ts
-import { defineConfig } from "nextly";
+import {
+  defineConfig,
+  getTrustedClientIp,
+  parseTrustedProxyIpsEnv,
+} from "nextly";
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 import { formBuilder, submitForm } from "@nextlyhq/plugin-form-builder";
 
@@ -635,12 +695,24 @@ const contactEndpoint = definePlugin({
         handler: async (request, ctx) => {
           const data = await request.json();
 
+          // Through the trust-proxy gate, never straight off the header: this
+          // value keys the rate limit above, so a forgeable one hands a bot a
+          // fresh bucket per request. `null` becomes `undefined`, which the
+          // limiter reads as "cannot attribute" and skips.
+          const ipAddress =
+            getTrustedClientIp(request, {
+              trustProxy: ctx.config.security?.trustProxy ?? false,
+              trustedProxyIps: parseTrustedProxyIpsEnv(
+                process.env.TRUSTED_PROXY_IPS
+              ),
+            }) ?? undefined;
+
           const result = await submitForm(
             {
               formSlug: "contact",
               data,
               metadata: {
-                ipAddress: request.headers.get("x-forwarded-for") ?? undefined,
+                ipAddress,
                 userAgent: request.headers.get("user-agent") ?? undefined,
               },
             },

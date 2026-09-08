@@ -122,7 +122,9 @@ const published = await nextly.find({
 const all = await nextly.find({ collection: "posts" });
 ```
 
-The `nextly` proxy above assumes Nextly is already initialised in the process. A scaffolded app does that in `src/instrumentation.ts`, which calls `createRegister(config)()` before the first request, so a public page can import the proxy directly. In a process where that has not run -- a standalone script, or an app that removed the instrumentation hook -- the proxy throws `Nextly services not initialized`; use `await getNextly({ config })` there, which initialises rather than assuming.
+The `nextly` proxy above assumes Nextly is already initialised in the process, and most projects are not. Of the scaffolds, only `blog` ships a `src/instrumentation.ts` that calls `createRegister(config)()` before the first request; `base` and `blank` ship none, so on those the proxy throws `Nextly services not initialized` the moment it is the first Nextly code a worker runs. The same applies to a standalone script, and to any app that removed the hook.
+
+Use `await getNextly({ config })` unless you know the process has been initialised. It initialises rather than assuming, so it is correct in both cases; the proxy is the lighter import for code that provably runs after initialisation.
 
 The query shape (`{ status: { equals: "published" } }`) works identically across all three dialects. The system column is indexed, so filtering by status is fast even on large tables.
 

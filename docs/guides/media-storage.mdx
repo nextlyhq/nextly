@@ -379,7 +379,11 @@ The list endpoint is permission-gated by `read-settings`; mutation endpoints req
 
 ### Using sizes from your frontend
 
-The media API response includes every generated variant under `sizes`:
+Where the variants reach you depends on how you read the media file, so it is worth
+being exact about it.
+
+A media file **populated as a relationship** on an entry or a single carries its
+variants under `sizes`, keyed by the name you configured:
 
 ```json
 {
@@ -395,12 +399,18 @@ The media API response includes every generated variant under `sizes`:
 }
 ```
 
-With `next/image`:
+`media.findByID()` does not. It returns a `MediaFile`, which declares no `sizes`
+field, so a variant read straight off that result does not exist at runtime and does
+not compile either.
+
+`getMediaVariant` is what to use in both cases. It asks for a variant by name, tries
+your fallback name next, then the thumbnail, then the original, so the same component
+works whether or not variants reached it:
 
 ```tsx
 // app/(site)/photo/page.tsx
 import Image from "next/image";
-import { getNextly } from "nextly";
+import { getMediaVariant, getNextly } from "nextly";
 
 import config from "../../../nextly.config";
 
@@ -409,13 +419,11 @@ export default async function Photo() {
   const media = await nextly.media.findByID({ id: "abc-123" });
   if (!media) return null;
 
-  const large = media.sizes?.large;
-
   return (
     <Image
-      src={large?.url ?? media.url}
-      width={large?.width ?? media.width}
-      height={large?.height ?? media.height}
+      src={getMediaVariant(media, "large") ?? media.url}
+      width={media.width ?? 1200}
+      height={media.height ?? 800}
       alt={media.altText ?? ""}
     />
   );

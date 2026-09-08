@@ -1,8 +1,8 @@
 {
   "coverage": {
     "pages": 49,
-    "samples": 328,
-    "compiled": 197
+    "samples": 329,
+    "compiled": 198
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -158,8 +158,8 @@
       "compiled": 1
     },
     "docs/plugins/form-builder.mdx": {
-      "samples": 22,
-      "compiled": 17
+      "samples": 23,
+      "compiled": 18
     },
     "docs/plugins/index.mdx": {
       "samples": 6,
@@ -204,13 +204,13 @@
   },
   "pages": {
     "docs/getting-started/quick-start.mdx": 1,
-    "docs/guides/media-storage.mdx": 2,
+    "docs/guides/media-storage.mdx": 1,
     "docs/guides/routing-and-seo.mdx": 8,
     "docs/plugins/admin-ui.mdx": 2,
     "docs/plugins/auth.mdx": 3,
     "docs/plugins/author-guide.mdx": 3,
     "docs/plugins/distribution.mdx": 1,
-    "docs/plugins/form-builder.mdx": 9,
+    "docs/plugins/form-builder.mdx": 6,
     "docs/plugins/index.mdx": 7,
     "docs/plugins/lifecycle.mdx": 2,
     "docs/database/mysql.mdx": 3,
@@ -218,11 +218,15 @@
   },
   "findings": {
     "docs/getting-started/quick-start.mdx": {
-      "#1 error TS2769: No overload matches this call. Overload 1 of 4, '(value: string | number | Date): Date', gave the following error. Argument of type 'unknown' is not assignable to parameter of type 'string | number | Date'. Overload 2 of 4, '(value: string | number): Date', gave the following error. Argument of type 'unknown' is not assignable to parameter of type 'string | number'.": 1
+      "#1 error TS2769: No overload matches this call. Overload 1 of 4, '(value: string | number | Date): Date', gave the following error. Argument of type 'unknown' is not assignable to parameter of type 'string | number | Date'. Overload 2 of 4, '(value: string | number): Date', gave the following error. Argument of type 'unknown' is not assignable to parameter of type 'string | number'.": 1,
+      "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
+      "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
+      "suppressed #2 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
+      "suppressed #2 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
+      "suppressed #4 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 2
     },
     "docs/guides/media-storage.mdx": {
-      "#10 error TS2353: Object literal may only specify known properties, and 'media' does not exist in type 'NextlyConfig'.": 1,
-      "#11 error TS2551: Property 'sizes' does not exist on type 'MediaFile'. Did you mean 'size'?": 1
+      "#10 error TS2353: Object literal may only specify known properties, and 'media' does not exist in type 'NextlyConfig'.": 1
     },
     "docs/guides/routing-and-seo.mdx": {
       "#0 error TS2304: Cannot find name 'Post'.": 1,
@@ -255,11 +259,9 @@
       "#0 error TS2304: Cannot find name 'Posts'.": 1,
       "#0 error TS2304: Cannot find name 'Users'.": 1,
       "#0 error TS2304: Cannot find name 'Media'.": 1,
-      "#15 error TS2304: Cannot find name 'secret'.": 1,
-      "#15 error TS2304: Cannot find name 'req'.": 2,
-      "#19 error TS2304: Cannot find name 'Posts'.": 1,
-      "#19 error TS2304: Cannot find name 'Users'.": 1,
-      "#19 error TS2304: Cannot find name 'Media'.": 1
+      "#20 error TS2304: Cannot find name 'Posts'.": 1,
+      "#20 error TS2304: Cannot find name 'Users'.": 1,
+      "#20 error TS2304: Cannot find name 'Media'.": 1
     },
     "docs/plugins/index.mdx": {
       "#0 error TS2304: Cannot find name 'Posts'.": 1,
@@ -268,7 +270,8 @@
       "#1 error TS2304: Cannot find name 'Posts'.": 1,
       "#1 error TS2304: Cannot find name 'Users'.": 1,
       "#1 error TS2304: Cannot find name 'Media'.": 1,
-      "#2 error TS2304: Cannot find name 'MyCollection'.": 1
+      "#2 error TS2304: Cannot find name 'MyCollection'.": 1,
+      "suppressed #3 error TS2339: Property 'id' does not exist on type '{}'.": 1
     },
     "docs/plugins/lifecycle.mdx": {
       "#1 error TS2304: Cannot find name 'a'.": 1,
@@ -281,6 +284,15 @@
     },
     "docs/guides/isr-caching.mdx": {
       "#4 error TS18004: No value exists in scope for the shorthand property 'data'. Either declare one or provide an initializer.": 1
+    },
+    "docs/api-reference/direct-api.mdx": {
+      "suppressed #34 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
+      "suppressed #34 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
+      "suppressed #34 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1
+    },
+    "docs/getting-started/index.mdx": {
+      "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
+      "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1
     }
   }
 }
