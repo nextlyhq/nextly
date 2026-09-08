@@ -3413,6 +3413,103 @@ describe("a saved DESCENDANT of an inserted root", () => {
     ).toBe("shared-1");
   });
 
+  it("restores an id two records AGREE about", () => {
+    // One insert stamps its rename map onto every root that references the
+    // renamed id, so saving two of those roots brings two records saying the
+    // same thing. Discarding on the count alone would store the page-specific
+    // id for a run whose records agree about it perfectly.
+    const record = {
+      from: "pattern",
+      id: "hero-pattern",
+      digest: "d",
+      renamed: { hero: "hero-1" },
+    };
+    const doc = page([
+      node("linkA", {
+        origin: record,
+        attributes: { "aria-describedby": "hero-1" },
+        props: { mark: "linkA" },
+      } as Partial<BlockNode>),
+      node("linkB", {
+        origin: record,
+        attributes: { "aria-describedby": "hero-1" },
+        props: { mark: "linkB" },
+      } as Partial<BlockNode>),
+      node("elsewhere", { cssId: "hero-1" }),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["linkA", "linkB"], target, anyParent)
+    ).document;
+
+    expect(
+      marked([...saved.nodes], "linkA").attributes?.["aria-describedby"]
+    ).toBe("hero");
+    expect(
+      marked([...saved.nodes], "linkB").attributes?.["aria-describedby"]
+    ).toBe("hero");
+  });
+
+  it("saves past a rename ENTRY that refuses to be read", () => {
+    // A validated record can still be a Proxy whose indexed reads throw, and
+    // an ordinary `renamed[was]` runs exactly the trap the validation avoided.
+    const renamed = new Proxy(
+      { pricing: "pricing-1" },
+      {
+        get(store, key) {
+          if (typeof key === "string" && key !== "constructor") {
+            throw new Error("the entry is not for reading");
+          }
+          return Reflect.get(store, key);
+        },
+      }
+    );
+    const doc = page([
+      withStoredOrigin(node("sibling"), {
+        from: "pattern",
+        id: "p",
+        digest: "d",
+        renamed,
+      }),
+      node("mine", { cssId: "hero", props: { mark: "target" } }),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["mine"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("hero");
+  });
+
+  it("saves past a sibling whose slots refuse to be read", () => {
+    // The scope walk reaches every node, and the shared walk descends by
+    // reading `slots` — so a node that will not answer took a valid save out.
+    const hostile = {} as BlockNode;
+    Object.defineProperties(hostile, {
+      id: { value: "hostile", enumerable: true },
+      type: { value: "core/box", enumerable: true },
+      version: { value: 1, enumerable: true },
+      props: { value: {}, enumerable: true },
+      slots: {
+        get() {
+          throw new Error("the slots are not for reading");
+        },
+        enumerable: true,
+        configurable: true,
+      },
+    });
+    const doc = page([
+      hostile,
+      node("mine", { cssId: "hero", props: { mark: "target" } }),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["mine"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("hero");
+  });
+
   it("keeps every id when no ancestor was ever inserted from a pattern", () => {
     // The control for all three above: without a record in scope there is
     // nothing to put back, and an authored id is the author's to keep.

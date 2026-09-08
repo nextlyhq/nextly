@@ -110,9 +110,30 @@ function takeNext(
   return undefined;
 }
 
+/**
+ * A node's slot record, or nothing when it will not say.
+ *
+ * A node reaching this walk may be a Proxy, and a `slots` getter that throws is
+ * as much a fact about untrusted stored input as a slot holding a string is. A
+ * node that will not answer has nowhere for the walk to go, which is the same
+ * answer as having no slots at all.
+ */
+function slotsOf(block: BlockNode): BlockNode["slots"] {
+  try {
+    return block.slots;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Queue a node's slot children so they are read before the next sibling. */
-function pushSlots(stack: Frame[], block: BlockNode, depth: number): void {
-  const lists = Object.values(block.slots ?? {});
+function pushSlots(
+  stack: Frame[],
+  block: BlockNode,
+  slots: NonNullable<BlockNode["slots"]>,
+  depth: number
+): void {
+  const lists = Object.values(slots);
   // Reversed so the first slot is read first: this is a pre-order walk, and a
   // caller reading a document in document order would otherwise see it mirrored
   // slot by slot.
@@ -160,10 +181,19 @@ export function walkForest(
 
     // Asking to descend into something with no slots is not an error; it simply
     // has nowhere to go. Checked here so no caller has to.
-    if (!isDescendable(node) || cycle || !node.slots) continue;
+    //
+    // Read ONCE, and defensively. A persisted forest arrives unvalidated and a
+    // node can be a Proxy whose `slots` getter throws — the same untrusted
+    // input the non-array check below is about, one step earlier. Reading it
+    // twice would also run such a getter twice and could see two answers.
+    if (!isDescendable(node) || cycle) continue;
+    // Falsy rather than `undefined`: a stored `slots` can be `null`, and the
+    // original read tested the value itself for exactly that reason.
+    const slots = slotsOf(node);
+    if (!slots) continue;
 
     onPath.add(node);
     stack.push({ kind: "leave", node });
-    pushSlots(stack, node, depth);
+    pushSlots(stack, node, slots, depth);
   }
 }

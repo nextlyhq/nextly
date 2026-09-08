@@ -3422,7 +3422,10 @@ function renamedIn(
   // number is a document that should not exist, and reading one is how a
   // planner returns a native error where it promised a plan or a refusal.
   for (const was of ownKeys(renamed)) {
-    const now: unknown = renamed[was];
+    // The ENTRY, through the same descriptor read the record's own fields use.
+    // A validated record can still be a Proxy whose indexed reads throw, and
+    // `renamed[was]` runs exactly the trap the validation avoided.
+    const now: unknown = storedField(renamed, was);
     if (typeof now === "string") map.set(was, now);
   }
   return map;
@@ -3518,34 +3521,27 @@ function restoredDomIds(
   for (const renamed of survey.applicable) {
     for (const [was, now] of renamed) {
       if (governs(renamed, now, survey.holders, referencing)) {
-        claim(claims, now, was, renamed);
+        claim(claims, now, was);
       }
     }
   }
   return settled(claims);
 }
 
-/** What the records in a selection say one current id used to be called. */
+/**
+ * What the records in a selection say one current id used to be called.
+ *
+ * The spellings and not the records offering them, because agreement is what
+ * decides: two records naming one id are a conflict only when they disagree.
+ */
 interface Claim {
-  /** Every source spelling offered for it. */
   readonly was: Set<string>;
-  /** Every record offering one. */
-  readonly scopes: Set<ReadonlyMap<string, string>>;
 }
 
-function claim(
-  claims: Map<string, Claim>,
-  now: string,
-  was: string,
-  renamed: ReadonlyMap<string, string>
-): void {
+function claim(claims: Map<string, Claim>, now: string, was: string): void {
   const found = claims.get(now);
-  if (found === undefined) {
-    claims.set(now, { was: new Set([was]), scopes: new Set([renamed]) });
-    return;
-  }
-  found.was.add(was);
-  found.scopes.add(renamed);
+  if (found === undefined) claims.set(now, { was: new Set([was]) });
+  else found.was.add(was);
 }
 
 /**
@@ -3566,7 +3562,12 @@ function claim(
 function settled(claims: ReadonlyMap<string, Claim>): Map<string, string> {
   const restore = new Map<string, string>();
   for (const [now, entry] of claims) {
-    if (entry.scopes.size !== 1 || entry.was.size !== 1) continue;
+    // DISAGREEING, not merely plural. One insert stamps its rename map onto
+    // every root that references the renamed id, so saving two of those roots
+    // brings two records that say the same thing — and discarding on the count
+    // alone would store the page-specific id for a run whose records agree
+    // about it perfectly.
+    if (entry.was.size !== 1) continue;
     const [only] = entry.was;
     if (only !== undefined) restore.set(now, only);
   }
@@ -3730,9 +3731,9 @@ function renameScopes(
     // none of them should inherit its renames — and only a whole pattern record
     // supplies a map, so every other case stops inheritance with an empty one.
     //
-    // Trusting the record to decide the boundary is the mistake this has now
-    // been three times: the test kept being for the thing that CARRIES the data
-    // rather than the thing that BOUNDS the scope.
+    // The test is for what BOUNDS the scope, not for what CARRIES the data: a
+    // record's contents decide what can be put back, and its PRESENCE decides
+    // whether this node is somewhere the ancestor's rename is about at all.
     //
     // The untrusted case is UNREACHABLE from here today and the test is kept
     // anyway: a selection holding a malformed record is refused by the shape
