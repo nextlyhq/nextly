@@ -1,8 +1,8 @@
 {
   "coverage": {
     "pages": 49,
-    "samples": 327,
-    "compiled": 187
+    "samples": 328,
+    "compiled": 188
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": 7,
@@ -38,7 +38,7 @@
     "docs/localization/index.mdx": 3,
     "docs/page-builder/index.mdx": 3,
     "docs/permissions/index.mdx": 3,
-    "docs/plugins/admin-ui.mdx": 11,
+    "docs/plugins/admin-ui.mdx": 12,
     "docs/plugins/api-reference.mdx": 14,
     "docs/plugins/auth.mdx": 3,
     "docs/plugins/author-guide.mdx": 5,
@@ -59,6 +59,7 @@
     "docs/getting-started/quick-start.mdx": 1,
     "docs/guides/media-storage.mdx": 2,
     "docs/guides/routing-and-seo.mdx": 8,
+    "docs/plugins/admin-ui.mdx": 2,
     "docs/plugins/auth.mdx": 3,
     "docs/plugins/author-guide.mdx": 3,
     "docs/plugins/distribution.mdx": 1,
