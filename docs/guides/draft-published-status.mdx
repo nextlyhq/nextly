@@ -122,6 +122,8 @@ const published = await nextly.find({
 const all = await nextly.find({ collection: "posts" });
 ```
 
+The `nextly` proxy above assumes Nextly is already initialised in the process. A scaffolded app does that in `src/instrumentation.ts`, which calls `createRegister(config)()` before the first request, so a public page can import the proxy directly. In a process where that has not run -- a standalone script, or an app that removed the instrumentation hook -- the proxy throws `Nextly services not initialized`; use `await getNextly({ config })` there, which initialises rather than assuming.
+
 The query shape (`{ status: { equals: "published" } }`) works identically across all three dialects. The system column is indexed, so filtering by status is fast even on large tables.
 
 ## Admin behaviour

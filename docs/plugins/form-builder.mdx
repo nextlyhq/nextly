@@ -252,7 +252,7 @@ assertValidFormConfig(contactForm);
 
 ## Form Submissions
 
-The handlers below take a `{ pluginContext, pluginConfig }` context. `pluginContext` is the `ctx` your code already receives from the plugin system -- for example a [plugin route handler](/docs/plugins/routes)'s `(req, ctx) => ...`, or your own plugin's `init(ctx)`. `pluginConfig` is the object `formBuilder()` returned (`fb.config`), or `getFormBuilderConfig(pluginContext)` if you only have the context.
+The handlers below take a `{ pluginContext, pluginConfig }` context. `pluginContext` is the `ctx` your code already receives from the plugin system -- for example a [plugin route handler](/docs/plugins/routes)'s `(req, ctx) => ...`, or your own plugin's `init(ctx)`. `pluginConfig` is the object `formBuilder()` returned: keep the result and use `fb.config`. Note that `getFormBuilderConfig(ctx)` is **not** an alternative from another plugin's context — the resolved config is written onto the form-builder's own context during its `init`, and `initializePlugins` gives every plugin a separate one, so that call returns `undefined` anywhere else.
 
 ### Handling Submissions
 
@@ -260,7 +260,7 @@ Use the `submitForm` handler to process submissions server-side. It runs the ful
 
 ```typescript
 import { submitForm } from '@nextlyhq/plugin-form-builder';
-import type { PluginContext } from 'nextly';
+import type { PluginContext } from '@nextlyhq/plugin-sdk';
 import type { ResolvedFormBuilderConfig } from '@nextlyhq/plugin-form-builder';
 
 declare const request: Request;
@@ -297,7 +297,7 @@ You can validate data without creating a submission:
 
 ```typescript
 import { validateSubmission } from '@nextlyhq/plugin-form-builder';
-import type { PluginContext } from 'nextly';
+import type { PluginContext } from '@nextlyhq/plugin-sdk';
 import type { ResolvedFormBuilderConfig } from '@nextlyhq/plugin-form-builder';
 
 declare const pluginContext: PluginContext;
@@ -326,7 +326,7 @@ Admins can also add internal notes to any submission -- these are not visible to
 
 ```typescript
 import { getFormSubmissionStats } from '@nextlyhq/plugin-form-builder';
-import type { PluginContext } from 'nextly';
+import type { PluginContext } from '@nextlyhq/plugin-sdk';
 import type { ResolvedFormBuilderConfig } from '@nextlyhq/plugin-form-builder';
 
 declare const pluginContext: PluginContext;
@@ -631,7 +631,6 @@ export async function POST(request: Request) {
 ```
 
 
-Add `contactRoutePlugin` to `plugins` alongside `fb.plugin`, and the form now posts to `/api/plugins/@mysite/contact-route/submit`.
 
 ## Next Steps
 

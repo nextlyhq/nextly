@@ -5,55 +5,202 @@
     "compiled": 188
   },
   "samplesPerPage": {
-    "docs/admin/branding.mdx": 7,
-    "docs/admin/customization.mdx": 4,
-    "docs/api-reference/block-document-format.mdx": 3,
-    "docs/api-reference/direct-api.mdx": 35,
-    "docs/api-reference/rest-api.mdx": 3,
-    "docs/configuration/collections.mdx": 9,
-    "docs/configuration/environment.mdx": 1,
-    "docs/configuration/field-groups.mdx": 6,
-    "docs/configuration/fields.mdx": 44,
-    "docs/configuration/index.mdx": 1,
-    "docs/configuration/media-upload-security.mdx": 1,
-    "docs/configuration/nextly-config.mdx": 25,
-    "docs/configuration/singles.mdx": 5,
-    "docs/database/mysql.mdx": 8,
-    "docs/database/postgres.mdx": 6,
-    "docs/database/sqlite.mdx": 5,
-    "docs/database/support.mdx": 1,
-    "docs/getting-started/index.mdx": 2,
-    "docs/getting-started/installation.mdx": 5,
-    "docs/getting-started/project-structure.mdx": 2,
-    "docs/getting-started/quick-start.mdx": 5,
-    "docs/guides/authentication.mdx": 6,
-    "docs/guides/deployment.mdx": 2,
-    "docs/guides/draft-published-status.mdx": 4,
-    "docs/guides/email.mdx": 8,
-    "docs/guides/isr-caching.mdx": 5,
-    "docs/guides/media-storage.mdx": 13,
-    "docs/guides/production-migrations.mdx": 1,
-    "docs/guides/routing-and-seo.mdx": 10,
-    "docs/jobs/index.mdx": 2,
-    "docs/localization/index.mdx": 3,
-    "docs/page-builder/index.mdx": 3,
-    "docs/permissions/index.mdx": 3,
-    "docs/plugins/admin-ui.mdx": 12,
-    "docs/plugins/api-reference.mdx": 14,
-    "docs/plugins/auth.mdx": 3,
-    "docs/plugins/author-guide.mdx": 5,
-    "docs/plugins/distribution.mdx": 1,
-    "docs/plugins/form-builder.mdx": 22,
-    "docs/plugins/index.mdx": 6,
-    "docs/plugins/lifecycle.mdx": 5,
-    "docs/plugins/permissions.mdx": 3,
-    "docs/plugins/routes.mdx": 3,
-    "docs/plugins/schema.mdx": 3,
-    "docs/plugins/services.mdx": 4,
-    "docs/plugins/testing.mdx": 1,
-    "docs/preview/index.mdx": 5,
-    "docs/versions/index.mdx": 1,
-    "docs/webhooks/retention.mdx": 2
+    "docs/admin/branding.mdx": {
+      "samples": 7,
+      "compiled": 1
+    },
+    "docs/admin/customization.mdx": {
+      "samples": 4,
+      "compiled": 4
+    },
+    "docs/api-reference/block-document-format.mdx": {
+      "samples": 3,
+      "compiled": 3
+    },
+    "docs/api-reference/direct-api.mdx": {
+      "samples": 35,
+      "compiled": 28
+    },
+    "docs/api-reference/rest-api.mdx": {
+      "samples": 3,
+      "compiled": 2
+    },
+    "docs/configuration/collections.mdx": {
+      "samples": 9,
+      "compiled": 3
+    },
+    "docs/configuration/environment.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
+    "docs/configuration/field-groups.mdx": {
+      "samples": 6,
+      "compiled": 6
+    },
+    "docs/configuration/fields.mdx": {
+      "samples": 44,
+      "compiled": 3
+    },
+    "docs/configuration/index.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
+    "docs/configuration/media-upload-security.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
+    "docs/configuration/nextly-config.mdx": {
+      "samples": 25,
+      "compiled": 8
+    },
+    "docs/configuration/singles.mdx": {
+      "samples": 5,
+      "compiled": 3
+    },
+    "docs/database/mysql.mdx": {
+      "samples": 8,
+      "compiled": 6
+    },
+    "docs/database/postgres.mdx": {
+      "samples": 6,
+      "compiled": 5
+    },
+    "docs/database/sqlite.mdx": {
+      "samples": 5,
+      "compiled": 3
+    },
+    "docs/database/support.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
+    "docs/getting-started/index.mdx": {
+      "samples": 2,
+      "compiled": 2
+    },
+    "docs/getting-started/installation.mdx": {
+      "samples": 5,
+      "compiled": 5
+    },
+    "docs/getting-started/project-structure.mdx": {
+      "samples": 2,
+      "compiled": 2
+    },
+    "docs/getting-started/quick-start.mdx": {
+      "samples": 5,
+      "compiled": 5
+    },
+    "docs/guides/authentication.mdx": {
+      "samples": 6,
+      "compiled": 5
+    },
+    "docs/guides/deployment.mdx": {
+      "samples": 2,
+      "compiled": 2
+    },
+    "docs/guides/draft-published-status.mdx": {
+      "samples": 4,
+      "compiled": 3
+    },
+    "docs/guides/email.mdx": {
+      "samples": 8,
+      "compiled": 7
+    },
+    "docs/guides/isr-caching.mdx": {
+      "samples": 5,
+      "compiled": 4
+    },
+    "docs/guides/media-storage.mdx": {
+      "samples": 13,
+      "compiled": 7
+    },
+    "docs/guides/production-migrations.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
+    "docs/guides/routing-and-seo.mdx": {
+      "samples": 10,
+      "compiled": 8
+    },
+    "docs/jobs/index.mdx": {
+      "samples": 2,
+      "compiled": 2
+    },
+    "docs/localization/index.mdx": {
+      "samples": 3,
+      "compiled": 3
+    },
+    "docs/page-builder/index.mdx": {
+      "samples": 3,
+      "compiled": 3
+    },
+    "docs/permissions/index.mdx": {
+      "samples": 3,
+      "compiled": 2
+    },
+    "docs/plugins/admin-ui.mdx": {
+      "samples": 12,
+      "compiled": 7
+    },
+    "docs/plugins/api-reference.mdx": {
+      "samples": 14,
+      "compiled": 1
+    },
+    "docs/plugins/auth.mdx": {
+      "samples": 3,
+      "compiled": 3
+    },
+    "docs/plugins/author-guide.mdx": {
+      "samples": 5,
+      "compiled": 4
+    },
+    "docs/plugins/distribution.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
+    "docs/plugins/form-builder.mdx": {
+      "samples": 22,
+      "compiled": 17
+    },
+    "docs/plugins/index.mdx": {
+      "samples": 6,
+      "compiled": 5
+    },
+    "docs/plugins/lifecycle.mdx": {
+      "samples": 5,
+      "compiled": 1
+    },
+    "docs/plugins/permissions.mdx": {
+      "samples": 3,
+      "compiled": 1
+    },
+    "docs/plugins/routes.mdx": {
+      "samples": 3,
+      "compiled": 0
+    },
+    "docs/plugins/schema.mdx": {
+      "samples": 3,
+      "compiled": 1
+    },
+    "docs/plugins/services.mdx": {
+      "samples": 4,
+      "compiled": 0
+    },
+    "docs/plugins/testing.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
+    "docs/preview/index.mdx": {
+      "samples": 5,
+      "compiled": 4
+    },
+    "docs/versions/index.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
+    "docs/webhooks/retention.mdx": {
+      "samples": 2,
+      "compiled": 1
+    }
   },
   "pages": {
     "docs/getting-started/quick-start.mdx": 1,
@@ -66,5 +213,55 @@
     "docs/plugins/form-builder.mdx": 9,
     "docs/plugins/index.mdx": 7,
     "docs/plugins/lifecycle.mdx": 2
+  },
+  "findings": {
+    "docs/getting-started/quick-start.mdx": {
+      "error TS2769: No overload matches this call. Overload 1 of 4, '(value: string | number | Date): Date', gave the following error. Argument of type 'unknown' is not assignable to parameter of type 'string | number | Date'. Overload 2 of 4, '(value: string | number): Date', gave the following error. Argument of type 'unknown' is not assignable to parameter of type 'string | number'.": 1
+    },
+    "docs/guides/media-storage.mdx": {
+      "error TS2353: Object literal may only specify known properties, and 'media' does not exist in type 'NextlyConfig'.": 1,
+      "error TS2551: Property 'sizes' does not exist on type 'MediaFile'. Did you mean 'size'?": 1
+    },
+    "docs/guides/routing-and-seo.mdx": {
+      "error TS2304: Cannot find name 'Post'.": 2,
+      "error TS2304: Cannot find name 'Page'.": 3,
+      "error TS2304: Cannot find name 'getPostBySlug'.": 1,
+      "error TS2304: Cannot find name 'services'.": 1,
+      "error TS18004: No value exists in scope for the shorthand property 'baseUrl'. Either declare one or provide an initializer.": 1
+    },
+    "docs/plugins/admin-ui.mdx": {
+      "error TS2304: Cannot find name 'Skeleton'.": 1,
+      "error TS2304: Cannot find name 'Chart'.": 1
+    },
+    "docs/plugins/auth.mdx": {
+      "error TS2304: Cannot find name 'verifyGoogleToken'.": 1,
+      "error TS2304: Cannot find name 'isTotpEnabled'.": 1,
+      "error TS2304: Cannot find name 'verifyTotp'.": 1
+    },
+    "docs/plugins/author-guide.mdx": {
+      "error TS2304: Cannot find name 'MyPluginOptions'.": 1,
+      "error TS2593: Cannot find name 'describe'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.": 1,
+      "error TS2593: Cannot find name 'it'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.": 1
+    },
+    "docs/plugins/distribution.mdx": {
+      "error TS2304: Cannot find name 'myPlugin'.": 1
+    },
+    "docs/plugins/form-builder.mdx": {
+      "error TS2304: Cannot find name 'Posts'.": 2,
+      "error TS2304: Cannot find name 'Users'.": 2,
+      "error TS2304: Cannot find name 'Media'.": 2,
+      "error TS2304: Cannot find name 'secret'.": 1,
+      "error TS2304: Cannot find name 'req'.": 2
+    },
+    "docs/plugins/index.mdx": {
+      "error TS2304: Cannot find name 'Posts'.": 2,
+      "error TS2304: Cannot find name 'Users'.": 2,
+      "error TS2304: Cannot find name 'Media'.": 2,
+      "error TS2304: Cannot find name 'MyCollection'.": 1
+    },
+    "docs/plugins/lifecycle.mdx": {
+      "error TS2304: Cannot find name 'a'.": 1,
+      "error TS2304: Cannot find name 'b'.": 1
+    }
   }
 }

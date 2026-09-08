@@ -1397,12 +1397,21 @@ async function auditDocs() {
       // unmoved, and the page that went quiet is exactly the one nobody would
       // think to look at. Recorded per page, the loss has nowhere to hide.
       perPage: Object.fromEntries(
-        [...new Set(all.map(sample => sample.file))]
-          .sort()
-          .map(file => [
-            file,
-            all.filter(sample => sample.file === file).length,
-          ])
+        [...new Set(all.map(sample => sample.file))].sort().map(file => [
+          file,
+          {
+            samples: all.filter(sample => sample.file === file).length,
+            // Compiled as well as extracted. A fence that stops QUALIFYING
+            // for compilation is still extracted, so tracking only the
+            // extracted count let a page quietly lose its checking while its
+            // sample count stood still.
+            compiled:
+              samples.filter(sample => sample.file === file).length +
+              [...continuedWithoutImports].filter(
+                origin => origin.split("#")[0] === file
+              ).length,
+          },
+        ])
       ),
     },
   };
@@ -1457,6 +1466,33 @@ async function main() {
     [...byFile].map(([file, lines]) => [file, lines.length])
   );
 
+  // What each page is failing ON, not just how many times. A count is a weak
+  // invariant: a change that removes one finding and introduces a different one
+  // leaves it equal, so neither the worse nor the better branch fires and a
+  // newly broken sample is accepted. Identities close that.
+  //
+  // The message alone, without the fence and line it landed on, because those
+  // move whenever a page is edited and a baseline that churns on every edit
+  // stops being read. Absolute paths are stripped for the same reason: they
+  // differ between a laptop and CI.
+  const identity = line =>
+    line
+      .slice(line.indexOf("  ") + 2)
+      .split(ROOT)
+      .join("<root>/")
+      .replace(/\s+/g, " ")
+      .trim();
+  const fingerprint = Object.fromEntries(
+    [...byFile].map(([file, lines]) => {
+      const counts = {};
+      for (const line of lines) {
+        const key = identity(line);
+        counts[key] = (counts[key] ?? 0) + 1;
+      }
+      return [file, counts];
+    })
+  );
+
   if (process.argv.includes("--write-baseline")) {
     // Refuses to record LESS coverage than the baseline already holds, unless
     // told to. Rewriting the baseline after a change is exactly how the
@@ -1465,7 +1501,22 @@ async function main() {
     // and the loss became the new normal — the gate then passed while a page
     // rendered as one long code block. The escape hatch has to be harder to
     // reach than the honest path.
-    const held = readBaseline().coverage ?? {};
+    const heldBaseline = readBaseline();
+    const held = heldBaseline.coverage ?? {};
+    // Per page as well as in aggregate. A loss on one page offset by a gain on
+    // another leaves every total standing, so the aggregate guard waved the
+    // write through and `samplesPerPage` was replaced with the diminished set —
+    // the exact hole per-page tracking exists to close, left open in the one
+    // path that overwrites it.
+    const shrunkPages = Object.entries(
+      heldBaseline.samplesPerPage ?? {}
+    ).filter(([file, was]) => {
+      const now = coverage.perPage[file] ?? { samples: 0, compiled: 0 };
+      return (
+        (now.samples ?? 0) < (was.samples ?? 0) ||
+        (now.compiled ?? 0) < (was.compiled ?? 0)
+      );
+    });
     const shrunk = Object.entries(held).filter(
       ([what, was]) =>
         ({
@@ -1474,7 +1525,10 @@ async function main() {
           compiled: coverage.compiled,
         })[what] < was
     );
-    if (shrunk.length > 0 && !process.argv.includes("--allow-coverage-loss")) {
+    if (
+      (shrunk.length > 0 || shrunkPages.length > 0) &&
+      !process.argv.includes("--allow-coverage-loss")
+    ) {
       console.error(
         "doc samples: this would record LESS coverage than the baseline holds, " +
           "which is what a lost fence looks like. Check that no fence was " +
@@ -1483,6 +1537,11 @@ async function main() {
       );
       for (const [what, was] of shrunk) {
         console.error(`  ${what}: baseline ${String(was)}`);
+      }
+      for (const [file, was] of shrunkPages) {
+        console.error(
+          `  ${file}: baseline ${String(was.samples)} sample(s), ${String(was.compiled)} compiled`
+        );
       }
       process.exit(1);
     }
@@ -1498,6 +1557,7 @@ async function main() {
           },
           samplesPerPage: coverage.perPage,
           pages: counted,
+          findings: fingerprint,
         },
         null,
         2
@@ -1565,9 +1625,13 @@ async function main() {
     }
   }
   for (const [file, was] of Object.entries(recorded.samplesPerPage ?? {})) {
-    const now = coverage.perPage[file] ?? 0;
-    if (now < was) {
-      lost.push(`${file}: was ${String(was)} sample(s), now ${String(now)}`);
+    const now = coverage.perPage[file] ?? { samples: 0, compiled: 0 };
+    for (const what of ["samples", "compiled"]) {
+      if ((now[what] ?? 0) < (was[what] ?? 0)) {
+        lost.push(
+          `${file}: ${what} was ${String(was[what])}, now ${String(now[what] ?? 0)}`
+        );
+      }
     }
   }
   if (lost.length > 0) {
@@ -1577,6 +1641,41 @@ async function main() {
         "was fixed. If the loss is intended, rewrite the baseline and say why.\n"
     );
     for (const line of lost) console.error(`  ${line}`);
+    process.exit(1);
+  }
+
+  // Identity comparison runs first, because it says WHAT changed where a count
+  // only says how much.
+  const held = recorded.findings ?? {};
+  const appeared = [];
+  const gone = [];
+  for (const [file, counts] of Object.entries(fingerprint)) {
+    for (const [message, n] of Object.entries(counts)) {
+      const was = (held[file] ?? {})[message] ?? 0;
+      if (n > was) appeared.push(`${file}: ${message}`);
+    }
+  }
+  for (const [file, counts] of Object.entries(held)) {
+    for (const [message, was] of Object.entries(counts)) {
+      const now = (fingerprint[file] ?? {})[message] ?? 0;
+      if (now < was) gone.push(`${file}: ${message}`);
+    }
+  }
+  if (appeared.length > 0) {
+    console.error(
+      "\ndoc samples: these diagnostics are new. A sample a reader copies has " +
+        "to run, so fix the finding rather than recording it.\n"
+    );
+    for (const line of appeared) console.error(`  ${line}`);
+    process.exit(1);
+  }
+  if (gone.length > 0) {
+    console.error(
+      "\ndoc samples: these diagnostics are gone, which is good news the " +
+        "baseline has not been told. Rewrite it so the gate starts protecting " +
+        "what you fixed.\n"
+    );
+    for (const line of gone) console.error(`  ${line}`);
     process.exit(1);
   }
 
