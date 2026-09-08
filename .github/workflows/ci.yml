@@ -235,13 +235,15 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:docs-claims
 
-      # The integration jobs select packages with a hand-written filter list, so
-      # a package that gains the task and is not added to it runs NOWHERE: the
-      # unit job no longer includes those files and no leg selects them, and
-      # every job stays green because what would have been reported is absent.
-      - name: Integration lane covers every package that declares it
+      # Both lanes select packages with a hand-written filter list, so a package
+      # that gains a test task and is not added to one runs NOWHERE, and every
+      # job stays green because what would have been reported is absent. That is
+      # not hypothetical: `nextly` and `@nextlyhq/admin` sat outside the unit
+      # list with 15623 passing tests between them until this check was widened
+      # to cover `test` as well as `test:integration`.
+      - name: Every test task is run by a lane
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: pnpm check:integration-lane
+        run: pnpm check:test-lanes
 
       # The About line and topic list are repository settings, not files, so every
       # check that reads git's index is blind to them. Reports unverifiable rather
@@ -554,6 +556,13 @@ jobs:
       # silence every suite listed here for no reason, and a failure in
       # one they DO depend on is reported as an attributed `#build` failure
       # here rather than as the type-aware noise the others would produce.
+      # `nextly` and `@nextlyhq/admin` were absent from this list until their
+      # unit baselines were green, and stayed absent after they became green.
+      # Measured on `e6797c5d1`: nextly 907 files / 11562 tests and admin 407 /
+      # 4061, both passing, neither gating. Twelve nextly files ran here by name
+      # in the two steps above, which is 1.3% of its suite; admin ran nowhere.
+      # They cost about 135s together. `nextly` caps itself to three forks for
+      # the contention this step creates, which is why it can join it.
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: >-
@@ -576,6 +585,10 @@ jobs:
           --filter=@nextlyhq/storage-vercel-blob
           --filter=@nextlyhq/telemetry
           --filter=create-nextly-app
+          --filter=nextly
+          --filter=@nextlyhq/admin
+          --filter=@nextlyhq/eslint-plugin
+          --filter=@nextlyhq/module-specifiers
         env:
           TURBO_CACHE_DIR: .turbo
 
