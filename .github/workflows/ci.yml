@@ -570,7 +570,8 @@ jobs:
       # wants to know what CI runs has to parse a shell command out of YAML,
       # which was tried and produced twelve ways to be wrong.
       #
-      # The script selects `./packages/*`, the same idiom Build and Lint above
+      # The script selects `./packages/*` MINUS `nextly`, which has a runner to
+      # itself below; the same location idiom Build and Lint above
       # already use, so a package added there gates on the commit that adds it.
       # It was a written-out list of twenty-two names until `nextly` (907 files,
       # 11562 tests) and `@nextlyhq/admin` (407, 4061) were found passing
@@ -658,6 +659,80 @@ jobs:
       # cancelled job saves nothing. That is not a detail — it is what makes the Playwright cache
       # guard above safe, because an install killed by its step timeout can never
       # persist a half-populated browser cache for later runs to skip.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # `nextly`'s unit suite, on a runner of its own.
+  #
+  # It is 907 files and 11562 tests, and inside the `ci` job's Test step it was
+  # 811s of 1804s — 45% of the work and the critical path on its own. Sharing a
+  # 4-vCPU runner with everything else, it took that step from 3.4 to 15.7
+  # minutes and the whole job from 13.1 to 28.5, which every contributor waits
+  # for on every push.
+  #
+  # `needs: changes` and NOT `needs: ci`, which is the point: this runs beside
+  # the lint, typecheck and build rather than after them, so the wall clock is
+  # the longer of the two jobs instead of their sum.
+  #
+  # WHAT it runs is not written here. `lane:test:nextly` in the root manifest
+  # holds it, `lane:test` excludes the same package, and `check:test-lanes`
+  # asks turbo what each selects — so the two cannot drift into running nextly
+  # twice or not at all.
+  #
+  # A plain job rather than a matrix over package names, deliberately: the lane
+  # check reads the workflow only to confirm the script is NAMED in it, and
+  # `pnpm lane:test:${{ matrix.package }}` would hide that name behind an
+  # expression. A second package moving here is a copy of this job, which is
+  # cheap and stays legible to the check.
+  unit-tests-nextly:
+    name: Unit tests (nextly)
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # Scoped to the JOB like every other `.turbo` cache in these workflows:
+      # this one builds only nextly's dependency subgraph, and an entry keyed on
+      # the commit alone would be read by jobs that built something else.
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `test` dependsOn `^build`, so turbo builds what nextly needs and nothing
+      # else. No separate Build step: this job has one question to answer.
+      - name: Test
+        run: pnpm lane:test:nextly
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Only a job that finished its work publishes what it learned.
       - name: Save Turbo cache
         if: success()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

@@ -8,6 +8,7 @@ import {
   namesScript,
   LANES,
   packagesInPlan,
+  packagesRunTwice,
   packagesWithTask,
   planForScript,
   directLaneCommand,
@@ -49,6 +50,26 @@ describe("packagesInPlan", () => {
 
   it("reports nothing for a plan with no tasks at all", () => {
     expect(packagesInPlan({}, "test")).toEqual([]);
+  });
+});
+
+describe("packagesRunTwice", () => {
+  it("names a package two scripts both run, and which ones", () => {
+    expect(
+      packagesRunTwice([
+        ["lane:test", ["a", "nextly"]],
+        ["lane:test:nextly", ["nextly"]],
+      ])
+    ).toEqual([{ name: "nextly", scripts: ["lane:test", "lane:test:nextly"] }]);
+  });
+
+  it("is silent when the scripts partition the work", () => {
+    expect(
+      packagesRunTwice([
+        ["lane:test", ["a", "b"]],
+        ["lane:test:nextly", ["nextly"]],
+      ])
+    ).toEqual([]);
   });
 });
 
@@ -246,6 +267,15 @@ describe("this repository", () => {
     expect(named.length).toBeGreaterThan(0);
     for (const script of named) {
       expect(isSingleCommand(rootScripts[script])).toBe(true);
+    }
+  });
+
+  it("says whether each lane's scripts partition the work", () => {
+    // A lane whose legs each take a dialect names the same package on purpose,
+    // so this is a declared property rather than one to infer. Asserted as a
+    // boolean so a new lane cannot leave it undefined and be read as false.
+    for (const lane of LANES) {
+      expect(typeof lane.partitioned).toBe("boolean");
     }
   });
 

@@ -53,7 +53,23 @@ export const LANES = [
   {
     task: "test",
     workflow: ".github/workflows/ci.yml",
-    scripts: ["lane:test"],
+    /*
+     * Two scripts, because `nextly` runs on a runner of its own: it is 45% of
+     * the unit work and was the critical path inside one job. They PARTITION
+     * the packages — `lane:test` excludes what `lane:test:nextly` selects — and
+     * turbo answering both is what makes the split safe to state here rather
+     * than to remember: a package dropped from one and not picked up by the
+     * other is reported as unrun, and one claimed by both simply runs twice.
+     */
+    scripts: ["lane:test", "lane:test:nextly"],
+    /*
+     * The two scripts PARTITION the packages, and saying so here is what makes
+     * it enforceable. `lane:test` excludes what `lane:test:nextly` selects; if
+     * that exclusion is ever dropped, nextly runs twice — 13.5 minutes spent
+     * again on every push, and green either way, which is the shape nothing
+     * notices.
+     */
+    partitioned: true,
     /*
      * The playground is an APP, and `test` dependsOn `^build`, so filtering
      * turbo to a leaf that depends on nearly every package would pull the whole
@@ -77,6 +93,12 @@ export const LANES = [
       "lane:test:integration:mysql",
       "lane:test:integration:sqlite",
     ],
+    /*
+     * NOT partitioned, and that is the property rather than an oversight:
+     * `nextly` and `plugin-page-builder` are named by every leg because their
+     * suites take a dialect, so running them three times is the coverage.
+     */
+    partitioned: false,
     direct: [],
   },
 ];
@@ -244,6 +266,26 @@ export function isSingleCommand(script) {
   return !/[;&|\n\r`]/.test(script) && !script.includes("$(");
 }
 
+/**
+ * Packages a partitioned lane runs more than once.
+ *
+ * Only meaningful where the lane declares its scripts to partition the work.
+ * A lane whose legs each take a dialect names the same package on purpose, and
+ * reporting that would be a check failing on every correct run.
+ */
+export function packagesRunTwice(perScript) {
+  const seen = new Map();
+  for (const [script, packages] of perScript) {
+    for (const name of packages) {
+      seen.set(name, [...(seen.get(name) ?? []), script]);
+    }
+  }
+  return [...seen.entries()]
+    .filter(([, scripts]) => scripts.length > 1)
+    .map(([name, scripts]) => ({ name, scripts }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /** Packages that declare the task and no lane runs. */
 export function unrunPackages(declared, covered) {
   const reached = new Set(covered);
@@ -280,7 +322,7 @@ if (invokedDirectly) {
   const failures = [];
   const summary = [];
 
-  for (const { task, workflow, scripts, direct } of LANES) {
+  for (const { task, workflow, scripts, direct, partitioned } of LANES) {
     const declared = packagesWithTask(readManifest, manifestPaths, task);
 
     // The population, before the verdict. An empty side is satisfied by every
@@ -331,6 +373,7 @@ if (invokedDirectly) {
       }
     }
 
+    const perScript = [];
     for (const script of scripts) {
       let plan;
       try {
@@ -347,7 +390,19 @@ if (invokedDirectly) {
         );
         process.exit(2);
       }
-      for (const name of packagesInPlan(plan, task)) covered.add(name);
+      const inThisScript = packagesInPlan(plan, task);
+      perScript.push([script, inThisScript]);
+      for (const name of inThisScript) covered.add(name);
+    }
+
+    if (partitioned) {
+      for (const { name, scripts: both } of packagesRunTwice(perScript)) {
+        failures.push(
+          `${name} is run by ${both.join(" and ")}, and the \`${task}\` lane's ` +
+            "scripts are meant to partition the work. Its suites run twice, " +
+            "green either way, for as long as nobody notices the duration."
+        );
+      }
     }
     /*
      * A `direct` entry is a claim that a script runs the package's WHOLE task,
