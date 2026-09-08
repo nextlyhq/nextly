@@ -140,11 +140,14 @@ const DATA_ARCHETYPE_SET: ReadonlySet<WidgetArchetype> = new Set(
  * a plugin's intent -- and the flexibility to draw something new from a new op
  * is the reason that archetype exists.
  */
-const ARCHETYPE_RESULTS: Record<DataWidgetArchetype, ReadonlySet<WidgetOp>> = {
-  metric: new Set<WidgetOp>(["count"]),
-  table: new Set<WidgetOp>(["list"]),
-  list: new Set<WidgetOp>(["list"]),
-};
+const ARCHETYPE_RESULTS: ReadonlyMap<
+  DataWidgetArchetype,
+  ReadonlySet<WidgetOp>
+> = new Map([
+  ["metric", new Set<WidgetOp>(["count"])],
+  ["table", new Set<WidgetOp>(["list"])],
+  ["list", new Set<WidgetOp>(["list"])],
+]);
 
 /**
  * How many numbers one `stats` card may declare.
@@ -1114,7 +1117,11 @@ export function archetypeResultProblem(
   archetype: WidgetArchetype,
   query: WidgetQuerySpec | undefined
 ): string | undefined {
-  const drawable = ARCHETYPE_RESULTS[archetype as DataWidgetArchetype];
+  // A Map, not an object literal. A contribution's archetype is caller text,
+  // and `"toString"` or `"constructor"` indexes an object literal to something
+  // inherited rather than to `undefined` — the same hole this file's group-key
+  // sibling had, so it gets the container that cannot have it.
+  const drawable = ARCHETYPE_RESULTS.get(archetype as DataWidgetArchetype);
   if (!drawable || !query?.op || drawable.has(query.op)) return undefined;
   return (
     `archetype "${archetype}" draws a ${[...drawable].join(" or ")} result, ` +

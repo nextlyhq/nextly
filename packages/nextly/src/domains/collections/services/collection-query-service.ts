@@ -448,15 +448,6 @@ function ungroupableKind(field: FieldDefinition): string | undefined {
   return undefined;
 }
 
-/** The declared fields of a collection, wherever this record happens to carry them. */
-function declaredFieldsOf(collection: unknown): FieldDefinition[] {
-  const record = collection as Record<string, unknown>;
-  const fromDefinition = (
-    record.schemaDefinition as Record<string, unknown> | undefined
-  )?.fields;
-  return (fromDefinition || record.fields || []) as FieldDefinition[];
-}
-
 /**
  * Refuse a group key that would disclose by grouping, or that names nothing.
  *
@@ -2607,7 +2598,7 @@ export class CollectionQueryService extends BaseService {
     const collectionForFilters = await this.collectionService.getCollection(
       params.collectionName
     );
-    const fieldsForFilters = declaredFieldsOf(collectionForFilters);
+    const fieldsForFilters = collectionFieldsFor(collectionForFilters);
 
     const { cleanedWhere: whereWithoutTranslation } =
       this.extractTranslationStatusFilter(countWhere);
@@ -2844,31 +2835,67 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
-   * The column a group key names, once it has earned the right to name one.
+   * The key this schema carries for a group-by, once it has earned the right
+   * to name one.
    *
-   * Resolved here rather than by the caller so the refusal happens before the
-   * read hooks run, and so a plan that came back allowed carries a column its
-   * consumer does not have to look up a second time.
+   * Answers the KEY rather than the column so the caller reads the column out
+   * of the schema itself, where its type is in scope: a column handed back
+   * through here would arrive widened and need a cast the compiler could not
+   * check.
+   *
+   * Runs before the read hooks. `beforeOperation` and `beforeRead` are
+   * ordinary user code that records audit entries and spends rate-limit
+   * budget, and a key that was never going to be accepted should not make them
+   * run. Collection authorization still comes first: whether the collection is
+   * readable at all outranks what was asked of it.
    */
-  private async assertGroupKeyResolvable(
-    groupBy: string,
-    collectionName: string,
+  private async validatedGroupKey(
+    params: FilteredReadParams,
     schema: Record<string, unknown>
-  ): Promise<void> {
-    // The spelling this schema actually carries. OWN properties only: `schema`
-    // is an ordinary object, so a key like `toString` resolves to a prototype
-    // method rather than `undefined`, which read as a column and failed inside
-    // the query builder as a 500 where the contract promises a named refusal.
+  ): Promise<string | undefined> {
+    const groupBy = params.groupBy;
+    if (groupBy === undefined) return undefined;
+    // OWN properties only: `schema` is an ordinary object, so a key like
+    // `toString` resolves to a prototype method rather than `undefined`, which
+    // read as a column and failed inside the query builder as a 500 where the
+    // contract promises a named refusal.
     const key = [groupBy, toSnakeCase(groupBy)].find(name =>
       Object.prototype.hasOwnProperty.call(schema, name)
     );
     assertGroupKeyUsable(
       groupBy,
       key === undefined ? undefined : schema[key],
-      declaredFieldsOf(
-        await this.collectionService.getCollection(collectionName)
+      collectionFieldsFor(
+        await this.collectionService.getCollection(params.collectionName)
       )
     );
+    return key;
+  }
+
+  /**
+   * The locale chain this read resolves against, and the companion table its
+   * localized values live in.
+   *
+   * Loaded together because the companion is only worth reading when there IS
+   * a chain — or when the caller asked for every locale — and the two are read
+   * as one pair by everything downstream. Mirrors `listEntries` so a
+   * locale-scoped search or filter describes the SAME rows the page returns.
+   */
+  private async localeScope(params: FilteredReadParams): Promise<{
+    localeChain: ReturnType<CollectionQueryService["resolveLocaleChain"]>;
+    companion: Awaited<
+      ReturnType<CollectionFileManager["loadCompanionSchema"]>
+    > | null;
+  }> {
+    const localeChain = this.resolveLocaleChain(
+      params.locale,
+      params.fallbackLocale
+    );
+    const companion =
+      localeChain || params.locale === "all"
+        ? await this.fileManager.loadCompanionSchema(params.collectionName)
+        : null;
+    return { localeChain, companion };
   }
 
   private async resolveReadPlan<TData>(params: FilteredReadParams) {
@@ -2907,28 +2934,21 @@ export class CollectionQueryService extends BaseService {
     // work and leaves a trail of reads that did not happen. Authorization
     // stays first, because whether the collection is readable at all outranks
     // what was asked of it.
-    if (params.groupBy !== undefined) {
-      await this.assertGroupKeyResolvable(
-        params.groupBy,
-        params.collectionName,
-        schema
-      );
-    }
+    // Resolved HERE, where the schema's own column type is in scope, and
+    // carried on the plan. Re-resolving it at the point of use was a second
+    // lookup that had to agree with this one, which is the seam this whole
+    // module exists to remove.
+    const groupKey =
+      params.groupBy === undefined
+        ? undefined
+        : await this.validatedGroupKey(params, schema);
+    const groupColumn = groupKey === undefined ? undefined : schema[groupKey];
 
     const countWhere = await this.hookSettledWhere(params);
 
     this.refuseGeoInAggregate(params.collectionName, countWhere);
 
-    // i18n M4c: mirror listEntries' localized-query context so a locale-scoped search/where
-    // counts the SAME rows the page returns (count==list parity).
-    const localeChain = this.resolveLocaleChain(
-      params.locale,
-      params.fallbackLocale
-    );
-    const companion =
-      localeChain || params.locale === "all"
-        ? await this.fileManager.loadCompanionSchema(params.collectionName)
-        : null;
+    const { localeChain, companion } = await this.localeScope(params);
 
     // Build count query using Drizzle
     // Start with a base count query
@@ -2993,7 +3013,7 @@ export class CollectionQueryService extends BaseService {
     );
     if (restriction) whereConditions.push(restriction);
 
-    return { allowed: true as const, schema, whereConditions };
+    return { allowed: true as const, schema, whereConditions, groupColumn };
   }
 
   async countEntries(
@@ -3080,13 +3100,10 @@ export class CollectionQueryService extends BaseService {
       // `toString` resolves to a prototype method rather than `undefined`,
       // which read as a column and reached the query builder -- answering a
       // 500 where the contract promises a named `FIELD_NOT_GROUPABLE`.
-      // The RULE ran inside the plan, before the read hooks. This is the same
-      // lookup reaching the column that plan already approved, kept beside the
-      // query so the schema's own type reaches the builder.
-      const key = [params.groupBy, toSnakeCase(params.groupBy)].find(name =>
-        Object.prototype.hasOwnProperty.call(schema, name)
-      );
-      const column = key === undefined ? undefined : schema[key];
+      // Resolved and approved by the plan, before the read hooks ran. Read
+      // from there rather than looked up again: two lookups that must agree is
+      // exactly the seam this service keeps removing.
+      const column = plan.groupColumn;
 
       // `Number.isFinite` first, because `Math.trunc`, `Math.max` and
       // `Math.min` all PRESERVE `NaN`: a computed bucket limit that arrived as

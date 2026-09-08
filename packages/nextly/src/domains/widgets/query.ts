@@ -611,13 +611,27 @@ function assertGroupByAgreesWithOp(
   source: WidgetSource,
   groupBy: unknown,
   declared: ReadonlySet<string>,
-  op: WidgetOp
+  op: WidgetOp,
+  select: unknown,
+  sort: unknown
 ): string | undefined {
   if (op !== "groupBy") {
     if (groupBy !== undefined) fail(`groupBy is not valid for op "${op}"`);
     return undefined;
   }
   if (groupBy === undefined) fail('op "groupBy" requires a groupBy field');
+  // `select` and `sort` describe ROWS, and a grouped read returns buckets. The
+  // executor ignores both, so accepting them answers a different question than
+  // the one asked and says nothing about it — the same accepted-and-dropped
+  // shape this guard refuses a group key beside `count` for.
+  if (select !== undefined) {
+    fail(
+      'select is not valid for op "groupBy", which returns buckets and not rows'
+    );
+  }
+  if (sort !== undefined) {
+    fail('sort is not valid for op "groupBy"; buckets are ordered by size');
+  }
   if (typeof groupBy !== "string") fail("groupBy must be a string");
   if (!declared.has(groupBy)) {
     fail(`groupBy references undeclared field "${groupBy}" on "${source.id}"`);
@@ -712,7 +726,14 @@ export function validateReadWidgetQuery(
   assertSelectFieldsDeclared(source, select, declared);
   const sort = assertSortFieldDeclared(source, raw.sort, declared);
   const status = assertValidStatus(raw.status);
-  const groupBy = assertGroupByAgreesWithOp(source, raw.groupBy, declared, op);
+  const groupBy = assertGroupByAgreesWithOp(
+    source,
+    raw.groupBy,
+    declared,
+    op,
+    select,
+    sort
+  );
 
   return {
     source: source.id,

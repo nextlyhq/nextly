@@ -711,6 +711,29 @@ describe("a contributed widget draws the result its archetype can draw", () => {
     expect((thrown as NextlyError).logMessage).toContain("groupBy");
   });
 
+  it("accepts an inherited property name as an archetype instead of crashing on it", () => {
+    // An unknown archetype is admitted on purpose -- it is how a plugin built
+    // against a NEWER core keeps working -- so the right outcome here is a
+    // clean pass, not a refusal.
+    //
+    // The defect was the route to it. A contribution's archetype is caller
+    // text, and indexed into an OBJECT LITERAL `"toString"` answers with a
+    // prototype method rather than `undefined`: the lookup found a truthy
+    // "result set", called `.has()` on a function, and threw a TypeError that
+    // aborted plugin resolution. A `Map` cannot be reached that way, so the
+    // unknown archetype takes the path meant for it.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/proto",
+          archetype: "toString",
+          component: "@acme/p/admin#Proto",
+          query: { source: "collection:posts", op: "count" },
+        }),
+      ])
+    ).not.toThrow();
+  });
+
   it("admits a custom widget carrying the same query", () => {
     // The control, and the point: a component receives the result whole and
     // decides what to draw, so constraining its op would be core guessing at a
