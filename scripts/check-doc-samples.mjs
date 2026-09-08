@@ -669,12 +669,54 @@ export function exportsMapAnswers(exports, subpath) {
 export const REGISTRY_TIMEOUT_MS = 10_000;
 
 const registryCache = new Map();
+
+/**
+ * The manifest of a package this workspace publishes, or null for anything else.
+ *
+ * Read from the checkout rather than cached across runs: the point is to answer
+ * for the code in this commit.
+ */
+const workspaceManifests = new Map();
+function workspaceManifest(pkg) {
+  if (workspaceManifests.size === 0) {
+    for (const dirent of readdirSync(join(ROOT, "packages"), {
+      withFileTypes: true,
+    })) {
+      if (!dirent.isDirectory()) continue;
+      try {
+        const manifest = JSON.parse(
+          readFileSync(
+            join(ROOT, "packages", dirent.name, "package.json"),
+            "utf-8"
+          )
+        );
+        if (manifest.name && !manifest.private) {
+          workspaceManifests.set(manifest.name, manifest);
+        }
+      } catch {
+        // A package without a readable manifest is not one a sample can import.
+      }
+    }
+  }
+  return workspaceManifests.get(pkg) ?? null;
+}
 export async function resolvesForAReader(
   specifier,
   fetchImpl = fetch,
   cache = registryCache
 ) {
   const pkg = packageOf(specifier);
+
+  // A package this workspace publishes is answered from this commit, never the
+  // registry. The registry describes the LAST RELEASE, so a pull request that
+  // removes an export leaves it still advertised there: the local compile
+  // reports TS2307 correctly and this would then classify it as "published but
+  // not installed here" and drop it from the gate. Removing an export a
+  // documented example imports is exactly the breakage this exists to catch,
+  // and it is the one case the registry cannot see.
+  const local = workspaceManifest(pkg);
+  if (local) return exportsMapAnswers(local.exports, subpathOf(specifier));
+
   if (!cache.has(pkg)) {
     let manifest;
     try {
