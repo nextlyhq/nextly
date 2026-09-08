@@ -404,6 +404,25 @@ describe("a group key whose read value is not its stored value", () => {
     expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
   });
 
+  it("refuses it for a TRUSTED caller too", async () => {
+    // A read rule asks who may see a value, so `overrideAccess` has already
+    // answered that. A transform asks what the value IS, and that answer does
+    // not change with the caller: a trusted grouped read would still publish
+    // stored values as labels while a list of the same rows shows the
+    // transformed ones. The two describing the same rows differently is the
+    // defect whatever the caller's trust.
+    const h = await boot([{ region: "emea", secret: "a" }]);
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "maskedRef",
+      overrideAccess: true,
+    });
+
+    expect(res.success).toBe(false);
+    expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
+  });
+
   it("still groups a plain field beside it", async () => {
     // The control: the refusal has to be about the hook, not about the fixture
     // having grown a field.
@@ -454,5 +473,37 @@ describe("a refused group key costs nothing before it is refused", () => {
     } finally {
       unregisterHook("beforeRead", ORDERS, counting);
     }
+  });
+});
+
+describe("which buckets survive the cap does not depend on the adapter", () => {
+  it("ranks the null bucket last when every bucket is the same size", async () => {
+    // Left to the dialect, `ORDER BY <col>` puts NULL last on PostgreSQL and
+    // FIRST on MySQL and SQLite. With a cap and equally sized buckets that is
+    // not a display difference -- the adapters return different bucket SETS,
+    // one dropping the null bucket and the others keeping it while dropping a
+    // real value.
+    const h = await boot([
+      { region: "aaa", secret: "s" },
+      { region: "bbb", secret: "s" },
+    ]);
+    await h.createEntry(
+      { collectionName: ORDERS, overrideAccess: true },
+      { secret: "s" }
+    );
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "region",
+      bucketLimit: 2,
+    });
+
+    expect(res.success).toBe(true);
+    // Every bucket holds one row, so the tie-break decides the set entirely.
+    expect(res.data?.buckets).toEqual([
+      { value: "aaa", count: 1 },
+      { value: "bbb", count: 1 },
+    ]);
+    expect(res.data?.truncated).toBe(true);
   });
 });

@@ -278,20 +278,17 @@ export function assertGroupableField(
   groupBy: string | undefined,
   opts: { overrideAccess?: boolean; frameworkFilter?: boolean } = {}
 ): void {
-  if (opts.overrideAccess || opts.frameworkFilter || !groupBy) return;
+  if (!groupBy) return;
   // Nested paths address the field that OWNS the rule, as `where` does.
   const name = groupBy.split(".")[0];
-  const denied = protectedFields(kind, slug, [name]);
-  if (denied.length > 0) refuse(denied, "groupBy");
 
-  // Buckets come from the STORED column, and an `afterRead` hook is what stands
-  // between that value and the one a read returns. A list applies it per row;
-  // an aggregate has no rows to apply it to, so the raw value would travel as
-  // the bucket's label -- past the one thing that was going to change it.
-  //
-  // Refused only for `groupBy`. A `where` or `sort` on such a field compares
-  // stored values without publishing them, and refusing those would reject the
-  // ordinary case of a hook that formats.
+  // BEFORE the trust check, and independently of it. A read rule asks who may
+  // see a value, so a caller reading with `overrideAccess` has already been
+  // answered. A transform asks what the value IS, and that answer does not
+  // change with the caller: a trusted grouped read would still publish stored
+  // values as labels while a list of the same rows shows the transformed ones,
+  // and the two describing the same rows differently is the defect whatever
+  // the caller's trust.
   const transformed = transformedFields(kind, slug, [name]);
   if (transformed.length > 0) {
     throw NextlyError.validation({
@@ -302,6 +299,10 @@ export function assertGroupableField(
       })),
     });
   }
+
+  if (opts.overrideAccess || opts.frameworkFilter) return;
+  const denied = protectedFields(kind, slug, [name]);
+  if (denied.length > 0) refuse(denied, "groupBy");
 }
 
 /**

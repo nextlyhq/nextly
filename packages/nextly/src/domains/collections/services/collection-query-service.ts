@@ -3116,7 +3116,15 @@ export class CollectionQueryService extends BaseService {
         .groupBy(column)
         // The value breaks ties, so two buckets of equal size come back in a
         // fixed order and the cap cannot drop a different one per request.
-        .orderBy(desc(sql`count(*)`), asc(column))
+        //
+        // NULL is placed explicitly, before the value is compared. Left to the
+        // dialect, `ORDER BY <col>` puts NULL last on PostgreSQL and first on
+        // MySQL and SQLite -- so with a cap and enough equally sized buckets,
+        // the adapters return DIFFERENT BUCKET SETS rather than the same set
+        // in a different order: one drops the null bucket, the others keep it.
+        // `IS NULL` sorts false before true everywhere, which puts the null
+        // bucket last on all three.
+        .orderBy(desc(sql`count(*)`), sql`${column} IS NULL`, asc(column))
         .limit(cap + 1);
 
       return {
