@@ -99,6 +99,35 @@ function spellings(name: string): string[] {
   return [...new Set([name, toCamelCase(name), toSnakeCase(name)])];
 }
 
+/**
+ * Whether a read hands back something other than what the column stores.
+ *
+ * `afterRead` runs per ROW on the way out, so at query time there is no row to
+ * judge and "does this hook mask the value" is not yet answerable -- the same
+ * position `carriesReadRule` is in, and it gets the same conservative answer.
+ * A hook that merely formats is refused alongside one that masks, because the
+ * two are indistinguishable from here and guessing wrong on the second
+ * publishes the value the hook exists to withhold.
+ */
+function transformsOnRead(fn: FieldFunctions | undefined): boolean {
+  if (!fn) return false;
+  if ((fn.hooks?.afterRead?.length ?? 0) > 0) return true;
+  return Object.values(fn.fields ?? {}).some(transformsOnRead);
+}
+
+/** Field names whose stored value is not the value a read returns. */
+function transformedFields(
+  kind: EntityKind,
+  slug: string,
+  names: Iterable<string>
+): string[] {
+  const fns = getFieldFunctions(kind, slug);
+  if (!fns) return [];
+  return [...names]
+    .filter(name => spellings(name).some(n => transformsOnRead(fns[n])))
+    .sort();
+}
+
 /** Field names the caller may not use to select or order rows. */
 function protectedFields(
   kind: EntityKind,
@@ -254,6 +283,25 @@ export function assertGroupableField(
   const name = groupBy.split(".")[0];
   const denied = protectedFields(kind, slug, [name]);
   if (denied.length > 0) refuse(denied, "groupBy");
+
+  // Buckets come from the STORED column, and an `afterRead` hook is what stands
+  // between that value and the one a read returns. A list applies it per row;
+  // an aggregate has no rows to apply it to, so the raw value would travel as
+  // the bucket's label -- past the one thing that was going to change it.
+  //
+  // Refused only for `groupBy`. A `where` or `sort` on such a field compares
+  // stored values without publishing them, and refusing those would reject the
+  // ordinary case of a hook that formats.
+  const transformed = transformedFields(kind, slug, [name]);
+  if (transformed.length > 0) {
+    throw NextlyError.validation({
+      errors: transformed.map(field => ({
+        path: `groupBy.${field}`,
+        code: "FIELD_NOT_GROUPABLE",
+        message: `The field "${field}" is transformed when it is read, so its stored value is not the one a read returns. Grouping would publish the stored value as a bucket label, past the hook that changes it.`,
+      })),
+    });
+  }
 }
 
 /**

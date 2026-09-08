@@ -73,6 +73,13 @@ async function boot(
           // their keys ordered differently are one bucket under jsonb and two
           // under SQLite.
           json({ name: "payload" }),
+          // Masked on the way out by a hook. A list applies it per row; an
+          // aggregate has no rows to apply it to, so the STORED value would
+          // travel as the bucket label past the thing that changes it.
+          text({
+            name: "maskedRef",
+            hooks: { afterRead: [() => "****"] },
+          }),
           // A readable top-level column that SHARES a name with a password
           // nested inside a group. The nested name is scoped to its container,
           // so this one must stay groupable.
@@ -374,5 +381,36 @@ describe("a group key that is not a scalar column of this table", () => {
 
     expect(res.success).toBe(true);
     expect(res.data?.buckets).toHaveLength(1);
+  });
+});
+
+describe("a group key whose read value is not its stored value", () => {
+  it("refuses a field an afterRead hook transforms", async () => {
+    // Conservative, like the read-rule guard beside it: a hook runs per ROW, so
+    // at query time there is no row to judge and "does it mask" is not yet
+    // answerable. Refusing any field that CAN transform is the same answer that
+    // question already gets one guard over.
+    const h = await boot([{ region: "emea", secret: "a" }]);
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "maskedRef",
+    });
+
+    expect(res.success).toBe(false);
+    expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
+  });
+
+  it("still groups a plain field beside it", async () => {
+    // The control: the refusal has to be about the hook, not about the fixture
+    // having grown a field.
+    const h = await boot([{ region: "emea", secret: "a" }]);
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "region",
+    });
+
+    expect(res.success).toBe(true);
   });
 });

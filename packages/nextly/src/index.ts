@@ -508,6 +508,7 @@ export {
   type WidgetSetting,
   type WidgetStatCell,
   type WidgetQuery,
+  type WidgetQuerySpec,
   type WidgetSize,
   type WidgetChrome,
   type WidgetHeight,

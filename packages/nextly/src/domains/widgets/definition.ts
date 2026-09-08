@@ -1110,7 +1110,7 @@ function validateCells(d: Partial<WidgetDefinition>): void {
  * Answers a reason rather than throwing, like {@link querylessQueryProblem}
  * beside it, so the caller attaches the widget id once for every rule.
  */
-function archetypeResultProblem(
+export function archetypeResultProblem(
   archetype: WidgetArchetype,
   query: WidgetQuerySpec | undefined
 ): string | undefined {

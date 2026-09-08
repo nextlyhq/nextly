@@ -681,3 +681,52 @@ describe("the serializer cannot publish what boot refused", () => {
     expect(() => JSON.stringify(meta)).not.toThrow();
   });
 });
+
+describe("a contributed widget draws the result its archetype can draw", () => {
+  it("refuses a metric contributed with a grouped query", () => {
+    // The registry already refused this pairing; contributions reach the admin
+    // through `validatedAdminWidgets` instead, so the guarantee had to be
+    // applied to BOTH doors or plugin authors would get neither the compile
+    // error nor the boot one -- and the card would register, execute, and be
+    // replaced by the body's "expected a count" message on every load.
+    let thrown: unknown;
+    try {
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/by-status",
+          archetype: "metric",
+          query: {
+            source: "collection:posts",
+            op: "groupBy",
+            groupBy: "status",
+          },
+        }),
+      ]);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(NextlyError.is(thrown)).toBe(true);
+    expect((thrown as NextlyError).logMessage).toContain("acme/by-status");
+    expect((thrown as NextlyError).logMessage).toContain("groupBy");
+  });
+
+  it("admits a custom widget carrying the same query", () => {
+    // The control, and the point: a component receives the result whole and
+    // decides what to draw, so constraining its op would be core guessing at a
+    // plugin's intent.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/chart",
+          component: "@acme/p/admin#Chart",
+          query: {
+            source: "collection:posts",
+            op: "groupBy",
+            groupBy: "status",
+          },
+        }),
+      ])
+    ).not.toThrow();
+  });
+});
