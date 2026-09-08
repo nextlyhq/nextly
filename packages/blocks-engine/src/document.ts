@@ -264,15 +264,63 @@ export type OriginReading = "whole" | "malformed" | "computed" | "unreadable";
  * mattering, with nothing to keep in step.
  */
 export function readBlockOrigin(value: unknown): OriginReading {
+  return readOrigin(value).reading;
+}
+
+/** One record's reading, with what a whole pattern record turned out to say. */
+interface OriginRead {
+  readonly reading: OriginReading;
+  /** The rename map of a whole PATTERN record, and nothing for every other. */
+  readonly renamed?: ReadonlyMap<string, string>;
+}
+
+/**
+ * The one reading of a stored provenance record.
+ *
+ * Both published questions come from here rather than asking the record twice.
+ * A reader that validated a record and then went back for its contents ran the
+ * record's own reflection a second time — measured, a `renamed` Proxy that
+ * permits one `ownKeys` and throws on the next crashed a planner AFTER the
+ * guard had passed it — and it also spelled the extraction rules a second time,
+ * beside the validator that already knows them.
+ *
+ * So validating and reading are one pass: what a record is, and what it holds
+ * if it is anything, cannot disagree because there is nowhere for them to.
+ */
+function readOrigin(value: unknown): OriginRead {
   try {
-    if (!isPlainRecord(value)) return "malformed";
+    if (!isPlainRecord(value)) return { reading: "malformed" };
     const reader = storedReader(value);
     const whole = wholeOrigin(reader.read);
-    if (reader.computed()) return "computed";
-    return whole ? "whole" : "malformed";
+    if (reader.computed()) return { reading: "computed" };
+    if (whole === undefined) return { reading: "malformed" };
+    return whole.renamed === undefined
+      ? { reading: "whole" }
+      : { reading: "whole", renamed: whole.renamed };
   } catch {
-    return "unreadable";
+    return { reading: "unreadable" };
   }
+}
+
+/**
+ * What a whole PATTERN record says was renamed, or nothing when it says none.
+ *
+ * Beside the validator, and derived from the same read, because "may I trust
+ * this record" and "what does this record say" are one question asked at two
+ * moments. A caller holding the second half of it independently is the drift
+ * this repository has a rule about: the planner's copy accepted a `renamed`
+ * whose property was non-enumerable — a field `JSON.stringify`, an object
+ * spread and `structuredClone` all drop — and restored an id from metadata the
+ * saved document would not carry.
+ *
+ * Nothing for a component record, which renames nothing, and nothing for a
+ * record this would not trust. A caller that must tell those apart is asking
+ * {@link readBlockOrigin}, which answers in four.
+ */
+export function patternRenames(
+  origin: unknown
+): ReadonlyMap<string, string> | undefined {
+  return readOrigin(origin).renamed;
 }
 
 /**
@@ -330,26 +378,54 @@ function storedReader(record: object): {
         computed = true;
         return undefined;
       }
+      // NON-ENUMERABLE reads as absent, which is what it will be. Every road a
+      // record travels to storage — `JSON.stringify`, an object spread,
+      // `structuredClone` — drops it, so a guard that admits one passes a
+      // record whose persisted form is a different record, and a reader acting
+      // on its contents restores from metadata no later reader can see.
+      //
+      // Not `computed`: nothing was executed and nothing is uncertain. The
+      // field is stored data that will not be stored, which is the same answer
+      // as a field that is not there.
+      if (descriptor.enumerable !== true) return undefined;
       return descriptor.value;
     },
     computed: () => computed,
   };
 }
 
-/** Whether the fields a provenance record must carry are all there and sound. */
-function wholeOrigin(read: (key: string) => unknown): boolean {
-  const id = read("id");
-  if (typeof id !== "string" || id === "") return false;
-  const from = read("from");
-  if (from === "component") return true;
-  if (from !== "pattern") return false;
-  const digest = read("digest");
-  if (typeof digest !== "string" || digest === "") return false;
-  return isRenameRecord(read("renamed"));
+/** What a whole record holds, or nothing when it is not one. */
+interface WholeOrigin {
+  /** A pattern record's renames. Absent on a component, which renames none. */
+  readonly renamed?: ReadonlyMap<string, string>;
 }
 
 /**
- * Whether a rename record is one a later reader could act on.
+ * The fields a provenance record must carry, read once and handed back.
+ *
+ * The map rather than a verdict about it, so the caller that needs the renames
+ * does not re-enumerate a record this already walked entry by entry.
+ */
+function wholeOrigin(read: (key: string) => unknown): WholeOrigin | undefined {
+  const id = read("id");
+  if (typeof id !== "string" || id === "") return undefined;
+  const from = read("from");
+  if (from === "component") return {};
+  if (from !== "pattern") return undefined;
+  const digest = read("digest");
+  if (typeof digest !== "string" || digest === "") return undefined;
+  const renamed = readRenameRecord(read("renamed"));
+  return renamed === undefined ? undefined : { renamed };
+}
+
+/**
+ * A rename record a later reader could act on, or nothing when it is not one.
+ *
+ * The MAP and not a verdict about it, because the reader that restores ids and
+ * the guard that admits the record are asking one question one pass can answer.
+ * Handing back a boolean sent the restore back to enumerate the same record
+ * again — a second run of a stored Proxy's traps, and a second spelling of what
+ * counts as an entry.
  *
  * Absent is valid and means nothing was renamed. Present and malformed is not:
  * a half-record would be read as "these are the originals" and put an id back
@@ -359,9 +435,11 @@ function wholeOrigin(read: (key: string) => unknown): boolean {
  * Own entries only, and every one a non-empty string on both sides. An empty id
  * is not an id, and an entry mapping to one would erase the id it restores.
  */
-function isRenameRecord(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!isPlainRecord(value)) return false;
+function readRenameRecord(
+  value: unknown
+): ReadonlyMap<string, string> | undefined {
+  if (value === undefined) return EMPTY_RENAMES;
+  if (!isPlainRecord(value)) return undefined;
   // The CURRENT ids, to reject a map that cannot be inverted. The record reads
   // source → copy, and restoring reads it the other way — so two sources
   // claiming one current id give the reverse two answers, and whichever the
@@ -373,19 +451,32 @@ function isRenameRecord(value: unknown): boolean {
   // ONE reader for the whole map, so an entry is read by the same rule the
   // record's own fields are and nothing allocates per entry.
   const { read } = storedReader(value);
+  const renamed = new Map<string, string>();
   for (const name of ownKeys(value)) {
-    if (!isRenameEntry(read, name, current)) return false;
+    const now = renameEntry(read, name, current);
+    if (now === undefined) return undefined;
+    renamed.set(name, now);
   }
-  return true;
+  return renamed;
 }
 
 /**
- * One entry of a rename map: stored data, non-empty on both sides, and naming a
- * current id no other entry claims.
+ * The scope of a record that renames nothing.
+ *
+ * A shared map rather than one per absent record: an empty rename map is what
+ * the ordinary insert writes — a collision is the exception — so a fresh
+ * allocation here would be the common case, and a reader comparing two scopes
+ * by identity would see two of them as a disagreement.
+ */
+const EMPTY_RENAMES: ReadonlyMap<string, string> = new Map();
+
+/**
+ * One entry of a rename map — stored data, non-empty on both sides, and naming
+ * a current id no other entry claims — or nothing when it is none of those.
  *
  * The DESCRIPTOR, before the value. An entry can be an accessor, and reading one
  * runs the document's own code inside a published guard — where a throwing
- * getter escapes as a native error rather than the `false` this promises. A
+ * getter escapes as a native error rather than the refusal this promises. A
  * computed entry is not stored data, which is the same answer the document and
  * node guards give it.
  *
@@ -393,17 +484,17 @@ function isRenameRecord(value: unknown): boolean {
  * both questions, and it is mutated here for the same reason: a second walk to
  * find duplicates would read every entry twice.
  */
-function isRenameEntry(
+function renameEntry(
   read: (key: string) => unknown,
   name: string,
   current: Set<string>
-): boolean {
-  if (name === "") return false;
+): string | undefined {
+  if (name === "") return undefined;
   const now = read(name);
-  if (typeof now !== "string" || now === "") return false;
-  if (current.has(now)) return false;
+  if (typeof now !== "string" || now === "") return undefined;
+  if (current.has(now)) return undefined;
   current.add(now);
-  return true;
+  return now;
 }
 
 // ---------------------------------------------------------------------------

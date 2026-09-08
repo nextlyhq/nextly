@@ -25,10 +25,10 @@
  */
 import {
   COMPONENT_INSTANCE_TYPE,
-  isBlockOrigin,
   isComponentDocument,
   isComponentInstance,
   isPatternDocument,
+  patternRenames,
   renderedDomId,
 } from "./document";
 import type {
@@ -3433,76 +3433,15 @@ function ownOrigin(node: BlockNode): BlockOrigin | undefined {
 function renamedIn(
   origin: BlockOrigin | undefined
 ): ReadonlyMap<string, string> {
-  if (origin === undefined || !isPatternOrigin(origin)) return new Map();
-  const renamed: unknown = storedField(origin, "renamed");
-  if (!isPlainRecord(renamed)) return new Map();
-  const map = new Map<string, string>();
-  // Own keys, and a string on both sides. The record is stored data: a
-  // `renamed` holding `null`, an array, or an entry whose replacement is a
-  // number is a document that should not exist, and reading one is how a
-  // planner returns a native error where it promised a plan or a refusal.
-  for (const was of ownKeys(renamed)) {
-    // The ENTRY, through the same descriptor read the record's own fields use.
-    // A validated record can still be a Proxy whose indexed reads throw, and
-    // `renamed[was]` runs exactly the trap the validation avoided.
-    const now: unknown = storedField(renamed, was);
-    if (typeof now === "string") map.set(was, now);
-  }
-  return map;
-}
-
-/**
- * Whether a node's record says it was copied from a pattern.
- *
- * Asked of the RECORD's shape rather than by reading `from` off whatever
- * arrived: a stored origin may be `null`, an array or a primitive, and a
- * property read on one of those is the crash this module exists to convert
- * into a refusal.
- *
- * Its own predicate because two questions now depend on it and they must agree:
- * which record supplies a rename map, and which node is a scope BOUNDARY. A
- * pattern that renamed nothing carries no `renamed` at all, so the two answers
- * differ — and deriving the boundary from the map being non-empty is exactly
- * the defect that made a nested pattern inherit its host's renames.
- *
- * DERIVED from `isBlockOrigin`, which is the one answer to whether a stored
- * record is whole: it refuses an origin missing the id or the digest, and one
- * whose rename map is malformed. Checking only the discriminant here accepted a
- * record no reader is meant to act on — measured, `{ from: "pattern", id: "",
- * digest: "", renamed: … }` drove a restore — and a second, weaker reading of
- * "is this a usable record" is the drift the validator and the planners exist
- * to keep out.
- */
-function isPatternOrigin(origin: unknown): boolean {
-  // The DISCRIMINANT is read the way the validator reads it, off the property
-  // descriptor. `isBlockOrigin` establishes the record is whole without running
-  // anything, and an ordinary `origin.from` afterwards would run a `get` trap
-  // the check just avoided — validating defensively and then reading naively is
-  // the same crash one line later.
-  return isBlockOrigin(origin) && storedField(origin, "from") === "pattern";
-}
-
-/**
- * One field of a stored record, without running the record's own code.
- *
- * Every read of a provenance record goes through this. A stored origin can be a
- * Proxy whose `get` trap throws, and a planner that reads a field naively takes
- * a valid save out with a native error — on behalf of a node nothing selected,
- * now that the walk reaches the whole document.
- *
- * An accessor answers `undefined` for the reason the validator treats one as
- * absent: reading it runs the document's own code inside the decision about
- * whether to trust it.
- */
-function storedField(record: object, key: string): unknown {
-  let descriptor: PropertyDescriptor | undefined;
-  try {
-    descriptor = Object.getOwnPropertyDescriptor(record, key);
-  } catch {
-    return undefined;
-  }
-  if (descriptor === undefined || !("value" in descriptor)) return undefined;
-  return descriptor.value;
+  // The DOCUMENT module's reading, not a second one here. What a record must
+  // carry to be trusted and what it says once trusted are one question, and
+  // this file used to answer the second half itself: it validated through
+  // `isBlockOrigin` and then walked the record again for its contents, so a
+  // stored Proxy ran its traps twice and the two readings could disagree about
+  // an entry. They now cannot, because there is one of them.
+  return (
+    (origin === undefined ? undefined : patternRenames(origin)) ?? NO_RENAMES
+  );
 }
 
 /**
@@ -3673,7 +3612,7 @@ function governs(
   // nothing about the answer.
   const said = carrying.get(now);
   if (said === undefined) return false;
-  return said.size === 1 && said.has(sourceOf(renamed, now));
+  return said.size === 1 && said.has(answerOf(renamed, now));
 }
 
 /**
@@ -3701,17 +3640,6 @@ function answerOf(
     inverse = built;
   }
   return inverse.get(now);
-}
-
-/** What one record says a current id used to be, or nothing. */
-function sourceOf(
-  renamed: ReadonlyMap<string, string>,
-  now: string
-): string | undefined {
-  for (const [was, minted] of renamed) {
-    if (minted === now) return was;
-  }
-  return undefined;
 }
 
 /**

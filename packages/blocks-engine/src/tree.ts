@@ -81,7 +81,7 @@
 import type { SlotSpec } from "./block";
 import type { BlockNode } from "./document";
 import { isBlockType, renderedDomId } from "./document";
-import { walkForest } from "./forest-walk";
+import { isDescendable, walkForest } from "./forest-walk";
 import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import { MAX_DEPTH, MAX_NODES } from "./limits";
 import { canNest, canNestInSlot } from "./nesting";
@@ -529,17 +529,6 @@ function toWalkOptions(
   return "id" in third ? { parent: third } : third;
 }
 
-/** Whether an entry is a value this walk can treat as a node. */
-function isWalkableNode(node: unknown): node is BlockNode {
-  // `Array.isArray` is checked SEPARATELY because `typeof [] === "object"`, so
-  // the type test alone hands an array to `fn` as though it were a node. Every
-  // caller then reads its fields as `undefined` rather than failing: an
-  // id-uniqueness check sees `undefined` and compares it against other
-  // `undefined`s, a class reader finds no classes, a renderer finds no type.
-  // Silence in each case, from a value none of them can act on.
-  return typeof node === "object" && node !== null && !Array.isArray(node);
-}
-
 /**
  * Depth-first visit over the forest: each node, then its slots' children in
  * order.
@@ -594,7 +583,11 @@ export function walkNodes(
     // sat untouched — the callback never fires, and a bound counting callbacks
     // cannot see it. `selectNodes` bounds the same quantity for the same reason.
     read += 1;
-    if (!isWalkableNode(entry.node)) return read >= limit ? "stop" : "skip";
+    // The WALK's own classification, not a second one beside it. An entry the
+    // walk declined to descend into is exactly an entry no caller can read
+    // fields off, and the two spellings this file used to carry differed in
+    // nothing but which of them a hostile entry crashed in.
+    if (!isDescendable(entry.node)) return read >= limit ? "stop" : "skip";
 
     // The shared walk does not descend into a node already on the path, so an
     // entry reported twice at the same identity is the cycle closing. Reported
@@ -619,7 +612,7 @@ export function findNode(
   walkForest(nodes, entry => {
     // Persisted forests reach here unvalidated, so an entry may be `null` or a
     // primitive and reading `id` off one throws.
-    if (!isWalkableNode(entry.node)) return "skip";
+    if (!isDescendable(entry.node)) return "skip";
     if (entry.node.id === id) {
       found = entry.node;
       // Abandons the walk with the stack unread. A recursive search noticed a
@@ -767,7 +760,7 @@ export function mapForest(
     const entry = top.source[top.index];
     top.index += 1;
 
-    if (!isWalkableNode(entry)) {
+    if (!isDescendable(entry)) {
       top.out.push(entry);
       continue;
     }

@@ -3776,3 +3776,88 @@ describe("a saved DESCENDANT of an inserted root", () => {
     expect(marked([...saved.nodes], "target").cssId).toBe("pricing");
   });
 });
+
+describe("provenance is read once, and only where storage would keep it", () => {
+  it("ignores a rename map storage would not keep", () => {
+    // The enclosing `origin` is enumerable and whole; the `renamed` INSIDE it
+    // is not. Every road this record travels to storage — `JSON.stringify`, an
+    // object spread, `structuredClone` — drops that field, so restoring from it
+    // renames an id on the strength of something the saved document will not
+    // carry. Guarding the record's own property and not its fields left exactly
+    // that gap one level down.
+    const origin: Record<string, unknown> = {
+      from: "pattern",
+      id: "hero-pattern",
+      digest: "d",
+    };
+    Object.defineProperty(origin, "renamed", {
+      value: { pricing: "pricing-1" },
+      enumerable: false,
+      configurable: true,
+    });
+    // The premise, asserted rather than assumed: a fixture that quietly became
+    // enumerable would make this test pass for the opposite reason.
+    expect(JSON.parse(JSON.stringify(origin)).renamed).toBeUndefined();
+
+    const root = node("root", { origin } as Partial<BlockNode>, {
+      children: [node("t", { cssId: "pricing-1", props: { mark: "target" } })],
+    });
+
+    const saved = created(
+      planSaveAsPattern(page([root]), ["t"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("pricing-1");
+  });
+
+  it("reads a validated rename record without enumerating it again", () => {
+    // A record that answers `ownKeys` once and throws on the next call. The
+    // guard enumerates to validate the map; a reader that goes back for the
+    // contents runs the same trap a second time and escapes as a native error
+    // from a save of a selection this node is not even part of.
+    let listings = 0;
+    const renamed = new Proxy(
+      { pricing: "pricing-1" } as Record<string, string>,
+      {
+        ownKeys(record) {
+          listings += 1;
+          if (listings > 1) throw new TypeError("listed twice");
+          return Reflect.ownKeys(record);
+        },
+      }
+    );
+    const sibling = node("sibling", {
+      origin: { from: "pattern", id: "hero-pattern", digest: "d", renamed },
+    } as Partial<BlockNode>);
+    const doc = page([
+      node("mine", { cssId: "hero", props: { mark: "target" } }),
+      sibling,
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["mine"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("hero");
+    expect(listings).toBe(1);
+  });
+
+  it("saves past a revoked proxy nothing selected", () => {
+    // `Array.isArray` THROWS on a revoked proxy, so classifying the entry took
+    // the walk out before either guarded slots read could contain it — and the
+    // classification was spelled twice, so containing one moved the same error
+    // to the line after it.
+    const { proxy, revoke } = Proxy.revocable(node("gone"), {});
+    revoke();
+    const doc = page([
+      node("mine", { cssId: "hero", props: { mark: "target" } }),
+      proxy as BlockNode,
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["mine"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("hero");
+  });
+});

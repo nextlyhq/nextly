@@ -230,11 +230,13 @@ export type {
 // The one answer to whether a stored value is a whole provenance record. A
 // consumer holding `BlockOrigin` and no way to check one has to write the check
 // again, and a second spelling of it admits records this package refuses.
-// The guard, and the richer reading it is derived from. Published together
-// because a caller that must tell a record it cannot READ from one that is
-// merely wrong — the validator does — would otherwise name the guard's fields a
-// second time to find out.
-export { isBlockOrigin, readBlockOrigin } from "./document";
+// The guard, the richer reading it is derived from, and what a trusted record
+// says. Published together because they are one read: a caller that must tell a
+// record it cannot READ from one that is merely wrong — the validator does — or
+// that needs the renames a trusted record carries would otherwise name the
+// guard's fields a second time to find out, and a second reading of a stored
+// record runs its own reflection twice.
+export { isBlockOrigin, patternRenames, readBlockOrigin } from "./document";
 export type { OriginReading } from "./document";
 // The one rule for which DOM id a node actually renders. A node can spell one
 // two ways and emits at most one, so anything asking "what ids are on this
