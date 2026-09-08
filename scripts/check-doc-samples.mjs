@@ -886,6 +886,36 @@ export function declaredNamesIn(source) {
  * would only report the names it inherits; compiled with them, it says what it
  * does with them.
  */
+/**
+ * The names an earlier fence declared as VALUES, excluding what it imported.
+ *
+ * The distinction decides whether a fence that only calls something is
+ * continuing the page or illustrating a shape. `radio({ ... })` on a field
+ * catalogue mentions `option`, which an earlier fence imported, and is not a
+ * program a reader pastes. `await nextly.logout()` calls a value an earlier
+ * fence built, and is.
+ */
+export function declaredValuesIn(source) {
+  const code = topLevelOnly(source);
+  const names = new Set();
+  for (const m of code.matchAll(
+    /(?:^|;)[ \t]*(?:(?:export|default|declare|abstract|async)[ \t]+)*(?:const|let|var|function|class)\b[\s*]+([A-Za-z_$][\w$]*)/gm
+  )) {
+    names.add(m[1]);
+  }
+  for (const m of code.matchAll(
+    /^\s*(?:export\s+)?(?:const|let|var)\s+([[{][^=]*?[\]}])\s*=/gm
+  )) {
+    for (const part of m[1].replace(/^[[{]|[\]}]$/g, "").split(",")) {
+      const piece = part.trim().replace(/^\.\.\./, "");
+      const bound = piece.includes(":") ? piece.split(":").pop() : piece;
+      const name = bound?.trim().match(/^[A-Za-z_$][\w$]*/)?.[0];
+      if (name) names.add(name);
+    }
+  }
+  return [...names];
+}
+
 export function inheritedNames(sample, samples) {
   // A continuation carries the example forward: it declares or assigns
   // something of its own. A bare expression does not, and `radio({ ... })` on a
@@ -893,16 +923,32 @@ export function inheritedNames(sample, samples) {
   // pastes — it only looked like a continuation because it happens to mention
   // `option`, which an earlier fence imported. Compiling those reported the
   // page as full of undefined names it never claimed to define.
-  if (
-    !/^\s*(?:const|let|var|function|class)\s|^[^\n=]*\s=\s(?!=)/m.test(
-      sample.code
-    )
-  ) {
-    return [];
-  }
   const earlier = samples.filter(
     s => s.file === sample.file && s.index < sample.index
   );
+  const carriesForward =
+    /^\s*(?:const|let|var|function|class)\s|^[^\n=]*\s=\s(?!=)/m.test(
+      sample.code
+    );
+  if (!carriesForward) {
+    // A fence that only calls or awaits still continues the page when what it
+    // calls is a value an earlier fence built: `await nextly.logout()` and the
+    // sorting and populate calls on the Direct API reference are exactly that,
+    // and nothing compiled them, so changing one to a method that does not
+    // exist produced no diagnostic at all.
+    //
+    // Only a declared VALUE counts, never an imported name. That is what keeps
+    // `radio({ ... })` on the field catalogue out: it mentions `option`, which
+    // an earlier fence imported, and is a shape being illustrated rather than a
+    // program a reader pastes.
+    const values = earlier.flatMap(s => declaredValuesIn(s.code));
+    const callsOne = values.some(name =>
+      new RegExp(
+        `\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[.(]`
+      ).test(sample.code)
+    );
+    if (!callsOne) return [];
+  }
   const declared = new Set(earlier.flatMap(s => declaredNamesIn(s.code)));
   const used = new Set(
     [...sample.code.matchAll(/[A-Za-z_$][\w$]*/g)].map(m => m[0])
