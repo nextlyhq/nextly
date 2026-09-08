@@ -41,6 +41,8 @@ import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
+import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
+import { patternLibraryRoute } from "./library-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
@@ -394,7 +396,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
   const configStyle = resolveSiteStyle(opts.siteStyle);
 
   return definePlugin({
-    name: "@nextlyhq/plugin-page-builder",
+    name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
     // The floor states the version carrying the APIs this plugin needs, not the
     // one it was first published against. Two of them: `blocks()` builds its
@@ -533,6 +535,15 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // validated against the same set the canvas draws with. With none
       // configured this is the empty set, which the engine treats permissively.
       fieldTypes: [blocksFieldType(siteBreakpoints(configStyle))],
+      // The one read the insert panel makes. A route rather than a collection
+      // read from the browser, because the index it serves has two sources —
+      // stored rows and, later, patterns a plugin declares in code — and only a
+      // server sees both. Measured besides: the admin's collection hooks are
+      // not exported from `@nextlyhq/plugin-sdk/admin`, which is the only
+      // surface this package may import from, so there is no browser-side
+      // collection read available to it at all.
+      routes: [patternLibraryRoute()],
+
       // No `publish` permission. One was declared here and nothing ever read
       // it: publishing a page is a status change on the entry, which
       // `update-pages` already covers, and no code path asked whether the user

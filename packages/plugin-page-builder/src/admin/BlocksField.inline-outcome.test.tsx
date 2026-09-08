@@ -160,6 +160,19 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => undefined,
+  /*
+   * The library read. Absent here rather than stubbed with patterns, because
+   * these cases are about other surfaces and an offered pattern would change
+   * what the palette contains. `pending: false` says the read ANSWERED with
+   * nothing, which is the site with an empty library — the state every one of
+   * these cases was written against.
+   */
+  usePluginRoute: () => ({
+    data: undefined,
+    pending: false,
+    error: null,
+    refetch: () => {},
+  }),
   useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
