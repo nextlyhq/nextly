@@ -802,6 +802,84 @@ jobs:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
+  # The one check that can block a merge, standing for all of them.
+  #
+  # 🔴 Measured before this existed: the only required status check on `main`
+  # was `Decide what this commit can affect`, a job that works out which paths a
+  # commit touches and then succeeds. Lint, typecheck, the unit suites and the
+  # browser tests were every one of them ADVISORY, so a red job could sit beside
+  # a merge that went through. Adding 15,764 tests to a job made them run; it
+  # did not make them gate.
+  #
+  # Listing those jobs individually as required checks is the obvious fix, and
+  # this repository has both of the reasons it does not work. A SKIPPED job
+  # never reports, and a required check that never reports blocks the branch for
+  # ever — every job here carries `if: needs.changes.outputs.inert != 'true'`,
+  # so a commit touching only inert paths would become unmergeable. And a matrix
+  # job's check is named from the expression it interpolates, so the list would
+  # restate names the workflow generates, which is the drift `check:test-lanes`
+  # exists to stop.
+  #
+  # So this depends on them and reports their verdict, and THIS is the check to
+  # require. Jobs can be added and removed here without touching a repository
+  # setting.
+  #
+  # `needs` IS the merge policy, and putting it here is most of the value. It
+  # used to live in a repository setting, where it appeared in no diff and no
+  # review — which is how it came to require one trivial job and nothing else
+  # without anyone deciding that. It is now a list a reviewer reads beside the
+  # jobs it names.
+  #
+  # ⚠️ The limit, stated rather than covered badly: nothing checks that a NEW
+  # job was added to this list, so one that is not here is advisory. That is a
+  # hand-written list, and this repository has spent real effort removing those
+  # — but the alternatives are worse. Deriving it would mean reading the job
+  # structure out of this YAML, which is the exact fallible read `check:test-
+  # lanes` was rewritten to stop doing, and no parser is available to scripts
+  # without taking a dependency for one call. What makes the trade acceptable is
+  # that both halves are now in ONE file a few dozen lines apart, so a job added
+  # without a line here is visible in the diff that adds it.
+  #
+  # The suites below — the browser tests, the scaffold and dev-script smokes —
+  # are deliberately NOT here yet: widening what blocks a merge is a decision
+  # about how the project ships, not a detail of this mechanism, and each is one
+  # line when that decision is made.
+  gate:
+    name: CI gate
+    # `always()`, and it is the whole point: a gate that is skipped when
+    # something upstream fails reports nothing, and nothing is what a required
+    # check must never report.
+    if: always()
+    needs:
+      - changes
+      - comments
+      - ci
+      - unit-tests-nextly
+      - unit-tests-admin
+      - entry-guard-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      # No install: the verdict is computed from the `needs` context alone, so
+      # this reads no dependency and can report even when the install that every
+      # other job depends on is what failed.
+      - name: Every job this depends on passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          INERT: ${{ needs.changes.outputs.inert }}
+        run: node scripts/ci-gate.mjs
+
   # The admin, in a real browser, against a real server and a real database.
   # Covers the class of failure the unit and integration suites structurally
   # cannot: jsdom has no layout engine, so a column that grew to 1024px or a
