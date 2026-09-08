@@ -186,6 +186,45 @@ describe("BlockToolbar", () => {
     expect(editor.select).toHaveBeenCalled();
   });
 
+  it("presses DELETE only for Delete", () => {
+    // The dispatch used to be a chain whose last arm was `delete`, so a verb
+    // added to the union and not wired reached that arm: the compiler pointed
+    // at the missing ICON, a developer supplied one, and the new button then
+    // deleted the block. Asserted per verb rather than on the union, because
+    // what went wrong was one verb answering for another.
+    register();
+    for (const label of [
+      "Select parent",
+      "Move up",
+      "Move down",
+      "Duplicate",
+    ]) {
+      const editor = editorSpy(pair(), "a");
+      mount(editor);
+      fireEvent.click(screen.getByLabelText(label));
+      const written = [
+        ...vi.mocked(editor.apply).mock.calls.map(([op]) => op),
+        ...vi.mocked(editor.applyAll).mock.calls.flatMap(([ops]) => [...ops]),
+      ];
+      expect(
+        JSON.stringify(written),
+        `${label} must not remove anything`
+      ).not.toContain("remove");
+      cleanup();
+    }
+
+    // The control: Delete really does remove, so the assertion above is about
+    // which verb ran and not about a bar that does nothing at all.
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+    fireEvent.click(screen.getByLabelText("Delete"));
+    const ops = [
+      ...vi.mocked(editor.apply).mock.calls.map(([op]) => op),
+      ...vi.mocked(editor.applyAll).mock.calls.flatMap(([list]) => [...list]),
+    ];
+    expect(JSON.stringify(ops)).toContain("remove");
+  });
+
   it("moves the selection down through the store", () => {
     register();
     const editor = editorSpy(pair(), "a");

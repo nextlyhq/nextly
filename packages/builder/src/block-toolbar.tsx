@@ -270,15 +270,33 @@ export function BlockToolbar({
    * rather than nothing at all. That sentence is the reason the button stays
    * pressable, and swallowing the press here would take it away.
    */
+  // A RECORD over the verb set rather than a chain ending in `else`.
+  //
+  // 🔴 The chain's last arm was `delete`, so a verb added to `ToolbarActionId`
+  // and not wired here did not fail to compile — it fell through and DELETED
+  // the block the author had selected. Measured: adding an id makes `ICONS`
+  // fail with TS2741 and left the dispatch silent, so the compiler pointed at
+  // the icon, the developer added one, and the new button then deleted things.
+  //
+  // Keyed by a typed union rather than by arbitrary input, so this is a lookup
+  // the compiler checks both ways: every verb needs an entry, and an entry
+  // nobody declares is rejected.
+  const perform = React.useMemo<Record<ToolbarActionId, () => void>>(
+    () => ({
+      "select-parent": () => verbs.selectParent(),
+      "move-up": () => verbs.move("up"),
+      "move-down": () => verbs.move("down"),
+      duplicate: () => verbs.duplicate(),
+      delete: () => verbs.delete(),
+    }),
+    [verbs]
+  );
+
   const run = React.useCallback(
     (action: ToolbarAction) => {
-      if (action.id === "select-parent") verbs.selectParent();
-      else if (action.id === "move-up") verbs.move("up");
-      else if (action.id === "move-down") verbs.move("down");
-      else if (action.id === "duplicate") verbs.duplicate();
-      else verbs.delete();
+      perform[action.id]();
     },
-    [verbs]
+    [perform]
   );
 
   if (hidden || actions.length === 0) return null;
