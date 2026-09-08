@@ -1392,6 +1392,18 @@ async function auditDocs() {
       files: [...new Set(all.map(sample => sample.file))].sort(),
       samples: all.length,
       compiled: samples.length + continuedWithoutImports.size,
+      // Per page as well as in total. Totals cancel: a change that loses a
+      // fence on one page while adding one on another leaves `samples`
+      // unmoved, and the page that went quiet is exactly the one nobody would
+      // think to look at. Recorded per page, the loss has nowhere to hide.
+      perPage: Object.fromEntries(
+        [...new Set(all.map(sample => sample.file))]
+          .sort()
+          .map(file => [
+            file,
+            all.filter(sample => sample.file === file).length,
+          ])
+      ),
     },
   };
 }
@@ -1477,7 +1489,19 @@ async function main() {
 
     writeFileSync(
       BASELINE,
-      `${JSON.stringify({ coverage: { pages: coverage.files.length, samples: coverage.samples, compiled: coverage.compiled }, pages: counted }, null, 2)}\n`
+      `${JSON.stringify(
+        {
+          coverage: {
+            pages: coverage.files.length,
+            samples: coverage.samples,
+            compiled: coverage.compiled,
+          },
+          samplesPerPage: coverage.perPage,
+          pages: counted,
+        },
+        null,
+        2
+      )}\n`
     );
     console.log(
       `doc samples: baseline written for ${String(Object.keys(counted).length)} page(s), ` +
@@ -1538,6 +1562,12 @@ async function main() {
   for (const [what, was] of Object.entries(recorded.coverage ?? {})) {
     if ((seen[what] ?? 0) < was) {
       lost.push(`${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`);
+    }
+  }
+  for (const [file, was] of Object.entries(recorded.samplesPerPage ?? {})) {
+    const now = coverage.perPage[file] ?? 0;
+    if (now < was) {
+      lost.push(`${file}: was ${String(was)} sample(s), now ${String(now)}`);
     }
   }
   if (lost.length > 0) {
