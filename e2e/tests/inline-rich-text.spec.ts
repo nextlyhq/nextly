@@ -284,6 +284,11 @@ test.describe("a passage edited on the canvas", () => {
      * item, the second should end the list. Counting items is what separates
      * the two outcomes — with the behaviour registered the empty item is
      * consumed, without it there are three.
+     *
+     * Three items is NOT proof of the behaviour being absent on its own, which
+     * is worth saying because it reads that way. A caret that is not where this
+     * case believes it is reaches the same count by splitting the word instead,
+     * so the intermediate assertion below is what tells the two apart.
      */
     await openBuilderWith(page, [
       {
@@ -308,17 +313,37 @@ test.describe("a passage edited on the canvas", () => {
         ],
       },
     ]);
-    await enterPassage(page, 0.5);
+    /*
+     * Entered AT THE END rather than in the middle and navigated there with
+     * `End`, and the difference is the whole reliability of this case.
+     *
+     * A caret placed here is written straight into the editor's own state, so
+     * the editor and the DOM agree before anything is typed. A navigation KEY
+     * does not work that way: it moves the browser's caret immediately, and the
+     * editor is told through `selectionchange`, which the browser dispatches on
+     * a later turn. Two synthetic keys land back to back faster than that, so
+     * the second one was applied at the caret the first had already moved away
+     * from — `Item` split into `Ite` and `m` — and the case failed roughly one
+     * run in three. Measured: a 50ms gap between the keys passed 30 of 30, so
+     * the window is far inside one human keystroke and no author can reach it.
+     * It was a race between this test and the browser, not in the product.
+     */
+    await enterPassage(page, 1);
 
-    await page.keyboard.press("End");
-    await page.keyboard.press("Enter");
     await page.keyboard.press("Enter");
 
     const items = page.locator(`${PASSAGE} li`);
-    // The control on the fixture itself: if the list never rendered as a list,
-    // this count would be 0 and the assertion below would pass for the wrong
-    // reason.
-    await expect(items).not.toHaveCount(0);
+    /*
+     * The precondition, asserted rather than assumed, and it carries the
+     * fixture control too. Two items reading `Item` and nothing prove the list
+     * rendered AS a list and that the caret really was at the end — a caret
+     * anywhere inside the word splits it here, and the final count would then
+     * be reached for a reason this case is not about.
+     */
+    await expect(items).toHaveText(["Item", ""]);
+
+    await page.keyboard.press("Enter");
+
     await expect(items).toHaveCount(1);
   });
 });
