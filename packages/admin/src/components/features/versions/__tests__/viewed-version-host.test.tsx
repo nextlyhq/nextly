@@ -43,7 +43,10 @@ vi.mock("@admin/components/features/versions/VersionSnapshotForm", () => ({
   },
 }));
 
-import { ViewedVersionBody } from "../viewed-version-host";
+import {
+  historicalToolbarValue,
+  ViewedVersionBody,
+} from "../viewed-version-host";
 import type { FieldConfig } from "nextly/config";
 
 const viewing: ViewedVersion = {
@@ -121,5 +124,66 @@ describe("ViewedVersionBody — the snapshot's inputs and inherited context", ()
     expect(
       screen.getByLabelText("Live field").closest("[aria-hidden='true']")
     ).not.toBeNull();
+  });
+
+  it("keeps the live subtree's DOM node across entering and leaving history", () => {
+    // Hiding must not change the subtree's React ancestry: a different parent
+    // unmounts and remounts the fields even when both trees render them, which
+    // destroys rich field state. The same DOM node on both sides is the proof.
+    function Harness({ viewing }: { viewing: ViewedVersion | null }) {
+      return (
+        <DocumentHistoryContext.Provider
+          value={{
+            viewing,
+            setViewing: () => {},
+            restore: null,
+            setRestore: () => {},
+          }}
+        >
+          <ViewedVersionBody
+            fields={[{ name: "title", type: "text" }]}
+            values={{ title: "as it was" }}
+          >
+            <input aria-label="Live field" />
+          </ViewedVersionBody>
+        </DocumentHistoryContext.Provider>
+      );
+    }
+
+    const { rerender } = render(<Harness viewing={viewing} />);
+    const before = screen.getByLabelText("Live field");
+
+    rerender(<Harness viewing={null} />);
+    const after = screen.getByLabelText("Live field");
+
+    expect(after).toBe(before);
+  });
+});
+
+describe("historicalToolbarValue — null versus undefined overrides", () => {
+  const viewing: ViewedVersion = {
+    versionNo: 2,
+    snapshot: {},
+    locale: null,
+    isLoading: false,
+    error: null,
+  };
+
+  it("returns the version's value while a version is on screen", () => {
+    expect(historicalToolbarValue({ mode: "read" }, viewing, "mode")).toBe(
+      "read"
+    );
+  });
+
+  it("returns an explicit null when the version never stored the controller", () => {
+    // Falling back to undefined here would hand the slot the live form's
+    // value, labelling the historical body with today's mode.
+    expect(historicalToolbarValue({ other: 1 }, viewing, "mode")).toBeNull();
+  });
+
+  it("returns undefined while the live document is on screen", () => {
+    expect(
+      historicalToolbarValue({ mode: "read" }, null, "mode")
+    ).toBeUndefined();
   });
 });

@@ -297,6 +297,25 @@ describe("SingleForm — a published version replaces the document", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it("collapses two same-turn submits into one write", async () => {
+    // Two native submits in the same turn both pass a render-derived guard,
+    // because the in-flight state publishes a render behind the mutation.
+    // The synchronous latch is what makes the second a no-op.
+    const onSubmit = vi.fn();
+    render(
+      <SingleForm schema={schema} document={document} onSubmit={onSubmit} />
+    );
+
+    const form = document_.querySelector("form");
+    expect(form, "the editor renders a form to submit").not.toBeNull();
+    fireEvent.submit(form as HTMLFormElement);
+    fireEvent.submit(form as HTMLFormElement);
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the submit path working while the live document is on screen", async () => {
     // The other direction, so the gate cannot be satisfied by refusing always.
     const onSubmit = vi.fn();

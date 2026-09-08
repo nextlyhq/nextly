@@ -543,6 +543,14 @@ export function SingleForm({
   // screen even while one is.
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
 
+  //
+  // The synchronous half of the same gate. `isSubmitting` is render state: it
+  // publishes one render behind the mutation, so two submissions in the same
+  // turn both read false and both write. The latch is set the moment the
+  // first submission enters and released when it settles, closing that gap.
+  //
+  const submissionLatch = useRef(false);
+
   const handleSubmit = useCallback(
     async (e?: React.BaseSyntheticEvent, intent?: EntryFormIntent) => {
       e?.preventDefault();
@@ -556,26 +564,31 @@ export function SingleForm({
       // handler acts on the live document, which is not what is on screen. And
       // so is a submit already in flight — parallel writes would let completion
       // order decide which contents survive.
-      if (writesHeld || isSubmitting) return;
+      if (writesHeld || isSubmitting || submissionLatch.current) return;
+      submissionLatch.current = true;
 
-      await form.handleSubmit(async rawData => {
-        // Why: shared intent→payload helper mirrors the EntryForm
-        // contract (see useEntryForm.mapIntentToPayload). Unpublish
-        // strips other dirty fields so a confirm-modal misclick can't
-        // ship unrelated changes to the public site.
-        const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
+      try {
+        await form.handleSubmit(async rawData => {
+          // Why: shared intent→payload helper mirrors the EntryForm
+          // contract (see useEntryForm.mapIntentToPayload). Unpublish
+          // strips other dirty fields so a confirm-modal misclick can't
+          // ship unrelated changes to the public site.
+          const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
 
-        try {
-          await onSubmit(data);
-          // After the write lands and before the reset: this is the only point
-          // that knows a save succeeded, and a revision that misses one leaves
-          // the pane showing the previous draft.
-          setSavedCount(n => n + 1);
-          form.reset(data);
-        } catch (error) {
-          console.error("Form submission error:", error);
-        }
-      })(e);
+          try {
+            await onSubmit(data);
+            // After the write lands and before the reset: this is the only
+            // point that knows a save succeeded, and a revision that misses
+            // one leaves the pane showing the previous draft.
+            setSavedCount(n => n + 1);
+            form.reset(data);
+          } catch (error) {
+            console.error("Form submission error:", error);
+          }
+        })(e);
+      } finally {
+        submissionLatch.current = false;
+      }
     },
     [form, onSubmit, blankPasswordFields, isSubmitting, writesHeld]
   );

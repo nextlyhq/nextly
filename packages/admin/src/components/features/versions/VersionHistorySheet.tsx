@@ -102,6 +102,12 @@ export interface VersionHistorySheetProps {
    * the other. Absent, the panel falls back to inferring it from the rows.
    */
   entityLocalized?: boolean;
+  /**
+   * Whether the live editor holds unsaved changes. Restoring replaces the
+   * live document, and the refresh that follows discards that work — the
+   * confirmation has to say so before the author commits to it.
+   */
+  liveDirty?: boolean;
 }
 
 function ListSkeleton() {
@@ -127,6 +133,7 @@ export function VersionHistorySheet({
   canRestore = false,
   liveStatus = null,
   entityLocalized,
+  liveDirty = false,
 }: VersionHistorySheetProps) {
   const [selected, setSelected] = useState<number | null>(null);
   // The version pair being compared (older -> newer), or null when not
@@ -723,6 +730,7 @@ export function VersionHistorySheet({
           onOpenChange={setConfirmingRestore}
           versionNo={selected}
           isPublished={liveStatus === "published"}
+          unsavedChanges={liveDirty}
           isRestoring={restore.isPending}
           onConfirm={() => restore.mutate(selected)}
         />

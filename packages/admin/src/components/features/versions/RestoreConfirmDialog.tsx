@@ -30,6 +30,12 @@ export interface RestoreConfirmDialogProps {
   versionNo: number;
   /** Whether this document is published, which decides how urgent this is. */
   isPublished?: boolean;
+  /**
+   * Whether the editor behind this restore holds unsaved changes. Restoring
+   * replaces the live document, and the refresh that follows discards that
+   * work — an author must be told before confirming, not discover it after.
+   */
+  unsavedChanges?: boolean;
   onConfirm: () => void;
   isRestoring?: boolean;
 }
@@ -39,6 +45,7 @@ export function RestoreConfirmDialog({
   onOpenChange,
   versionNo,
   isPublished = false,
+  unsavedChanges = false,
   onConfirm,
   isRestoring = false,
 }: RestoreConfirmDialogProps) {
@@ -63,6 +70,11 @@ export function RestoreConfirmDialog({
                 Values that were never stored in a version, such as passwords,
                 are left as they are.
               </p>
+              {unsavedChanges ? (
+                <p className="font-medium text-foreground">
+                  The editor has unsaved changes that this restore will discard.
+                </p>
+              ) : null}
             </div>
           </AlertDialogDescription>
         </AlertDialogHeader>

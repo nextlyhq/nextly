@@ -864,6 +864,9 @@ export function EntrySystemHeader({
           // Restore reuses the ordinary edit permission, so a caller who may
           // only read history is not offered a write that would be refused.
           canRestore={canUpdateDocument}
+          // The restore's confirmation must disclose what happens to unsaved
+          // work in the live editor — restoring replaces the live document.
+          liveDirty={isDirty}
           // The live document's status, which is what a restore changes — the
           // selected version's own status describes the past.
           liveStatus={effectiveStatus}

@@ -32,6 +32,7 @@ import {
   computeMainFields,
   type TakeoverType,
 } from "@admin/lib/builder/takeoverLayout";
+import { cn } from "@admin/lib/utils";
 
 import {
   useDocumentHistory,
@@ -214,6 +215,11 @@ export function useViewedVersion(
  * form's value would label the historical body with today's mode — the one
  * thing on screen that disagrees with the version below it. Undefined while
  * the live document is on screen, so the slot falls back to the live form.
+ *
+ * A version that never stored the controller resolves to NULL, not undefined:
+ * an explicit override with no value, so the slot shows an empty mode rather
+ * than silently falling back to the live form's — the two cases mean opposite
+ * things and only differ by that one distinction.
  */
 export function historicalToolbarValue(
   historicalValues: Record<string, unknown> | null,
@@ -221,7 +227,7 @@ export function historicalToolbarValue(
   controllerField: string
 ): unknown {
   return viewingVersion !== null
-    ? historicalValues?.[controllerField]
+    ? (historicalValues?.[controllerField] ?? null)
     : undefined;
 }
 
@@ -358,12 +364,11 @@ export function ViewedVersionBody({
   const { viewing } = useDocumentHistory();
   const outerLocale = useEntryLocale();
   const { getLocale, defaultLocale } = useLocalization();
-  if (!viewing) return <>{children}</>;
   // A snapshot captured in another language is presented in that language —
   // the banner above it names the locale, so the fields must agree — while
   // every seam that acts on the live editor is withheld from the snapshot.
   const snapshotLocale =
-    viewing.locale !== null
+    viewing && viewing.locale !== null
       ? snapshotLocaleContext(
           outerLocale,
           viewing.locale,
@@ -373,53 +378,55 @@ export function ViewedVersionBody({
       : outerLocale;
   return (
     <>
-      {/* Hidden, not unmounted: remounting a rich field component destroys
-          state the serialized form values do not carry — an editor's undo
-          history, its selection — so returning to current would land the
-          author in a freshly created composer. Hidden removes the tree from
-          the accessibility tree and from every pointer, so the read-only
-          claim on the banner holds. */}
-      <div aria-hidden="true" className="hidden">
+      {/* The live field tree keeps ONE stable parent in both branches, and
+          only the wrapper's hidden state toggles: moving the subtree in and
+          out of a wrapper would change its React ancestry, which unmounts
+          and remounts it — destroying exactly the rich field state (an
+          editor's undo history, its selection) that hiding exists to
+          preserve. Hidden removes the tree from the accessibility tree and
+          from every pointer, so the read-only claim on the banner holds. */}
+      <div
+        aria-hidden={viewing ? true : undefined}
+        className={cn(viewing && "hidden")}
+      >
         {children}
       </div>
-      <div className="@4xl/content:p-8 pt-6">
-        {viewing.error ? (
-          // A failed read must not render as an empty document: that is a
-          // different and wrong claim about the version.
-          <Alert variant="destructive">
-            <AlertDescription>
-              This version could not be loaded.
-            </AlertDescription>
-          </Alert>
-        ) : !versionOnScreen(viewing) ? (
-          <div className="flex flex-col gap-4" aria-busy="true">
-            <span className="sr-only" role="status">
-              Loading version {viewing.versionNo}
-            </span>
-            {[0, 1, 2, 3].map(i => (
-              <div key={i} className="flex flex-col gap-1">
-                <Skeleton className="h-3 w-24" />
-                <Skeleton className="h-9 w-full" />
-              </div>
-            ))}
-          </div>
-        ) : (
-          <EntryLocaleProvider value={snapshotLocale}>
-            {/* No translation-field context: history is opened from inside
-                translation mode without the mode exiting, and an inherited
-                source would put a "use source" affordance on every historical
-                field — writing into the version this area claims is frozen.
-                Empty is the context's own answer for "offers nothing". */}
-            <TranslationFieldProvider value={{}}>
-              {/* Unreachable with an empty map: the body only renders the
-                  snapshot while a version is published, and the host's map is
-                  then guaranteed — the fallback exists for the live branch's
-                  types alone. */}
-              <VersionSnapshotForm fields={fields} values={values ?? {}} />
-            </TranslationFieldProvider>
-          </EntryLocaleProvider>
-        )}
-      </div>
+      {viewing ? (
+        <div className="@4xl/content:p-8 pt-6">
+          {viewing.error ? (
+            // A failed read must not render as an empty document: that is a
+            // different and wrong claim about the version.
+            <Alert variant="destructive">
+              <AlertDescription>
+                This version could not be loaded.
+              </AlertDescription>
+            </Alert>
+          ) : !versionOnScreen(viewing) ? (
+            <div className="flex flex-col gap-4" aria-busy="true">
+              <span className="sr-only" role="status">
+                Loading version {viewing.versionNo}
+              </span>
+              {[0, 1, 2, 3].map(i => (
+                <div key={i} className="flex flex-col gap-1">
+                  <Skeleton className="h-3 w-24" />
+                  <Skeleton className="h-9 w-full" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EntryLocaleProvider value={snapshotLocale}>
+              {/* No translation-field context: history is opened from inside
+                  translation mode without the mode exiting, and an inherited
+                  source would put a "use source" affordance on every historical
+                  field — writing into the version this area claims is frozen.
+                  Empty is the context's own answer for "offers nothing". */}
+              <TranslationFieldProvider value={{}}>
+                <VersionSnapshotForm fields={fields} values={values ?? {}} />
+              </TranslationFieldProvider>
+            </EntryLocaleProvider>
+          )}
+        </div>
+      ) : null}
     </>
   );
 }

@@ -13,7 +13,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { FieldConfig } from "nextly/config";
-import { useMemo, useCallback, useEffect } from "react";
+import { useMemo, useCallback, useEffect, useRef } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
@@ -501,6 +501,15 @@ export function useEntryForm({
     updateMutation.isPending ||
     discardMutation.isPending;
 
+  //
+  // The synchronous half of the same guard. `isSubmitting` is render state:
+  // it publishes one render behind the mutation, so two submissions in the
+  // same turn both read false and both write — two identical creates. The
+  // latch is set the moment the first submission enters and released when it
+  // settles, closing that gap.
+  //
+  const submissionLatch = useRef(false);
+
   // Submit handler. The intent arg names the user's button click and
   // determines payload shape (see EntryFormIntent). Without an intent,
   // submission keeps the existing status and just persists dirty fields
@@ -508,44 +517,48 @@ export function useEntryForm({
   const handleSubmit = useCallback(
     async (e?: React.BaseSyntheticEvent, intent?: EntryFormIntent) => {
       e?.preventDefault();
-      if (isSubmitting) return;
+      if (isSubmitting || submissionLatch.current) return;
+      submissionLatch.current = true;
+      try {
+        await form.handleSubmit(async rawData => {
+          // Why: intent → payload mapping is the core PR-3 bug fix —
+          // extracted to mapIntentToPayload above so the contract is
+          // unit-testable without renderHook plumbing.
+          const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
 
-      await form.handleSubmit(async rawData => {
-        // Why: intent → payload mapping is the core PR-3 bug fix —
-        // extracted to mapIntentToPayload above so the contract is
-        // unit-testable without renderHook plumbing.
-        const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
-
-        try {
-          if (mode === "create") {
-            const result = await createMutation.mutateAsync(
-              data as Record<string, EntryValue>
-            );
-            // Reset form to mark as clean after successful create
-            form.reset(data);
-            // The entry, not the envelope: the mutation now resolves to the
-            // whole response so the hook can report post-commit failures, and
-            // this callback's contract is the saved row.
-            onSuccess?.(result.item);
-          } else {
-            if (!entry?.id) {
-              throw new Error("Entry ID is required for update");
+          try {
+            if (mode === "create") {
+              const result = await createMutation.mutateAsync(
+                data as Record<string, EntryValue>
+              );
+              // Reset form to mark as clean after successful create
+              form.reset(data);
+              // The entry, not the envelope: the mutation now resolves to the
+              // whole response so the hook can report post-commit failures, and
+              // this callback's contract is the saved row.
+              onSuccess?.(result.item);
+            } else {
+              if (!entry?.id) {
+                throw new Error("Entry ID is required for update");
+              }
+              // entryId is passed to useUpdateEntry hook, so we just pass data here
+              const result = await updateMutation.mutateAsync(
+                data as Record<string, EntryValue>
+              );
+              // Reset form to mark as clean after successful update
+              form.reset(data);
+              onSuccess?.(result.item);
             }
-            // entryId is passed to useUpdateEntry hook, so we just pass data here
-            const result = await updateMutation.mutateAsync(
-              data as Record<string, EntryValue>
-            );
-            // Reset form to mark as clean after successful update
-            form.reset(data);
-            onSuccess?.(result.item);
+          } catch (error) {
+            // Server errors are automatically mapped to form fields via setError
+            // passed to the mutation hooks. Only log for debugging.
+            console.error("Form submission error:", error);
+            onError?.(error);
           }
-        } catch (error) {
-          // Server errors are automatically mapped to form fields via setError
-          // passed to the mutation hooks. Only log for debugging.
-          console.error("Form submission error:", error);
-          onError?.(error);
-        }
-      })(e);
+        })(e);
+      } finally {
+        submissionLatch.current = false;
+      }
     },
     [
       form,

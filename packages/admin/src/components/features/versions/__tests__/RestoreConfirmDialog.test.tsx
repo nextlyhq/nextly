@@ -106,3 +106,28 @@ describe("RestoreConfirmDialog", () => {
     expect(screen.getByRole("button", { name: /Restoring/ })).toBeDisabled();
   });
 });
+
+describe("RestoreConfirmDialog — unsaved changes in the live editor", () => {
+  const base = {
+    open: true,
+    onOpenChange: vi.fn(),
+    versionNo: 3,
+    onConfirm: vi.fn(),
+  };
+
+  it("warns that the restore will discard unsaved editor changes", () => {
+    render(<RestoreConfirmDialog {...base} unsavedChanges />);
+
+    expect(
+      screen.getByText(/unsaved changes that this restore will discard/i)
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing about unsaved changes when the editor is clean", () => {
+    render(<RestoreConfirmDialog {...base} />);
+
+    expect(
+      screen.queryByText(/unsaved changes that this restore will discard/i)
+    ).not.toBeInTheDocument();
+  });
+});
