@@ -3801,32 +3801,20 @@ describe("a document whose branches share one object", () => {
   }
 
   it("is refused for its SIZE rather than walked", () => {
-    // Nineteen objects, half a million entries. The selection is one unrelated
-    // top-level node and was found immediately; what has to be bounded is the
-    // scan that goes looking for the scope it sits in.
-    const plan = planSaveAsPattern(pageWith(18), ["mine"], target, anyParent);
+    // THIRTY levels — thirty-one objects, and 2^30 entries to anything that
+    // walks them. The selection is one unrelated top-level node, found
+    // immediately; what has to be bounded is the scan that goes looking for the
+    // scope it sits in.
+    //
+    // The DEPTH is the evidence, and it is why this needs no timing threshold.
+    // Bounded, the scan reads at most `maxNodes + 1` entries and returns in
+    // under a millisecond. Unbounded, it reads a billion — measured, the cost
+    // doubles per level from 47ms at depth 18, so this depth is minutes. So the
+    // two implementations differ by RETURNING and NOT RETURNING, and a test
+    // that completes at all separates them. Nothing here measures the machine.
+    const plan = planSaveAsPattern(pageWith(30), ["mine"], target, anyParent);
 
     expect(plan.problem).toBe("exceeds-limits");
-  });
-
-  it("costs the same at six levels deeper", () => {
-    // A RATIO between two runs in one process, never a wall-clock ceiling: a
-    // ceiling measures the machine, and the exponential version passed a
-    // generous one at small depths. Six more levels is 64x the entries, so
-    // anything proportional to the document is unmissable here — measured at
-    // 17x before the bound, and the walk stops at the cap either way now.
-    const time = (depth: number): number => {
-      const doc = pageWith(depth);
-      const start = performance.now();
-      planSaveAsPattern(doc, ["mine"], target, anyParent);
-      return performance.now() - start;
-    };
-    time(10);
-
-    const shallow = time(12);
-    const deep = time(18);
-
-    expect(deep / Math.max(shallow, 0.05)).toBeLessThan(8);
   });
 
   it("refuses a NaN cap before walking, not after", () => {
@@ -3835,32 +3823,21 @@ describe("a document whose branches share one object", () => {
     // this bound exists to stop runs in full before anything rejects the
     // configuration. The published limit rule already refuses that.
     //
-    // Asserted as a RATIO between two depths, not as a throw: the configuration
-    // is rejected later in the component planner too, so `toThrow` alone passes
-    // just as well on the unbounded version — after it has done the work.
-    const spent = (depth: number): number => {
-      const doc = pageWith(depth);
-      const start = performance.now();
-      try {
-        planSaveAsComponent(
-          doc,
-          ["mine"],
-          componentTarget,
-          { properties: [] },
-          anyParent,
-          { ...DEFAULT_LIMITS, maxNodes: Number.NaN }
-        );
-      } catch {
-        // The refusal is the point; what this measures is when it arrives.
-      }
-      return performance.now() - start;
-    };
-    spent(10);
-
-    const shallow = spent(12);
-    const deep = spent(18);
-
-    expect(deep / Math.max(shallow, 0.05)).toBeLessThan(8);
+    // At THIRTY levels the throw is the evidence, which it is not at a shallow
+    // depth: the component planner rejects the same configuration later anyway,
+    // so a shallow `toThrow` passes on the unbounded version too — after it has
+    // done the work. Here the unbounded version has a billion entries to read
+    // before it reaches that rejection, so it does not arrive at all.
+    expect(() =>
+      planSaveAsComponent(
+        pageWith(30),
+        ["mine"],
+        componentTarget,
+        { properties: [] },
+        anyParent,
+        { ...DEFAULT_LIMITS, maxNodes: Number.NaN }
+      )
+    ).toThrow(RangeError);
   });
 
   it("still plans when the sharing is somewhere the save is not", () => {
