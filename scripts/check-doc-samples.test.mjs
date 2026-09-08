@@ -26,6 +26,19 @@ import {
  * old scoring accept what the new scoring rejects is.
  */
 
+/** A compiler host serving one in-memory `/probe.d.ts`, for the control below. */
+const declarationHost = text => {
+  const host = ts.createCompilerHost({});
+  const original = host.getSourceFile.bind(host);
+  host.getSourceFile = (name, langVersion, ...rest) =>
+    name === "/probe.d.ts"
+      ? ts.createSourceFile(name, text, langVersion, true, ts.ScriptKind.TS)
+      : original(name, langVersion, ...rest);
+  host.fileExists = name => name === "/probe.d.ts" || ts.sys.fileExists(name);
+  host.readFile = name => (name === "/probe.d.ts" ? text : ts.sys.readFile(name));
+  return host;
+};
+
 /** What the baseline held before fences were part of an identity. */
 const messageOnly = line => line.slice(line.indexOf("  ") + 2);
 
@@ -663,16 +676,6 @@ describe("isModule asks the compiler rather than listing node kinds", () => {
         )
     );
 
-  it("compiles a fence that only exports a namespace", () => {
-    // `export as namespace X` parses as a NamespaceExportDeclaration, which no
-    // kind in the list matched, so such a fence was never compiled and carried
-    // whatever else it said into the baseline unread. TypeScript's own error
-    // for it, TS1314, says the syntax may only appear in a module file.
-    const code = "export as namespace Nextly;\ndeclare const a: number;\n";
-    expect(isModule(code, "ts")).toBe(true);
-    expect(byKindList(code)).toBe(false);
-  });
-
   it("compiles a fence whose only module syntax is import.meta", () => {
     // TypeScript sets its module indicator for `import.meta`, so this fence is
     // a module to the compiler that would compile it while the list read it as
@@ -745,66 +748,66 @@ describe("rebaseContextDiagnostics accounts for every line", () => {
   });
 });
 
-describe("a declaration fence keeps declaration-file grammar", () => {
-  const declaration = [
-    "export as namespace Nextly;",
-    "",
-    "export interface Thing {",
-    "  a: string;",
-    "}",
-  ].join("\n");
+describe("a fence whose only module syntax is a namespace export", () => {
+  const namespaceOnly = "export as namespace Nextly;\ndeclare const a: number;\n";
 
-  it("writes a .d.ts fence as one", () => {
-    expect(extensionFor({ meta: 'title="index.d.ts"', lang: "ts", code: "" })).toBe(
-      "d.ts"
-    );
-    // The control: the pattern this replaced stopped at `.ts`, so the file went
-    // to the compiler under the wrong grammar.
-    expect('title="index.d.ts"'.match(/\.(tsx?)\b/)?.[1]).toBe("ts");
-    // And the ordinary cases still answer as they did.
-    expect(
-      extensionFor({ meta: 'title="nextly.config.ts"', lang: "ts", code: "" })
-    ).toBe("ts");
-    expect(
-      extensionFor({ meta: 'title="app/page.tsx"', lang: "tsx", code: "" })
-    ).toBe("tsx");
+  it("stays a fragment", () => {
+    expect(isModule(namespaceOnly, "ts")).toBe(false);
   });
 
-  it("compiles a namespace export clean in a declaration file", () => {
-    // Driven through the real compile rather than the predicate, because the
-    // predicate cannot say what TypeScript does with the file afterwards.
-    const asDeclaration = compile(
-      [
-        {
-          file: "docs/example.mdx",
-          index: 0,
-          lang: "ts",
-          meta: 'title="index.d.ts"',
-          code: declaration,
-        },
-      ],
-      "test-declaration"
-    );
-    expect(asDeclaration).toEqual([]);
+  it("is not invisible, because an uncompiled fence still counts as a sample", () => {
+    // The reason the line above is deliberate rather than a hole. Coverage is
+    // ratcheted per page in both directions, so a page that gains a fence the
+    // gate cannot compile fails on its sample count until somebody rewrites the
+    // baseline. Asserted through the comparison the gate actually runs.
+    const coverage = {
+      files: ["docs/a.mdx"],
+      samples: 2,
+      compiled: 1,
+      perPage: { "docs/a.mdx": { samples: 2, compiled: 1 } },
+    };
+    const baseline = {
+      coverage: { pages: 1, samples: 1, compiled: 1 },
+      samplesPerPage: { "docs/a.mdx": { samples: 1, compiled: 1 } },
+      counted: {},
+      findings: {},
+    };
+    const { gained } = compareToBaseline({
+      baseline,
+      coverage,
+      counted: {},
+      fingerprint: {},
+    });
+    expect(gained.join("\n")).toContain("samples was 1, now 2");
   });
 
-  it("still reports a namespace export outside a declaration file", () => {
-    // The control on the control: the syntax is not merely tolerated
-    // everywhere. Without the title the fence is an ordinary `.ts`, and
-    // TypeScript's own error says the syntax belongs to declaration files.
+  it("would be counted as compiled while checking nothing, if it were compiled", () => {
+    // The other half of the reason. `compileOnce` runs with `skipLibCheck`,
+    // under which a declaration file's body reports nothing at all, and it
+    // appends `export {}` to every sample, which makes a namespace-only
+    // declaration file valid and erases the one error a reader would meet.
+    const broken = "export interface Thing { a: NoSuchTypeAnywhere }\n";
     const asScript = compile(
-      [
-        {
-          file: "docs/example.mdx",
-          index: 0,
-          lang: "ts",
-          meta: "",
-          code: declaration,
-        },
-      ],
-      "test-not-a-declaration"
+      [{ file: "docs/a.mdx", index: 0, lang: "ts", meta: "", code: broken }],
+      "test-script-checks"
     );
-    expect(asScript.join("\n")).toContain("TS1315");
+    expect(asScript.join("\n")).toContain("TS2304");
+    // The control: the same body under the options a declaration file would get
+    // is silent, so "compiled" would not mean "checked".
+    const program = ts.createProgram(
+      ["/probe.d.ts"],
+      {
+        noEmit: true,
+        strict: true,
+        skipLibCheck: true,
+        target: ts.ScriptTarget.ES2022,
+        lib: ["lib.es2022.d.ts"],
+      },
+      declarationHost(`${broken}\nexport {};\n`)
+    );
+    expect(
+      program.getSemanticDiagnostics(program.getSourceFile("/probe.d.ts"))
+    ).toEqual([]);
   });
 });
 
@@ -904,6 +907,24 @@ describe("contextOnlyWorthRecording deduplicates on identity", () => {
     // The control: the two really do share an identity, so only the page
     // separates them.
     expect(identityOf(contextOnly[0])).toBe(identityOf(firstPass[0]));
+  });
+
+  it("keeps two occurrences in one fence as two", () => {
+    // `identityOf` drops the line number on purpose, so a finding that moves
+    // down a fence stays the same finding. As a dedup key that is wrong: one
+    // fence saying `Cannot find name 'Foo'` on two lines is two occurrences,
+    // and the fingerprint downstream counts occurrences, so collapsing them
+    // meant a second identical error moved nothing the gate compares.
+    const contextOnly = [
+      missingFoo("docs/a.mdx#1", 3),
+      missingFoo("docs/a.mdx#1", 7),
+    ];
+    expect(contextOnlyWorthRecording({ contextOnly, firstPass: [] })).toEqual(
+      contextOnly
+    );
+    // The control: the two really do share a baseline identity, so only the
+    // location separates them.
+    expect(identityOf(contextOnly[0])).toBe(identityOf(contextOnly[1]));
   });
 
   it("records a block pasted into several continuations once", () => {

@@ -203,16 +203,9 @@ export const extensionFor = sample => {
   // of it is not the file that title names: forcing `.ts` on it when the pasted
   // part contains JSX makes it fail to parse for a reason the page does not
   // have. `prependedLines` is only set on a rebuild.
-  //
-  // `.d.ts` is kept whole rather than reduced to `ts`. A declaration file is a
-  // different grammar: `export as namespace X` is valid in one and reports
-  // TS1315 in the other, so compiling a fence headed `title="index.d.ts"` as a
-  // plain `.ts` invents a finding the reader never meets. Measured against the
-  // compiler: the same body is clean written as `.d.ts` and reports TS1315
-  // written as `.ts`, with or without the appended `export {}`.
   const stated = sample.prependedLines
     ? undefined
-    : sample.meta?.match(/\.(d\.ts|tsx?)\b/)?.[1];
+    : sample.meta?.match(/\.(tsx?)\b/)?.[1];
   if (stated) return stated;
   return sample.lang === "tsx" || looksLikeJsx(sample.code) ? "tsx" : "ts";
 };
@@ -322,12 +315,30 @@ export const isModule = (code, extension = "tsx") => {
   ts.forEachChild(parsed, walk);
   if (loads) return true;
 
-  // `export as namespace X`, which TypeScript answers "not a module" to while
-  // its own error says the syntax may only appear in a module file. Left as a
-  // fragment it is never compiled, so a fence carrying it takes its API
-  // mistakes into the baseline unread. Compiled, it reports TS1314, which is
-  // the finding a reader copying that fence would meet.
-  return parsed.statements.some(ts.isNamespaceExportDeclaration);
+  // A fence whose only module syntax is `export as namespace X` stays a
+  // fragment, deliberately.
+  //
+  // It reads like a hole: the fence is never compiled, so nothing in it is
+  // checked. It is not one. A fence that is not compiled still counts in its
+  // page's `samples`, and coverage is ratcheted per page in BOTH directions, so
+  // adding one fails the gate with `samples was 1, now 2` until somebody
+  // rewrites the baseline. Measured, by adding such a fence to a page and
+  // running the gate with this branch absent.
+  //
+  // Compiling it instead would cost more than it returns. The syntax belongs to
+  // a declaration file, and this harness cannot check one: `compileOnce` runs
+  // with `skipLibCheck`, under which a `.d.ts` body reports NOTHING — measured,
+  // a `.d.ts` declaring a field of a nonexistent type is silent while the same
+  // text as `.ts` reports TS2304. It also appends `export {}` to every sample,
+  // which makes a namespace-only declaration file valid and erases the one
+  // error a reader would meet. So compiling one would raise coverage while
+  // checking nothing, which is the defect this gate already has filed against
+  // `require()` fences.
+  //
+  // Doing it properly means a second program for declaration samples, with its
+  // own options and no appended export. Worth building when a page has one; no
+  // page does.
+  return false;
 };
 
 /**
@@ -1603,21 +1614,24 @@ export function rebaseContextDiagnostics({
  * continuations arrives here four times.
  */
 export function contextOnlyWorthRecording({ contextOnly, firstPass }) {
-  // Page AND identity. `identityOf` returns `#3 <message>`, which is scoped to
-  // a page by the map the baseline stores it in; used on its own as a key it
-  // makes `docs/a.mdx#1` and `docs/elsewhere.mdx#1` the same diagnostic.
+  // The whole rebased line: page, fence, LINE NUMBER and message.
   //
-  // Wrapped rather than passed by name: `identityOf` takes a second parameter,
-  // and `map` hands a callback the index as its second argument, so
-  // `map(identityOf)` splits every message on the string "0".
-  const keyOf = line => `${pageOf(line)}\u0000${identityOf(line)}`;
-  const reportedAlready = new Set(firstPass.map(line => keyOf(line)));
+  // Not the baseline identity, which drops the line number on purpose so a
+  // finding that moves down a fence stays the same finding. Used as a dedup key
+  // that is wrong in both directions: `docs/a.mdx#1` and `docs/elsewhere.mdx#1`
+  // become one diagnostic, and one fence saying `Cannot find name 'Foo'` on two
+  // lines becomes one occurrence, while the fingerprint downstream counts
+  // occurrences. A second identical error would then move nothing.
+  //
+  // The line numbers do match across the two passes: a pasted block is its own
+  // code verbatim, and these lines have already been rebased onto it, so the
+  // location a first-pass compile reported is the location this one reports.
+  const reportedAlready = new Set(firstPass);
   const seen = new Set();
   const worth = [];
   for (const line of contextOnly) {
-    const key = keyOf(line);
-    if (reportedAlready.has(key) || seen.has(key)) continue;
-    seen.add(key);
+    if (reportedAlready.has(line) || seen.has(line)) continue;
+    seen.add(line);
     worth.push(line);
   }
   return worth;
