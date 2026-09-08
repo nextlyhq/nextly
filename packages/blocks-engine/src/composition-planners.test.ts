@@ -3859,6 +3859,14 @@ describe("a document whose branches share one object", () => {
     const deep = scanOf(30);
 
     expect(deep.problem).toBe("exceeds-limits");
+    // The counter OBSERVED the walk. Without this the test is satisfied by a
+    // probe that never counts: a mistyped key leaves both scans at zero, and
+    // `0 <= cap` and the equality below both hold while `problem` keeps coming
+    // from the production cap. The suite would then accept a dead tripwire —
+    // and the tripwire is what stops a later loss of the bound from hanging
+    // this test for hours instead of failing it. Measured: with this assertion
+    // removed, a mistyped key in the probe failed nothing at all.
+    expect(deep.reads).toBeGreaterThan(cap / 2);
     expect(deep.reads).toBeLessThanOrEqual(cap);
     // INDEPENDENT of depth, which is the whole property. Eighteen more levels
     // is 2^18 times the document and must be the same amount of reading.
@@ -3880,6 +3888,14 @@ describe("a document whose branches share one object", () => {
     const { root, reads } = counted(30, cap);
     const doc = page([node("mine", { props: { mark: "target" } }), root]);
 
+    // The CONTROL, and this test needs one more than most: zero reads is the
+    // answer being asserted, so a probe that never counts gives it for free.
+    // A valid save over the same document proves the counter observes this
+    // walk before the count of zero is allowed to mean anything.
+    planSaveAsPattern(doc, ["mine"], target, anyParent);
+    expect(reads()).toBeGreaterThan(0);
+    const before = reads();
+
     expect(() =>
       planSaveAsComponent(
         doc,
@@ -3890,7 +3906,8 @@ describe("a document whose branches share one object", () => {
         { ...DEFAULT_LIMITS, maxNodes: Number.NaN }
       )
     ).toThrow(RangeError);
-    expect(reads()).toBe(0);
+    // NOTHING was added by the refused call — the document was never touched.
+    expect(reads()).toBe(before);
   });
 
   it("still plans when the sharing is somewhere the save is not", () => {
