@@ -61,7 +61,7 @@ export default defineSingle({
   },
   hooks: {
     afterChange: [
-      async ({ doc }) => {
+      async ({ data }) => {
         await fetch("/api/revalidate?tag=site-settings", { method: "POST" });
       },
     ],
@@ -246,15 +246,15 @@ What a `beforeChange` handler returns is written without being re-validated.
 ```typescript title="src/singles/site-settings.ts"
 hooks: {
   afterChange: [
-    async ({ doc }) => {
+    async ({ data }) => {
       // Invalidate ISR / CDN caches when settings change
       await fetch("/api/revalidate?tag=site-settings", { method: "POST" });
     },
   ],
   afterRead: [
-    async ({ doc }) => {
+    async ({ data }) => {
       // Add a computed field
-      return { ...doc, fullTitle: `${doc.siteName} - ${doc.tagline}` };
+      return { ...data, fullTitle: `${data.siteName} - ${data.tagline}` };
     },
   ],
 }

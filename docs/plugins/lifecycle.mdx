@@ -13,7 +13,7 @@ ordering and version constraints. For the errors these rules produce, see the
 definePlugin({
   name: "@acme/nextly-plugin-thing",
   version: "1.0.0",      // your plugin's semver (used by others' dependsOn ranges)
-  nextly: "^1",          // core-compat range (see Version compatibility)
+  nextly: ">=0.0.2-alpha.63", // core-compat range (see Version compatibility)
   contributes: {
     /* declarative nouns: collections, extend, permissions, routes, admin, events */
   },
@@ -49,6 +49,8 @@ dependency relationship, their **array order** in `defineConfig({ plugins: [...]
 breaks the tie.
 
 ```ts
+import { defineConfig } from "nextly";
+
 export default defineConfig({
   // a runs before b (array order), unless dependsOn says otherwise
   plugins: [a(), b()],
@@ -66,7 +68,7 @@ Declare dependencies on other plugins by **package name → version range**:
 definePlugin({
   name: "@acme/nextly-plugin-reports",
   version: "1.0.0",
-  nextly: "^1",
+  nextly: ">=0.0.2-alpha.63",
   // Hard requirement: must be installed and in-range, and inits first.
   dependsOn: { "@acme/nextly-plugin-core": "^2" },
   // Enhance-if-present: fine if absent; if present it must be in-range and inits first.
@@ -91,7 +93,7 @@ an out-of-range core is a fail-fast error (`reason: "core-incompatible"` /
 `"invalid-nextly-range"`).
 
 ```ts
-nextly: "^1 || ^2", // may span multiple majors
+nextly: ">=0.0.2-alpha.63", // a range may span multiple majors once they exist
 ```
 
 Prereleases (alpha/beta) count as in-range. For runtime feature-detection, read
@@ -105,7 +107,7 @@ so disabling a plugin doesn't drop its tables or strand its data. This lets an
 integrator turn a plugin's behavior off without a destructive schema change.
 
 ```ts
-definePlugin({ name: "@acme/nextly-plugin-thing", version: "1.0.0", nextly: "^1", enabled: false });
+definePlugin({ name: "@acme/nextly-plugin-thing", version: "1.0.0", nextly: ">=0.0.2-alpha.63", enabled: false });
 ```
 
 To actually remove a plugin's tables and data, remove it from the config and run

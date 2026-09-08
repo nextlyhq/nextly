@@ -107,15 +107,42 @@ function protectedFields(
     .sort();
 }
 
-function refuse(fields: string[], at: "where" | "sort"): never {
+/** Where a field was named, and what naming it there would disclose. */
+type Position = "where" | "sort" | "groupBy";
+
+/**
+ * One row per position, rather than a ternary chain.
+ *
+ * A table because each position leaks the same hidden value by a DIFFERENT
+ * route, so each refusal has to say which route -- and a chain that grows a
+ * branch per position stops being readable at exactly the point a third one
+ * arrives.
+ */
+const REFUSALS: Record<Position, { code: string; because: string }> = {
+  where: {
+    code: "FIELD_NOT_FILTERABLE",
+    because:
+      "Filtering on a field you may not read would reveal its contents through the rows returned.",
+  },
+  sort: {
+    code: "FIELD_NOT_SORTABLE",
+    because:
+      "Ordering by a field you may not read reveals how its values compare across rows.",
+  },
+  groupBy: {
+    code: "FIELD_NOT_GROUPABLE",
+    because:
+      "Grouping by a field you may not read publishes its distinct values as the buckets themselves, which redaction never sees because the value is never rendered in a row.",
+  },
+};
+
+function refuse(fields: string[], at: Position): never {
+  const { code, because } = REFUSALS[at];
   throw NextlyError.validation({
     errors: fields.map(field => ({
       path: `${at}.${field}`,
-      code: at === "sort" ? "FIELD_NOT_SORTABLE" : "FIELD_NOT_FILTERABLE",
-      message:
-        at === "sort"
-          ? `The field "${field}" carries a read rule, so it cannot be used to sort. Ordering by a field you may not read reveals how its values compare across rows.`
-          : `The field "${field}" carries a read rule, so it cannot be used to filter. Filtering on a field you may not read would reveal its contents through the rows returned.`,
+      code,
+      message: `The field "${field}" carries a read rule, so it cannot be used to ${at === "groupBy" ? "group" : at === "sort" ? "sort" : "filter"}. ${because}`,
     })),
   });
 }
@@ -194,6 +221,34 @@ export function assertSortableField(
   const name = sort.replace(/^-/, "").split(".")[0];
   const denied = protectedFields(kind, slug, [name]);
   if (denied.length > 0) refuse(denied, "sort");
+}
+
+/**
+ * Refuse a GROUP BY that names a field carrying a read rule.
+ *
+ * 🔴 A third disclosure route, and the one the other two guards do not cover.
+ * `where` leaks a hidden value through which rows come back and `sort` through
+ * where they land; grouping leaks it MORE directly than either, because the
+ * distinct values become the buckets. A caller never sees the column -- field
+ * redaction strips it from every row -- and reads the whole value set off the
+ * labels instead. Selecting the field is not required, and refusing it does not
+ * help: the answer is the grouping, not the row.
+ *
+ * Conservative for the reason the module states: a field read rule is a
+ * function of the ROW, there is no row at query time, and a precondition that
+ * cannot decide fails closed.
+ */
+export function assertGroupableField(
+  kind: EntityKind,
+  slug: string,
+  groupBy: string | undefined,
+  opts: { overrideAccess?: boolean; frameworkFilter?: boolean } = {}
+): void {
+  if (opts.overrideAccess || opts.frameworkFilter || !groupBy) return;
+  // Nested paths address the field that OWNS the rule, as `where` does.
+  const name = groupBy.split(".")[0];
+  const denied = protectedFields(kind, slug, [name]);
+  if (denied.length > 0) refuse(denied, "groupBy");
 }
 
 /**

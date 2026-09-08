@@ -211,6 +211,8 @@ during startup instead of (or in addition to) a CI step. Opt in via config:
 
 ```ts
 // nextly.config.ts
+import { defineConfig } from "nextly/config";
+
 export default defineConfig({
   db: {
     runMigrationsOnBoot: true, // default: false

@@ -45,6 +45,7 @@ export interface WidgetQuery {
   status?: "published" | "draft" | "all";
   select?: string[];
   sort?: string;
+  groupBy?: string;
   limit?: number;
 }
 
@@ -82,6 +83,7 @@ export interface RawWidgetQuery {
   status: unknown;
   select: unknown;
   sort: unknown;
+  groupBy: unknown;
   limit: unknown;
 }
 
@@ -105,6 +107,7 @@ export function readWidgetQuery(query: unknown): RawWidgetQuery {
     status: q.status,
     select: q.select,
     sort: q.sort,
+    groupBy: q.groupBy,
     limit: q.limit,
   };
 }
@@ -550,6 +553,43 @@ function assertSortFieldDeclared(
   return sort;
 }
 
+/**
+ * Confirms the group key agrees with the op, and names a field the source
+ * declared.
+ *
+ * Op and key are judged TOGETHER rather than by two independent guards,
+ * because the failure worth closing is a key that validates and is then
+ * ignored. `groupBy` means something only to the `groupBy` op: carried
+ * alongside `count` it would pass a field check, ride along in the returned
+ * query and change no result, which reads back to the caller as a grouped
+ * count they asked for and did not get. A refusal names the mismatch instead.
+ *
+ * The empty direction is refused for the same reason. `op: "groupBy"` with no
+ * key has no bucket to group into, and leaving that for execution to discover
+ * moves the failure a long way from the thing that caused it.
+ *
+ * The key is checked against the same `declared` set `sort` and `select` are
+ * checked against, so one naming a field the source never published is refused
+ * here rather than reaching a compiler that would have to guess at its column.
+ */
+function assertGroupByAgreesWithOp(
+  source: WidgetSource,
+  groupBy: unknown,
+  declared: ReadonlySet<string>,
+  op: WidgetOp
+): string | undefined {
+  if (op !== "groupBy") {
+    if (groupBy !== undefined) fail(`groupBy is not valid for op "${op}"`);
+    return undefined;
+  }
+  if (groupBy === undefined) fail('op "groupBy" requires a groupBy field');
+  if (typeof groupBy !== "string") fail("groupBy must be a string");
+  if (!declared.has(groupBy)) {
+    fail(`groupBy references undeclared field "${groupBy}" on "${source.id}"`);
+  }
+  return groupBy;
+}
+
 /** Confirms `status`, when present, is one of the known values, and returns it. */
 function assertValidStatus(status: unknown): WidgetQuery["status"] | undefined {
   if (status === undefined) return undefined;
@@ -600,8 +640,8 @@ function clampLimit(limit: unknown): number {
  * The returned query is safe to compile: its source exists, its op is
  * supported, every field it names was declared by that source (at every
  * `where` nesting depth, and only via operators the query layer actually
- * understands, on conditions that are neither `null` nor empty), and its
- * limit is a bounded, finite integer.
+ * understands, on conditions that are neither `null` nor empty), its group
+ * key agrees with its op, and its limit is a bounded, finite integer.
  */
 export function validateWidgetQuery(query: unknown): WidgetQuery {
   const raw = readWidgetQuery(query);
@@ -637,6 +677,7 @@ export function validateReadWidgetQuery(
   assertSelectFieldsDeclared(source, select, declared);
   const sort = assertSortFieldDeclared(source, raw.sort, declared);
   const status = assertValidStatus(raw.status);
+  const groupBy = assertGroupByAgreesWithOp(source, raw.groupBy, declared, op);
 
   return {
     source: source.id,
@@ -645,6 +686,7 @@ export function validateReadWidgetQuery(
     ...(status ? { status } : {}),
     ...(select ? { select } : {}),
     ...(sort ? { sort } : {}),
+    ...(groupBy ? { groupBy } : {}),
     limit: clampLimit(raw.limit),
   };
 }

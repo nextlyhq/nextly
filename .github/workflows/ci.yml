@@ -150,8 +150,22 @@ jobs:
           # run only inside the gated ci job — so an edit to either must not
           # skip the very job that checks it. They are re-added after the
           # inert filter rather than encoded in it, because ERE cannot negate.
+          #
+          # `docs/` is re-added for the same reason and it is a newer one: the
+          # published pages carry TypeScript the `Doc samples compile` step
+          # checks, and that step lives in the gated job because it needs the
+          # packages built. Left inert, the one check that reads these pages
+          # would be the one thing a change to them skipped.
+          #
+          # The cost is real: a prose-only edit under docs/ now runs the whole
+          # job. A path filter cannot tell prose from a code fence, and a gate
+          # that does not run for the changes it exists to ratchet is worth
+          # nothing, which this repository learned the expensive way when a
+          # change that could not compile reached production because no check
+          # built the app.
           NOT_INERT=$({ printf '%s\n' "$CHANGED" | grep -vE "$INERT" || true
-                        printf '%s\n' "$CHANGED" | grep -xE 'AGENTS(\.measured)?\.md' || true; } | sort -u | grep . || true)
+                        printf '%s\n' "$CHANGED" | grep -xE 'AGENTS(\.measured)?\.md' || true
+                        printf '%s\n' "$CHANGED" | grep -E '^docs/' || true; } | sort -u | grep . || true)
 
           {
             echo "### CI scope"
@@ -235,13 +249,15 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:docs-claims
 
-      # The integration jobs select packages with a hand-written filter list, so
-      # a package that gains the task and is not added to it runs NOWHERE: the
-      # unit job no longer includes those files and no leg selects them, and
-      # every job stays green because what would have been reported is absent.
-      - name: Integration lane covers every package that declares it
+      # Both lanes select packages with a hand-written filter list, so a package
+      # that gains a test task and is not added to one runs NOWHERE, and every
+      # job stays green because what would have been reported is absent. That is
+      # not hypothetical: `nextly` and `@nextlyhq/admin` sat outside the unit
+      # list with 15623 passing tests between them until this check was widened
+      # to cover `test` as well as `test:integration`.
+      - name: Every test task is run by a lane
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: pnpm check:integration-lane
+        run: pnpm check:test-lanes
 
       # The About line and topic list are repository settings, not files, so every
       # check that reads git's index is blind to them. Reports unverifiable rather
@@ -521,6 +537,20 @@ jobs:
 
       # `./e2e` is named explicitly: it is a workspace member but sits under
       # neither glob, being neither something we publish nor something we run.
+      # After Build, deliberately: the samples resolve `nextly` and `@nextlyhq/*`
+      # through the real exports map of the packages in this commit, which
+      # exists only once they are built. Mapped paths would have answered for a
+      # subpath the package does not export, and the exports map is exactly what
+      # a sample can get wrong: three snippets in the authentication guide
+      # imported `nextly/lib/env`, which is not in it.
+      #
+      # It ratchets rather than gates outright, because the pages already carry
+      # findings and a check that is red when nothing is wrong teaches people to
+      # re-run reds instead of reading them.
+      - name: Doc samples compile
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
+        run: pnpm check:doc-samples
+
       - name: Lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: pnpm turbo lint --continue --filter='./packages/*' --filter='./apps/*' --filter='./e2e'
@@ -533,49 +563,44 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
-      # Unit tests. Named packages rather than all of them: `nextly` and
-      # `@nextlyhq/admin` carry a large pre-existing failing baseline (stale
-      # test scaffolding, not product bugs) and are being repaired in a
-      # follow-up that adds them here once green. Everything gated below passes
-      # today, so a new failure in any of these packages is a real regression
-      # and blocks the merge — which is the whole point, and the reason the job
-      # was named "Test" long before it ran any.
+      # Unit tests for everything under `packages/`, selected by LOCATION
+      # rather than by a written-out list of names. `turbo test` skips a package
+      # that declares no `test` script, so the glob and a correct list run the
+      # same commands - measured on this tree, both select the same 22 - and
+      # only one of them can fall out of step with the packages. It fell out of
+      # step: `nextly` (907 files, 11562 tests) and `@nextlyhq/admin` (407,
+      # 4061) passed for weeks outside the list, gating nothing, on
+      # `e6797c5d1`. Twelve `nextly` files ran by name in the two steps above,
+      # which is 1.3% of its suite and enough to make the package look present.
+      # A package added under `packages/` now gates on the commit that adds it.
       #
-      # ui / storage-s3 / storage-uploadthing have no test files yet; listed so
-      # they gate automatically the moment they gain one.
-      # admin-css is listed because its suite compiles a fixture stylesheet, and
-      # what that compile emits depends on the repository around it rather than
-      # on this package alone - so it is a suite an unrelated change can turn
-      # red, which is exactly the kind nothing should have to remember to run.
+      # `./packages/*` and not `./apps/*`: the Build and Lint steps above name
+      # both because an app is built and linted, but `test` dependsOn `^build`
+      # and an app is a leaf depending on nearly every package, so filtering
+      # turbo to one pulls the whole graph into a step that needs only what
+      # Build already produced. The playground runs its own suites below.
+      #
       # NOT gated on Build, unlike the four steps around it: turbo.jsonc gives
       # `test` `dependsOn: ["^build"]`, so `turbo test` rebuilds the dependency
       # subgraph of whatever it is filtered to. A Build failure in a package
       # none of these depends on - an app, which is a leaf - would otherwise
-      # silence every suite listed here for no reason, and a failure in
-      # one they DO depend on is reported as an attributed `#build` failure
-      # here rather than as the type-aware noise the others would produce.
+      # silence every suite here for no reason, and a failure in one they DO
+      # depend on is reported as an attributed `#build` failure here rather
+      # than as the type-aware noise the others would produce.
+      #
+      # `--concurrency` is what makes room for the full set. turbo defaults to
+      # 10 tasks at once and a runner here has 4 vCPUs, and each task's vitest
+      # spawns cores-1 workers of its own, so the step was asking for about 30
+      # processes on 4 cores. Wall-clock timeouts measure per-test CPU, so
+      # oversubscription that deep pushed jsdom component suites in `admin` and
+      # `plugin-form-builder` past their budgets the first time the full set
+      # ran. At 50% the step completes in 15m39s with 35 tasks. A percentage
+      # rather than a count: it follows the runner rather than being a number
+      # that is right on one machine size. Capping WORKERS instead would not
+      # have helped, since cores-1 on a 4-vCPU runner is already 3.
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: >-
-          pnpm turbo test
-          --filter=@nextlyhq/blocks-engine
-          --filter=@nextlyhq/blocks-react
-          --filter=@nextlyhq/builder
-          --filter=@nextlyhq/plugin-page-builder
-          --filter=@nextlyhq/plugin-form-builder
-          --filter=@nextlyhq/plugin-seo
-          --filter=@nextlyhq/plugin-sdk
-          --filter=@nextlyhq/ui
-          --filter=@nextlyhq/admin-css
-          --filter=@nextlyhq/adapter-drizzle
-          --filter=@nextlyhq/adapter-postgres
-          --filter=@nextlyhq/adapter-mysql
-          --filter=@nextlyhq/adapter-sqlite
-          --filter=@nextlyhq/storage-s3
-          --filter=@nextlyhq/storage-uploadthing
-          --filter=@nextlyhq/storage-vercel-blob
-          --filter=@nextlyhq/telemetry
-          --filter=create-nextly-app
+        run: pnpm turbo test --concurrency=50% --filter='./packages/*'
         env:
           TURBO_CACHE_DIR: .turbo
 

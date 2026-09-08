@@ -24,6 +24,8 @@ Passes are bounded so a single write never turns into an unbounded delete.
 Set `webhooks.retention` in `nextly.config.ts`. Every field is optional; the defaults suit most installs.
 
 ```ts
+import { defineConfig } from "nextly/config";
+
 export default defineConfig({
   webhooks: {
     retention: {
