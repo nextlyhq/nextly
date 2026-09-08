@@ -120,8 +120,10 @@ const plugin: PluginDefinition = {
   name: 'my-plugin',
   version: '0.1.0',
   nextly: '>=0.0.2-alpha.63',
-  collections: [MyCollection],
+  contributes: { collections: [MyCollection] },
 
+  // Placement and appearance stay at the top level. This is complementary to
+  // `contributes.admin`, which is the declarative menu, pages and views surface.
   admin: {
     order: 50,
     description: 'What this plugin does',
