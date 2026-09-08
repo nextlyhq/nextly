@@ -29,6 +29,22 @@ export { useDocumentIdentity, type DocumentIdentity } from "@nextlyhq/admin";
 export type { ComponentPath } from "@nextlyhq/admin";
 
 /**
+ * The props a custom collection Edit view is handed (@experimental).
+ *
+ * A plugin registering `admin.components.views.Edit.Component` receives these,
+ * and had no way to type against them without reaching into the admin package
+ * directly. `documentLock` is the pair a colleague's claim withholds: it is
+ * absent while creating, which has no document to claim, and absent from a view
+ * rendered outside the entry page.
+ *
+ * 🔴 Republished rather than restated. The admin declares the shape and derives
+ * the lock pair from the affordances the editor itself acts on, so a plugin
+ * typing its own copy would go on compiling while an affordance renamed there
+ * quietly stopped reaching the write gates that read it.
+ */
+export type { CustomEditViewProps, DocumentLockGates } from "@nextlyhq/admin";
+
+/**
  * Which language the surrounding document is being edited in (@experimental).
  *
  * A field inside a localized document can say WHICH document it is in but not

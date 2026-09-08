@@ -39,6 +39,8 @@
 
 import type { ComponentType } from "react";
 
+import type { DocumentLockGates } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
+
 import {
   componentRegistry,
   CORE_COMPONENT_PREFIX,
@@ -87,12 +89,7 @@ export interface CustomEditViewProps {
    *
    * Absent while creating, which has no document to claim.
    */
-  documentLock?: {
-    /** Fields should render uneditable: the document is someone else's. */
-    readOnly: boolean;
-    /** Save, delete and every other write should be withheld. */
-    actionsDisabled: boolean;
-  };
+  documentLock?: DocumentLockGates;
 }
 
 /**
