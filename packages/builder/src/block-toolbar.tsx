@@ -52,6 +52,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
@@ -270,27 +271,21 @@ export function BlockToolbar({
    * rather than nothing at all. That sentence is the reason the button stays
    * pressable, and swallowing the press here would take it away.
    */
-  // A RECORD over the verb set rather than a chain ending in `else`.
+  // The SHARED runner map, not a second one.
   //
-  // 🔴 The chain's last arm was `delete`, so a verb added to `ToolbarActionId`
-  // and not wired here did not fail to compile — it fell through and DELETED
-  // the block the author had selected. Measured: adding an id makes `ICONS`
-  // fail with TS2741 and left the dispatch silent, so the compiler pointed at
-  // the icon, the developer added one, and the new button then deleted things.
+  // 🔴 The dispatch here was a chain of `else if` ending in a bare `else
+  // verbs.delete()`, so a verb added to `ToolbarActionId` and not wired did not
+  // fail to compile — it fell through and DELETED the block the author had
+  // selected. Measured: adding an id makes `ICONS` fail with TS2741 and left
+  // the dispatch silent, so the compiler pointed at the icon, a developer
+  // supplied one, and the new button then deleted things.
   //
-  // Keyed by a typed union rather than by arbitrary input, so this is a lookup
-  // the compiler checks both ways: every verb needs an entry, and an entry
-  // nobody declares is rejected.
-  const perform = React.useMemo<Record<ToolbarActionId, () => void>>(
-    () => ({
-      "select-parent": () => verbs.selectParent(),
-      "move-up": () => verbs.move("up"),
-      "move-down": () => verbs.move("down"),
-      duplicate: () => verbs.duplicate(),
-      delete: () => verbs.delete(),
-    }),
-    [verbs]
-  );
+  // Taken from `blockActionRunners` rather than written again here. A second
+  // exhaustive record makes the compiler demand an entry in BOTH and prove
+  // nothing about the two agreeing — this bar could be wired to a different
+  // verb than the palette and the context menu, which is the drift the
+  // exhaustiveness was added to prevent, one level up.
+  const perform = React.useMemo(() => blockActionRunners(verbs), [verbs]);
 
   const run = React.useCallback(
     (action: ToolbarAction) => {

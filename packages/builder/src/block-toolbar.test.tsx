@@ -193,12 +193,21 @@ describe("BlockToolbar", () => {
     // deleted the block. Asserted per verb rather than on the union, because
     // what went wrong was one verb answering for another.
     register();
-    for (const label of [
-      "Select parent",
-      "Move up",
-      "Move down",
-      "Duplicate",
-    ]) {
+    // DERIVED from what the bar actually renders, not a list written here. A
+    // fixed list covers the verbs that existed when it was written, so the next
+    // verb — the very thing this guards — would never be clicked by it, and the
+    // other expectations could be updated around a button that silently
+    // deletes.
+    mount(editorSpy(pair(), "a"));
+    const offered = screen
+      .getAllByRole("button")
+      .map(button => button.getAttribute("aria-label") ?? "")
+      .filter(label => label !== "Delete");
+    cleanup();
+    // The bar really did offer something, so an empty loop cannot pass this.
+    expect(offered.length).toBeGreaterThan(0);
+
+    for (const label of offered) {
       const editor = editorSpy(pair(), "a");
       mount(editor);
       fireEvent.click(screen.getByLabelText(label));
