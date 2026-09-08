@@ -51,6 +51,9 @@ const TYPESCRIPT_EXTENSIONS = /\.(?:ts|tsx|mts|cts)$/;
  * indistinguishable from a hash gap in the summary line, which is the reason
  * this is a named constant rather than a number tucked into one call.
  */
+
+import { parseTurboPlan } from "./turbo-plan.mjs";
+
 const PROBE_TIMEOUT_MS = 180_000;
 
 function dryRun() {
@@ -59,31 +62,11 @@ function dryRun() {
     ["exec", "turbo", "run", "check-types", "--dry=json"],
     { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
   );
-  // Turbo's document is pretty-printed from column zero, while the tools around
-  // it are not silent: pnpm emits config warnings and turbo a version banner,
-  // and which stream each uses varies between a terminal and a runner. So the
-  // document is located by the first line that OPENS it, rather than by the
-  // first `{` anywhere — a brace inside a warning would otherwise start the
-  // parse mid-sentence and fail on the character after it.
-  const lines = raw.split("\n");
-  const start = lines.findIndex(line => line.startsWith("{"));
-  if (start === -1) {
-    throw new Error(
-      `turbo --dry=json produced no JSON document. First 400 chars:\n${raw.slice(0, 400)}`
-    );
-  }
-  const document = lines.slice(start).join("\n");
-  try {
-    return JSON.parse(document);
-  } catch (cause) {
-    // Naming what was actually received, because the parser's own message
-    // ("Expected property name at position 1") describes the text and not
-    // where it came from, which leaves the next reader with nothing to act on.
-    throw new Error(
-      `turbo --dry=json did not parse. First 400 chars of the document:\n${document.slice(0, 400)}`,
-      { cause }
-    );
-  }
+  // Located rather than assumed: pnpm emits config warnings and turbo a
+  // version banner, and which stream each uses varies between a terminal and a
+  // runner. `parseTurboPlan` is the one reader of a turbo plan in this repo,
+  // so the rule about where the document starts is stated once.
+  return parseTurboPlan(raw, "turbo run check-types --dry=json");
 }
 
 function resolvedTasks() {

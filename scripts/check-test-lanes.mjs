@@ -41,6 +41,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parseTurboPlan } from "./turbo-plan.mjs";
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
@@ -150,13 +152,15 @@ export function workspaceManifests(cwd, run = execFileSync) {
       maxBuffer: 32 * 1024 * 1024,
     })
   );
-  return projects
-    .map(project => relative(cwd, project.path ?? ""))
-    // The workspace root is a project to pnpm and not a package to this: it
-    // declares no suites of its own and no lane selects it.
-    .filter(directory => directory !== "" && directory !== ".")
-    .map(directory => `${directory}/package.json`)
-    .sort();
+  return (
+    projects
+      .map(project => relative(cwd, project.path ?? ""))
+      // The workspace root is a project to pnpm and not a package to this: it
+      // declares no suites of its own and no lane selects it.
+      .filter(directory => directory !== "" && directory !== ".")
+      .map(directory => `${directory}/package.json`)
+      .sort()
+  );
 }
 
 /**
@@ -186,28 +190,13 @@ export function packagesInPlan(plan, task) {
  * `--dry=json` is appended to the real command rather than reconstructed, so
  * what is measured is what CI runs.
  *
- * 🔴 `--silent` is load-bearing. Without it pnpm echoes the package name and
- * the command before handing over, and finding the plan meant scanning for the
- * first `{` — which took a brace out of that preamble on a runner whose npm
- * warnings differ from a laptop's, and the whole check failed on a
- * `SyntaxError` at position 1. Silencing pnpm removes the preamble instead of
- * teaching a scanner to skip it, and the JSON then starts at the first byte.
- *
- * 🔴 `--silent` is not sufficient, and no pnpm flag is. It silences the SCRIPT;
- * a complaint about the config itself is written while pnpm READS that config,
- * before there is a script to be silent about, and it goes to stdout. Measured
- * on the runner: `WARN  Issue while reading "…/_temp/.npmrc". Failed to replace
- * env in config: ${NODE_AUTH_TOKEN}` prepended 214 bytes to a 1.75 MB plan and
- * the parse threw at position 1. Measured against that same input,
- * `--loglevel=error` and `--reporter=silent` both leave it exactly 214 bytes
- * long — the warning precedes flag handling, so suppression cannot reach it.
- *
- * So the reader separates the two instead, and the separator is the COLUMN.
- * Note why the obvious `indexOf("{")` is still wrong, and it is the same brace
- * the line above was bitten by: that warning quotes `${NODE_AUTH_TOKEN}`, so
- * the first `{` in the stream belongs to the diagnostic. turbo pretty-prints
- * the plan from column zero and every pnpm diagnostic is indented, so a
- * LINE-INITIAL `{` is the first byte that can begin the plan.
+ * 🔴 `--silent` is load-bearing and is not sufficient alone. Without it pnpm
+ * echoes the package name and the command before handing over, so the preamble
+ * is removed rather than skipped. It does NOT remove a warning raised while
+ * READING configuration — a runner whose `.npmrc` interpolates an unset token
+ * prints one before any reporter exists to silence — so the plan is located
+ * rather than assumed to start at the first byte. `parseTurboPlan` owns that,
+ * for both readers of a turbo plan in this repo.
  */
 export function planForScript(script, cwd, run = execFileSync) {
   const output = run("pnpm", ["--silent", "run", script, "--dry=json"], {
@@ -215,21 +204,7 @@ export function planForScript(script, cwd, run = execFileSync) {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-  const start = output.search(/^\{/m);
-  try {
-    // Refused rather than parsed when no line begins an object: slicing from
-    // -1 would drop the last character and report a syntax error about a
-    // stream that never contained a plan at all.
-    if (start < 0) throw new SyntaxError("no line begins a JSON object");
-    return JSON.parse(output.slice(start).trim());
-  } catch (error) {
-    // Never a bare parse error: what this was reading is the only thing that
-    // explains it, and a `SyntaxError` alone costs a CI round trip to diagnose.
-    throw new Error(
-      `\`pnpm ${script} --dry=json\` did not produce a turbo plan. ` +
-        `${error.message}. It began: ${JSON.stringify(output.slice(0, 200))}`
-    );
-  }
+  return parseTurboPlan(output, `\`pnpm ${script} --dry=json\``);
 }
 
 /**
@@ -488,7 +463,9 @@ if (invokedDirectly) {
     process.exit(1);
   }
 
-  console.log("check-test-lanes: ok — every package's test task is run by a lane.");
+  console.log(
+    "check-test-lanes: ok — every package's test task is run by a lane."
+  );
   for (const line of summary) console.log(line);
   // Said on the way past rather than only in the source, so a reader taking
   // this as proof of coverage knows which shape it did not judge.
