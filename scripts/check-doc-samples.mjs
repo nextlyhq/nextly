@@ -284,6 +284,7 @@ export function collectDocSamples() {
  * disagreement would be invisible.
  */
 export function compile(samples, label, ignore = SUPPLIED_BY_THE_READER) {
+  suppressedByTheReaderRule.length = 0;
   const first = compileOnce(samples, label, ignore);
   if (first.unparsed.length === 0) return first.diagnostics;
   // Only the samples that failed to parse, identified by the file TypeScript
@@ -514,7 +515,20 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
       };
     };
 
-    const keep = d => !ignore.some(re => re.test(d.text));
+    // Suppressed diagnostics are counted, not vanished. Each pattern here is
+    // keyed on `unknown` or `{}`, which in these pages comes from document
+    // fields a reader's `nextly generate:types` would answer and this checkout
+    // cannot. Nothing in a diagnostic proves that origin, though, so a genuine
+    // mistake that happens to involve `unknown` would be dropped too — and a
+    // suppression nobody can see is the one kind this gate must not have. The
+    // report says how many were suppressed and by which rule, so the number is
+    // available to argue with.
+    const keep = d => {
+      const rule = ignore.find(re => re.test(d.text));
+      if (!rule) return true;
+      suppressedByTheReaderRule.push({ rule: String(rule), text: d.text });
+      return false;
+    };
 
     // The compiler's own complaints about its setup, which neither of the two
     // collections below carries. A production-only install without @types/node
@@ -545,6 +559,15 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+/**
+ * What the reader-supplied rules dropped in the last compile.
+ *
+ * Module-level rather than returned, so the many callers of `compile` do not
+ * all have to thread it through; the audit reads it straight after the compile
+ * it belongs to.
+ */
+export const suppressedByTheReaderRule = [];
 
 /** An import this compilation could not resolve. */
 export const UNRESOLVED_IMPORT = /error TS2307: Cannot find module '([^']+)'/;
@@ -1156,6 +1179,9 @@ async function auditDocs() {
     re => re !== READER_OWNED_FILE && re !== IMPLICIT_ANY_PARAMETER
   );
   const firstPass = compile(samples, "docs", AUDIT_IGNORES);
+  // Read straight after the compile it belongs to, before any later one
+  // overwrites it.
+  const suppressed = [...suppressedByTheReaderRule];
   const { continued: continuations } = await classifyDocDiagnostics({
     diagnostics: firstPass,
     samples: all,
@@ -1346,6 +1372,12 @@ async function auditDocs() {
       `earlier one without repeating its imports).\n` +
       `  ${String(real.length)} diagnostic(s) a reader would hit, across ` +
       `${String(byFile.size)} page(s).\n` +
+      (suppressed.length > 0
+        ? `  ${String(suppressed.length)} were suppressed as reader-supplied: ` +
+          `${[...new Set(suppressed.map(d => d.text.match(/error TS\d+/)?.[0] ?? "?"))].sort().join(", ")}. ` +
+          `Nothing in a diagnostic proves it came from an ungenerated document ` +
+          `field, so this number is the size of that assumption.\n`
+        : "") +
       `  ${String(uninstalled.length)} import a package that is published but ` +
       `not installed here, which a reader would have.\n` +
       `  ${String(stillContinued.length)} use a name an earlier block on the same ` +
