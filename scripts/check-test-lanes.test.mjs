@@ -305,6 +305,50 @@ describe("this repository", () => {
         }
       });
 
+      it("finds the plan behind whatever pnpm printed first", () => {
+        // Measured on the runner rather than imagined: pnpm complained about
+        // the config it was READING — `WARN  Issue while reading
+        // ".../_temp/.npmrc". Failed to replace env in config:
+        // ${NODE_AUTH_TOKEN}` — and 214 bytes of it landed on stdout ahead of a
+        // 1.75 MB plan. Two lanes failed on `SyntaxError` at position 1 while
+        // turbo had answered perfectly, and it took three pull requests with
+        // it.
+        //
+        // No pnpm flag reaches this: the warning is written while the config is
+        // read, before there is a script to be silent about. Measured against
+        // that same input, `--loglevel=error` and `--reporter=silent` both left
+        // the output exactly 214 bytes long.
+        //
+        // The `${...}` in the warning is the whole reason the separator is the
+        // COLUMN rather than the first brace — that quoted variable puts a `{`
+        // in the diagnostic, ahead of the plan's own.
+        const plan = '{\n  "id": "x",\n  "tasks": []\n}\n';
+        const warned =
+          ' WARN  Issue while reading "/x/.npmrc". ' +
+          'Failed to replace env in config: ${NODE_AUTH_TOKEN}\n' +
+          plan;
+
+        expect(planForScript("lane:test", root, () => warned)).toEqual({
+          id: "x",
+          tasks: [],
+        });
+      });
+
+      it("still refuses a stream that carries no plan at all", () => {
+        // The other half, and the one that matters more: a reader that skips
+        // to a brace must not become a reader that invents a pass. Slicing from
+        // a `search` miss would drop the last character and blame a syntax
+        // error on a stream that never held a plan.
+        const onlyNoise = " WARN  something went wrong\n";
+
+        expect(() => planForScript("lane:test", root, () => onlyNoise)).toThrow(
+          /did not produce a turbo plan/
+        );
+        expect(() => planForScript("lane:test", root, () => "")).toThrow(
+          /did not produce a turbo plan/
+        );
+      });
+
       it("runs every package that declares the task", () => {
         // Against the real tree and the real command, not a fixture: turbo is
         // asked what the lane script would execute, so what is measured is what
