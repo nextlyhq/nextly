@@ -435,6 +435,19 @@ describe("a provenance record's rename map", () => {
     ]).toEqual([["pricing", "pricing-1"]]);
   });
 
+  it("hands out a map of its own for a record that renamed nothing", () => {
+    // `ReadonlyMap` is readonly to TypeScript and nothing else: `.set` is still
+    // there at runtime, and this is a published function. A consumer writing to
+    // a module-wide empty singleton would make every later origin that renamed
+    // NOTHING claim that rename, and silently rewrite ids on a save with
+    // nothing to restore.
+    const whole = { ...base };
+    const first = patternRenames(whole);
+    (first as Map<string, string>).set("pricing", "pricing-1");
+
+    expect(patternRenames({ ...base })?.size).toBe(0);
+  });
+
   it("says nothing about a record it would not trust, or one that renames none", () => {
     // Undefined covers both, because a caller that must tell them apart is
     // asking `readBlockOrigin`, which answers in four.

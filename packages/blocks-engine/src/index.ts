@@ -163,6 +163,10 @@ export type {
   ReidentifiedSubtree,
   SlotDefaultSource,
   TreePosition,
+  // Beside `walkNodes`, because a caller BOUNDING a walk has to hold its
+  // options in a variable to build one — and the option that says the budget
+  // ran out is useless to anyone who cannot name the type carrying it.
+  WalkOptions,
 } from "./tree";
 
 // The one rule for which prop of a copied node holds a link, and what happens

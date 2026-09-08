@@ -438,7 +438,12 @@ function wholeOrigin(read: (key: string) => unknown): WholeOrigin | undefined {
 function readRenameRecord(
   value: unknown
 ): ReadonlyMap<string, string> | undefined {
-  if (value === undefined) return EMPTY_RENAMES;
+  // A FRESH map, not a shared empty one. `patternRenames` hands this to
+  // consumers, and a `ReadonlyMap` is only readonly to TypeScript — `.set` is
+  // still there at runtime. One caller adding an entry to a module-wide
+  // singleton would make every later origin that renamed NOTHING claim that
+  // rename, and silently rewrite ids on a save that had nothing to restore.
+  if (value === undefined) return new Map();
   if (!isPlainRecord(value)) return undefined;
   // The CURRENT ids, to reject a map that cannot be inverted. The record reads
   // source → copy, and restoring reads it the other way — so two sources
@@ -459,16 +464,6 @@ function readRenameRecord(
   }
   return renamed;
 }
-
-/**
- * The scope of a record that renames nothing.
- *
- * A shared map rather than one per absent record: an empty rename map is what
- * the ordinary insert writes — a collision is the exception — so a fresh
- * allocation here would be the common case, and a reader comparing two scopes
- * by identity would see two of them as a disagreement.
- */
-const EMPTY_RENAMES: ReadonlyMap<string, string> = new Map();
 
 /**
  * One entry of a rename map — stored data, non-empty on both sides, and naming
