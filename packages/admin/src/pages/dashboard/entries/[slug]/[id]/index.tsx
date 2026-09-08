@@ -15,11 +15,19 @@ import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 import { useMemo } from "react";
 
+import { entryTitleValue } from "@admin/components/features/entries/entry-title";
 import {
+  DocumentLockBanner,
   EntryForm,
+  useDocumentLockSurface,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
-import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
+import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
+import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
+import {
+  CONTENT_PAGE_MEASURE,
+  CONTENT_MEASURE_LENGTH,
+} from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -88,7 +96,7 @@ function EditEntryBreadcrumbs({
  */
 function EditEntryPageSkeleton() {
   return (
-    <PageContainer width={CONTENT_PAGE_MEASURE}>
+    <PageContainer width="full">
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading entry...
@@ -102,7 +110,13 @@ function EditEntryPageSkeleton() {
         {/* Main Content */}
         {/* `min-w-0` as the editor that replaces this carries it: without it
             this pane will not shrink and pushes the rail past the column. */}
-        <div className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6">
+        <div
+          className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6 mx-auto w-full"
+          // The editor that replaces this bounds its FIELD column, not the
+          // page, so a skeleton bounded at the page moves every field
+          // sideways the moment data arrives.
+          style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+        >
           {/* Breadcrumbs skeleton */}
           <div className="mb-6">
             <Skeleton className="h-5 w-64" />
@@ -125,7 +139,7 @@ function EditEntryPageSkeleton() {
         </div>
 
         {/* Sidebar */}
-        <div className="w-full lg:w-[360px] shrink-0  border-t border-border lg:border-t-0 lg:border-l border-border lg:border-border bg-card flex flex-col relative z-10">
+        <div className="w-full lg:w-[320px] shrink-0  border-t border-border lg:border-t-0 lg:border-l border-border lg:border-border bg-card flex flex-col relative z-10">
           <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] flex flex-col">
             {/* Sidebar Header/Actions Skeleton */}
             <div className="p-6  border-b border-border space-y-3">
@@ -187,28 +201,11 @@ function getEntryTitle(
   id: string,
   useAsTitle?: string
 ): string {
-  // 1. Try designated title field
-  if (useAsTitle && useAsTitle !== "id") {
-    const value = entry[useAsTitle];
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-    if (value !== undefined && value !== null && String(value).trim()) {
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      return String(value);
-    }
-  }
-
-  // 2. Try common title fields
-  const titleFields = ["title", "name", "label", "subject", "heading"];
-
-  for (const field of titleFields) {
-    const value = entry[field];
-    if (typeof value === "string" && value.trim()) {
-      return value;
-    }
-  }
-
-  // 3. Fallback to shortened ID
-  return `Entry ${id.substring(0, 8)}...`;
+  // The shared order, so this heading and the version comparison's name the
+  // same document the same way. Only the last resort is decided here: a
+  // heading must produce text, and a shortened id is what identifies an entry
+  // that says nothing about itself.
+  return entryTitleValue(entry, useAsTitle) ?? `Entry ${id.substring(0, 8)}...`;
 }
 
 // ============================================================================
@@ -282,6 +279,23 @@ export default function EditEntryPage({
   // the primary fetch above (same cache key) and needs no source copy.
   const isNonDefaultLocale =
     !!locale && !!defaultLocale && locale !== defaultLocale;
+  /*
+   * Called HERE, above this component's loading and error returns, because it
+   * is a hook and the page returns early several times below. What it produces
+   * is only read once those guards have passed; while the collection is still
+   * loading it reports no action, which is correct — there is nothing on screen
+   * to contribute one to.
+   */
+  const release = useAddToReleaseAction({
+    scopeKind: "collection",
+    scopeSlug: slug,
+    entryId: id,
+    // The same flag the editor's own publish controls read. A release member
+    // performs a publish or unpublish, and the route refuses a collection whose
+    // schema declares no lifecycle.
+    lifecycleEnabled: collection?.status,
+    onDefaultLocale: !isNonDefaultLocale,
+  });
   const { translateFrom, enterTranslationMode, exitTranslationMode } =
     useTranslationMode({ activeLocale: locale, defaultLocale });
   // The language the source is read AT. Translation mode names it explicitly;
@@ -305,6 +319,51 @@ export default function EditEntryPage({
 
   const isLoading = isLoadingCollection || isLoadingEntry;
   const error = collectionError || entryError;
+
+  // Resolved here, above this component's loading and error returns, for the
+  // reason the hooks above give: whether a custom view renders decides whether
+  // THIS page claims the document, and a hook cannot be asked that after a
+  // return. The registration hook has run, so the registry can answer.
+  const customEditViewPath =
+    collection?.admin?.components?.views?.Edit?.Component;
+  const CustomEditView = customEditViewPath
+    ? getComponent<CustomEditViewProps>(customEditViewPath)
+    : undefined;
+
+  /*
+   * A custom edit view replaces the FORM, not the facts about the document, so
+   * it takes the same claim the default editor takes. Without one it never
+   * announces itself to the lock, so a colleague opening the same document is
+   * told nobody holds it, and the editor is shown no holder and offered no
+   * takeover — on precisely the documents a project cared enough about to build
+   * a bespoke editor for.
+   *
+   * 🔴 Enabled ONLY on that branch. `EntryForm` claims for the default editor,
+   * and claiming in both places would put two claims on one document under one
+   * author, which the repository keys and releases separately. The condition is
+   * the resolved component rather than the registered path, because a path that
+   * resolves to nothing falls through to `EntryForm` and that branch has its
+   * own claim.
+   */
+  const customViewLock = useDocumentLockSurface({
+    scopeKind: "collection",
+    slug: slug ?? "",
+    entryId: id,
+    // 🔴 The same prerequisites the custom branch renders under, not merely a
+    // resolved component. A claim taken while the entry is still loading, or
+    // after it failed, heartbeats a document the editor is not looking at - and
+    // on a load failure that leaves the lock endpoint reachable, colleagues are
+    // told this person is editing a page that never appeared for them.
+    enabled: Boolean(
+      CustomEditView &&
+        slug &&
+        id &&
+        !isLoading &&
+        !error &&
+        collection &&
+        entry
+    ),
+  });
 
   /**
    * The page's measure, on every branch.
@@ -435,13 +494,6 @@ export default function EditEntryPage({
   const entryData = entry as unknown as Record<string, unknown>;
   const entryTitle = getEntryTitle(entryData, id, collection.admin?.useAsTitle);
 
-  // Check for custom Edit view component from plugins
-  const customEditViewPath =
-    collection.admin?.components?.views?.Edit?.Component;
-  const CustomEditView = customEditViewPath
-    ? getComponent<CustomEditViewProps>(customEditViewPath)
-    : undefined;
-
   // Shared callbacks for both default and custom views
   const handleSuccess = () => {
     // Stay on edit page - success toast is shown by mutation hook
@@ -467,6 +519,13 @@ export default function EditEntryPage({
       onSuccess: handleSuccess,
       onDelete: handleDelete,
       onCancel: handleCancel,
+      // The banner above says in words that changes cannot be saved while a
+      // colleague holds this. Passing the same decision the banner was derived
+      // from is what keeps that sentence true.
+      documentLock: {
+        readOnly: customViewLock.readOnly,
+        actionsDisabled: customViewLock.actionsDisabled,
+      },
     };
 
     return (
@@ -480,6 +539,22 @@ export default function EditEntryPage({
             />
           }
         >
+          {/* A custom edit view replaces the FORM, not the facts about the
+              document. Its editor is as able to save changes into a scheduled
+              release as any other, and omitting the banner here would withhold
+              the warning from precisely the documents a project cared enough
+              about to build a bespoke editor for. */}
+          <ScheduledReleaseBanner
+            document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
+            onDefaultLocale={!isNonDefaultLocale}
+          />
+          {/* Said for the same reason, about the other fact a second editor
+              needs: who has this document open. The strip renders nothing while
+              the claim is this editor's own. */}
+          <DocumentLockBanner
+            notice={customViewLock.notice}
+            onTakeOver={customViewLock.takeOver}
+          />
           {/* Boxed for the same reason the injection slots are: under the
               measured frame this is a direct child of a CSS grid, and the rule
               that puts a child in the content column can only place a
@@ -512,7 +587,7 @@ export default function EditEntryPage({
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <MeasuredPageFrame>
+      <MeasuredPageFrame contentCarriesMeasure>
         {/* Each injection slot gets a box of its own. Under the measured
             frame these are direct children of a CSS grid, and the rule that
             puts a child in the content column can only place a generated
@@ -521,14 +596,46 @@ export default function EditEntryPage({
             instead. The registry imposes no root-element contract on a plugin,
             so the page provides the box rather than trusting it to. */}
         {beforeEditPath && (
-          <div>
+          <div
+            // Bounded here rather than inheriting the page, which no longer
+            // caps: the frame gives the panel to the form-and-rail row, and a
+            // slot outside that row would otherwise stretch the whole width.
+            // Plugin content keeps the measure it had before the row took the
+            // panel, so nothing a plugin renders changes shape.
+            className="mx-auto w-full"
+            style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+          >
             <PluginSlot path={beforeEditPath} props={editInjectionProps} />
           </div>
         )}
+        {/* FULL WIDTH and first, matching the historical-version banner: this
+            is a standing fact about the whole document, and a bar constrained
+            to the content measure reads as a note about the fields under it.
+            It does not touch the per-language staleness markers in the language
+            panel — those answer a different question, and a stale translation
+            inside a scheduled release is exactly where an editor needs both. */}
+        <ScheduledReleaseBanner
+          document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
+          onDefaultLocale={!isNonDefaultLocale}
+        />
+        {release.dialog}
         <EntryForm
           collection={collection as unknown as EntryFormCollection}
           entry={entry}
           mode="edit"
+          /* The same destination the entry list already sends people to, and
+             the replacement the header's menu now names where `Show JSON` used
+             to be. The route knows how to navigate; the form does not. */
+          onViewApi={() =>
+            navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_API, { slug }))
+          }
+          /* Contributed to the editor's action model, which places it in the
+             overflow menu beside Duplicate: scheduling a release is a
+             document-management act rather than a leading one, and the toolbar
+             is reserved for the verbs an author reaches for while writing. */
+          documentActions={
+            release.contributed === null ? [] : [release.contributed]
+          }
           locale={locale}
           onLocaleChange={changeLocale}
           {...(seedFromLocale === undefined ? {} : { seedFromLocale })}
@@ -545,7 +652,15 @@ export default function EditEntryPage({
           onCancel={handleCancel}
         />
         {afterEditPath && (
-          <div>
+          <div
+            // Bounded here rather than inheriting the page, which no longer
+            // caps: the frame gives the panel to the form-and-rail row, and a
+            // slot outside that row would otherwise stretch the whole width.
+            // Plugin content keeps the measure it had before the row took the
+            // panel, so nothing a plugin renders changes shape.
+            className="mx-auto w-full"
+            style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+          >
             <PluginSlot path={afterEditPath} props={editInjectionProps} />
           </div>
         )}

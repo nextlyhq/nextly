@@ -40,6 +40,19 @@
  * preserve — each reasoned correctly from its own case, and the fourth case had
  * nothing to derive an answer from.
  *
+ * **Where the line falls, because the two cases look alike from a diff.** A
+ * primitive here handles what breaks ITSELF and does not police what breaks a
+ * later stage. `expandSlotDefaults` catching a `structuredClone` that THROWS is
+ * the first kind: without it the function cannot complete and the call site
+ * gets an exception instead of a node. Refusing a value that clones perfectly
+ * and is merely unstorable — a nested `Date`, a `BigInt` — would be the second,
+ * and is the fourth answer this rule exists to prevent.
+ *
+ * Stated here rather than only where it was decided, because it reads as an
+ * omission from any one call site: a reviewer looking at a clone guard and a
+ * missing storability check sees two spellings of one question. It is two
+ * questions, and only this module says so.
+ *
  * What they DO refuse is an ARGUMENT that would break id-addressing: a subtree
  * carrying a duplicate id, or an id already in the destination. That is a
  * different question. It is about an invariant these primitives depend on to
@@ -65,9 +78,18 @@
  * primitive was ALREADY going to rebuild, and never as a repair pass of its
  * own.
  */
+import type { SlotSpec } from "./block";
 import type { BlockNode } from "./document";
-import { walkForest } from "./forest-walk";
+import { isBlockType, renderedDomId } from "./document";
+import { isDescendable, walkForest } from "./forest-walk";
+import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
+import { MAX_DEPTH, MAX_NODES } from "./limits";
+import { canNest, canNestInSlot } from "./nesting";
+import type { NestingSource } from "./nesting";
+import { isPlainRecord } from "./plain-record";
+import { isUsableSlotName } from "./registry";
 import { defineEntry, ownEntry } from "./safe-record";
+import { isConditionGated } from "./visibility";
 
 /** Stable unique node id. `crypto.randomUUID` exists in Node ≥ 20 and browsers. */
 export function newId(): string {
@@ -84,6 +106,373 @@ export function makeNode(
   const node: BlockNode = { id: newId(), type, version, props };
   if (slots) node.slots = slots;
   return node;
+}
+
+/**
+ * How `expandSlotDefaults` resolves a block type to what it needs to know.
+ *
+ * A one-method source rather than the registry, matching how the rest of this
+ * package takes its inputs: resolving a type differs per caller — the editor
+ * asks the global registry, a test supplies a fixture — and the rule applied to
+ * the result is the same either way.
+ */
+export interface SlotDefaultSource {
+  get(type: string):
+    | {
+        version: number;
+        slots?: Record<string, SlotSpec>;
+        /**
+         * The child's own prop defaults, which a seeded child starts with just
+         * as a directly inserted one does. Without it a block reached through a
+         * parent's declaration arrives with `{}` while the same block chosen
+         * from the palette arrives with its defaults — one block with two
+         * starting states, decided by how the author happened to create it.
+         */
+        defaultProps?: object;
+        /** The child's own parent restriction, read to refuse an illegal seed. */
+        parent?: readonly string[];
+      }
+    | undefined;
+}
+
+/** What {@link SlotDefaultSource} answers with for a type it knows. */
+type ResolvedDefinition = NonNullable<ReturnType<SlotDefaultSource["get"]>>;
+
+/**
+ * How deep a chain of declared defaults may go.
+ *
+ * **This bounds THIS function's own recursion; it does not promise the result
+ * fits.** The same distinction the node budget below draws, and for the same
+ * reason stated at the top of this module: these primitives make no claim about
+ * whether what they build can be saved, and one place decides that at the point
+ * of writing. A subtree seeded into an already-deep slot can exceed the
+ * document's depth once placed, and the op layer refuses it — which is what
+ * happens to any oversized insert and is not this function's question. It
+ * cannot be this function's question: the insertion point belongs to the
+ * caller, and a value expanded here may be placed anywhere or nowhere.
+ *
+ * `MAX_DEPTH` supplies the ceiling because it is the natural one and inventing
+ * a second number would give the same question two answers — the failure this
+ * replaced, where a legal nine-deep declaration was truncated by a bound this
+ * module had chosen for itself.
+ *
+ * Less ONE, because the node these children hang from is created by the caller
+ * and occupies a level of its own. That removes the case that could never fit
+ * WHEREVER it landed; it does not make the remainder fit everywhere.
+ *
+ * The cycle set is what stops a block seeding itself at any remove, so this
+ * bounds only a chain of DISTINCT types.
+ */
+const MAX_SLOT_DEFAULT_DEPTH = MAX_DEPTH - 1;
+
+/**
+ * How many nodes one expansion may create, and why a depth bound is not enough.
+ *
+ * The depth bound limits how DEEP a declaration reaches; it says nothing about
+ * how WIDE. Ten children at each of eight levels is a legal set of declarations
+ * and about a hundred million nodes, every one of them minting a UUID — enough
+ * to exhaust the heap before anything downstream is asked a question.
+ *
+ * **This bounds THIS function's own allocation; it does not enforce a document
+ * limit.** The distinction is the one stated at the top of this module: these
+ * primitives make no claim about whether their result can be saved, and one
+ * place decides that at the point of writing. A host running a lower cap gets
+ * a subtree its op layer refuses, which is what happens to any oversized insert
+ * and is not this function's question.
+ *
+ * `MAX_NODES` supplies the ceiling because it is the natural one and inventing
+ * a second number would give the same question two answers. Less ONE, because
+ * the node these children hang from is created by the caller and is not charged
+ * here — spending the whole cap on children alone yields a subtree of
+ * `MAX_NODES + 1` that could never fit whatever the caller does.
+ */
+const MAX_SLOT_DEFAULT_NODES = MAX_NODES - 1;
+
+/**
+ * The nesting rules as they read from a block-definition source.
+ *
+ * DERIVED from the one source this function already holds rather than taken as
+ * a second parameter, for the reason `registrySlotSource` is derived from
+ * `registryBlockSource`: two readings of one set of definitions agree only
+ * until one of them changes. The RULE stays in `nesting.ts` — this supplies it
+ * the same declarations the expansion is reading, so a seed is judged by
+ * exactly the predicate that judges an author's own drag.
+ */
+function nestingFrom(definitions: SlotDefaultSource): NestingSource {
+  return {
+    parentsOf: type => definitions.get(type)?.parent,
+    slotAllowOf: (parentType, slot) => {
+      const slots = definitions.get(parentType)?.slots;
+      return slots === undefined ? undefined : ownEntry(slots, slot)?.allow;
+    },
+  };
+}
+
+/**
+ * The children a freshly placed block of `type` starts with, ready for
+ * `makeNode`'s `slots` argument.
+ *
+ * This is the layer that makes a declared default safe. A block declares its
+ * starting children by TYPE (`SlotSpec.defaultBlock`), and every node is minted
+ * here through `makeNode` — so each call produces ids that have never existed,
+ * and two parents expanded from one declaration cannot repeat each other's.
+ * Holding the children as stored nodes instead would make that collision the
+ * default behaviour rather than an unreachable one.
+ *
+ * Answers `undefined`, not an empty record, when nothing is to be created.
+ * `makeNode` writes a `slots` key only when one is supplied, so `undefined`
+ * leaves a container carrying no `slots` at all — which is what an empty
+ * container is, and what the editor's own emptiness check reads.
+ *
+ * A declared child is expanded RECURSIVELY, so a container that declares its
+ * own starting children arrives with them whether an author inserted it from
+ * the palette or a parent's declaration seeded it. The alternative makes a
+ * block's declaration depend on how it was reached, which is the one thing a
+ * declaration should not do.
+ *
+ * Four things are deliberately skipped rather than refused, because a block
+ * definition is code this package does not own and a bad entry in one must not
+ * make the block unplaceable:
+ * - an entry whose type the source cannot resolve contributes no child, since
+ *   a node of an unregistered type renders as a placeholder the author did not
+ *   ask for and cannot repair;
+ * - an entry the nesting rules refuse contributes no child, because seeding it
+ *   would build a document that the editor's own validation then reports as
+ *   invalid — a block that is illegal to drag in must not arrive by being
+ *   declared;
+ * - an entry naming a type already being expanded contributes no child, which
+ *   is what stops a declaration that cycles from recurring forever;
+ * - a slot left with no children by any of those is omitted entirely, so a
+ *   container never claims a slot it did not fill.
+ *
+ * The SHAPE of `defaultBlock` is not re-checked here. `registry.ts` refuses a
+ * malformed one at registration with an actionable message, for the same reason
+ * and in the same place it refuses a malformed `allow`: a reader that guards
+ * every field it touches turns a boot-time error a plugin author can fix into a
+ * silent difference in behaviour they cannot.
+ */
+export function expandSlotDefaults(
+  type: string,
+  definitions: SlotDefaultSource,
+  nesting?: NestingSource
+): Record<string, BlockNode[]> | undefined {
+  return expandFrom(
+    type,
+    definitions,
+    // The CALLER's rules when it has any, so a seeded child is judged by the
+    // same source that decided what the palette would offer. A caller holding
+    // its own nesting source and getting the registry's here would filter the
+    // palette by one rule set and populate the insert by another.
+    nesting ?? nestingFrom(definitions),
+    new Set([type]),
+    0,
+    { remaining: MAX_SLOT_DEFAULT_NODES }
+  );
+}
+
+/**
+ * One level of {@link expandSlotDefaults}, carrying what recursion needs.
+ *
+ * `ancestors` holds the types already being expanded on this path rather than
+ * every type seen anywhere, so two sibling slots may each seed the same child —
+ * which is a shape an author would draw — while a type that reaches itself may
+ * not.
+ */
+function expandFrom(
+  type: string,
+  definitions: SlotDefaultSource,
+  nesting: NestingSource,
+  ancestors: ReadonlySet<string>,
+  depth: number,
+  budget: { remaining: number }
+): Record<string, BlockNode[]> | undefined {
+  if (depth >= MAX_SLOT_DEFAULT_DEPTH) return undefined;
+  // A plain record, not merely "not undefined". `slots: null` reaches
+  // `Object.entries(null)` as a TypeError, and a supplied definition never
+  // passed registration — the same reason the entries below are checked. The
+  // enclosing map arrives through exactly the source its contents do.
+  const declaredSlots = definitions.get(type)?.slots;
+  if (!isPlainRecord(declaredSlots)) return undefined;
+
+  const expanded: Record<string, BlockNode[]> = {};
+  let filledAnySlot = false;
+
+  for (const [slotName, spec] of Object.entries(declaredSlots)) {
+    // Registration refuses a slot named for an `Object.prototype` member, and
+    // registration is not the only way a definition reaches here: a supplied
+    // definition the registry does not hold never passed that check. Filling
+    // such a slot materialises a key `assertNodeShape` then rejects, so the op
+    // is refused and the author's click does nothing, silently. The SAME
+    // predicate answers here, so the two paths cannot disagree about a name.
+    if (!isUsableSlotName(slotName)) continue;
+    const children = childrenForSlot(spec?.defaultBlock, {
+      type,
+      slotName,
+      definitions,
+      nesting,
+      ancestors,
+      depth,
+      budget,
+    });
+    // A slot whose declaration produced nothing is omitted entirely, so a
+    // container never claims a slot it did not fill.
+    if (children.length === 0) continue;
+    // `defineEntry` rather than assignment: a slot name is chosen by whichever
+    // package defined the block, so it is not a string this package controls,
+    // and assigning to `__proto__` would create no key while replacing the
+    // record's prototype.
+    defineEntry(expanded, slotName, children);
+    filledAnySlot = true;
+  }
+
+  return filledAnySlot ? expanded : undefined;
+}
+
+/** What one slot's declaration expands to, with every refused entry dropped. */
+function childrenForSlot(
+  declared: SlotSpec["defaultBlock"],
+  context: {
+    readonly type: string;
+    readonly slotName: string;
+    readonly definitions: SlotDefaultSource;
+    readonly nesting: NestingSource;
+    readonly ancestors: ReadonlySet<string>;
+    readonly depth: number;
+    readonly budget: { remaining: number };
+  }
+): BlockNode[] {
+  // The SHAPE is checked here and not only at registration, because
+  // registration is no longer the only way a definition reaches this function.
+  // `blockSourceFor` deliberately admits a caller-supplied definition the
+  // registry does not hold, so a host or fixture declaration never passes
+  // `registerBlocks` at all — and a non-array reaching the loop below throws
+  // `TypeError: declared is not iterable` at the author's click.
+  if (!Array.isArray(declared)) return [];
+  const children: BlockNode[] = [];
+  for (const entry of declared) {
+    const child = childForEntry(entry, context);
+    if (child !== null) children.push(child);
+  }
+  return children;
+}
+
+/**
+ * One declared entry as a node, or `null` where it must not be created.
+ *
+ * Separate from the slot loop because it answers a different question: the loop
+ * decides which slots get filled, this decides whether one declaration may
+ * become a child at all. Each `null` below is a distinct refusal, and keeping
+ * them together is what lets the loop above read as the shape it builds.
+ */
+type EntryContext = {
+  readonly type: string;
+  readonly slotName: string;
+  readonly definitions: SlotDefaultSource;
+  readonly nesting: NestingSource;
+  readonly ancestors: ReadonlySet<string>;
+  readonly depth: number;
+  readonly budget: { remaining: number };
+};
+
+/**
+ * The entry's resolved type and definition, or `null` for any reason it must
+ * not become a child.
+ *
+ * Every refusal lives here and none of them in the construction below, so the
+ * two questions stay apart: whether this declaration MAY become a child, and
+ * what that child is. Each `null` is a distinct reason, and the comments name
+ * the failure each one prevents rather than restating the condition.
+ */
+function resolvedEntry(
+  entry: unknown,
+  context: EntryContext
+): { type: string; definition: ResolvedDefinition } | null {
+  const { definitions, nesting, ancestors, budget } = context;
+  // Checked before the definition is even resolved: once the budget is spent
+  // nothing further can be built, so the cheapest possible refusal is the right
+  // one.
+  if (budget.remaining <= 0) return null;
+  // An entry is not trusted to BE an entry. A sparse array yields `undefined`
+  // here — `Array.prototype.every` skips a hole while `for...of` visits it, so
+  // a declaration validated by the first is read by the second — and an
+  // unregistered supplied definition never passed any shape check at all.
+  if (!isPlainRecord(entry)) return null;
+  const type = entry.type;
+  if (!isBlockType(type)) return null;
+  const definition = definitions.get(type);
+  // A node of an unregistered type renders as a placeholder the author did not
+  // ask for and cannot repair.
+  if (definition === undefined) return null;
+  // Both halves of the nesting rule, because `block.ts` is explicit that
+  // neither implies the other: the child says where it belongs, the slot says
+  // what it holds, and a seed has to satisfy both to be a placement the author
+  // could have made themselves.
+  if (!canNest(type, context.type, nesting).allowed) return null;
+  if (!canNestInSlot(type, context.type, context.slotName, nesting).allowed) {
+    return null;
+  }
+  // Already being expanded on this path, so creating it again would not
+  // terminate.
+  if (ancestors.has(type)) return null;
+  return { type, definition };
+}
+
+function childForEntry(
+  entry: unknown,
+  context: EntryContext
+): BlockNode | null {
+  const { definitions, nesting, ancestors, depth, budget } = context;
+  const resolved = resolvedEntry(entry, context);
+  if (resolved === null) return null;
+  const { type, definition } = resolved;
+
+  // The child's own defaults UNDERNEATH the entry's values, so a seeded child
+  // starts where a directly inserted one starts and the declaration overrides
+  // only what it actually names.
+  //
+  // Deep-copied, because the declaration and the definition both outlive every
+  // block expanded from them: handing out either object would let an edit to
+  // one inserted block reach back into the definition, and through it every
+  // block expanded from it afterwards. A shallow copy is not enough, because a
+  // declared value may be an array or a nested object.
+  // `isPlainRecord` judges the prototype, not the contents, so a declared prop
+  // holding a function or a symbol is a plain object that `structuredClone`
+  // refuses with a `DataCloneError`. Uncaught, that throws at the author's
+  // click rather than anywhere a plugin author would see it. The child is
+  // dropped instead, which is what every other unusable entry here does — a
+  // container arriving without one declared child is a state the editor
+  // already renders, and a thrown insert is not.
+  let props: Record<string, unknown>;
+  try {
+    props = structuredClone({
+      ...(definition.defaultProps ?? {}),
+      ...(isPlainRecord(entry) && isPlainRecord(entry.props)
+        ? entry.props
+        : {}),
+    });
+  } catch {
+    return null;
+  }
+
+  // Spent BEFORE recursing, so a child's own declared children are drawn from
+  // what remains after it rather than from the budget its parent saw.
+  budget.remaining -= 1;
+  return makeNode(
+    type,
+    // The CHILD's own schema version, never the parent's: a node stamped with
+    // its parent's version is read by the migration runner as older or newer
+    // than it is, and gets upgrade steps meant for a different block.
+    definition.version,
+    props,
+    expandFrom(
+      type,
+      definitions,
+      nesting,
+      new Set([...ancestors, type]),
+      depth + 1,
+      budget
+    )
+  );
 }
 
 /** Where an insert or move lands: a parent's slot, or the top level when `parentId` is absent. */
@@ -112,6 +501,21 @@ export interface WalkOptions {
    */
   maxNodes?: number;
   /**
+   * Called when the budget ran out, rather than the forest ending.
+   *
+   * The walk is the only place that knows, which is the reason `onCycle` is
+   * here too: a caller counting its own callbacks cannot see the entries the
+   * walk read and skipped, so a bound with no report is one that answers "I
+   * finished" and "I gave up" identically — and it fails in the PASSING
+   * direction, returning a partial answer as a whole one.
+   *
+   * It reports that `maxNodes` entries were READ and the walk stopped there.
+   * Whether anything remained is a different question this cannot answer, so a
+   * caller needing "more than N exist" bounds at N + 1 and reads this as the
+   * proof: N + 1 entries read is N + 1 entries that exist.
+   */
+  onBudgetSpent?: () => void;
+  /**
    * Called for each node skipped because it is its own ancestor.
    *
    * The walk is the only place that knows — detecting a cycle is a property of
@@ -138,17 +542,6 @@ function toWalkOptions(
 ): WalkOptions {
   if (third === undefined) return {};
   return "id" in third ? { parent: third } : third;
-}
-
-/** Whether an entry is a value this walk can treat as a node. */
-function isWalkableNode(node: unknown): node is BlockNode {
-  // `Array.isArray` is checked SEPARATELY because `typeof [] === "object"`, so
-  // the type test alone hands an array to `fn` as though it were a node. Every
-  // caller then reads its fields as `undefined` rather than failing: an
-  // id-uniqueness check sees `undefined` and compares it against other
-  // `undefined`s, a class reader finds no classes, a renderer finds no type.
-  // Silence in each case, from a value none of them can act on.
-  return typeof node === "object" && node !== null && !Array.isArray(node);
 }
 
 /**
@@ -195,9 +588,13 @@ export function walkNodes(
 ): void {
   const options = toWalkOptions(third);
   const limit = options.maxNodes ?? Number.POSITIVE_INFINITY;
-  if (limit <= 0) return;
+  if (limit <= 0) {
+    options.onBudgetSpent?.();
+    return;
+  }
 
   let read = 0;
+  let spent = false;
   walkForest(nodes, entry => {
     // Every entry READ spends the budget, not every entry that turned out to be
     // a node. Reading is the work being bounded, so a forest beginning with a
@@ -205,7 +602,12 @@ export function walkNodes(
     // sat untouched — the callback never fires, and a bound counting callbacks
     // cannot see it. `selectNodes` bounds the same quantity for the same reason.
     read += 1;
-    if (!isWalkableNode(entry.node)) return read >= limit ? "stop" : "skip";
+    if (read >= limit) spent = true;
+    // The WALK's own classification, not a second one beside it. An entry the
+    // walk declined to descend into is exactly an entry no caller can read
+    // fields off, and the two spellings this file used to carry differed in
+    // nothing but which of them a hostile entry crashed in.
+    if (!isDescendable(entry.node)) return read >= limit ? "stop" : "skip";
 
     // The shared walk does not descend into a node already on the path, so an
     // entry reported twice at the same identity is the cycle closing. Reported
@@ -219,6 +621,7 @@ export function walkNodes(
     fn(entry.node, entry.parent ?? options.parent);
     return read >= limit ? "stop" : "descend";
   });
+  if (spent) options.onBudgetSpent?.();
 }
 
 /** Find a node anywhere in the forest by id. */
@@ -230,7 +633,7 @@ export function findNode(
   walkForest(nodes, entry => {
     // Persisted forests reach here unvalidated, so an entry may be `null` or a
     // primitive and reading `id` off one throws.
-    if (!isWalkableNode(entry.node)) return "skip";
+    if (!isDescendable(entry.node)) return "skip";
     if (entry.node.id === id) {
       found = entry.node;
       // Abandons the walk with the stack unread. A recursive search noticed a
@@ -256,13 +659,20 @@ export function locateNode(
   nodes: BlockNode[],
   id: string
 ): NodeLocation | undefined {
-  const topIndex = nodes.findIndex(node => node.id === id);
+  // Read defensively at every step. This is a stored document and nothing here
+  // has validated it — a slot may hold `null` instead of an array, and a list
+  // may hold a hole — so an entry is asked for its id rather than assumed to
+  // have one. It matters because ONE damaged node anywhere in the forest would
+  // otherwise throw, and the caller looking for a completely unrelated
+  // selection elsewhere in the document gets a crash instead of an answer.
+  const topIndex = nodes.findIndex(node => node?.id === id);
   if (topIndex !== -1) return { index: topIndex };
   let found: NodeLocation | undefined;
   walkNodes(nodes, node => {
     if (found || !node.slots) return;
     for (const [slot, children] of Object.entries(node.slots)) {
-      const index = children.findIndex(child => child.id === id);
+      if (!Array.isArray(children)) continue;
+      const index = children.findIndex(child => child?.id === id);
       if (index !== -1) {
         found = { parent: node, slot, index };
         return;
@@ -336,8 +746,14 @@ function queueSlotRebuilds(
  * would let any unrelated edit silently destroy stored content that a caller
  * may still need to read or repair, which is a worse outcome than the throw it
  * replaced: the throw was loud and lost nothing.
+ *
+ * Published because those three are exactly what a caller rewriting one field
+ * across a stored forest gets wrong, and each was learned here rather than
+ * guessed. A planner stripping a lock or a provenance record wrote its own walk
+ * and inherited none of them; the rule is that a forest rewrite is this
+ * function with a different `fn`, not a new traversal.
  */
-function mapForest(
+export function mapForest(
   nodes: BlockNode[],
   fn: (node: BlockNode) => BlockNode
 ): BlockNode[] {
@@ -365,7 +781,7 @@ function mapForest(
     const entry = top.source[top.index];
     top.index += 1;
 
-    if (!isWalkableNode(entry)) {
+    if (!isDescendable(entry)) {
       top.out.push(entry);
       continue;
     }
@@ -633,6 +1049,589 @@ export function reidSubtree(node: BlockNode): BlockNode {
   // a second set of answers to the same three questions.
   const [rebuilt] = mapForest([node], reidOne);
   return rebuilt ?? node;
+}
+
+/**
+ * What re-identifying a subtree produced, when the caller needs to follow it.
+ *
+ * {@link reidSubtree} drops a copy's DOM ids, which is right when the copy is
+ * all anyone will look at. It is wrong when the subtree REFERS to itself: a
+ * link inside a saved pattern pointing at `#pricing` resolves to a node in the
+ * same pattern, and dropping the target's id leaves the copy carrying a link to
+ * nowhere — worse, to whatever `#pricing` the destination page happens to own.
+ *
+ * So the ids are remapped rather than dropped, and both maps are handed back.
+ * The engine cannot rewrite the references itself: a link's target lives in a
+ * block's props, and which prop holds one is a property of the block's
+ * definition rather than of the document format.
+ */
+export interface ReidentifiedSubtree {
+  /** The rebuilt subtree. */
+  node: BlockNode;
+  /** Every node's old id → its new one. */
+  nodeIds: ReadonlyMap<string, string>;
+  /**
+   * Every DOM id the subtree carried → its replacement.
+   *
+   * Keyed by the id as written. A subtree that already used one id on two nodes
+   * is malformed — validation reports it as a duplicate — and appears here once,
+   * mapped to the first replacement minted.
+   */
+  domIds: ReadonlyMap<string, string>;
+}
+
+/**
+ * What a re-identification does with the DOM ids it copies.
+ *
+ * Two words rather than a boolean, because the call site is where this is read
+ * and `true` at a call site says nothing about which way it points.
+ *
+ * - `{ avoid }` — mint only the ids the destination ALREADY holds, and carry
+ *   the rest verbatim. For an INSERT, which is the only caller that can name
+ *   what it is landing among.
+ * - `"keep"` — carry every id across and record none as moved. For a run being
+ *   lifted into a document of its OWN, which is every SAVE: nothing is placed
+ *   beside anything, so nothing can collide.
+ * - `"remint"` — mint every id unconditionally. For a copier that cannot see
+ *   its destination, which is composition inlining a definition into an
+ *   instance without reading the host.
+ *
+ * A DOM id is authored content — someone typed `hero`, and it appears in a URL
+ * fragment, a stylesheet and the attribute panel — so it is rewritten only when
+ * keeping it would put two elements on a page answering to one id. `{ avoid }`
+ * exists because `"remint"` was doing it always: inserting into a page holding
+ * no `hero` still produced `hero-e75f55fb`, and feeding that back through a
+ * save grew the id by nine characters every cycle without bound.
+ */
+export type DomIdPolicy =
+  | "remint"
+  | "keep"
+  | {
+      /** The DOM ids the destination already carries, folded as HTML folds them. */
+      readonly avoid: ReadonlySet<string>;
+    }
+  | {
+      /**
+       * DOM ids to put BACK, as they are now → as they were, keeping the rest.
+       *
+       * The inverse of what an `avoid` copy recorded. An insert renames an id
+       * only because the page it landed on already held that name, so the new
+       * one is a fact about that page rather than anything the author wrote —
+       * and a copy saved back out of the page carries it into a library where
+       * it means nothing, and grows another suffix on every insert-save cycle.
+       *
+       * A map rather than a re-mint, because the original cannot be derived
+       * from the current value: a minted id is the authored one plus a suffix
+       * drawn from a node id, and content from a script or an import may name
+       * its anchors that way deliberately. Only the copy that did the renaming
+       * knows, which is why it records it.
+       */
+      readonly restore: ReadonlyMap<string, string>;
+    };
+
+/** A re-identified FOREST, and the two maps describing what moved. */
+export interface ReidentifiedForest {
+  /** The rebuilt roots, in the order they were given. */
+  nodes: BlockNode[];
+  /** Every node's old id → its new one, across every root. */
+  nodeIds: ReadonlyMap<string, string>;
+  /**
+   * Every DOM id the forest carried → its replacement, across every root.
+   *
+   * EMPTY under {@link DomIdPolicy} `"keep"`, which is the honest record rather
+   * than an omission: nothing moved, so nothing needs following. A caller
+   * checking this map against a destination is asking which ids this copy
+   * introduces, and identity entries would answer that question wrongly.
+   */
+  domIds: ReadonlyMap<string, string>;
+}
+
+/**
+ * Deep-clone a FOREST with fresh ids, KEEPING its internal references usable.
+ *
+ * The same rebuild as {@link reidSubtree}, differing in what happens to a DOM
+ * id: dropped there, and here either minted afresh and recorded or carried
+ * across untouched, as {@link DomIdPolicy} says. Dropping is the one answer
+ * neither caller can use. Two copies of one pattern on a page must not emit the
+ * same HTML `id`, and a copy's internal anchor must still reach its own target
+ * — and an id that is simply gone satisfies neither.
+ *
+ * The minted id is DERIVED from the original (`pricing` becomes
+ * `pricing-<suffix>`) rather than freshly random, because it is a value authors
+ * read and write: it appears in a URL fragment, in a stylesheet and in the
+ * attribute panel. A UUID would be unique and unusable.
+ *
+ * ## Why a forest, and not one root at a time
+ *
+ * A saved selection is a contiguous RUN of siblings, so the document it becomes
+ * holds several roots, and re-identifying them with one call each is not the
+ * same operation. Each call can only see the subtree it was handed, so its
+ * `domIds` records that subtree's ids and nothing else — and a reference that
+ * crosses from one root to another finds no entry, and is left pointing at the
+ * ORIGINAL element. For `aria-labelledby` and `aria-describedby` that means the
+ * copy silently loses its accessible name, a failure invisible to everyone who
+ * does not use assistive technology. Re-identifying the roots TOGETHER is what
+ * makes the second pass see every id, so the guarantee is a property of this
+ * function rather than of each caller remembering not to loop.
+ *
+ * Uniqueness is guaranteed WITHIN the returned forest, not against the document
+ * it is going into — this function is given a forest and cannot see anything
+ * else. A caller inserting into a page it can read should check
+ * {@link ReidentifiedForest.domIds} against that page.
+ *
+ * ## Minting is for a copy that lands BESIDE its original
+ *
+ * That is the whole reason for it, so what a caller answers is which ids its
+ * destination already holds. `"keep"` is for the one landing among nothing: a
+ * run lifted out of a page to become a document of its OWN. `{ avoid }` is for
+ * one that can name what is there. Minting where neither says to is not merely
+ * unnecessary, it is wrong in three ways that were measured rather than
+ * argued.
+ *
+ * A DOM id is authored content: someone typed `hero`, and it appears in a URL
+ * fragment, a stylesheet and the attribute panel. Storing `hero-3ee4a0d4` puts
+ * a value in the library that no author wrote and every author sees.
+ *
+ * It is not idempotent. Save the same selection twice and the two stored copies
+ * differ, so anything fingerprinting content — `patternDigest` keeps `cssId`
+ * deliberately, because a copy derives from it — reports a change nobody made.
+ * A staleness signal that fires without cause teaches authors to dismiss the
+ * one that means something.
+ *
+ * And it accumulates. Save, insert, save over the source, insert again: the id
+ * grew by nine characters every cycle, `hero` to
+ * `hero-3ee4a0d4-fb48e67c-1118df3b` and on, with no bound.
+ */
+/** No node is gated — the set a restore walks with. */
+const EMPTY_NODE_SET: ReadonlySet<BlockNode> = new Set<BlockNode>();
+
+export function reidForestWithMap(
+  nodes: BlockNode[],
+  domIdPolicy: DomIdPolicy = "remint"
+): ReidentifiedForest {
+  const nodeIds = new Map<string, string>();
+  const domIds = new Map<string, string>();
+  const restoring = typeof domIdPolicy === "object" && "restore" in domIdPolicy;
+
+  // A RESTORE knows both halves of every move before the walk starts, so it
+  // seeds them. The other policies discover what moved as they go, and an id
+  // that was not minted contributes no entry — but a restore is undoing an
+  // insert's renames, and a selection may hold the REFERENCE without the node
+  // that renders it. Saving only the root carrying `aria-describedby` found
+  // nothing in the map, left the page-specific id in place, and put a pattern
+  // in the library naming an id that exists on exactly one page.
+  if (restoring) {
+    for (const [now, was] of domIdPolicy.restore) domIds.set(now, was);
+  }
+
+  // A node the renderer prunes puts NO id on the page, so none of its ids may
+  // be rewritten: renaming one and following every reference to it leaves a
+  // visible sibling's `#hero` pointing at a minted id nothing owns, where
+  // before it reached the destination's own `hero`.
+  //
+  // A RESTORE is the exception, and walks with an empty set. Gating decides
+  // what may be RENAMED, because a rename has to avoid the ids a page renders
+  // — a question about the page. Putting an id BACK asks nothing about the
+  // page: the insert renamed only ungated nodes, so everything in a restore map
+  // was renamed while visible, and a node an author gated afterwards still
+  // holds the minted id and still has to give it up. Leaving it behind restored
+  // the reference and not its target, pointing the two at different ids.
+  const hidden = restoring ? EMPTY_NODE_SET : hiddenSubtreeNodes(nodes);
+  const rebuilt = mapForest(nodes, original =>
+    reidOneKeepingReferences(original, nodeIds, domIds, domIdPolicy, hidden)
+  );
+  // A SECOND pass, because a node may reference an id defined on a node the
+  // first had not reached yet. Without it a copied `aria-labelledby` points at
+  // the original's id, so the copy loses its accessible name — the same gap
+  // composition has, closed the same way.
+  const linked = mapForest(rebuilt, copy => relinkOne(copy, domIds));
+  return { nodes: linked, nodeIds, domIds };
+}
+
+/**
+ * One copied node, with every reference to a re-minted id following the copy.
+ *
+ * Both halves matter and only one of them is markup. `aria-labelledby` lives in
+ * `attributes`; a link's target lives in `props` as `href: "#pricing"`, and a
+ * copy that moves the id without the link leaves the anchor resolving to
+ * nothing. Applied HERE rather than left to each caller, because the caller
+ * that forgets does not fail — it stores a document that renders, validates and
+ * quietly points somewhere else.
+ */
+function relinkOne(
+  copy: BlockNode,
+  domIds: ReadonlyMap<string, string>
+): BlockNode {
+  // `isPlainRecord`, not `!== undefined`. A persisted `attributes: null` is
+  // content the first pass deliberately carries through untouched, and handing
+  // it to the remapper enumerates null and throws — a rebuild that destroys a
+  // node because of a field on a different one.
+  const attributes = isPlainRecord(copy.attributes)
+    ? remapIdReferences(copy.attributes, domIds)
+    : copy.attributes;
+  // See `fragment-refs` for why a copier may rewrite a prop it has no schema
+  // for: only a whole string of `#` plus an id THIS copy minted is touched, and
+  // nothing but a reference to the copy's own target can spell that.
+  const props = remapFragmentProps(copy.props, domIds) as BlockNode["props"];
+  // And the BOUND form of the same field. A bound `href` keeps its literal in
+  // `bindings.href.fallback`, which is what renders when the source is empty —
+  // so leaving it behind makes the link work until the data does not, which is
+  // the one case the fallback exists for.
+  const bindings = remapFragmentBindings(
+    copy.bindings,
+    domIds
+  ) as BlockNode["bindings"];
+  // Every remapper returns its input unchanged when nothing matched, so an
+  // ordinary node is returned as it stands rather than reallocated.
+  if (
+    attributes === copy.attributes &&
+    props === copy.props &&
+    bindings === copy.bindings
+  ) {
+    return copy;
+  }
+  // Spread CONDITIONALLY. `{ ...copy, bindings }` writes the key even when the
+  // value is `undefined`, and a key holding `undefined` is a value JSON cannot
+  // carry — `applyOp` refuses the whole insert for it. An ordinary node has no
+  // `bindings`, so any copy that relinked anything at all produced an op group
+  // the apply then rejected, and the planner's dry run promised an insert that
+  // could not happen.
+  return {
+    ...copy,
+    ...(attributes === undefined ? {} : { attributes }),
+    ...(props === undefined ? {} : { props }),
+    ...(bindings === undefined ? {} : { bindings }),
+  };
+}
+
+/**
+ * Which of a set of candidate DOM ids one subtree's REFERENCES actually reach.
+ *
+ * A copy's rename record has to cover every id the copy still points at, not
+ * only the ids it renders. One root can define `#hero` while a sibling names it
+ * through `aria-describedby`, a `href="#hero"` prop, or that href's binding
+ * fallback — {@link reidForestWithMap} rewrites all three across the whole
+ * forest, so a record built from rendered ids alone leaves the referencing root
+ * with a page-specific id and no way back to what its source called it.
+ *
+ * Answered by RUNNING the relink pass rather than by a second enumeration of
+ * which fields hold a reference. That list lives in three places already
+ * ({@link ID_REFERENCE_ATTRIBUTES} and the two fragment remappers), and a
+ * fourth reader of it would agree with them exactly until one of them gained a
+ * carrier — at which point this would go on reporting a complete record while
+ * silently missing the new one. Running the pass cannot drift from the pass.
+ *
+ * The rewritten nodes are DISCARDED; only which lookups the pass made is kept.
+ * One entry per root, positionally, so the work is linear in the forest however
+ * many entries the candidate map holds.
+ */
+export function referencedDomIds(
+  roots: readonly BlockNode[],
+  candidates: ReadonlyMap<string, string>
+): ReadonlyMap<string, string>[] {
+  const perRoot = roots.map(() => new Map<string, string>());
+  if (candidates.size === 0) return perRoot;
+  // ONE probe for the whole forest, and the root being walked decides where a
+  // hit is recorded. Copying the candidates per root would put the map's size
+  // into the per-root cost — the same shape as recording every root's renames
+  // on every root, which made a wide pattern's work grow with its square.
+  //
+  // A real `Map`, so every member the remappers reach — `size` as well as
+  // `get` — behaves as they expect; only the lookup is observed.
+  let used = perRoot[0];
+  const probe = new Map(candidates);
+  const lookup = probe.get.bind(probe);
+  probe.get = (key: string): string | undefined => {
+    const found = lookup(key);
+    if (found !== undefined) used.set(key, found);
+    return found;
+  };
+  roots.forEach((root, index) => {
+    used = perRoot[index]!;
+    mapForest([root], copy => relinkOne(copy, probe));
+  });
+  return perRoot;
+}
+
+/**
+ * One subtree, re-identified — {@link reidForestWithMap} for a single root.
+ *
+ * Delegates rather than repeating the two passes, so the singular and the
+ * plural cannot drift into disagreeing about what a copy is.
+ *
+ * It takes no {@link DomIdPolicy}, and the honest reason is that nothing in the
+ * product calls this. Measured: every occurrence outside this file is a test,
+ * the package entry, or a comment in `resolve-instances.ts` citing it as an
+ * analogy — composition keeps a `domIds` memo of its own and re-identifies to
+ * deterministic scoped ids rather than random ones, and a save works on a RUN
+ * of siblings and reaches for the forest form. Adding the parameter would be
+ * offering an option to nobody. Whether a published helper with no caller
+ * should stay is a separate question from this one.
+ */
+export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
+  const { nodes, nodeIds, domIds } = reidForestWithMap([node]);
+  return { node: nodes[0] ?? node, nodeIds, domIds };
+}
+
+/** One node, re-identified, with its DOM id remapped rather than removed. */
+/**
+ * What a moving DOM id becomes: the recorded original, or a minted one.
+ *
+ * Both answers go through the caller's memo, so a subtree spelling one id on
+ * two nodes still maps both to a single replacement and a reference to it still
+ * reaches one target.
+ *
+ * A `restore` policy that does not name this id falls back to minting, which
+ * cannot happen through {@link movesUnder} — that only lets an id move when the
+ * map holds it — and is the safe answer rather than returning the id unchanged,
+ * which would be a copy silently keeping an id it was told to move.
+ */
+function replacementFor(
+  value: string,
+  nodeId: string,
+  policy: DomIdPolicy
+): string {
+  if (typeof policy === "object" && "restore" in policy) {
+    return policy.restore.get(value) ?? mintDomId(value, nodeId);
+  }
+  return mintDomId(value, nodeId);
+}
+
+/**
+ * Whether the id this node RENDERS changes under the policy it was given.
+ *
+ * Only the rendered one is ever a candidate — a node can spell two and emits
+ * one, and moving the shadowed spelling makes the relink pass rewrite every
+ * reference to an id nothing renders.
+ *
+ * Its own function because the copier it serves is at the complexity the gate
+ * allows, and because the four policies read as one question here rather than
+ * as a condition threaded through two rewrite sites.
+ */
+function movesUnder(
+  value: string,
+  rendered: string | undefined,
+  policy: DomIdPolicy
+): boolean {
+  if (value !== rendered) return false;
+  if (policy === "remint") return true;
+  if (policy === "keep") return false;
+  if ("restore" in policy) return policy.restore.has(value);
+  return policy.avoid.has(value);
+}
+
+function reidOneKeepingReferences(
+  node: BlockNode,
+  nodeIds: Map<string, string>,
+  domIds: Map<string, string>,
+  domIdPolicy: DomIdPolicy,
+  hidden: ReadonlySet<BlockNode>
+): BlockNode {
+  const { slots, ...own } = node;
+  const copy: BlockNode = { ...structuredClone(own), id: newId() };
+  if (typeof node.id === "string") nodeIds.set(node.id, copy.id);
+
+  // `mintDomId` is asked once per distinct ORIGINAL id, so a subtree whose two
+  // nodes carry the same DOM id maps both to one replacement. That preserves
+  // the document's own meaning: the pair pointed at one target before, and a
+  // reference to it still reaches one target after.
+  const remap = (value: string): string => {
+    const existing = domIds.get(value);
+    if (existing !== undefined) return existing;
+    const replacement = replacementFor(value, copy.id, domIdPolicy);
+    domIds.set(value, replacement);
+    return replacement;
+  };
+
+  // An id that is NOT minted contributes no entry to `domIds`, which is the
+  // honest record: nothing moved, so the relink pass that follows has nothing
+  // to rewrite and every reference still names the id it named. Identity
+  // entries would say the same thing less clearly and make a caller checking
+  // the map against its destination report collisions it is not introducing.
+  //
+  // Only the id this node RENDERS is a candidate. A node can spell two and
+  // emits one, and minting the shadowed spelling is worse than pointless: the
+  // relink pass then rewrites every reference to it, so a link that deliberately
+  // reached an element in the DESTINATION now names a minted id nothing renders
+  // at all. Both spellings move together when they carry the same value, since
+  // the memo maps one original to one replacement — so the node still spells a
+  // single id afterwards.
+  const rendered = hidden.has(node) ? undefined : renderedDomId(node);
+  const moves = (value: string): boolean =>
+    movesUnder(value, rendered, domIdPolicy);
+
+  if (
+    typeof copy.cssId === "string" &&
+    copy.cssId !== "" &&
+    moves(copy.cssId)
+  ) {
+    copy.cssId = remap(copy.cssId);
+  }
+  if (copy.attributes) {
+    copy.attributes = Object.fromEntries(
+      Object.entries(copy.attributes).map(([key, value]) =>
+        key.toLowerCase() === "id" &&
+        typeof value === "string" &&
+        value !== "" &&
+        moves(value)
+          ? [key, remap(value)]
+          : [key, value]
+      )
+    );
+  }
+
+  if (slots !== undefined) copy.slots = slots;
+  return copy;
+}
+
+/**
+ * Attributes whose VALUE is an id, or a whitespace-separated list of ids.
+ *
+ * Remapping a `cssId` without these breaks every relationship built on it:
+ * `aria-labelledby` and `aria-describedby` are how a control is NAMED and
+ * DESCRIBED to a screen reader, and a reference to an id that no longer exists
+ * is silently ignored — the element simply loses its name. That failure is
+ * invisible to everyone who does not use assistive technology, which is why it
+ * is listed as data here rather than left to each copier to remember.
+ *
+ * Single-id and list-valued attributes are not separated, because the rewrite
+ * does not need them to be: a single id is a one-token list, and splitting on
+ * whitespace handles both without a second table to keep in step.
+ *
+ * Lowercase, and compared after folding, because HTML attribute names are
+ * case-insensitive and a stored `aria-labelledBy` addresses the same thing.
+ */
+export const ID_REFERENCE_ATTRIBUTES: readonly string[] = [
+  // HTML
+  "for",
+  "form",
+  "list",
+  "headers",
+  "itemref",
+  "popovertarget",
+  "anchor",
+  // ARIA
+  "aria-activedescendant",
+  "aria-controls",
+  "aria-describedby",
+  "aria-details",
+  "aria-errormessage",
+  "aria-flowto",
+  "aria-labelledby",
+  "aria-owns",
+];
+
+const ID_REFERENCE_SET = new Set(ID_REFERENCE_ATTRIBUTES);
+
+/**
+ * An IDREFS value as its tokens, with the separators gone.
+ *
+ * The single statement of what such a value MEANS: a list of ids, where runs of
+ * whitespace are one separator and a leading or trailing one is nothing. Every
+ * parser reads `"hero   label"` and `"hero label"` as the same two references,
+ * and {@link remapIdReferences} writes both back as the second.
+ *
+ * Published because a second reader now depends on that being true rather than
+ * merely doing the same thing: a fingerprint of what a copy carries has to
+ * normalise exactly where the copier normalises, and a parallel `split`
+ * elsewhere would agree until one of them changed.
+ */
+export function idReferenceTokens(value: string): string[] {
+  return value.split(/\s+/).filter(token => token !== "");
+}
+
+/**
+ * Point a node's id REFERENCES at wherever those ids ended up.
+ *
+ * Applied as a second pass, after every id has been minted, and that ordering
+ * is the whole reason it is a separate function: a node may reference an id
+ * defined on a node the walk has not reached yet, so rewriting during the copy
+ * would leave every forward reference pointing at the original.
+ *
+ * A token with no entry in the map is left ALONE rather than dropped. It
+ * addresses something outside the copied subtree — an element the host page
+ * owns, or one the application renders — and rewriting or removing it would
+ * break a relationship that was working.
+ *
+ * Returns the SAME record when nothing referenced anything, so the ordinary
+ * node allocates nothing.
+ */
+export function remapIdReferences(
+  attributes: Record<string, string>,
+  domIds: ReadonlyMap<string, string>
+): Record<string, string> {
+  if (domIds.size === 0) return attributes;
+  let changed = false;
+  const next: Record<string, string> = {};
+  for (const name of Object.keys(attributes)) {
+    const value = ownEntry(attributes, name);
+    if (
+      typeof value !== "string" ||
+      !ID_REFERENCE_SET.has(name.toLowerCase())
+    ) {
+      defineEntry(next, name, value as string);
+      continue;
+    }
+    // Token by token, through the one spelling of what an IDREFS list IS.
+    const mapped = idReferenceTokens(value).map(
+      token => domIds.get(token) ?? token
+    );
+    const rewritten = mapped.join(" ");
+    if (rewritten !== value) changed = true;
+    defineEntry(next, name, rewritten);
+  }
+  return changed ? next : attributes;
+}
+
+/**
+ * Every node inside a subtree the renderer will prune, by identity.
+ *
+ * Gating is INHERITED: `pruneHiddenNodes` drops a gated node with everything
+ * under it, so an ungated child of a gated parent does not reach the page
+ * either. Asking `isConditionGated` of each node alone answers about that child
+ * and gets it wrong.
+ *
+ * Shared, because two different questions need the same answer and got it
+ * separately once already — which DOM ids a document has in use, and which of a
+ * copy's ids may be rewritten. When those disagree, a copy renames an id nobody
+ * renders and every reference to it follows the rename to nothing.
+ *
+ * Keyed on identity rather than on `id`, because a malformed document can spell
+ * one id on two nodes and this is asked of the objects being walked.
+ */
+export function hiddenSubtreeNodes(
+  nodes: readonly BlockNode[]
+): ReadonlySet<BlockNode> {
+  const hidden = new Set<BlockNode>();
+  const seen = new Map<BlockNode, boolean>();
+  walkNodes([...nodes], (node, parent) => {
+    const inherited = parent !== undefined && seen.get(parent) === true;
+    const gated = inherited || isConditionGated(node);
+    seen.set(node, gated);
+    if (gated) hidden.add(node);
+  });
+  return hidden;
+}
+
+/**
+ * A replacement DOM id, derived from the original.
+ *
+ * The suffix comes from the node's NEW id, so the same original inside two
+ * copies of one pattern produces two different replacements — which is the
+ * collision the remap exists to avoid. Trimmed to keep the result readable in a
+ * URL fragment; the full node id is not needed for uniqueness within a subtree
+ * that has exactly one node per new id.
+ *
+ * Exported because a second copier now exists. Composition inlines one
+ * definition into every instance of it, which duplicates the definition's
+ * `cssId` and `attributes.id` exactly as pattern insert duplicates a subtree's
+ * — and a document may legitimately hold both, so the two must agree on what a
+ * replacement looks like or one page carries two spellings of the same rule.
+ * The COPY policy is shared; the id policy is not, because these ids are
+ * derived and `reidSubtree`'s are random.
+ */
+export function mintDomId(original: string, newNodeId: string): string {
+  return `${original}-${newNodeId.replace(/-/g, "").slice(0, 8)}`;
 }
 
 /** One node's own fields, freshly identified. Slots are the rebuild's job. */

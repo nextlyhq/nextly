@@ -34,12 +34,6 @@ import {
 const JSON_SERIALIZABLE_TYPES = ["repeater", "group", "json"] as const;
 
 /**
- * Field types that are layout-only and don't store data.
- * Currently empty as layout field types have been removed.
- */
-const LAYOUT_FIELD_TYPES: readonly string[] = [] as const;
-
-/**
  * Options for transform operations.
  */
 export interface TransformOptions {
@@ -63,13 +57,6 @@ export interface TransformOptions {
 // ============================================================
 // Type Guards
 // ============================================================
-
-/**
- * Check if a field type is a layout-only field (no data storage).
- */
-function isLayoutField(field: FieldConfig): boolean {
-  return LAYOUT_FIELD_TYPES.includes(field.type);
-}
 
 /**
  * Check if a field type requires JSON serialization.
@@ -98,9 +85,7 @@ function isAlreadySerialized(value: unknown): value is string {
 function isNamedDataField(
   field: FieldConfig
 ): field is DataFieldConfig & { name: string } {
-  return (
-    !isLayoutField(field) && "name" in field && typeof field.name === "string"
-  );
+  return "name" in field && typeof field.name === "string";
 }
 
 // ============================================================
@@ -108,17 +93,10 @@ function isNamedDataField(
 // ============================================================
 
 /**
- * Flatten fields array, returning only data fields.
- */
-function flattenFields(fields: FieldConfig[]): FieldConfig[] {
-  return fields.filter(field => !isLayoutField(field));
-}
-
-/**
  * Build a field lookup map for efficient field access by name.
  */
 function buildFieldMap(fields: FieldConfig[]): Map<string, FieldConfig> {
-  const flatFields = flattenFields(fields);
+  const flatFields = fields;
   const map = new Map<string, FieldConfig>();
 
   for (const field of flatFields) {

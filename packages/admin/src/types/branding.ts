@@ -1,3 +1,4 @@
+import type { PluginAdminWidget, WidgetDefinition } from "nextly/config";
 import type {
   FieldStoragePrimitive,
   FieldSurface,
@@ -54,13 +55,48 @@ export interface PluginPageMeta {
   section?: PluginNavSectionMeta;
 }
 
-/** A plugin dashboard widget, delivered via `/admin-meta`. */
-export interface PluginWidgetMeta {
-  id: string;
-  component: string;
-  size?: "full" | "half";
-  requiredPermission?: string;
-}
+/**
+ * A plugin dashboard widget, delivered via `/admin-meta`.
+ *
+ * DERIVED from the server's declaration rather than restated beside it.
+ * `buildPluginAdminMeta` assigns `contributes.admin.widgets` to the meta
+ * verbatim, so the two are one shape -- and while they were one shape declared
+ * twice they drifted twice. First `component`: the server made it optional
+ * while this kept it required, so a plugin adopting the server's shape reached
+ * `PluginSlot` with `path === undefined` and rendered an empty grid cell
+ * silently. Then the declarative half -- `title`, `description`, `icon`,
+ * `category`, `archetype`, `defaultSize`, `minSize`, `maxSize`, `query` and
+ * `link` -- which the server serializes on every contributed widget and this
+ * copy never gained, so admin code reading a property that was PRESENT on the
+ * wire got a type error for it.
+ *
+ * An alias makes that a compile error at the one declaration instead of a
+ * convention two files have to keep. It is reachable through `nextly/config`
+ * specifically: this package's tsconfig maps the BARE `nextly` specifier to
+ * `../nextly/src`, so importing from `"nextly"` shadows the package exports and
+ * pulls core's whole source tree in behind internal `@nextly/*` aliases this
+ * project does not declare. Subpaths are not covered by that mapping, so
+ * `nextly/config` resolves through the export map to the built declaration
+ * bundle, exactly as a consumer's would.
+ */
+export type PluginWidgetMeta = PluginAdminWidget;
+
+/**
+ * A widget the running app REGISTERED, as `/admin-meta/workspace` serializes it.
+ *
+ * A different channel from `PluginWidgetMeta` above, not a variant of it. That
+ * one is DECLARED in a plugin's `contributes.admin.widgets` and is almost
+ * entirely optional; this one went through `registerWidget`, whose validator
+ * requires `title`, `archetype` and `defaultSize`, requires a `query` for every
+ * data archetype and a `component` for `custom`, and forbids each where it does
+ * not belong. So a registered widget arrives already complete, and the resolver
+ * has nothing to default for it.
+ *
+ * Aliased from core's own declaration for the same reason `PluginWidgetMeta` is:
+ * the server puts that exact object on the wire, so a second spelling here would
+ * be one contract declared twice.
+ */
+export type RegisteredWidgetMeta = WidgetDefinition;
 
 /**
  * A plugin's public client configuration, served before a session exists.
@@ -238,6 +274,20 @@ export interface AdminBranding {
    * unavailable. Only `usePluginClientConfig` reads this.
    */
   pluginClientConfigs?: PluginClientConfigMeta[];
+
+  /**
+   * Widgets the running app registered through `registerWidget`.
+   *
+   * Beside `plugins`, never inside it: a registration is not a plugin
+   * contribution, and the two reach the dashboard grid by different routes. A
+   * widget may legitimately appear in both -- an app that declares it AND
+   * registers it -- which is why the grid dedupes by id rather than assuming
+   * the lists are disjoint.
+   *
+   * Comes from the session-gated half alone, so its absence means the registry
+   * has not arrived rather than that the app registered nothing.
+   */
+  widgets?: RegisteredWidgetMeta[];
 
   /** Custom sidebar groups created by the user for organizing collections/singles. */
   customGroups?: Array<{ slug: string; name: string; icon?: string }>;

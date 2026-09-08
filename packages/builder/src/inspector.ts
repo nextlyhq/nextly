@@ -248,6 +248,26 @@ export function lockStateOf(
  * Describe the selected block for editing, or `null` when there is nothing to
  * edit. See {@link selectedBlock} for what "nothing" covers and why.
  */
+/**
+ * Whether the inspector can show anything for this selection.
+ *
+ * Exported because the CANVAS needs the same answer and cannot reach
+ * {@link inspectSelection}'s result: when this is false the panel replaces its
+ * whole tab strip, so a host still forcing an interaction state would draw the
+ * selected block mid-hover with the control that explains it off screen.
+ *
+ * Derived from {@link selectedBlock}, which is the lookup `inspectSelection`
+ * already starts with, so the two cannot disagree about what is inspectable —
+ * an unregistered block type is the case that separates them, and it reads as
+ * an ordinary selection to anything counting ids.
+ */
+export function selectionIsInspectable(
+  document: BlockDocument,
+  selectedId: string | null
+): boolean {
+  return selectedBlock(document, selectedId) !== null;
+}
+
 export function inspectSelection(
   document: BlockDocument,
   selectedId: string | null

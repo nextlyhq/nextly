@@ -34,7 +34,7 @@ describe("resolveStatusFilter", () => {
         overrideAccess: false,
         explicit: undefined,
       })
-    ).toEqual({ value: "published" });
+    ).toEqual({ values: ["published"], isPublicRead: true });
   });
 
   it("returns null for trusted callers by default (overrideAccess: true)", () => {
@@ -72,7 +72,7 @@ describe("resolveStatusFilter", () => {
         overrideAccess: false,
         explicit: "draft",
       })
-    ).toEqual({ value: "draft" });
+    ).toEqual({ values: ["draft"], isPublicRead: false });
 
     expect(
       resolveStatusFilter({
@@ -80,7 +80,7 @@ describe("resolveStatusFilter", () => {
         overrideAccess: true,
         explicit: "draft",
       })
-    ).toEqual({ value: "draft" });
+    ).toEqual({ values: ["draft"], isPublicRead: false });
   });
 
   it("respects explicit 'published' for any caller", () => {
@@ -90,7 +90,7 @@ describe("resolveStatusFilter", () => {
         overrideAccess: true,
         explicit: "published",
       })
-    ).toEqual({ value: "published" });
+    ).toEqual({ values: ["published"], isPublicRead: true });
   });
 });
 
@@ -180,6 +180,6 @@ describe("expansionStatusScope", () => {
         overrideAccess: false,
         explicit: scope,
       })
-    ).toEqual({ value: "published" });
+    ).toEqual({ values: ["published"], isPublicRead: true });
   });
 });

@@ -12,12 +12,8 @@
 import { Alert, AlertDescription, AlertTitle, Button } from "@nextlyhq/ui";
 import type React from "react";
 
-import { CollectionQuickLinks } from "@admin/components/features/dashboard/CollectionQuickLinks";
-import { PluginWidgetGrid } from "@admin/components/features/dashboard/PluginWidgetGrid";
-import { SeedDemoContentCard } from "@admin/components/features/dashboard/SeedDemoContentCard";
-import { SinglesQuickLinks } from "@admin/components/features/dashboard/SinglesQuickLinks";
-import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
 import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";
+import { WidgetGrid } from "@admin/components/features/widgets/WidgetGrid";
 import { AlertCircle } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { ErrorBoundary } from "@admin/components/shared/error-boundary";
@@ -61,31 +57,25 @@ const DashboardPage: React.FC = () => {
             <WelcomeHeader />
           </div>
 
-          {/* Seed demo content card — visible only when the project ships
-              a seed route and the meta flags aren't set. Hides itself
-              entirely when not applicable, so blank-template projects and
-              already-seeded/skipped projects render nothing here. */}
-          <SeedDemoContentCard />
+          {/* Every card, through ONE grid.
+ 
+              The seed prompt, the collection counts, the singles and the team
+              summary used to be mounted here by name, above a grid that drew
+              only what plugins contributed. That made two dashboards: a
+              hardcoded half nobody could arrange and a managed half that was
+              empty on every real install, because nothing contributed a widget.
 
-          {/* The stats grid is deliberately absent: the dashboard's job here is
-              to get an editor to their content, and a row of counters above the
-              resource sections competes with that without answering a question
-              an editor actually has. Kept commented rather than deleted because
-              the component still ships and is cheap to restore. */}
-          {/* <ContentStatsGrid /> */}
+              They are ordinary widgets now, registered by core under reserved
+              `core#` paths with a declared `defaultOrder` that keeps the order
+              this page had. Each still draws its own titled section -- their
+              definitions decline the card frame -- so what a reader sees is
+              unchanged while what they can arrange is the whole page.
 
-          <div className="space-y-12">
-            {/* Resource sections: Collections, Singles, Team. Each section
-                handles its own loading / error / empty states; SinglesQuickLinks
-                hides itself entirely when the project has no singles. */}
-            <CollectionQuickLinks />
-            <SinglesQuickLinks />
-            <TeamSummary />
-          </div>
-
-          {/* Plugin-contributed dashboard widgets (D22 / C9). Renders nothing
-              when no plugin contributes a widget the current user may see. */}
-          <PluginWidgetGrid />
+              The stats grid stays deliberately absent: a row of counters above
+              the resource sections competes with getting an editor to their
+              content without answering a question they actually have. The
+              component still ships and is cheap to restore, as a widget now. */}
+          <WidgetGrid />
         </div>
       </PageContainer>
     </ErrorBoundary>

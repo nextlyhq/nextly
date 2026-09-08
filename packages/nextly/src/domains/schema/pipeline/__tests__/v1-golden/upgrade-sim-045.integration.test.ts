@@ -119,6 +119,30 @@ const POST_045_TABLES = [
   // touching the child reading as a phantom diff.
   "nextly_releases",
   "nextly_release_members",
+  // The durable job queue, post-0.45 like the tables above: an existing install
+  // gains it on upgrade, so its CREATE TABLE and its indexes are legitimate
+  // rather than phantom. The pass-2 assertion below is what proves the
+  // declaration reaches the dialect bundles as well as the core schema — a
+  // table present in only one of the two is re-proposed on every reconcile
+  // instead of round-tripping to silence.
+  "nextly_jobs",
+  // The document soft lock, post-0.45 like the tables above: an existing
+  // install gains it on upgrade, so its CREATE TABLE and its two indexes are
+  // legitimate rather than phantom. The pass-2 assertion below is what proves
+  // the declaration round-trips — this table is reached through the core
+  // schema, the dialect bundles AND the SQLite bootstrap DDL, and a shape that
+  // disagrees between any two of them is re-proposed on every reconcile rather
+  // than settling to silence.
+  "nextly_document_lock",
+  // One reader's dashboard arrangement, post-0.45 like the tables above: an
+  // existing install gains it on upgrade, so its CREATE TABLE is legitimate
+  // rather than phantom. The pass-2 assertion below is what proves the
+  // declaration round-trips — this table is reached through the core schema,
+  // the dialect bundles AND the SQLite bootstrap DDL, and a shape that
+  // disagrees between any two of them is re-proposed on every reconcile
+  // instead of settling to silence. It declares no index, so the CREATE TABLE
+  // is the whole of what an upgrade emits for it.
+  "nextly_widget_layout",
 ];
 
 // The post-045 names are static identifiers, but escape defensively so the
@@ -285,6 +309,41 @@ const addsAuditLogErasureStamp = (stmt: string): boolean => {
   );
 };
 
+/**
+ * The activity log gains the LANGUAGE a mutation was made in.
+ *
+ * The feed authorizes each row's document as the caller, and a stored `custom`
+ * read rule is a predicate over the collection's own fields — which answer
+ * differently per translation. Without the column a row is judged against the
+ * default language, so an edit made in a language the rule denies could still
+ * show its title.
+ *
+ * Pinned to the table AND the column, and required to be the WHOLE statement,
+ * for the reason the erasure stamp above gives: a substring match would admit a
+ * destructive clause riding through beside the additive one.
+ */
+const addsActivityLocaleColumn = (stmt: string): boolean => {
+  const s = stmt.trim().replace(/;$/, "");
+  return /^ALTER TABLE [`"]?activity_log[`"]? ADD (COLUMN )?[`"]?locale[`"]?[^,]*$/i.test(
+    s
+  );
+};
+
+/**
+ * The activity log gains what each row is ABOUT.
+ *
+ * The slug alone cannot decide it: a resource that already held a now-reserved
+ * name may keep it, so an upgraded install can have a real collection sharing a
+ * settings namespace, and registry membership then reads a credential rotation
+ * as a document in that collection.
+ */
+const addsActivitySubjectKindColumn = (stmt: string): boolean => {
+  const s = stmt.trim().replace(/;$/, "");
+  return /^ALTER TABLE [`"]?activity_log[`"]? ADD (COLUMN )?[`"]?subject_kind[`"]?[^,]*$/i.test(
+    s
+  );
+};
+
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).
 const hasCreateTableFor = (stmts: string[], table: string): boolean =>
@@ -395,6 +454,8 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               addsWebhooksColumn(s) ||
               migratesActivityLogActor(s) ||
               addsAuditLogErasureStamp(s) ||
+              addsActivityLocaleColumn(s) ||
+              addsActivitySubjectKindColumn(s) ||
               addsPreviewGenerationColumn(s),
             `phantom diff: ${s}`
           ).toBe(true);
@@ -474,6 +535,8 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               addsWebhooksColumn(s) ||
               migratesActivityLogActor(s) ||
               addsAuditLogErasureStamp(s) ||
+              addsActivityLocaleColumn(s) ||
+              addsActivitySubjectKindColumn(s) ||
               addsPreviewGenerationColumn(s),
             `unexpected reconcile statement shape: ${s}`
           ).toBe(true);

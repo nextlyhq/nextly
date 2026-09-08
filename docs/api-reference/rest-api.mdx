@@ -52,7 +52,7 @@ API keys are managed via `POST /api/api-keys` (admin UI). There is **no** `X-API
 
 ## Response envelopes
 
-All responses follow the canonical Phase 4 shapes documented in [`packages/nextly/src/api/response-shapes.ts`](https://github.com/nextlyhq/nextly/blob/dev/packages/nextly/src/api/response-shapes.ts). Content-Type is always `application/json` for success responses and `application/problem+json` for errors. Every response carries an `X-Request-Id` header you can quote when filing bugs.
+All responses follow the canonical Phase 4 shapes documented in [`packages/nextly/src/api/response-shapes.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/nextly/src/api/response-shapes.ts). Content-Type is always `application/json` for success responses and `application/problem+json` for errors. Every response carries an `X-Request-Id` header you can quote when filing bugs.
 
 ### List
 
@@ -578,7 +578,7 @@ curl -X POST http://localhost:3000/api/email/send-with-template \
 
 The media collection is just a normal collection (`/api/collections/media/entries`) with extra plumbing for binary uploads. The `POST /api/collections/media/entries` endpoint accepts `multipart/form-data` with the file under `file` and any other fields alongside.
 
-Image-size presets are managed under `/api/image-sizes`. The `regeneration-status` and `regenerate` sub-routes return a "coming soon" placeholder today (see [`packages/nextly/src/routeHandler.ts`](https://github.com/nextlyhq/nextly/blob/dev/packages/nextly/src/routeHandler.ts)).
+Image-size presets are managed under `/api/image-sizes`. The `regeneration-status` and `regenerate` sub-routes return a "coming soon" placeholder today (see [`packages/nextly/src/routeHandler.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/nextly/src/routeHandler.ts)).
 
 ### API keys
 

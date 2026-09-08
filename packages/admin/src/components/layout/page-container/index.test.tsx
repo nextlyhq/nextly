@@ -15,6 +15,11 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import {
+  CONTENT_MEASURE_LENGTH,
+  CONTENT_PAGE_MEASURE,
+} from "@admin/components/layout/content-measure";
+
 import { PageContainer } from "./index";
 
 describe("PageContainer", () => {
@@ -55,6 +60,56 @@ describe("PageContainer", () => {
         .getByTestId("page-container")
         .style.getPropertyValue("--nx-shell-measure")
     ).toBe("var(--nx-measure-wide)");
+
+    // `full` is the arm a page uses when its CONTENT carries the measure.
+    // Asserted as a DISTINCT value rather than merely present: a container
+    // that ignored the prop and kept whichever measure it rendered first
+    // would satisfy "the property is set".
+    rerender(<PageContainer width="full">content</PageContainer>);
+    expect(
+      screen
+        .getByTestId("page-container")
+        .style.getPropertyValue("--nx-shell-measure")
+    ).toBe("100%");
+  });
+
+  it("the content length agrees with what the shell actually renders", () => {
+    // The oracle is the RENDER, not the map. `CONTENT_MEASURE_LENGTH` and the
+    // shell both read `SHELL_MEASURE`, so comparing them to each other would
+    // compare two reads of one value and pass however wrong that value was.
+    // Rendering the container at the content measure and reading the property
+    // back off the DOM is a different observation, and it is the one that
+    // catches the field column being bounded to something the page never uses.
+    render(<PageContainer width={CONTENT_PAGE_MEASURE}>content</PageContainer>);
+    const rendered = screen
+      .getByTestId("page-container")
+      .style.getPropertyValue("--nx-shell-measure");
+
+    expect(rendered).not.toBe("");
+    expect(CONTENT_MEASURE_LENGTH).toBe(rendered);
+  });
+
+  it("keeps the grid for `full`, which is what separates it from no width", () => {
+    // The two look alike on screen and are different layouts. `full` is the
+    // shell grid with an uncapped content column, so the inset is still a
+    // column and a child can leave it with `Bleed`; omitting the prop is the
+    // padded block that four pages depend on for their height chains. A page
+    // reaching for the wrong one takes the other's behaviour silently.
+    const { rerender } = render(
+      <PageContainer width="full">content</PageContainer>
+    );
+    expect(screen.getByTestId("page-container").className).toContain(
+      "nx-page-shell"
+    );
+    expect(screen.getByTestId("page-container").className).not.toContain(
+      "px-4"
+    );
+
+    rerender(<PageContainer>content</PageContainer>);
+    expect(screen.getByTestId("page-container").className).not.toContain(
+      "nx-page-shell"
+    );
+    expect(screen.getByTestId("page-container").className).toContain("px-4");
   });
 
   it("keeps the panel surface under both layouts", () => {

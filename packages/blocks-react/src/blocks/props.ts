@@ -10,30 +10,34 @@
  *
  * @module blocks/props
  */
-import { isFetchableUrl, normalizeUrl } from "@nextlyhq/blocks-engine";
+import {
+  authoredText,
+  isAuthoredText,
+  isFetchableUrl,
+  isLinkableUrl,
+} from "@nextlyhq/blocks-engine";
 import type { RemotePatternInput } from "@nextlyhq/blocks-engine";
 
-/** A string prop, or the fallback when the stored value is not usable text. */
 /**
  * Whether a stored value is text an author actually put there.
+ *
+ * Re-exported from the engine rather than declared here, because link
+ * eligibility is not the only decision this renderer shares with the plain-text
+ * projections taken from the same document: what a page DRAWS and what a
+ * description SAYS about it have to answer this identically, and a copy here
+ * agreed on the day it was written and then drifted.
  *
  * Separate from {@link text} because a few props need to tell a MISSING value
  * from an empty one, and `text()` maps both to `""`. An image's `alt` is the
  * case that matters: absent means "nobody said", while an explicit `""` is the
  * documented way to mark an image decorative, and those call for opposite
- * behaviour. Sharing this predicate keeps the two from drifting apart.
+ * behaviour.
  */
-export function isAuthoredText(value: unknown): boolean {
-  // A number is text a person would recognise, and a stored `0` or `2024` is
-  // almost always a value someone typed. Booleans, objects and null are not.
-  return (
-    typeof value === "string" ||
-    (typeof value === "number" && Number.isFinite(value))
-  );
-}
+export { isAuthoredText };
 
+/** A string prop, or the fallback when the stored value is not usable text. */
 export function text(value: unknown, fallback = ""): string {
-  return isAuthoredText(value) ? String(value) : fallback;
+  return authoredText(value, fallback);
 }
 
 /** A stored value constrained to one of a fixed set, or the fallback. */
@@ -84,8 +88,6 @@ export function number(
  * accepts a wider set for what an author may TYPE; that is an input affordance
  * and not the boundary, which is here.
  */
-const ALLOWED_SCHEMES: readonly string[] = ["http", "https", "mailto", "tel"];
-
 /**
  * Any leading `scheme:`, which is what decides whether the list above applies.
  *
@@ -95,8 +97,6 @@ const ALLOWED_SCHEMES: readonly string[] = ["http", "https", "mailto", "tel"];
  * WHICH hosts may be reached is a separate question, asked of the host policy
  * by the blocks that fetch, not of this list.
  */
-const URL_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
-
 /**
  * Whether a string still holds a control character.
  *
@@ -106,14 +106,6 @@ const URL_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
  * it next. `0x20` is deliberately excluded — a space is not a control character,
  * and an interior one belongs to the path.
  */
-function hasControlCharacter(value: string): boolean {
-  for (const character of value) {
-    const code = character.codePointAt(0) ?? 0;
-    if (code <= 0x1f || code === 0x7f) return true;
-  }
-  return false;
-}
-
 /**
  * A URL safe to place in an attribute, or `undefined`.
  *
@@ -139,19 +131,13 @@ function hasControlCharacter(value: string): boolean {
  * a legitimate URL is never silently rewritten.
  */
 export function url(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  if (trimmed === "") return undefined;
-
-  const normalized = normalizeUrl(trimmed);
-  if (normalized === "") return undefined;
-  if (hasControlCharacter(normalized)) return undefined;
-
-  const scheme = URL_SCHEME.exec(normalized);
-  if (scheme === null) return trimmed;
-  const name = scheme[1];
-  if (name === undefined) return undefined;
-  return ALLOWED_SCHEMES.includes(name.toLowerCase()) ? trimmed : undefined;
+  // The DECISION belongs to the engine, which owns what the stored format can
+  // express — otherwise a renderer that draws nothing for an unusable link and
+  // a flattener that still reports its label describe different pages. What
+  // stays here is the return value: the original trimmed string, so a
+  // legitimate URL is never silently rewritten into its normalised form.
+  if (!isLinkableUrl(value)) return undefined;
+  return typeof value === "string" ? value.trim() : undefined;
 }
 
 /**

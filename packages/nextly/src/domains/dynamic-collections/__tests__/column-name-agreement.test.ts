@@ -23,9 +23,9 @@ import {
   type SupportedDialect,
 } from "../../schema/services/field-column-descriptor";
 import { defineCollection } from "../../../collections/config/define-collection";
+import { validateSingleConfig } from "../../../singles/config/validate-single";
 import { validateCollectionConfig } from "../../../collections/config/validate-config";
 import { defineSingle } from "../../../singles/config/define-single";
-import { validateSingleConfig } from "../../../singles/config/validate-single";
 import { DynamicCollectionSchemaService } from "../services/dynamic-collection-schema-service";
 
 /** Names that reach a column, including the shapes the Builder refuses but code paths allow. */
@@ -459,6 +459,62 @@ describe("the publish lifecycle owns its columns while it is on", () => {
       } as never).errors ?? []
     ).filter(e => e.code === "FIELD_NAME_LIFECYCLE_RESERVED").length;
   }
+
+  it("refuses a column-less status field on a SINGLE as well", () => {
+    // The Single validator carries the same column-less exemption and emits the
+    // same lifecycle member, so the collision is identical there. One rule,
+    // asked by both, rather than the check living only where it was first
+    // noticed.
+    const singleErrors = (fields: unknown[], status: boolean) =>
+      (
+        validateSingleConfig({
+          slug: "settings",
+          label: "Settings",
+          status,
+          fields,
+        } as never).errors ?? []
+      ).filter(e => e.code === "FIELD_NAME_LIFECYCLE_RESERVED").length;
+
+    const manyToMany = [
+      {
+        type: "relationship",
+        name: "status",
+        relationTo: "tags",
+        options: { relationType: "manyToMany" },
+      },
+    ];
+
+    expect({
+      on: singleErrors(manyToMany, true),
+      off: singleErrors(manyToMany, false),
+    }).toEqual({ on: 1, off: 0 });
+  });
+
+  it("refuses a COLUMN-LESS status field too, because the artifacts declare one", () => {
+    // A many-to-many keeps its values in its own table, so the column-collision
+    // rule exempts it and returns before the column-based lifecycle check. The
+    // generated interface and the generated schema each still declare a
+    // `status` member under that name, so the field and the lifecycle are
+    // emitted twice and the generated file does not compile.
+    // `options.relationType` is what `usesJunctionTable` reads; a top-level
+    // `hasMany` still produces a column and would be caught by the ordinary
+    // column rule instead, leaving this case unexercised.
+    const manyToMany = [
+      {
+        type: "relationship",
+        name: "status",
+        relationTo: "tags",
+        options: { relationType: "manyToMany" },
+      },
+    ];
+
+    expect({
+      on: lifecycleErrors(manyToMany, true),
+      // The control: with the lifecycle off nothing emits a status member, so
+      // the name is ordinary and must stay accepted.
+      off: lifecycleErrors(manyToMany, false),
+    }).toEqual({ on: 1, off: 0 });
+  });
 
   it("refuses a status field only when the lifecycle is enabled", () => {
     // Measured across all three generators: with the lifecycle ON a `status` field duplicates the

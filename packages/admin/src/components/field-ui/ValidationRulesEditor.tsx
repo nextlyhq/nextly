@@ -142,6 +142,17 @@ export interface ValidationRulesEditorProps {
    * cannot know.
    */
   allowed: readonly FieldValidationRule[];
+  /**
+   * What the custom message is shown for, which only the caller knows.
+   *
+   * A surface whose runtime hands the message to one rule can say so and help
+   * the author write copy for it. One that hands the same string to required,
+   * length and format failures must not, or copy written for a pattern appears
+   * on failures it does not describe. Defaulting to `"validation"` means a
+   * caller that has not thought about it gets the wording that is true either
+   * way.
+   */
+  messageDescribes?: "pattern" | "validation";
   value: ValidationRuleValues;
   /** Receives only the rules that changed, for the caller to merge as it stores. */
   onChange: (next: Partial<ValidationRuleValues>) => void;
@@ -153,6 +164,7 @@ export function ValidationRulesEditor({
   value,
   onChange,
   disabled = false,
+  messageDescribes = "validation",
 }: ValidationRulesEditorProps) {
   const permits = new Set<FieldValidationRule>(allowed);
 
@@ -190,7 +202,7 @@ export function ValidationRulesEditor({
         <MessageRow
           value={value.message}
           disabled={disabled}
-          describesPattern={permits.has("pattern")}
+          describes={messageDescribes}
           onChange={message => onChange({ message })}
         />
       )}
@@ -228,12 +240,12 @@ function PatternRow({
 function MessageRow({
   value,
   disabled,
-  describesPattern,
+  describes,
   onChange,
 }: {
   value: string | undefined;
   disabled?: boolean;
-  describesPattern: boolean;
+  describes: "pattern" | "validation";
   onChange: (v: string) => void;
 }) {
   const id = useId();
@@ -246,11 +258,13 @@ function MessageRow({
         disabled={disabled}
         onChange={e => onChange(e.target.value)}
       />
-      {/* Named for what it governs: a message beside a pattern explains that
-          pattern, and one without explains the field's other rules. Saying
-          which keeps the author from writing copy for the wrong failure. */}
+      {/* Which failure this message describes is the caller's, not something
+          this component can see. Naming the Pattern is right where the runtime
+          applies the message to that rule, and wrong where the same string also
+          reaches required, length and format failures — copy written for a
+          regex would then appear on failures it does not describe. */}
       <p className="text-xs text-muted-foreground">
-        {describesPattern
+        {describes === "pattern"
           ? "Shown when the value fails the Pattern above. Falls back to a default message if blank."
           : "Shown when the value fails validation. Falls back to a default message if blank."}
       </p>

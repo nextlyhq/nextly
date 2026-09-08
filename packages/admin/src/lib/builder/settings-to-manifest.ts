@@ -26,6 +26,7 @@ export function collectionEntityFromSettings(
     slug,
     settings: {
       singularName: settings.singularName,
+      description: settings.description,
       pluralName: settings.pluralName,
       status: settings.status === true,
       // i18n: the collection-level Internationalization toggle.
@@ -53,6 +54,7 @@ export function singleEntityFromSettings(
     slug,
     settings: {
       singularName: settings.singularName,
+      description: settings.description,
       status: settings.status === true,
       // i18n: the single-level Internationalization toggle (mirrors collectionEntityFromSettings).
       localized: settings.i18n === true,

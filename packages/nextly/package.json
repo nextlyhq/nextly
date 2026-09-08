@@ -1,7 +1,7 @@
 {
   "name": "nextly",
-  "version": "0.0.2-alpha.60",
-  "description": "Nextly - Core functionality, database, services, and APIs",
+  "version": "0.0.2-alpha.63",
+  "description": "Nextly is an open-source CMS and visual page builder for Next.js. Model content, build pages, localize, version and release from your own stack.",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.mjs",
@@ -46,6 +46,18 @@
     "./field-catalog": {
       "types": "./dist/field-catalog.d.ts",
       "import": "./dist/collections/fields/catalog.mjs"
+    },
+    "./widget-gate": {
+      "types": "./dist/widget-gate.d.ts",
+      "import": "./dist/domains/widgets/gate.mjs"
+    },
+    "./widget-result": {
+      "types": "./dist/widget-result.d.ts",
+      "import": "./dist/domains/widgets/result.mjs"
+    },
+    "./document-lock": {
+      "types": "./dist/document-lock.d.ts",
+      "import": "./dist/domains/document-lock/contract.mjs"
     },
     "./query": {
       "types": "./dist/query/index.d.ts",
@@ -131,6 +143,10 @@
       "types": "./dist/api/email-templates-preview.d.ts",
       "import": "./dist/api/email-templates-preview.mjs"
     },
+    "./api/email-templates-draft-preview": {
+      "types": "./dist/api/email-templates-draft-preview.d.ts",
+      "import": "./dist/api/email-templates-draft-preview.mjs"
+    },
     "./api/email-send": {
       "types": "./dist/api/email-send.d.ts",
       "import": "./dist/api/email-send.mjs"
@@ -175,6 +191,14 @@
       "types": "./dist/cli/utils/index.d.ts",
       "import": "./dist/cli/utils/index.mjs"
     },
+    "./storage/read-errors": {
+      "types": "./dist/storage/read-errors.d.ts",
+      "import": "./dist/storage/read-errors.mjs"
+    },
+    "./storage/fetch-stored-bytes": {
+      "types": "./dist/storage/fetch-stored-bytes.d.ts",
+      "import": "./dist/storage/fetch-stored-bytes.mjs"
+    },
     "./storage": {
       "types": "./dist/storage/index.d.ts",
       "import": "./dist/storage/index.mjs"
@@ -186,6 +210,14 @@
     "./api/email-provider-types": {
       "types": "./dist/api/email-provider-types.d.ts",
       "import": "./dist/api/email-provider-types.mjs"
+    },
+    "./api/email-template-preview-types": {
+      "types": "./dist/api/email-template-preview-types.d.ts",
+      "import": "./dist/api/email-template-preview-types.mjs"
+    },
+    "./api/jobs-list-types": {
+      "types": "./dist/api/jobs-list-types.d.ts",
+      "import": "./dist/api/jobs-list-types.mjs"
     }
   },
   "files": [
@@ -231,7 +263,7 @@
     "better-sqlite3": "^12.10.0",
     "esbuild": "^0.28.1",
     "eslint": "^9.39.1",
-    "mysql2": "^3.15.0",
+    "mysql2": "^3.23.1",
     "nodemailer": "^9.0.1",
     "pg": "^8.16.3",
     "rimraf": "^6.1.3",
@@ -317,8 +349,7 @@
     "cms",
     "nextjs",
     "headless-cms",
-    "app-framework",
-    "framework",
+    "page-builder",
     "typescript",
     "react",
     "drizzle",

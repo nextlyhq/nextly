@@ -25,9 +25,10 @@ describe("registerMigrateCommand", () => {
 
 describe("splitSqlStatements", () => {
   // A comment mentioning a DDL keyword survives the line filter, so its prose
-  // reaches the scanner. An apostrophe there used to open a string that never
-  // closed, which stopped every later semicolon from separating statements and
-  // handed the driver one merged statement it rejects.
+  // reaches the scanner. An apostrophe there is prose, not an opening quote:
+  // counted as one it opens a string that never closes, which stops every later
+  // semicolon from separating statements and hands the driver one merged
+  // statement it rejects.
   it("does not let an apostrophe in a comment merge the statements after it", () => {
     const sql = [
       `CREATE TABLE "a" ("id" TEXT);`,
@@ -144,6 +145,194 @@ describe("splitSqlStatements", () => {
       `CREATE TABLE "b" ("id" TEXT);`,
     ].join("\n");
 
+    expect(splitSqlStatements(sql, "postgresql")).toHaveLength(2);
+  });
+});
+
+describe("splitting a statement whose value ends in a backslash", () => {
+  it("closes the quote when the backslash run is EVEN", () => {
+    // 🔴 A doubled backslash is ONE literal backslash — how MySQL escaping
+    // writes a value ending in one — so it sits immediately before the closing
+    // quote. Reading only that last character calls the quote escaped, leaves
+    // the splitter inside a string it has left, swallows the semicolon and
+    // concatenates the next statement. A driver with multi-statements disabled
+    // then rejects the pair, after earlier statements in the file have run.
+    const sql = [
+      `INSERT INTO t (d) VALUES ('ends with a backslash \\\\');`,
+      `INSERT INTO u (d) VALUES ('second');`,
+    ].join("\n");
+    expect(splitSqlStatements(sql, "mysql")).toHaveLength(2);
+  });
+
+  it("does NOT treat a backslash as an escape on PostgreSQL or SQLite", () => {
+    // 🔴 Only MySQL reads a backslash as an escape inside a string literal;
+    // SQLite has no C-style escapes at all. `quoteSqlLiteral` therefore leaves
+    // a trailing backslash SINGLE on those dialects, so a parity rule applied
+    // unconditionally calls the closing quote escaped and swallows the
+    // semicolon — the very defect the parity check was added to remove, moved
+    // to the other two dialects.
+    const sql = [
+      `INSERT INTO t (d) VALUES ('ends with a backslash \\');`,
+      `INSERT INTO u (d) VALUES ('second');`,
+    ].join("\n");
+    for (const dialect of ["postgresql", "sqlite"] as const) {
+      expect(splitSqlStatements(sql, dialect)).toHaveLength(2);
+    }
+  });
+
+  it("still treats an ODD run as escaping the quote", () => {
+    // The control: a rule that stopped honouring backslash escapes entirely
+    // would satisfy the case above and split this one in the wrong place.
+    const sql = `INSERT INTO t (d) VALUES ('not \\' the end; still inside');`;
+    expect(splitSqlStatements(sql, "mysql")).toHaveLength(1);
+  });
+});
+
+describe("PostgreSQL escape strings honour backslashes; ordinary literals do not", () => {
+  it("keeps an E'...' literal WHOLE when a backslash escapes its quote", () => {
+    // 🔴 PostgreSQL DOES read a backslash as an escape inside an `E'…'` string.
+    // Disabling backslash handling for the whole dialect split this valid
+    // statement at the semicolon INSIDE the literal.
+    //
+    // Asserted on CONTENT, not on the count: `splitSqlStatements` discards a
+    // fragment carrying no SQL keyword, so the tail `right';` vanishes either
+    // way and a length check passes on the broken implementation too.
+    const sql = `SELECT E'left \\'; right' AS v;`;
+    const out = splitSqlStatements(sql, "postgresql");
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain("right");
+  });
+
+  it("still splits an ORDINARY PostgreSQL literal ending in a backslash", () => {
+    // The control, and why this is a property of the LITERAL rather than the
+    // dialect: outside `E'…'` PostgreSQL stores a backslash verbatim, so the
+    // quote after it closes the string and the semicolon separates.
+    const sql = [
+      `INSERT INTO t (d) VALUES ('ends with a backslash \\\\');`,
+      `INSERT INTO u (d) VALUES ('second');`,
+    ].join("\n");
+    expect(splitSqlStatements(sql, "postgresql")).toHaveLength(2);
+  });
+});
+
+describe("MySQL escapes inside BOTH literal quotes", () => {
+  it("keeps a double-quoted MySQL value whole when a backslash escapes its quote", () => {
+    // 🔴 Under MySQL's default SQL mode a double quote also delimits a string,
+    // so the backslash check has to apply to whichever quote opened the region.
+    // Gating on the single quote alone splits this valid statement at the
+    // semicolon INSIDE the value.
+    //
+    // Asserted on CONTENT: a fragment carrying no SQL keyword is discarded, so
+    // a length check passes on the broken implementation too.
+    const sql = `SELECT "left \\"; right" AS v;`;
+    const out = splitSqlStatements(sql, "mysql");
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain("right");
+  });
+
+  it("does NOT treat a backtick-quoted identifier as escaping", () => {
+    // The control: a backtick delimits a NAME, not a literal, so a backslash
+    // inside one escapes nothing and the following semicolon still separates.
+    const sql =
+      "INSERT INTO `t` (d) VALUES (1); INSERT INTO `u` (d) VALUES (2);";
+    expect(splitSqlStatements(sql, "mysql")).toHaveLength(2);
+  });
+});
+
+describe("a line inside a string literal is data, not SQL", () => {
+  it("KEEPS a continuation line that begins with a comment marker", () => {
+    // 🔴 A multiline description whose second line starts with `--` puts
+    // comment-looking text at the start of a line. Read as a standalone SQL
+    // comment it is dropped, the migration still succeeds, and the replayed
+    // database stores a SILENTLY TRUNCATED description — no error anywhere.
+    const sql = `INSERT INTO "t" ("d") VALUES ('Summary\n-- internal note');`;
+    const out = splitSqlStatements(sql, "sqlite").join(";");
+    expect(out).toContain("internal note");
+  });
+
+  it("KEEPS a literal that contains the breakpoint marker text", () => {
+    // The same rule for the rewrite half of the cleanup: stripping the marker
+    // out of prose corrupts the stored value exactly as dropping the line does.
+    const sql = `INSERT INTO "t" ("d") VALUES ('note\n--> statement-breakpoint here');`;
+    const out = splitSqlStatements(sql, "sqlite").join(";");
+    expect(out).toContain("--> statement-breakpoint here");
+  });
+
+  it("still DROPS a standalone comment line outside any literal", () => {
+    // 🔴 The control. Both cases above pass on an implementation that simply
+    // stopped cleaning up, which would put marker text and comments back into
+    // the SQL the driver receives — so the cleanup must be shown to still run.
+    const sql = `-- a leading note\nCREATE TABLE "t" ("a" text);`;
+    const out = splitSqlStatements(sql, "sqlite").join(";");
+    expect(out).not.toContain("a leading note");
+    expect(out).toContain("CREATE TABLE");
+  });
+
+  it("still STRIPS an inline breakpoint marker outside any literal", () => {
+    // The rewrite half of the same control: unstripped, the marker text
+    // pollutes the next accumulated statement and MySQL rejects it.
+    const sql = `CREATE TABLE "t" ("a" text);--> statement-breakpoint\nCREATE INDEX "i" ON "t" ("a");`;
+    const out = splitSqlStatements(sql, "sqlite");
+    expect(out.join(";")).not.toContain("statement-breakpoint");
+    expect(out).toHaveLength(2);
+  });
+
+  it("KEEPS marker text in a literal that opens LATER on the line", () => {
+    // 🔴 A per-line answer is not enough. This line begins as ordinary SQL, so
+    // any rule keyed on where the LINE starts treats the whole line as SQL and
+    // rewrites the value inside it — storing a truncated description while the
+    // migration reports success.
+    const sql = `INSERT INTO "t" ("d") VALUES ('note --> statement-breakpoint here');`;
+    const out = splitSqlStatements(sql, "sqlite").join(";");
+    expect(out).toContain("--> statement-breakpoint here");
+  });
+
+  it("does not let an apostrophe inside a BLOCK comment open a literal", () => {
+    // 🔴 `it's` here is prose, not an opening quote. Counted as one, everything
+    // after it reads as being inside a literal, so the real breakpoint line
+    // below is treated as data and survives — and on MySQL, where `-->` is not
+    // a comment, that text reaches the driver as invalid SQL.
+    const sql = `/* it's a note\n   spanning lines */\nCREATE TABLE "t" ("a" text);\n--> statement-breakpoint\nCREATE INDEX "i" ON "t" ("a");`;
+    const out = splitSqlStatements(sql, "mysql");
+    expect(out.join(";")).not.toContain("statement-breakpoint");
+    expect(out).toHaveLength(2);
+  });
+});
+
+describe("a doubled delimiter escapes the delimiter, it does not end the literal", () => {
+  it("keeps a Postgres escape string whole across a doubled quote", () => {
+    // 🔴 Closing on the first quote of `''` and reopening on the second looks
+    // harmless — the state toggles twice and comes back correct — but the
+    // reopened literal is a DIFFERENT one. `escapesWithBackslash` is read from
+    // the prefix at the opening quote, and the second quote of a pair is no
+    // longer adjacent to the `E`. The mode is lost, the later `\'` reads as the
+    // closing quote, and the statement is cut at the semicolon INSIDE the
+    // value.
+    //
+    // Asserted on CONTENT, not on the number of statements: the splitter drops
+    // fragments carrying no SQL keyword, so the tail of a mis-split statement
+    // disappears and a count assertion passes on the broken implementation.
+    const sql = `SELECT E'it''s left \\'; right' AS v;`;
+    expect(splitSqlStatements(sql, "postgresql").join(" | ")).toBe(
+      `SELECT E'it''s left \\'; right' AS v`
+    );
+  });
+
+  it("keeps an ordinary literal whole across a doubled quote", () => {
+    // The control. This case is correct even when the pair is treated as a
+    // close followed by an open, because both literals carry the same escape
+    // mode — so it passes on the broken implementation and shows that the fix
+    // is about the MODE rather than about doubled quotes in general.
+    const sql = `INSERT INTO "t" ("d") VALUES ('it''s fine; really');`;
+    expect(splitSqlStatements(sql, "postgresql").join(" | ")).toBe(
+      `INSERT INTO "t" ("d") VALUES ('it''s fine; really')`
+    );
+  });
+
+  it("still CLOSES on a single delimiter, so a doubled one is not assumed", () => {
+    // 🔴 The other direction: an implementation that never closed on a quote
+    // adjacent to another would swallow the boundary between two statements.
+    const sql = `INSERT INTO "t" ("d") VALUES ('a');INSERT INTO "t" ("d") VALUES ('b');`;
     expect(splitSqlStatements(sql, "postgresql")).toHaveLength(2);
   });
 });

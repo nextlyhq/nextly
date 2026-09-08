@@ -14,6 +14,11 @@
  * ```
  */
 
+import type {
+  DraftPreviewRequest,
+  RenderedTemplate,
+} from "nextly/api/email-template-preview-types";
+
 import { fetcher } from "../lib/api/fetcher";
 import type {
   ActionResponse,
@@ -201,6 +206,60 @@ export async function previewTemplate(
   );
 }
 
+/**
+ * The fields the draft-preview route renders — DERIVED from the schema the
+ * server validates against, never restated.
+ *
+ * A hand-written mirror compiles happily while every request is rejected: add
+ * a required field on the server and nothing here fails until runtime. Taking
+ * the type from the canonical schema turns that into a build error, for the
+ * same reason the render itself has only one implementation — a contract with
+ * two definitions is one that drifts.
+ *
+ * A type-only import, so nothing of the server reaches the browser bundle, and
+ * the entry point it comes from pulls zod and nothing else.
+ */
+export type DraftPreviewTemplate = DraftPreviewRequest["template"];
+
+/** The variable values a render interpolates, as the schema declares them. */
+export type DraftPreviewData = DraftPreviewRequest["data"];
+
+/**
+ * A rendered draft: the complete artifact, including the text part.
+ *
+ * The server's own `RenderedTemplate`, so the field the browser-side preview
+ * used to guess at cannot be dropped here without the compiler noticing.
+ * Distinct from `EmailTemplatePreviewResult`, which carries no `text` because
+ * the saved-row preview predates the unified renderer.
+ */
+export type DraftPreviewResult = RenderedTemplate;
+
+/**
+ * Render UNSAVED template fields through the server's composition.
+ *
+ * The editor previews through this rather than interpolating in the browser:
+ * a second implementation of the render is a second answer to "what will they
+ * receive", and the two drifted on the preheader, on a layout's own chrome and
+ * on the derived text part before this existed.
+ */
+export async function previewDraft(
+  template: DraftPreviewTemplate,
+  data: DraftPreviewData
+): Promise<DraftPreviewResult> {
+  /*
+   * The WHOLE body is annotated, not just the template inside it. Typing only
+   * the nested field leaves the envelope hand-authored, so a schema that gains
+   * another required top-level property still compiles here and fails as a 400
+   * at runtime — which is the failure this derivation exists to prevent.
+   */
+  const body: DraftPreviewRequest = { template, data };
+  return fetcher<DraftPreviewResult>(
+    "/email-templates/preview",
+    { method: "POST", body: JSON.stringify(body) },
+    true
+  );
+}
+
 export interface SendTestEmailResult {
   success: boolean;
   messageId?: string;
@@ -232,5 +291,6 @@ export const emailTemplateApi = {
   updateTemplate,
   deleteTemplate,
   previewTemplate,
+  previewDraft,
   sendTestEmail,
 } as const;

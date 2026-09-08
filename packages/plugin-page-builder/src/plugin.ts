@@ -3,9 +3,11 @@ import {
   type DocumentLimits,
   type RemotePattern,
 } from "@nextlyhq/blocks-engine";
+import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 import {
   definePlugin,
   resolvedCollectionDraftSplit,
+  resolvedCollectionView,
 } from "@nextlyhq/plugin-sdk";
 import type { PreviewViewportsDeclaration } from "nextly/config";
 
@@ -23,14 +25,20 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
-import { resolvedCollectionView } from "./class-usage-collection-view";
 import { registerClassUsageMaintenance } from "./class-usage-hook";
 import {
   CLASS_USAGE_INDEX_SLUG,
   classUsageIndexCollection,
 } from "./collections/class-usage-index";
+import {
+  COMPONENTS_SLUG,
+  componentsCollection,
+} from "./collections/components";
+import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { pagesCollection } from "./collections/pages";
+import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
+import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
@@ -55,7 +63,6 @@ function pagesOptions(
     ...(opts.pagePreviewPath === undefined
       ? {}
       : { previewPath: opts.pagePreviewPath }),
-    ...(opts.limits === undefined ? {} : { limits: opts.limits }),
     ...(pagePreviewBreakpoints(opts, configStyle) ?? {}),
   };
 }
@@ -105,6 +112,74 @@ function pagePreviewBreakpoints(
   };
 }
 
+/**
+ * Wire the publish-readiness notice, unless the host turned it off.
+ *
+ * Lifted out of `init` rather than left inline: initialisation is a list of
+ * registrations, and a branch resolving four settings inside it makes the list
+ * harder to read than the decision is. Off means NOT REGISTERED, rather than
+ * registered and declining per write — a hook that runs on every save to answer
+ * "not my business" is cost with no product.
+ */
+function registerReadinessNotice(
+  // Named structurally rather than by importing the plugin context type: only
+  // the capabilities used are declared, so a later edit reaching for a service
+  // this has no business with shows up as a type error here.
+  ctx: {
+    self: { collections: Record<string, string | undefined> };
+    hooks: unknown;
+    services: unknown;
+  },
+  opts: PageBuilderOptions
+): void {
+  const readiness = opts.componentReadiness;
+  if (readiness === false) return;
+  registerComponentReadinessNotice({
+    ctx: ctx as never,
+    // The RESOLVED slug, for the reason the index slug is resolved: an
+    // integrator may rename the collection, and a hook holding the literal
+    // would ask about a table that does not exist and report every embedded
+    // component as unpublished.
+    componentCollection:
+      readiness?.collection ??
+      ctx.self.collections[COMPONENTS_SLUG] ??
+      COMPONENTS_SLUG,
+    // Defaults to the field the RENDERER defaults to, so the check reads the
+    // document the page draws from rather than every blocks field the store
+    // happens to have.
+    componentField: readiness?.field ?? COMPONENT_DOCUMENT_FIELD,
+    // The SAME bounds the renderer draws under, asked per call. A notice
+    // derived under different ones names components inside a document the page
+    // never renders.
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+    ...optionalScope(readiness),
+  });
+}
+
+/**
+ * The two settings that are absent by default rather than defaulted.
+ *
+ * Spread as a unit so the registration above stays a list of resolved values.
+ * Both narrow what the notice speaks about, and both are unset for the ordinary
+ * install: a collection declares one blocks field, and every collection with
+ * one is content some route renders.
+ */
+function optionalScope(
+  readiness: Exclude<PageBuilderOptions["componentReadiness"], false>
+): {
+  pageField?: string;
+  renderedCollections?: readonly string[];
+} {
+  return {
+    ...(readiness?.pageField === undefined
+      ? {}
+      : { pageField: readiness.pageField }),
+    ...(readiness?.renderedCollections === undefined
+      ? {}
+      : { renderedCollections: readiness.renderedCollections }),
+  };
+}
+
 export interface PageBuilderOptions {
   /** Disable behavior while still applying schema. Default true. */
   enabled?: boolean;
@@ -114,15 +189,47 @@ export interface PageBuilderOptions {
    *
    * Set the SAME value here and on `PageRenderer.limits` (or on the style
    * context it reads). The renderer decides which nodes a page draws; this
-   * decides which nodes the class-usage record counts, and both ask the engine
+   * decides which nodes the class-usage index counts, and both ask the engine
    * the same question through `selectNodes`. Handing them different bounds
    * makes them answer about different documents — a class applied to a node the
-   * page renders would be missing from the record, and a usage-based delete
+   * page renders would be missing from the index, and a usage-based delete
    * reads that absence as "not used".
    *
    * Left unset, both use the engine defaults and agree by construction.
    */
   limits?: DocumentLimits;
+  /**
+   * Where publishing a page looks for the components it embeds, when it warns
+   * that some are not live.
+   *
+   * Defaults to the component store this plugin contributes, which is where the
+   * renderer reads them from unless a route says otherwise. A route MAY say
+   * otherwise: `createBlocksPage` accepts `componentCollection` to name a
+   * different store and `resolveComponents` to supply definitions from
+   * somewhere that is not a collection at all. Neither is visible from here —
+   * the route is configured in the host's app, and this runs on the write path
+   * — so a host that redirected the renderer must redirect this too, or the
+   * notice judges the page against a store it does not render from and reports
+   * live components as missing.
+   *
+   * `false` turns the notice off, which is the honest setting for a host whose
+   * definitions come from a custom `resolveComponents` source: no collection
+   * can answer the question, so asking one produces a warning about nothing.
+   */
+  componentReadiness?:
+    | false
+    | {
+        collection?: string;
+        field?: string;
+        pageField?: string;
+        /**
+         * The collections a route renders. Unset, every collection with a
+         * blocks field is examined; named, the notice stays quiet about
+         * content no route serves, since claiming components "will not appear
+         * for visitors" is a claim about a page that does not exist.
+         */
+        renderedCollections?: readonly string[];
+      };
   /**
    * Whether the editor shows its getting-started checklist. Default true.
    *
@@ -258,6 +365,27 @@ export interface PageBuilderOptions {
  * The Page Builder plugin factory. Call it in a host app's
  * `defineConfig({ plugins: [pageBuilder()] })`.
  */
+/**
+ * Document limits in a form that survives the client-config round trip.
+ *
+ * `clientConfig` is refused at BOOT unless it is delivered unchanged through
+ * JSON, and `Infinity` is not a JSON value — it round-trips to `null`, so
+ * publishing it raw takes the whole plugin down. An infinite bound is
+ * deliberately supported by the engine, whose byte measurement refuses to
+ * reject one, so it has to be carried rather than dropped.
+ *
+ * `null` is the wire spelling for "no bound", and the admin reads it back as
+ * `Infinity`. Encoded here because this is where the value crosses into JSON.
+ */
+function jsonSafeLimits(limits: DocumentLimits): Record<string, number | null> {
+  return Object.fromEntries(
+    Object.entries(limits).map(([key, value]) => [
+      key,
+      Number.isFinite(value) ? value : null,
+    ])
+  );
+}
+
 export const pageBuilder = (opts: PageBuilderOptions = {}) => {
   // Resolved once, with no stored tier: at config time there is no database to
   // read, so what the factory can wire into the validator and the canvas is
@@ -297,9 +425,9 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // How the plugin names itself wherever the admin lists it. Without this
       // the dashboard section and the plugins list fall back to `meta.name`,
       // which is the raw package specifier — `@nextlyhq/plugin-page-builder`
-      // shown where the form builder shows "Forms". The icon matches the Pages
-      // menu entry this plugin contributes, so one feature is not drawn two
-      // different ways in the same sidebar.
+      // shown where the form builder shows "Forms". `Layout` is the feature's
+      // own mark rather than any one menu entry's, so the plugins list and the
+      // sidebar heading draw the same feature the same way.
       appearance: { icon: "Layout", label: "Page Builder" },
       description:
         "Build pages visually from blocks with drag-and-drop editing",
@@ -338,12 +466,13 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         // renderer no longer applies.
         locales: () =>
           ctx.config.localization?.locales.map(locale => locale.code) ?? [],
-        // The SAME bounds the pages collection and the renderer use. Deriving
-        // the index under different ones records a different document than the
-        // page serves: raised bounds leave classes on the extra nodes
-        // unindexed, so a class the page renders reads as unused.
+        // The SAME bounds the renderer draws under. Deriving the index under
+        // different ones records a different document than the page serves:
+        // raised bounds leave classes on the extra nodes unindexed, so a class
+        // the page renders reads as unused.
         limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
+      registerReadinessNotice(ctx, opts);
     },
     contributes: {
       // The channel another plugin adds blocks through. Core carries no
@@ -357,8 +486,19 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // describes. Its table existing is what lets the maintenance path write
       // to it without a first-run branch, exactly as the site style single is
       // registered whether or not the host stated any defaults.
+      // The composition stores, contributed unconditionally beside the pages
+      // they serve. Each is a collection rather than a shape inside one,
+      // because a collection is what core seeds permissions for: the six
+      // actions on `patterns` are separate rows from the six on `components`,
+      // so "may create a pattern" and "may publish a component to every page
+      // that carries it" are already different grants on the day this ships.
+      // A single table discriminated by a column would leave both behind one
+      // permission and could not declare a slug unique per kind.
       collections: [
         pagesCollection(pagesOptions(opts, configStyle)),
+        patternsCollection(),
+        componentsCollection(),
+        layoutsCollection(),
         classUsageIndexCollection(),
       ],
       // The Site Style global: one versioned, access-controlled document the
@@ -413,6 +553,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         // key already says.
         ...(opts.remotePatterns !== undefined ||
         opts.checklist !== undefined ||
+        opts.limits !== undefined ||
         opts.siteStyle !== undefined
           ? {
               clientConfig: {
@@ -429,11 +570,72 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
                 ...(opts.siteStyle === undefined
                   ? {}
                   : { siteStyle: configStyle }),
+                /*
+                 * The bounds the renderer draws under, so the admin asks the
+                 * same question the page answers. The classes manager walks the
+                 * open document to say which classes a page applies, and a walk
+                 * under different limits selects different nodes — reporting a
+                 * class as absent from a page that renders it. Plain numbers,
+                 * and nothing secret: the published page is drawn under them.
+                 */
+                ...(opts.limits === undefined
+                  ? {}
+                  : { limits: jsonSafeLimits(opts.limits) }),
               },
             }
           : {}),
+        // The three LIBRARIES, and no link to Pages.
+        //
+        // Pages is an ordinary collection that happens to declare a `blocks`
+        // field — a title, a slug and the document — and the Collections
+        // listing already offers it, because it is not hidden and claims no
+        // sidebar group. A second entry here was the same screen named twice.
+        //
+        // It is also a claim the code does not support. The page builder is a
+        // FIELD TYPE, so any collection may declare it and a Single may too;
+        // nothing in the engine, the builder or this package knows the slug
+        // `pages`. A menu promising "the page builder lives here, and it means
+        // Pages" gets less true the moment a second collection declares the
+        // field, and nothing would ever add that one.
+        //
+        // So content sits with content, and this menu holds what is genuinely
+        // global: the pieces pages are built FROM. An author already switches
+        // page from inside the editor, whose left rail carries a Pages panel —
+        // which is where that job belongs, since it is done while building
+        // rather than while deciding what to build.
+        //
+        // Each entry names the permission that makes its screen reachable, so
+        // a role without it is not offered a link into a list it would be
+        // refused, and each names its `collection`, so a host that renames one
+        // gets a link to the collection it actually registered and a gate on
+        // the permission that slug actually seeds. Spelling either literally
+        // would strand the link and hide the item from the readers who can
+        // open the list.
+        //
+        // They sit under this plugin's own heading rather than a section of
+        // their own: the sidebar's section vocabulary is a closed list in core
+        // with no design entry, so grouping them elsewhere would mean widening
+        // that list — a change to the admin's navigation model, and a larger
+        // question than where three links go.
         menu: [
-          { label: "Pages", to: "/admin/collections/pages", icon: "Layout" },
+          {
+            label: "Patterns",
+            collection: PATTERNS_SLUG,
+            to: `/admin/collections/${PATTERNS_SLUG}`,
+            icon: "LayoutTemplate",
+          },
+          {
+            label: "Components",
+            collection: COMPONENTS_SLUG,
+            to: `/admin/collections/${COMPONENTS_SLUG}`,
+            icon: "Component",
+          },
+          {
+            label: "Layouts",
+            collection: LAYOUTS_SLUG,
+            to: `/admin/collections/${LAYOUTS_SLUG}`,
+            icon: "PanelsTopLeft",
+          },
         ],
         // No `schemaBuilderSlot` and no `entryFormToolbarSlot`.
         //

@@ -31,14 +31,20 @@ import {
 } from "../../domains/schema/services/field-column-descriptor";
 import {
   isLifecycleSystemColumn,
+  lifecycleDeclaredNameMessage,
+  lifecycleReservesDeclaredName,
   isOwnableSystemColumn,
   isReservedSystemColumn,
 } from "../../lib/system-columns";
-import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
+import {
+  NEWLY_RESERVED_SLUG_NOTES,
+  SYSTEM_RESOURCES,
+} from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
+  validateContainerFieldsShared,
   validateFieldNameShared,
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
@@ -427,45 +433,31 @@ function validateField(
       validateRelationshipTargetShared(f, path, errsBase, allCollectionSlugs);
       break;
 
-    case "repeater": {
-      const arrayFields = f.fields;
-      if (!arrayFields) {
-        errors.push({
-          path: `${path}.fields`,
-          message: "Array field must have a 'fields' array",
-          code: "ARRAY_FIELDS_REQUIRED",
-        });
-      } else if (Array.isArray(arrayFields)) {
-        validateFieldsArray(
-          arrayFields,
-          `${path}.fields`,
-          errors,
-          allCollectionSlugs
-        );
-      }
+    case "repeater":
+      validateContainerFieldsShared(
+        f,
+        path,
+        errsBase,
+        { label: "Array field", code: "ARRAY_FIELDS_REQUIRED" },
+        (children, basePath) =>
+          validateFieldsArray(children, basePath, errors, allCollectionSlugs)
+      );
       break;
-    }
 
-    case "group": {
-      const groupFields = f.fields;
-      if (!groupFields) {
-        errors.push({
-          path: `${path}.fields`,
-          message: "Group field must have a 'fields' array",
-          code: "GROUP_FIELDS_REQUIRED",
-        });
-      } else if (Array.isArray(groupFields)) {
-        validateFieldsArray(
-          groupFields,
-          `${path}.fields`,
-          errors,
-          allCollectionSlugs
-        );
-      }
+    case "group":
+      validateContainerFieldsShared(
+        f,
+        path,
+        errsBase,
+        { label: "Group field", code: "GROUP_FIELDS_REQUIRED" },
+        (children, basePath) =>
+          validateFieldsArray(children, basePath, errors, allCollectionSlugs)
+      );
       break;
-    }
 
     case "component":
+    case "fieldGroup":
+      // The migrated spelling validates by the same reference rule.
       validateComponentFieldRefShared(f, path, errsBase);
       break;
 
@@ -573,6 +565,14 @@ function validateFields(
     // Everything below is about columns, so a field that occupies none is exempt. A component or
     // a many-to-many named `Title` takes over nothing: its values live in its own table and its
     // payload key stays `Title`, distinct from the system field's `title`.
+    if (lifecycleReservesDeclaredName(name, "collection", lifecycleEnabled)) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: lifecycleDeclaredNameMessage(name),
+        code: "FIELD_NAME_LIFECYCLE_RESERVED",
+      });
+      return;
+    }
     if (!fieldProducesColumn(candidate)) return;
     // A field may take over `title` or `slug` — that is the documented "user wins" behaviour —
     // but only under the column's own name. `Title` reaches the same column while staying a
@@ -697,6 +697,7 @@ export function validateCollectionConfig(
   validateSlugShared(config.slug, errsBase, {
     entityLabel: "Collection",
     reservedSlugsSet: RESERVED_SLUGS_SET,
+    reservedSlugNotes: NEWLY_RESERVED_SLUG_NOTES,
     sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
   });
 

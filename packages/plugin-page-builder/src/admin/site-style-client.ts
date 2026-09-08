@@ -38,7 +38,10 @@ import {
 import { useCallback, useMemo } from "react";
 
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
-import { readSiteStyleRecord } from "../site-style-record";
+import {
+  readSiteStyleRecord,
+  unreadableStoredFonts,
+} from "../site-style-record";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
 
 /** The four sections of the document, each one studio's to own. */
@@ -57,6 +60,29 @@ export type SiteStyleSection = keyof SiteStyleData;
 export interface SiteStyleRead {
   /** Defaults merged with the stored tier, ready to compile a sheet from. */
   readonly siteStyle: SiteStyleData;
+  /**
+   * The stored tier alone, as the document holds it.
+   *
+   * What a writer editing one section has to build on. `save` replaces a
+   * section outright, so appending to the MERGED value would copy the host's
+   * config-stated entries into storage — where they stop tracking the config
+   * and mask a later change to it — while appending to the config tier drops
+   * everything already stored. Neither is the document being edited; this is.
+   *
+   * `undefined` until the read arrives, which is why `pending` exists beside
+   * it: an append derived from `undefined` writes the new entry alone and
+   * silently discards the rest.
+   */
+  readonly stored: SiteStyleData | undefined;
+  /**
+   * The stored font rows the read had to drop, named by position.
+   *
+   * Beside `stored` because it is the part of the answer `stored` cannot
+   * carry: a narrowed list and a complete one are the same shape, so a writer
+   * appending to it has no way to see that rows are missing from the value it
+   * is about to save back over them.
+   */
+  readonly unreadableFonts: readonly string[];
   /** Whether the stored tier has arrived yet. */
   readonly pending: boolean;
   /** Why the read failed, when it did. */
@@ -78,13 +104,22 @@ export function useSiteStyle(defaults?: SiteStyleData): SiteStyleRead {
   // validators, so the read keeps what it can type and drops what it cannot,
   // exactly as the published route does — a read that refused would take down
   // the editor over one legacy row.
+  // Narrowed ONCE and both views taken from it, rather than reading the row
+  // twice: two calls to `readSiteStyleRecord` over one document are two
+  // derivations of the same answer, and they agree until one of them moves.
+  const stored = useMemo(() => readSiteStyleRecord(data), [data]);
   const siteStyle = useMemo(
-    () => resolveSiteStyle(defaults, readSiteStyleRecord(data)),
-    [defaults, data]
+    () => resolveSiteStyle(defaults, stored),
+    [defaults, stored]
   );
+  // From the document rather than from `stored`, which is the value AFTER the
+  // drop and therefore cannot report one.
+  const unreadableFonts = useMemo(() => unreadableStoredFonts(data), [data]);
 
   return {
     siteStyle,
+    stored,
+    unreadableFonts,
     pending: isPending,
     error: error ?? null,
   };

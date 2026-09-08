@@ -428,6 +428,54 @@ describe("resolveComponentFieldMap", () => {
     expect([...map.keys()].sort()).toEqual(["leaf", "wrapper"]);
   });
 
+  it("terminates when a group contains ITSELF, not only when slugs cycle", async () => {
+    // The slug cycle below is a different graph from this one. `slugsIn` walks
+    // `.fields` structurally, so a config whose unnamed group holds itself
+    // overflowed the call stack here — on the save path this runs BEFORE the
+    // tagging walk, so hardening only that one left the failure reachable one
+    // function earlier, after the row is already written.
+    const group: Record<string, unknown> = { fields: [] };
+    (group.fields as unknown[]).push(group);
+
+    const map = await resolveComponentFieldMap(
+      [group] as unknown as FieldConfig[],
+      async () => null
+    );
+
+    expect([...map.keys()]).toEqual([]);
+  });
+
+  it("collects slugs from a list wider than the argument limit", async () => {
+    // `push(...slugsIn(children))` threw past the engine's argument limit. The
+    // size is comfortably beyond any plausible one and deliberately does not
+    // assert where it is, that being a property of the day's engine.
+    const wide = {
+      fields: Array.from({ length: 200_000 }, (_, i) => ({
+        name: `f${i}`,
+        type: "component",
+        component: `c${i}`,
+      })),
+    };
+
+    // The lookup RESOLVES one of them, and the assertion is that it came back.
+    // Asserting an empty map instead would be satisfied by an implementation
+    // that never descends into `wide.fields` at all — the same green for the
+    // opposite behaviour.
+    const asked: string[] = [];
+    const map = await resolveComponentFieldMap(
+      [wide] as unknown as FieldConfig[],
+      async slug => {
+        asked.push(slug);
+        return slug === "c199999"
+          ? ([{ name: "deep", type: "text" }] as FieldConfig[])
+          : null;
+      }
+    );
+
+    expect(asked).toHaveLength(200_000);
+    expect(map.get("c199999")).toEqual([{ name: "deep", type: "text" }]);
+  });
+
   it("terminates on a cycle", async () => {
     const map = await resolveComponentFieldMap(
       [{ name: "hero", type: "component", component: "node" }] as FieldConfig[],
@@ -507,5 +555,70 @@ describe("rehydrateSnapshotDates", () => {
       null
     );
     expect(value.when instanceof Date).toBe(true);
+  });
+});
+
+describe("the migrated fieldGroup spellings reach the capture walks", () => {
+  // A definition the storage migration rewrote carries its reference keys
+  // under the fieldGroup spellings. A capture walk that reads only the legacy
+  // keys leaves the value untagged — pruned against the wrong schema at
+  // restore — and drops its slugs from the schema map. The marker itself is
+  // always written in the CURRENT wire spelling, whatever the definition says.
+
+  it("tagComponentTypes tags a migrated single reference", () => {
+    const tagged = tagComponentTypes({ seo: { metaTitle: "Hi" } }, [
+      { name: "seo", type: "fieldGroup", fieldGroup: "seo" },
+    ] as FieldConfig[]);
+    expect(tagged.seo).toEqual({ metaTitle: "Hi", _componentType: "seo" });
+  });
+
+  it("tagComponentTypes walks a migrated zone row by its own type", () => {
+    // The zone whitelist is what admits the row's `_fieldGroupType` to the
+    // nested walk; a whitelist read from the legacy key alone would be
+    // undefined here and the row — and its nested component — left untagged.
+    const tagged = tagComponentTypes(
+      { layout: [{ _fieldGroupType: "hero", inner: { deep: "value" } }] },
+      [
+        { name: "layout", type: "fieldGroup", fieldGroups: ["hero"] },
+      ] as FieldConfig[],
+      slug =>
+        slug === "hero"
+          ? ([
+              { name: "inner", type: "component", component: "deep" },
+            ] as FieldConfig[])
+          : undefined
+    );
+    expect(tagged.layout).toEqual([
+      {
+        _fieldGroupType: "hero",
+        inner: { deep: "value", _componentType: "deep" },
+      },
+    ]);
+  });
+
+  it("resolveComponentFieldMap collects a migrated definition's slugs", async () => {
+    const map = await resolveComponentFieldMap(
+      [
+        { name: "seo", type: "fieldGroup", fieldGroup: "seo" },
+        { name: "layout", type: "fieldGroup", fieldGroups: ["hero", "cta"] },
+      ] as FieldConfig[],
+      async () => [{ name: "t", type: "text" }] as FieldConfig[]
+    );
+    expect([...map.keys()].sort()).toEqual(["cta", "hero", "seo"]);
+  });
+
+  it("rehydrateSnapshotDates follows a migrated single reference", () => {
+    const value: Record<string, unknown> = {
+      seo: { when: "2026-02-02T00:00:00.000Z" },
+    };
+    rehydrateSnapshotDates(
+      value,
+      [{ name: "seo", type: "fieldGroup", fieldGroup: "seo" }] as FieldConfig[],
+      new Map([
+        ["seo", { fields: [{ name: "when", type: "date" }] as FieldConfig[] }],
+      ]) as never
+    );
+    const seo = value.seo as Record<string, unknown>;
+    expect(seo.when instanceof Date).toBe(true);
   });
 });

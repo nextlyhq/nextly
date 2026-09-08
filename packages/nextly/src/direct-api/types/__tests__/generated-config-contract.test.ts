@@ -185,7 +185,13 @@ describe("generated date-field contract", () => {
     // REPRESENTATION only: how the emission spells nullability is a separate
     // question about every optional field, not about timestamps.
     expect(code).toContain("  createdAt: string;");
-    expect(code).toContain("  publishedAt?: string;");
+    // The nullability spelling is deliberately not pinned here, per the note
+    // above: a nullable column earns `| null` on every optional field, which is
+    // a claim about optionality rather than about how a timestamp is spelled.
+    // What must not drift is `string` rather than `Date`, so that is asserted
+    // in both directions.
+    expect(code).toMatch(/ {2}publishedAt\?: string( \| null)?;/);
+    expect(code).not.toContain("publishedAt?: Date");
     expect(code).not.toContain("createdAt: Date");
   });
 });

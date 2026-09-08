@@ -161,3 +161,26 @@ export async function singleDocumentEditable(
   });
   return denied === null;
 }
+
+/**
+ * The id of a Single's live document, or `null` when it has not been
+ * materialized yet.
+ *
+ * A Single's URL carries no entry id (there is only ever one document), so
+ * callers must resolve it from the backing row rather than trusting a
+ * client-supplied value — otherwise the id check that stops a recreated Single
+ * exposing its predecessor's snapshots could simply be bypassed. Reads the row
+ * directly instead of going through `SingleEntryService.get`, which would
+ * materialize a missing Single as a side effect of a read.
+ */
+export async function resolveSingleDocumentId(
+  slug: string
+): Promise<string | null> {
+  const registry = getService("singleRegistryService");
+  const record = await registry.getSingleBySlug(slug);
+  if (!record?.tableName) return null;
+
+  const adapter = getService("adapter");
+  const row = await adapter.selectOne<{ id?: unknown }>(record.tableName, {});
+  return typeof row?.id === "string" ? row.id : null;
+}

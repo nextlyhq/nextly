@@ -9,7 +9,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { readVersionParam, resolvePair } from "../version-search-params";
+import {
+  readLocaleParam,
+  readVersionParam,
+  resolvePair,
+} from "../version-search-params";
 
 describe("readVersionParam", () => {
   it("reads a version number", () => {
@@ -117,5 +121,37 @@ describe("resolvePair", () => {
     expect(resolvePair(interleaved, undefined, undefined, true)).toEqual({
       kind: "not-loaded",
     });
+  });
+});
+
+describe("readLocaleParam", () => {
+  /**
+   * A version's locale decides which text the document HAS, so it decides what
+   * the document is called. It is carried in the address rather than inferred
+   * because the page is addressable: a link shared from a French history has
+   * to open the French comparison, named in French, for a reader whose editor
+   * was last in English.
+   */
+  it("takes a locale the address names", () => {
+    expect(readLocaleParam("fr")).toBe("fr");
+    expect(readLocaleParam("  fr  ")).toBe("fr");
+  });
+
+  /**
+   * Absent means the default language, which is what the server resolves when
+   * none is asked for — so a non-localized document needs no parameter. An
+   * EMPTY one is not a language either: it reads as a locale that failed to
+   * resolve rather than one never asked for.
+   */
+  it("treats absent and empty alike, as no locale at all", () => {
+    expect(readLocaleParam(undefined)).toBeUndefined();
+    expect(readLocaleParam("")).toBeUndefined();
+    expect(readLocaleParam("   ")).toBeUndefined();
+  });
+
+  /** A repeated parameter is ambiguous, and guessing which one is meant is
+   *  worse than answering with the default. */
+  it("refuses a repeated parameter rather than picking one", () => {
+    expect(readLocaleParam(["fr", "en"])).toBeUndefined();
   });
 });

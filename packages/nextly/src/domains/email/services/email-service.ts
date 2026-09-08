@@ -52,12 +52,9 @@ import { getEmailProviderRegistry } from "./email-provider-registry";
 import type { EmailProviderService } from "./email-provider-service";
 import type { EmailTemplateService } from "./email-template-service";
 import { LOG_PROVIDER_TYPE } from "./providers/log-provider";
+import { DEFAULT_APP_NAME, renderTemplate } from "./render-template";
 import { mergeTemplateAttachments } from "./template-attachment-merge";
-import {
-  htmlToText,
-  interpolateTemplate,
-  validateTemplateVariables,
-} from "./template-engine";
+import { htmlToText, validateTemplateVariables } from "./template-engine";
 
 /**
  * Dependencies needed to resolve attachments from the media library.
@@ -253,34 +250,20 @@ export class EmailService extends BaseService {
         );
       }
 
-      // Interpolate subject (no HTML escaping — plain text)
-      const subject = interpolateTemplate(dbTemplate.subject, variables, {
-        escapeHtml: false,
+      // One composition, shared with every preview surface. Resolving WHICH
+      // layout wraps this template needs the database; composing with it does
+      // not, so only the resolution stays here.
+      const layout = dbTemplate.useLayout
+        ? await this.templateService.getLayoutFor(dbTemplate)
+        : null;
+
+      const {
+        subject,
+        html,
+        text: plainText,
+      } = renderTemplate(dbTemplate, layout, variables, {
+        appName: this.getAppName(),
       });
-
-      // Interpolate body (HTML escaping for injected values)
-      let html = interpolateTemplate(dbTemplate.htmlContent, variables);
-
-      // Plain-text alternative: use the template's own text if authored
-      // (interpolated, no HTML escaping); otherwise derive it from the body
-      // BEFORE the preheader/layout are spliced in, so the hidden preheader div
-      // never leaks into the text mail as duplicated preview text.
-      const plainText = dbTemplate.plainTextContent?.trim()
-        ? interpolateTemplate(dbTemplate.plainTextContent, variables, {
-            escapeHtml: false,
-          })
-        : htmlToText(html);
-
-      // Prepend a hidden preheader (inbox preview line) when authored.
-      if (dbTemplate.preheader?.trim()) {
-        const preheader = interpolateTemplate(dbTemplate.preheader, variables);
-        html = `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${preheader}</div>${html}`;
-      }
-
-      // Compose with layout if enabled
-      if (dbTemplate.useLayout) {
-        html = await this.composeWithLayout(dbTemplate, html, variables);
-      }
 
       // Merge template-default attachments with per-send attachments.
       // Dedupe by mediaId — per-send entries win on conflict.
@@ -1021,39 +1004,6 @@ export class EmailService extends BaseService {
   }
 
   // ============================================================
-  // Private: Template Layout Composition
-  // ============================================================
-
-  /**
-   * Compose the final HTML by injecting the interpolated template body
-   * into its resolved layout at the `{{content}}` placeholder. The
-   * layout's own `{{year}}` / `{{appName}}` placeholders are filled;
-   * the body is spliced in verbatim. Returns the body unchanged when
-   * no layout exists.
-   */
-  private async composeWithLayout(
-    template: EmailTemplateRecord,
-    interpolatedBody: string,
-    variables: Record<string, unknown>
-  ): Promise<string> {
-    const layout = await this.templateService.getLayoutFor(template);
-    if (!layout) return interpolatedBody;
-
-    // Ensure common layout variables are always available
-    const layoutVars: Record<string, unknown> = {
-      ...variables,
-      year: variables.year ?? new Date().getFullYear().toString(),
-      appName: variables.appName ?? this.getAppName(),
-    };
-
-    return this.templateService.renderWithLayout(
-      layout,
-      interpolatedBody,
-      layoutVars
-    );
-  }
-
-  // ============================================================
   // Private: Adapter Factories
   // ============================================================
 
@@ -1117,7 +1067,7 @@ export class EmailService extends BaseService {
    * Get the application name for email templates.
    */
   private getAppName(): string {
-    return this.emailConfig?.appName ?? "Nextly";
+    return this.emailConfig?.appName ?? DEFAULT_APP_NAME;
   }
 
   /**

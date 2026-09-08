@@ -12,12 +12,10 @@
 
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import {
-  Button,
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
   DialogDescription,
   Input,
   Label,
@@ -32,8 +30,12 @@ import {
 } from "lexical";
 import { useState, useCallback, useEffect } from "react";
 
-import { Video, AlertCircle } from "@admin/components/icons";
+import { Video } from "@admin/components/icons";
 
+import {
+  useInsertDialogState,
+  InsertDialogFooter,
+} from "./RichTextInsertDialog";
 import {
   $createVideoNode,
   parseVideoUrl,
@@ -64,7 +66,6 @@ export function RichTextVideoPlugin({
   disabled = false,
 }: RichTextVideoPluginProps) {
   const [editor] = useLexicalComposerContext();
-  const [isOpen, setIsOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [caption, setCaption] = useState("");
   const [altText, setAltText] = useState("");
@@ -84,11 +85,14 @@ export function RichTextVideoPlugin({
     setPreviewInfo(null);
   }, []);
 
-  const openDialog = useCallback(() => {
-    if (disabled) return;
-    resetState();
-    setIsOpen(true);
-  }, [disabled, resetState]);
+  // Shared dialog shell: open/close lifecycle with reset-on-close and
+  // Enter-to-submit, so this dialog cannot drift from the other three.
+  const { isOpen, setIsOpen, openDialog, handleOpenChange, handleKeyDown } =
+    useInsertDialogState({
+      resetState,
+      onSubmit: () => insertVideo(),
+      disabled,
+    });
 
   // Validate and preview URL as user types
   const handleUrlChange = useCallback((value: string) => {
@@ -146,27 +150,7 @@ export function RichTextVideoPlugin({
 
     setIsOpen(false);
     resetState();
-  }, [editor, url, caption, altText, title, resetState]);
-
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      if (!open) {
-        resetState();
-      }
-      setIsOpen(open);
-    },
-    [resetState]
-  );
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        insertVideo();
-      }
-    },
-    [insertVideo]
-  );
+  }, [editor, url, caption, altText, title, setIsOpen, resetState]);
 
   // Register commands
   useEffect(() => {
@@ -273,32 +257,19 @@ export function RichTextVideoPlugin({
               disabled={disabled}
             />
           </div>
-
-          {/* Error */}
-          {error && (
-            <div className="flex items-center gap-2 text-destructive text-sm">
-              <AlertCircle className="h-4 w-4" />
-              {error}
-            </div>
-          )}
         </div>
 
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => handleOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={insertVideo}
-            disabled={!url.trim() || !previewInfo}
-          >
-            Embed Video
-          </Button>
-        </DialogFooter>
+        {/* Shared footer: the error banner and Cancel/Confirm row every
+            insert dialog renders. confirmDisabled carries this dialog's own
+            gate — a non-empty, parseable URL with its preview ready — so the
+            shared shell preserves the video-specific confirmation rules. */}
+        <InsertDialogFooter
+          error={error}
+          onCancel={() => handleOpenChange(false)}
+          onConfirm={insertVideo}
+          confirmLabel="Embed Video"
+          confirmDisabled={!url.trim() || !previewInfo}
+        />
       </DialogContent>
     </Dialog>
   );

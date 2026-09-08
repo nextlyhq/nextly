@@ -1,0 +1,514 @@
+/**
+ * A card per collection: what is derived, and what is deliberately not.
+ */
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  collectionWidgets,
+  generatedCollectionSlug,
+  readableGeneratedWidgets,
+  setGeneratedWidgets,
+} from "../collection-widgets";
+import type { WidgetSource } from "../sources";
+
+function source(patch: Partial<WidgetSource>): WidgetSource {
+  return {
+    id: "collection:posts",
+    label: "posts",
+    kind: "collection",
+    requiredPermission: "read-posts",
+    titleField: "title",
+    supports: ["count", "list"],
+    fields: [
+      { name: "id", type: "string" },
+      { name: "title", type: "string" },
+      { name: "updatedAt", type: "date" },
+    ],
+    ...patch,
+  } as WidgetSource;
+}
+
+describe("what a collection gets", () => {
+  it("derives a metric, a list and a table from one source", () => {
+    const widgets = collectionWidgets([source({})]);
+    expect(widgets.map(w => [w.id, w.archetype])).toEqual([
+      ["collection/posts-count", "metric"],
+      ["collection/posts-recent", "list"],
+      ["collection/posts-table", "table"],
+    ]);
+  });
+
+  it("adds a health card ONLY for a collection that declares a status", () => {
+    // 🔴 The refusal is the point. Without a status there is one number to
+    // draw, which is the `metric` card this source already has -- a reader
+    // placing both would see the same figure twice under two names and
+    // reasonably assume they measured different things.
+    const without = collectionWidgets([source({})]).map(w => w.archetype);
+    expect(without).not.toContain("stats");
+
+    const withStatus = collectionWidgets([
+      source({
+        lifecycleStatus: true,
+        fields: [
+          { name: "id", type: "string" },
+          { name: "title", type: "string" },
+          { name: "updatedAt", type: "date" },
+          { name: "status", type: "string" },
+        ],
+      }),
+    ]);
+    const stats = withStatus.find(w => w.archetype === "stats");
+    expect(stats?.id).toBe("collection/posts-stats");
+    expect(stats?.cells?.map(c => c.key)).toEqual([
+      "total",
+      "published",
+      "draft",
+    ]);
+  });
+
+  it("is PUBLISHED, not withheld for naming no collection", () => {
+    // 🔴 `readableGeneratedWidgets` withholds a card whose subject it cannot
+    // identify, and the slug was derived from `widget.query.source` alone -- a
+    // field a stats card does not have. Every health card was generated,
+    // registered, and then silently never published. Asserted through the
+    // publication path rather than the generator, because the generator was
+    // never the thing that was wrong.
+    setGeneratedWidgets(collectionWidgets([source({ lifecycleStatus: true })]));
+    const published = readableGeneratedWidgets(() => true, new Set());
+    expect(published.map(w => w.id)).toContain("collection/posts-stats");
+  });
+
+  it("withholds a health card when its cells disagree about the collection", () => {
+    // A card reading two collections cannot be gated by one permission, so the
+    // slug is refused rather than taken from whichever cell came first -- the
+    // access decision and the rows would be about different collections.
+    expect(
+      generatedCollectionSlug({
+        id: "core/mixed",
+        title: "Mixed",
+        archetype: "stats",
+        defaultSize: "md",
+        cells: [
+          {
+            key: "a",
+            label: "A",
+            query: { source: "collection:posts", op: "count" },
+          },
+          {
+            key: "b",
+            label: "B",
+            query: { source: "collection:pages", op: "count" },
+          },
+        ],
+      })
+    ).toBeUndefined();
+  });
+
+  it("reads the LIFECYCLE capability, not a field named status", () => {
+    // 🔴 A collection with lifecycle disabled may declare an ordinary user
+    // field called `status`, and the two are indistinguishable in `fields`. A
+    // card built on the name counts every row three times while its links
+    // filter something unrelated.
+    const impostor = collectionWidgets([
+      source({
+        lifecycleStatus: false,
+        fields: [
+          { name: "id", type: "string" },
+          { name: "status", type: "string" },
+          { name: "title", type: "string" },
+          { name: "updatedAt", type: "date" },
+        ],
+      }),
+    ]);
+    expect(impostor.map(w => w.archetype)).not.toContain("stats");
+  });
+
+  it("makes each cell's LINK ask the same question as its number", () => {
+    // 🔴 The card's whole promise is that a number and the page behind it are
+    // one question. A cell counting drafts whose link opens an unfiltered list
+    // is not visibly broken: the reader sees a list, counts nothing, and keeps
+    // believing the number. So the link is decoded and put back through the
+    // entry list's OWN filter builder, and the result must be the filter the
+    // cell's query asked for.
+    const [stats] = collectionWidgets([
+      source({
+        lifecycleStatus: true,
+        fields: [
+          { name: "id", type: "string" },
+          { name: "status", type: "string" },
+          { name: "title", type: "string" },
+          { name: "updatedAt", type: "date" },
+        ],
+      }),
+    ]).filter(w => w.archetype === "stats");
+
+    for (const cell of stats?.cells ?? []) {
+      const url = new URL(cell.link!.href, "https://example.test");
+      expect(url.pathname).toBe("/admin/collections/posts");
+      const where = url.searchParams.get("where");
+      if (cell.query.where === undefined) {
+        // The total is deliberately unfiltered: it is what the parts are OF.
+        expect(where).toBeNull();
+        continue;
+      }
+      // 🔴 The link carries the query's OWN predicate, not a re-derivation of
+      // it. The count and the destination therefore cannot answer differently.
+      expect(JSON.parse(where!)).toEqual(cell.query.where);
+    }
+  });
+
+  it("carries NO requiredPermission, because the SERVER gates it", () => {
+    // 🔴 It used to carry the source's permission, and that was wrong in the
+    // direction that loses cards. The client checks `requiredPermission` against
+    // the flat `/me/permissions` list, which does not hold a grant that exists
+    // only in a collection's code-defined `access.read` — so a reader the server
+    // had approved saw both cards discarded by the grid, for a query it would
+    // have answered. The server filters these by collection on both paths that
+    // publish them; the client draws what it is sent.
+    const widgets = collectionWidgets([
+      source({ requiredPermission: "read-articles" }),
+    ]);
+    expect(widgets).toHaveLength(3);
+    for (const widget of widgets) {
+      expect(widget).not.toHaveProperty("requiredPermission");
+    }
+  });
+
+  it("derives a valid id for a slug carrying an underscore", () => {
+    // 🔴 `SLUG_PATTERN` permits `_` and a widget id does not, so
+    // `customer_notes` produced an id the registry refuses and BOTH cards were
+    // dropped — a supported class of collection that never got the feature.
+    const widgets = collectionWidgets([
+      source({ id: "collection:customer_notes", label: "customer_notes" }),
+    ]);
+    expect(widgets.map(w => w.id)).toEqual([
+      "collection/customer-notes-count",
+      "collection/customer-notes-recent",
+      "collection/customer-notes-table",
+    ]);
+  });
+
+  it("gives NEITHER collection a card when two slugs derive one id", () => {
+    // The mapping is not injective: `a_b` and `a-b` both reduce to `a-b`.
+    // Neither has a claim over the other, and a card drawn for one while its
+    // query reads the other is the worst outcome available — so a collision
+    // costs both rather than silently picking a winner.
+    const widgets = collectionWidgets([
+      source({ id: "collection:a_b", label: "a_b" }),
+      source({ id: "collection:a-b", label: "a-b" }),
+    ]);
+    expect(widgets).toEqual([]);
+  });
+
+  it("still gives a card to collections that did not collide", () => {
+    // The control: without it the assertion above is satisfied by a collision
+    // rule that drops everything.
+    const widgets = collectionWidgets([
+      source({ id: "collection:a_b", label: "a_b" }),
+      source({ id: "collection:a-b", label: "a-b" }),
+      source({ id: "collection:posts", label: "posts" }),
+    ]);
+    expect(widgets.map(w => w.id)).toEqual([
+      "collection/posts-count",
+      "collection/posts-recent",
+      "collection/posts-table",
+    ]);
+  });
+
+  it("counts EVERY entry, drafts included", () => {
+    // A count that quietly excluded drafts would disagree with the number the
+    // collection's own list view shows, with nothing to say which is narrower.
+    const [count] = collectionWidgets([source({})]);
+    expect(count.query).toMatchObject({ op: "count", status: "all" });
+  });
+
+  it("selects the row label first and the muted line second", () => {
+    // The order the `list` renderer reads `select` in.
+    const [, recent] = collectionWidgets([source({})]);
+    expect(recent.query?.select).toEqual(["title", "updatedAt"]);
+    expect(recent.query?.sort).toBe("-updatedAt");
+  });
+
+  it("labels rows with the field the SOURCE resolved, not one of its own", () => {
+    // 🔴 The source already applied the shared rule to the author's
+    // `admin.useAsTitle` AND the full field list. Re-resolving here from
+    // `fields` alone would ignore the nomination: a collection whose author
+    // chose `headline` would be labelled by a conventional name instead, and
+    // the dashboard would hold the worse of two answers to one question.
+    const [, recent] = collectionWidgets([
+      source({
+        titleField: "headline",
+        fields: [
+          { name: "headline", type: "string" },
+          { name: "title", type: "string" },
+          { name: "updatedAt", type: "date" },
+        ],
+      }),
+    ]);
+    expect(recent.query?.select?.[0]).toBe("headline");
+  });
+});
+
+describe("what a collection does NOT get", () => {
+  it("no list when nothing names its entries", () => {
+    // 🔴 A refusal, not a fallback. Every row would read as an identifier, and
+    // the `list` renderer already declines to guess a key out of a document it
+    // knows nothing about -- generating one that guesses badly would defeat
+    // that by answering the question wrongly instead of declining it.
+    const widgets = collectionWidgets([
+      source({
+        titleField: undefined,
+        fields: [
+          { name: "id", type: "string" },
+          { name: "amount", type: "number" },
+          { name: "updatedAt", type: "date" },
+        ],
+      }),
+    ]);
+    expect(widgets.map(w => w.archetype)).toEqual(["metric"]);
+  });
+
+  it("no list when there is no updatedAt to mean 'recent'", () => {
+    // Sorting by id would give a card whose title claims something its rows do
+    // not support.
+    const widgets = collectionWidgets([
+      source({
+        fields: [
+          { name: "id", type: "string" },
+          { name: "title", type: "string" },
+        ],
+      }),
+    ]);
+    expect(widgets.map(w => w.archetype)).toEqual(["metric"]);
+  });
+
+  it("no metric when the source does not answer count", () => {
+    const widgets = collectionWidgets([source({ supports: ["list"] })]);
+    expect(widgets.map(w => w.archetype)).toEqual(["list", "table"]);
+  });
+
+  it("selects the status column when the collection HAS one", () => {
+    // 🔴 Asked of the source, because `status` is a per-collection fact: the
+    // schema pipeline injects the column only for a collection declaring
+    // `status: true`, and the source lists it only then. Selecting it
+    // unconditionally is refused by the read path — a refusal about a field
+    // nothing declared, on a card the reader did not misconfigure.
+    const [table] = collectionWidgets([
+      source({
+        fields: [
+          { name: "id", type: "string" },
+          { name: "title", type: "string" },
+          { name: "status", type: "string" },
+          { name: "updatedAt", type: "date" },
+        ],
+      }),
+    ]).filter(w => w.archetype === "table");
+    expect(table?.query?.select).toEqual(["title", "status", "updatedAt"]);
+  });
+
+  it("OMITS it when the collection has none", () => {
+    // The control. Selecting `status` unconditionally satisfies the case above
+    // and breaks every collection that turned it off, which is the direction
+    // that fails on the reader's dashboard rather than in a test.
+    const [table] = collectionWidgets([source({})]).filter(
+      w => w.archetype === "table"
+    );
+    expect(table?.query?.select).toEqual(["title", "updatedAt"]);
+  });
+
+  it("gives NO table to a collection nothing names its rows by", () => {
+    // 🔴 The same refusal the list makes, for the same reason: with no field
+    // naming a row, every line of the table reads as an identifier. A table is
+    // worse than a list here, not better — a column of ids under a heading
+    // looks like data rather than like a card that declined to guess.
+    const widgets = collectionWidgets([
+      source({
+        titleField: undefined,
+        fields: [
+          { name: "id", type: "string" },
+          { name: "updatedAt", type: "date" },
+        ],
+      }),
+    ]);
+    expect(widgets.map(w => w.archetype)).toEqual(["metric"]);
+  });
+
+  it("gives NO table when nothing can order it", () => {
+    // "Recent" is a claim, and `updatedAt` is what supports it. Sorting by id
+    // would produce a card whose title its rows do not bear out.
+    const widgets = collectionWidgets([
+      source({
+        fields: [
+          { name: "id", type: "string" },
+          { name: "title", type: "string" },
+        ],
+      }),
+    ]);
+    expect(widgets.map(w => w.archetype)).toEqual(["metric"]);
+  });
+
+  it("asks for every entry, so a draft is visible in the table", () => {
+    // The counterpart of the metric counting drafts. A table that silently
+    // excluded them would disagree with the collection's own list view, and a
+    // reader has no way to tell which of the two answers a narrower question.
+    const [table] = collectionWidgets([source({})]).filter(
+      w => w.archetype === "table"
+    );
+    expect(table?.query?.status).toBe("all");
+    expect(table?.query?.sort).toBe("-updatedAt");
+  });
+
+  it("gives a collection BOTH recent cards or NEITHER", () => {
+    // 🔴 The list and the table put the same question to a source — can it be
+    // listed, does a field name its rows, is there an `updatedAt` — so a
+    // collection that gets one must get the other. Asked twice, the two answers
+    // drift: a change to one card's conditions leaves a collection with a table
+    // and no list, from an edit that pointed at neither.
+    const sources = [
+      // Eligible.
+      source({ id: "collection:posts", label: "posts" }),
+      // No field names its rows.
+      source({
+        id: "collection:events",
+        label: "events",
+        titleField: undefined,
+        fields: [
+          { name: "id", type: "string" },
+          { name: "updatedAt", type: "date" },
+        ],
+      }),
+      // Nothing to order "recent" by.
+      source({
+        id: "collection:tags",
+        label: "tags",
+        fields: [
+          { name: "id", type: "string" },
+          { name: "title", type: "string" },
+        ],
+      }),
+      // Cannot be listed at all.
+      source({ id: "collection:audit", label: "audit", supports: ["count"] }),
+    ];
+
+    for (const one of sources) {
+      const kinds = new Set(
+        collectionWidgets([one]).map(widget => widget.archetype)
+      );
+      expect(kinds.has("list")).toBe(kinds.has("table"));
+    }
+
+    // The control: at least one of those sources DOES produce the pair, so the
+    // agreement above is not satisfied by a generator that makes neither for
+    // anything.
+    const eligible = collectionWidgets([sources[0]]).map(w => w.archetype);
+    expect(eligible).toContain("list");
+    expect(eligible).toContain("table");
+  });
+
+  it("nothing at all for a source that is not a collection", () => {
+    // Singles hold one entry, so a count of them is a constant and a list of
+    // them is that one entry. Neither is a card worth offering.
+    expect(
+      collectionWidgets([
+        source({ id: "single:homepage", kind: "single", label: "homepage" }),
+      ])
+    ).toEqual([]);
+  });
+
+  it("nothing when the install has no sources", () => {
+    expect(collectionWidgets([])).toEqual([]);
+  });
+
+  it("no card at all when the slug cannot make a valid widget id", () => {
+    // 🔴 A widget id is `namespace/name` in lowercase slug form, and the check
+    // is the REGISTRY's own predicate rather than a copy of its pattern. A
+    // second copy would accept ids the registry refuses -- and these ids reach
+    // the admin's payload and the layout endpoint, both of which treat them as
+    // real. Skipping is the honest outcome: the collection is still readable
+    // everywhere else, it simply gets no generated card.
+    expect(
+      collectionWidgets([
+        source({ id: "collection:Weird_Slug", label: "Weird_Slug" }),
+      ])
+    ).toEqual([]);
+  });
+});
+
+describe("which generated cards a reader may be told about", () => {
+  const card = (id: string, permission?: string) =>
+    ({
+      id,
+      title: id,
+      archetype: "metric",
+      defaultSize: "sm",
+      ...(permission === undefined ? {} : { requiredPermission: permission }),
+      query: { source: `collection:${id}`, op: "count" },
+    }) as unknown as Parameters<typeof setGeneratedWidgets>[0][number];
+
+  afterEach(() => setGeneratedWidgets([]));
+
+  it("withholds a card for a collection this reader may not read", () => {
+    // 🔴 The disclosure. A generated card's id, title and query all name a
+    // COLLECTION, so publishing the whole set tells any authenticated reader
+    // the slug and the existence of every collection in the install --
+    // including the ones the layout and query endpoints hide from them. That
+    // the admin would not draw the card is not a control: the payload is JSON,
+    // and reading it is the bypass.
+    setGeneratedWidgets([card("secret", "read-secret"), card("open")]);
+
+    const readable = readableGeneratedWidgets(
+      slug => slug !== "secret",
+      new Set()
+    );
+
+    expect(readable.map(w => w.id)).toEqual(["open"]);
+  });
+
+  it("withholds a card whose id a DECLARATION already claimed", () => {
+    // The admin reads this array as the registration channel, and its merge
+    // gives a registration authority over a colliding contribution's title,
+    // archetype, query and permission. Publishing here would replace a plugin's
+    // card with core's guess in the grid while the server's canonical set kept
+    // the plugin's -- drawing one declaration and placing another.
+    setGeneratedWidgets([card("posts"), card("pages")]);
+
+    const readable = readableGeneratedWidgets(() => true, new Set(["posts"]));
+
+    expect(readable.map(w => w.id)).toEqual(["pages"]);
+  });
+
+  it("passes everything a reader may see and nobody claimed", () => {
+    // The control. Without it both refusals above are satisfied by a filter
+    // that returns nothing at all.
+    setGeneratedWidgets([card("posts"), card("pages")]);
+    expect(
+      readableGeneratedWidgets(() => true, new Set()).map(w => w.id)
+    ).toEqual(["posts", "pages"]);
+  });
+});
+
+describe("which collection a generated card is about", () => {
+  it("takes it from the QUERY, not from the widget id", () => {
+    // 🔴 Access is checked against the thing being READ. The id is a display
+    // identity that happens to be derived from the same slug; checking a name
+    // rather than the source is how the two come apart, and the query is what
+    // the read is actually performed against.
+    expect(
+      generatedCollectionSlug({
+        id: "collection/anything-count",
+        query: { source: "collection:posts", op: "count" },
+      } as unknown as Parameters<typeof generatedCollectionSlug>[0])
+    ).toBe("posts");
+  });
+
+  it("names nothing for a card that queries no collection", () => {
+    // The control, and what makes the refusal in `readableGeneratedWidgets`
+    // meaningful: a card whose subject cannot be identified is withheld.
+    expect(
+      generatedCollectionSlug({
+        id: "core/whatever",
+        query: { source: "system:users", op: "count" },
+      } as unknown as Parameters<typeof generatedCollectionSlug>[0])
+    ).toBeUndefined();
+  });
+});

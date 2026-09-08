@@ -2,7 +2,62 @@ import { z } from "zod";
 
 // Zod v4 schema for environment variables with conditional validation
 // for production and database dialects.
-export const _envSchema = z
+/** The dialects this package supports. One list; the enum and the type both come from it. */
+const DIALECTS = ["postgresql", "mysql", "sqlite"] as const;
+type Dialect = (typeof DIALECTS)[number];
+
+/**
+ * The dialect a connection URL implies, or undefined when it implies nothing.
+ *
+ * These are the rules the database factory already applied; they live here now
+ * so there is one answer rather than two, and so the answer is reached before
+ * anything reads it.
+ */
+export function dialectFromUrl(url: unknown): Dialect | undefined {
+  if (typeof url !== "string" || url === "") return undefined;
+  if (url.startsWith("postgres://") || url.startsWith("postgresql://")) {
+    return "postgresql";
+  }
+  if (url.startsWith("mysql://")) return "mysql";
+  if (
+    url.startsWith("file:") ||
+    url.endsWith(".db") ||
+    url.endsWith(".sqlite") ||
+    url.endsWith(".sqlite3")
+  ) {
+    return "sqlite";
+  }
+  return undefined;
+}
+
+/**
+ * Fill in the dialect the operator did not state.
+ *
+ * DB_DIALECT used to carry a Zod default, so it was never absent, so the
+ * factory's URL fallback behind it was unreachable: an operator who set only
+ * `DATABASE_URL=mysql://...`, which the adapter READMEs say is enough, got a
+ * PostgreSQL adapter, PostgreSQL identifier quoting and the PostgreSQL schema
+ * tables, because all three read this one value.
+ *
+ * Done here, before the object parses, rather than at each call site, so both
+ * entry points get it and the rule is stated once. An explicit value always
+ * wins; an empty string counts as unstated, which is how the factory's own
+ * truthiness check treated it.
+ */
+function withResolvedDialect(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null) return raw;
+  const source = raw as Record<string, unknown>;
+  if (source.DB_DIALECT) return source;
+  // An empty DB_DIALECT is unstated, so it must not reach the enum: leaving it
+  // in place made `DB_DIALECT=""` with a URL implying nothing fail validation
+  // rather than take the PostgreSQL default, which contradicts the rule stated
+  // just above. Removed whether or not the URL supplies a replacement.
+  const { DB_DIALECT: _unstated, ...rest } = source;
+  const implied = dialectFromUrl(source.DATABASE_URL);
+  return implied ? { ...rest, DB_DIALECT: implied } : rest;
+}
+
+const _envObject = z
   .object({
     // Runtime
     NODE_ENV: z
@@ -10,7 +65,7 @@ export const _envSchema = z
       .default("development"),
 
     // Database
-    DB_DIALECT: z.enum(["postgresql", "mysql", "sqlite"]).default("postgresql"),
+    DB_DIALECT: z.enum(DIALECTS).default("postgresql"),
     // Optional by default to allow sqlite file paths; validated conditionally below
     DATABASE_URL: z.string().optional(),
     // SQLite-specific path (alternative to DATABASE_URL for SQLite)
@@ -193,6 +248,16 @@ export const _envSchema = z
       }
     }
   });
+
+/**
+ * The schema, with the dialect resolved before anything reads it.
+ *
+ * Wrapping rather than resolving at each call site keeps the rule in one place:
+ * `validateEnv` and `validateEnvObject` both parse through here, and the
+ * conditional checks above see the resolved dialect rather than an absent one,
+ * so their messages still name a real dialect.
+ */
+export const _envSchema = z.preprocess(withResolvedDialect, _envObject);
 
 export type BaseEnv = z.infer<typeof _envSchema>;
 export type Env = BaseEnv & {

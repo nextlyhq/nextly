@@ -14,6 +14,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  ADVISORY_REVIEWERS,
+  CODERABBIT,
+  advisoryExemptions,
+  REVIEW_THREAD_NODE_FIELDS,
   assertCompleteFileList,
   flatPages,
   blockingJobs,
@@ -1394,5 +1398,129 @@ describe("exitCode", () => {
     expect(
       exitCode({ landedVerdict: "no-candidates", mergeable: false })
     ).toBe(1);
+  });
+});
+
+describe("advisory review threads do not block the merge gate", () => {
+  /**
+   * The count is taken by the sibling's shared implementation, which needs to
+   * know who opened each thread and can only know it if the request asks.
+   *
+   * Asserted on the exported string the query is built from, because a fixture
+   * cannot establish it: every unit test supplies whatever author fields it
+   * writes into its own objects, so a selection missing `__typename` leaves
+   * them all green while in production nothing canonicalises to a bot, nothing
+   * is ever advisory, and every advisory thread blocks.
+   */
+  it("asks for the author fields the shared policy reads", () => {
+    expect(REVIEW_THREAD_NODE_FIELDS).toContain("author { login __typename }");
+    // The control. If the selection were replaced wholesale by something that
+    // merely mentioned the author, this catches it.
+    expect(REVIEW_THREAD_NODE_FIELDS).toContain("isResolved");
+  });
+
+  /**
+   * The selection is SHARED, not restated.
+   *
+   * A selection declared here instead passes every other test: the count
+   * delegates to `canonicalActorLogin`, so a field added to `ci-verdict.mjs`'s
+   * query leaves a copy here asking for less, and this gate then reaches a
+   * different verdict than the other on the same pull request.
+   *
+   * Asserted against the SOURCE because that is where the duplication would
+   * reappear; a value test cannot tell a shared constant from an equal copy.
+   */
+  it("builds its query from the shared fragment rather than its own copy", () => {
+    const source = readFileSync(
+      new URL("./verify-merge.mjs", import.meta.url),
+      "utf8"
+    );
+    expect(source).toContain("${REVIEW_THREAD_NODE_FIELDS}");
+    // Population: the query line exists at all, so a rename cannot satisfy
+    // this by matching nothing.
+    expect(source).toContain("reviewThreads(first:100");
+    // And no restated selection beside it.
+    expect(source).not.toContain("author { login __typename }");
+  });
+
+  /**
+   * The advisory list is spelled the way REST spells it, which is the canonical
+   * form. Written as an assertion rather than a comment because the whole
+   * defect was two spellings of one identity that never met.
+   */
+  /**
+   * The advisory list is RESOLVED, not restated.
+   *
+   * The sibling computes it from `CI_VERDICT_ADVISORY`. A literal here would
+   * name the default while the other gate honoured an override, and the two
+   * would clear and reject the same pull request — the disagreement this file
+   * is being brought into line with.
+   *
+   * Asserted against the source because that is where a literal would come
+   * back; the resolved value and a hard-coded copy are equal under the default
+   * environment, so no value test can tell them apart.
+   */
+  it("resolves the advisory list rather than declaring one", () => {
+    const source = readFileSync(
+      new URL("./verify-merge.mjs", import.meta.url),
+      "utf8"
+    );
+    expect(source).toContain("verdict.resolveReviewers(process.env)");
+    // And reduced by the sibling's overlap rule, so a login named in BOTH
+    // policies keeps its blocking status here as it does there. The raw
+    // advisory list would exempt a reviewer that is simultaneously required,
+    // letting this gate pass a pull request the other one holds.
+    expect(source).toContain("verdict.advisoryExemptions(");
+    // Population: the export exists, so a rename cannot satisfy this by
+    // matching nothing.
+    expect(source).toContain("export const ADVISORY_REVIEWERS");
+    // And the value is usable under the default environment.
+    expect(ADVISORY_REVIEWERS).toContain("coderabbitai[bot]");
+  });
+
+  /**
+   * Blocking wins over advisory wherever the two policies name one login.
+   *
+   * Asserted through the shared rule rather than through this module's
+   * environment-resolved constant, because the constant is computed once at
+   * load and cannot be varied per case — and the property that matters is the
+   * rule both gates apply, not the value one of them happened to resolve.
+   */
+  it("never exempts a reviewer that is also blocking", () => {
+    const CODEX = "chatgpt-codex-connector[bot]";
+    // The premise: without the overlap, the advisory login IS exempted.
+    expect(advisoryExemptions([CODEX], [CODERABBIT])).toEqual([CODERABBIT]);
+    // And a login in both keeps its blocking status.
+    expect(advisoryExemptions([CODEX], [CODERABBIT, CODEX])).toEqual([
+      CODERABBIT,
+    ]);
+    expect(advisoryExemptions([CODEX], [CODEX])).toEqual([]);
+  });
+
+  /**
+   * Coverage and blocking are different questions, so the second reviewer's
+   * account is named separately from the advisory list on purpose: a reviewer
+   * can be required to look without being able to hold the merge.
+   */
+  it("keeps the coverage identity distinct from the blocking policy", () => {
+    expect(CODERABBIT).toBe("coderabbitai[bot]");
+  });
+
+  /**
+   * An unreadable count must not read as zero. `unresolvedThreads` answers
+   * `Infinity` for a list it could not read, and `gateVerdict` treats a
+   * non-integer as unknown — so the two compose into a refusal rather than a
+   * pass. Asserted here because it spans both, and neither alone shows it.
+   */
+  it("refuses rather than passes when the thread count is unreadable", () => {
+    const verdict = gateVerdict({
+      tip: "a".repeat(40),
+      unresolvedThreads: Number.POSITIVE_INFINITY,
+      checkRuns: [],
+      changedPaths: [],
+      required: [],
+      eligibility: {},
+    });
+    expect(verdict.blockers.some(b => b.kind === "threads-unknown")).toBe(true);
   });
 });

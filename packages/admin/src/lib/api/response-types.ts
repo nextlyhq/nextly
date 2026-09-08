@@ -1,3 +1,5 @@
+import type { HookWarning } from "@admin/lib/mutation-warnings";
+
 /**
  * Canonical response shape types for admin consumers.
  *
@@ -93,6 +95,17 @@ export type BulkResponse<T> = {
   message: string;
   items: T[];
   errors: PerItemError[];
+  /**
+   * What the server has to say about the write beyond whether it succeeded.
+   *
+   * `respondBulk` already emits these — a post-commit hook failure, or an
+   * advisory about the state the write left behind — and the admin dropped them
+   * here, so an author publishing ten pages at once was told nothing that an
+   * author publishing one of them would have been told. Distinct from `errors`,
+   * which are per-ITEM failures that stopped a write: these describe writes that
+   * happened.
+   */
+  warnings?: HookWarning[];
 };
 
 /**

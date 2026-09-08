@@ -37,6 +37,21 @@ export const NEXTLY_ERROR_STATUS = {
   MIME_BLOCKED: 415,
   MIME_NOT_ALLOWED: 415,
   SIZE_EXCEEDED: 413,
+  // A stored object exceeded the cap a READ was given, which is a different
+  // question from SIZE_EXCEEDED above: that one refuses an upload the caller
+  // is sending, this one refuses to buffer an object already stored. Kept
+  // apart so a caller discriminating on the code cannot match both.
+  STORAGE_READ_TOO_LARGE: 413,
+  // A stored object did not answer within the deadline the read was given. 504
+  // rather than 500 because the failure is the BACKEND not answering, and a
+  // caller can act on that difference: a gateway timeout is worth retrying, an
+  // internal error is not.
+  STORAGE_READ_TIMEOUT: 504,
+  // The store answered, and answered badly. 502 rather than 500 because the
+  // fault is UPSTREAM of this process: a caller can retry it, and an operator
+  // reading the log needs to look at the bucket rather than at this service.
+  // Distinct from the timeout above, which never got an answer at all.
+  STORAGE_READ_UNREACHABLE: 502,
   MAGIC_BYTE_MISMATCH: 400,
   SVG_SANITIZATION_FAILED: 400,
   UNSUPPORTED_FOR_BACKEND: 415,
@@ -76,6 +91,11 @@ export const NEXTLY_ERROR_STATUS = {
   // Plugin platform — a declared admin.clientConfig that cannot be delivered
   // to the browser, refused at boot rather than serialized mangled.
   NEXTLY_PLUGIN_CLIENT_CONFIG_INVALID: 500,
+  // Plugin platform — a contributed admin widget that cannot be delivered to
+  // the browser. Refused at boot because it is serialized into the ONE
+  // `/api/admin-meta/workspace` payload: a value `JSON.stringify` throws on
+  // fails that request for every admin, not just the widget's own card.
+  NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
   // Plugin platform (P4) — contributes.routes collection (D25).

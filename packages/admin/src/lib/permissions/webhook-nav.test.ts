@@ -7,26 +7,16 @@
 import { describe, expect, it } from "vitest";
 
 import type { NavigationItem } from "@admin/constants/navigation";
+import { buildCapabilities } from "@admin/hooks/useCurrentUserPermissions";
 import type { AdminCapabilities } from "@admin/types/permissions";
 
 import { filterNavigationItems } from "./authorization";
 
-const base: AdminCapabilities = {
-  isSuperAdmin: false,
-  canViewCollections: false,
-  canViewUsers: false,
-  canViewRoles: false,
-  canViewMedia: false,
-  canViewSettings: false,
-  canViewWebhooks: false,
-  collections: {},
-  canManageUsers: false,
-  canManageRoles: false,
-  canManageMedia: false,
-  canManageSettings: false,
-  canManageEmailProviders: false,
-  canManageEmailTemplates: false,
-};
+// Derived the way the product derives it, never hand-built. A literal here has
+// to be edited every time a capability is added, and — worse — it goes on
+// passing after `buildCapabilities` stops setting a flag the literal still sets
+// for itself, which is a test asserting against a shape nothing produces.
+const base: AdminCapabilities = buildCapabilities([], false);
 
 const webhookItem: NavigationItem = {
   title: "Webhooks",

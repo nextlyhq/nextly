@@ -3,7 +3,11 @@ import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
+import {
+  createTestDb,
+  testLogger,
+  type TestDb,
+} from "../../../__tests__/fixtures/db";
 import {
   permissionFactory,
   bulkPermissionsFactory,
@@ -16,7 +20,6 @@ import {
 } from "../../../__tests__/fixtures/roles";
 import {
   expectSuccessResponse,
-  expectErrorResponse,
   expectValidUUID,
   expectPaginationMeta,
   expectArrayLength,
@@ -29,12 +32,12 @@ describe("RoleService", () => {
 
   beforeEach(async () => {
     testDb = await createTestDb();
-    service = new RoleService(testDb.db, testDb.schema);
+    service = new RoleService(testDb.adapter, testLogger);
   });
 
   afterEach(async () => {
     await testDb.reset();
-    testDb.close();
+    await testDb.close();
   });
 
   describe("listRoles()", () => {
@@ -48,7 +51,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 1, limit: 10 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 10);
         expectPaginationMeta(result, {
           total: 25,
@@ -67,7 +69,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 2, limit: 10 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 10);
         expectPaginationMeta(result, {
           page: 2,
@@ -85,7 +86,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 3, limit: 10 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 5); // Last page has 5 items
         expectPaginationMeta(result, {
           page: 3,
@@ -102,7 +102,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 10, limit: 10 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 0);
         expectPaginationMeta(result, {
           total: 5,
@@ -120,7 +119,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 1, limit: 25 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 25);
         expectPaginationMeta(result, {
           total: 50,
@@ -138,7 +136,6 @@ describe("RoleService", () => {
         const result = await service.listRoles();
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 10); // Default limit
         expectPaginationMeta(result, {
           page: 1, // Default page
@@ -151,7 +148,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 1, limit: 10 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 0);
         expectPaginationMeta(result, {
           total: 0,
@@ -169,7 +165,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 1, limit: 1 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 1);
         expectPaginationMeta(result, {
           total: 5,
@@ -187,7 +182,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 1, limit: 100 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 5);
         expectPaginationMeta(result, {
           total: 5,
@@ -227,7 +221,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ search: "admin" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 1);
         expect(result.data![0].name).toBe("Administrator");
       });
@@ -246,7 +239,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ search: "content" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
       });
 
@@ -260,7 +252,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ search: "nonexistent" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 0);
       });
 
@@ -277,7 +268,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ search: "(super)" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 1);
       });
 
@@ -294,7 +284,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 10);
         expectPaginationMeta(result, {
           total: 15,
@@ -311,7 +300,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ search: "" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 5); // Should return all
       });
 
@@ -324,7 +312,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ search: "   " });
 
         // Assert
-        expectSuccessResponse(result, 200);
         // Should return based on database behavior (likely all or none)
       });
 
@@ -339,7 +326,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ search: "編集" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data!.length).toBeGreaterThanOrEqual(0);
       });
     });
@@ -359,7 +345,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ isSystem: true });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
         result.data!.forEach(role => {
           expect(role.isSystem).toBe(true);
@@ -380,7 +365,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ isSystem: false });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
         result.data!.forEach(role => {
           expect(role.isSystem).toBe(false);
@@ -401,7 +385,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ levelMin: 50 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
         result.data!.forEach(role => {
           expect(role.level).toBeGreaterThanOrEqual(50);
@@ -422,7 +405,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ levelMax: 50 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
         result.data!.forEach(role => {
           expect(role.level).toBeLessThanOrEqual(50);
@@ -444,7 +426,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ levelMin: 30, levelMax: 70 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
         result.data!.forEach(role => {
           expect(role.level).toBeGreaterThanOrEqual(30);
@@ -470,7 +451,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 1);
         expect(result.data![0].name).toBe("System High");
       });
@@ -488,7 +468,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 0);
       });
 
@@ -509,7 +488,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 1);
         expect(result.data![0].level).toBe(50);
       });
@@ -527,7 +505,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ levelMin: 0, levelMax: 0 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 1);
         expect(result.data![0].level).toBe(0);
       });
@@ -545,7 +522,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ levelMax: 100 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
       });
     });
@@ -568,7 +544,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].name).toBe("Alpha");
         expect(result.data![1].name).toBe("Beta");
         expect(result.data![2].name).toBe("Zebra");
@@ -591,7 +566,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].name).toBe("Zebra");
         expect(result.data![1].name).toBe("Beta");
         expect(result.data![2].name).toBe("Alpha");
@@ -614,7 +588,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].level).toBe(10);
         expect(result.data![1].level).toBe(50);
         expect(result.data![2].level).toBe(90);
@@ -637,7 +610,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].level).toBe(90);
         expect(result.data![1].level).toBe(50);
         expect(result.data![2].level).toBe(10);
@@ -657,7 +629,6 @@ describe("RoleService", () => {
         const result = await service.listRoles();
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].level).toBe(10);
         expect(result.data![1].level).toBe(20);
         expect(result.data![2].level).toBe(30);
@@ -677,7 +648,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ sortBy: "level" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 3);
         // All should have same level
         result.data!.forEach(role => expect(role.level).toBe(50));
@@ -712,7 +682,6 @@ describe("RoleService", () => {
         const result = await service.listRoles();
 
         // Assert
-        expectSuccessResponse(result, 200);
         const parent = result.data!.find(r => r.name === "Parent");
         expect(parent).toBeDefined();
         expect(parent!.childRoleIds).toBeDefined();
@@ -730,7 +699,6 @@ describe("RoleService", () => {
         const result = await service.listRoles();
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].childRoleIds).toEqual([]);
       });
     });
@@ -738,20 +706,30 @@ describe("RoleService", () => {
     describe("error handling", () => {
       it("should handle database errors gracefully", async () => {
         // Arrange: Close the database connection to simulate error
-        testDb.close();
+        await testDb.close();
 
-        // Act: Try to list roles with closed database
-        const result = await service.listRoles();
+        // Act: the query service catches ANY database error and rethrows it
+        // through `NextlyError.fromDatabaseError`, so a caller never sees the
+        // driver's own text.
+        const error = await service.listRoles().then(
+          () => null,
+          (e: unknown) => e
+        );
 
-        // Assert: Should return error response
-        expect(result.success).toBe(false);
-        expect(result.statusCode).toBeGreaterThanOrEqual(400);
-        expect(result.message).toContain("Failed to list roles");
-        expect(result.data).toBeNull();
+        // Assert: a generic public message, and the driver's error preserved
+        // as `cause`. The cause is asserted separately because it is the whole
+        // point of the wrapping — without it an operator is left holding
+        // "An unexpected error occurred." and nothing that says why.
+        expect(error).toMatchObject({
+          code: "INTERNAL_ERROR",
+          statusCode: 500,
+          publicMessage: "An unexpected error occurred.",
+        });
+        expect((error as { cause?: unknown }).cause).toBeDefined();
 
         // Cleanup: Recreate database for subsequent tests
         testDb = await createTestDb();
-        service = new RoleService(testDb.db, testDb.schema);
+        service = new RoleService(testDb.adapter, testLogger);
       });
     });
 
@@ -784,7 +762,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ includePermissions: true });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].permissionIds).toBeDefined();
         expectArrayLength(result.data![0].permissionIds!, 2);
         expect(result.data![0].permissionIds).toContain(permission1.id);
@@ -800,7 +777,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ includePermissions: false });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].permissionIds).toBeUndefined();
       });
 
@@ -813,7 +789,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ includePermissions: true });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].permissionIds).toEqual([]);
       });
     });
@@ -829,20 +804,22 @@ describe("RoleService", () => {
       const result = await service.getRoleById(role.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data!.id).toBe(role.id);
-      expect(result.data!.name).toBe("Test Role");
-      expect(result.data!.slug).toBe(role.slug);
-      expect(result.data!.level).toBe(role.level);
-      expect(result.data!.isSystem).toBe(false);
+      expect(result.id).toBe(role.id);
+      expect(result.name).toBe("Test Role");
+      expect(result.slug).toBe(role.slug);
+      expect(result.level).toBe(role.level);
+      expect(result.isSystem).toBe(false);
     });
 
     it("should return 404 when role does not exist", async () => {
-      // Act
-      const result = await service.getRoleById(randomUUID());
-
-      // Assert
-      expectErrorResponse(result, 404, "not found");
+      // The documented contract: `@throws NextlyError(NOT_FOUND) when no role
+      // has this id`. An id that is well-formed but matches nothing is a
+      // miss, not a validation failure, so it must not arrive as the
+      // VALIDATION_ERROR the malformed-id tests below assert.
+      await expect(service.getRoleById(randomUUID())).rejects.toMatchObject({
+        code: "NOT_FOUND",
+        statusCode: 404,
+      });
     });
 
     // PR 4 migration: getRoleById now throws NextlyError(VALIDATION_ERROR) for
@@ -897,8 +874,7 @@ describe("RoleService", () => {
       const result = await service.getRoleById(role.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data!.isSystem).toBe(true);
+      expect(result.isSystem).toBe(true);
     });
 
     it("should return all fields correctly", async () => {
@@ -915,8 +891,7 @@ describe("RoleService", () => {
       const result = await service.getRoleById(role.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data).toEqual({
+      expect(result).toEqual({
         id: role.id,
         name: "Complete Role",
         slug: "complete-role",
@@ -935,8 +910,7 @@ describe("RoleService", () => {
       const result = await service.getRoleById(role.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data!.description).toBeNull();
+      expect(result.description).toBeNull();
     });
 
     it("should return valid UUID in response", async () => {
@@ -948,8 +922,7 @@ describe("RoleService", () => {
       const result = await service.getRoleById(role.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expectValidUUID(result.data!.id);
+      expectValidUUID(result.id);
     });
 
     it("should handle uppercase UUID input", async () => {
@@ -957,12 +930,26 @@ describe("RoleService", () => {
       const role = roleFactory();
       await testDb.db.insert(testDb.schema.roles).values(role);
 
-      // Act
-      const result = await service.getRoleById(role.id.toUpperCase());
+      // Act: whether an uppercased id still matches depends on how the
+      // dialect compares text, so BOTH outcomes are correct here. The outcome
+      // is captured rather than wrapped in try/catch so that a failing
+      // assertion inside the success branch cannot be swallowed and re-read
+      // as the miss branch.
+      const outcome = await service.getRoleById(role.id.toUpperCase()).then(
+        found => ({ found: true as const, role: found }),
+        (error: unknown) => ({ found: false as const, error })
+      );
 
-      // Assert
-      // Should either work or return 404 (depending on DB case sensitivity)
-      expect([200, 404]).toContain(result.statusCode);
+      // Assert: it resolved THIS role, or it missed and said NOT_FOUND.
+      // Anything else — a validation error, a driver error — is a real failure.
+      if (outcome.found) {
+        expect(outcome.role.id).toBe(role.id);
+      } else {
+        expect(outcome.error).toMatchObject({
+          code: "NOT_FOUND",
+          statusCode: 404,
+        });
+      }
     });
 
     it("should be performant for single lookup", async () => {
@@ -1277,7 +1264,6 @@ describe("RoleService", () => {
       });
 
       // Assert
-      expectSuccessResponse(result, 200);
       expectArrayLength(result.data!, 1);
       expect(result.data![0].name).toBe("System Admin");
     });
@@ -1301,7 +1287,6 @@ describe("RoleService", () => {
       });
 
       // Assert
-      expectSuccessResponse(result, 200);
       expectArrayLength(result.data!, 1);
       expect(result.data![0].name).toBe("Editor Mid");
     });
@@ -1332,7 +1317,6 @@ describe("RoleService", () => {
       });
 
       // Assert
-      expectSuccessResponse(result, 200);
       expectArrayLength(result.data!, 3);
       expectPaginationMeta(result, {
         page: 1,

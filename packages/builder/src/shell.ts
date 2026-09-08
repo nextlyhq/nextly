@@ -39,6 +39,21 @@ export type { BuilderShellProps } from "./builder-shell";
  * keeps the cascade from being walked per control; `style-trace.ts` says why it
  * is compiled a second time.
  */
+/*
+ * The inspector's own answer to whether it can show anything for a selection,
+ * exported because a HOST needs it.
+ *
+ * A host drawing both the panel and the canvas has to keep them agreeing about
+ * the interaction state, and the panel withholds its whole tab strip — the
+ * state control with it — for a selection it cannot inspect. An unregistered
+ * block type is that case and reads as one ordinary selection to anything
+ * counting ids, so a host deriving the answer itself gets it wrong on exactly
+ * the input the predicate exists for.
+ *
+ * A pure function over a document, so it crosses this entry carrying no state
+ * and no React.
+ */
+export { selectionIsInspectable } from "./inspector";
 export { pageStyleTrace } from "./style-trace";
 
 /**
@@ -47,7 +62,7 @@ export { pageStyleTrace } from "./style-trace";
  * Exported for slot content that PORTALS out of the shell, which the shell cannot reach with
  * `hidden` and `inert` and so has to inform instead.
  */
-export { useShellIsActive } from "./builder-shell";
+export { useShellIsActive } from "./shell-active";
 
 /**
  * The command palette, published here beside the shell because it is a client
@@ -115,6 +130,11 @@ export type { StyleInspectorPanelProps } from "./style-inspector-panel";
 
 export { InsertPanel } from "./insert-panel";
 export type { InsertPanelProps } from "./insert-panel";
+// The shape a host hands the panel for the pattern tier. Published beside the
+// panel because supplying `patterns` is impossible without it: a caller loads
+// rows from a plugin's collection and has to know which fields the palette
+// reads before it can map them.
+export type { SavedPattern } from "./inserter";
 
 /**
  * The site's breakpoints, as a trigger and the dialog behind it.
@@ -146,6 +166,19 @@ export type { BreakpointManagerProps } from "./breakpoint-manager";
  */
 export { BreakpointSwitcher } from "./breakpoint-switcher";
 export type { BreakpointSwitcherProps } from "./breakpoint-switcher";
+
+/**
+ * The canvas zoom, and the control that names it.
+ *
+ * The control is a client component and belongs here; the model beside it is
+ * pure and is exported from the root entry as well, so a host can read a stored
+ * preference without pulling a component into a server render.
+ */
+export { CanvasZoomControl } from "./canvas-zoom-control";
+export type { CanvasZoomControlProps } from "./canvas-zoom-control";
+// The type alone: a host threading a zoom through this entry should not have
+// to import the model from a second one.
+export type { CanvasZoom } from "./canvas-zoom";
 export {
   breakpointsAtWidth,
   editedBreakpointAtWidth,
@@ -195,6 +228,16 @@ export type {
 export { EditorCommandPalette } from "./editor-command-palette";
 export type { EditorCommandPaletteProps } from "./editor-command-palette";
 
+/**
+ * The right-click menu over the canvas.
+ *
+ * Beside the palette because the two are the same kind of thing: a surface the
+ * editor assembles from the verbs context so a host does not have to know the
+ * three separate facts that mounting one correctly requires.
+ */
+export { BlockContextMenu } from "./block-context-menu";
+export type { BlockContextMenuProps } from "./block-context-menu";
+
 export { BlockToolbar } from "./block-toolbar";
 export type { BlockToolbarProps } from "./block-toolbar";
 
@@ -212,6 +255,19 @@ export type { BlockToolbarProps } from "./block-toolbar";
  */
 export { SpacingOverlay } from "./spacing-overlay";
 export type { SpacingOverlayProps } from "./spacing-overlay";
+
+/**
+ * A labelled "+" drawn over every container that has nothing in it.
+ *
+ * A canvas overlay like the two above, and composed the same way — it goes in
+ * `Canvas`'s `overlay`, because it is positioned in the canvas's own content
+ * coordinates and the canvas root is what establishes them. It is a client
+ * component for the same reason `SpacingOverlay` is: it holds React state for
+ * what it has measured, so it belongs behind this entry's banner rather than
+ * the root's.
+ */
+export { EmptyContainerAppenders } from "./empty-container-appender";
+export type { EmptyContainerAppendersProps } from "./empty-container-appender";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook
@@ -247,6 +303,60 @@ export { DropIndicator, useCanvasDrag } from "./canvas-drag";
 export { useInlineText, EDITING_ATTRIBUTE } from "./use-inline-text";
 export type { InlineTextEditing, UseInlineTextResult } from "./use-inline-text";
 export { inlineTargets, inlineTarget, inlineTextOp } from "./inline-text";
+/**
+ * Typing a block's PASSAGE directly on the canvas, and the one gesture that
+ * reaches either surface.
+ *
+ * `useInlineEditing` is what a host wires to the canvas: it owns both the plain
+ * and the rich edit, decides from the block's own schema which a double-click
+ * opened, and keeps at most one of them live. A host that supplies no rich-text
+ * loader still edits plain text; passages simply do not open.
+ *
+ * The rich editor is loaded on first edit, not on mount, because its node
+ * classes carry a 630KB chunk that an author who never edits a passage should
+ * never fetch.
+ */
+export { useInlineEditing } from "./use-inline-editing";
+export type { UseInlineEditingResult } from "./use-inline-editing";
+/**
+ * What finishing an inline edit did.
+ *
+ * A host must branch on this rather than on the presence of a document. A
+ * refused commit has kept the surface open because the author's words are in it
+ * and nowhere else — closing, navigating or opening another value on top of
+ * that is what loses them.
+ */
+export {
+  documentAfter,
+  INLINE_EDIT_DISCARDED,
+  INLINE_EDIT_UNCHANGED,
+} from "./inline-edit-outcome";
+export type {
+  InlineEditOutcome,
+  InlineEditDiscarded,
+  InlineEditRefusal,
+  InlineEditRefused,
+  InlineEditUnchanged,
+  InlineEditWritten,
+} from "./inline-edit-outcome";
+export { useInlineRichText } from "./use-inline-rich-text";
+export type {
+  InlineRichTextEditing,
+  InlineRichTextEditorLoader,
+  InlineRichTextFinished,
+  UseInlineRichTextResult,
+} from "./use-inline-rich-text";
+export {
+  richInlineTargets,
+  richInlineTarget,
+  richInlineTextOp,
+  richTextChanged,
+} from "./inline-rich-text";
+export type { InlineRichTextTarget } from "./inline-rich-text";
+export { inlinePropKind } from "./inline-prop-kind";
+export { namedTarget, firstInlineProp } from "./inline-target";
+export type { FirstInlineProp } from "./inline-target";
+export type { InlinePropKind } from "./inline-prop-kind";
 /**
  * The first-run checklist: what an author has not done on this page yet.
  *
@@ -299,3 +409,80 @@ export { TokensPanel } from "./tokens-panel";
 export type { TokensPanelProps } from "./tokens-panel";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
+/*
+ * The two class surfaces, and the rules both answer from.
+ *
+ * Split because the actions are: applying a class happens while styling one
+ * element and belongs beside the style controls, while auditing and deleting is
+ * occasional and needs a list. A host that mounts either owns the site style
+ * document and decides when an edit is persisted; these export the surfaces,
+ * not the save.
+ */
+export { ClassSelector } from "./class-selector";
+/*
+ * `ClassCreation` travels with the selector's props because a HOST implements
+ * `onCreateClass` and has to name what it answers with. It was reachable only
+ * through `ClassSelectorProps["onCreateClass"]`, which spells one type as a
+ * lookup into another and reads as though the answer were private.
+ */
+export type { ClassCreation, ClassSelectorProps } from "./class-selector";
+/*
+ * The notice surface is deliberately NOT exported.
+ *
+ * `BuilderShell` owns its queue and renders the region itself, and it offers no
+ * way to supply a queue or to suppress the built-in region — so a host calling
+ * `useNoticeQueue` would build a SECOND, empty queue and place a region that
+ * can never receive anything, while the shell's own went on reporting. An
+ * export whose documented use cannot work is worse than its absence, because
+ * the failure is silent and looks like a wiring mistake at the call site.
+ *
+ * Publishing it needs the shell to accept a queue first. That is a contract
+ * change rather than an export, so it waits for a host that wants it.
+ */
+export { ClassManagerPanel } from "./class-manager-panel";
+export type {
+  ClassManagerPanelProps,
+  ClassRenameOutcome,
+} from "./class-manager-panel";
+export {
+  classRows,
+  filterClassRows,
+  deletionWarning,
+  newClassName,
+  renamedClassName,
+  nodeHasRoom,
+  siteClasses,
+  usageSummary,
+  withClassApplied,
+  withClassRemoved,
+} from "./class-library";
+export type {
+  ApplyRefusal,
+  ClassApplyOutcome,
+  ClassChoice,
+  ClassFilter,
+  ClassNameOutcome,
+  ClassRow,
+  ClassUsageCounts,
+  DeletionWarning,
+  NameRefusal,
+} from "./class-library";
+
+/**
+ * The fonts panel, and the rules it draws from.
+ *
+ * A reader over the site's faces and its `fontFamily` tokens rather than an
+ * editor: creating and renaming those tokens belongs to the tokens studio, and
+ * the question this answers — whether a family a token names will actually
+ * render — needs both lists at once, which is why neither the studio nor the
+ * inspector can ask it.
+ */
+export { FontsPanel } from "./fonts-panel";
+export type { FontsPanelProps, FontFaceUpload } from "./fonts-panel";
+export { fontTokenRows, readStack, rowsNeedingAttention } from "./font-library";
+export type {
+  FamilyReading,
+  FamilySource,
+  FontTokenRow,
+  StackReading,
+} from "./font-library";

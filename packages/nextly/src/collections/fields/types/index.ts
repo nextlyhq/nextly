@@ -138,6 +138,11 @@ export type DataFieldType =
   | "group"
   | "json"
   | "component"
+  // The migrated spelling of "component". Stored definitions rewritten by the
+  // storage migration carry it, so every gate that names built-in types —
+  // boot validation, the field-type registry, value validation — must accept
+  // it (see domains/field-groups/storage/field-group-field-type).
+  | "fieldGroup"
   | "chips";
 
 /**
@@ -171,6 +176,7 @@ export const DATA_FIELD_TYPES: readonly DataFieldType[] = [
   "group",
   "json",
   "component",
+  "fieldGroup",
   "chips",
 ] as const;
 

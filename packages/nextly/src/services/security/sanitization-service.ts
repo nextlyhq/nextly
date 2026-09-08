@@ -6,9 +6,17 @@
  * here — they are handled at output time or are intentionally raw.
  */
 
+// The shared vocabulary readers keep the nested-document descent identical
+// across both stored field-group spellings: which fields are field groups,
+// what a definition references, and the wire key a zone row announces under.
+import { typeHasNestedFields } from "../../collections/fields/guards";
+import {
+  extractFieldGroupReferences,
+  isFieldGroupType,
+} from "../../domains/field-groups/storage/field-group-field-type";
+import { readFieldGroupType } from "../../domains/field-groups/storage/field-group-type-key";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { SanitizationConfigInput } from "../../schemas/security-config";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
 
 const TEXT_LIKE_FIELDS = new Set(["text", "string", "textarea", "email"]);
 
@@ -133,72 +141,230 @@ export function sanitizeEntryData(
     const value = data[field.name];
     if (value === undefined) continue;
 
-    if (field.type === "group" && field.fields && Array.isArray(field.fields)) {
-      if (value != null && typeof value === "object" && !Array.isArray(value)) {
-        sanitizeEntryData(
-          value as Record<string, unknown>,
-          field.fields,
-          config
-        );
-      }
+    // group and repeater carry their child definitions inline on the field.
+    if (field.type === "group" || field.type === "repeater") {
+      sanitizeInstances(value, field.fields, config);
       continue;
     }
 
-    if (
-      field.type === "repeater" &&
-      field.fields &&
-      Array.isArray(field.fields)
-    ) {
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          if (
-            item != null &&
-            typeof item === "object" &&
-            !Array.isArray(item)
-          ) {
-            sanitizeEntryData(
-              item as Record<string, unknown>,
-              field.fields,
-              config
-            );
-          }
-        }
-      }
-      continue;
-    }
-
-    if (field.type === STORAGE_FORMAT.fieldType) {
-      if (field.fields && Array.isArray(field.fields)) {
-        const repeatable = (field as { repeatable?: boolean }).repeatable;
-        if (repeatable && Array.isArray(value)) {
-          for (const item of value) {
-            if (
-              item != null &&
-              typeof item === "object" &&
-              !Array.isArray(item)
-            ) {
-              sanitizeEntryData(
-                item as Record<string, unknown>,
-                field.fields,
-                config
-              );
-            }
-          }
-        } else if (
-          value != null &&
-          typeof value === "object" &&
-          !Array.isArray(value)
-        ) {
-          sanitizeEntryData(
-            value as Record<string, unknown>,
-            field.fields,
-            config
-          );
-        }
-      }
+    // A field group's values are nested documents carrying the group's own
+    // fields, so the descent must follow either type spelling — skipping the
+    // migrated one would leave its text values unsanitized.
+    if (isFieldGroupType(field.type)) {
+      sanitizeFieldGroupValue(value, field, config);
       continue;
     }
 
     data[field.name] = sanitizeFieldValue(value, field.type, config);
   }
+}
+
+/**
+ * Sanitize every object instance `value` holds against one child schema.
+ *
+ * A group holds a single object and a repeater a list of rows; both arrive
+ * here as the same "walk the instances" question, so the two containers
+ * cannot drift about what counts as an instance.
+ */
+function sanitizeInstances(
+  value: unknown,
+  childFields: FieldDefinition[] | undefined,
+  config?: SanitizationConfigInput
+): void {
+  if (!Array.isArray(childFields) || childFields.length === 0) return;
+  const rows = Array.isArray(value) ? value : [value];
+  for (const row of rows) {
+    if (row !== null && typeof row === "object" && !Array.isArray(row)) {
+      sanitizeEntryData(row as Record<string, unknown>, childFields, config);
+    }
+  }
+}
+
+/** The per-slug schema map enrichment attaches to a zone field. */
+type FieldGroupSchemaMap = Record<string, { fields?: FieldDefinition[] }>;
+
+/** The schema one zone instance resolves to, by its own type discriminator. */
+function zoneSchemaFields(
+  schemas: FieldGroupSchemaMap | undefined,
+  instance: Record<string, unknown>
+): FieldDefinition[] {
+  // Truthy check, not `!== undefined`: the map is read off a stored
+  // definition, so a JSON round trip can deliver `null`, and `typeof null`
+  // is "object" — indexing it would throw inside the entry-write path.
+  if (!schemas || typeof schemas !== "object") return [];
+  // Read through the reader that tries both spellings of the wire key: the
+  // migration renames that key inside stored rows, and an unreadable type
+  // would skip its children entirely.
+  const type = readFieldGroupType(instance);
+  if (type === undefined) return [];
+  const schema = schemas[type];
+  return schema && Array.isArray(schema.fields) ? schema.fields : [];
+}
+
+/**
+ * The child definitions one field-group instance is judged against, from
+ * whichever source carries them.
+ *
+ * Stored definitions hold no children of their own — a field group is a leaf
+ * reference by slug — so the shapes that matter are the inline `fields` of a
+ * hand-written nested definition, the `componentFields` enrichment attaches
+ * for a single reference, and the `componentSchemas` map enrichment attaches
+ * for a zone, resolved per instance.
+ */
+function fieldGroupChildFields(
+  field: FieldDefinition,
+  instance: Record<string, unknown>
+): FieldDefinition[] {
+  if (Array.isArray(field.fields) && field.fields.length > 0) {
+    return field.fields;
+  }
+  const single = (field as { componentFields?: FieldDefinition[] })
+    .componentFields;
+  if (Array.isArray(single) && single.length > 0) {
+    return single;
+  }
+  return zoneSchemaFields(
+    (field as { componentSchemas?: FieldGroupSchemaMap }).componentSchemas,
+    instance
+  );
+}
+
+/**
+ * Descend into one field-group value's instances with their resolved schemas.
+ *
+ * A repeatable field — and a zone read back from its own table — holds an
+ * array of instances; a single one holds the instance object itself. Each
+ * instance is sanitized against ITS schema, which is why the array is walked
+ * before the lookup rather than after: a zone's instances differ in type.
+ */
+function sanitizeFieldGroupValue(
+  value: unknown,
+  field: FieldDefinition,
+  config?: SanitizationConfigInput
+): void {
+  const rows = Array.isArray(value) ? value : [value];
+  for (const row of rows) {
+    if (row === null || typeof row !== "object" || Array.isArray(row)) {
+      continue;
+    }
+    const record = row as Record<string, unknown>;
+    const children = fieldGroupChildFields(field, record);
+    if (children.length > 0) {
+      sanitizeEntryData(record, children, config);
+    }
+  }
+}
+
+/**
+ * How deep the enrichment walk follows field-group-to-field-group edges.
+ * Matches the editor's nesting limit. Inline containers cost nothing: the
+ * declared schema is finite, so a deep group/repeater hierarchy is walked
+ * without spending this budget, and a self-referencing container is
+ * terminated by the path-scoped open set in the walk below.
+ */
+const MAX_FIELD_GROUP_RESOLVE_DEPTH = 3;
+
+/**
+ * Attach one field-group field's referenced children, single reference or zone.
+ *
+ * Each resolved child schema recurses through the same attachment at the next
+ * field-group depth, so a field group whose registered fields reference
+ * another field group is enriched at every depth the editor allows — the
+ * descent reaches B's text only when B's own children were attached.
+ */
+async function attachFieldGroupReferences(
+  field: FieldDefinition,
+  resolveChildren: (slug: string) => Promise<FieldDefinition[] | undefined>,
+  depth: number,
+  openContainers: WeakSet<object>
+): Promise<void> {
+  const { single, many } = extractFieldGroupReferences(field);
+  if (single !== undefined) {
+    const children = await resolveChildren(single);
+    if (children !== undefined) {
+      await attachFieldGroupChildren(
+        children,
+        resolveChildren,
+        depth + 1,
+        openContainers
+      );
+      (field as { componentFields?: FieldDefinition[] }).componentFields =
+        children;
+    }
+    return;
+  }
+  if (many === undefined) return;
+  const schemas: FieldGroupSchemaMap = {};
+  for (const slug of many) {
+    const children = await resolveChildren(slug);
+    if (children !== undefined) {
+      await attachFieldGroupChildren(
+        children,
+        resolveChildren,
+        depth + 1,
+        openContainers
+      );
+      schemas[slug] = { fields: children };
+    }
+  }
+  if (Object.keys(schemas).length > 0) {
+    (field as { componentSchemas?: FieldGroupSchemaMap }).componentSchemas =
+      schemas;
+  }
+}
+
+/**
+ * Attach every field-group field's referenced child definitions, so
+ * {@link sanitizeEntryData}'s descent can reach the group's nested values.
+ *
+ * The lookup is injected because the caller owns the executor: the sanitization
+ * hook runs inside entry-write transactions and must resolve on that same
+ * connection, where a pooled read would wait for a connection the transaction
+ * is holding. Resolved single references land on `componentFields` and zones
+ * on `componentSchemas` — the same shapes the read path's enrichment produces,
+ * so the descent reads one vocabulary.
+ *
+ * Resolved children recurse through the same walk — containers (repeater/group)
+ * so their nested field-group references resolve, and resolved field-group
+ * schemas so a group nested inside a group enriches too. Only field-group
+ * edges spend the depth budget: an inline container hierarchy is as deep as
+ * its schema declares and is walked at the same depth, with `openContainers`
+ * — scoped to the current path and released on the way out — terminating a
+ * self-referencing container instead.
+ */
+export async function attachFieldGroupChildren(
+  fields: FieldDefinition[],
+  resolveChildren: (slug: string) => Promise<FieldDefinition[] | undefined>,
+  depth = 0,
+  openContainers: WeakSet<object> = new WeakSet<object>()
+): Promise<FieldDefinition[]> {
+  if (depth > MAX_FIELD_GROUP_RESOLVE_DEPTH) return fields;
+
+  for (const field of fields) {
+    if (isFieldGroupType(field.type)) {
+      await attachFieldGroupReferences(
+        field,
+        resolveChildren,
+        depth,
+        openContainers
+      );
+      continue;
+    }
+    if (
+      typeHasNestedFields(field.type) &&
+      Array.isArray(field.fields) &&
+      field.fields.length > 0
+    ) {
+      if (openContainers.has(field)) continue;
+      openContainers.add(field);
+      await attachFieldGroupChildren(
+        field.fields,
+        resolveChildren,
+        depth,
+        openContainers
+      );
+      openContainers.delete(field);
+    }
+  }
+  return fields;
 }

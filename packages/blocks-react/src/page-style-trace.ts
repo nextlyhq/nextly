@@ -21,6 +21,7 @@
 import type {
   BlockDocument,
   BlockNode,
+  DefinitionsById,
   DocumentLimits,
   RemotePatternInput,
   SiteSheetInput,
@@ -28,6 +29,7 @@ import type {
   StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
+import { withTypographyDefaults } from "./blocks/typography-defaults";
 import {
   pruneRenderedPlaceholders,
   sharedStyleInputs,
@@ -54,6 +56,16 @@ export interface PageStyleTraceInput {
   readonly blocks?: BlockResolver;
   /** The host's fetch policy, so a refused `url(...)` is refused here too. */
   readonly remotePatterns?: readonly RemotePatternInput[];
+  /**
+   * The component definitions the page renders with.
+   *
+   * Forwarded for exactly the reason `limits` is, one entry below: they change
+   * what EXISTS. A trace run without them marks every instance unresolved and
+   * drops it, so the provenance an editor shows describes a tree the page is
+   * not rendering — and the disagreement is silent, because a trace of a
+   * smaller tree is a perfectly well formed trace.
+   */
+  readonly definitions?: DefinitionsById;
   /**
    * The caps the renderer prepares and compiles under.
    *
@@ -116,18 +128,20 @@ export function pageStyleTrace(
    * compile provided it named the breakpoints — the one field a compile cannot
    * proceed without.
    */
+  // The same baseline the render path applies, from the same function. The
+  // panel explains a cascade, so it has to compile the cascade the page has.
   const merged: StyleCompileContext | undefined =
     input.styleContext !== undefined
-      ? {
+      ? withTypographyDefaults({
           ...input.styleContext,
           ...withoutStatedNulls(shared),
           // Spread LAST, so the normalised set replaces the null the spread
           // above would otherwise carry into a slot declared as a set.
           breakpoints: stated ?? input.styleContext.breakpoints,
-        }
+        })
       : stated === undefined
         ? undefined
-        : {
+        : withTypographyDefaults({
             ...withoutStatedNulls(shared),
             breakpoints: stated,
             /*
@@ -141,7 +155,7 @@ export function pageStyleTrace(
             ...(input.site?.mayFetchUrl === undefined
               ? {}
               : { mayFetchUrl: input.site.mayFetchUrl }),
-          };
+          });
   if (merged === undefined) return undefined;
   const { context } = effectiveCompile({
     styleContext: merged,
@@ -219,6 +233,7 @@ export function pageStyleTrace(
     resolver,
     ...(input.limits === undefined ? {} : { limits: input.limits }),
     styleContext: context,
+    definitions: input.definitions,
   });
   // An unreadable ENVELOPE, which is a real answer: nothing can be compiled from
   // a document this format does not recognise.

@@ -299,16 +299,19 @@ describe("Direct API - Media Operations", () => {
 
   describe("media.bulkDelete()", () => {
     it("should return bulk operation result", async () => {
-      mocks.mediaService.bulkDelete.mockResolvedValue({
-        totalItems: 3,
+      // The service already returns the canonical BulkOperationResult, and the
+      // namespace passes it through untranslated -- so the double has to BE
+      // that shape. A per-item failure is structured `{id, code, message}`, not
+      // a free-text `error`: the code is what a caller branches on, and the
+      // message is the public-safe one that never echoes an identifier.
+      const serviceResult = {
+        successes: [{ id: "m1" }, { id: "m2" }],
+        failures: [{ id: "m3", code: "NOT_FOUND", message: "Not found." }],
+        total: 3,
         successCount: 2,
-        failureCount: 1,
-        results: [
-          { id: "m1", success: true },
-          { id: "m2", success: true },
-          { id: "m3", success: false, error: "Not found" },
-        ],
-      });
+        failedCount: 1,
+      };
+      mocks.mediaService.bulkDelete.mockResolvedValue(serviceResult);
 
       const result = await nextly.media.bulkDelete({
         ids: ["m1", "m2", "m3"],
@@ -316,15 +319,28 @@ describe("Direct API - Media Operations", () => {
 
       expect(result.successCount).toBe(2);
       expect(result.failedCount).toBe(1);
-      expect(result.success).toEqual(["m1", "m2"]);
-      expect(result.failed).toEqual([{ id: "m3", error: "Not found" }]);
+      expect(result.successes).toEqual([{ id: "m1" }, { id: "m2" }]);
+      expect(result.failures).toEqual([
+        { id: "m3", code: "NOT_FOUND", message: "Not found." },
+      ]);
+      // The pass-through is the contract here: the boundary no longer
+      // translates, so anything it added or dropped would be a regression.
+      expect(result).toEqual(serviceResult);
     });
 
     it("should return empty result for empty ids", async () => {
       const result = await nextly.media.bulkDelete({ ids: [] });
 
-      expect(result.successCount).toBe(0);
-      expect(result.success).toEqual([]);
+      // Short-circuited before the service, so this is the namespace's own
+      // empty BulkOperationResult -- asserted whole, because a partial one
+      // would still satisfy a successCount check.
+      expect(result).toEqual({
+        successes: [],
+        failures: [],
+        total: 0,
+        successCount: 0,
+        failedCount: 0,
+      });
       expect(mocks.mediaService.bulkDelete).not.toHaveBeenCalled();
     });
   });

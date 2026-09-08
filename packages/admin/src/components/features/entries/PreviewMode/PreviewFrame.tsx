@@ -30,17 +30,17 @@ import { useRef } from "react";
 
 import { ExternalLink, Loader2, RefreshCw, X } from "@admin/components/icons";
 import {
+  previewFrameFit,
+  previewFrameStyle,
+  type PreviewFit,
+} from "@admin/components/shared/preview/previewFrameFit";
+import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
+import {
   previewMessage,
   type PreviewDocumentNoun,
 } from "@admin/hooks/useEntryPreview";
 
-import {
-  previewFrameFit,
-  previewFrameStyle,
-  type PreviewFit,
-} from "./previewFrameFit";
 import { PreviewViewportControl } from "./PreviewViewportControl";
-import { useMeasuredWidth } from "./useMeasuredWidth";
 import {
   PREVIEW_PANE_BLOCK_MESSAGES,
   type UsePreviewFrameResult,

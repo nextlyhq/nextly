@@ -7,6 +7,7 @@ import {
 } from "./document";
 import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 import { DEFAULT_LIMITS, documentBytes } from "./limits";
+import { applyOps } from "./ops";
 import {
   MAX_SITE_LOOKUPS,
   MAX_SITE_ISSUES,
@@ -21,7 +22,12 @@ import type { NestingSource } from "./nesting";
 import type { BlockTypeLookup } from "./validation";
 import { compilePageCss } from "./style/compile-page";
 import { measureBytes } from "./measure-bytes";
-import { ISSUE_CODES, validate, validateDocument } from "./validation";
+import {
+  ISSUE_CODES,
+  componentEnvelopeIssues,
+  validate,
+  validateDocument,
+} from "./validation";
 
 function lookup(types: string[]): BlockTypeLookup {
   const set = new Set(types);
@@ -2713,12 +2719,447 @@ describe("an unstorable document does not have its values parsed", () => {
       )
     ).toBe(false);
 
-    // What this does NOT do, stated rather than implied: the property is still
-    // READ, so the getter still runs. Skipping the read entirely would mean not
-    // validating the node's shape at all, and a document is refused on its
-    // shape long before its style values matter. The exposure that closes is
-    // the parsing of whatever the getter returns, not the single invocation.
-    expect(reads).toBeGreaterThan(0);
+    // And the getter is never invoked AT ALL, which is stronger than this
+    // originally promised. It used to read the property and skip only the
+    // parsing, on the reasoning that a node still had to be checked for shape;
+    // the walk now stops for a document the survey could not read, so the
+    // document's own code is not executed inside the check deciding whether to
+    // trust it. Nothing about a document nobody can read is worth learning by
+    // running it.
+    expect(reads).toBe(0);
+  });
+});
+
+describe("componentEnvelopeIssues reads a stored value defensively", () => {
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["a string", "bad"],
+    ["a number", 3],
+  ])("answers rather than throwing for %s", (_name, doc) => {
+    // A published entry point whose own docblock names a stored row as an
+    // input, and a row can be any of these. Dereferencing `.kind` took a native
+    // error out of a function that promises a list.
+    let threw: unknown;
+    let issues;
+    try {
+      issues = componentEnvelopeIssues(doc as never);
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeUndefined();
+    // Whether such a document is READABLE is `validateDocument`'s question; an
+    // unreadable one simply has no envelope to be wrong about.
+    expect(issues).toEqual([]);
+  });
+});
+
+describe("componentEnvelopeIssues holds itself to a real bound", () => {
+  it.each([
+    ["NaN", Number.NaN],
+    ["undefined", undefined],
+    ["a string", "500"],
+  ])("refuses %s as a node cap, as the survey does", (_name, maxNodes) => {
+    // A bound that is not a number is not a bound: every comparison against it
+    // in the walk is false, so the index is built over the whole forest and a
+    // dangling pointer is reported as sound — with the resource bound gone as
+    // well as the verdict wrong.
+    const doc = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "a", type: "core/text", version: 1, props: {} }],
+      exposed: [
+        { id: "p", label: "L", nodeId: "ghost", propPath: "t", type: "text" },
+      ],
+    } as unknown as BlockDocument;
+
+    expect(() =>
+      componentEnvelopeIssues(doc, {
+        ...DEFAULT_LIMITS,
+        maxNodes: maxNodes as number,
+      })
+    ).toThrow(RangeError);
+
+    // The gate this predicts refuses the same limits, which is why refusing is
+    // the answer rather than falling back to a default: the two must not
+    // disagree about what counts as a bound.
+    expect(() =>
+      validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        limits: { ...DEFAULT_LIMITS, maxNodes: maxNodes as number },
+      })
+    ).toThrow(RangeError);
+  });
+
+  it("still answers for a sound cap", () => {
+    // The control: without it, a helper that threw for every limit would pass
+    // every assertion above.
+    const doc = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "a", type: "core/text", version: 1, props: {} }],
+      exposed: [
+        { id: "p", label: "L", nodeId: "ghost", propPath: "t", type: "text" },
+      ],
+    } as unknown as BlockDocument;
+
+    expect(componentEnvelopeIssues(doc).map(i => i.code)).toContain(
+      "exposed-node-missing"
+    );
+  });
+});
+
+describe("a node's provenance record is checked on both roads to storage", () => {
+  /** A one-node page whose node carries this origin. */
+  function withOrigin(origin: unknown): BlockDocument {
+    return {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/text", version: 1, props: {}, origin }],
+    } as unknown as BlockDocument;
+  }
+
+  const codesFor = (origin: unknown, mode: "strict" | "forgiving" = "strict") =>
+    validate(withOrigin(origin), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode,
+    }).map(issue => issue.code);
+
+  it.each([
+    ["a pattern with no digest", { from: "pattern", id: "p1" }],
+    [
+      "a pattern with an empty digest",
+      { from: "pattern", id: "p1", digest: "" },
+    ],
+    ["a pattern with an empty id", { from: "pattern", id: "", digest: "d" }],
+    ["a component with no id", { from: "component" }],
+    ["an unknown arm", { from: "elsewhere", id: "x" }],
+    ["not a record", "pattern"],
+  ])("refuses %s", (_name, origin) => {
+    // An import or a script can write one of these through the FIELD road, and
+    // every later provenance reader takes it at face value: a staleness check
+    // against a pattern with no id answers confidently and wrongly.
+    expect(codesFor(origin)).toContain("invalid-origin");
+  });
+
+  it.each([
+    ["a whole pattern record", { from: "pattern", id: "p1", digest: "d1" }],
+    ["a whole component record", { from: "component", id: "c1" }],
+  ])("accepts %s", (_name, origin) => {
+    // The controls. Without them a check that refused every record would pass
+    // every assertion above.
+    expect(codesFor(origin)).not.toContain("invalid-origin");
+  });
+
+  it("accepts a node with no record at all", () => {
+    const codes = validate(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ id: "n1", type: "core/text", version: 1, props: {} }],
+      } as unknown as BlockDocument,
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    ).map(issue => issue.code);
+
+    expect(codes).not.toContain("invalid-origin");
+  });
+
+  it("refuses it in FORGIVING mode too", () => {
+    // Forgiving mode keeps a document readable when a future build wrote
+    // something this one does not understand. A half-written record is not a
+    // future value — it is a claim about history with a piece missing, and a
+    // reader cannot tell which piece.
+    expect(codesFor({ from: "pattern", id: "p1" }, "forgiving")).toContain(
+      "invalid-origin"
+    );
+  });
+
+  it.each([
+    [
+      "a throwing getter",
+      () => {
+        throw new Error("boom");
+      },
+    ],
+    ["a benign getter", () => ({ from: "pattern", id: "p1", digest: "d1" })],
+  ])("never invokes an origin that is %s", (_name, get) => {
+    // `surveyDocument` refuses to invoke an accessor and already reports such a
+    // document unreadable, so reading one here would run the document's own
+    // code inside the check deciding whether to trust it. Measured before the
+    // descriptor read: the throwing one escaped `validate()` as a native error,
+    // and the benign one was invoked TWICE — once per read.
+    let reads = 0;
+    const node: Record<string, unknown> = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+    };
+    Object.defineProperty(node, "origin", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return get();
+      },
+    });
+
+    let escaped: unknown;
+    let codes: string[] = [];
+    try {
+      codes = validate(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [node],
+        } as unknown as BlockDocument,
+        { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+      ).map(issue => issue.code);
+    } catch (error) {
+      escaped = error;
+    }
+
+    expect(escaped).toBeUndefined();
+    expect(reads).toBe(0);
+    // The verdict that already covers it, rather than a second one from here:
+    // a document whose fields compute themselves is refused as a whole.
+    expect(codes).toContain("document-unreadable");
+    expect(codes).not.toContain("invalid-origin");
+  });
+
+  it.each(["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor"])(
+    "refuses a record whose %s trap throws, rather than escaping",
+    trap => {
+      // Reflection itself can fail, and the guard promises an answer, not a
+      // throw. Uncaught, all three took the caller's error out of `validate()`
+      // as a native error instead of the issue list it promises.
+      const origin = new Proxy({ from: "pattern", id: "p1", digest: "d1" }, {
+        [trap]() {
+          throw new Error("boom");
+        },
+      } as ProxyHandler<object>);
+
+      let escaped: unknown;
+      let codes: string[] = [];
+      try {
+        codes = codesFor(origin);
+      } catch (error) {
+        escaped = error;
+      }
+
+      expect(escaped).toBeUndefined();
+      // A SURVEY-classification test, and only that. All three traps make the
+      // survey call the document unreadable, so validation stops at that
+      // verdict and none of them reaches the per-record guard — this would
+      // stay green with that guard deleted, and says nothing about it.
+      //
+      // Which verdict is reported depends on where the trap bites first:
+      // `ownKeys` and `getOwnPropertyDescriptor` also stop the document being
+      // SERIALIZED, and `checkLimits` reports unwritable ahead of unreadable.
+      //
+      // What keeps the guard necessary is the case below — a trap that fires
+      // only for an ABSENT field, which the survey never asks for and therefore
+      // never meets, so the walk runs and the record is judged.
+      expect(codes).toContain(
+        trap === "getPrototypeOf"
+          ? "document-unreadable"
+          : "document-unwritable"
+      );
+    }
+  );
+
+  it("refuses a malformed record whose trap fires only for an ABSENT field", () => {
+    // The case that makes deferring unsafe. The survey walks the keys a record
+    // HAS, so a trap that throws only for `renamed` — which this record does
+    // not carry — is never triggered by it, and the document is reported
+    // perfectly readable. A check that asked for every field it might consult,
+    // rather than only the ones the guard actually reaches, hit that trap on a
+    // record the guard rejects at its FIRST field, and then read the failure as
+    // "the survey already covered this" — letting an EMPTY id through with no
+    // issue raised at all.
+    //
+    // Nothing asks for `renamed` here now: the guard stops at `id`. That is the
+    // second reason this record is refused, and the case below covers the
+    // first, where the trap really is reached.
+    const origin = new Proxy(
+      { from: "pattern", id: "", digest: "d1" },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === "renamed") throw new Error("boom");
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      }
+    );
+
+    const codes = codesFor(origin);
+
+    expect(codes).toContain("invalid-origin");
+    // The control: the survey really did find nothing wrong, so the verdict
+    // above is this check's own and not one inherited from it.
+    expect(codes).not.toContain("document-unreadable");
+  });
+
+  it("refuses a record it cannot finish reading, even one otherwise whole", () => {
+    // Here the trap IS reached: every earlier field is sound, so the guard goes
+    // on to `renamed` and reflection fails there. The record may well be whole —
+    // but nothing can establish that, and the survey has not refused the
+    // document either, since it never asked for the absent field. Reporting is
+    // the only answer that does not treat an unverified record as verified.
+    const origin = new Proxy(
+      { from: "pattern", id: "p1", digest: "d1" },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === "renamed") throw new Error("boom");
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      }
+    );
+
+    const codes = codesFor(origin);
+
+    expect(codes).toContain("invalid-origin");
+    expect(codes).not.toContain("document-unreadable");
+  });
+
+  it("reads only the fields the guard reaches, not every key the record carries", () => {
+    // The check goes through the guard's own reads. Enumerating the record's
+    // own keys cost one descriptor lookup PER KEY, on a document the byte cap
+    // had already rejected — work proportional to caller-supplied content the
+    // bounded survey deliberately never traverses.
+    //
+    // Counted as descriptor lookups rather than as `ownKeys` calls, because
+    // `getOwnPropertyNames` is a SINGLE call whatever the record holds: a count
+    // of those is identical for three keys and fifty thousand, and cannot tell
+    // the two implementations apart.
+    const lookups = (keys: number): number => {
+      const origin: Record<string, unknown> = {
+        from: "pattern",
+        id: "p1",
+        digest: "d1",
+      };
+      for (let i = 0; i < keys; i += 1) origin[`k${String(i)}`] = 1;
+      let counted = 0;
+      const watched = new Proxy(origin, {
+        getOwnPropertyDescriptor(target, key) {
+          counted += 1;
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      });
+      // Over the byte cap on an EARLIER member, which is the case the bound
+      // exists for: the survey stops, reports `document-too-large`, and never
+      // traverses this record — so every lookup counted here belongs to the
+      // walk that runs afterwards. Without it the survey measures the whole
+      // record legitimately and the count says nothing about this check.
+      const doc = {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "n1",
+            type: "core/text",
+            version: 1,
+            props: { big: "x".repeat(5_000) },
+            origin: watched,
+          },
+        ],
+      } as unknown as BlockDocument;
+      const codes = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        limits: { ...DEFAULT_LIMITS, maxBytes: 1_000 },
+      }).map(issue => issue.code);
+      expect(codes).toContain("document-too-large");
+      return counted;
+    };
+
+    const many = lookups(50_000);
+    // The control: a record of three keys, so the assertion is about the count
+    // not growing rather than about it being small for a small record.
+    expect(lookups(0)).toBeGreaterThan(0);
+    expect(many).toBe(lookups(0));
+  });
+
+  it("never invokes an accessor INSIDE the record either", () => {
+    // One level deeper than the property itself: a data-property `origin` whose
+    // `digest` is a getter. `isBlockOrigin` reaches its fields through
+    // `ownEntry`, which reads values — so guarding only the outer property left
+    // the predicate to invoke them on the way in.
+    const origin: Record<string, unknown> = { from: "pattern", id: "p1" };
+    let reads = 0;
+    Object.defineProperty(origin, "digest", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        throw new Error("boom");
+      },
+    });
+
+    let escaped: unknown;
+    let codes: string[] = [];
+    try {
+      codes = validate(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            { id: "n1", type: "core/text", version: 1, props: {}, origin },
+          ],
+        } as unknown as BlockDocument,
+        { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+      ).map(issue => issue.code);
+    } catch (error) {
+      escaped = error;
+    }
+
+    expect(escaped).toBeUndefined();
+    expect(reads).toBe(0);
+    // The verdict that already covers such a document, rather than a second one.
+    expect(codes).toContain("document-unreadable");
+  });
+
+  it("ignores an origin inherited from the prototype", () => {
+    // Through `Object.prototype`, which is the reachable case: a node built with
+    // `Object.create(custom)` fails `isPlainRecord` and never reaches this check
+    // at all, so a test written that way proves nothing about it.
+    //
+    // `structuredClone` and object spreads copy OWN properties, so an inherited
+    // value is not what would be stored — the rule this engine applies to every
+    // other field.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.origin = { from: "pattern", id: "" };
+    try {
+      const codes = validate(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [{ id: "n1", type: "core/text", version: 1, props: {} }],
+        } as unknown as BlockDocument,
+        { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+      ).map(issue => issue.code);
+
+      expect(codes).not.toContain("invalid-origin");
+    } finally {
+      delete polluted.origin;
+    }
+  });
+
+  it("agrees with the road an op takes", () => {
+    // The point of the check: a record one road admits and the other refuses is
+    // one that exists in the database and cannot be edited. Both ask
+    // `isBlockOrigin`, so this asserts the SAME record is refused by both.
+    const half = { from: "pattern", id: "p1" };
+
+    expect(codesFor(half)).toContain("invalid-origin");
+    expect(() =>
+      applyOps(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [{ id: "n1", type: "core/text", version: 1, props: {} }],
+        } as unknown as BlockDocument,
+        [{ kind: "update", id: "n1", patch: { origin: half } }] as never
+      )
+    ).toThrow();
   });
 });
 
@@ -2799,5 +3240,376 @@ describe("validate and compile agree on which breakpoints a site defines", () =>
     expect(seen.compilerSaw).toBe(false);
     expect(seen.validationSaw).toBe(false);
     expect(seen.emitted).toBe(true);
+  });
+});
+
+describe("a bag validation has already refused is never enumerated", () => {
+  it("does not run an accessor the document supplied", () => {
+    // `Object.entries` invokes a getter. A throwing one would escape
+    // `validate()` as a native error rather than an issue, and a
+    // side-effecting one would execute the document's own code inside the
+    // check deciding whether to trust it.
+    let ran = false;
+    const bag = Object.create(
+      {},
+      {
+        id: {
+          enumerable: true,
+          get() {
+            ran = true;
+            throw new Error("a document should not get to run this");
+          },
+        },
+      }
+    ) as Record<string, string>;
+
+    const doc = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/text", version: 1, props: {}, attributes: bag },
+      ],
+    } as unknown as BlockDocument;
+
+    expect(() =>
+      validateDocument(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      })
+    ).not.toThrow();
+    expect(ran).toBe(false);
+    // And it is still REPORTED, rather than quietly skipped — as
+    // `document-unreadable` rather than `invalid-attributes`. The survey met
+    // this accessor too and refused the whole document, and the walk that would
+    // have named the field no longer runs on a document nobody can read.
+    expect(
+      validateDocument(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      }).issues.some(issue => issue.code === "document-unreadable")
+    ).toBe(true);
+  });
+
+  it.each([
+    ["null", null],
+    ["a primitive", 7],
+    ["an array", []],
+  ])(
+    "refuses %s as a document without touching the site settings",
+    (_name, root) => {
+      // Hoisting the breakpoint scan ahead of the readability gate put it ahead
+      // of the malformed-root refusal too, so a document that was never going to
+      // be validated still ran the caller's settings — and an adversarial set
+      // escaped as a native error. The coarse root test asks nothing that can
+      // throw, so it can safely come first.
+      const hostile = new Proxy(
+        { viewport: [], container: [] },
+        {
+          getPrototypeOf() {
+            throw new Error("settings should not be read for this document");
+          },
+        }
+      ) as unknown as typeof FIXTURE_BREAKPOINTS;
+
+      let escaped: unknown;
+      let codes: string[] = [];
+      try {
+        codes = validate(root as unknown as BlockDocument, {
+          breakpoints: hostile,
+          mode: "strict",
+        }).map(issue => issue.code);
+      } catch (error) {
+        escaped = error;
+      }
+
+      expect(escaped).toBeUndefined();
+      expect(codes).toEqual(["invalid-document"]);
+    }
+  );
+
+  it("sends a root that cannot answer the array question to the survey", () => {
+    // `Array.isArray` runs no trap, but it reads the array brand THROUGH a
+    // proxy and a revoked one throws rather than answering. Asking it bare took
+    // `validate()` out as a native `TypeError` on a root every other release
+    // reported as an issue list.
+    //
+    // A root that cannot answer that question is not thereby a non-record, so
+    // the refusal above is NOT the answer: it is unreadable, which is the
+    // survey's verdict to give, and it reaches the readability gate — which is
+    // also why the site's own duplicate id is still reported for it.
+    const { proxy, revoke } = Proxy.revocable(
+      {} as Record<string, unknown>,
+      {}
+    );
+    revoke();
+    const duplicated = {
+      viewport: [
+        { id: "base", label: "Desktop" },
+        { id: "base", label: "Again" },
+      ],
+      container: [],
+    } as unknown as typeof FIXTURE_BREAKPOINTS;
+
+    let escaped: unknown;
+    let codes: string[] = [];
+    try {
+      codes = validate(proxy as unknown as BlockDocument, {
+        breakpoints: duplicated,
+        mode: "strict",
+      }).map(issue => issue.code);
+    } catch (error) {
+      escaped = error;
+    }
+
+    expect(escaped).toBeUndefined();
+    expect(codes).toContain("document-unwritable");
+    expect(codes).toContain("breakpoint-id-not-unique");
+    expect(codes).not.toContain("invalid-document");
+  });
+
+  it("still reports a fault in the site's own breakpoints", () => {
+    // `collectBreakpointIds` judges the CALLER's settings, not the document, so
+    // a duplicate id among them is true whatever the document turns out to be.
+    // Collecting it inside the envelope meant an unreadable document silently
+    // swallowed a fault in the site's configuration — one the author would fix
+    // in a different screen entirely.
+    const node: Record<string, unknown> = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+    };
+    Object.defineProperty(node, "props", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        throw new Error("a document should not get to run this");
+      },
+    });
+    const duplicated = {
+      viewport: [
+        { id: "base", label: "Desktop" },
+        { id: "base", label: "Again" },
+      ],
+      container: [],
+    } as unknown as typeof FIXTURE_BREAKPOINTS;
+
+    const codes = validate(
+      {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [node],
+      } as unknown as BlockDocument,
+      { breakpoints: duplicated, mode: "strict" }
+    ).map(issue => issue.code);
+
+    expect(codes).toContain("breakpoint-id-not-unique");
+    expect(codes).toContain("document-unreadable");
+  });
+
+  it.each(["formatVersion", "kind", "nodes"])(
+    "does not read the document's own %s when it could not be read",
+    field => {
+      // The ENVELOPE is reached before any node is, so a check placed after it
+      // is placed too late: these three are read to decide whether the document
+      // is one at all, and each took a caller's error out of `validate()`.
+      const doc: Record<string, unknown> = {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [],
+      };
+      Object.defineProperty(doc, field, {
+        enumerable: true,
+        configurable: true,
+        get() {
+          throw new Error("a document should not get to run this");
+        },
+      });
+
+      let escaped: unknown;
+      let codes: string[] = [];
+      try {
+        codes = validate(doc as unknown as BlockDocument, {
+          breakpoints: FIXTURE_BREAKPOINTS,
+          mode: "strict",
+        }).map(issue => issue.code);
+      } catch (error) {
+        escaped = error;
+      }
+
+      expect(escaped).toBeUndefined();
+      expect(codes).toContain("document-unreadable");
+    }
+  );
+
+  it("does not inspect a root whose prototype trap throws", () => {
+    // `isPlainRecord` asks for the prototype, so the very first thing the
+    // envelope does is something a hostile root can refuse.
+    const doc = new Proxy(
+      { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "page", nodes: [] },
+      {
+        getPrototypeOf() {
+          throw new Error("a document should not get to run this");
+        },
+      }
+    );
+
+    let escaped: unknown;
+    let codes: string[] = [];
+    try {
+      codes = validate(doc as unknown as BlockDocument, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      }).map(issue => issue.code);
+    } catch (error) {
+      escaped = error;
+    }
+
+    expect(escaped).toBeUndefined();
+    expect(codes).toContain("document-unreadable");
+  });
+
+  it.each([
+    "id",
+    "type",
+    "version",
+    "props",
+    "slots",
+    "attributes",
+    "cssId",
+    "styles",
+    "bindings",
+    "visibility",
+  ])(
+    "does not read a node's %s off a document the survey could not read",
+    field => {
+      // The whole point of the gate, measured field by field. `surveyDocument`
+      // refuses to invoke an accessor and reports the document unreadable; the
+      // walk then reached the same field by ordinary property access and
+      // invoked exactly what the survey declined to. Every one of these ten
+      // took the caller's error out of `validate()` as a native throw instead
+      // of the issue list it promises.
+      const node: Record<string, unknown> = {
+        id: "n1",
+        type: "core/text",
+        version: 1,
+        props: {},
+      };
+      Object.defineProperty(node, field, {
+        enumerable: true,
+        configurable: true,
+        get() {
+          throw new Error("a document should not get to run this");
+        },
+      });
+
+      let escaped: unknown;
+      let codes: string[] = [];
+      try {
+        codes = validate(
+          {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "page",
+            nodes: [node],
+          } as unknown as BlockDocument,
+          { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+        ).map(issue => issue.code);
+      } catch (error) {
+        escaped = error;
+      }
+
+      expect(escaped).toBeUndefined();
+      expect(codes).toContain("document-unreadable");
+    }
+  );
+
+  it("reports one verdict for the unreadable document, and the duplicate for a readable one", () => {
+    // The cost of stopping at the survey's verdict, stated rather than hidden:
+    // a document carrying an accessor is refused as a whole, so the duplicate
+    // DOM id inside it is not named separately. That is the trade — one honest
+    // verdict, and none of the document's own code run — and it is bounded to
+    // documents the survey could not read, which come from an import or a
+    // script rather than from the editor.
+    //
+    // The second half is what makes the first safe to accept: the same
+    // duplicate on an ORDINARY document is still reported, so the capability is
+    // intact rather than lost.
+    const bag = Object.create({}, { id: { enumerable: true, get: () => "x" } });
+    const doc = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          cssId: "hero",
+          attributes: bag,
+        },
+        { id: "n2", type: "core/text", version: 1, props: {}, cssId: "hero" },
+      ],
+    } as unknown as BlockDocument;
+
+    const codes = validateDocument(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    }).issues.map(issue => issue.code);
+    expect(codes).toContain("document-unreadable");
+    expect(codes).not.toContain("duplicate-dom-id");
+
+    const readable = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/text", version: 1, props: {}, cssId: "hero" },
+        { id: "n2", type: "core/text", version: 1, props: {}, cssId: "hero" },
+      ],
+    } as unknown as BlockDocument;
+    expect(
+      validateDocument(readable, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      }).issues.map(issue => issue.code)
+    ).toContain("duplicate-dom-id");
+  });
+});
+
+describe("the gating read stays inside the node budget", () => {
+  it("does not touch a node beyond maxNodes", () => {
+    // The check that decides whether a node is pruned reads `visibility`. Doing
+    // that in a pass of its own walked the whole forest, outside the one loop
+    // bounded by `maxNodes` — so an oversized document was traversed in full by
+    // a check the cap exists to stop.
+    //
+    // Observable because a getter is observable: the node carrying it sits past
+    // the cap, so a bounded walk never reads it.
+    let readPastTheCap = false;
+    const beyond = { id: "n3", type: "core/text", version: 1, props: {} };
+    Object.defineProperty(beyond, "visibility", {
+      enumerable: true,
+      get() {
+        readPastTheCap = true;
+        return undefined;
+      },
+    });
+
+    const doc = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/text", version: 1, props: {} },
+        { id: "n2", type: "core/text", version: 1, props: {} },
+        beyond,
+      ],
+    } as unknown as BlockDocument;
+
+    validateDocument(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      limits: { ...DEFAULT_LIMITS, maxNodes: 2 },
+    });
+
+    expect(readPastTheCap).toBe(false);
   });
 });

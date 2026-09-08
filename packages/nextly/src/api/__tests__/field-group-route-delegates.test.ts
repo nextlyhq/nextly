@@ -24,6 +24,11 @@ vi.mock("../../di", () => ({
       ? { createFieldGroup }
       : { registerComponent }
   ),
+  // The route asks whether the container is up before it resolves anything. A
+  // factory mock replaces the WHOLE module, so an export it omits is missing
+  // rather than passed through — the route then fails on the guard instead of
+  // reaching the delegate these cases are about.
+  isServicesRegistered: vi.fn(() => true),
 }));
 
 vi.mock("../../init", () => ({

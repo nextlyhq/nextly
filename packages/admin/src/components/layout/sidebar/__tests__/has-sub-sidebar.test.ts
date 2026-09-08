@@ -10,6 +10,33 @@ import { isSubSidebarCategory, isSubSidebarOpen } from "../lib/has-sub-sidebar";
 const ALL = ["collections", "singles", "media", "plugins", "settings"];
 
 describe("isSubSidebarOpen", () => {
+  it("refuses the panel when a surface suppressed it, even where it would open", () => {
+    /*
+     * The layer was declared in `AdminChromeLayer` and resolved by
+     * `resolveSuppressedChrome`, and nothing implemented it: the layout only
+     * drops the sidebar COLUMN when `primaryRail` is surrendered as well, so a
+     * surface asking for the panel alone got the panel anyway. Both existing
+     * consumers suppress all four layers or only `pageFrame`, so the isolated
+     * case had never been exercised.
+     */
+    expect(
+      isSubSidebarOpen("settings", ALL, false, new Set(["subSidebar"]))
+    ).toBe(false);
+  });
+
+  it("opens where the same input suppresses something ELSE", () => {
+    // The control. Without it, an implementation that refused on ANY non-empty
+    // suppression set would pass the test above just as well.
+    expect(
+      isSubSidebarOpen("settings", ALL, false, new Set(["pageFrame"]))
+    ).toBe(true);
+  });
+
+  it("opens when nothing is suppressed, which is every existing caller", () => {
+    expect(isSubSidebarOpen("settings", ALL, false, new Set())).toBe(true);
+    expect(isSubSidebarOpen("settings", ALL, false)).toBe(true);
+  });
+
   it("opens the panel for a category the rail is showing", () => {
     expect(isSubSidebarOpen("plugins", ALL, false)).toBe(true);
   });

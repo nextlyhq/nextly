@@ -11,11 +11,11 @@ Field groups are reusable field structures. Define a set of fields once as a fie
 
 Key characteristics:
 
-- **Templates, not documents** — field groups define a field structure; each embed creates its own data row.
-- **Own database table** — each field group gets a table derived from its slug and prefixed with `comp_` (e.g. `comp_seo`). The name is always derived; it cannot be overridden.
-- **Nesting** — a field group's fields can include `component` fields referencing other field groups (max depth: 3 levels).
-- **Slug uniqueness** — field group slugs must be unique across field groups, collections, **and** singles.
-- **Dual creation** — define in code with `defineFieldGroup()` or visually in the Visual Schema Builder.
+- **Templates, not documents.** Field groups define a field structure; each embed creates its own data row.
+- **Own database table.** Each field group gets a table derived from its slug and prefixed with `comp_` (e.g. `comp_seo`). The name is always derived; it cannot be overridden.
+- **Nesting.** A field group's fields can include `component` fields referencing other field groups (max depth: 3 levels).
+- **Slug uniqueness.** Field group slugs must be unique across field groups, collections, **and** singles.
+- **Dual creation.** Define in code with `defineFieldGroup()` or visually in the Visual Schema Builder.
 
 <Tabs items={["Code-first", "Visual Schema Builder"]}>
 <Tab value="Code-first">

@@ -14,6 +14,8 @@
  *
  * @module layers-panel.test
  */
+import { ShortcutProvider } from "@nextlyhq/ui";
+import { renderToStaticMarkup } from "react-dom/server";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import * as React from "react";
@@ -26,6 +28,8 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
+import { keyHint } from "./key-hint";
+import { MOVE_KEYS } from "./keyboard-actions";
 import { LayersPanel } from "./layers-panel";
 import { useEditorState, type EditorState } from "./editor-state";
 
@@ -114,15 +118,44 @@ function nestedDocument(): BlockDocument {
 
 let editorRef: EditorState | null = null;
 
-function Host({ document }: { document: BlockDocument }): React.JSX.Element {
+function Host({
+  document,
+  keys = "bound",
+}: {
+  document: BlockDocument;
+  keys?: "bound" | "disabled" | "absent";
+}): React.JSX.Element {
   const editor = useEditorState({ initialDocument: document });
   editorRef = editor;
-  return <LayersPanel editor={editor} />;
+  /*
+   * No shortcut provider around it, deliberately.
+   *
+   * This component is exported and a host may mount it on its own, so it must
+   * render without one. A harness that always supplied a provider could not
+   * tell that apart from a panel that requires one.
+   */
+  return <LayersPanel editor={editor} moveHints={keys === "bound"} />;
 }
 
-function renderPanel(document: BlockDocument = nestedDocument()) {
+function renderPanel(
+  document: BlockDocument = nestedDocument(),
+  keys: "bound" | "disabled" | "absent" = "bound"
+) {
   register();
-  return render(<Host document={document} />);
+  return render(<Host document={document} keys={keys} />);
+}
+
+/**
+ * The legend, found the way assistive technology finds it.
+ *
+ * Through the tree's own `aria-describedby` rather than by a known id: the id
+ * is per instance now, so a fixed one would be a second answer to which element
+ * describes this tree — and looking it up by that fixed name is exactly what
+ * would keep passing if the wiring broke.
+ */
+function hintFor(tree: HTMLElement): HTMLElement | null {
+  const id = tree.getAttribute("aria-describedby");
+  return id === null ? null : window.document.getElementById(id);
 }
 
 /** The rows currently on screen, by their accessible name. */
@@ -133,6 +166,168 @@ function rows(): string[] {
 }
 
 describe("LayersPanel", () => {
+  it("says how to reorder, in the keys this platform carries", () => {
+    /*
+     * The bindings already work while this panel holds focus — the tree takes
+     * the keystroke and the editor acts on the selection — so what was missing
+     * was never the capability, only any way to find it.
+     */
+    renderPanel();
+
+    const hint = hintFor(screen.getByRole("tree"));
+    expect(hint).not.toBeNull();
+    // The DESCRIPTION every binding already carries, not a second wording.
+    expect(hint?.textContent).toContain("Move the selected block up");
+    expect(hint?.textContent).toContain("Move the selected block out of its");
+  });
+
+  it("derives the hint from the bindings rather than restating them", () => {
+    /*
+     * The property that matters, and the one a fixed string cannot have: every
+     * binding the editor registers is named here, and nothing else is. A
+     * retyped legend passes an assertion about its own text on the day it is
+     * written and teaches a dead keystroke the day someone rebinds one.
+     */
+    renderPanel();
+
+    const hint = hintFor(screen.getByRole("tree"));
+    const rendered = Array.from(
+      hint?.querySelectorAll(".nx-layers-panel__hint-row") ?? []
+    );
+    expect(rendered).toHaveLength(MOVE_KEYS.length);
+    MOVE_KEYS.forEach(({ keys, description }, index) => {
+      const shown = keyHint(keys, false);
+      expect(shown).not.toBeNull();
+      const row = rendered[index];
+      /*
+       * The KEY as drawn, beside its own description. Asserting only that the
+       * descriptions appear leaves the keystrokes unchecked, so a legend that
+       * iterated these bindings and printed fixed labels beside them would
+       * pass — which is the exact implementation this claims not to be.
+       */
+      expect(
+        row?.querySelector(".nx-layers-panel__hint-key")?.textContent
+      ).toBe(shown);
+      expect(row?.textContent).toContain(description);
+    });
+    // As many keystrokes drawn as there are bindings, so a binding added to the
+    // table cannot quietly go unmentioned here.
+    expect(hint?.querySelectorAll(".nx-layers-panel__hint-key").length).toBe(
+      MOVE_KEYS.length
+    );
+  });
+
+  it("emits no keystroke at all in a SERVER render", () => {
+    /*
+     * The hydration case, and the only place it is observable.
+     *
+     * `detectApplePlatform` reads `navigator`, which a server does not have, so
+     * it answers false there — a server would emit `Alt` and the first browser
+     * render `⌥`, React would find markup it did not produce, and it would
+     * throw the subtree away.
+     *
+     * No test in this file can see that: jsdom always HAS a `navigator`, so
+     * resolving the platform during render gives the same answer as resolving
+     * it after mounting, and every case above passes either way. Rendering to
+     * a string is what removes the browser from the question — effects do not
+     * run there, which is exactly the condition the server is in.
+     */
+    register();
+    const html = renderToStaticMarkup(<Host document={nestedDocument()} />);
+
+    expect(html).not.toContain("Move up");
+    expect(html).not.toContain("Alt");
+    expect(html).not.toContain("\u2325");
+  });
+
+  it("gives each panel its own description to point at", () => {
+    /*
+     * A host can mount two editors on one page. With a fixed id both trees
+     * point at the same element and the lookup is ambiguous, so assistive
+     * technology can read one panel's tree the OTHER panel's description —
+     * which is worse than no description, because it is confidently wrong.
+     *
+     * Two panels is the whole of the case: one panel with a fixed id behaves
+     * perfectly, which is why a single-panel fixture cannot see this.
+     */
+    register();
+    /*
+     * BOTH bound. With one panel unbound its description is absent, so the
+     * comparison is against a `null` that differs from anything — green with a
+     * shared constant id, which is the regression this is for.
+     */
+    render(
+      <>
+        <Host document={nestedDocument()} keys="bound" />
+        <Host document={nestedDocument()} keys="bound" />
+      </>
+    );
+
+    const [first, second] = screen.getAllByRole("tree");
+    if (first === undefined || second === undefined) {
+      throw new Error("expected two trees");
+    }
+    const firstId = first.getAttribute("aria-describedby");
+    const secondId = second.getAttribute("aria-describedby");
+    expect(firstId).not.toBeNull();
+    expect(secondId).not.toBeNull();
+    expect(firstId).not.toBe(secondId);
+    // And each id resolves to a legend inside ITS OWN panel — two different
+    // strings alone do not establish that either points at the right element.
+    for (const tree of [first, second]) {
+      const hint = hintFor(tree);
+      expect(hint).not.toBeNull();
+      expect(hint?.closest(".nx-layers-panel")).toBe(
+        tree.closest(".nx-layers-panel")
+      );
+    }
+  });
+
+  it("says nothing about keys nothing is listening for", () => {
+    /*
+     * A host may mount this panel with no bindings above it at all. Advertising
+     * the keystrokes there is not a cosmetic slip — it is the editor telling an
+     * author to press something that does nothing, which is worse than the
+     * silence this replaced, because silence at least does not mislead.
+     */
+    renderPanel(nestedDocument(), "absent");
+
+    expect(hintFor(screen.getByRole("tree"))).toBeNull();
+    expect(
+      screen.getByRole("tree").getAttribute("aria-describedby")
+    ).toBeNull();
+  });
+
+  it("says nothing while the bindings are turned off", () => {
+    /*
+     * The other way the same claim goes false, and the one a presence check
+     * alone would miss: the provider IS above this, and a host has disabled it
+     * because something modal is over the canvas. The keystrokes reach nothing
+     * until it closes.
+     */
+    renderPanel(nestedDocument(), "disabled");
+
+    expect(hintFor(screen.getByRole("tree"))).toBeNull();
+  });
+
+  it("makes the hint the tree's own description", () => {
+    /*
+     * Text near the tree is read by whoever can see it. As the tree's
+     * description it is announced on entering the tree, which is the moment an
+     * author asks the question it answers.
+     */
+    renderPanel();
+
+    const tree = screen.getByRole("tree");
+    const id = tree.getAttribute("aria-describedby");
+    expect(id).not.toBeNull();
+    // It points at an element that EXISTS and is the legend, which a bare
+    // string comparison against a known id never established.
+    expect(
+      hintFor(tree)?.querySelectorAll(".nx-layers-panel__hint-row").length
+    ).toBe(MOVE_KEYS.length);
+  });
+
   it("shows the top level, and hides what is inside a collapsed block", () => {
     // The precondition for everything below. An assertion that a nested row is
     // ABSENT is satisfied by a panel that renders nothing at all, so the rows

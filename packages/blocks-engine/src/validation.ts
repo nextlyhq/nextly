@@ -15,19 +15,27 @@ import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  EXPOSED_PROPERTY_TYPES,
   MAX_CLASSES_PER_NODE,
   STYLE_STATES,
   isBindingSource,
+  readBlockOrigin,
   isBlockType,
+  renderedDomId,
 } from "./document";
 import { describeValue, pointer } from "./issue-text";
-import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
+import {
+  DEFAULT_LIMITS,
+  LIMIT_WARNING_RATIO,
+  MAX_ENVELOPE_ENTRIES,
+} from "./limits";
 import type { DocumentLimits } from "./limits";
-import { surveyDocument } from "./measure-bytes";
+import { boundedLimit, surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
 import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
-import { isPlainRecord } from "./plain-record";
+import { definitelyNotARecord, isPlainRecord } from "./plain-record";
+import { boundedOwnKeys } from "./safe-record";
 import type { TokenKind } from "./style/catalog-types";
 import { breakpointContexts } from "./style/compile-page";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./style/named-class";
@@ -43,6 +51,8 @@ import {
   validateStyleValues,
 } from "./style/validate-style-value";
 import type { ReadyStyleIssueBudget } from "./style/validate-style-value";
+import { walkNodes } from "./tree";
+import { isConditionGated } from "./visibility";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
 export type IssueSeverity = "error" | "warning";
@@ -175,9 +185,27 @@ export const ISSUE_CODES = {
   "invalid-format-version":
     "The document formatVersion is not the supported version.",
   "invalid-kind": "The document kind is not one of the known kinds.",
+  "component-envelope-invalid":
+    "A component document's exposed list or slot map is not the right shape.",
+  "exposed-property-invalid":
+    "An exposed property is missing a required field or declares an unknown type.",
+  "exposed-duplicate-id":
+    "Two exposed properties or slots share one id, so an override cannot address either.",
+  "exposed-node-missing":
+    "An exposed property or slot points at a node this document does not contain.",
+  "exposed-path-invalid":
+    "An exposed property's prop path is not a dot-joined chain of field identifiers.",
+  "exposed-options-invalid":
+    "An exposed property declares options without being a select, or a select declares none.",
+  "exposed-slot-missing":
+    "An exposed slot names a slot the node it points at does not declare.",
+  "variant-unknown-target":
+    "A variant names an exposed property or slot the definition does not expose.",
   "invalid-document": "The document is not an object.",
   "nodes-not-array": "The document nodes field is not an array.",
   "invalid-node": "A node is not an object.",
+  "invalid-origin":
+    "A node's provenance record is missing a field it needs to be trusted.",
   "depth-exceeded": "The node tree is nested deeper than the allowed maximum.",
   "node-count-exceeded":
     "The document has more nodes than the allowed maximum.",
@@ -243,6 +271,8 @@ export const ISSUE_CODES = {
     "Some token and class names were not checked against the site, so any that do not resolve are not reported.",
   "invalid-scope":
     "The compile scope is not a single class, so the document's rules were not scoped.",
+  "invalid-block-part":
+    "A block names an element it renders, and the name is not a lowercase slug, so that part's default styles were not written.",
   // Spelled the same as the `NestingRefusal` members they report, so the code a
   // caller matches on and the reason the rule gave are one string rather than a
   // mapping that has to be kept in step.
@@ -334,6 +364,25 @@ export function validate(
   return validateDocument(doc, ctx).issues;
 }
 
+/**
+ * The one issue both root readings report.
+ *
+ * Two places decide a root is not a document — the coarse test before the
+ * caller's settings are read, and the envelope's fuller reading after the
+ * survey — and they say the same thing for the same reason. Written twice, the
+ * two copies agree until someone improves the sentence in one of them, and an
+ * author then reads a different message depending on which shape their document
+ * happens to be broken in.
+ */
+function invalidDocumentIssue(): ValidationIssue {
+  return {
+    path: "",
+    code: "invalid-document",
+    severity: "error",
+    message: "The document must be an object.",
+  };
+}
+
 export function validateDocument(
   doc: BlockDocument,
   ctx: ValidationContext
@@ -353,22 +402,166 @@ export function validateDocument(
   const unknownSeverity: IssueSeverity =
     ctx.mode === "strict" ? "error" : "warning";
 
+  // A root that is not even a candidate for a record — `null`, a primitive, an
+  // array — is refused before ANYTHING else is inspected, the caller's own
+  // settings included. Reading an adversarial breakpoint set on behalf of a
+  // document that was never going to be validated runs unrelated hostile input
+  // for nothing.
+  //
+  // The THROW-FREE reading of the same question the envelope asks in full.
+  // `isPlainRecord` settles it by asking for the prototype, which a hostile root
+  // refuses — exactly the case the readability gate below exists for — so it
+  // cannot run before the survey has had its say. `definitelyNotARecord` never
+  // accepts what its fuller half would refuse, so refusing early here can only
+  // ever agree with the envelope, and the two cannot drift apart.
+  if (definitelyNotARecord(doc)) {
+    issues.push(invalidDocumentIssue());
+    return { issues, survey };
+  }
+
+  // The SITE's own breakpoints, before anything about the document is decided.
+  // They come from the caller's settings rather than from the document, so a
+  // duplicate id among them is true whatever the document turns out to be —
+  // and collecting them inside the envelope meant an unreadable document
+  // silently swallowed a fault in the site's configuration.
+  const knownBreakpoints = collectBreakpointIds(ctx.breakpoints, issues);
+
+  // A document the survey could not READ is not one to read, and this is the
+  // first line after the measurement for that reason: everything below reaches
+  // the document's own fields by ordinary property access.
+  //
+  // `surveyDocument` refuses to invoke an accessor — it reports the document
+  // `document-unreadable` rather than run a getter it was handed. Reading on
+  // regardless invokes exactly what it declined to, and a throwing getter then
+  // leaves as a native error rather than the issue list this promises.
+  // Measured, every field of a node did that, and so did `formatVersion`,
+  // `kind` and `nodes` on the document itself — which is why the check sits
+  // ahead of the envelope rather than after it.
+  //
+  // `unreadable`, and NOT `overLimits`. They are different facts and only one
+  // is about reading: a document that merely exceeds `maxNodes` was read
+  // perfectly well and reports `traversed: false` with `unreadable: false`, and
+  // its nodes are still worth checking under the cap. Stopping on the broader
+  // fact would drop every per-node issue such a document earns.
+  //
+  // The verdict is still RECORDED before returning, or a caller gets an empty
+  // issue list for a document nothing could read.
+  if (survey.unreadable) {
+    checkLimits(survey, issues);
+    return { issues, survey };
+  }
+
+  const envelope = documentEnvelope(doc, unknownSeverity, issues);
+  if (envelope.stop) return { issues, survey };
+
+  checkLimits(survey, issues);
+  //
+  // `document-unwritable` belongs here for a sharper reason than tidiness: the
+  // byte pass could not measure what it refused. A `styles` accessor is
+  // reported absent rather than invoked, so its megabytes were never counted —
+  // and the per-value work below reaches the same field by ordinary property
+  // access, runs the getter, and parses everything it returns. Leaving it out
+  // meant the one document whose size is UNKNOWN was the one whose values were
+  // parsed in full.
+  // Asked of the SURVEY rather than reconstructed from the issues it produced.
+  // Matching issue codes re-derives, from four strings, a fact the walk already
+  // established — and a code list is a second statement of when the numbers are
+  // untrustworthy, which goes stale the first time a fifth way to stop short is
+  // added. `complete` is that fact, derived where it is known.
+  //
+  // `traversed`, NOT `complete`, and the difference is a fail-open. `complete`
+  // additionally requires the counts to be the writer's, so a node hook
+  // returning a replacement makes it false on a document the walk read from end
+  // to end — and every per-value check below was then skipped on a document
+  // with nothing wrong with it. Coverage silently dropped, no issue raised.
+  //
+  // The narrow question is the one this needs. A document JSON merely REWRITES
+  // was measured in full, so the per-value work below is bounded and skipping it
+  // would drop real issues on a document whose only fault is that a value comes
+  // back changed. It is a measurement that STOPPED SHORT which leaves nothing
+  // bounded, and that is exactly what `traversed` reports.
+  const overLimits = !survey.traversed;
+
+  // Per-kind rules. Only `component` has any today, and it is the kind whose
+  // extra fields nothing else in the document can check: `exposed` and `slots`
+  // are pointers INTO the node forest, so this is the first point at which
+  // they can be resolved at all.
+  //
+  // After the limits verdict, and skipped once it is negative, for the same
+  // reason the per-value work below is: a document the survey could not
+  // traverse is refused already, and an envelope with a million entries would
+  // otherwise be walked in full — and produce an issue per entry — to add
+  // nothing to a refusal that has already been made.
+  if (envelope.kind === "component" && !overLimits) {
+    // The SURVEY's snapshot, not `limits`. `DocumentLimits` is an ordinary
+    // object a caller may back with a getter, and `surveyDocument` snapshots
+    // it precisely so two readings cannot disagree. Re-reading here would let
+    // a shrinking limit report a node the survey counted as missing from the
+    // index, which surfaces as `exposed-node-missing` on a sound definition.
+    validateComponentEnvelope(
+      envelope.doc,
+      envelope.nodes,
+      survey.limits.maxNodes,
+      issues
+    );
+  }
+
+  const state = nodeCheckState(ctx, issues, knownBreakpoints, unknownSeverity, {
+    overLimits,
+  });
+
+  // Document-level styles use the same envelope as node styles but have no
+  // owning node, so validate them here or they would go unchecked.
+  const settings = envelope.doc.settings;
+  if (isPlainRecord(settings) && settings.styles !== undefined) {
+    validateStyleEnvelope(settings.styles, "/settings/styles", state);
+  }
+
+  validateNodeForest(envelope.nodes, state, survey.limits.maxNodes);
+
+  return { issues, survey };
+}
+
+/**
+ * What the document's own envelope said, and whether there is a forest to walk.
+ *
+ * Its own function because it is a distinct question with a distinct answer:
+ * "is this a document at all, and is its outer shape sound" is settled before
+ * anything reads a node, and two of its outcomes end the whole validation.
+ * Keeping it inline put those early returns in the middle of a function that
+ * also holds the walk, which is what made the walk unreachable to a reader —
+ * and to the complexity gate, which refuses any edit to a function this size.
+ *
+ * The order of the checks is the order of the issues, and it is load-bearing:
+ * callers assert on the first issue, so a breakpoint fault must still precede a
+ * format-version fault, and `nodes` must still be judged last.
+ */
+type DocumentEnvelope =
+  | { readonly stop: true }
+  | {
+      readonly stop: false;
+      /** The same value as the argument, established as a record. */
+      readonly doc: Record<string, unknown>;
+      /** Its `nodes`, established as an array. */
+      readonly nodes: BlockNode[];
+      /** As stored — validated above, and read again for the per-kind rules. */
+      readonly kind: unknown;
+    };
+
+function documentEnvelope(
+  doc: BlockDocument,
+  unknownSeverity: IssueSeverity,
+  issues: ValidationIssue[]
+): DocumentEnvelope {
   // A wholly-malformed document (null, an array, a primitive) is reported as a
   // structural issue rather than crashing on the field reads below. `rawDoc`
   // aliases the same value as `unknown`: reads through it are legitimately
   // untrusted, while `doc` keeps its declared type for the typed helper calls.
   const rawDoc: unknown = doc;
   if (!isPlainRecord(rawDoc)) {
-    issues.push({
-      path: "",
-      code: "invalid-document",
-      severity: "error",
-      message: "The document must be an object.",
-    });
-    return { issues, survey };
+    issues.push(invalidDocumentIssue());
+    return { stop: true };
   }
-
-  const knownBreakpoints = collectBreakpointIds(ctx.breakpoints, issues);
 
   const formatVersion = rawDoc.formatVersion;
   if (formatVersion !== DOCUMENT_FORMAT_VERSION) {
@@ -404,39 +597,33 @@ export function validateDocument(
       message: "The document nodes field must be an array.",
     });
     // Nothing further to check without a node forest.
-    return { issues, survey };
+    return { stop: true };
   }
 
-  checkLimits(survey, issues);
-  //
-  // `document-unwritable` belongs here for a sharper reason than tidiness: the
-  // byte pass could not measure what it refused. A `styles` accessor is
-  // reported absent rather than invoked, so its megabytes were never counted —
-  // and the per-value work below reaches the same field by ordinary property
-  // access, runs the getter, and parses everything it returns. Leaving it out
-  // meant the one document whose size is UNKNOWN was the one whose values were
-  // parsed in full.
-  // Asked of the SURVEY rather than reconstructed from the issues it produced.
-  // Matching issue codes re-derives, from four strings, a fact the walk already
-  // established — and a code list is a second statement of when the numbers are
-  // untrustworthy, which goes stale the first time a fifth way to stop short is
-  // added. `complete` is that fact, derived where it is known.
-  //
-  // `traversed`, NOT `complete`, and the difference is a fail-open. `complete`
-  // additionally requires the counts to be the writer's, so a node hook
-  // returning a replacement makes it false on a document the walk read from end
-  // to end — and every per-value check below was then skipped on a document
-  // with nothing wrong with it. Coverage silently dropped, no issue raised.
-  //
-  // The narrow question is the one this needs. A document JSON merely REWRITES
-  // was measured in full, so the per-value work below is bounded and skipping it
-  // would drop real issues on a document whose only fault is that a value comes
-  // back changed. It is a measurement that STOPPED SHORT which leaves nothing
-  // bounded, and that is exactly what `traversed` reports.
-  const overLimits = !survey.traversed;
+  return {
+    stop: false,
+    doc: rawDoc,
+    nodes: rawDoc.nodes as BlockNode[],
+    kind,
+  };
+}
 
+/**
+ * The state every node check shares, built once.
+ *
+ * Separated from the walk because it is configuration rather than traversal:
+ * nothing here decides anything about a node, and reading it beside the loop
+ * made the loop look like it depended on the order these were assembled in.
+ */
+function nodeCheckState(
+  ctx: ValidationContext,
+  issues: ValidationIssue[],
+  knownBreakpoints: Set<string>,
+  unknownSeverity: IssueSeverity,
+  bounds: { readonly overLimits: boolean }
+): NodeCheckState {
   const styleBudget = newStyleIssueBudget();
-  const nodeState: NodeCheckState = {
+  return {
     // Both site lookups are wrapped once here rather than per node or per style
     // envelope, so a name repeated across the document costs the caller one
     // answer for the whole walk. Nothing else bounds that repetition: a name
@@ -452,99 +639,127 @@ export function validateDocument(
     unknownSeverity,
     seenIds: new Map<string, string>(),
     seenDomIds: new Map<string, string>(),
-    skipValueParsing: overLimits,
+
+    skipValueParsing: bounds.overLimits,
     styleBudget,
   };
+}
 
-  // Document-level styles use the same envelope as node styles but have no
-  // owning node, so validate them here or they would go unchecked.
-  if (isPlainRecord(rawDoc.settings) && rawDoc.settings.styles !== undefined) {
-    validateStyleEnvelope(
-      rawDoc.settings.styles,
-      "/settings/styles",
-      nodeState
-    );
-  }
+/**
+ * One node on the queue, with everything the check of it needs.
+ *
+ * THREE placement states, not a nullable type. "At the top level" and "inside a
+ * container whose type is malformed" are different facts, and one absent value
+ * standing for both makes a child in a slot answer the ROOT question — which
+ * reports it as sitting nowhere while its own path says which slot holds it.
+ */
+interface QueuedNode {
+  node: BlockNode;
+  path: string;
+  placement: Placement;
+  /**
+   * True when an ancestor is condition-gated, so the renderer prunes this
+   * node with it.
+   *
+   * Carried DOWN the queue rather than precomputed over the raw forest.
+   * A separate walk would read every node's `visibility` and `slots` outside
+   * this loop, which is the one place bounded by `maxNodes` — so an oversized
+   * document would be traversed in full by the check meant to be capped.
+   */
+  hidden: boolean;
+}
 
-  // Iterative breadth-first walk. It never recurses, so a document nested
-  // arbitrarily deep cannot overflow the call stack — validation returns the
-  // depth issue instead of throwing. It also stops after visiting maxNodes
-  // nodes (the node-count issue is already recorded by checkLimits), so an
-  // oversized document cannot make the walk do unbounded work.
-  // Index-based reads (not .map/.forEach) so a sparse array's holes become
-  // explicit undefined entries reported as invalid nodes, and the queue is
-  // capped at maxNodes so an oversized forest cannot grow it without bound.
-  // Where this node was reached from, carried on the queue entry: a
-  // breadth-first walk has already left the parent behind by the time a node is
-  // dequeued, and re-deriving it would mean a second traversal answering a
-  // question this one already knew.
-  //
-  // THREE states, not a nullable type. "At the top level" and "inside a
-  // container whose type is malformed" are different facts, and one absent value
-  // standing for both makes a child in a slot answer the ROOT question — which
-  // reports it as sitting nowhere while its own path says which slot holds it.
-  const queue: Array<{
-    node: BlockNode;
-    path: string;
-    placement: Placement;
-  }> = [];
-  for (
-    let i = 0;
-    i < doc.nodes.length && queue.length <= survey.limits.maxNodes;
-    i++
-  ) {
+/**
+ * Check every node in the forest, and everything about where it sits.
+ *
+ * Iterative breadth-first. It never recurses, so a document nested arbitrarily
+ * deep cannot overflow the call stack — validation returns the depth issue
+ * instead of throwing. It also stops after visiting `maxNodes` nodes (the
+ * node-count issue is already recorded by `checkLimits`), so an oversized
+ * document cannot make the walk do unbounded work.
+ *
+ * Index-based reads (not `.map`/`.forEach`) so a sparse array's holes become
+ * explicit `undefined` entries reported as invalid nodes, and the queue is
+ * capped at `maxNodes` so an oversized forest cannot grow it without bound.
+ */
+function validateNodeForest(
+  nodes: BlockNode[],
+  state: NodeCheckState,
+  maxNodes: number
+): void {
+  const queue: QueuedNode[] = [];
+  for (let i = 0; i < nodes.length && queue.length <= maxNodes; i++) {
     queue.push({
-      node: doc.nodes[i],
+      node: nodes[i],
       path: pointer("/nodes", i),
       placement: { at: "root" },
+      hidden: false,
     });
   }
-  for (let i = 0; i < queue.length && i < survey.limits.maxNodes; i++) {
-    const { node, path, placement } = queue[i];
-    validateNode(node, path, nodeState);
-    checkNesting(node, path, placement, nodeState);
-    if (isPlainRecord(node) && isPlainRecord(node.slots)) {
-      // The container's placement for every child beneath it, read once.
-      //
-      // `isNodeType`, NOT a `typeof` check, and they are not the same boundary:
-      // `"columns"` and `"core/columns/"` are strings that no block can be
-      // named, so a weaker guard admits them as container NAMES and a restricted
-      // child is then refused against a name nothing could ever match. The
-      // predicate used here is the one that decides `invalid-node-type`, so a
-      // container reported as malformed is exactly a container this cannot name.
-      //
-      // Children are still walked and still checked for everything else. Only
-      // the one question that needs the container's name is recorded as
-      // unanswerable rather than answered from a name that does not exist.
-      // The container's name, resolved once; the SLOT differs per iteration, so
-      // the placement is built inside the loop. Hoisting it would carry one
-      // slot's name to every sibling slot's children and check each against the
-      // wrong allow-list — a refusal naming a slot the node is not in.
-      const containerType = isNodeType(node.type) ? node.type : undefined;
-      for (const [slot, children] of Object.entries(node.slots)) {
-        const childPlacement: Placement =
-          containerType === undefined
-            ? { at: "unnameable-container" }
-            : { at: "container", type: containerType, slot };
-        if (Array.isArray(children)) {
-          const slotPath = pointer(pointer(path, "slots"), slot);
-          for (
-            let c = 0;
-            c < children.length && queue.length <= survey.limits.maxNodes;
-            c++
-          ) {
-            queue.push({
-              node: children[c],
-              path: pointer(slotPath, c),
-              placement: childPlacement,
-            });
-          }
-        }
-      }
+  for (let i = 0; i < queue.length && i < maxNodes; i++) {
+    const { node, path, placement, hidden } = queue[i];
+    // Asked HERE rather than in a pass of its own, so the read is inside the
+    // budget and happens on a node this loop has reached. Gating is inherited,
+    // because the renderer prunes a gated node's whole subtree.
+    // `isPlainRecord` first: this walk accepts whatever the database returned,
+    // and a `null` among the nodes reaches here. Reading `visibility` off one
+    // throws, where the contract is an issue rather than an exception — the
+    // same guard the slot walk below already applies.
+    const gated = hidden || (isPlainRecord(node) && isConditionGated(node));
+    validateNode(node, path, state, gated);
+    checkNesting(node, path, placement, state);
+    enqueueChildren({ node, path, gated }, queue, maxNodes);
+  }
+}
+
+/**
+ * Put a node's slot children on the queue, each with the placement it inherits.
+ *
+ * Its own function because it answers a question the loop above does not: where
+ * a child SITS, which needs the container's name and the slot it is in. Reading
+ * that inline made the loop's own subject — one node, checked — hard to see
+ * past two levels of nesting.
+ */
+function enqueueChildren(
+  parent: { node: BlockNode; path: string; gated: boolean },
+  queue: QueuedNode[],
+  maxNodes: number
+): void {
+  const { node, path, gated } = parent;
+  if (!isPlainRecord(node) || !isPlainRecord(node.slots)) return;
+  // The container's placement for every child beneath it, read once.
+  //
+  // `isNodeType`, NOT a `typeof` check, and they are not the same boundary:
+  // `"columns"` and `"core/columns/"` are strings that no block can be
+  // named, so a weaker guard admits them as container NAMES and a restricted
+  // child is then refused against a name nothing could ever match. The
+  // predicate used here is the one that decides `invalid-node-type`, so a
+  // container reported as malformed is exactly a container this cannot name.
+  //
+  // Children are still walked and still checked for everything else. Only
+  // the one question that needs the container's name is recorded as
+  // unanswerable rather than answered from a name that does not exist.
+  // The container's name, resolved once; the SLOT differs per iteration, so
+  // the placement is built inside the loop. Hoisting it would carry one
+  // slot's name to every sibling slot's children and check each against the
+  // wrong allow-list — a refusal naming a slot the node is not in.
+  const containerType = isNodeType(node.type) ? node.type : undefined;
+  for (const [slot, children] of Object.entries(node.slots)) {
+    const childPlacement: Placement =
+      containerType === undefined
+        ? { at: "unnameable-container" }
+        : { at: "container", type: containerType, slot };
+    if (!Array.isArray(children)) continue;
+    const slotPath = pointer(pointer(path, "slots"), slot);
+    for (let c = 0; c < children.length && queue.length <= maxNodes; c++) {
+      queue.push({
+        node: children[c],
+        path: pointer(slotPath, c),
+        placement: childPlacement,
+        hidden: gated,
+      });
     }
   }
-
-  return { issues, survey };
 }
 
 /**
@@ -864,6 +1079,7 @@ interface NodeCheckState {
   seenIds: Map<string, string>;
   /** Non-empty DOM ids seen so far (from `cssId` or `attributes.id`) → pointer. */
   seenDomIds: Map<string, string>;
+
   /** Shared across the whole document, so the limit is not per node. */
   styleBudget: ReadyStyleIssueBudget;
   /**
@@ -876,23 +1092,21 @@ interface NodeCheckState {
   skipValueParsing: boolean;
 }
 
-function validateNode(
-  node: BlockNode,
+/**
+ * A node's id: present, non-empty, and unique across the whole document.
+ *
+ * Its own function because the node check is already at the complexity this
+ * repo's gate allows, and because "which id is this, and has it been seen" is a
+ * question with its own state — the seen-ids map — that nothing else there
+ * touches. Early returns rather than nesting, which says the same thing with
+ * one level less of it.
+ */
+function checkNodeId(
+  node: Record<string, unknown>,
   path: string,
   state: NodeCheckState
 ): void {
   const { issues } = state;
-  if (!isPlainRecord(node)) {
-    issues.push({
-      path,
-      code: "invalid-node",
-      severity: "error",
-      message: "A node must be an object.",
-    });
-    return;
-  }
-
-  // id: present, non-empty, unique across the whole document.
   if (typeof node.id !== "string" || node.id.length === 0) {
     issues.push({
       path: pointer(path, "id"),
@@ -900,22 +1114,29 @@ function validateNode(
       severity: "error",
       message: "Every node needs a non-empty string id.",
     });
-  } else {
-    const firstSeenAt = state.seenIds.get(node.id);
-    if (firstSeenAt !== undefined) {
-      issues.push({
-        path: pointer(path, "id"),
-        code: "duplicate-node-id",
-        severity: "error",
-        message: `Node id "${describeValue(node.id)}" is already used at ${firstSeenAt}.`,
-        suggestion: "Give every node a unique id.",
-      });
-    } else {
-      state.seenIds.set(node.id, pointer(path, "id"));
-    }
+    return;
   }
+  const firstSeenAt = state.seenIds.get(node.id);
+  if (firstSeenAt !== undefined) {
+    issues.push({
+      path: pointer(path, "id"),
+      code: "duplicate-node-id",
+      severity: "error",
+      message: `Node id "${describeValue(node.id)}" is already used at ${firstSeenAt}.`,
+      suggestion: "Give every node a unique id.",
+    });
+    return;
+  }
+  state.seenIds.set(node.id, pointer(path, "id"));
+}
 
-  // type: namespaced slug, and — if a registry is supplied — registered.
+/** A node's type: a namespaced slug, and — given a registry — registered. */
+function checkNodeType(
+  node: Record<string, unknown>,
+  path: string,
+  state: NodeCheckState
+): void {
+  const { issues } = state;
   if (!isNodeType(node.type)) {
     issues.push({
       path: pointer(path, "type"),
@@ -923,7 +1144,9 @@ function validateNode(
       severity: "error",
       message: `Node type "${describeValue(node.type)}" must be a namespaced slug like "core/heading".`,
     });
-  } else if (
+    return;
+  }
+  if (
     state.ctx.registry &&
     // Engine-owned synthetic types are not registrable blocks and so are never
     // present in a block registry; exempt them from the registration check.
@@ -938,6 +1161,132 @@ function validateNode(
       suggestion: "Register the block or remove the node.",
     });
   }
+}
+
+/**
+ * A node's provenance record, if it carries one.
+ *
+ * A document reaches storage by two roads — an op through `applyOp`, and a
+ * field write through this validator — and only the op road asked this. So an
+ * import or a script could persist `{ from: "pattern", id: "", digest: "" }`,
+ * which every later provenance reader takes at face value: a staleness check
+ * comparing against a pattern with no id answers confidently and wrongly, and a
+ * save-over restoring the DOM ids an insert renamed reads a record it cannot
+ * trust.
+ *
+ * Through {@link isBlockOrigin}, which is the op road's own predicate and lives
+ * beside the type it describes. A record one road admits and the other refuses
+ * is one that exists in the database and cannot be edited, so both ask the same
+ * question rather than two that agree for now.
+ *
+ * ERROR in both modes. Forgiving mode exists to keep a document READABLE when a
+ * future build wrote something this one does not understand; a half-written
+ * record is not a future value but a claim about history with a piece missing,
+ * and a reader cannot tell which piece.
+ *
+ * The asymmetry this closes is pre-existing and general rather than new: this
+ * validator does not check `migrationFailed` either. `origin` joins that set
+ * instead of creating it, and it is the one a planner now reads back.
+ */
+/**
+ * Whether a node's stored `origin` is one to report as malformed.
+ *
+ * The four-way reading comes from {@link readBlockOrigin}, beside the type, so
+ * this asks the guard's own question instead of naming its fields a second time
+ * — the reason it can tell `computed` from `malformed` without a parallel list
+ * to keep in step.
+ *
+ * `computed` is left alone. A field the guard consults being an accessor makes
+ * the record untrusted, but it may be perfectly well formed, and the document
+ * holding it is one `surveyDocument` refuses to measure and already reports
+ * `document-unreadable`. A second verdict naming this one field would send an
+ * author to repair something that may not be broken.
+ *
+ * `unreadable` is NOT left alone, and the difference is the whole point.
+ * Reflection can fail where an accessor cannot be missed: the survey walks the
+ * keys a record HAS, so a Proxy trap that throws only for an ABSENT field —
+ * `renamed`, say — is never triggered by it, and the document is reported
+ * perfectly readable. Deferring on that let `{ from: "pattern", id: "" }`
+ * through with no issue raised at all. Nothing can establish such a record is
+ * whole, so it is not treated as though something had.
+ */
+function reportsAMalformedOrigin(node: Record<string, unknown>): boolean {
+  const descriptor = ownOriginDescriptor(node);
+  if (descriptor === undefined || descriptor.get !== undefined) return false;
+  const origin: unknown = descriptor.value;
+  if (origin === undefined) return false;
+  const reading = readBlockOrigin(origin);
+  return reading === "malformed" || reading === "unreadable";
+}
+
+/**
+ * The node's own `origin` descriptor, or `undefined` when reflection fails.
+ *
+ * Reading a descriptor off the NODE can throw too — the node itself may be a
+ * Proxy — and that failure says nothing about the record, so there is nothing
+ * to report about one. The document is refused as unreadable by the survey.
+ */
+function ownOriginDescriptor(
+  node: Record<string, unknown>
+): PropertyDescriptor | undefined {
+  try {
+    return Object.getOwnPropertyDescriptor(node, "origin");
+  } catch {
+    return undefined;
+  }
+}
+
+function checkNodeOrigin(
+  node: Record<string, unknown>,
+  path: string,
+  issues: ValidationIssue[]
+): void {
+  // Through the DESCRIPTOR, never an ordinary read. `surveyDocument` refuses to
+  // invoke an accessor and already reports such a document `document-unreadable`
+  // — so reading one here runs the document's own code inside the check deciding
+  // whether to trust it, which is the rule `ops.ts` states about node fields.
+  // Measured before this: a throwing getter escaped `validate()` as a native
+  // error, and a benign one was invoked TWICE, once per read below.
+  //
+  // An accessor is left to the verdict that already covers it rather than given
+  // a second one here: a document whose fields compute themselves is refused as
+  // a whole, and reporting its `origin` as malformed would send an author to fix
+  // a record that may be perfectly well formed.
+  //
+  // An INHERITED `origin` is absent for the same reason it is elsewhere in this
+  // engine: `structuredClone` and object spreads copy own properties, so a value
+  // reached through the prototype is not what would be stored.
+  if (!reportsAMalformedOrigin(node)) return;
+  issues.push({
+    path: pointer(path, "origin"),
+    code: "invalid-origin",
+    severity: "error",
+    message:
+      "A node's origin must say where it came from, whole: a pattern needs an id and a digest, a component an id.",
+    suggestion: "Remove the record, or write it complete.",
+  });
+}
+
+function validateNode(
+  node: BlockNode,
+  path: string,
+  state: NodeCheckState,
+  hidden: boolean
+): void {
+  const { issues } = state;
+  if (!isPlainRecord(node)) {
+    issues.push({
+      path,
+      code: "invalid-node",
+      severity: "error",
+      message: "A node must be an object.",
+    });
+    return;
+  }
+
+  checkNodeId(node, path, state);
+  checkNodeType(node, path, state);
+  checkNodeOrigin(node, path, issues);
 
   // version: positive integer.
   if (!isNodeVersion(node.version)) {
@@ -972,7 +1321,7 @@ function validateNode(
   validateVisibility(node, path, state);
   validateBindings(node, path, issues);
   validateComponentInstance(node, path, issues);
-  validateDomIds(node, path, state);
+  validateDomIds(node, path, state, hidden);
 }
 
 /**
@@ -984,7 +1333,8 @@ function validateNode(
 function validateDomIds(
   node: BlockNode,
   path: string,
-  state: NodeCheckState
+  state: NodeCheckState,
+  hidden: boolean
 ): void {
   const report = (domId: string, at: string): void => {
     const firstAt = state.seenDomIds.get(domId);
@@ -1007,20 +1357,68 @@ function validateDomIds(
       severity: "error",
       message: "A node cssId must be a string.",
     });
-  } else if (typeof node.cssId === "string" && node.cssId.length > 0) {
-    report(node.cssId, pointer(path, "cssId"));
   }
+  // ONE id per node, through the rule the renderer follows and the composition
+  // planners ask. A node can spell an id twice and emits one, so counting both
+  // reported a collision the page cannot have: a node carrying `cssId:
+  // "actual"` beside `attributes.id: "hero"` renders only `actual`, and
+  // registering `hero` made an unrelated node's real `hero` a duplicate.
+  //
+  // Skipping only the spellings that are EQUAL, as this did, catches the
+  // narrowest case of that and leaves the rest — and it left a save that these
+  // planners permit producing a pattern this gate then refuses.
+  //
+  // A bag `validateAttributes` has already refused is one this walk must not
+  // ENUMERATE. `Object.entries` runs an accessor, so a throwing getter would
+  // escape `validate()` as a native error instead of an issue, and a
+  // side-effecting one would execute the document's own code inside the check
+  // deciding whether to trust it.
+  //
+  // The fallback is not a second copy of which spelling wins: with the bag
+  // unreadable, `cssId` is the only place an id can come from, and a string
+  // `cssId` shadows the bag anyway. The node is already reported as
+  // `invalid-attributes`, so nothing about it is being passed as sound.
+  // A node the renderer prunes emits no id, so it can collide with nothing.
+  // This is the case gating exists for: personalised variants of one section,
+  // each carrying the same anchor, with exactly one ever served — and reporting
+  // them as duplicates blocked publishing a page the planners now let an author
+  // save. The gate and the planners have to agree, or a save produces a pattern
+  // that cannot be published.
+  //
+  // What this cannot decide is the day an evaluator arrives and two gated nodes
+  // both match. That belongs to the evaluator, which alone can read the
+  // conditions; nothing here has them.
+  if (hidden) return;
+
+  const readable =
+    node.attributes === undefined || isPlainRecord(node.attributes);
+  const rendered = readable
+    ? renderedDomId(node)
+    : typeof node.cssId === "string" && node.cssId !== ""
+      ? node.cssId
+      : undefined;
+  if (rendered !== undefined)
+    report(rendered, domIdPointer(node, path, rendered));
+}
+
+/**
+ * Where the id a node renders is written, for the issue to point at.
+ *
+ * Derived from the VALUE {@link renderedDomId} chose rather than by asking
+ * which field wins a second time: a second reading of that rule is one that can
+ * disagree with the first, and then an issue names a field that is not the one
+ * carrying the id.
+ */
+function domIdPointer(node: BlockNode, path: string, rendered: string): string {
+  if (node.cssId === rendered) return pointer(path, "cssId");
   if (isPlainRecord(node.attributes)) {
-    for (const [key, value] of Object.entries(node.attributes)) {
-      if (key.toLowerCase() === "id" && typeof value === "string" && value) {
-        // One node setting the same id through both `cssId` and `attributes.id`
-        // renders a single id, so it must not be reported as colliding with
-        // itself; only a second NODE claiming the id is a duplicate.
-        if (value === node.cssId) continue;
-        report(value, pointer(pointer(path, "attributes"), key));
-      }
+    let key: string | undefined;
+    for (const [name, value] of Object.entries(node.attributes)) {
+      if (name.toLowerCase() === "id" && value === rendered) key = name;
     }
+    if (key !== undefined) return pointer(pointer(path, "attributes"), key);
   }
+  return pointer(path, "cssId");
 }
 
 function validateSlots(
@@ -1491,6 +1889,786 @@ function isConditionsShapeValid(conditions: unknown): boolean {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// The component definition envelope (`kind: "component"`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every node in the forest, by id.
+ *
+ * Its own bounded walk rather than a share of the main one. The envelope needs
+ * the WHOLE index before it can judge its first pointer, while the main walk
+ * reports as it goes — so reusing it would mean either checking pointers
+ * against a half-built index, or holding the envelope's issues back to the end
+ * and reordering the report. A second walk of a component document, bounded by
+ * the same snapshotted node cap, costs less than either.
+ */
+function nodesById(nodes: BlockNode[], maxNodes: number) {
+  const index = new Map<string, BlockNode>();
+  // The snapshotted node bound, so this walk and the survey that measured the
+  // document agree on how many nodes there are. A caller may back
+  // `DocumentLimits` with a getter, and two readings that disagree would build
+  // an index missing a node the survey counted — reported as a sound exposure
+  // pointing at nothing.
+  walkNodes(
+    nodes,
+    node => {
+      // First writer wins. A forest with a duplicated id is already reported by
+      // the main walk, and overwriting here would make the envelope's answer
+      // depend on traversal order for a document that is being refused anyway.
+      if (!index.has(node.id)) index.set(node.id, node);
+    },
+    { maxNodes }
+  );
+  return index;
+}
+
+/**
+ * Walk an untrusted array, bounded, without calling a method on it.
+ *
+ * Two hazards in one helper, because the envelope reads arrays a caller
+ * supplied and both apply to every one of them.
+ *
+ * BOUNDED, on the collection's own terms. The survey measures what
+ * `JSON.stringify` would emit, so a field carrying a `toJSON` returning `[]`
+ * is measured as two bytes while this reads the real array by ordinary
+ * property access — a document that passes a 200-byte survey can still hold a
+ * hundred thousand entries. Nothing upstream bounds what is read here.
+ *
+ * BY INDEX, never `forEach`. The array is a caller's object, so its `forEach`
+ * may be shadowed with a non-function, and validation would throw where its
+ * whole contract is to RETURN issues about malformed input.
+ *
+ * @returns false when the collection was refused for its size, so a caller
+ * skips the work rather than reporting a fault per entry on top of it.
+ */
+function eachBounded(
+  items: readonly unknown[],
+  path: string,
+  what: string,
+  issues: ValidationIssue[],
+  visit: (entry: unknown, index: number) => void
+): boolean {
+  if (!withinBudget(items.length, path, what, issues)) return false;
+  for (let i = 0; i < items.length; i += 1) visit(items[i], i);
+  return true;
+}
+
+/** Report once when a collection is too large to be worth walking. */
+function withinBudget(
+  size: number,
+  path: string,
+  what: string,
+  issues: ValidationIssue[]
+): boolean {
+  if (size <= MAX_ENVELOPE_ENTRIES) return true;
+  issues.push({
+    path,
+    code: "component-envelope-invalid",
+    severity: "error",
+    message: `A component declares ${size} ${what}, more than the ${MAX_ENVELOPE_ENTRIES} an envelope may hold.`,
+  });
+  return false;
+}
+
+/**
+ * The own keys of an untrusted record, or `null` when there are too many.
+ *
+ * Counted with `for...in` and stopped at the budget rather than materializing
+ * `Object.keys` first: a map with a hundred thousand keys would otherwise be
+ * enumerated into an array in full before anything could refuse it, which is
+ * the allocation the budget exists to prevent.
+ */
+function ownKeysBounded(
+  record: object,
+  path: string,
+  what: string,
+  issues: ValidationIssue[]
+): string[] | null {
+  const keys = boundedOwnKeys(record, MAX_ENVELOPE_ENTRIES);
+  if (keys !== null) return keys;
+  // The walk stops AT the cap and reports nothing itself, so the number named
+  // here is the smallest one that exceeds it rather than the record's real
+  // size — which is the point of stopping, and why the enumeration and the
+  // complaint are two functions.
+  withinBudget(MAX_ENVELOPE_ENTRIES + 1, path, what, issues);
+  return null;
+}
+
+/** One `exposed` entry, before anything about it has been checked. */
+type RawExposed = Record<string, unknown>;
+
+/** True when a record declares `key` itself rather than inheriting it. */
+function declares(record: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+/**
+ * Check a component definition's exposed properties, slots and variants.
+ *
+ * Every rule here is about a POINTER resolving or a field being present,
+ * because those are the faults the envelope introduces and the ones nothing
+ * downstream can report. A definition whose pointer names a deleted node still
+ * loads, still renders, and still offers the property in the inspector — where
+ * editing it writes an override keyed to an id that resolves to nothing, on
+ * every instance in the site. The failure surfaces as "my change did nothing",
+ * far from the definition that caused it.
+ *
+ * Errors, not warnings, and in both modes. Forgiving mode exists to keep a
+ * document READABLE when a future build wrote something this one does not
+ * understand; a dangling pointer is not a future value, it is a broken
+ * reference to this document's own tree.
+ */
+function validateComponentEnvelope(
+  doc: Record<string, unknown>,
+  nodes: BlockNode[],
+  maxNodes: number,
+  issues: ValidationIssue[]
+): void {
+  const index = nodesById(nodes, maxNodes);
+  const exposedIds = checkExposedList(doc.exposed, index, issues);
+  checkExposedSlots(doc.slots, index, issues);
+  checkVariants(doc.variants, exposedIds, issues);
+}
+
+/**
+ * The issues a component definition's ENVELOPE would be refused for, alone.
+ *
+ * The same walk {@link validateDocument} runs for a `kind: "component"`
+ * document, published so a planner can ask it before it proposes storing one.
+ *
+ * Narrow deliberately, and the narrowness is what makes it reachable from a
+ * planner at all. Full validation needs a breakpoint set, and a planner has
+ * none: breakpoints are the host's configuration and a plan is pure. The
+ * envelope rules need none of it — they resolve pointers against the
+ * document's own forest and nothing else, which is why this question can be
+ * asked in isolation where the style and class ones cannot.
+ *
+ * The alternative is a planner that re-implements "does this pointer resolve",
+ * and one rule spelled twice is the failure this package keeps paying for: the
+ * two readings agree until one moves, and the one that moves is the one nobody
+ * is looking at. A dry run that disagrees with the gate it predicts is worse
+ * than no dry run, because it is believed.
+ *
+ * Every issue it can return is an `error` in both modes — a dangling pointer
+ * is a broken reference to this document's own tree rather than a value a
+ * future build understands — so a caller may read a non-empty result as a
+ * refusal without inspecting severities.
+ *
+ * Empty for a document that is not a component, matching where the per-kind
+ * rules run: a pattern has no envelope to be wrong about, and answering
+ * otherwise would make "no issues" mean two different things.
+ *
+ * The node array is read defensively because this is a published entry point
+ * and the value reaching it comes from a stored row as often as from a typed
+ * caller. A corrupt forest is reported by the main walk; refusing to index it
+ * here would throw where this module promises to answer.
+ */
+export function componentEnvelopeIssues(
+  doc: BlockDocument,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): ValidationIssue[] {
+  // The DOCUMENT, before its kind is read off it. This is a published entry
+  // point whose own docblock names a stored row as an input, and a row can be
+  // `null` or a string — where dereferencing `.kind` throws a native error out
+  // of a function that promises a list. Whether such a document is READABLE at
+  // all is `validateDocument`'s question and a planner asks it separately; this
+  // one answers only about an envelope, and an unreadable document has none.
+  if (!isPlainRecord(doc) || doc.kind !== "component") return [];
+  const issues: ValidationIssue[] = [];
+  validateComponentEnvelope(
+    doc,
+    Array.isArray(doc.nodes) ? doc.nodes : [],
+    // Through the SAME rule the survey applies, because a bound that is not a
+    // number is not a bound: every comparison against `NaN` in the walk is
+    // false, so the index is built over the whole forest and a dangling pointer
+    // is reported as sound — with the resource bound gone as well as the
+    // verdict wrong. `validateDocument`, the gate this predicts, refuses those
+    // limits outright, so accepting them here is the dry run disagreeing with
+    // the thing it exists to foresee.
+    boundedLimit(limits.maxNodes, "maxNodes", "componentEnvelopeIssues"),
+    issues
+  );
+  return issues;
+}
+
+/**
+ * The `exposed` list, returning the ids it declared.
+ *
+ * The ids are the return value because the variants below address them: a
+ * variant preset naming something nothing exposes is applied by no one, and
+ * only this pass knows what was named.
+ */
+function checkExposedList(
+  exposed: unknown,
+  index: Map<string, BlockNode>,
+  issues: ValidationIssue[]
+): ReadonlySet<string> {
+  const exposedIds = new Set<string>();
+  if (exposed === undefined) return exposedIds;
+
+  if (!Array.isArray(exposed)) {
+    issues.push({
+      path: "/exposed",
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: "A component's exposed field must be an array.",
+    });
+    return exposedIds;
+  }
+
+  eachBounded(exposed, "/exposed", "exposed properties", issues, (entry, i) => {
+    checkExposedProperty(entry, `/exposed/${i}`, index, exposedIds, issues);
+  });
+  return exposedIds;
+}
+
+/** The `slots` map, keyed by the id an instance addresses its content with. */
+function checkExposedSlots(
+  slots: unknown,
+  index: Map<string, BlockNode>,
+  issues: ValidationIssue[]
+): void {
+  if (slots === undefined) return;
+
+  if (!isPlainRecord(slots)) {
+    issues.push({
+      path: "/slots",
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: "A component's slots field must be an object keyed by slot id.",
+    });
+    return;
+  }
+
+  const ids = ownKeysBounded(slots, "/slots", "exposed slots", issues);
+  if (ids === null) return;
+
+  for (const id of ids) {
+    checkExposedSlot(slots[id], id, pointer("/slots", id), index, issues);
+  }
+}
+
+/**
+ * One exposed property.
+ *
+ * Split three ways — identity, pointer, options — rather than checked in one
+ * pass, because the id has to be established before anything else can be
+ * REPORTED. Every message below names the exposure, and an entry with no
+ * usable id is one the author cannot pick out of a list whose entries
+ * otherwise look alike.
+ */
+function checkExposedProperty(
+  entry: unknown,
+  path: string,
+  index: Map<string, BlockNode>,
+  seen: Set<string>,
+  issues: ValidationIssue[]
+): void {
+  if (!isPlainRecord(entry)) {
+    issues.push({
+      path,
+      code: "exposed-property-invalid",
+      severity: "error",
+      message: "An exposed property must be an object.",
+    });
+    return;
+  }
+
+  const raw: RawExposed = entry;
+  const id = checkExposedIdentity(raw, path, seen, issues);
+  if (id === undefined) return;
+
+  checkExposedPointer(raw, id, path, index, issues);
+  checkExposedOptions(raw.options, raw.type, id, path, issues);
+}
+
+/**
+ * The id, its uniqueness and the label; returns the id when it is usable.
+ *
+ * `undefined` stops the caller rather than letting it report the remaining
+ * faults against an entry it has no way to name.
+ */
+function checkExposedIdentity(
+  raw: RawExposed,
+  path: string,
+  seen: Set<string>,
+  issues: ValidationIssue[]
+): string | undefined {
+  const id = raw.id;
+  if (typeof id !== "string" || id === "") {
+    issues.push({
+      path: pointer(path, "id"),
+      code: "exposed-property-invalid",
+      severity: "error",
+      message: "An exposed property needs a non-empty id.",
+    });
+    return undefined;
+  }
+
+  // Reported against the SECOND entry, so one message names one thing to fix
+  // rather than two that each read as unrelated.
+  if (seen.has(id)) {
+    issues.push({
+      path: pointer(path, "id"),
+      code: "exposed-duplicate-id",
+      severity: "error",
+      message: `Two exposed properties share the id "${id}".`,
+      suggestion: "Give each exposed property its own id.",
+    });
+  }
+  seen.add(id);
+
+  if (typeof raw.label !== "string" || raw.label === "") {
+    issues.push({
+      path: pointer(path, "label"),
+      code: "exposed-property-invalid",
+      severity: "error",
+      message: `Exposed property "${id}" needs a non-empty label.`,
+    });
+  }
+
+  return id;
+}
+
+/** Where the exposure points: its type, its node, and the prop path on it. */
+function checkExposedPointer(
+  raw: RawExposed,
+  id: string,
+  path: string,
+  index: Map<string, BlockNode>,
+  issues: ValidationIssue[]
+): void {
+  const type = raw.type;
+  if (
+    !EXPOSED_PROPERTY_TYPES.includes(
+      type as (typeof EXPOSED_PROPERTY_TYPES)[number]
+    )
+  ) {
+    issues.push({
+      path: pointer(path, "type"),
+      code: "exposed-property-invalid",
+      severity: "error",
+      message: `Exposed property "${id}" declares an unknown type ${describeValue(type)}.`,
+      suggestion: `Use one of: ${EXPOSED_PROPERTY_TYPES.join(", ")}.`,
+    });
+  }
+
+  const nodeId = raw.nodeId;
+  if (typeof nodeId !== "string" || !index.has(nodeId)) {
+    issues.push({
+      path: pointer(path, "nodeId"),
+      code: "exposed-node-missing",
+      severity: "error",
+      message: `Exposed property "${id}" points at node ${describeValue(nodeId)}, which this document does not contain.`,
+      suggestion:
+        "Point it at a node in this component's tree, or remove the exposure.",
+    });
+  }
+
+  // The GRAMMAR only. Whether the path names a prop the node's block actually
+  // declares is a question about the block's schema, and the schema is not
+  // reachable from here — `BlockTypeLookup` answers `has(type)` and nothing
+  // else. Checking the path against `node.props` instead would refuse a sound
+  // exposure of any prop whose value comes from the block's default, since a
+  // defaulted prop is absent from the stored node.
+  const propPath = raw.propPath;
+  if (typeof propPath !== "string" || !BIND_PATH_RE.test(propPath)) {
+    issues.push({
+      path: pointer(path, "propPath"),
+      code: "exposed-path-invalid",
+      severity: "error",
+      message: `Exposed property "${id}" has prop path ${describeValue(propPath)}.`,
+      suggestion: 'Use a dot-joined chain of field identifiers, e.g. "text".',
+    });
+  }
+}
+
+/**
+ * The options list, which only a `select` may carry.
+ *
+ * Checked in both directions. Options on a non-select are dead configuration
+ * the inspector will not read, and a select WITHOUT them offers a control with
+ * nothing to choose — which reads to an author as a broken editor rather than
+ * as an incomplete definition.
+ */
+function checkExposedOptions(
+  options: unknown,
+  type: unknown,
+  id: string,
+  path: string,
+  issues: ValidationIssue[]
+): void {
+  const isSelect = type === "select";
+
+  if (!isSelect) {
+    if (options !== undefined) {
+      issues.push({
+        path: pointer(path, "options"),
+        code: "exposed-options-invalid",
+        severity: "error",
+        message: `Exposed property "${id}" declares options but is not a select.`,
+      });
+    }
+    return;
+  }
+
+  if (!Array.isArray(options) || options.length === 0) {
+    issues.push({
+      path: pointer(path, "options"),
+      code: "exposed-options-invalid",
+      severity: "error",
+      message: `Exposed property "${id}" is a select and needs at least one option.`,
+    });
+    return;
+  }
+
+  const at = pointer(path, "options");
+  const seen = new Set<string>();
+  eachBounded(options, at, "select options", issues, (option, i) => {
+    if (
+      !isPlainRecord(option) ||
+      typeof option.value !== "string" ||
+      typeof option.label !== "string"
+    ) {
+      issues.push({
+        // One segment per call. `pointer` escapes its token whole, so a single
+        // call with "options/0" emits `options~10` — a pointer that resolves
+        // to nothing, in the field whose purpose is to let a machine locate
+        // the value.
+        path: pointer(at, i),
+        code: "exposed-options-invalid",
+        severity: "error",
+        message: `An option of exposed property "${id}" needs a string value and label.`,
+      });
+      return;
+    }
+
+    // An override stores only the VALUE, so two options sharing one cannot be
+    // told apart after the author chooses: the menu shows two labels and both
+    // resolve identically, with nothing recording which was picked.
+    if (seen.has(option.value)) {
+      issues.push({
+        path: pointer(at, i),
+        code: "exposed-options-invalid",
+        severity: "error",
+        message: `Exposed property "${id}" offers the value "${option.value}" twice.`,
+        suggestion: "Give each option its own value.",
+      });
+      return;
+    }
+    seen.add(option.value);
+  });
+}
+
+/** One exposed slot: its metadata, its node, and the region on that node. */
+function checkExposedSlot(
+  entry: unknown,
+  id: string,
+  path: string,
+  index: Map<string, BlockNode>,
+  issues: ValidationIssue[]
+): void {
+  // The map KEY is the slot's id, and an empty one is unusable rather than
+  // merely odd: instance content is stored under it in the instance node's own
+  // `slots`, and the builder's operation boundary refuses an empty slot name —
+  // so an exposure accepted here is one no author can ever fill.
+  if (id === "") {
+    issues.push({
+      path,
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: "An exposed slot needs a non-empty id.",
+    });
+    return;
+  }
+
+  if (!isPlainRecord(entry)) {
+    issues.push({
+      path,
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Exposed slot "${id}" must be an object.`,
+    });
+    return;
+  }
+
+  checkExposedSlotMetadata(entry, id, path, issues);
+
+  const nodeId = entry.nodeId;
+  const node = typeof nodeId === "string" ? index.get(nodeId) : undefined;
+  if (node === undefined) {
+    issues.push({
+      path: pointer(path, "nodeId"),
+      code: "exposed-node-missing",
+      severity: "error",
+      message: `Exposed slot "${id}" points at node ${describeValue(nodeId)}, which this document does not contain.`,
+    });
+    return;
+  }
+
+  checkSlotOnNode(entry.slot, node, id, path, issues);
+}
+
+/**
+ * The label the layers panel shows, and the block types the slot accepts.
+ *
+ * Both are read straight out of the stored envelope by consumers that treat
+ * the declared types as guarantees: a missing label renders as `undefined` in
+ * the panel, and an `allow` that is a bare string is iterated character by
+ * character, silently permitting nothing.
+ */
+function checkExposedSlotMetadata(
+  entry: Record<string, unknown>,
+  id: string,
+  path: string,
+  issues: ValidationIssue[]
+): void {
+  if (typeof entry.label !== "string" || entry.label === "") {
+    issues.push({
+      path: pointer(path, "label"),
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Exposed slot "${id}" needs a non-empty label.`,
+    });
+  }
+
+  const allow = entry.allow;
+  if (allow === undefined) return;
+  if (!Array.isArray(allow)) {
+    issues.push({
+      path: pointer(path, "allow"),
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Exposed slot "${id}" allow must be an array of block types.`,
+    });
+    return;
+  }
+
+  const at = pointer(path, "allow");
+  eachBounded(allow, at, "allowed block types", issues, (type, i) => {
+    // The same predicate the rest of this file holds a node's `type` to. A
+    // second, weaker definition here would accept `"not-a-block"` as a block
+    // type in the one place the field's whole purpose is naming block types.
+    if (isBlockType(type)) return;
+    issues.push({
+      path: pointer(at, i),
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Exposed slot "${id}" allows ${describeValue(type)}, which is not a block type.`,
+    });
+  });
+}
+
+/**
+ * That the node holds the named region.
+ *
+ * Answered from the node's STORED slots, which is what this package can see: a
+ * block's declared slots live in its definition, and validation is given a
+ * `BlockTypeLookup` that answers `has(type)` and nothing else. So this catches
+ * the case it can — a slot key the node's own content does not use, which is
+ * what a renamed container leaves behind — and cannot catch a slot that the
+ * block definition no longer declares but whose content is still stored.
+ *
+ * A node with NO slots map is passed, deliberately. `makeNode` sets `slots`
+ * only when a caller supplies content and `expandSlotDefaults` returns nothing
+ * for a container with no seeded children, so a declared, still-empty region
+ * is stored as an absent map — indistinguishable from a region that never
+ * existed. Refusing that would reject a sound definition for exposing a slot
+ * the author has not filled yet, which is the ordinary state of a container
+ * the moment it is created.
+ *
+ * An OWN property when there is a map. `slots` is an ordinary object, so
+ * `"toString" in slots` is true of every node, and a slot by that name would
+ * otherwise pass and then resolve to nothing.
+ */
+function checkSlotOnNode(
+  slot: unknown,
+  node: BlockNode,
+  id: string,
+  path: string,
+  issues: ValidationIssue[]
+): void {
+  // The NAME first, before any question about the node. A slot field that is
+  // missing, numeric or empty is wrong whatever the node holds, and answering
+  // the node question first let an empty container accept `undefined` as a
+  // region name — handing a consumer the one value the contract promises it
+  // will never see.
+  if (typeof slot !== "string" || slot === "") {
+    issues.push({
+      path: pointer(path, "slot"),
+      code: "exposed-slot-missing",
+      severity: "error",
+      message: `Exposed slot "${id}" names ${describeValue(slot)}, which is not a slot name.`,
+    });
+    return;
+  }
+
+  // A stored `slots` that is not a record is the main node walk's to report as
+  // `invalid-slots`. Reading it here first would reach `hasOwnProperty.call`
+  // with `null` and throw — turning a malformed import, which this function
+  // exists to describe, into a crash that describes nothing.
+  const declared = node.slots;
+  if (!isPlainRecord(declared)) return;
+  if (declares(declared, slot)) return;
+
+  issues.push({
+    path: pointer(path, "slot"),
+    code: "exposed-slot-missing",
+    severity: "error",
+    message: `Exposed slot "${id}" names slot "${slot}", which node "${node.id}" does not hold.`,
+    suggestion: `Name one of: ${Object.keys(declared).join(", ") || "(none)"}.`,
+  });
+}
+
+/**
+ * Variants, checked against what the definition actually exposes.
+ *
+ * A variant is a preset of overrides, so every key it sets has to name
+ * something an instance could set itself. A key naming nothing is applied by
+ * no one and reported by nothing: the variant appears in the picker, selecting
+ * it changes nothing, and the definition looks broken rather than
+ * misconfigured.
+ */
+function checkVariants(
+  variants: unknown,
+  exposedIds: ReadonlySet<string>,
+  issues: ValidationIssue[]
+): void {
+  if (variants === undefined) return;
+  if (!isPlainRecord(variants)) {
+    issues.push({
+      path: "/variants",
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: "A component's variants field must be an object keyed by name.",
+    });
+    return;
+  }
+
+  const names = ownKeysBounded(variants, "/variants", "variants", issues);
+  if (names === null) return;
+
+  for (const name of names) {
+    checkVariant(name, variants[name], exposedIds, issues);
+  }
+}
+
+/** One variant: its label, and the exposures its overrides address. */
+function checkVariant(
+  name: string,
+  variant: unknown,
+  exposedIds: ReadonlySet<string>,
+  issues: ValidationIssue[]
+): void {
+  const at = pointer("/variants", name);
+  if (!isPlainRecord(variant)) {
+    issues.push({
+      path: at,
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Variant "${name}" must be an object.`,
+    });
+    return;
+  }
+
+  if (typeof variant.label !== "string" || variant.label === "") {
+    issues.push({
+      path: pointer(at, "label"),
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Variant "${name}" needs a non-empty label.`,
+    });
+  }
+
+  // Required AND non-empty. A variant is a preset, and the picker offering one
+  // that presets nothing is a control that does nothing when chosen. An empty
+  // map is that control exactly, so checking only the type would state the
+  // invariant in the comment and enforce a weaker one in the code.
+  if (!isPlainRecord(variant.overrides)) {
+    issues.push({
+      path: pointer(at, "overrides"),
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Variant "${name}" needs an overrides object keyed by exposed id.`,
+    });
+  } else {
+    // Bounded HERE, not only at the variant map. `variants` being within the
+    // budget says nothing about one variant's overrides, so a single variant
+    // holding a hundred thousand keys reached both the emptiness check and the
+    // per-key walk below — twice — through a cap that had already passed.
+    const overrideKeys = ownKeysBounded(
+      variant.overrides,
+      pointer(at, "overrides"),
+      "variant overrides",
+      issues
+    );
+    if (overrideKeys === null) return;
+
+    if (overrideKeys.length === 0) {
+      issues.push({
+        path: pointer(at, "overrides"),
+        code: "component-envelope-invalid",
+        severity: "error",
+        message: `Variant "${name}" presets nothing, so selecting it would change nothing.`,
+        suggestion: "Give it at least one override, or remove the variant.",
+      });
+      return;
+    }
+
+    checkVariantTargets(
+      overrideKeys,
+      exposedIds,
+      pointer(at, "overrides"),
+      key =>
+        `Variant "${name}" overrides "${key}", which this component does not expose.`,
+      issues
+    );
+  }
+
+  // `slots` carries no content in this format yet, so a variant naming one can
+  // only be addressing a slot id — see `Variant` in `document.ts`.
+  if (variant.slots !== undefined) {
+    issues.push({
+      path: pointer(at, "slots"),
+      code: "component-envelope-invalid",
+      severity: "error",
+      message: `Variant "${name}" declares slot content, which this format version does not carry.`,
+      suggestion: "Put the content in the instance's own slots.",
+    });
+  }
+}
+
+/**
+ * A variant's override map, against the ids the definition exposes.
+ *
+ * The keys are the whole check: a value may be anything an exposed property
+ * holds, and props are unconstrained, so there is nothing narrower to say
+ * about one than that its key names something.
+ */
+function checkVariantTargets(
+  keys: readonly string[],
+  known: ReadonlySet<string>,
+  at: string,
+  message: (key: string) => string,
+  issues: ValidationIssue[]
+): void {
+  // Takes the KEYS a bounded read already produced, rather than the map. Given
+  // the map it would enumerate a second time, so one collection would be
+  // counted once and walked twice — and the second walk had no bound at all.
+  for (const key of keys) {
+    if (known.has(key)) continue;
+    issues.push({
+      // One segment per call: `pointer` escapes its token whole, so passing
+      // "overrides/missing" emits `overrides~1missing`, which resolves to
+      // nothing.
+      path: pointer(at, key),
+      code: "variant-unknown-target",
+      severity: "error",
+      message: message(key),
+    });
+  }
+}
 /**
  * A binding path is a dot-joined chain of field identifiers, e.g. "title" or
  * "author.name". This rejects expression-like or otherwise malformed strings so
@@ -1601,6 +2779,24 @@ function validateComponentInstance(
       severity: "error",
       message:
         "A component-instance node must set props.componentId to the component's id.",
+    });
+  }
+
+  // `overrides` is a MAP keyed by exposed id, and only the shape is checkable
+  // here: which ids exist is a property of a definition this document does not
+  // carry. The shape still has to be refused, because a resolver enumerating
+  // it either throws on a string and an array, or reads their indices as
+  // exposure ids and applies values to properties nobody named.
+  //
+  // Only when present. Absent means the instance overrides nothing, which is
+  // the ordinary state of a freshly placed component.
+  const overrides = node.props.overrides;
+  if (overrides !== undefined && !isPlainRecord(overrides)) {
+    issues.push({
+      path: pointer(pointer(path, "props"), "overrides"),
+      code: "invalid-component-instance",
+      severity: "error",
+      message: `A component instance's props.overrides must be an object keyed by exposed id, not ${describeValue(overrides)}.`,
     });
   }
 }

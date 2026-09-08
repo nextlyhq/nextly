@@ -6,6 +6,7 @@ import { and, eq, gt, lt, sql } from "drizzle-orm";
 import { getAuthLogger } from "../../../lib/logger";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
+import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 
 // Rate-limited error logging to prevent log flooding on repeated cache write failures
 const errorLogRateLimiter = new Map<string, number>();
@@ -289,7 +290,7 @@ export class PermissionCacheService extends BaseService {
         .set({ expiresAt: new Date() })
         .where(eq(userPermissionCache.userId, userId));
 
-      const invalidatedCount = result.rowCount ?? 0;
+      const invalidatedCount = affectedRowCount(result, this.dialect);
 
       if (process.env.DEBUG_CACHE === "1") {
         console.log("[cache][dbg] invalidateByUser", {
@@ -370,7 +371,7 @@ export class PermissionCacheService extends BaseService {
         .set({ expiresAt: new Date() })
         .where(containsRoleClause);
 
-      const invalidatedCount = result.rowCount ?? 0;
+      const invalidatedCount = affectedRowCount(result, this.dialect);
 
       if (process.env.DEBUG_CACHE === "1") {
         console.log("[cache][dbg] invalidateByRole", {
@@ -411,7 +412,7 @@ export class PermissionCacheService extends BaseService {
         .delete(userPermissionCache)
         .where(lt(userPermissionCache.expiresAt, now));
 
-      const deletedCount = result.rowCount ?? 0;
+      const deletedCount = affectedRowCount(result, this.dialect);
 
       if (process.env.DEBUG_CACHE === "1" || deletedCount > 0) {
         console.log("[cache][info] cleanupExpired", {

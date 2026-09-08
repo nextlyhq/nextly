@@ -1,16 +1,18 @@
-"use client";
-
-import {
-  CommandPalette,
-  ErrorBoundary,
-  QueryProvider,
-  ThemeProvider,
-} from "@nextlyhq/admin";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./globals.css";
 
 /**
+ * The document shell, and nothing else.
+ *
+ * A server component, which is what keeps a public page's payload to what that
+ * page actually needs. The admin's client runtime — theme, query cache, error
+ * boundary, command palette — is mounted by the layouts of the surfaces that
+ * use it, because a root layout reaches every URL in the app and a rendered
+ * blocks page has no use for any of it.
+ *
+ * ## Why the faces are stylesheet imports
+ *
  * The faces are imported as STYLESHEETS from packages in `node_modules`, rather
  * than fetched from fonts.googleapis.com by `next/font/google` while
  * `next build` runs — which made every build depend on reaching a third party
@@ -25,13 +27,16 @@ import "./globals.css";
  *
  * The trade is `next/font`'s metric-adjusted fallback, so text can shift
  * slightly as the face arrives. The families are bound to this app's `--font-*`
- * variables in `globals.css`, which is what every rule downstream reads. *
+ * variables in `globals.css`, which is what every rule downstream reads.
+ *
  * Importing the package root ships every subset the face offers — Latin, Latin
  * Extended, Cyrillic, Vietnamese — but each `@font-face` carries a
  * `unicode-range`, so a browser downloads only the subsets the page actually
  * uses. The deployed bundle is larger than a single hand-picked file; what a
  * reader fetches is not, and a page in Cyrillic now gets its face instead of a
  * fallback.
+ *
+ * @module app/layout
  */
 export default function RootLayout({
   children,
@@ -65,21 +70,7 @@ export default function RootLayout({
        * @see https://react.dev/link/hydration-mismatch
        */}
       <body className="antialiased" suppressHydrationWarning>
-        <ThemeProvider>
-          <ErrorBoundary
-            onError={(error, errorInfo) => {
-              // Log errors to console in development
-              // In production, this would integrate with error tracking services
-              // (Sentry, LogRocket, etc.)
-              console.error("Error boundary caught error:", error, errorInfo);
-            }}
-          >
-            <QueryProvider>
-              {children}
-              <CommandPalette />
-            </QueryProvider>
-          </ErrorBoundary>
-        </ThemeProvider>
+        {children}
       </body>
     </html>
   );

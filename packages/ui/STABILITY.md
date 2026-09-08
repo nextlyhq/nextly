@@ -86,9 +86,16 @@ Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialo
 `Progress`, `ResizablePanelGroup`/`ResizablePanel`/`ResizableHandle`, `Separator`,
 `Skeleton`, `Slider`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`,
 `TreeView`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`,
-`PageShell`, `Bleed`, `PageHeader`),
+`PageShell`, `Bleed`, `PageHeader`, `SHELL_MEASURE`),
 `Toaster` and the shortcut manager (`ShortcutProvider`, `ShortcutScope`, `useShortcuts`,
 `useShortcutManager`, `useActiveShortcuts`, `createShortcutManager`, `parseKeys`).
+
+`SHELL_MEASURE` is the width-to-length mapping `PageShell` applies, exported because a
+surface whose CONTENT carries the measure — an editor that seats a rail beside its
+fields, so the page cannot cap the two together — needs the same value as a CSS length.
+The alternative is a second table naming the same tokens, which drifts silently because
+each copy reads correctly beside its own neighbours. Exported so there is one answer
+rather than two that happen to agree.
 
 `Slider` (with `SliderThumbProps`) joins them for the inspector: a bounded numeric property — opacity, blur radius,
 letter spacing, a colour's alpha — is the single most repeated control in an editing surface,

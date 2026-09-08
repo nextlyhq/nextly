@@ -19,6 +19,16 @@ export const ROUTES = {
   // Media routes
   MEDIA: "/admin/media",
 
+  // Translations
+  TRANSLATIONS: "/admin/translations",
+
+  // Content releases: a batch of documents that goes live at one instant.
+  // Top-level rather than nested under a collection, because a release spans
+  // collections and Singles and is the only shape that answers "what is going
+  // live on Friday?" without starting from a document.
+  RELEASES: "/admin/releases",
+  RELEASES_DETAIL: "/admin/releases/[id]",
+
   // ============================================================
   // Builder routes (schema management)
   //
@@ -106,6 +116,10 @@ export const ROUTES = {
   SETTINGS_WEBHOOKS_DELIVERIES: "/admin/settings/webhooks/[id]/deliveries",
   SETTINGS_WEBHOOKS_DELIVERY_DETAIL:
     "/admin/settings/webhooks/[id]/deliveries/[deliveryId]",
+  // Background jobs: the queue's recent history, read-only. Under settings
+  // rather than in the rail because it is machinery an operator watches, not
+  // editorial work — the same reasoning that puts webhooks there.
+  SETTINGS_BACKGROUND_JOBS: "/admin/settings/background-jobs",
   SETTINGS_IMAGE_SIZES: "/admin/settings/image-sizes",
   SETTINGS_IMAGE_SIZES_CREATE: "/admin/settings/image-sizes/create",
   SETTINGS_IMAGE_SIZES_EDIT: "/admin/settings/image-sizes/edit/[id]",

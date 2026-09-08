@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./globals.css";
+import { SITE_URL } from "@/lib/site-url";
 
 /**
  * The faces are imported as STYLESHEETS from packages in `node_modules`, rather
@@ -34,9 +35,7 @@ import "./globals.css";
  * `https://yourblog.com`). The localhost fallback keeps dev working.
  */
 export const metadata: Metadata = {
-  metadataBase: new URL(
-    process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"
-  ),
+  metadataBase: new URL(SITE_URL),
   title: { default: "Nextly", template: "%s — Nextly" },
   description: "A site built with Nextly.",
 };

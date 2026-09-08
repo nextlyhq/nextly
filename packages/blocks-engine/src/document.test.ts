@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import * as entry from "./index";
 
-import type { BlockDocument } from "./document";
+import type { BlockDocument, BlockNode } from "./document";
+import { renderedDomId, renderedDomIdIn } from "./document";
 import {
   COMPONENT_INSTANCE_TYPE,
+  isBlockOrigin,
+  patternRenames,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   isComponentInstance,
@@ -212,5 +215,253 @@ describe("the block-type predicate", () => {
     expect(`core/${"a".repeat(entry.MAX_BLOCK_TYPE_LENGTH - 4)}`).toHaveLength(
       entry.MAX_BLOCK_TYPE_LENGTH + 1
     );
+  });
+});
+
+describe("renderedDomId: which of a node's two spellings reaches the page", () => {
+  const bare = (extra: Record<string, unknown>) =>
+    ({
+      id: "n",
+      type: "core/box",
+      version: 1,
+      props: {},
+      ...extra,
+    }) as BlockNode;
+
+  it("prefers a non-empty cssId, which overwrites the bag", () => {
+    expect(
+      renderedDomId(bare({ cssId: "actual", attributes: { id: "hero" } }))
+    ).toBe("actual");
+  });
+
+  it("treats an EMPTY string cssId as shadowing, emitting nothing reachable", () => {
+    // The renderer sets `id=""`, which no anchor, label or selector reaches —
+    // and the bag's value is overwritten, so it does not render either.
+    expect(
+      renderedDomId(bare({ cssId: "", attributes: { id: "hero" } }))
+    ).toBeUndefined();
+  });
+
+  it("lets the bag through when cssId is NOT a string", () => {
+    // The renderer normalises a non-string cssId to undefined
+    // (`typeof node.cssId === "string" ? node.cssId : undefined`) and only then
+    // decides whether to overwrite — so the bag is what renders. Reading this
+    // as "any cssId shadows" costs a real duplicate id on the page.
+    expect(
+      renderedDomId(bare({ cssId: null, attributes: { id: "hero" } }))
+    ).toBe("hero");
+    expect(renderedDomId(bare({ cssId: 7, attributes: { id: "hero" } }))).toBe(
+      "hero"
+    );
+  });
+
+  it("folds the attribute name, because HTML does", () => {
+    expect(renderedDomId(bare({ attributes: { ID: "hero" } }))).toBe("hero");
+  });
+
+  it("lets a trailing EMPTY case variant overwrite an earlier one", () => {
+    // The renderer lowercases each key and assigns in turn, so
+    // `{ id: "hero", ID: "" }` leaves the element with `id=""`. Skipping the
+    // empty one keeps `hero` and reports an id that does not render — which
+    // then makes a copy rename itself away from an id nothing owns.
+    expect(
+      renderedDomId(bare({ attributes: { id: "hero", ID: "" } }))
+    ).toBeUndefined();
+  });
+
+  it("lets a trailing NON-empty variant win too", () => {
+    // The control. "Ignore empty values entirely" passes the case above only by
+    // accident; "last one wins, whatever it holds" is the rule.
+    expect(renderedDomId(bare({ attributes: { id: "", ID: "hero" } }))).toBe(
+      "hero"
+    );
+  });
+
+  it("reads a bag the RENDERER would read, not only a plain record", () => {
+    // The renderer does `Object.entries(attributes)` on any non-array object,
+    // so a class instance with an own `id` puts that id on the page. Narrowing
+    // to a plain record reported no id, and an insert then kept an incoming id
+    // the destination was already rendering.
+    class Bag {
+      id = "hero";
+    }
+    expect(renderedDomId(bare({ attributes: new Bag() }))).toBe("hero");
+    // Still absent for the shapes the renderer treats as absent.
+    expect(renderedDomIdIn(null)).toBeUndefined();
+    expect(renderedDomIdIn(["id"])).toBeUndefined();
+  });
+
+  it("asks the bag alone the same way", () => {
+    // The narrower question a surface asks when it needs to know whether an
+    // empty bag id would SHADOW something.
+    expect(renderedDomIdIn({ id: "hero", ID: "" })).toBe("");
+    expect(renderedDomIdIn({ id: "", ID: "hero" })).toBe("hero");
+    expect(renderedDomIdIn(null)).toBeUndefined();
+    expect(renderedDomIdIn(["id"])).toBeUndefined();
+  });
+
+  it("reports none when the node spells none", () => {
+    expect(renderedDomId(bare({}))).toBeUndefined();
+    expect(renderedDomId(bare({ attributes: { id: "" } }))).toBeUndefined();
+  });
+});
+
+/** A rename map whose only entry is an accessor. */
+function computedRenameEntry(): Record<string, unknown> {
+  const renamed: Record<string, unknown> = {};
+  Object.defineProperty(renamed, "authored", {
+    enumerable: true,
+    get() {
+      throw new Error("boom");
+    },
+  });
+  return renamed;
+}
+
+describe("a provenance record's rename map", () => {
+  const base = { from: "pattern" as const, id: "p1", digest: "d1" };
+
+  it("accepts a record with no rename map", () => {
+    // The migration path, and the control for every refusal below: a record
+    // written before this field existed is still whole.
+    expect(isBlockOrigin(base)).toBe(true);
+  });
+
+  it("accepts a well-formed map", () => {
+    expect(
+      isBlockOrigin({ ...base, renamed: { pricing: "pricing-a1b2" } })
+    ).toBe(true);
+  });
+
+  it.each([
+    ["not a record", "pricing"],
+    ["an array", ["pricing"]],
+    ["null", null],
+    ["a non-string current id", { pricing: 3 }],
+    ["an empty current id", { pricing: "" }],
+    ["an empty original", { "": "pricing" }],
+    ["two sources claiming one current id", { a: "same", b: "same" }],
+    ["an entry that computes itself", computedRenameEntry()],
+  ])("refuses %s", (_name, renamed) => {
+    // A half-record is read as "these are the originals" and puts back an id
+    // that was never there, which is worse than having no record at all — the
+    // same reason a pattern origin without a digest is refused.
+    expect(isBlockOrigin({ ...base, renamed })).toBe(false);
+  });
+
+  it.each(["id", "from", "digest", "renamed"])(
+    "refuses a record whose %s computes itself, without running it",
+    field => {
+      // Every field of a provenance record is data a caller supplied — an
+      // import, a script, an in-process edit — and this is the published guard
+      // that decides whether to trust it. Reading a field with an ordinary
+      // property access runs the caller's code INSIDE that decision: a throwing
+      // getter escaped as a native error rather than the `false` this promises,
+      // and a side-effecting one executed on the way past. Measured, all four
+      // fields did that; only the entries INSIDE the map were descriptor-read.
+      let reads = 0;
+      const origin: Record<string, unknown> = { ...base };
+      Object.defineProperty(origin, field, {
+        enumerable: true,
+        configurable: true,
+        get() {
+          reads += 1;
+          throw new Error("a provenance field must never be invoked");
+        },
+      });
+
+      expect(isBlockOrigin(origin)).toBe(false);
+      expect(reads).toBe(0);
+    }
+  );
+
+  it("refuses a record whose renamed is a set-only accessor", () => {
+    // Absent and COMPUTED are different answers and both read back as
+    // `undefined`, so collapsing the descriptor to its value would call this
+    // record whole. A set-only accessor has no getter either, which is why the
+    // rule is "does the descriptor hold a value", not "is there a getter".
+    const origin: Record<string, unknown> = { ...base };
+    Object.defineProperty(origin, "renamed", {
+      enumerable: true,
+      configurable: true,
+      set() {
+        /* nothing */
+      },
+    });
+    expect(isBlockOrigin(origin)).toBe(false);
+  });
+
+  it.each(["id", "from", "digest", "renamed"])(
+    "refuses a record whose %s storage would not keep",
+    field => {
+      // A non-enumerable field is dropped by every road this record travels to
+      // storage — `JSON.stringify`, an object spread, `structuredClone` — so a
+      // guard that admits one has trusted a record whose persisted form is a
+      // different record. Absent is the honest reading of it, which for `id`,
+      // `from` and `digest` is a refusal on its own; the map's own arm is
+      // asserted separately, because absent is VALID there and the consequence
+      // is a restore rather than a verdict.
+      const origin: Record<string, unknown> = { ...base };
+      Object.defineProperty(origin, field, {
+        value: field === "renamed" ? { pricing: "pricing-1" } : "x",
+        enumerable: false,
+        configurable: true,
+      });
+
+      expect(JSON.parse(JSON.stringify(origin))[field]).toBeUndefined();
+      expect(isBlockOrigin(origin)).toBe(field === "renamed");
+    }
+  );
+
+  it("reads no renames from a map storage would not keep", () => {
+    // The record stays whole — `renamed` may be absent — and what it SAYS is
+    // that nothing was renamed, so a planner restoring from it puts nothing
+    // back rather than acting on metadata the saved document will not carry.
+    const origin: Record<string, unknown> = { ...base };
+    Object.defineProperty(origin, "renamed", {
+      value: { pricing: "pricing-1" },
+      enumerable: false,
+      configurable: true,
+    });
+
+    expect(patternRenames(origin)?.size).toBe(0);
+  });
+
+  it("says what a whole pattern record renamed", () => {
+    // The control for the two refusals above: the same question, asked of a
+    // record with nothing wrong with it, answers with the map.
+    expect([
+      ...(patternRenames({ ...base, renamed: { pricing: "pricing-1" } }) ?? []),
+    ]).toEqual([["pricing", "pricing-1"]]);
+  });
+
+  it("hands out a map of its own for a record that renamed nothing", () => {
+    // `ReadonlyMap` is readonly to TypeScript and nothing else: `.set` is still
+    // there at runtime, and this is a published function. A consumer writing to
+    // a module-wide empty singleton would make every later origin that renamed
+    // NOTHING claim that rename, and silently rewrite ids on a save with
+    // nothing to restore.
+    const whole = { ...base };
+    const first = patternRenames(whole);
+    (first as Map<string, string>).set("pricing", "pricing-1");
+
+    expect(patternRenames({ ...base })?.size).toBe(0);
+  });
+
+  it("says nothing about a record it would not trust, or one that renames none", () => {
+    // Undefined covers both, because a caller that must tell them apart is
+    // asking `readBlockOrigin`, which answers in four.
+    expect(patternRenames({ ...base, renamed: null })).toBeUndefined();
+    expect(patternRenames({ from: "component", id: "c1" })).toBeUndefined();
+  });
+
+  it("ignores a rename map on a component record", () => {
+    // That arm severs a link deliberately and restores nothing, so it has no
+    // such field; an extra member is not what makes a record whole. The map is
+    // PRESENT in the input, and malformed — without that this would prove only
+    // that the component arm accepts a record with no map at all.
+    expect(
+      isBlockOrigin({ from: "component", id: "c1", renamed: "nonsense" })
+    ).toBe(true);
   });
 });

@@ -153,21 +153,25 @@ export class ExpressionValidator {
           );
         },
 
+        // NO function call of any kind is allowed in an RLS expression —
+        // neither `someGlobal()` nor `array.includes()`. `CallExpression` is
+        // absent from ALLOWED_NODE_TYPES, so the check below rejects every one
+        // of them, and that is the rule rather than an oversight: these
+        // expressions are evaluated against user
+        // data to decide access, and a narrow surface is the point.
+        //
+        // This visitor previously carried a branch below the check that tried
+        // to separate global calls from member calls, and a message telling
+        // the author to "use member methods instead (e.g. array.includes())".
+        // It was unreachable — the check above always fired first — so the
+        // message advertised a capability that does not exist and sent anyone
+        // who hit the real error toward a second failure. Deleted rather than
+        // enabled: enabling it would widen an access-control evaluator on the
+        // strength of a stale comment.
         CallExpression(node: Node) {
-          const callNode = node as Node & {
-            callee: Node & { type: string; name?: string };
-          };
           if (!ExpressionValidator.ALLOWED_NODE_TYPES.has(node.type)) {
             throw new Error(
               `Unsafe expression: AST node type '${node.type}' is not allowed in RLS expressions`
-            );
-          }
-
-          // Allow safe method calls like array.includes(); block calls to global identifiers
-          if (callNode.callee.type === "Identifier") {
-            throw new Error(
-              `Function calls to global functions are not allowed in RLS expressions. ` +
-                `Found: ${callNode.callee.name ?? "unknown"}(). Use member methods instead (e.g., array.includes()).`
             );
           }
         },

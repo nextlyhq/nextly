@@ -28,6 +28,7 @@ import {
   STYLE_CATALOG,
   styleOrigin,
   breakpointContexts,
+  outranksEntry,
   type BreakpointAxis,
   type BreakpointId,
   type BreakpointSet,
@@ -195,6 +196,20 @@ function landsOnTheBlock(entry: StyleTraceEntry): boolean {
   return normalizeDescendant(entry.descendant) !== "";
 }
 
+/*
+ * The typographic baseline is deliberately NOT part of the case above. It does
+ * land on the block — `:where(h1)` styles the heading itself rather than the
+ * page root — so it needs no descendant to reach one, and `styleOrigin` has
+ * already refused it for any subject whose element does not match.
+ *
+ * The subject learns its tag from the CANVAS — `renderedTagOf` reads the
+ * element carrying the node's id — so a heading reports its size as coming from
+ * the baseline while `core/rich-text` does not: that block's own root is a
+ * `div` with its headings inside, and the baseline genuinely does not style its
+ * box. A host that supplies no canvas states no tag and gets the refusal, which
+ * is the quiet answer rather than a guessed one.
+ */
+
 /**
  * Whether a recorded declaration reaches the element this control addresses.
  *
@@ -255,47 +270,39 @@ function lastWritten(
 ): StyleTraceEntry | undefined {
   let best: StyleTraceEntry | undefined;
   let bestIndex = -1;
-  let bestSpecificity = -1;
   for (const winner of winners) {
     if (winner === undefined) continue;
     const index = trace.indexOf(winner);
-    const specificity = pseudoClassesIn(winner.descendant);
     /*
-     * SPECIFICITY before source order, which is the order the cascade itself
-     * applies them in — and `styleOrigin` already ranks this way WITHIN a state.
-     * Across states it cannot, because it is asked once per state and each
-     * answer is a separate winner, so the comparison lands here.
+     * WEIGHT before source order, which is the order the cascade itself applies
+     * them in — and `styleOrigin` already ranks this way WITHIN a state. Across
+     * states it cannot, because it is asked once per state and each answer is a
+     * separate winner, so the comparison lands here.
      *
-     * Position alone is wrong wherever the states disagree on specificity. A
-     * state's rules are wrapped in `:where()`, which contributes NOTHING, so an
-     * earlier `.card a:hover` outranks a later `:where(:hover) a` however far
-     * apart they were emitted — and picking the later one names a declaration
-     * the browser is not showing.
+     * Position alone is wrong wherever the states disagree on weight. A state's
+     * rules are wrapped in `:where()`, which contributes NOTHING, so an earlier
+     * `.card a:hover` outranks a later `:where(:hover) a` however far apart they
+     * were emitted — and picking the later one names a declaration the browser
+     * is not showing.
+     *
+     * Ranked THROUGH the engine's comparator rather than by counting
+     * pseudo-classes here. That count was the same answer only while every tier
+     * carried one class-worth of prefix. A default is now anchored to a single
+     * page-root class with its descendant inside `:where()`, so its ` a:hover`
+     * weighs `0-1-0` against a node's ` a` at `0-3-1` — counting names the
+     * default while the browser shows the node. One weighting, owned beside the
+     * compiler that emits the selectors it describes.
      */
-    if (
-      best === undefined ||
-      specificity > bestSpecificity ||
-      (specificity === bestSpecificity && index > bestIndex)
-    ) {
-      best = winner;
-      bestIndex = index;
-      bestSpecificity = specificity;
+    if (best !== undefined) {
+      // The standing answer weighs more, so nothing here can displace it.
+      if (outranksEntry(best, winner)) continue;
+      // Equal weight, and this one was written first. Source order decides.
+      if (!outranksEntry(winner, best) && index < bestIndex) continue;
     }
+    best = winner;
+    bestIndex = index;
   }
   return best;
-}
-
-/**
- * How many pseudo-classes a descendant selector carries.
- *
- * The same count `styleOrigin` uses for its own ranking, which is the point: two
- * different ideas of what makes one selector beat another would disagree exactly
- * where the answer is hard, and this comparison exists only to extend that
- * ranking across the states it is asked about separately.
- */
-function pseudoClassesIn(descendant: string | undefined): number {
-  if (descendant === undefined) return 0;
-  return descendant.split(":").length - 1;
 }
 
 /** Whether an entry is this node's own value at the position being edited. */

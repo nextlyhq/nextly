@@ -40,12 +40,15 @@ const serverEntries = [
   "src/api/versions-diff.ts",
   "src/api/email-providers.ts",
   "src/api/email-provider-types.ts",
+  "src/api/email-template-preview-types.ts",
+  "src/api/jobs-list-types.ts",
   "src/api/email-providers-detail.ts",
   "src/api/email-providers-test.ts",
   "src/api/email-providers-default.ts",
   "src/api/email-templates.ts",
   "src/api/email-templates-detail.ts",
   "src/api/email-templates-preview.ts",
+  "src/api/email-templates-draft-preview.ts",
   "src/api/email-send.ts",
   "src/api/email-send-template.ts",
   "src/api/storage-upload-url.ts",
@@ -90,10 +93,44 @@ const clientEntries = [
   "src/field-group-reconcile.ts",
   // Pure serializable data, consumed by the admin's field pickers and by plugins.
   "src/collections/fields/catalog.ts",
+  // The widget permission gate, as its OWN entry and with no imports of its
+  // own. The layout endpoint and the browser both decide whether a reader may
+  // be told a card exists, and a second implementation of that answer splits
+  // them apart silently -- a card the server sends and the browser hides
+  // reports nothing anywhere. Reaching it through `nextly/config` instead would
+  // make a bundler traverse the whole config surface for two pure functions.
+  "src/domains/widgets/gate.ts",
+  // What a widget query ANSWERS with, as its own entry: the result shapes, the
+  // per-widget slot and the batch body. The server produces them, the admin
+  // draws them and a plugin's widget component receives them, and until this
+  // entry existed each of those three declared its own copy -- the admin's
+  // being STRICTER than the server's, so it promised readers a guarantee the
+  // producer had never made. Reached through `nextly/config` instead, a
+  // consumer would pull the widget barrel and with it `executeWidgetQuery` and
+  // the Direct API graph, which is what that entry point is shaped to keep out.
+  "src/domains/widgets/result.ts",
+  // The lease timings and wire types a client needs to HOLD a lock, as their
+  // own entry. The admin maps `nextly` to this package's source, so reaching
+  // these through the root entry pulls the DI container and the auth
+  // middleware into its typecheck: measured at 112 errors, none of them about
+  // the importing code. The repository stays out — it takes an adapter and
+  // belongs to the server; a client reaches locks through the route.
+  "src/domains/document-lock/contract.ts",
   // The query-parameter formats, so a caller writes one with the same code the
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.
   "src/query/index.ts",
+  // The one helper an out-of-tree storage adapter needs, as its OWN entry.
+  //
+  // Reaching it through `nextly/storage` instead makes a bundler traverse that
+  // whole barrel — the local adapter and its `fs/promises` and `path`, the
+  // env-config and its dotenv chunks — into a package that depends on neither.
+  // Measured on `@nextlyhq/storage-vercel-blob`: 240K over 6 files became 1.3M
+  // over 16 the moment the barrel import landed, and every install pays it.
+  "src/storage/fetch-stored-bytes.ts",
+  // The over-cap refusal, reachable by an adapter without the barrel for the
+  // same reason as the helper above.
+  "src/storage/read-errors.ts",
 ];
 
 // Shared config options

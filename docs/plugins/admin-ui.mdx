@@ -5,13 +5,14 @@ description: Contribute admin menu items, pages, settings, and collection-view o
 
 A plugin can extend the Nextly admin in two complementary ways:
 
-- **`contributes.admin`** — the *declarative* surface: menu entries, custom pages,
+- **`contributes.admin`.** The *declarative* surface: menu entries, custom pages,
   a settings panel, and per-collection view overrides (D19–D23).
 - **`admin`** (on the plugin definition) — *placement & appearance*: where the
   plugin's items sit in the sidebar and how they look (D20).
 
-Both are `@public`. Admin **dashboard widgets** (`PluginAdminWidget`, D22) are reserved
-but not yet rendered — they remain [`@experimental`](/docs/plugins/stability) until M8.
+Both are `@public`. Admin **dashboard widgets** (`PluginAdminWidget`, D22) are rendered
+on the admin dashboard today, but the contract remains
+[`@experimental`](/docs/plugins/stability) while its shape settles.
 
 ## Component paths
 
@@ -179,12 +180,55 @@ contributes: {
 [Permissions](/docs/plugins/permissions)). View override slots are `list`, `edit`,
 `beforeList`, `afterList`, `beforeEdit`, `afterEdit`.
 
-## Dashboard widgets (reserved)
+## Dashboard widgets
 
-`contributes.admin.widgets` (D22) is a **forward-looking contract**: the `PluginAdminWidget`
-shape is published so plugin authors can design against it, but **widget rendering and the
-dashboard grid are deferred to a later milestone (M8)** — declaring widgets has **no effect
-yet**. It stays [`@experimental`](/docs/plugins/stability) until the dashboard ships.
+A widget is drawn one of two ways, and you pick by what you declare.
+
+### Let the host draw it
+
+Declare an `archetype` and the `query` it is drawn from, and ship no UI code. The host
+runs the query for the signed-in user and renders the card.
+
+> **What the host draws today: `metric`, `list`, `table` and `actions`.**
+> `text` is accepted by the contract but has no renderer yet, so a widget
+> declaring it shows "the text archetype is not rendered yet" in its card unless
+> it also ships a `component` to draw the body itself.
+>
+> A `list` widget draws one row per result. Its query's `select` decides what each
+> row shows, in order: the first field is the row's label and the second, if there
+> is one, is the muted line under it.
+>
+> A `table` widget draws a column per selected field, headed by that field's label
+> from your collection — so a heading reads "Published at", not `publishedAt`. The
+> columns come from what the SERVER returned, not from `select`: a field carrying
+> an `access.read` rule that denies the viewer is absent from their rows, and its
+> column and heading are absent with it.
+>
+> A `list` or `table` that selects nothing says so rather than guessing at a field,
+> and says it without running a query.
+>
+> An `actions` widget is a short column of shortcuts, declared rather than
+> queried:
+>
+> ```ts
+> {
+>   id: "acme/shortcuts",
+>   title: "Shortcuts",
+>   archetype: "actions",
+>   defaultSize: "sm",
+>   actions: [
+>     { label: "New post", href: "/admin/collections/posts/create" },
+>     { label: "Invite user", href: "/admin/users/create", requiredPermission: "create-users" },
+>     { label: "Docs", href: "https://nextly.dev/docs", external: true },
+>   ],
+> }
+> ```
+>
+> Each item is gated on its own `requiredPermission`: a reader who may not use a
+> shortcut does not see it, while the card itself stays. That is separate from
+> the widget's own `requiredPermission`, which decides whether the card appears
+> at all. `external: true` opens the destination in a new tab and says so to a
+> screen reader. A card shows at most six shortcuts and counts the rest.
 
 ```ts
 contributes: {
@@ -192,7 +236,76 @@ contributes: {
     widgets: [
       {
         id: "reports-summary",
-        component: "@acme/nextly-plugin-reports/admin#SummaryWidget",
+        title: "Published reports",
+        archetype: "metric",                 // metric | table | list | text | actions
+        defaultSize: "sm",                   // sm | md | lg | xl | full
+        query: { source: "collection:reports", op: "count" },
+        requiredPermission: "read-reports",  // client-gated
+        defaultOrder: 40,                    // optional; lower sits higher
+      },
+    ],
+  },
+}
+```
+
+`text` and `actions` are drawn without data, so they take no `query` — declaring one is
+a type error. Every other archetype requires it. (`actions` is drawn by the host; `text`
+is not yet — see the note above.)
+
+### Where a card sits
+
+`defaultOrder` is optional and sorts ascending; a widget that omits it goes after every
+widget that states one. Leave it off unless you mean it — without it your card keeps its
+declaration order, which is what nearly every widget wants.
+
+It exists because position would otherwise depend on **how** a widget reached the
+dashboard rather than on anything it said: contributions resolve before registrations, so
+the same card moved across the grid when its author switched channels. Core's own
+dashboard cards state one, which is how they stay above contributed widgets.
+
+Numbers, not indexes — core spaces its own ten apart so a card can be placed between two
+without renumbering anything.
+
+A reader's saved layout, once they have arranged their dashboard, wins over this. Think
+of it as where the card starts, not where it stays.
+
+### Widgets that draw their own surface
+
+A `custom` widget may set `chrome: "none"` to decline the card frame entirely, and is
+then responsible for everything the card would have provided — its heading, its loading
+and error states, its own visual boundary.
+
+Reach for it only when your component **is** already a designed surface, such as a
+titled section with its own rules. Framing one of those draws a second heading above its
+own. If your component draws a body and expects a title around it, leave `chrome` alone.
+
+It is refused on every other archetype, because core composes those bodies **into** the
+card — the card owns the title, the footer and the busy state — so an unframed one would
+render with no heading and nothing reporting that it was loading.
+
+One consequence worth knowing: an unframed component that renders nothing costs no space
+at all. The grid collapses a cell whose widget drew nothing, so a card that hides itself
+when it has nothing to say leaves no gap behind.
+
+<Callout type="info">
+  `core#` is reserved. Core's own dashboard cards resolve their components under that
+  prefix, and the admin refuses to let anything else register or unregister one — a
+  plugin claiming the path would replace the body drawn for a card the registry still
+  attributes to core.
+</Callout>
+
+### Draw it yourself
+
+Ship a `component` and the host gives you the card's frame — header, footer, loading and
+error states — while you draw the body:
+
+```ts
+contributes: {
+  admin: {
+    widgets: [
+      {
+        id: "reports-chart",
+        component: "@acme/nextly-plugin-reports/admin#ChartWidget",
         size: "half",                        // "full" | "half"
         requiredPermission: "read-reports",  // client-gated
       },
@@ -201,8 +314,64 @@ contributes: {
 }
 ```
 
-Declaring widgets now is safe (it's validated but ignored); they'll light up when the
-dashboard lands. Everything else on this page is `@public` today.
+A component-drawn widget may ALSO declare a `query`: the host runs it in the same batch
+and hands your component the result, so you do not fetch it again.
+
+Your component receives five props, and you can name their types:
+
+```ts
+import type { WidgetComponentProps } from "@nextlyhq/plugin-sdk/widgets";
+
+export function ChartWidget({ slot, isFetching }: WidgetComponentProps) {
+  // `slot` is undefined in TWO cases, and `isFetching` tells them apart:
+  // the first request is still running, or this widget declared no query.
+  if (!slot) return isFetching ? <Skeleton /> : null;
+  if (!slot.ok) return <p>{slot.error}</p>;
+  if (slot.result.op !== "list") return null;
+  return <Chart rows={slot.result.items} busy={isFetching} />;
+}
+```
+
+| Prop | Type | What it is |
+|---|---|---|
+| `widgetId` | `string` | The id you registered the widget under. |
+| `placementId` | `string` | The **card's** id. One widget may sit on a dashboard twice, and everything belonging to a card — its settings and its answer — is keyed by this, not by `widgetId`. |
+| `settings` | `Record<string, unknown>` | This card's settings, already resolved: the reader's stored values where they are usable, your declared defaults everywhere else. |
+| `slot` | `WidgetSlot \| undefined` | This card's answer. `undefined` means either that the first request is still in flight **or** that the widget declared no query — see below. |
+| `isFetching` | `boolean` | Whether this card's query is in flight, the first request included. Always `false` for a widget with no query. |
+
+An absent `slot` has two causes and they need different UI: `isFetching` is `true` only
+for a card whose query is in the batch, so `slot === undefined && isFetching` is the
+first load — draw a skeleton — while `slot === undefined && !isFetching` means no answer
+is ever coming. Treating them alike draws an empty state over a running request.
+
+`slot` is a discriminated union — `{ ok: true, result }` or `{ ok: false, error }` — so
+narrowing on `slot.ok` gives you a typed `result`. A failing query is a value, not a
+thrown error: the batch answers with every other widget's data intact, so one query
+failing colours one card rather than blanking the dashboard.
+
+These types come from `@nextlyhq/plugin-sdk/widgets`, which carries no runtime code —
+importing them adds nothing to your bundle.
+
+Widgets are rendered on the admin dashboard by `WidgetGrid`, in a 12-column grid that
+collapses to one column on small screens, and are hidden from users who lack
+`requiredPermission`. Every widget on the page is fetched in a single batched request.
+
+An archetype this version of Nextly does not draw reports itself in that card and leaves
+the rest of the dashboard alone — whether it is one of the four above or a name from a
+newer core this admin has never heard of. A plugin ahead of its host degrades one card
+rather than breaking the admin.
+
+The contract is still `@experimental` and is expected to grow: charts, and richer
+archetypes. Per-widget settings and saved layouts have since shipped — a widget declares
+`settings`, the reader edits them per card, and your component is handed the resolved
+values. Pin your Nextly version while it settles.
+
+`requiredPermission` gates whether the widget renders. It does **not** constrain the data
+your widget reads — fetch through the access-controlled API so a viewer only ever sees
+rows they may read.
+
+Everything else on this page is `@public` today.
 
 ## Placement & appearance
 
@@ -215,8 +384,8 @@ definePlugin({
   // ...
   admin: {
     placement: AdminPlacement.COLLECTIONS, // COLLECTIONS | SINGLES | USERS | SETTINGS | PLUGINS | STANDALONE
-    order: 10,                             // lower = higher; default 100
-    after: "collections",                  // anchor for STANDALONE icons
+    order: 10, // lower = higher; default 100
+    after: "collections", // anchor for STANDALONE icons
   },
 });
 ```

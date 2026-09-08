@@ -18,8 +18,7 @@ import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-dra
 import { MediaService as LegacyMediaService } from "../../services/media";
 import { MediaService as UnifiedMediaService } from "../../services/media/media-service";
 import { MediaFolderService } from "../../services/media-folder";
-import { UploadValidator } from "../../services/upload-validation";
-import type { SecurityBlockLike } from "../../services/upload-validation";
+import { resolveUploadPolicy } from "../../services/upload-validation/upload-policy";
 import type { IStorageAdapter } from "../../storage/types";
 import { container } from "../container";
 
@@ -29,7 +28,21 @@ export function registerMediaServices(ctx: RegistrationContext): void {
   const { adapter, logger, storage, mediaStorage, imageProcessor } = ctx;
 
   container.registerSingleton<UnifiedMediaService>("mediaService", () => {
-    const legacyMediaService = new LegacyMediaService(adapter, logger);
+    const {
+      validator: uploadValidator,
+      svgCsp,
+      maxSize,
+    } = resolveUploadPolicy();
+
+    // The wrapped writer gets the same cap the wrapper enforces; its own
+    // default would refuse, from the inside, a file the policy just allowed.
+    const legacyMediaService = new LegacyMediaService(
+      adapter,
+      logger,
+      undefined,
+      undefined,
+      maxSize
+    );
     const folderService = new MediaFolderService(adapter, logger);
 
     // Late-binding getter so storage plugins registered after initial
@@ -42,12 +55,6 @@ export function registerMediaServices(ctx: RegistrationContext): void {
         return null;
       }
     };
-
-    const config = container.has("config")
-      ? container.get<{ security?: SecurityBlockLike }>("config")
-      : undefined;
-    const uploadValidator = new UploadValidator(config?.security);
-    const svgCsp = config?.security?.uploads?.svgCsp ?? true;
 
     return new UnifiedMediaService(
       legacyMediaService,

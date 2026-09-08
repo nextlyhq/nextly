@@ -31,6 +31,27 @@ import type { SiteStyleData } from "@nextlyhq/plugin-page-builder";
 // type: `SITE_STYLE_CONTEXT` reads it as a required `StyleCompileContext`
 // field, which an optional-typed property cannot satisfy.
 export const SITE_STYLE_DEFAULTS = {
+  /*
+   * MEDIA, matching how this app actually switches theme.
+   *
+   * The engine defaults to `"attribute"` and writes its dark values under
+   * `[data-nx-theme="dark"]`, which a host with a theme toggle sets. This app
+   * has no toggle: `globals.css` enters dark mode through
+   * `@media (prefers-color-scheme: dark)`, and `data-nx-theme` appears nowhere
+   * outside the engine and builder source.
+   *
+   * So with a dark OS preference the page went dark and every site token stayed
+   * on its LIGHT value — a form control keeping `#ffffff` on a `#0a0a0a` page,
+   * and a card keeping its light surface. Not a token that fails contrast: the
+   * whole dark half of the set never applying, silently, because the selector
+   * that would have applied it is never written.
+   */
+  tokens: {
+    // No tokens of its own: this site takes the engine's guaranteed set whole,
+    // and states only HOW the dark half of it is selected.
+    tokens: [],
+    darkMode: "media",
+  },
   breakpoints: {
     viewport: [
       { id: "base", label: "Base" },

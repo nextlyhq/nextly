@@ -408,8 +408,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # Matched on the title as well as the label. Taking the first issue carrying the
+          # label alone means any other workflow that adopts it, or anyone who applies it by
+          # hand, silently redirects these reports into an unrelated issue.
           existing=$(gh issue list --repo "${{ github.repository }}" \
-            --label ci-nightly-failure --state open --json number --jq '.[0].number // empty')
+            --label ci-nightly-failure --state open --json number,title \
+            --jq '[.[] | select(.title == "Nightly package smoke is failing")][0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "${{ github.repository }}" \
               --body "Nightly package smoke failed again: $RUN_URL"

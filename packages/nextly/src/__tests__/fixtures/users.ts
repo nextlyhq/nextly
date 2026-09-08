@@ -9,8 +9,13 @@ export function userFactory(overrides?: {
   id?: string;
   name?: string;
   email?: string;
-  emailVerified?: number | null;
-  passwordUpdatedAt?: number | null;
+  // `Date`, not `number`. Both columns are `integer(..., { mode: "timestamp" })`,
+  // which Drizzle types as `Date`; declaring them numeric here made every
+  // insert of a factory user fail the test typecheck while passing at runtime,
+  // because every caller happens to pass `null`. The declared type has to match
+  // the column it feeds or the fixture type-checks a shape the schema rejects.
+  emailVerified?: Date | null;
+  passwordUpdatedAt?: Date | null;
   image?: string | null;
   passwordHash?: string | null;
 }) {

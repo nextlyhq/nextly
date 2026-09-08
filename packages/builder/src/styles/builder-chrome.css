@@ -70,13 +70,18 @@
  * few pixels wider than the geometry that reserved room for them.
  *
  * Confined to the shell's subtree, so it stays a statement about the editor
- * rather than about the host's page.
+ * rather than about the host's page — and to any token scope hoisted out of it,
+ * which is the same subtree by a different route.
  */
 @layer base {
   .nx-builder-chrome,
   .nx-builder-chrome *,
   .nx-builder-chrome *::before,
-  .nx-builder-chrome *::after {
+  .nx-builder-chrome *::after,
+  .nx-builder-tokens,
+  .nx-builder-tokens *,
+  .nx-builder-tokens *::before,
+  .nx-builder-tokens *::after {
     box-sizing: border-box;
   }
 }
@@ -101,6 +106,22 @@
  * F7 primitive list was the wrong home for it.
  */
 
+/*
+ * DECLARING the tokens and BEING the chrome root are two jobs, and they are
+ * spelled separately because a surface can need the first without the second.
+ *
+ * `.nx-builder-chrome` identifies the editor's root: the empty-slot selector
+ * keys off it, and it is what carries the shell's own state attributes. A
+ * surface mounted OUTSIDE that root still has to resolve `--nx-builder-*`,
+ * because custom properties inherit down and never across — and giving it the
+ * chrome class to get them would put a second chrome root in the document, so
+ * every selector and every query that means "the editor" would match whichever
+ * came first.
+ *
+ * `.nx-builder-tokens` is that scope on its own. One declaration block serves
+ * both, so the two cannot drift apart; only the painting below is the chrome's.
+ */
+.nx-builder-tokens,
 .nx-builder-chrome {
   /* The frame behind rail, panels and bars. Deliberately not `--nx-background`:
      the canvas uses that, and the frame must read as a layer behind it. */
@@ -112,7 +133,9 @@
   /* The rail's selected item, and the only accent the chrome spends. */
   --nx-builder-accent: var(--nx-primary);
   --nx-builder-accent-text: var(--nx-primary-foreground);
+}
 
+.nx-builder-chrome {
   background-color: var(--nx-builder-surface);
   color: var(--nx-builder-text);
 }
@@ -126,6 +149,14 @@
  * quiet, and quiet is exactly what fails at higher contrast needs.
  */
 @media (prefers-contrast: more) {
+  /*
+   * Both scopes, for the reason the split exists. A surface hoisted out of the
+   * chrome takes its tokens from `.nx-builder-tokens`, so an override written
+   * only against the chrome silently hands it the resting values — and the
+   * surface that moved out is the failure region, which is the last thing that
+   * should be quiet when someone has asked for more contrast.
+   */
+  .nx-builder-tokens,
   .nx-builder-chrome {
     --nx-builder-border: var(--nx-foreground);
     --nx-builder-text-muted: var(--nx-foreground);
@@ -191,92 +222,196 @@
 }
 
 /*
- * Two lines per row, so the block's description is readable without a hover.
- * A palette that shows only labels makes an author guess what "Section" holds,
- * and the description is already required on every block definition.
+ * Tiles, three to a row.
+ *
+ * The count comes from the panel as `--nx-insert-columns` rather than being
+ * spelled here, so the layout has one source.
+ *
+ * It is a LAYOUT count and nothing else. Arrow keys belong to the command
+ * primitives and step by one option, matching the listbox semantics they
+ * announce — a grid keyboard would need a grid accessibility tree, which is
+ * not something the panel can add on top of them.
+ *
+ * Applied to the primitives\' OWN items container rather than to a wrapper of
+ * this file\'s. The primitives register an item through the group that
+ * contains it, and an element interposed between the two leaves the group
+ * holding no items at all — a panel that renders headings and nothing under
+ * them.
+ *
+ * `minmax(0, 1fr)` rather than `1fr`. A grid track's default minimum is its
+ * content, so a block whose name has no break opportunity — a plugin naming
+ * one "CollectionLoop" — would push its column wider than a third and squeeze
+ * the other two rather than wrapping.
  */
+.nx-insert-panel [cmdk-group-items] {
+  display: grid;
+  grid-template-columns: repeat(var(--nx-insert-columns, 3), minmax(0, 1fr));
+  gap: 0.375rem;
+  padding: 0.125rem 0.5rem 0.5rem;
+}
+
 .nx-insert-panel__label {
   display: block;
+  font-size: 0.6875rem;
   font-weight: 500;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--nx-foreground);
+  /*
+   * Broken anywhere rather than at spaces only. A tile is about 86px at the
+   * panel's default width, which is narrower than several block names, and a
+   * name that cannot break overflows its tile instead of wrapping inside it.
+   */
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The description stays in the option and stops being drawn.
+ *
+ * Clipped rather than `display: none` or `visibility: hidden`, both of which
+ * remove it from the accessible name as well — and the name is the whole
+ * reason it is still here. A screen reader moving between tiles reads the
+ * block's sentence exactly as it did when the panel was a list; only sighted
+ * authors read it from the strip below.
+ */
+.nx-insert-panel__description {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * The strip: what the tile under the cursor or the keyboard is for.
+ *
+ * Pinned below the list rather than floating over it, because a tooltip is
+ * mouse-only — it never reaches a keyboard, and on a touch screen there is no
+ * hover to open it at all. This follows focus as well as the pointer, so
+ * arrowing through the grid reads the same as pointing at it.
+ *
+ * `min-height` sized for three lines rather than a fixed height. Descriptions
+ * are prose from block authors and the longest in the first-party library runs
+ * to five lines here; a fixed box would clip exactly the blocks whose
+ * behaviour needs the most explaining. The list above holds the flexible
+ * space, so a longer sentence takes room from the list rather than pushing the
+ * panel.
+ */
+.nx-insert-panel__describes {
+  /*
+   * Shrinkable and scrollable, not `flex: none`.
+   *
+   * A description is prose from a block author and nothing caps its length, so
+   * an unshrinkable strip claims its full content height inside a root that is
+   * `h-full` and `overflow-hidden` — squeezing the tile list toward zero and
+   * then clipping its own overflow with no way to reach it. One long-winded
+   * plugin could hide every block in the palette AND be unreadable itself.
+   *
+   * `40%` of the panel rather than a fixed pixel height, so the split holds at
+   * whatever height the editor is mounted at; `min-height` still reserves
+   * three lines so the list does not jog as the description changes.
+   */
+  flex: 0 1 auto;
+  min-height: 4.25rem;
+  max-height: 40%;
+  overflow-y: auto;
+  padding: 0.5rem 0.75rem 0.625rem;
+  border-top: 1px solid var(--nx-border);
+  background: var(--nx-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * The touch gesture hint.
+ *
+ * No media query: whether to draw this is decided at runtime from the pointer
+ * that was actually used, because `(pointer: coarse)` describes the device's
+ * PRIMARY pointer and would hide it on a touchscreen laptop being touched.
+ *
+ * `flex: none` here where the strip above is deliberately shrinkable: this is
+ * one short line that must not be the thing that scrolls away, and it cannot
+ * grow with authored prose the way a description can.
+ */
+.nx-insert-panel__gesture-hint {
+  flex: none;
+  margin: 0;
+  padding: 0.375rem 0.75rem 0.5rem;
+  border-top: 1px solid var(--nx-border);
+  background: var(--nx-muted);
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  color: var(--nx-muted-foreground);
+  text-align: center;
+}
+
+.nx-insert-panel__describes-name {
+  font-weight: 600;
   color: var(--nx-foreground);
 }
 
-.nx-insert-panel__description {
-  display: block;
-  font-size: 0.75rem;
-  line-height: 1.4;
-  color: var(--nx-muted-foreground);
-  /*
-   * Clamped rather than truncated at one line: descriptions are prose written
-   * by block authors and the first few words are often a category name shared
-   * with a sibling block, so one line can render two rows indistinguishable.
-   */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
 /*
- * Rows grow to their content.
+ * A tile: the mark above the name, both centred.
  *
- * The command primitives size an item for a single line, which clips any label
- * that wraps — "Collection loop" lost its second line. Labels come from block
- * authors and cannot be assumed short, and a clipped row is worse than a taller
- * one: the author reads a truncated name with nothing indicating it was cut.
+ * Every geometry the primitives set for a LIST ITEM is restated rather than
+ * inherited — height, padding, the flex row, the 12px gap they put between an
+ * icon and its label. Those are correct for a row and wrong for a tile, and
+ * leaving any one of them turns the tile into a squat row with a glyph beside
+ * a clipped word.
  *
- * `align-items: start` so a two-line label does not drag its description to the
- * vertical centre, which reads as misalignment against the single-line rows
- * above and below it.
+ * `position: relative` because the description inside is clipped out of view by
+ * absolute positioning, and it has to be positioned against the tile rather
+ * than against whatever ancestor happens to be positioned — the scrolling list,
+ * which would leave a 1px sliver following the scroll.
  */
 .nx-insert-panel [cmdk-item] {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.3125rem;
   height: auto;
-  min-height: 2.5rem;
-  align-items: start;
-  padding-block: 0.375rem;
-}
-
-/*
- * Mark, then the two lines of text beside it.
- *
- * A GRID rather than a flex row, because the row holds three children on two
- * lines: laid out as a flex row the label and the description sit side by side,
- * and the two-line reading the panel is built around disappears. The mark spans
- * both rows so it stays level with the label whether the description wraps to
- * one line or two.
- */
-.nx-insert-panel [cmdk-item] {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: 0.5rem;
+  min-height: 3.75rem;
+  padding: 0.5rem 0.25rem 0.4375rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.3125rem;
+  text-align: center;
   /*
-   * ZERO, stated rather than inherited. The command primitive sets `gap-3` on
-   * every item, which is a column gap while the item is a flex ROW and becomes
-   * a row gap as well the moment it is a grid — pushing 12px between a label
-   * and the description belonging to it, so the two lines of one entry read as
-   * two entries and the row grows by the height of a line.
+   * Reserve the sideways gesture, so a tile can be DRAGGED onto the canvas.
+   *
+   * Left at the default, a touch browser owns direct manipulation from the
+   * moment it classifies the movement as panning, and it announces that by
+   * sending `pointercancel` — which the drag engine correctly treats as the
+   * gesture being withdrawn. The drag would abandon itself partway across, and
+   * only on touch.
+   *
+   * `pan-y` rather than `none`: the palette scrolls, and taking vertical
+   * panning as well would trade a broken drag for a list a finger cannot
+   * scroll.
    */
-  row-gap: 0;
+  touch-action: pan-y;
 }
 
 /*
- * Nudged down by the difference between the glyph's box and the label's first
- * line: `align-items: start` above puts both at the top of the row, where a
- * 16px mark reads as sitting slightly high against 13px text.
+ * The current tile, marked with a BORDER as well as a background.
+ *
+ * The primitives tint the background of a highlighted item, which reads clearly
+ * across a full-width row and barely at all on an 86px tile sitting in a grid
+ * of them. The border is what makes the current tile findable at a glance, and
+ * it replaces an existing border rather than adding one, so nothing reflows.
  */
+.nx-insert-panel [cmdk-item][data-selected="true"] {
+  border-color: var(--nx-primary);
+}
+
 .nx-insert-panel .nx-block-icon {
-  grid-row: 1 / span 2;
-  align-self: start;
-  padding-block-start: 0.125rem;
-}
-
-/*
- * The label keeps its own column and never wraps mid-word. A block named
- * "Collection loop" breaks at the space; one named "Collectionloop" would
- * otherwise break mid-word and read as two words.
- */
-.nx-insert-panel__label {
-  overflow-wrap: break-word;
+  flex: none;
 }
 
 /*
@@ -438,6 +573,21 @@
  * layout instead of its own.
  */
 .nx-inspector {
+  /*
+   * The CHROME's own axes, declared once because one thing needs to put them
+   * back: the box of logical sides takes the EDITED ELEMENT's writing mode so
+   * its grid places each side on the right edge, and the controls inside it
+   * must go on reading the way the rest of this panel reads.
+   *
+   * Declared rather than measured, because this is a fact about the admin
+   * interface rather than about any site: the chrome runs left to right and
+   * horizontally, whatever the page being edited does. Should the interface
+   * itself ever run right to left, these two values are what changes — here, in
+   * one place, instead of every rule that resets an axis carrying its own
+   * guess.
+   */
+  --nx-chrome-writing-mode: horizontal-tb;
+  --nx-chrome-direction: ltr;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -465,24 +615,115 @@
   color: var(--nx-muted-foreground);
 }
 
+/*
+ * A container, so a field can answer for the RAIL's width rather than the
+ * window's. The rail is resizable, so the width that decides whether a label
+ * fits beside its control is not a property of the viewport.
+ */
 .nx-inspector__fields {
   display: flex;
   flex-direction: column;
-  gap: 0.875rem;
+  gap: 0.5rem;
+  container-type: inline-size;
+  container-name: nx-inspector-fields;
 }
 
+/*
+ * A label BESIDE its control rather than stacked above it.
+ *
+ * Stacked, every field spent two rows and a gap on one value, so a panel
+ * offering eleven groups of properties showed a handful at a time and an author
+ * scrolled to compare two numbers that belong together. Beside, the same field
+ * is one row: the panel roughly halves in height and a group can be read at
+ * once, which is what makes a group a group.
+ *
+ * The label column is bounded rather than sized to content. Content sizing
+ * would let the longest label in a group set the indent for every other one, so
+ * the controls in Typography and the controls in Spacing would start at
+ * different places and stop reading as columns at all.
+ *
+ * Its width is what the longest ORDINARY label needs rather than a round
+ * number: the logical side names — "Block start", "Inline start" — are the
+ * longest the catalog produces, and at a narrower column they wrap onto two
+ * lines, which puts the row back to the height the stacked layout had.
+ */
 .nx-inspector__field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
+  display: grid;
+  grid-template-columns: minmax(0, 6.5rem) minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0.5rem;
+  row-gap: 0.25rem;
+}
+
+/*
+ * Everything that is not the label sits in the second column and stacks: a
+ * field holds its control, sometimes a breakpoint action, and sometimes an
+ * error, and all three describe the same value. Addressed by position rather
+ * than by element, because the control is whichever component the value's kind
+ * chose and naming them here would be a list to keep in step.
+ */
+.nx-inspector__field > * {
+  grid-column: 2;
+  min-width: 0;
+}
+
+/*
+ * The label, addressed as a LABEL rather than as the first child.
+ *
+ * Position is not a property a field has: a checkbox row puts its control
+ * first so the box sits beside the words it names, and a positional rule sends
+ * that checkbox to the label column and the words to the control column. The
+ * element answers what the position only usually implies, and it keeps
+ * answering for a field whose children arrive in another order.
+ */
+.nx-inspector__field > label {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+/*
+ * Below the width where a label and a control can share a row, the field goes
+ * back to stacking. Asked of the CONTAINER: the rail can be dragged narrow
+ * while the window stays wide, and a media query would answer for the window.
+ *
+ * The threshold is the row's own arithmetic rather than a round number: the
+ * label column is 6.5rem and the gap 0.5rem, so a control keeps less than 11rem
+ * below 18rem — under what the widest segmented control needs to show its whole
+ * vocabulary. The inspector's supported minimum is 280px, which is 16rem of
+ * container once its 0.75rem padding is taken, so this fires there rather than
+ * leaving a control to overflow the rail it is drawn in.
+ *
+ * It decides ONLY whether the label sits beside the control or above it. What
+ * keeps a control inside the rail is the control's own layout — see the
+ * segmented control, whose buttons may shrink — so this number and the
+ * eligibility rules are not two answers to the same question.
+ */
+@container nx-inspector-fields (max-width: 18rem) {
+  .nx-inspector__field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .nx-inspector__field > *,
+  .nx-inspector__field > label {
+    grid-column: 1;
+  }
 }
 
 /*
  * A checkbox reads as one line with its label beside it rather than stacked
  * above it: the control is small enough that a label on its own line separates
  * the two further than they belong.
+ *
+ * `display` is restated rather than inherited, and that is the whole rule: an
+ * ordinary field is a grid with a fixed label column, and a checkbox row wants
+ * neither the column nor the order it implies. Setting only the flex properties
+ * leaves the grid in force — they describe a layout the field is not using —
+ * and the checkbox is then sized to a 6.5rem label column with its words in the
+ * column beside it. Declared on both classes so the layout does not depend on
+ * which rule appears later in this file.
  */
-.nx-inspector__field--inline {
+.nx-inspector__field.nx-inspector__field--inline {
+  display: flex;
   flex-direction: row;
   align-items: center;
   gap: 0.5rem;
@@ -661,15 +902,37 @@
 
 .nx-style-inspector__toggle > button {
   flex: 1 1 0;
+  /*
+   * A flex item will not shrink below its own text by default, so without this
+   * the control keeps its content width and overflows the rail rather than
+   * fitting in it. Overriding that makes the control answer for its own width
+   * at any rail size, which is what leaves the field's stacking threshold free
+   * to be about where the label reads best rather than about what fits.
+   */
+  min-width: 0;
   padding: 0.25rem 0.5rem;
   border: 1px solid var(--nx-border);
+  /* Given up here and taken back by the first button, so a seam is one border. */
+  border-inline-start-width: 0;
   background: var(--nx-background);
   color: var(--nx-foreground);
   font: inherit;
   cursor: pointer;
 }
 
+/*
+ * The group's leading edge belongs to the group, not to each button in it.
+ *
+ * Every button gives its leading border up and the first one takes it back, so
+ * a seam between two buttons is drawn once however many there are. Stated this
+ * way round because the alternative — removing the border from the LAST button
+ * — is right only while there are exactly two: with three it leaves the first
+ * seam two borders wide and the second one, and the segments stop reading as a
+ * single control. This way the count cannot enter into it, and the rule needs
+ * no selector beyond the two the radii already use.
+ */
 .nx-style-inspector__toggle > button:first-child {
+  border-inline-start-width: 1px;
   border-start-start-radius: var(--radius-md);
   border-end-start-radius: var(--radius-md);
 }
@@ -677,8 +940,6 @@
 .nx-style-inspector__toggle > button:last-child {
   border-start-end-radius: var(--radius-md);
   border-end-end-radius: var(--radius-md);
-  /* The shared edge is drawn once, by the first button. */
-  border-inline-start-width: 0;
 }
 
 /*
@@ -867,6 +1128,65 @@
 .nx-canvas {
   position: relative;
   /*
+   * The page's own surface.
+   *
+   * The frame is `--nx-builder-surface`, a shade off the background so it
+   * recedes behind the canvas. With no surface of its own the canvas INHERITS
+   * that frame, so the page being composed is drawn on the editor's grey — and
+   * a block declares no background, so the grey shows through the document
+   * itself. What an author edits then looks nothing like what a visitor loads,
+   * which is the one thing this canvas exists to show.
+   *
+   * The token rather than a literal, so a host re-theming the admin moves the
+   * page with it, exactly as the frame already does.
+   *
+   * The frame only becomes visible BESIDE the page where the canvas is
+   * bounded: at full width the page is the region, and there are no edges to
+   * frame. A narrower tier, or zooming out, reveals it.
+   */
+  background-color: var(--nx-builder-surface-raised);
+  /*
+   * A SHEET, not a region that happens to be a different colour.
+   *
+   * The surface alone separates the page from the frame only where the two
+   * tones differ enough to read, and they deliberately do not: the frame is one
+   * step off the background so it recedes. A border states the page's edge at
+   * any tone, in either mode — `--nx-builder-border` is 0.92 against a 0.99
+   * page in light and 0.26 against a 0.00 page in dark, so the edge survives
+   * the palette inverting while the two surfaces swap which of them is lighter.
+   *
+   * The shadow is the secondary cue and is allowed to be nearly invisible in
+   * dark, where a cast shadow has almost nothing to darken. Carrying the
+   * separation on the BORDER rather than the shadow is what keeps both modes
+   * equally legible instead of tuning one and checking the other.
+   *
+   * No radius, deliberately. The drop indicator and the selection chrome are
+   * positioned in this element's own content coordinates and are not clipped by
+   * it; rounding the corners without clipping leaves a block's own background
+   * squaring them off, and clipping to fix that would cut the drag chrome the
+   * canvas exists to draw.
+   *
+   * Stated on the PAGE rather than on the region around it, so the page is a
+   * self-contained sheet: several of them side by side — one per breakpoint —
+   * would each carry their own edge with nothing about this rule to revisit.
+   *
+   * An OUTLINE rather than a border, and that is a correctness requirement
+   * rather than a preference. This element carries three things at once: the
+   * width a tier is previewed at, `container-type: inline-size`, and this edge.
+   * Container queries resolve against the CONTENT box, and the shell resets its
+   * whole subtree to `box-sizing: border-box` — so a border here is subtracted
+   * from the width the page is being previewed at. Two pixels is enough to
+   * decide a tier: a 992px request lays out 990px of content, the widest
+   * `max-width: 991px` rule stays active, and the unconditional tier becomes
+   * unreachable from the switcher. The `ResizeObserver` reads `contentRect` and
+   * reports the same narrowed width, so the tier readout agrees with the wrong
+   * answer. An outline is painted outside the border box and takes part in no
+   * layout, so the page keeps exactly the width it was asked for. It has room
+   * to paint because the region around it is padded.
+   */
+  outline: 1px solid var(--nx-builder-border);
+  box-shadow: var(--shadow-md);
+  /*
    * Fills the region rather than stopping at its content.
    *
    * Without this the canvas is exactly as tall as the blocks in it, so the area
@@ -957,6 +1277,214 @@
 .nx-drop-indicator[data-axis="x"] {
   width: 2px;
   transform: translateX(-1px);
+}
+
+/*
+ * The line gets a terminal, so it reads as an insertion point.
+ *
+ * A bare 2px rule spanning a region is ambiguous with a border belonging to the
+ * block below it — which is exactly the reading to avoid, because a border says
+ * "this block" and the line means "between these blocks". A dot at the leading
+ * end is the convention every editor that draws this uses, and it costs no
+ * layout: the indicator is already absolutely positioned and takes part in no
+ * flow.
+ */
+.nx-drop-indicator::before {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--nx-primary);
+}
+
+.nx-drop-indicator[data-axis="y"]::before {
+  left: -4px;
+  top: -3px;
+}
+
+.nx-drop-indicator[data-axis="x"]::before {
+  top: -4px;
+  left: -3px;
+}
+
+/*
+ * A block on the canvas says it can be picked up.
+ *
+ * Blocks here have no drag handle: the whole element is the grab surface. That
+ * is a deliberate choice and it carries an obligation — with no handle to point
+ * at, the cursor is the ONLY thing that says the element can be moved, so its
+ * absence leaves the gesture undiscoverable rather than merely unadorned. The
+ * palette tile has said this since it shipped; the canvas is the half that
+ * never did.
+ */
+.nx-canvas [data-nx-node] {
+  cursor: grab;
+}
+
+/*
+ * A locked block does not offer the grab.
+ *
+ * The drag engine returns before creating a gesture for one, so advertising it
+ * as movable promises something that can never happen and leaves an author
+ * pressing repeatedly at a block that will not move. Since the whole element is
+ * the grab surface here, the cursor is the only place that promise is made.
+ *
+ * Withdrawn by SPECIFICITY rather than by excluding it from the rule above: a
+ * negation there would have to name every reason a block might not be
+ * draggable, and each new reason would edit a selector that means "a block"
+ * into one that means "a block, except". Two rules keep the general statement
+ * general and let the exception say what it is.
+ */
+.nx-canvas [data-nx-node][data-nx-locked] {
+  cursor: default;
+}
+
+/*
+ * Text being edited shows a caret, not a grab.
+ *
+ * Inline editing turns the node's own element into editable content and stops
+ * the pointer events a drag would start from, so the gesture the grab cursor
+ * advertises is unavailable at exactly the moment the element most needs to
+ * advertise a different one: where the caret will land, and what a press-drag
+ * will select.
+ *
+ * Both spellings, because the attribute and the property are set by different
+ * layers — the builder marks the element it is editing, the browser reflects
+ * the editable state — and a rule keyed on only one of them is right until
+ * whichever it did not name changes.
+ */
+.nx-canvas [data-nx-node][data-nx-editing],
+.nx-canvas [data-nx-node][contenteditable="true"],
+.nx-canvas [data-nx-node][contenteditable="plaintext-only"] {
+  cursor: text;
+}
+
+/*
+ * Held, and refused.
+ *
+ * Both are reachable because this drag is built on POINTER events with pointer
+ * capture rather than on the HTML5 drag-and-drop API, where the cursor is taken
+ * over by the drop effect for the duration of the gesture and neither of these
+ * can be shown.
+ *
+ * On the ROOT rather than per block: pointer capture means the events keep
+ * arriving at the canvas however far the hand travels, so a cursor set on
+ * whatever happens to be underneath would flicker as the pointer crossed gaps.
+ */
+.nx-canvas[data-nx-dragging] {
+  cursor: grabbing;
+}
+
+.nx-canvas[data-nx-dragging="refused"] {
+  cursor: no-drop;
+}
+
+/*
+ * The drag state has to WIN over the block's own cursor, not merely be
+ * inherited past it.
+ *
+ * `cursor` inherits, but a descendant that declares its own value is not
+ * inheriting anything — and every block declares `grab` above. Setting the drag
+ * state only on the root therefore changes the cursor over the gaps between
+ * blocks and leaves it reading `grab` over the blocks themselves, which is
+ * where the pointer spends a drag. These two selectors are the ones that
+ * actually reach it.
+ *
+ * The locked rule above is deliberately NOT re-stated here: once a drag is in
+ * flight the subject is the block being carried, and the cursor describes the
+ * gesture rather than whatever it happens to be passing over.
+ */
+.nx-canvas[data-nx-dragging] [data-nx-node] {
+  cursor: grabbing;
+}
+
+.nx-canvas[data-nx-dragging="refused"] [data-nx-node] {
+  cursor: no-drop;
+}
+
+/*
+ * What is being held, dimmed where it sits.
+ *
+ * The block STAYS in place rather than being replaced by a preview that follows
+ * the pointer. On a canvas the block is the rendered artefact at its real size,
+ * so a simplified preview would show strictly less than is already on screen —
+ * the opposite of a list, where a row is a summary and the preview is the only
+ * thing carrying what is in flight.
+ */
+.nx-canvas [data-nx-drag-source] {
+  opacity: 0.4;
+}
+
+/*
+ * WHICH container, which the line cannot say.
+ *
+ * The line answers "between which two siblings"; this answers "inside which
+ * container", and the two come apart exactly where the line alone is ambiguous:
+ * the coordinate at the bottom edge of one container is also the top edge of
+ * the next, and only this separates them.
+ *
+ * DASHED and OUTSIDE, where the selection is solid and inset. They are both
+ * outlines in the same colour and they mean different things, so the shape has
+ * to carry the difference — a second solid outline would read as a second
+ * selection.
+ *
+ * An outline rather than a border, for the reason `.nx-canvas` documents: a
+ * container may carry `container-type: inline-size`, and a border is subtracted
+ * from the content box its queries resolve against, so a highlight drawn with
+ * one would change the layout it is describing.
+ */
+.nx-canvas [data-nx-drop-parent] {
+  outline: 2px dashed var(--nx-primary);
+  outline-offset: 2px;
+}
+
+.nx-canvas [data-nx-drop-refused] {
+  outline: 2px solid var(--nx-destructive);
+  outline-offset: 2px;
+}
+
+/*
+ * The sentence a refusal draws, over the container that refused.
+ *
+ * Positioned in the canvas's own content coordinates, the space the drop
+ * indicator and the block toolbar already use, so all three agree at any scroll
+ * offset and under zoom.
+ *
+ * Never a drop target itself: it sits over the region the pointer is aiming at
+ * by construction, so a hit-test that could land on it would resolve the drag
+ * to the message rather than to the container beneath.
+ */
+.nx-drop-refusal {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  max-width: 18rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--radius);
+  background: var(--nx-destructive);
+  color: var(--nx-destructive-foreground);
+  box-shadow: var(--shadow-md);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.nx-drop-refusal__why {
+  font-weight: 600;
+}
+
+/*
+ * The remedy, quieter than the refusal itself.
+ *
+ * Deliberately not hidden on a narrow canvas: naming what the region DOES take
+ * is what makes this an instruction rather than a wall, and it is the half an
+ * author acts on.
+ */
+.nx-drop-refusal__takes {
+  opacity: 0.9;
 }
 
 /*
@@ -1357,7 +1885,13 @@
  * the two fields share what is left, which keeps a long token name from
  * pushing the remove button out of reach.
  */
-.nx-tokens {
+/*
+ * The body layout every rail panel uses. One rule rather than a copy per
+ * panel: a second copy drifts, and the panels would then disagree about their
+ * own padding for no reason a reader could find.
+ */
+.nx-tokens,
+.nx-classman {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -1418,6 +1952,123 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * The sentence that says what a token is, before any of the machinery.
+ *
+ * Given the panel's own tone rather than a notice's: it is not a warning and
+ * must not read as one, so it takes the muted foreground and a rule beneath
+ * rather than a coloured ground.
+ */
+.nx-tokens__lede,
+.nx-classman__lede {
+  margin: 0;
+  padding-bottom: 0.625rem;
+  border-bottom: 1px solid var(--nx-border);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-tokens__lede b,
+.nx-classman__lede b {
+  color: var(--nx-foreground);
+  font-weight: 600;
+}
+
+/*
+ * A group heading, which is a row rather than a heading element on its own.
+ *
+ * The count sits BESIDE the heading rather than inside it, so the heading's
+ * accessible name is the kind alone — inside, "Colour" becomes "Colour 3" and
+ * every reader addressing the group by name has to know the number first.
+ */
+.nx-tokens__grouphead,
+.nx-classman__grouphead {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  padding-top: 0.25rem;
+}
+
+.nx-tokens__groupname,
+.nx-classman__groupname {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--nx-muted-foreground);
+}
+
+/* The rule runs to the end of the row, which is what separates one group from
+ * the next without spending a heavier border on it. */
+.nx-tokens__grouphead::after,
+.nx-classman__grouphead::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--nx-border);
+}
+
+.nx-tokens__group,
+.nx-classman__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+/*
+ * The empty state, which is the first thing a new site shows.
+ *
+ * Given room rather than a single muted line: this is the one surface where an
+ * author who does not know what a token is can find out, and a sentence set
+ * like an error note reads as something having gone wrong.
+ */
+.nx-tokens__empty,
+.nx-classman__empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.75rem 0;
+}
+
+.nx-tokens__empty-head,
+.nx-classman__empty-head {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+/* Creating a token names its kind, because a list that omits empty kinds has
+ * nowhere to stand and press "add". */
+.nx-tokens__add {
+  display: flex;
+  gap: 0.375rem;
+  align-items: center;
+}
+
+.nx-tokens__kind {
+  flex: 1;
+  min-width: 0;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font-size: var(--text-xs);
+}
+
+.nx-tokens__kind:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-tokens__search,
+.nx-classman__search {
+  flex: none;
+}
+
 .nx-tokens__list {
   display: flex;
   flex-direction: column;
@@ -1466,10 +2117,13 @@
    * stylesheet on its own.
    */
   --nx-swatch: transparent;
-  flex: 0 0 auto;
-  width: 1.25rem;
-  height: 1.25rem;
-  border: 1px solid var(--nx-border);
+  /*
+   * FILLS the shared slot rather than being a box of its own. Each row owns an
+   * independent `auto` grid column, so a colour slot of a different width put
+   * its fields at a different indent from every other row's.
+   */
+  position: absolute;
+  inset: 0;
   border-radius: var(--radius-sm);
   background-image:
     linear-gradient(var(--nx-swatch), var(--nx-swatch)), var(--nx-checkerboard);
@@ -1768,4 +2422,1001 @@
   font-size: var(--text-xs);
   font-weight: 400;
   color: var(--nx-muted-foreground);
+}
+
+/**
+ * The "+" drawn over an empty container.
+ *
+ * BASE tokens rather than the `--nx-builder-*` set several sections above,
+ * matching the drop indicator: this control belongs to the canvas's own
+ * palette, which is the page's rather than the chrome's, so the token it takes
+ * its colour from should be the one every other canvas affordance uses.
+ *
+ * A builder token would in fact resolve here — the empty-container rule above
+ * is scoped to `.nx-builder-chrome`, so a container carrying this control is
+ * always inside the element those tokens are declared on. That is a reason the
+ * choice is safe either way rather than a reason to change it.
+ *
+ * Positioned exactly like `.nx-spacing-overlay`: a full-bleed layer over the
+ * canvas root's own content box, so the pixel numbers the component computes
+ * through `canvasContentRect` land on the containers they were measured from.
+ */
+.nx-empty-container-appenders {
+  position: absolute;
+  inset: 0;
+  /* Above the spacing bands, which only describe what already is; below the
+     floating toolbar, which can be showing for the same selected-but-empty
+     container and should not be covered by this. */
+  z-index: 2;
+  /*
+   * Never a pointer target ITSELF. This layer spans the whole canvas root, and
+   * a hit-test that could land on the empty space between controls would make
+   * every block underneath it unclickable — exactly the failure
+   * `.nx-spacing-overlay` avoids the same way. Each button below opts back in.
+   */
+  pointer-events: none;
+}
+
+/*
+ * The button itself: transparent at rest, so it does not double up on the
+ * dashed `[data-nx-slots]:empty` box already drawn under it, and picking up
+ * colour only on hover and focus — where the two states share a treatment
+ * because both are ways of saying "this is interactive", pointer and keyboard
+ * alike.
+ */
+.nx-empty-container-appenders__button {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-empty-container-appenders__button:hover {
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+}
+
+.nx-empty-container-appenders__button:focus-visible {
+  outline: 2px solid var(--nx-primary);
+  outline-offset: -2px;
+  color: var(--nx-foreground);
+}
+
+/*
+ * The class selector, at the top of the style inspector.
+ *
+ * Chips wrap rather than scroll: the rail is narrow and a horizontal scroller
+ * hides the classes furthest from the start, which are the ones that override
+ * the others.
+ */
+.nx-classes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nx-classes__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-classes__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  padding-inline-start: 0.5rem;
+  background: var(--nx-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5rem;
+}
+
+.nx-classes__chip-name {
+  font-family: var(--font-mono, monospace);
+}
+
+.nx-classes__chip-remove {
+  height: 1.25rem;
+  min-width: 1.25rem;
+  padding: 0;
+  line-height: 1;
+}
+
+.nx-classes__options {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  overflow: hidden;
+}
+
+/*
+ * The row IS the target. It carries no nested button, because with
+ * `aria-activedescendant` the input owns the tab sequence and a focusable
+ * child would take rows into it.
+ */
+.nx-classes__option {
+  padding: 0.25rem 0.5rem;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono, monospace);
+  cursor: pointer;
+}
+
+/*
+ * ONE highlighted row, and it is the React state that draws it — never :hover.
+ * The pointer moves that same state as it passes over a row, so hovering and
+ * arrowing cannot disagree. Adding `:hover` to this rule instead would paint a
+ * second row while Enter still committed the first, which is the exact
+ * confusion the shared state exists to prevent.
+ */
+.nx-classes__option--active {
+  background: var(--nx-accent);
+}
+
+/*
+ * The class manager, a rail panel beside the tokens studio.
+ *
+ * A rail panel rather than the top-bar dialog the breakpoint manager uses,
+ * because a class library grows without bound and an author reads this list
+ * WHILE looking at the canvas to see what a filter selected. A modal forecloses
+ * that.
+ */
+.nx-classman__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+/*
+ * The name search. Full width because it is the only control that can reach a
+ * class past the row cap, and a narrow box beside the chips reads as an
+ * afterthought rather than as the way through a long library.
+ */
+.nx-classman__search {
+  display: flex;
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.nx-classman__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.nx-classman__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.nx-classman__fields {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.nx-classman__name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/*
+ * The trailing note on a row: either what the index holds, or the marker on a
+ * class the site's config supplies and storage therefore cannot delete. One
+ * rule, because they occupy the same slot and a second copy would drift.
+ */
+.nx-classman__usage,
+.nx-classman__origin {
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+  white-space: nowrap;
+}
+
+.nx-classman__issue {
+  margin: 0.25rem 0 0;
+  font-size: var(--text-xs);
+  color: var(--nx-destructive);
+}
+
+/*
+ * The confirmation sits in the row rather than in a modal. It names a number
+ * the index cannot guarantee, so it has to be read beside the class it is
+ * about — a dialog would separate the claim from its subject.
+ */
+.nx-classman__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem;
+  border: 1px solid var(--nx-destructive);
+  border-radius: 0.375rem;
+}
+
+/*
+ * Text being edited keeps the platform's own long-press callout.
+ *
+ * The context menu's trigger wraps the canvas, and Radix sets
+ * `-webkit-touch-callout: none` on it so a long press opens the block menu
+ * rather than the browser's. That property INHERITS, so it reaches the
+ * `contenteditable` inside a block as well — and the canvas withholds the
+ * press there, so a long press on text would open neither menu: the platform's
+ * spelling, selection and clipboard callout suppressed, and nothing put in its
+ * place. Restored on the editable subtree only, so the block menu keeps the
+ * whole of the canvas that is not text.
+ *
+ * `[contenteditable="false"]` is excluded for the reason the canvas excludes
+ * it: it marks a region deliberately made uneditable inside an editable one,
+ * which is a block again rather than text.
+ */
+.nx-canvas [contenteditable] {
+  -webkit-touch-callout: default;
+}
+
+/*
+ * ...except a region the editor has deliberately made uneditable inside an
+ * editable one. That is a block again rather than text, so the block menu is
+ * the right menu there and the suppression stands. Written as its own rule
+ * rather than as a `:not()` on the one above: two plain selectors say the same
+ * thing, and the negated form was complex enough to be flagged.
+ */
+.nx-canvas [contenteditable="false"] {
+  -webkit-touch-callout: none;
+}
+
+/*
+ * The reordering hint under the layers tree.
+ *
+ * Quiet by construction: it is a standing legend rather than a message, so it
+ * has to be readable without competing with the tree it describes. Kept at the
+ * panel's own text size floor rather than smaller, because a hint nobody can
+ * read is the same as the missing hint it replaced.
+ */
+.nx-layers-panel__hint {
+  margin: 0;
+  padding: 0.5rem 0.625rem;
+  border-top: 1px solid var(--nx-border);
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  list-style: none;
+}
+
+/*
+ * One binding per row, with the keystroke in a column of its own.
+ *
+ * A run of them separated inline wraps mid-binding at this width — the key and
+ * the words it belongs to end up on different lines — which turns a legend
+ * meant to be scanned into a paragraph to be read.
+ */
+.nx-layers-panel__hint-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+/* Wide enough that the four labels start on one line rather than four. */
+.nx-layers-panel__hint-row .nx-layers-panel__hint-key {
+  flex: none;
+  min-width: 2.5rem;
+  text-align: center;
+}
+
+/*
+ * The keystroke reads as a key, so it is set apart from the words around it.
+ * `inline-block` rather than a bare span: the glyphs are narrow and the label
+ * beside them is not, and without a box the two run together at small sizes.
+ */
+.nx-layers-panel__hint-key {
+  display: inline-block;
+  padding: 0 0.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.25rem;
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  white-space: nowrap;
+}
+
+/*
+ * The canvas zoom trigger.
+ *
+ * Styled here because it is a bare Radix trigger: Preflight strips a button's
+ * border and background, so without this the percentage renders as plain text
+ * and reads as a status readout rather than something to press. It sits in the
+ * top bar beside the breakpoint switcher, so it borrows that furniture's
+ * proportions rather than introducing its own.
+ */
+.nx-zoom-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.5rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font-size: var(--text-xs);
+  /* The digits change as the canvas resizes, and a proportional face makes the
+     control shift width while an author is reading it. */
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.nx-zoom-control:hover {
+  background: var(--nx-muted);
+}
+
+/* Open is a STATE, not a hover: the menu can be opened from the keyboard, and
+   a trigger that looks unpressed while its menu is up reads as a stray popup. */
+.nx-zoom-control[data-state="open"] {
+  background: var(--nx-muted);
+  border-color: var(--nx-ring);
+}
+
+.nx-zoom-control:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+}
+
+/* --- fonts panel ----------------------------------------------------------
+   Token-driven throughout, per the admin styling rule: every colour here is an
+   `--nx-*` custom property so the panel works in both modes without a second
+   palette. */
+
+/* One stacking rule for every column in the panel, varying only the gap. Four
+   near-identical flex blocks is the duplication the CSS audit names, and the
+   copies drift: a spacing change made in three of them looks done. */
+.nx-fonts,
+.nx-fonts__faces,
+.nx-fonts__tokens,
+.nx-fonts__face,
+.nx-fonts__token,
+.nx-fonts__families,
+.nx-fonts__family-group,
+.nx-fonts__family-faces {
+  display: flex;
+  flex-direction: column;
+}
+
+.nx-fonts {
+  gap: 1rem;
+}
+
+.nx-fonts__faces,
+.nx-fonts__tokens {
+  gap: 0.5rem;
+}
+
+/* The bordered blocks the panel is built from. A family group is one of them:
+   same inset, same boundary, so the three read as one kind of card rather than
+   as three that happen to look alike. */
+.nx-fonts__face,
+.nx-fonts__token,
+.nx-fonts__family-group {
+  gap: 0.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  padding: 0.5rem;
+}
+
+.nx-fonts__families {
+  gap: 0.125rem;
+}
+
+/* A family's cuts, grouped under the name they share so the block reads as one
+   typeface rather than as repeated rows. Its stacking, list reset and boundary
+   all come from the rules above; only the inner spacing is its own. */
+.nx-fonts__family-faces {
+  gap: 0.375rem;
+}
+
+/* Which cut a row is. Quieter than the family name above it, because the name
+   is what an author scans for and the cut is what they confirm. */
+.nx-fonts__face-cut {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- adding a font file ---------------------------------------------------
+   A labelled column rather than a grid: the panel is a narrow rail, and a
+   two-column form there collapses to unreadable field widths at the sizes this
+   surface is actually used at. */
+.nx-fonts__add {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--nx-border);
+}
+
+/* The group's own name. A `role="group"` needs one to be announced as a group
+   at all, and the visible heading and the accessible name are then the same
+   string rather than a caption and a hidden label that can disagree. */
+.nx-fonts__add-heading {
+  margin: 0 0 0.125rem;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-fonts__add-label {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--nx-muted-foreground);
+}
+
+/* One rule for every control, so the file input, the text fields and the select
+   share a boundary and a height instead of falling back to three different
+   platform presentations. */
+.nx-fonts__add-file,
+.nx-fonts__add-text {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.375rem 0.5rem;
+  font-size: var(--text-xs);
+  font-family: inherit;
+  color: var(--nx-foreground);
+  background: var(--nx-background);
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+}
+
+.nx-fonts__add-file::file-selector-button {
+  margin-right: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  font-size: var(--text-xs);
+  font-family: inherit;
+  color: var(--nx-foreground);
+  background: var(--nx-muted);
+  border: 1px solid var(--nx-border);
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.nx-fonts__add-file:focus-visible,
+.nx-fonts__add-text:focus-visible,
+.nx-fonts__add-submit:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+}
+
+.nx-fonts__add-submit {
+  margin-top: 0.125rem;
+  padding: 0.375rem 0.75rem;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--nx-primary-foreground);
+  background: var(--nx-primary);
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+/* Disabled is a STATE, not a colour: an author reads why from the fields above,
+   so this only has to stop reading as pressable. */
+.nx-fonts__add-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* The refusal sits under the control that produced it and uses the destructive
+   token, so it carries the same meaning in both modes as every other error in
+   this chrome. */
+.nx-fonts__add-error {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--nx-destructive);
+}
+
+.nx-fonts__faces,
+.nx-fonts__tokens,
+.nx-fonts__families,
+.nx-fonts__family-faces {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-fonts__heading {
+  margin: 0 0 0.375rem;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-fonts__face-name,
+.nx-fonts__token-name,
+.nx-fonts__family-name {
+  font-family: var(--font-mono, monospace);
+}
+
+.nx-fonts__face-name,
+.nx-fonts__token-name {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* The specimen is the affordance, so it is given room and never wraps into the
+   chrome around it. `clip` rather than `ellipsis`: a truncated typeface still
+   shows its letterforms, and an ellipsis would sit in the panel's font rather
+   than the specimen's, which is the one place a substitution must not appear. */
+.nx-fonts__specimen {
+  display: block;
+  font-size: var(--text-lg);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+  color: var(--nx-foreground);
+}
+
+.nx-fonts__family {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.nx-fonts__family,
+.nx-fonts__family-note,
+.nx-fonts__note {
+  font-size: var(--text-xs);
+}
+
+.nx-fonts__family-note,
+.nx-fonts__note {
+  color: var(--nx-muted-foreground);
+  margin: 0;
+}
+
+/* Attention is carried by a border and the foreground colour rather than by
+   colour alone, so it survives a reader who cannot separate the two. */
+.nx-fonts__note--attention {
+  border-inline-start: 2px solid var(--nx-ring);
+  padding-inline-start: 0.5rem;
+  color: var(--nx-foreground);
+}
+
+.nx-fonts__jump {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--nx-ring);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.nx-fonts__jump:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+}
+
+/*
+ * Notices about work the builder could not finish.
+ *
+ * Fixed rather than placed in the shell's flow. The shell sizes every region
+ * against the caller's container through a wrapper that is `display: contents`,
+ * so a box added to that flow would change what those regions measure — to
+ * carry a surface that renders nothing at all most of the time.
+ *
+ * Centred at the top because that is where the shell has no chrome of its own:
+ * the rail is left, the bars are bottom, and an author's attention after
+ * pressing Enter in the inspector is on the right. This crosses that path.
+ */
+.nx-notices {
+  position: fixed;
+  top: var(--space-3);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: min(32rem, calc(100vw - var(--space-6)));
+}
+
+.nx-notices__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  /* The shell's own surface, not a red panel. These report a refused write —
+     something to read and act on, not an error state of the editor itself. */
+  background: var(--nx-builder-surface);
+  color: var(--nx-builder-text);
+  box-shadow: var(--shadow-lg);
+}
+
+.nx-notices__text {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.nx-notices__dismiss {
+  flex: 0 0 auto;
+}
+
+/*
+ * A per-side property drawn as the box it describes.
+ *
+ * `margin` and `padding` are one property each with four sides, and as four
+ * stacked rows they say nothing about which edge is which — an author reads
+ * four labels to answer what a diagram answers at a glance.
+ *
+ * ORIENTED BY THE EDITED ELEMENT, not by this panel. The element's axes reach
+ * this grid as the custom properties the rule below reads, and grid placement
+ * resolves in them: columns run along the inline axis and rows along the block
+ * axis, so `grid-column: 1` is the inline START edge in a right-to-left page as
+ * well as a left-to-right one, and a vertical writing mode transposes the pair
+ * without a single physical edge being named here. A layout written with `left`
+ * and `right` would have looked correct in an English admin and pointed at the
+ * opposite edge on an Arabic site.
+ *
+ * Values rather than an applied `writing-mode`, so the narrow fallback at the
+ * end of this file can take the axes back on cascade order: an inline
+ * declaration outranks every selector, and the fallback could then only win by
+ * shouting.
+ *
+ * The panel draws this only where it could READ that orientation; where it
+ * could not, the fields stay ordinary rows that name their side in words.
+ */
+.nx-style-inspector__side-box {
+  /*
+   * The edited element's axes, handed over by the panel as values.
+   *
+   * Used through a rule rather than applied inline, so the narrow fallback
+   * below can take them back by ordinary cascade order — an inline
+   * `writing-mode` outranks every selector, and the fallback could then only
+   * win by shouting.
+   */
+  writing-mode: var(--nx-side-writing-mode, horizontal-tb);
+  direction: var(--nx-side-direction, ltr);
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+/*
+ * The sides, placed by WHICH SIDE THEY ARE.
+ *
+ * Not by their position among the children: that list varies with the heading,
+ * the form selectors and the notice above, so a rule counting elements moves
+ * every side the moment one appears. Each field says which side it draws and
+ * this reads it, which is also why these selectors stay shallow.
+ */
+.nx-style-inspector__side-box > [data-side="blockStart"] {
+  grid-area: 1 / 2;
+}
+
+.nx-style-inspector__side-box > [data-side="inlineStart"] {
+  grid-area: 2 / 1;
+}
+
+.nx-style-inspector__side-box > [data-side="inlineEnd"] {
+  grid-area: 2 / 3;
+}
+
+.nx-style-inspector__side-box > [data-side="blockEnd"] {
+  grid-area: 3 / 2;
+}
+
+/*
+ * A side is a control alone: no label column, and the text of its label hidden.
+ *
+ * Position is what tells a sighted author which edge this is, so the words are
+ * noise here — but only the WORDS. The label still carries the provenance dot,
+ * which says whether the side is authored or inherited and is not something
+ * position can tell anyone, so the dot stays and the text is clipped around it.
+ */
+.nx-style-inspector__side-box > [data-side] {
+  display: block;
+}
+
+.nx-style-inspector__side-box .nx-style-inspector__field-label-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * The children read in the PANEL's axes, not the element's.
+ *
+ * The grid above is set to the edited element's writing mode so its placement
+ * resolves there. That mode is inherited, so without this a vertical-writing
+ * page would rotate the text inside every input and menu in the box — the
+ * orientation is meant to decide where a control sits, never how its own
+ * content reads.
+ *
+ * The panel's own axes are passed in rather than written here as `ltr`: the
+ * admin interface is translatable, so a fixed answer would reverse every
+ * control in this box on the day the admin itself runs right-to-left. The
+ * fallbacks apply only if the box is somehow drawn without them, and they are
+ * the ordinary case rather than an assumption about the site.
+ */
+.nx-style-inspector__side-box > * {
+  writing-mode: var(--nx-chrome-writing-mode, horizontal-tb);
+  direction: var(--nx-chrome-direction, ltr);
+}
+
+/*
+ * The middle of the box, which is what makes the four fields read as edges.
+ *
+ * Without it they are four inputs in a three-column grid with a hole, and the
+ * arrangement has to be inferred. A pseudo-element rather than a child, so the
+ * shape costs no markup and nothing announces it: the box is a picture of an
+ * arrangement a screen reader is already given in words, by the label each
+ * field keeps.
+ */
+.nx-style-inspector__side-box::before {
+  content: "";
+  grid-area: 2 / 2;
+  align-self: stretch;
+  min-height: 1.25rem;
+  border: 1px dashed var(--nx-border);
+  border-radius: 0.25rem;
+}
+
+/*
+ * A measurement STACKS inside a box: the quantity above, the unit under it.
+ *
+ * Beside each other they do not fit. A side is a third of a rail rather than a
+ * whole one, and the unit menu is about 66px of intrinsic width — a trigger
+ * showing two or three characters plus its chevron and padding — which leaves
+ * the quantity around 26px, or two characters, in the very field an author
+ * types into. Lowering the menu's `min-width` cannot recover that, because the
+ * width is its CONTENT rather than its minimum.
+ *
+ * So the two halves take turns on the width instead of splitting it, which
+ * costs a row of height in a control that is three rows tall already and gives
+ * the quantity the whole 96px. Only inside a box: a full-width row has room for
+ * both and reads better with them on one line.
+ */
+.nx-style-inspector__side-box .nx-style-inspector__numeric {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.125rem;
+}
+
+.nx-style-inspector__side-box .nx-style-inspector__unit {
+  width: 100%;
+}
+
+/*
+ * Below the width where three columns of a control can be read, the box gives
+ * up and becomes rows.
+ *
+ * AFTER the box's own rules, and that is the whole reason this block sits at
+ * the end of the file rather than beside the field's stacking query it shares a
+ * threshold with. These selectors have the same specificity as the ones they
+ * override, so order decides: written earlier, the base rule below would
+ * restore `display: grid` and the label rule would restore the clipping, and
+ * what an author got at a narrow rail was a cramped grid with neither its
+ * centre diagram nor visible labels — the fallback declared and not delivered.
+ *
+ * The labels come BACK when it stacks. Their words are hidden only because
+ * position is saying which edge each field is, and once the fields are in a
+ * column nothing is saying it; four unlabelled inputs would be worse than
+ * either layout.
+ *
+ * The PANEL's axes come back too. The box carries the edited element's writing
+ * mode so its grid resolves there, and `flex-direction: column` would follow
+ * that same block axis — which is horizontal in a vertical writing mode, so the
+ * promised stack would run sideways. Plain declarations suffice because the
+ * element's axes are used through a rule rather than applied inline, so this
+ * one wins on order alone.
+ */
+@container nx-inspector-fields (max-width: 18rem) {
+  .nx-style-inspector__side-box {
+    display: flex;
+    flex-direction: column;
+    writing-mode: var(--nx-chrome-writing-mode, horizontal-tb);
+    direction: var(--nx-chrome-direction, ltr);
+  }
+
+  .nx-style-inspector__side-box::before {
+    display: none;
+  }
+
+  .nx-style-inspector__side-box .nx-style-inspector__field-label-text {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+    white-space: normal;
+  }
+}
+
+/*
+ * The row drawn on its own after an add that landed past the mounted page.
+ *
+ * Separated rather than slotted into the list, because it is NOT the next row:
+ * everything between it and the last mounted one is still hidden behind the
+ * cap, and drawing it flush would claim an adjacency the list does not have.
+ */
+.nx-tokens__revealed {
+  border-top: 1px dashed var(--nx-builder-border);
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+}
+
+/*
+ * The preview slot for kinds that are not a colour.
+ *
+ * Same box as the swatch so the previews form a column rather than a ragged
+ * edge, and wider than tall because the two kinds that need room — a length
+ * and a duration — both need it along one axis.
+ */
+.nx-tokens__preview {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 2.5rem;
+  height: 1.25rem;
+  overflow: hidden;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface);
+  font-size: 0.6875rem;
+  line-height: 1;
+  color: var(--nx-builder-text);
+}
+
+/*
+ * The shadow's own box, inset so the shadow it casts has somewhere to land.
+ * A shadow drawn on an element flush with its container is clipped to nothing,
+ * which would report every shadow as identical.
+ */
+.nx-tokens__shadow {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 2px;
+  background: var(--nx-builder-surface-raised);
+}
+
+/* A length, measured against the slot and stopping at it. */
+.nx-tokens__bar {
+  position: absolute;
+  inset-inline-start: 0;
+  height: 0.375rem;
+  min-width: 1px;
+  /* The cap. A token has no maximum to scale against, so a longer value runs
+     to the end of the slot and says only "at least this". */
+  max-width: 100%;
+  border-radius: 1px;
+  background: var(--nx-builder-text);
+}
+
+/*
+ * A negative length, drawn on the other side of a centre line.
+ *
+ * The line is what makes the direction readable: without it a bar growing
+ * leftwards from the right edge looks like a shorter bar, and the sign — which
+ * is the whole reason a margin token is negative — disappears.
+ */
+.nx-tokens__preview[data-sign="negative"] {
+  border-inline-start-color: transparent;
+}
+
+.nx-tokens__preview[data-sign="negative"] .nx-tokens__bar {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+  opacity: 0.55;
+}
+
+/*
+ * A duration, shown by taking that long to cross the slot. `alternate` so the
+ * dot returns rather than jumping back, which reads as a second, shorter run.
+ */
+.nx-tokens__tick {
+  position: absolute;
+  inset-inline-start: 0;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: var(--nx-builder-text);
+  animation-name: nx-token-tick;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+  animation-timing-function: linear;
+}
+
+@keyframes nx-token-tick {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(2rem);
+  }
+}
+
+/*
+ * At rest when motion is not wanted. The dot still says WHICH row holds a
+ * duration; it stops claiming how long by moving.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .nx-tokens__tick {
+    animation: none;
+  }
+}
+
+/*
+ * What a class writes, under its name.
+ *
+ * Two parts on one line: the properties the base state sets, and how much is
+ * set somewhere this row is not showing. The second is dimmed because it is a
+ * caveat on the first rather than more of it.
+ */
+.nx-classman__declares {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.375rem;
+  margin: 0;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--nx-builder-text-muted);
+}
+
+/*
+ * Truncated rather than wrapped to any length. A class may write a dozen
+ * properties and the rail is narrow; the row's job is to say what KIND of
+ * thing this class does, and the panel below it can say the rest.
+ */
+.nx-classman__properties {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--nx-font-mono, ui-monospace, monospace);
+}
+
+.nx-classman__elsewhere {
+  flex: 0 0 auto;
+  opacity: 0.75;
+  font-style: italic;
 }

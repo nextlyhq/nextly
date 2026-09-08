@@ -63,6 +63,12 @@ export type {
  * it: the two inputs overlap in neither direction, and a runtime check that
  * tried to tell them apart would misread the boolean shorthand and fail
  * silently in the direction that disables drafts.
+ *
+ * That record is not DECLARED as one, which is why `resolvedCollectionView`
+ * below exists: `getCollection` returns `Collection`, whose fields live under
+ * `schemaDefinition` and which promises no root-level `status` or `versions`,
+ * so its result is not assignable here however faithfully the object carries
+ * them. Project it rather than asserting it.
  */
 export { resolvedCollectionDraftSplit } from "nextly";
 /**
@@ -71,6 +77,18 @@ export { resolvedCollectionDraftSplit } from "nextly";
  *   release tag applies to the declaration it precedes.
  */
 export type { ResolvedDraftSplitCollection } from "nextly";
+/**
+ * @experimental `resolvedCollectionView` — a registry record, projected onto
+ *   the shape above.
+ *
+ * Published rather than left to each plugin. The projection is the only way to
+ * get from the documented producer to the documented consumer without an
+ * assertion, so every plugin needing the question would otherwise write it, and
+ * a projection restated per caller drifts from the type it feeds while all of
+ * them still compile. It reads every property as unknown and checks it, which
+ * is the honest handling of a value whose declared type under-states it.
+ */
+export { resolvedCollectionView } from "nextly";
 
 /**
  * Plugin identity and classification.
@@ -126,6 +144,34 @@ export type {
  */
 export { text, textarea, checkbox, upload, group } from "nextly";
 export type { FieldConfig } from "nextly";
+
+/**
+ * Which fields a level addresses, with presentational groups flattened.
+ *
+ * An unnamed group lays fields out and stores its children at the level it sits
+ * in; a named one stores them under itself. A plugin walking a collection's
+ * fields has to make that distinction to find where a value is actually kept,
+ * and reimplementing it is a second answer to one question.
+ *
+ * @experimental
+ */
+export { addressableFields } from "nextly";
+
+/**
+ * What a caller passes to control the walk, and what it emits.
+ *
+ * `descendInto` chooses which unnamed containers are transparent, and the
+ * choice has to be made during the walk: the result holds the flattened
+ * children themselves, so a field reached through one container is the same
+ * object as the same field reached through another.
+ *
+ * @experimental
+ */
+export type {
+  AddressableFieldsOptions,
+  AddressableField,
+  UnvalidatedAddressableField,
+} from "nextly";
 
 /**
  * Declaring a field of a type the plugin itself contributes. The built-in
@@ -233,8 +279,9 @@ export type {
  *
  * @public `PluginAdminContributions`, `PluginAdminPage`, `PluginCollectionView`,
  *   `PluginMenuItem`, `ComponentPath` — exercised by `plugin-form-builder`.
- * @experimental `PluginAdminWidget` — dashboard-widget rendering is deferred to
- *   M8 (D22); the contract is reserved, not rendered.
+ * @experimental `PluginAdminWidget` — dashboard widgets render (D22); the
+ *   contribution shape is still settling, so it graduates once a first-party
+ *   plugin ships one.
  */
 export type {
   ComponentPath,
@@ -244,6 +291,12 @@ export type {
   PluginAdminPage,
   PluginNavSection,
   PluginAdminWidget,
+  PluginAdminCustomWidget,
+  PluginAdminDataWidget,
+  PluginAdminStatsWidget,
+  PluginAdminDeclarativeWidget,
+  PluginAdminQuerylessWidget,
+  DeclarativeWidgetArchetype,
   PluginCollectionView,
   PluginMenuItem,
 } from "nextly";
@@ -355,4 +408,73 @@ export type {
   EmailProviderDescriptor,
   ProviderAvailability,
   RegisteredEmailProvider,
+} from "nextly";
+
+/**
+ * @experimental Background jobs.
+ *
+ * A plugin declares a job type with `defineJob` and asks for one to happen with
+ * `nextly.jobs.queue`. Held experimental per D55 until a first-party plugin
+ * ships one — the release drain is core's, not a plugin's, so nothing has yet
+ * exercised this from the outside.
+ */
+export { defineJob, MAX_JOB_SLUG_LENGTH } from "nextly";
+/** @experimental See `defineJob`. */
+export type {
+  JobContext,
+  JobDefinition,
+  JobDefinitionInput,
+  JobInputFor,
+  JobRetryPolicy,
+  JobSlug,
+  QueueJobArgs,
+  QueueJobResult,
+} from "nextly";
+
+/**
+ * @experimental Dashboard widgets (D22/C9) — the registry a widget declares
+ * itself to, the source registry a query names, and the declarative query
+ * contract itself.
+ *
+ * Forwarded here for the reason the Singles surface above is: a plugin imports
+ * only from `@nextlyhq/plugin-sdk` and `@nextlyhq/ui`, never from core, so a
+ * registry exported from the `nextly` root alone is one an author following the
+ * documented surface cannot reach at all. There is no `nextly/widgets` subpath,
+ * so this is the only supported spelling.
+ *
+ * Every contract a published shape NAMES travels with it, the way core's own
+ * root export does: `WidgetDefinition.defaultHeight` is a `WidgetHeight`, and a
+ * `WidgetSource` is built out of `WidgetSourceField`, `WidgetSourceKind` and
+ * `WidgetOp` — a public property whose type has no public name can be inferred
+ * but never annotated.
+ *
+ * Held `@experimental` alongside `PluginAdminWidget`, which is the same feature
+ * seen from the contributions side: the widget contract graduates per D55 once a
+ * first-party plugin ships one. See STABILITY.md.
+ */
+export {
+  WIDGET_SIZES,
+  WIDGET_CHROME,
+  WIDGET_HEIGHTS,
+  WIDGET_ARCHETYPES,
+  WIDGET_OPS,
+  WIDGET_SOURCE_KINDS,
+  WIDGET_SOURCE_FIELD_TYPES,
+  registerWidget,
+  registerSource,
+  type WidgetDefinition,
+  type WidgetAction,
+  type WidgetSetting,
+  type WidgetQuery,
+  type WidgetSize,
+  type WidgetChrome,
+  type WidgetHeight,
+  type WidgetArchetype,
+  type DataWidgetArchetype,
+  type QuerylessWidgetArchetype,
+  type WidgetSource,
+  type WidgetSourceField,
+  type WidgetSourceFieldType,
+  type WidgetSourceKind,
+  type WidgetOp,
 } from "nextly";

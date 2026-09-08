@@ -14,11 +14,13 @@ import {
   compilePageCss,
   MAX_SCANNED_KEYS,
   MAX_SCOPE_LENGTH,
+  previewStateClass,
 } from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
 import {
   nodeClassName,
   nodeClassNames,
+  PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
 import {
@@ -259,10 +261,58 @@ describe("cascade tiers", () => {
     expect(out).toBe(
       [
         `${PAGE_ROOT_SELECTOR} { color: #111 }`,
-        `${PAGE_ROOT_SELECTOR} .nx-bt-core--box { color: #222 }`,
+        // Anchored to ONE page-root class with the rest inside `:where()`, so
+        // the default weighs 0-1-0: enough to clear a bare element reset, and
+        // below the node value on the line after this one.
+        `.${PAGE_ROOT_CLASS} :where(.nx-bt-core--box) { color: #222 }`,
         `${PAGE_ROOT_SELECTOR} .${nodeClassName("n1")} { color: #333 }`,
       ].join("\n")
     );
+  });
+
+  it("weighs a block default at one class, descendants included", () => {
+    const out = css(doc([node("n1", {})], {}), {
+      ...CTX,
+      blockBases: {
+        "core/box": {
+          base: {
+            base: {
+              color: "#222",
+              // A catalog property whose shape carries the descendant `a`, so
+              // this emits a SECOND rule with a part after the block class.
+              // Without it the test cannot tell a wrapper that covers the
+              // whole remainder from one that stops at the base.
+              linkColor: "#333",
+            },
+          },
+        },
+      },
+    });
+
+    const blockRules = out
+      .split("\n")
+      .filter(line => line.includes("nx-bt-core--box"));
+    // Population before the property: two rules, one of them the descendant.
+    expect(blockRules).toHaveLength(2);
+    expect(blockRules.some(rule => rule.includes("nx-bt-core--box a"))).toBe(
+      true
+    );
+
+    for (const rule of blockRules) {
+      const selector = rule.slice(0, rule.indexOf("{")).trim();
+      // ONE class outside the wrapper, and it must not be the doubled root.
+      // Wrapping the whole selector weighs 0-0-0, and an ordinary unlayered
+      // reset — `h1, h2, … { font-size: inherit; margin: 0 }` — is 0-0-1 and
+      // beats it, so a default written that way loses to the reset it exists
+      // to answer. Measured in a browser against that reset: fully wrapped
+      // left an `h1` at 16px, anchored gave its declared 36px, and a host's
+      // own `.content h1` still won at 11px.
+      expect(selector.startsWith(`.${PAGE_ROOT_CLASS} :where(`)).toBe(true);
+      expect(selector.startsWith(PAGE_ROOT_SELECTOR)).toBe(false);
+      // And the wrapper closes at the end, so no part of the remainder sits
+      // outside carrying weight of its own.
+      expect(selector.endsWith(")")).toBe(true);
+    }
   });
 
   it("refuses a block type longer than the cap, so two cannot compile apart", () => {
@@ -552,8 +602,8 @@ describe("block type classes", () => {
         },
       }
     );
-    expect(out).toContain(".nx-bt-foo-bar--baz {");
-    expect(out).toContain(".nx-bt-foo--bar-baz {");
+    expect(out).toContain(".nx-bt-foo-bar--baz)");
+    expect(out).toContain(".nx-bt-foo--bar-baz)");
   });
 
   it("escapes the type in a warning pointer", () => {
@@ -1686,5 +1736,206 @@ describe("the page scope", () => {
       scope: atBound,
     });
     expect(out).toContain(atBound);
+  });
+});
+
+describe("element defaults", () => {
+  /**
+   * The tier exists so an `h1` and an `h3` differ under a host reset. A block
+   * default cannot do it: those are keyed by block TYPE and a heading's level
+   * is a PROP, so one `core/heading` default gives every level one size.
+   */
+  const TYPOGRAPHY = {
+    h1: { base: { base: { fontSize: "2.25rem" } } },
+    p: { base: { base: { lineHeight: 1.6 } } },
+  };
+
+  it("emits one rule per declared element, weighing a single class", () => {
+    const out = css(doc([node("n1")]), { ...CTX, elementBases: TYPOGRAPHY });
+
+    const lines = out.split("\n").filter(line => /:where\((h1|p)\)/.test(line));
+    // Population before the property: a filter that matched nothing would
+    // satisfy every per-line claim below.
+    expect(lines).toHaveLength(2);
+    for (const rule of lines) {
+      const selector = rule.slice(0, rule.indexOf("{")).trim();
+      // One class outside the wrapper, and the element inside it. `0-1-0`
+      // clears a bare `h1 { font-size: inherit }` reset at `0-0-1` and still
+      // yields to a host's own `.content h1` at `0-1-1`.
+      expect(selector.startsWith(`.${PAGE_ROOT_CLASS} :where(`)).toBe(true);
+      expect(selector.endsWith(")")).toBe(true);
+      // NOT the doubled root. That prefix exists to make an AUTHOR's values
+      // outrank host CSS; a default borrowing it stops being a default.
+      expect(selector.startsWith(PAGE_ROOT_SELECTOR)).toBe(false);
+    }
+    expect(out).toContain("font-size: 2.25rem");
+    expect(out).toContain("line-height: 1.6");
+  });
+
+  it("drops an element the compiler does not emit", () => {
+    // A tag reaches a SELECTOR, so the set is a closed list rather than an
+    // escaped string. `blockquote` is a plausible thing for a host to supply
+    // and is not one of the elements this library renders text as.
+    //
+    // The declared type already refuses it, and that is not the case being
+    // covered: a compile context is a HOST's value. It arrives from JavaScript
+    // that was never checked, or off a stored artifact compiled by a version
+    // whose list differed, and the compiler is what has to hold either way.
+    const out = css(doc([node("n1")]), {
+      ...CTX,
+      elementBases: {
+        ...TYPOGRAPHY,
+        blockquote: { base: { base: { color: "#111" } } },
+      },
+    } as unknown as StyleCompileContext);
+
+    expect(out).not.toContain("blockquote");
+    // The control: the tags that ARE in the list still emitted, so this cannot
+    // pass by dropping everything.
+    expect(out).toContain(":where(h1)");
+  });
+
+  it("keeps a scoped document's defaults exactly as overridable", () => {
+    // A scope constrains the anchor; it must not add to it. Appended plainly
+    // the pair weighs `0-2-0` and beats a host's `.content h1` at `0-1-1`, so a
+    // scoped document would keep the defaults precisely where an unscoped one
+    // yields — scoping deciding a cascade question it has no business in.
+    const scoped = css(doc([node("n1")]), {
+      ...CTX,
+      elementBases: TYPOGRAPHY,
+      scope: "nx-doc-a",
+    });
+
+    // The scope still has to MATCH: dropping it would leak this document's
+    // defaults onto another rendered beside it.
+    expect(scoped).toContain(".nx-doc-a");
+    // ...and it carries no weight, so the anchor is the one page-root class.
+    expect(scoped).toContain(
+      `.${PAGE_ROOT_CLASS}:where(.nx-doc-a) :where(h1) {`
+    );
+    expect(scoped).not.toContain(`.${PAGE_ROOT_CLASS}.nx-doc-a :where(h1)`);
+  });
+
+  it("yields to a node's own value for the same property", () => {
+    // The tier is a baseline, not a policy. A node value is `0-3-0` against the
+    // default's `0-1-0`, so the author wins wherever they said anything.
+    const out = css(
+      doc([node("n1", { base: { base: { fontSize: "5rem" } } })]),
+      { ...CTX, elementBases: TYPOGRAPHY }
+    );
+
+    const defaultRule = out
+      .split("\n")
+      .find(line => line.includes(":where(h1)"));
+    const nodeRule = out
+      .split("\n")
+      .find(line => line.includes(nodeClassName("n1")));
+    expect(defaultRule).toContain("2.25rem");
+    expect(nodeRule).toContain("5rem");
+    // Both present, and the node's selector is the heavier one.
+    expect(nodeRule?.startsWith(PAGE_ROOT_SELECTOR)).toBe(true);
+  });
+});
+
+describe("previewing an interaction state", () => {
+  /** Every tier that can style the previewed element, in one document. */
+  function everyTier(previewStates: boolean): string {
+    const document = doc(
+      [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          classes: ["c1"],
+          styles: { hover: { base: { color: "#000001" } } },
+        } as unknown as BlockNode,
+      ],
+      { styles: { hover: { base: { color: "#000005" } } } }
+    );
+    return css(document, {
+      ...CTX,
+      ...(previewStates ? { previewStates: true } : {}),
+      namedClasses: [
+        {
+          id: "c1",
+          slug: "card",
+          orderIndex: 0,
+          styles: { hover: { base: { color: "#000002" } } },
+        },
+      ],
+      blockBases: { "core/box": { hover: { base: { color: "#000003" } } } },
+      elementBases: { h1: { hover: { base: { color: "#000004" } } } },
+    } as unknown as StyleCompileContext);
+  }
+
+  it("is OFF unless a caller asks, so a published page carries no marker", () => {
+    // The default matters more than the feature: a visitor's browser decides
+    // its own `:hover`, and a class nothing will ever set is bytes on every
+    // page for nobody.
+    const out = everyTier(false);
+    expect(out).toContain(":where(:hover)");
+    expect(out).not.toContain("nx-pb-state-hover");
+  });
+
+  it("gives EVERY tier the forceable form, not just the node's own", () => {
+    // A forced state has to reach every rule that can match the element. A tier
+    // left behind shows half the appearance the author is editing — and the
+    // half that is missing is whichever one they did not set directly.
+    const out = everyTier(true);
+    const forced = out
+      .split("\n")
+      .filter(line => line.includes(`.${previewStateClass("hover")}`));
+    // Five tiers wrote a hover rule, so five must carry the marker. Asserting
+    // "contains the class" would pass with one.
+    expect(forced).toHaveLength(5);
+    // One distinguishable value per tier. Sentinels like `#node` read better
+    // and are not colours — the compiler drops an invalid value and emits
+    // nothing, so the whole fixture compiled to an empty sheet and every
+    // assertion over it was vacuous.
+    for (const value of [
+      "#000001",
+      "#000002",
+      "#000003",
+      "#000004",
+      "#000005",
+    ]) {
+      expect(
+        forced.some(rule => rule.includes(value)),
+        `no forced rule carried ${value}`
+      ).toBe(true);
+    }
+  });
+
+  it("joins the marker INSIDE the wrapper, so it adds no weight", () => {
+    /*
+     * The whole reason this is safe. `:where()` contributes nothing whatever it
+     * holds, so a previewed rule weighs exactly what the published one weighs.
+     * Measured in a browser: with the marker inside, a later equal-weight rule
+     * still won; moved outside, the earlier rule won because the class had
+     * added a class of its own.
+     *
+     * It matters because the style panel's provenance explains what a VISITOR
+     * gets. A preview that ranked its rules differently would describe an order
+     * nobody is served, in the one state the author opened the panel to see.
+     */
+    const out = everyTier(true);
+    for (const rule of out.split("\n")) {
+      if (!rule.includes(`.${previewStateClass("hover")}`)) continue;
+      // The marker never appears outside a `:where(...)` group.
+      const outside = rule
+        .replace(/:where\([^)]*\)/g, "")
+        .includes(previewStateClass("hover"));
+      expect(outside, `marker escaped its wrapper in: ${rule}`).toBe(false);
+    }
+  });
+
+  it("leaves `base` alone, which is not a state anything forces", () => {
+    const out = css(doc([node("n1", { base: { base: { color: "#111" } } })]), {
+      ...CTX,
+      previewStates: true,
+    } as unknown as StyleCompileContext);
+    expect(out).toContain(`${PAGE_ROOT_SELECTOR} .${nodeClassName("n1")} {`);
+    expect(out).not.toContain("nx-pb-state-base");
   });
 });

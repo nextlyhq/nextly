@@ -1,0 +1,225 @@
+"use client";
+
+/**
+ * Dispatches a widget to its archetype body, inside the one card.
+ *
+ * The card is drawn HERE rather than by each archetype, so an archetype added
+ * later contributes a body function and inherits the header, the footer, the
+ * busy state, the error presentation and the region label without deciding any
+ * of them again. Adding `table`, `list`, `text` and `actions` is one entry in
+ * `ARCHETYPE_BODIES` each.
+ *
+ * WHICH of those states a widget is in is decided by `resolveWidgetOutcome`
+ * rather than here, because the grid has to count the same answer for its live
+ * region. See `./outcome`.
+ *
+ * `custom` is the exception, and it does NOT get a second resolution path: it
+ * goes through `PluginSlot`, which already resolves a component path against
+ * the registry and already isolates a throw behind `PluginComponentBoundary`.
+ * A widget-specific resolver beside it would be a second place for a plugin
+ * component to fail differently.
+ *
+ * @module components/features/widgets/WidgetRenderer
+ */
+
+import type { WidgetComponentProps } from "nextly/widget-result";
+
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import type {
+  DashboardWidget,
+  WidgetSlot,
+} from "@admin/types/dashboard/widgets";
+
+import { resolveIconName } from "./archetypes/icon";
+import type { CellSlotLookup } from "./archetypes/types";
+import { resolveWidgetOutcome } from "./outcome";
+import { WidgetCard } from "./WidgetCard";
+
+/**
+ * A Lucide icon component for the definition's icon NAME, or nothing.
+ *
+ * Names arrive from a plugin's declaration, so an unknown one is expected
+ * input. It resolves to nothing rather than to a placeholder glyph: an icon is
+ * meant to be functional here, and a stand-in that means nothing is worse than
+ * the header simply not having one.
+ */
+
+export interface WidgetRendererProps {
+  definition: DashboardWidget;
+  /**
+   * This widget's slot from the batch. `undefined` means the batch has not
+   * answered yet — which is why a data widget with no slot is BUSY rather than
+   * empty, and a widget that asked for nothing is neither.
+   */
+  slot: WidgetSlot | undefined;
+  /**
+   * How a `stats` card reaches each cell's answer.
+   *
+   * Optional, and absent for every archetype that asks one question: their
+   * answer arrives in `slot` above. A stats card's numbers are keyed per cell,
+   * so its own `slot` is permanently undefined and this is where its data is.
+   */
+  slotFor?: CellSlotLookup;
+  /** When the batch this slot came from landed, for the freshness line. */
+  updatedAt?: Date | null;
+  /**
+   * Whether a request for this widget is in flight RIGHT NOW, including a
+   * background refetch that is keeping the previous answer on screen.
+   *
+   * Separate from the slot's absence, which is only ever the first load. This
+   * grid refetches on every window focus and the cards deliberately keep their
+   * numbers through it, so without this a reader using a screen reader had no
+   * way to know the dashboard was reading again.
+   */
+  isFetching?: boolean;
+  /**
+   * Which CARD this render is, and what its reader configured.
+   *
+   * 🔴 Handed to a plugin's own component, because nothing else can reach it.
+   * `plugin-sdk` is an author's only stable import surface, so a component that
+   * cannot receive its settings as props cannot observe them at all — a widget
+   * could declare a `text`, `checkbox` or `select` setting, a reader could
+   * choose a value, and the component drawing the card would never learn of it.
+   * Only `limit` reaches anything otherwise, through the query.
+   *
+   * The ID travels with them because `widgetId` does not identify a card. The
+   * same widget can sit on a dashboard twice with different settings, and a
+   * component keying anything — local state, a fetch, a chart instance — on the
+   * widget id would have the two copies overwrite each other.
+   *
+   * Optional, and the fallback is the layout's own rule rather than a guess:
+   * `defaultPlacements` names each placement after its widget, because an
+   * unarranged dashboard is the one case where the two are genuinely
+   * one-to-one. A render outside an arrangement is exactly that case.
+   */
+  placement?: { id: string; settings: Record<string, unknown> };
+}
+
+export function WidgetRenderer({
+  definition,
+  slot,
+  slotFor,
+  placement,
+  updatedAt = null,
+  isFetching = false,
+}: WidgetRendererProps) {
+  const shared = {
+    title: definition.title,
+    icon: resolveIconName(definition.icon),
+    link: definition.link,
+  };
+
+  const outcome = resolveWidgetOutcome(definition, slot, slotFor);
+
+  /*
+   * Built once, so the two `chrome` branches below cannot drift into handing a
+   * component different props depending on whether its card is framed.
+   *
+   * 🔴 ANNOTATED with the published type rather than inferred. `PluginSlot`
+   * forwards `Record<string, unknown>`, so nothing downstream would object to a
+   * renamed, dropped or retyped prop here -- and plugin authors compile against
+   * `WidgetComponentProps`, which would go on describing the old shape. That is
+   * the same parallel-definition drift this contract exists to end, so the
+   * producer is held to it here, where a mismatch fails to compile.
+   */
+  const componentProps: WidgetComponentProps = {
+    widgetId: definition.id,
+    placementId: placement?.id ?? definition.id,
+    settings: placement?.settings ?? {},
+    slot,
+    isFetching,
+  };
+
+  // The escape hatch. A plugin component draws its own body, so the card
+  // asserts nothing about its loading or empty states -- the component knows
+  // what it is showing and the card does not.
+  //
+  // It DOES receive its slot. `custom` is deliberately allowed to carry a
+  // query: core's own validator puts it in neither the data set nor the
+  // query-less set, because a widget that draws itself may still want the host
+  // to run its request. The grid honours that by putting the query in the
+  // batch, so withholding the answer here would make every such widget pay for
+  // a database read on every mount and every window focus and then fetch the
+  // same data again for itself. `undefined` while the batch is in flight, and
+  // the component decides what that looks like.
+  //
+  // And it receives the REFETCH state, in both directions. The card is marked
+  // busy like any other -- a queried custom widget keeps its body through a
+  // window-focus refetch exactly as an archetype does, so a reader on a screen
+  // reader needs the same `aria-busy` telling them the dashboard is reading
+  // again. The component is told too, because `slot` alone cannot say it: the
+  // slot holds the PREVIOUS answer during a refetch and is indistinguishable
+  // from idle. The grid already computes both for this widget and this branch
+  // was the one place that dropped them on the floor.
+  //
+  // Both are still `null`/`false` for a query-less custom widget, because the
+  // grid only reports them for a widget that asked -- so nothing here puts a
+  // freshness line under a card that never made a request.
+  if (outcome.state === "self-drawn") {
+    // A widget that declines the frame draws its own surface, so the card would
+    // be a second one around it -- a heading above its heading, a border around
+    // its border. Core's dashboard sections are exactly that: each already
+    // carries a title, a rule and its own loading and error states.
+    //
+    // Reached only for `custom`, which `validateWidgetDefinition` enforces:
+    // every other archetype has its body composed INTO the card, so unframing
+    // one would leave content with no heading and nothing owning its states.
+    //
+    // Nothing is wrapped around it at all -- not even a fragment with a class --
+    // so a component returning null leaves the grid cell genuinely empty and
+    // `empty:hidden` can collapse it. Anything drawn here to "help" would fill
+    // the cell and reinstate the blank row.
+    if (definition.chrome === "none") {
+      return <PluginSlot path={definition.component} props={componentProps} />;
+    }
+
+    return (
+      <WidgetCard
+        {...shared}
+        // Withheld when the slot is a REFUSAL, for the reason `WidgetCard`
+        // states about its own error branch: the timestamp says when the batch
+        // landed, which is true of the request and not of this card, so
+        // "Updated just now" over a body drawn from a failure tells the reader
+        // the opposite of what happened. The card cannot reach that rule by
+        // itself here -- an error REPLACES a body, and a self-drawn body is
+        // never replaced, so no `error` is passed and the footer's `settled`
+        // gate never sees one.
+        updatedAt={slot?.ok === false ? null : updatedAt}
+        isLoading={isFetching}
+      >
+        <PluginSlot path={definition.component} props={componentProps} />
+      </WidgetCard>
+    );
+  }
+
+  if (outcome.state === "loading") {
+    return (
+      <WidgetCard {...shared} isLoading>
+        {null}
+      </WidgetCard>
+    );
+  }
+
+  // From here down the card is showing an ANSWER, so `isLoading` reports a
+  // refetch rather than a first load -- it marks the body busy and leaves what
+  // is already there alone, which is the whole reason the card marks rather
+  // than replaces.
+  if (outcome.state === "failed") {
+    return (
+      <WidgetCard
+        {...shared}
+        error={outcome.message}
+        updatedAt={updatedAt}
+        isLoading={isFetching}
+      >
+        {null}
+      </WidgetCard>
+    );
+  }
+
+  return (
+    <WidgetCard {...shared} updatedAt={updatedAt} isLoading={isFetching}>
+      {outcome.node}
+    </WidgetCard>
+  );
+}

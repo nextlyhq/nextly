@@ -158,6 +158,11 @@ export { ListToolbar } from "./ListToolbar";
 export { ListColumnsMenu } from "./ListColumnsMenu";
 export { useListColumns } from "./useListColumns";
 export type { UseListColumnsOptions } from "./useListColumns";
+export { useTableColumns } from "./useTableColumns";
+export type {
+  UseTableColumnsOptions,
+  UseTableColumnsResult,
+} from "./useTableColumns";
 export type {
   ListColumnsControl,
   ListEmpty,

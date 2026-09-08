@@ -19,14 +19,13 @@
 
 import {
   findNode,
-  getBlock,
   type BlockDocument,
   type BlockNode,
   type PropSchema,
 } from "@nextlyhq/blocks-engine";
 
+import { inlinePropsOfKind } from "./inline-target";
 import { propPatch } from "./inspector";
-import { isLocked } from "./locking";
 import type { BuilderOp } from "./ops";
 
 /** One value a canvas may let an author type into. */
@@ -56,11 +55,6 @@ export interface InlineTextTarget {
  */
 function asText(value: unknown): string {
   return typeof value === "string" ? value : "";
-}
-
-/** Whether a schema opted this value into editing on the canvas. */
-function declaresInline(schema: PropSchema | undefined): boolean {
-  return schema?.inline === true;
 }
 
 function targetFor(
@@ -93,14 +87,11 @@ export function inlineTargets(
   document: BlockDocument,
   nodeId: string
 ): readonly InlineTextTarget[] {
-  const node = findNode(document.nodes, nodeId);
-  if (node === undefined || isLocked(node)) return [];
-  const definition = getBlock(node.type);
-  if (definition === undefined) return [];
-  const props = definition.props ?? {};
-  return Object.keys(props)
-    .filter(name => declaresInline(props[name]))
-    .map(name => targetFor(node, name, props[name]));
+  const found = inlinePropsOfKind(document, nodeId, "plain");
+  if (found === null) return [];
+  return found.entries.map(([name, schema]) =>
+    targetFor(found.node, name, schema)
+  );
 }
 
 /**

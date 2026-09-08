@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
+import {
+  createTestDb,
+  type TestDb,
+  testLogger,
+} from "../../../__tests__/fixtures/db";
 import { permissionFactory } from "../../../__tests__/fixtures/permissions";
 import { roleFactory } from "../../../__tests__/fixtures/roles";
 import { userFactory } from "../../../__tests__/fixtures/users";
@@ -18,7 +22,7 @@ describe("UserRoleService", () => {
     testDb = await createTestDb();
     // Type cast necessary: UserRoleService expects RBACDatabaseInstance (production PostgreSQL/MySQL)
     // but tests use in-memory SQLite. Both implement the same query interface.
-    service = new UserRoleService(testDb.db as any, testDb.schema);
+    service = new UserRoleService(testDb.adapter, testLogger);
   });
 
   describe("assignRoleToUser", () => {

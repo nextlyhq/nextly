@@ -95,6 +95,8 @@ export interface BlockSupportKeys {
   position: never;
   /** Container-query behaviour. */
   container: never;
+  /** Marker style on a list. */
+  list: never;
   /** Author-written CSS on this block. Gates a capability, not a style group. */
   customCss: never;
 }
@@ -350,6 +352,8 @@ export type {
   BlockEditorMeta,
   BlockExample,
   BlockIcon,
+  BlockIsland,
+  BlockPart,
   BlockSeoContribution,
   BlockSeoImage,
   BlockVariation,

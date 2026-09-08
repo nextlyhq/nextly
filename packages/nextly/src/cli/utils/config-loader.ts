@@ -57,6 +57,7 @@ import {
   finalizeRelationTargets,
   validateCrossPluginRelations,
 } from "../../plugins/schema/validate-relations";
+import { assertAdminWidgets } from "../../plugins/validate-admin-widgets";
 import { validatePluginSlugs } from "../../plugins/validate-slugs";
 
 import { bundleAndRequire } from "./config-bundler";
@@ -581,6 +582,15 @@ async function loadConfigInternal(
       // migration or a db sync accepts and acts on a configuration the
       // deployed app then refuses to start on.
       validatePluginSlugs(transformedConfig.plugins ?? []);
+
+      // The widgets on that same transformed list, and here for the same
+      // reason the runtime checks its own: a transformer can contribute a
+      // widget the resolver's list never held, and a value `JSON.stringify`
+      // cannot carry breaks the whole `/api/admin-meta/workspace` response
+      // rather than the one card. The CLI has to agree with boot, or
+      // `nextly build` accepts a configuration the deployed app refuses to
+      // start on.
+      assertAdminWidgets(transformedConfig.plugins ?? []);
 
       // Fold plugin contributions. Extend targets that aren't code/plugin
       // entities are DEFERRED (candidate Builder/UI-schema targets) rather than

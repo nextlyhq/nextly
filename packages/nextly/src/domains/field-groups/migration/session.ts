@@ -32,11 +32,9 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
 import { safeCode } from "../../../database/errors";
-import {
-  deriveLeaseTimings,
-  futureExpression,
-  nowExpression,
-} from "../../../database/lease-clock";
+import { futureExpression, nowExpression } from "../../../database/lease-clock";
+import { deriveLeaseTimings } from "../../../database/lease-timings";
+import { isMissingColumnError } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
 import { fieldGroupLockColumnTypes } from "../../../schemas/field-group-lock";
 import type { Logger } from "../../../shared/types";
@@ -272,7 +270,7 @@ async function lockTableUnderstandsExpiry(
     await readLockStateOutsideTransaction(adapter, dialect);
     return true;
   } catch (error) {
-    if (isMissingColumn(error, dialect)) return false;
+    if (isMissingColumnError(error)) return false;
     throw error;
   }
 }
@@ -445,40 +443,6 @@ export function getMigrationLockUpgradeDdl(dialect: MigrationDialect): string {
   // so the duplicate is tolerated by CODE below rather than by syntax.
   const guard = dialect === "postgresql" ? "IF NOT EXISTS " : "";
   return `ALTER TABLE ${MIGRATION_LOCK_TABLE} ADD COLUMN ${guard}expires_at ${expiresType}`;
-}
-
-/**
- * Whether a statement failed because `expires_at` is not there.
- *
- * A lock table created before that column existed answers every liveness read this way. Classified
- * by the driver's own code at the specificity the claim needs, exactly as {@link isDuplicateColumn}
- * and {@link isMissingTable} are — a message match would also catch a typo'd column name, which is
- * a programming error that must NOT be quietly tolerated.
- */
-function isMissingColumn(error: unknown, dialect: MigrationDialect): boolean {
-  let link: unknown = error;
-  for (
-    let depth = 0;
-    depth < 5 && link !== null && link !== undefined;
-    depth++
-  ) {
-    const code = safeCode(link);
-    const message = link instanceof Error ? link.message : "";
-
-    // 42703 undefined_column.
-    if (dialect === "postgresql" && code === "42703") return true;
-    if (
-      dialect === "mysql" &&
-      (code === "ER_BAD_FIELD_ERROR" || code === "1054" || code === "42S22")
-    ) {
-      return true;
-    }
-    // SQLite has no distinct code, and the text is unambiguous for this case.
-    if (dialect === "sqlite" && /no such column/i.test(message)) return true;
-
-    link = (link as { cause?: unknown }).cause;
-  }
-  return false;
 }
 
 /**

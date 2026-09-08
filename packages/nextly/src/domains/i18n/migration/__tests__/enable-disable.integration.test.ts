@@ -122,8 +122,14 @@ describe("i18n enable/disable migration (real sqlite)", () => {
     await apply();
 
     // add a German translation, then remove the enable file so only disable is pending
+    // Columns named rather than positional, unlike the `dc_pages` seeds above. This table is
+    // created by the migration under test, so its shape belongs to the production DDL and grows
+    // with it -- a structural column added there turns a positional VALUES list into
+    // "N columns but M values were supplied", failing a test that is about neither the column
+    // nor the count.
     sqlite.exec(
-      `INSERT INTO "dc_pages_locales" VALUES ('p1','de','Hallo','Welt')`
+      `INSERT INTO "dc_pages_locales" ("_parent", "_locale", "title", "body") ` +
+        `VALUES ('p1','de','Hallo','Welt')`
     );
     rmSync(join(dir, "20260708_000000_000_enable_localization_pages.sql"));
 

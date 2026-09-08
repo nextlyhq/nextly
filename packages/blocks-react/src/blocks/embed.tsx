@@ -90,6 +90,33 @@ export function renderEmbed({
   );
 }
 
+/**
+ * The shape an embed takes before an author gives it one.
+ *
+ * A user agent sizes an `<iframe>` at 300x150 and nothing here overrode it, so
+ * a video dropped on a page rendered at postage-stamp size in the corner of a
+ * full-width column — measured on a published page, and the block declared no
+ * defaults at all.
+ *
+ * `16 / 9` because that is what the sources an embed block is for actually
+ * serve: YouTube, Vimeo and every player that follows them. It is a DEFAULT
+ * rather than a rule — `dimensions` is in this block's `supports`, so an
+ * author setting a height or a ratio of their own outranks it, which is what
+ * an audio embed or a square player needs.
+ *
+ * `width: 100%` alongside it, because a ratio alone still resolves against the
+ * 300px the user agent starts from: the pair is what makes the frame fill its
+ * column and take its height from that width.
+ */
+const EMBED_BASE_STYLES = {
+  base: {
+    base: {
+      width: "100%",
+      aspectRatio: "16 / 9",
+    },
+  },
+} as const;
+
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
@@ -117,6 +144,7 @@ export const embed = defineBlock<EmbedProps, PageContext>({
   example: {
     props: { src: "https://example.com/player", title: "A product demo" },
   },
+  baseStyles: EMBED_BASE_STYLES,
   supports: {
     spacing: true,
     dimensions: true,

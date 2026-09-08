@@ -265,6 +265,62 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     resource: "webhooks",
     description: "Permission to delete webhook endpoints",
   },
+  // Content releases. Three authorities, not a CRUD set: a release is
+  // assembled and then COMMITTED, and those are different powers.
+  //
+  // The resource is `content-releases` rather than `releases` because
+  // registering one RESERVES the name, and "press releases" is a collection
+  // real sites already have.
+  //
+  // `publish-releases` is separate from `create-releases` on purpose. Creating
+  // a release and choosing what goes in it changes nothing a reader can see;
+  // scheduling it is the act that puts content live later, and it is the one
+  // that needs holding back. That is the same split the content lifecycle
+  // already makes, where `publish` and `unpublish` are distinct from `update`.
+  //
+  // `update` and `delete` are deliberately NOT seeded. A permission nothing
+  // enforces teaches the admin a vocabulary the server ignores; they arrive
+  // with the surfaces that check them.
+  {
+    name: "Read Releases",
+    slug: "read-content-releases",
+    action: "read",
+    resource: "content-releases",
+    description: "Permission to view content releases and their members",
+  },
+  {
+    name: "Create Releases",
+    slug: "create-content-releases",
+    action: "create",
+    resource: "content-releases",
+    description:
+      "Permission to create a content release and choose its members",
+  },
+  {
+    name: "Publish Releases",
+    slug: "publish-content-releases",
+    action: "publish",
+    resource: "content-releases",
+    description:
+      "Permission to schedule or cancel a content release, which is what makes its content go live",
+  },
+  // Background jobs. ONE permission, not a CRUD set: the only surface that
+  // checks anything today is the trigger that runs a drain pass by hand, and a
+  // permission nothing enforces teaches the admin a vocabulary the server
+  // ignores. `read-background-jobs` arrives with the queue view that reads it.
+  //
+  // Pulling the trigger confers no authority over the work itself. Every job
+  // runs as the identity it was queued with, reconstructed at execution, so a
+  // holder of this permission makes already-queued, already-authorized work
+  // happen NOW — they do not gain the power to perform it.
+  {
+    name: "Manage Background Jobs",
+    slug: "manage-background-jobs",
+    action: "manage",
+    resource: "background-jobs",
+    description:
+      "Permission to run the background job queue by hand, outside its schedule",
+  },
 ];
 
 /**

@@ -1,9 +1,11 @@
 import {
   compileSiteSheet,
+  compileSiteTokenSheet,
   DOCUMENT_FORMAT_VERSION,
   PAGE_ROOT_CLASS,
   resolveSiteTokens,
   type BlockDocument,
+  type DefinitionsById,
   type DocumentLimits,
   type SiteSheetInput,
   type StyleCompileContext,
@@ -47,6 +49,17 @@ export interface PageRendererProps {
   context?: PageContext;
   /** Where block definitions come from. Defaults to the process registry. */
   blocks?: BlockResolver;
+  /**
+   * The component definitions this page may inline, at the posture the caller
+   * chose — drafts for the editor, published for a served page.
+   *
+   * Passed through to the shared pipeline rather than resolved here, so this
+   * renderer and every other reader of the same document compose it the same
+   * way. Absent, an instance renders the marker that says its component could
+   * not be loaded, which is the honest answer for a reader that did not fetch
+   * one.
+   */
+  definitions?: DefinitionsById;
   /**
    * The stylesheet compiled when the document was saved, with the class each
    * node was assigned. Supplying it is the normal path.
@@ -201,6 +214,7 @@ interface SiteInputRoles {
   blockBases: "reconciled-here";
   tokenPrefix: "reconciled-here";
   previewContainer: "reconciled-here";
+  previewStates: "reconciled-here";
   mayFetchUrl: "reconciled-elsewhere";
   fonts: "sheet-only";
   tokens: "sheet-only";
@@ -317,6 +331,7 @@ export function withoutStatedNulls(
     blockBases: shared.blockBases ?? undefined,
     tokenPrefix: shared.tokenPrefix ?? undefined,
     previewContainer: shared.previewContainer ?? undefined,
+    previewStates: shared.previewStates ?? undefined,
   };
 }
 
@@ -399,6 +414,11 @@ export function sharedStyleInputs(
       route.previewContainer,
       stored.previewContainer
     ),
+    // The same precedence, for the same reason: whether this surface is
+    // previewing an interaction state is a fact about THIS render, while a
+    // stored tier describes the site. A site record has no business turning
+    // forceable states on for a published page.
+    previewStates: firstStated(route.previewStates, stored.previewStates),
   });
 }
 
@@ -445,6 +465,7 @@ export function PageRenderer({
   document,
   context,
   blocks,
+  definitions,
   styles,
   styleContext,
   siteStyles,
@@ -511,6 +532,7 @@ export function PageRenderer({
     resolver,
     limits,
     styleContext,
+    definitions,
   });
   // `null` here means only an unreadable ENVELOPE, which the two guards above
   // already answered. Kept because unreachability is a property of the current
@@ -523,7 +545,13 @@ export function PageRenderer({
       </div>
     );
   }
-  const { sanitized, migrated: doc, gated: pruned, deduped: visible } = stages;
+  const {
+    sanitized,
+    resolved,
+    migrated: doc,
+    gated: pruned,
+    deduped: visible,
+  } = stages;
 
   // The scope comes from whichever input supplied the stylesheet, never from a
   // separate prop. Two inputs would have to agree, and when they did not the
@@ -636,6 +664,17 @@ export function PageRenderer({
   // answer for that one.
   const repairedDocument =
     sanitized !== document ||
+    // Composition is a sixth, and the only one that ADDS nodes rather than
+    // removing them: a stored sheet names the page's own ids, and an inlined
+    // component's are not among them.
+    //
+    // Redundant today with the artifact's own unaccounted-node check, for the
+    // reason recorded beside the same clause in `read-page.ts` — every node
+    // gets a class, so a replaced instance always trips that one first. Kept
+    // because the redundancy is a property of class assignment rather than of
+    // composition, and inheriting a guarantee from something that never
+    // promised it is how one lapses without a failing test.
+    resolved !== sanitized ||
     (pruned !== doc && !gatingCoveredByArtifact) ||
     visible !== pruned ||
     (drawlessInput !== visible && !drawlessCoveredByArtifact) ||
@@ -756,47 +795,83 @@ export function PageRenderer({
   // tier is emitted under, invisibly, since each sheet is consistent on its own.
   const siteBreakpoints =
     siteStyles === false ? undefined : statedBreakpoints(shared.breakpoints);
+  // The input both compilers below are given, assembled ONCE. Breakpoints are
+  // the only member either of them disagrees about, so stating the rest twice
+  // is how the two paths would come to answer differently about a prefix or a
+  // fetch predicate while each stayed self-consistent.
+  const siteSheetInput = {
+    ...siteInput,
+    // The RESOLVED values, the same objects the page context above was
+    // given. Spreading `siteInput` alone would leave each consumer
+    // computing its own answer, which is the defect this closes.
+    ...(shared.blockBases == null ? {} : { blockBases: shared.blockBases }),
+    ...(shared.tokenPrefix == null ? {} : { tokenPrefix: shared.tokenPrefix }),
+    tokens: resolveSiteTokens(siteInput?.tokens),
+    // The SAME predicate the page sheet is compiled with, taken from the
+    // one place it is derived rather than derived again here. The class
+    // and block-default tiers are emitted verbatim into every page, so
+    // without this a stored class could name a host the node styles
+    // beside it are refused for — and this sheet is emitted first, where
+    // a later omission cannot retract it. A caller who put a predicate on
+    // `siteStyles` keeps it, matching how `effectiveCompile` treats one
+    // on the style context.
+    ...(mayFetchUrl === undefined || siteInput?.mayFetchUrl !== undefined
+      ? {}
+      : { mayFetchUrl }),
+    // The RESOLVED preview option, from the same reconciliation the page
+    // context above was given. A shared tier compiled for the published
+    // page beneath node styles compiled for a preview surface puts two
+    // answers to one breakpoint in one document.
+    // Carried into the SITE sheet as well as the page compile. A named
+    // class and a block-type default are emitted here, so an editor that
+    // asked only the page compile for forceable states gets a selected
+    // block whose hover appearance comes from a class showing nothing.
+    // ALWAYS written, rather than only when it is true. `siteInput` is
+    // spread above and can carry a preview flag of its own, so a
+    // conditional override is silently one-directional: a route turning
+    // the option OFF resolves correctly here and then loses to the value
+    // already in the spread, leaving the page sheet on published
+    // selectors while the class and block-default tiers use preview ones.
+    // Route-wins precedence has to be able to win downwards too.
+    previewStates: shared.previewStates === true,
+    ...(shared.previewContainer == null
+      ? {}
+      : { previewContainer: shared.previewContainer }),
+  };
+
   // A sheet by DEFAULT. Without one a block cannot reference a token at all —
   // a default reading `color.surface` would resolve on a route and resolve to
   // nothing here — which is why `core/card` shipped with no background.
-  // Withheld only when no breakpoints are known, because a sheet compiled
-  // against breakpoints nobody chose would put the block-default tier under
-  // at-rules the page sheet does not use.
+  //
+  // THREE outcomes, not two, because `siteBreakpoints` is undefined for two
+  // unrelated reasons and they want opposite answers. `siteStyles === false` is
+  // a caller declining the sheet, and a token tier emitted anyway would override
+  // the declining host's own custom properties. Breakpoints merely not stated is
+  // a caller who said nothing, and there the token tier is the half that must
+  // still arrive: a stored artifact carries `var(--site-*)` references whose
+  // declarations live nowhere else, and a custom property nothing declares makes
+  // its whole declaration invalid at computed-value time — so the property falls
+  // to its initial value, which for `border-color` is `currentColor` rather than
+  // nothing. Only the block-default and named-class tiers are withheld there,
+  // being the two the site's breakpoints decide the at-rules for.
+  //
+  // Paired with the page CSS rather than emitted beside every render: the token
+  // tier exists to resolve `var(--site-*)` in that CSS, so with no page sheet
+  // nothing references it, and declaring the custom properties anyway would push
+  // `--site-*` onto a host that asked this renderer for markup alone. It is also
+  // what stops a stylesheet withheld as untrustworthy from acquiring a companion
+  // sheet that the withholding was meant to suppress.
   const siteSheet =
-    siteBreakpoints === undefined
+    siteStyles === false
       ? undefined
-      : compileSiteSheet({
-          ...siteInput,
-          // The RESOLVED values, the same objects the page context above was
-          // given. Spreading `siteInput` alone would leave each consumer
-          // computing its own answer, which is the defect this closes.
-          breakpoints: siteBreakpoints,
-          ...(shared.blockBases == null
-            ? {}
-            : { blockBases: shared.blockBases }),
-          ...(shared.tokenPrefix == null
-            ? {}
-            : { tokenPrefix: shared.tokenPrefix }),
-          tokens: resolveSiteTokens(siteInput?.tokens),
-          // The SAME predicate the page sheet is compiled with, taken from the
-          // one place it is derived rather than derived again here. The class
-          // and block-default tiers are emitted verbatim into every page, so
-          // without this a stored class could name a host the node styles
-          // beside it are refused for — and this sheet is emitted first, where
-          // a later omission cannot retract it. A caller who put a predicate on
-          // `siteStyles` keeps it, matching how `effectiveCompile` treats one
-          // on the style context.
-          ...(mayFetchUrl === undefined || siteInput?.mayFetchUrl !== undefined
-            ? {}
-            : { mayFetchUrl }),
-          // The RESOLVED preview option, from the same reconciliation the page
-          // context above was given. A shared tier compiled for the published
-          // page beneath node styles compiled for a preview surface puts two
-          // answers to one breakpoint in one document.
-          ...(shared.previewContainer == null
-            ? {}
-            : { previewContainer: shared.previewContainer }),
-        });
+      : siteBreakpoints === undefined
+        ? css === ""
+          ? undefined
+          : compileSiteTokenSheet(siteSheetInput)
+        : compileSiteSheet({
+            ...siteSheetInput,
+            breakpoints: siteBreakpoints,
+          });
 
   return (
     <div className={rootClassName}>

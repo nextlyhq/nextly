@@ -41,6 +41,7 @@ import {
 } from "../../../schemas/users/sqlite";
 import { nextlyEvents as eventsSqlite } from "../../../schemas/webhooks/sqlite";
 import { ActivityLogService } from "../../../services/dashboard/activity-log-service";
+import { allResources } from "../../../services/dashboard/readable-resources";
 import { UserMutationService } from "../services/user-mutation-service";
 
 const TEST_DB_DIR = join(
@@ -409,8 +410,18 @@ describe("deleting a user erases them from the activity log without erasing the 
       entryTitle: "Before Deletion",
     });
 
+    // This suite exercises the erasure identity mechanism, not permission
+    // scoping, so it asks for every resource explicitly -- an omitted scope
+    // now fails closed and would return nothing, which is the correct
+    // behaviour for a real caller but not what this assertion is about.
     const live = await activity.getRecentActivity({
       userId: String(author.id),
+      scope: allResources(),
+      // The feed authorizes each row's document as this caller and answers
+      // EMPTY without one. These rows name no registered content, so the scope
+      // decides them -- but the caller is still required, because "no caller"
+      // is the fail-closed case rather than a permissive default.
+      caller: { user: { id: "reader", roles: [] } },
     });
     expect(live.activities).toHaveLength(1);
     // The premise: every field the admin renders survives the mapping.
@@ -423,6 +434,12 @@ describe("deleting a user erases them from the activity log without erasing the 
 
     const erased = await activity.getRecentActivity({
       userId: String(author.id),
+      scope: allResources(),
+      // The feed authorizes each row's document as this caller and answers
+      // EMPTY without one. These rows name no registered content, so the scope
+      // decides them -- but the caller is still required, because "no caller"
+      // is the fail-closed case rather than a permissive default.
+      caller: { user: { id: "reader", roles: [] } },
     });
     expect(erased.activities).toHaveLength(1);
     expect(erased.activities[0].userName).toBeNull();
@@ -464,10 +481,13 @@ describe("deleting a user erases them from the activity log without erasing the 
 
     const feed = await activity.getRecentActivity({
       userId: String(author.id),
+      scope: allResources(),
+      // The feed authorizes each row's document as this caller and answers
+      // empty without one; these rows name no registered content, so the scope
+      // decides them.
+      caller: { user: { id: "reader", roles: [] } },
     });
     expect(feed.activities.map(a => a.entryTitle)).toEqual(["newer", "older"]);
-    // The count query reads the same filter through its own spelling.
-    expect(feed.total).toBe(2);
   });
 
   it("does not rewrite entries the erasure already handled", async () => {

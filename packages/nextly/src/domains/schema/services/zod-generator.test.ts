@@ -322,7 +322,7 @@ describe("ZodGenerator — Individual Field Generation", () => {
     ]);
     const { code } = gen.generateSchema(col);
     expect(code).toContain(
-      "tags: z.array(z.string()).min(1).max(5).optional(),"
+      "tags: z.array(z.string()).min(1).max(5).nullish(),"
     );
   });
 
@@ -397,7 +397,7 @@ describe("ZodGenerator — Individual Field Generation", () => {
       } as FieldConfig,
     ]);
     const { code } = gen.generateSchema(col);
-    expect(code).toContain("publishedAt: z.string().datetime().optional(),");
+    expect(code).toContain("publishedAt: z.string().datetime().nullish(),");
   });
 
   it("generates boolean schema for checkbox fields", () => {
@@ -450,7 +450,7 @@ describe("ZodGenerator — Individual Field Generation", () => {
       } as unknown as FieldConfig,
     ]);
     const { code } = gen.generateSchema(col);
-    expect(code).toContain("attachments: z.array(z.string()).optional(),");
+    expect(code).toContain("attachments: z.array(z.string()).nullish(),");
   });
 
   it("generates polymorphic array schema for relationship fields with hasMany", () => {
@@ -492,7 +492,7 @@ describe("ZodGenerator — Individual Field Generation", () => {
       } as FieldConfig,
     ]);
     const { code } = gen.generateSchema(col);
-    expect(code).toContain("metadata: z.any().optional(),");
+    expect(code).toContain("metadata: z.any().nullish(),");
   });
 
   it("generates empty object schema for groups without data fields", () => {
@@ -572,7 +572,7 @@ describe("ZodGenerator — Nested Recursion Depth", () => {
     ]);
     const { code } = gen.generateSchema(col);
     expect(code).toContain(
-      "configGroup: z.object({ items: z.array(z.object({ key: z.string(), value: z.number().optional() })).min(1).max(3) }),"
+      "configGroup: z.object({ items: z.array(z.object({ key: z.string(), value: z.number().nullish() })).min(1).max(3) }),"
     );
   });
 
@@ -625,7 +625,7 @@ describe("ZodGenerator — Plugin Fields & Storage Fallback", () => {
       } as unknown as FieldConfig,
     ]);
     const { code } = gen.generateSchema(col);
-    expect(code).toContain("userScore: (z.number().min(1).max(5)).optional(),");
+    expect(code).toContain("userScore: (z.number().min(1).max(5)).nullish(),");
   });
 
   it("falls back to storage type schema when plugin declares no zodSchema", () => {
@@ -671,7 +671,7 @@ describe("ZodGenerator — Plugin Fields & Storage Fallback", () => {
     ]);
     const { code } = gen.generateSchema(col);
     expect(code).toContain(
-      "details: z.object({ badge: z.string().optional() }),"
+      "details: z.object({ badge: z.string().nullish() }),"
     );
   });
 });
@@ -695,7 +695,7 @@ describe("ZodGenerator — Schema Variants & Exports", () => {
     expect(code).toContain("export const ArticleSchema = z.object({");
     expect(code).toContain("  id: z.string(),");
     expect(code).toContain("  title: z.string(),");
-    expect(code).toContain("  body: z.string().optional(),");
+    expect(code).toContain("  body: z.string().nullish(),");
     expect(code).toContain("  createdAt: z.string().datetime(),");
     expect(code).toContain("  updatedAt: z.string().datetime(),");
 

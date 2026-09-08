@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import * as publicEntry from "../index";
+import { contrastRatio, parseColor } from "./contrast";
 import { compileStyleValues, safeTokenPrefix } from "./declarations";
 import type { SiteToken, SiteTokenSet } from "./site-tokens";
 import {
@@ -505,9 +506,64 @@ describe("emitTokenBlocks", () => {
       },
       SCOPE
     );
-    expect(css).toContain(
-      `[${DARK_MODE_ATTRIBUTE}="dark"] ${SCOPE}{--site-color-text:#eee}`
+    // BOTH forms, because the selector decides which one can match and this
+    // function serves two. A scoped selector is matched by the ancestor form,
+    // which is the flexible one — a host may carry the switch anywhere above
+    // it. A site sheet declares on `:root`, which IS the document element and
+    // has no ancestor, so only the attached form can reach it.
+    // Wrapped in `:is()`, because this selector may be a LIST and appending
+    // the attribute to one would qualify only its last member.
+    expect(css).toContain(`[${DARK_MODE_ATTRIBUTE}="dark"] :is(${SCOPE})`);
+    expect(css).toContain(`:is(${SCOPE})[${DARK_MODE_ATTRIBUTE}="dark"]`);
+    expect(css).toContain("--site-color-text:#eee");
+  });
+
+  it("qualifies every member of a scoped selector LIST", () => {
+    // Appending the attribute to `.a,.b` qualifies only the last member, so
+    // `.a` would take the dark values with no attribute anywhere and a scoped
+    // preview would render dark permanently.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+        ],
+      },
+      ".preview-a,.preview-b"
     );
+    const dark = css.slice(css.indexOf("#111") + 4);
+    expect(dark).not.toMatch(/(^|[,{])\s*\.preview-a\s*[,{]/);
+    expect(dark).toContain(":is(.preview-a,.preview-b)");
+  });
+
+  it("declares root-scoped dark values on whichever element carries the switch", () => {
+    // `:root` IS `<html>`, so no rule describing an ancestor can reach it — and
+    // a rule ATTACHED to it reaches only the case where the host put the
+    // attribute on `<html>`. Custom properties inherit, so declaring them on
+    // the attribute-bearing element covers `<html>`, `<body>` and a wrapper
+    // alike. Measured in a browser across all three placements.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+        ],
+      },
+      ":root"
+    );
+    expect(css).toContain(
+      `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee}`
+    );
+    // Not anchored to the root, which is the form that only works on `<html>`.
+    expect(css).not.toContain(`:root[${DARK_MODE_ATTRIBUTE}="dark"]`);
+    // And the light block still declares on the root itself.
+    expect(css).toContain(":root{--site-color-text:#111}");
   });
 
   it("follows the operating system when the site asks for that instead", () => {
@@ -815,8 +871,83 @@ describe("resolveSiteTokens", () => {
   });
 });
 
+describe("a control boundary clears the contrast a control boundary needs", () => {
+  /*
+   * WCAG 2.2 SC 1.4.11 requires 3:1 for a boundary that IDENTIFIES a control.
+   * `core/form` gives its control the page's own background on purpose, so the
+   * border is the only thing telling a person where the field is.
+   *
+   * Computed from the tokens rather than compared against a literal. A test
+   * asserting `#6b7280` passes on a palette retune that keeps the spelling and
+   * loses the property; this one fails the moment the ratio does, which is the
+   * thing anybody actually depends on.
+   */
+  const FLOOR = 3;
+  const rgb = (value: string) => {
+    const parsed = parseColor(value);
+    if (parsed === undefined) throw new Error(`unparseable: ${value}`);
+    return parsed;
+  };
+  const token = (name: string) => {
+    const found = defaultSiteTokens().find(entry => entry.name === name);
+    if (found === undefined) throw new Error(`missing token: ${name}`);
+    return found.values;
+  };
+
+  it.each([
+    ["light", "color.background"],
+    ["light", "color.surface"],
+    ["dark", "color.background"],
+    ["dark", "color.surface"],
+  ] as const)(
+    "color.border-strong clears 3:1 in %s against %s",
+    (mode, behind) => {
+      const border = token("color.border-strong")[mode];
+      const back = token(behind)[mode];
+      expect(border, `color.border-strong has no ${mode} value`).toBeDefined();
+      expect(back, `${behind} has no ${mode} value`).toBeDefined();
+
+      const ratio = contrastRatio(rgb(border as string), rgb(back as string));
+
+      expect(
+        ratio,
+        `color.border-strong is ${ratio.toFixed(2)}:1 against ${behind} in ` +
+          `${mode}, below the ${FLOOR}:1 WCAG 2.2 SC 1.4.11 requires of a ` +
+          `boundary that identifies a control.`
+      ).toBeGreaterThanOrEqual(FLOOR);
+    }
+  );
+
+  it("is a DIFFERENT token from the decorative hairline", () => {
+    /*
+     * The must-differ half. `color.border` is deliberately decorative and does
+     * NOT clear 3:1 — measured at 1.24:1 light and 1.30:1 dark — so a change
+     * that pointed `color.border-strong` at the same value would pass nothing
+     * above by accident and fail here.
+     */
+    const strong = token("color.border-strong");
+    const hairline = token("color.border");
+
+    expect(strong.light).not.toBe(hairline.light);
+    expect(strong.dark).not.toBe(hairline.dark);
+
+    // And the hairline really is below the floor, so the pair is a genuine
+    // distinction rather than two names for one adequate colour.
+    const light = contrastRatio(
+      rgb(hairline.light),
+      rgb(token("color.background").light)
+    );
+    expect(light).toBeLessThan(FLOOR);
+  });
+});
+
 describe("the surface, border and muted tokens", () => {
-  const NEW = ["color.surface", "color.border", "color.muted"];
+  const NEW = [
+    "color.surface",
+    "color.border",
+    "color.border-strong",
+    "color.muted",
+  ];
 
   it("are in the guaranteed set", () => {
     // Their absence made four blocks compromise — card shipped with no

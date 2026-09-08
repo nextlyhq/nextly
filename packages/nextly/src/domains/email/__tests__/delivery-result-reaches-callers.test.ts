@@ -43,7 +43,6 @@ function makeTemplateService() {
   return {
     getTemplateBySlug: vi.fn().mockResolvedValue(null),
     getLayoutFor: vi.fn().mockResolvedValue(null),
-    renderWithLayout: vi.fn(),
   };
 }
 

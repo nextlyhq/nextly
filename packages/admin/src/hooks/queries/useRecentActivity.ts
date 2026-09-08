@@ -10,10 +10,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
-import {
-  describeActivityActor,
-  formatRelativeTime,
-} from "@admin/lib/dashboard";
+import { describeActivityActor } from "@admin/lib/dashboard";
 import type {
   Activity,
   ActivityCategory,
@@ -43,7 +40,6 @@ interface ActivityLogEntry {
 
 interface ActivityLogApiResponse {
   activities: ActivityLogEntry[];
-  total: number;
   hasMore: boolean;
 }
 
@@ -84,7 +80,6 @@ function mapEntry(entry: ActivityLogEntry): Activity {
     collectionLabel,
     category: ACTION_CATEGORIES[entry.action] ?? "info",
     timestamp: entry.createdAt,
-    relativeTime: formatRelativeTime(entry.createdAt),
   };
 }
 
@@ -116,7 +111,6 @@ export function useRecentActivity(limit = 10) {
       );
       return {
         activities: raw.activities.map(mapEntry),
-        total: raw.total,
         hasMore: raw.hasMore,
       };
     },

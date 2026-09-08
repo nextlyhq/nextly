@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { getEventBus, resetEventBus } from "../../../events/event-bus";
 import { UploadValidator } from "../../../services/upload-validation";
+import { PNG_1X1 } from "../../../services/upload-validation/__tests__/format-fixtures";
 import { MediaService } from "../services/media-service";
 import type { UploadMediaInput } from "../services/media-service";
 
@@ -103,7 +104,7 @@ describe("MediaService — media.* post-commit events (D69)", () => {
     });
 
     const input: UploadMediaInput = {
-      buffer: Buffer.from("a fake but non-empty image payload"),
+      buffer: PNG_1X1,
       filename: "f.png",
       mimeType: "image/png",
       size: 1024,

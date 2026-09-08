@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { PNG_1X1 } from "./__tests__/format-fixtures";
 import { UploadValidator } from "./upload-validator";
 
-const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const PNG = PNG_1X1;
 
 describe("UploadValidator", () => {
   it("validates with resolved config from constructor", async () => {

@@ -1,5 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, inArray, sql } from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
@@ -13,7 +13,11 @@ import {
   keysToCamelCase,
 } from "../../../lib/case-conversion";
 import { absolutizeMediaUrls } from "../../../lib/media-variant";
-import { resolveStatusFilter } from "../../../lib/status-filter";
+import { statusCondition } from "../../../lib/status-condition";
+import {
+  resolveStatusFilter,
+  type StatusFilter,
+} from "../../../lib/status-filter";
 import {
   AccessControlService,
   DEFAULT_OWNER_FIELD,
@@ -65,6 +69,14 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { RBACAccessControlService } from "../../auth/services/rbac-access-control-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import {
+  NO_DECISIONS,
+  type ReleaseDecisions,
+} from "../../releases/release-scope";
+import {
+  NO_RELEASE_VISIBILITY,
+  type ReleaseVisibility,
+} from "../../releases/release-visibility";
 
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
@@ -1286,9 +1298,45 @@ export class CollectionRelationshipService extends BaseService {
     adapter: DrizzleAdapter,
     logger: Logger,
     private readonly fileManager: CollectionFileManager,
-    private readonly collectionService: DynamicCollectionService
+    private readonly collectionService: DynamicCollectionService,
+    /**
+     * What a due release makes visible in the TARGET collection.
+     *
+     * Not a trust question. `widensLifecycle` and `expansionStatusScope` decide
+     * whether this CALLER may see unpublished content, and a bounded caller
+     * deliberately inherits nothing. A due release is the other kind of fact:
+     * the target document IS published, for everyone, so it reaches a bounded
+     * caller too and that is correct rather than a leak.
+     */
+    private readonly releaseVisibility: ReleaseVisibility = NO_RELEASE_VISIBILITY
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * The documents a due release would publish in the target collection.
+   *
+   * Only asked when the read is bounded to published: an unbounded expansion
+   * already returns the row, so there is nothing to reveal and nothing to pay
+   * for.
+   */
+  private async targetDecisions(
+    targetCollection: string,
+    statusFilter: StatusFilter | null,
+    now: Date
+  ): Promise<ReleaseDecisions> {
+    // Only a PUBLIC read is widened by a due release. Read off the filter,
+    // which carries why its set was chosen, rather than asking the values
+    // again — a second answer to that question disagrees the moment a
+    // workflow's public and non-public sets are not complementary.
+    if (statusFilter === null || !statusFilter.isPublicRead) {
+      return NO_DECISIONS;
+    }
+    return this.releaseVisibility.decisions({
+      scopeKind: "collection",
+      scopeSlug: targetCollection,
+      now,
+    });
   }
 
   private resolveAccessService(): CollectionAccessService {
@@ -1364,16 +1412,16 @@ export class CollectionRelationshipService extends BaseService {
    *
    * System entities have no lifecycle and no collection record to ask.
    */
-  private async resolveTargetStatusValue(
+  private async resolveTargetStatusFilter(
     targetCollection: string,
     schema: TargetTableColumns,
     access: RelatedRowAccess
-  ): Promise<string | undefined> {
-    if (isSystemEntity(targetCollection)) return undefined;
+  ): Promise<StatusFilter | null> {
+    if (isSystemEntity(targetCollection)) return null;
     // Guarded on the column, not only on the collection's flag: a collection
     // whose status was switched off keeps the flag until its schema is
     // reapplied, and naming a column the table lacks fails the whole read.
-    if (!schema.status) return undefined;
+    if (!schema.status) return null;
 
     let hasStatus: boolean;
     try {
@@ -1395,7 +1443,7 @@ export class CollectionRelationshipService extends BaseService {
       overrideAccess: widensLifecycle(access),
       explicit: access.status,
     });
-    return statusFilter?.value;
+    return statusFilter;
   }
 
   private async readTargetRows(
@@ -1414,7 +1462,7 @@ export class CollectionRelationshipService extends BaseService {
     // read of it. Without this, a caller who is 404'd asking for an unpublished
     // row is handed the whole thing — status column included — by populating a
     // relationship that points at it.
-    const statusValue = await this.resolveTargetStatusValue(
+    const statusFilter = await this.resolveTargetStatusFilter(
       targetCollection,
       schema,
       access
@@ -1435,8 +1483,34 @@ export class CollectionRelationshipService extends BaseService {
     // an unexplained absence as evidence lost and refuses the whole parent.
     // A row that was never there stays unrecorded, because a dangling
     // reference is a data problem and must not be dressed up as a refusal.
-    const rows = statusValue
-      ? fetched.filter(row => row.status === statusValue)
+    // A due release publishes the target, so a row it names is admitted even
+    // though its stored status still says otherwise. Reading the author
+    // directly already honours this; an expansion that did not would make the
+    // same document published when asked for by name and missing when arrived
+    // at by reference.
+    // A due release also WITHDRAWS. Applying only the reveal half left a
+    // scheduled takedown visible through every relationship that pointed at it,
+    // while a direct read of the same document honoured it.
+    const decisions = await this.targetDecisions(
+      targetCollection,
+      statusFilter,
+      new Date()
+    );
+    const revealed = new Set(decisions.reveal);
+    const hidden = new Set(decisions.hide);
+    const rows = statusFilter
+      ? fetched.filter(row => {
+          const id = typeof row.id === "string" ? row.id : null;
+          // Withdrawn wins over the stored status: the row still says
+          // published, which is exactly what the release is undoing.
+          if (id !== null && hidden.has(id)) return false;
+          // Membership, because a read bounded to "not yet public" covers every
+          // state the workflow does not publish.
+          return (
+            statusFilter.values.includes(row.status as string) ||
+            (id !== null && revealed.has(id))
+          );
+        })
       : fetched;
     this.recordWithheld(targetCollection, fetched, rows, access);
 
@@ -1693,7 +1767,7 @@ export class CollectionRelationshipService extends BaseService {
         schema,
         access,
         constraint,
-        statusFilter?.value
+        statusFilter?.values
       );
 
       const untranslatable = describeUntranslatableConstraint(
@@ -1747,17 +1821,25 @@ export class CollectionRelationshipService extends BaseService {
       // Guarded on the column and not on the flag alone: naming a column the
       // table does not have fails the whole query, and the catch below would
       // then withhold every row of the collection.
-      const statusCondition =
-        statusFilter && schema.status
-          ? eq(schema.status, statusFilter.value)
-          : undefined;
+      const lifecycleCondition = statusCondition({
+        filter: statusFilter,
+        statusColumn: schema.status,
+        idColumn: schema.id,
+        // See collection-query-service: every call site names its workflow so
+        // the ones phase 2 must thread are greppable.
+        decisions: await this.targetDecisions(
+          targetCollection,
+          statusFilter,
+          new Date()
+        ),
+      });
       const admitted = (await this.db
         .select()
         .from(schema)
         .where(
           and(
             inArray(schema.id, ids),
-            ...(statusCondition ? [statusCondition] : []),
+            ...(lifecycleCondition ? [lifecycleCondition] : []),
             condition
           )
         )) as Record<string, unknown>[];
@@ -1829,7 +1911,7 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess,
     constraint: Record<string, unknown>,
     /** The status a read of this target resolves to, or undefined for none. */
-    statusValue: string | undefined
+    statusValues: readonly string[] | undefined
   ): Promise<LocalizedQueryContext | null> {
     if (!access.locale || isSystemEntity(targetCollection)) return null;
     // Judged on the raw constraint keys, which is what the untranslatable check
@@ -1858,7 +1940,7 @@ export class CollectionRelationshipService extends BaseService {
       // translation holding the permitted value would otherwise admit a row the
       // target's own list read, filtering on the same status, excludes. Gated on
       // the companion having the column, matching the read path.
-      statusValue: companion.hasStatus ? statusValue : undefined,
+      statusValues: companion.hasStatus ? statusValues : undefined,
     };
   }
 

@@ -23,6 +23,33 @@ export function renderDivider({
   return <hr className={className} />;
 }
 
+/**
+ * The rule itself, and the air around it.
+ *
+ * A user agent draws `<hr>` with an inset 3D border that no design system wants
+ * and a reset removes entirely — so the element is either wrong or invisible
+ * depending on the host. All four sides are stated so neither outcome survives:
+ * three at zero, one hairline in the border token, which is a token because it
+ * is a COLOUR and a literal would be wrong in one of the two themes.
+ */
+const DIVIDER_BASE_STYLES = {
+  base: {
+    base: {
+      margin: { blockStart: "1.5em", blockEnd: "1.5em" },
+      border: {
+        width: {
+          blockStart: "1px",
+          blockEnd: "0",
+          inlineStart: "0",
+          inlineEnd: "0",
+        },
+        style: "solid",
+        color: { $token: "color.border" },
+      },
+    },
+  },
+} as const;
+
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
@@ -51,5 +78,6 @@ export const divider = defineBlock<DividerProps, PageContext>({
     dimensions: true,
     effects: true,
   },
+  baseStyles: DIVIDER_BASE_STYLES,
   render: renderDivider,
 });

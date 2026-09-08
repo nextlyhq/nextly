@@ -1,0 +1,169 @@
+/**
+ * A same-name edit that moves a field between storage classes must be treated
+ * as a removal plus an addition, not a modification.
+ *
+ * Both directions matter, and they fail differently when `storageClassChanged`
+ * compares only junction usage: a plain type edited into a field group leaves
+ * its old parent-table column behind — the ghost column the next boot sync
+ * then offers to drop — and the reverse is treated as a modification of a
+ * column the parent table never had.
+ */
+import { describe, expect, it } from "vitest";
+
+import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import { DynamicCollectionSchemaService } from "../dynamic-collection-schema-service";
+
+const TABLE = "dc_storage_class";
+const DIALECTS = ["postgresql", "mysql", "sqlite"] as const;
+
+const asField = (f: Record<string, unknown>): FieldDefinition =>
+  f as unknown as FieldDefinition;
+
+describe.each(DIALECTS)(
+  "%s: a same-name edit that changes storage class",
+  dialect => {
+    const service = new DynamicCollectionSchemaService(undefined, dialect);
+
+    it("drops the plain column when the field becomes a field group", () => {
+      const sql = service.generateAlterTableMigration(
+        TABLE,
+        [asField({ name: "bio", type: "text" })],
+        [asField({ name: "bio", type: "fieldGroup", fieldGroup: "seo" })]
+      );
+
+      // The separating assertion: without the storage-class comparison this edit
+      // emits nothing at all, and the old column silently outlives its field.
+      expect(sql).toContain("DROP COLUMN");
+      // The field group's values live in their own table; the parent row gains
+      // no replacement column.
+      expect(sql).not.toContain("ADD COLUMN");
+    });
+
+    it("adds the plain column when the field stops being a field group", () => {
+      const sql = service.generateAlterTableMigration(
+        TABLE,
+        [asField({ name: "bio", type: "component", component: "seo" })],
+        [asField({ name: "bio", type: "text" })]
+      );
+
+      expect(sql).toContain("ADD COLUMN");
+      // The generators quote identifiers per dialect; `bio` must be the added one.
+      expect(sql).toMatch(/ADD COLUMN ["'`]bio["'`]/);
+      // Nothing to drop: a field group never occupied a parent-table column, so
+      // emitting one here would be an ALTER against a name the table never had.
+      expect(sql).not.toContain("DROP COLUMN");
+    });
+
+    it("renaming a field group emits no parent-table RENAME COLUMN", () => {
+      // A field group has no column on the parent row, so a rename is a change
+      // of the association key on its own data table — the alter generator
+      // must not emit a rename of a column that cannot exist.
+      const sql = service.generateAlterTableMigration(
+        TABLE,
+        [asField({ name: "seo", type: "component", component: "seo" })],
+        [asField({ name: "meta", type: "component", component: "seo" })]
+      );
+
+      expect(sql).not.toContain("RENAME COLUMN");
+    });
+
+    it("renaming a field group migrates the association key on its own table", () => {
+      // The separating assertion the no-rename test alone cannot make: the
+      // rename must still migrate the existing rows, or the registry adopts
+      // the new field name while every instance stays keyed by the old one
+      // and reads return no nested data. The generator names the group's
+      // table ONLY from the registry-resolved map — deriving it from the slug
+      // would target comp_ on a database the storage migration has already
+      // renamed to fg_.
+      const sql = service.generateAlterTableMigration(
+        TABLE,
+        [asField({ name: "seo", type: "fieldGroup", fieldGroup: "seo" })],
+        [asField({ name: "meta", type: "fieldGroup", fieldGroup: "seo" })],
+        { fieldGroupTableNames: new Map([["seo", "comp_seo"]]) }
+      );
+
+      expect(sql).toContain("UPDATE");
+      expect(sql).toContain("comp_seo");
+      // The generators quote identifiers per dialect, so match the association
+      // columns either way.
+      expect(sql).toMatch(/["'`]_parent_field["'`] = 'meta'/);
+      expect(sql).toMatch(/["'`]_parent_field["'`] = 'seo'/);
+      // Scoped to this parent's rows only: the same group can be embedded
+      // under the same field name in other collections.
+      expect(sql).toMatch(/["'`]_parent_table["'`] = 'dc_storage_class'/);
+    });
+
+    it("emits no association UPDATE for a slug the registry cannot resolve", () => {
+      // A slug with no record has no table: guessing its name would emit an
+      // UPDATE against a table that does not exist and fail the save.
+      const sql = service.generateAlterTableMigration(
+        TABLE,
+        [asField({ name: "seo", type: "fieldGroup", fieldGroup: "seo" })],
+        [asField({ name: "meta", type: "fieldGroup", fieldGroup: "seo" })],
+        { fieldGroupTableNames: new Map() }
+      );
+
+      expect(sql).not.toContain("UPDATE");
+    });
+
+    it("migrates the rename among other same-save field edits", () => {
+      // The rename saved alongside an unrelated field addition is still a
+      // rename: only the field-group fields participate in the pairing, and
+      // skipping it because other fields changed would orphan the rows under
+      // the old name while the metadata adopted the new one.
+      const sql = service.generateAlterTableMigration(
+        TABLE,
+        [
+          asField({ name: "title", type: "text" }),
+          asField({ name: "seo", type: "fieldGroup", fieldGroup: "seo" }),
+        ],
+        [
+          asField({ name: "title", type: "text" }),
+          asField({ name: "meta", type: "fieldGroup", fieldGroup: "seo" }),
+          asField({ name: "extra", type: "text" }),
+        ],
+        { fieldGroupTableNames: new Map([["seo", "comp_seo"]]) }
+      );
+
+      expect(sql).toMatch(/["'`]_parent_field["'`] = 'meta'/);
+    });
+
+    it("refuses a save that renames two field groups at once", () => {
+      // With two renamed groups in flight the old-to-new pairing cannot be
+      // known reliably, and a wrong mapping migrates the wrong rows — the
+      // save is refused rather than guessed.
+      const build = () =>
+        service.generateAlterTableMigration(
+          TABLE,
+          [
+            asField({ name: "a", type: "fieldGroup", fieldGroup: "ga" }),
+            asField({ name: "b", type: "fieldGroup", fieldGroup: "gb" }),
+          ],
+          [
+            asField({ name: "a2", type: "fieldGroup", fieldGroup: "ga" }),
+            asField({ name: "b2", type: "fieldGroup", fieldGroup: "gb" }),
+          ],
+          {
+            fieldGroupTableNames: new Map([
+              ["ga", "comp_ga"],
+              ["gb", "comp_gb"],
+            ]),
+          }
+        );
+
+      // The envelope's message is the generic "Validation failed."; the
+      // actionable detail lives in the typed publicData payload.
+      try {
+        build();
+        expect.unreachable("expected a refusal");
+      } catch (error) {
+        const data = (
+          error as {
+            publicData?: { errors?: { code?: string }[] };
+          }
+        ).publicData;
+        expect(data?.errors?.[0]?.code).toBe("FIELD_GROUP_RENAME_AMBIGUOUS");
+      }
+    });
+  }
+);

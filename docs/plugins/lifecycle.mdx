@@ -74,10 +74,10 @@ definePlugin({
 });
 ```
 
-- **`dependsOn`** — a missing dependency, or one whose installed version is outside the
+- **`dependsOn`.** A missing dependency, or one whose installed version is outside the
   range, is a fail-fast boot error (`reason: "missing-dependency"` /
   `"version-incompatible"`).
-- **`optionalDependsOn`** — an **absent** optional dependency is fine; a **present but
+- **`optionalDependsOn`.** An **absent** optional dependency is fine; a **present but
   out-of-range** one fails fast (`reason: "optional-version-incompatible"`). Use
   `ctx.nextlyVersion` or feature checks to branch on whether an optional dep is active.
 

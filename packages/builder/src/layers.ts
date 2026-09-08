@@ -89,15 +89,29 @@ function hasConditions(node: BlockNode): boolean {
 }
 
 /**
+ * The author's own name for a node, when they gave it a non-blank one.
+ *
+ * Trimmed and an empty result treated as absent: a name of spaces would read
+ * as though the author had named the block while giving nothing that
+ * distinguishes it from its neighbours.
+ *
+ * Exported so a second caller needing "does this node carry an authored
+ * name" asks this rather than restating the trim-and-blank check — precisely
+ * the two-implementations risk this module's own header warns about for the
+ * tree it builds from the same field.
+ */
+export function authoredName(node: BlockNode): string | undefined {
+  const named = node.name?.trim();
+  return named !== undefined && named !== "" ? named : undefined;
+}
+
+/**
  * The name an author reads for one block.
  *
- * An instance name wins, because it is the only part an author wrote. It is
- * trimmed and an empty one is ignored: a name of spaces would render a blank
- * row that cannot be typed to and cannot be told from its neighbours.
+ * An instance name wins, because it is the only part an author wrote.
  */
 export function layerLabel(node: BlockNode): string {
-  const named = node.name?.trim();
-  return named !== undefined && named !== "" ? named : blockLabel(node.type);
+  return authoredName(node) ?? blockLabel(node.type);
 }
 
 /** The document as a tree of rows. */

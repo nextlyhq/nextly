@@ -98,6 +98,17 @@ export type PageContainerProps = React.HTMLAttributes<HTMLDivElement> & {
    * collapse. The default is therefore pinned by a test on THIS component
    * instead: a container given no width must render no grid.
    *
+   * `full` removes the cap while KEEPING the gutter, so the column takes
+   * whatever the panel gives it and the page still reads as inset rather than
+   * edge-to-edge. It is what a page uses when its CONTENT carries the measure
+   * instead — an entry editor bounds its own field column and seats the
+   * document rail beside it, and a page-level cap there would bound the two
+   * together and spend the rail's width out of the author's.
+   *
+   * That is not the same as omitting `width`, per the paragraph above: `full`
+   * is still the grid, so the inset stays a column and a child can leave it
+   * with `Bleed`. Omitting stays the padded block.
+   *
    * @example
    * ```tsx
    * <PageContainer width="form">
@@ -106,7 +117,7 @@ export type PageContainerProps = React.HTMLAttributes<HTMLDivElement> & {
    * </PageContainer>
    * ```
    */
-  width?: "form" | "wide";
+  width?: "form" | "wide" | "full";
 };
 
 /**

@@ -57,6 +57,37 @@ export type DynamicTableRow = {
  * valid Drizzle table — having no user-defined fields is NOT a reason
  * to skip registration.
  */
+/** Why one row, or the read itself, produced no registration. */
+export interface DynamicTableLoadFailure {
+  scope: "read" | "row";
+  /** The row's table, when a single row is at fault. */
+  tableName?: string;
+  error: unknown;
+}
+
+/**
+ * What one pass over a registry table actually did.
+ *
+ * 🔴 Returned rather than signalled through callbacks, because this function
+ * has THREE outcomes and used to collapse them into `Promise<void>`: the read
+ * failed, some rows failed, or everything registered. Both swallows are RIGHT
+ * for the caller they were written for — a fresh database has no registry table
+ * yet, and one corrupt row must not cost every other dynamic table its
+ * registration — and wrong for a caller that has just migrated, which must not
+ * report a reload as done while an entity it registered is unaddressable.
+ *
+ * A caller that does not care ignores the value and keeps exactly the old
+ * behaviour; a caller that does gets the evidence rather than inferring it from
+ * silence. An earlier revision used an `onReadError` callback, which answered
+ * only the first of the three and would have needed a second callback for the
+ * second — two ad-hoc channels where the function has one outcome to describe.
+ */
+export interface DynamicTableLoadResult {
+  /** How many rows registered a runtime schema. */
+  registered: number;
+  failures: DynamicTableLoadFailure[];
+}
+
 export async function loadDynamicTables(
   adapter: DrizzleAdapter,
   sourceTable:
@@ -75,7 +106,7 @@ export async function loadDynamicTables(
      */
     builderOwned: boolean | undefined
   ) => Promise<void>
-): Promise<void> {
+): Promise<DynamicTableLoadResult> {
   // Components have no `status` column (they're not Draft/Published) — selecting it
   // would fail. They DO carry `localized` (i18n). Collections/singles carry both.
   // Asked under both registry spellings: the storage migration renames this
@@ -131,6 +162,8 @@ export async function loadDynamicTables(
     throw lastError;
   };
 
+  const result: DynamicTableLoadResult = { registered: 0, failures: [] };
+
   try {
     const rows = await readRows();
 
@@ -139,7 +172,17 @@ export async function loadDynamicTables(
         const fields =
           typeof row.fields === "string" ? JSON.parse(row.fields) : row.fields;
 
-        if (!Array.isArray(fields)) continue;
+        if (!Array.isArray(fields)) {
+          // Recorded rather than skipped in silence: the entity ends up
+          // unregistered either way, and a caller that has just migrated must
+          // not call that a completed reload.
+          result.failures.push({
+            scope: "row",
+            tableName: String(row.table_name),
+            error: new Error("stored `fields` is not an array"),
+          });
+          continue;
+        }
 
         // Coerce dialect-specific representations into a JS boolean.
         // sqlite returns 0/1, postgres returns booleans, mysql may return
@@ -163,13 +206,25 @@ export async function loadDynamicTables(
           localized,
           builderOwned
         );
-      } catch {
-        // Skip individual row if schema generation fails.
+        result.registered += 1;
+      } catch (err) {
+        // Still skipped rather than thrown: one row that cannot generate a
+        // schema must not cost every other dynamic table its registration.
+        // Recorded, so a caller that needs to know can ask.
+        result.failures.push({
+          scope: "row",
+          tableName: String(row.table_name),
+          error: err,
+        });
       }
     }
-  } catch {
-    // Dynamic table may not exist yet (fresh database).
+  } catch (err) {
+    // Dynamic table may not exist yet (fresh database), which is why this is
+    // still swallowed rather than thrown.
+    result.failures.push({ scope: "read", error: err });
   }
+
+  return result;
 }
 
 /** Slug sets for the dynamic (Builder/UI + previously-synced) entities. */

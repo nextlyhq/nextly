@@ -27,7 +27,11 @@ import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
 import { previewDraftGate } from "nextly/runtime";
 
-import { siteReader, SITE_STYLE_CONTEXT } from "../../../lib/site-content";
+import {
+  siteDataProvider,
+  siteReader,
+  SITE_STYLE_CONTEXT,
+} from "../../../lib/site-content";
 import { SITE_STYLE_DEFAULTS } from "../../../lib/site-style-defaults";
 
 /**
@@ -95,6 +99,12 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   // editor — so a public route depending on it renders the unknown-block
   // placeholder whenever this request arrived before the admin did.
   blocks: createBlockResolver(coreBlocks),
+  // Without this every `core/collection-loop` in a stored document answers with
+  // nothing: the default context installs `emptyDataProvider`, so the block
+  // draws its container and no entries, and a page that says it lists posts
+  // renders an empty box. The helper caps the reads per render, so supplying a
+  // real provider does not make a document's nesting unbounded.
+  data: siteDataProvider,
   styleContext: SITE_STYLE_CONTEXT,
   // Resolved per request: defaults with the stored Site Style layered on top.
   // The same statement the page-builder route makes, because both routes serve

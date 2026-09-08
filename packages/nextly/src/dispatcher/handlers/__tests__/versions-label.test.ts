@@ -21,7 +21,7 @@ vi.mock("../../../di", () => ({
 
 vi.mock("../../../api/versions-access", () => ({
   assertVersionDocumentReadable: readableSpy,
-  assertVersionDocumentUpdatable: updatableSpy,
+  assertDocumentUpdatable: updatableSpy,
   redactSnapshotForUser: vi.fn(),
   resolveSingleDocumentId: vi.fn(),
 }));

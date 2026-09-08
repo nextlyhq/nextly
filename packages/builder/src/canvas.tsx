@@ -30,9 +30,16 @@
  */
 
 import {
+  findNode,
+  PAGE_ROOT_CLASS,
   previewContainerName,
+  previewStateClass,
+  statePropagatesToAncestors,
+  STYLE_STATES,
+  walkNodes,
   type BlockDocument,
   type BreakpointSet,
+  type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
   NODE_ID_ATTRIBUTE,
@@ -41,22 +48,29 @@ import {
   sharedStyleInputs,
 } from "@nextlyhq/blocks-react";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
+import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { CanvasDragHandlers } from "./canvas-drag";
+import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { offeredTiers } from "./canvas-width";
+import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
+import { refusalWording } from "./drag-refusal";
+import { canvasContentRect, scrollableAncestor } from "./geometry-dom";
+import { isLocked } from "./locking";
+import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
+import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /**
  * The class marking the canvas root, and the boundary the hit-test stops at.
  *
- * The walk needs an upper bound for the reason given in
- * {@link nodeIdFromEvent}, and that bound has to be identifiable from a DOM
- * node rather than from React state, because the walk starts at an event
- * target and climbs.
+ * Declared in `shell-state.ts` beside the other markers `builder-chrome.css`
+ * spells out literally, and re-exported here because this is where a reader
+ * looks for the canvas's own marker. See {@link nodeIdFromEvent} for the walk
+ * that needs it as an upper bound.
  */
-export const CANVAS_ROOT_CLASS = "nx-canvas";
+export { CANVAS_ROOT_CLASS };
 
 /**
  * Marks the selected block's own element.
@@ -70,6 +84,49 @@ export const CANVAS_ROOT_CLASS = "nx-canvas";
  * no compiler behind it.
  */
 export const SELECTED_ATTRIBUTE = "data-nx-selected";
+
+/**
+ * Marks a node the drag engine will refuse to pick up.
+ *
+ * Drawn so the grab cursor can be withheld from it. With no drag handle, that
+ * cursor is the only thing advertising a block as movable, so offering it on a
+ * node `useCanvasDrag` returns early for leaves an author pressing repeatedly
+ * at something that will never move — an affordance promising what the engine
+ * has already decided against.
+ */
+export const LOCKED_ATTRIBUTE = "data-nx-locked";
+
+/**
+ * Marks every element drawing the block currently being dragged.
+ *
+ * EVERY element rather than one: a node id is unique in a document and not in
+ * the tree drawn from it, so a repeating block is many elements for one id and
+ * a mark that stopped at the first would dim one copy of a block that is
+ * wholly in flight.
+ *
+ * Boolean by presence, for the reason {@link SELECTED_ATTRIBUTE} is: the
+ * element already states its id.
+ */
+export const DRAG_SOURCE_ATTRIBUTE = "data-nx-drag-source";
+
+/**
+ * Marks the container a drop would land in.
+ *
+ * The line says WHERE among siblings; this says WHICH container, and the two
+ * are different questions. They come apart exactly where the line alone is
+ * ambiguous — the coordinate at the bottom edge of one container is also the
+ * top edge of the next, and only this mark separates them.
+ */
+export const DROP_PARENT_ATTRIBUTE = "data-nx-drop-parent";
+
+/**
+ * Marks the container that will not take the block being dragged.
+ *
+ * Mutually exclusive with {@link DROP_PARENT_ATTRIBUTE} by construction: the
+ * engine answers with a target or a refusal, never both, so an element carrying
+ * the two at once is drawing a state that cannot exist.
+ */
+export const DROP_REFUSED_ATTRIBUTE = "data-nx-drop-refused";
 
 /**
  * Marks editor chrome drawn over the page, which is not part of the page.
@@ -88,6 +145,65 @@ export const SELECTED_ATTRIBUTE = "data-nx-selected";
 export const CHROME_ATTRIBUTE = "data-nx-chrome";
 
 /** Whether an event started inside editor chrome rather than inside the page. */
+/**
+ * The block a context gesture is aimed at, or `null` when it is aimed at
+ * nothing a block menu could act on.
+ *
+ * Published because a context menu can be opened TWO ways and they arrive by
+ * different events. A secondary click arrives as `contextmenu`, which the
+ * canvas sees; a touch or pen long-press is opened by Radix from its own timer
+ * on `pointerdown`, and never produces a `contextmenu` event at all. A menu
+ * that filtered one path and not the other would offer a block's verbs for a
+ * press aimed at chrome, or — worse — offer the PREVIOUS selection's verbs,
+ * with Delete among them, for a press on a block that was never selected.
+ *
+ * So the decision lives here once and both callers ask it, rather than each
+ * spelling out three rejections and drifting.
+ */
+export function contextMenuTargetOf(
+  target: EventTarget | null,
+  root: Element
+): string | null {
+  if (isEditableTarget(target) || isChrome(target)) return null;
+  if (!(target instanceof Element)) return null;
+  const owner = target.closest(`[${NODE_ID_ATTRIBUTE}]`);
+  if (owner === null) return null;
+  /*
+   * Owned by THIS canvas, not merely by A canvas.
+   *
+   * `nodeIdFromEvent` asks the weaker question — its own comment claims this
+   * one, and it checks only that some canvas is an ancestor. That is enough
+   * for selection, where a foreign id is ignored and nothing happens. It is
+   * not enough here: a canvas rendered inside a block of another canvas sends
+   * its events up through the outer one, which would then let a menu open
+   * while the outer selection stayed where it was — and its verbs would act on
+   * a block nobody was pointing at.
+   */
+  if (owner.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return null;
+  return owner.getAttribute(NODE_ID_ATTRIBUTE);
+}
+
+/**
+ * Whether the gesture landed in text the author is editing.
+ *
+ * Asked apart from {@link isChrome} because the answer is the same and the
+ * reason is not: chrome is not the page, while this IS the page and is being
+ * typed into. The browser's own menu carries spelling, selection and clipboard
+ * for a caret, and none of that has a replacement here — taking it away mid
+ * sentence to offer "Move up" is a straight loss.
+ *
+ * `contenteditable="false"` is excluded explicitly: it marks a region the
+ * editor has deliberately made uneditable INSIDE an editable one, which is a
+ * block again rather than text.
+ */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const editable = target.closest("[contenteditable]");
+  return (
+    editable !== null && editable.getAttribute("contenteditable") !== "false"
+  );
+}
+
 function isChrome(target: EventTarget | null): boolean {
   return (
     target instanceof Element &&
@@ -294,6 +410,47 @@ function useReportedInlineWidth(
  * observer at all — there is nothing for it to answer, and one that exists
  * anyway fires on every pane drag for a number nobody reads.
  */
+/**
+ * The nearest ancestor that actually lays the canvas out.
+ *
+ * NOT `parentElement`, which is the DOM parent and not necessarily the element
+ * whose width the canvas is fitted into. `display: contents` leaves a node in
+ * the tree while generating no box at all, so its children are laid out by ITS
+ * parent — and a `ResizeObserver` on one reports an inline size of zero.
+ * Measured in a browser: a boxless wrapper inside a 911px container observes
+ * `0` while the container observes `911`.
+ *
+ * That is not hypothetical here. The block context menu wraps the canvas in
+ * Radix's trigger and gives it `display: contents` deliberately, so a `span`
+ * around a block box does not change the layout it is meant to be transparent
+ * over. Measuring through it made `canvasScale` see a region of zero, take its
+ * identity branch, and report a fit of `1` forever: an author who pinned Tablet
+ * at 1024 was editing at the region's own width with the control still showing
+ * Tablet selected, and no width readout to contradict it.
+ *
+ * Written as a WALK rather than as a check for that one wrapper. The wrapper
+ * arrived legitimately and nothing connected it to a measurement two files
+ * away; the next one would do the same. Skipping every boxless ancestor is the
+ * property the measurement actually needs.
+ *
+ * `display: none` is deliberately NOT skipped past — it is boxless too, but its
+ * children generate no box either, so there is no canvas being laid out
+ * anywhere and the honest answer is the hidden ancestor itself, whose zero
+ * leaves the scale at its identity.
+ */
+function layoutRegionOf(element: HTMLElement | null): HTMLElement | null {
+  const view = element?.ownerDocument.defaultView ?? null;
+  if (view === null) return null;
+  for (
+    let node = element?.parentElement ?? null;
+    node !== null;
+    node = node.parentElement
+  ) {
+    if (view.getComputedStyle(node).display !== "contents") return node;
+  }
+  return null;
+}
+
 function useRegionWidth(
   box: React.RefObject<HTMLElement | null>,
   scaling: boolean
@@ -301,7 +458,7 @@ function useRegionWidth(
   const [width, setWidth] = useState<number | undefined>(undefined);
   useEffect(() => {
     if (!scaling) return;
-    const region = box.current?.parentElement ?? null;
+    const region = layoutRegionOf(box.current);
     if (region === null) return;
     if (typeof ResizeObserver !== "function") return;
     const observer = new ResizeObserver(entries => {
@@ -341,11 +498,61 @@ function useRegionWidth(
  */
 export function canvasScale(
   requested: number | undefined,
-  region: number | undefined
+  region: number | undefined,
+  zoom: CanvasZoom = FIT_ZOOM
 ): number {
+  /*
+   * A chosen scale is not derived from anything, which is the whole of what
+   * choosing means. It is answered before the guards below because those exist
+   * to make a FIT computable — an unmeasured region cannot be fitted to, and a
+   * fixed scale never needed it.
+   */
+  if (zoom.kind === "fixed") {
+    // A host can build this value directly, so it has not necessarily been
+    // through the storage guard. An unusable one falls back to fitting rather
+    // than being painted: an invalid `zoom` declaration is dropped by the
+    // browser and an enormous one puts the page beyond reach of the control
+    // that would undo it.
+    const usable = usableScale(zoom.scale);
+    if (usable !== null) return usable;
+  }
   if (requested === undefined || region === undefined) return 1;
   if (!(requested > 0) || !(region > 0)) return 1;
   return Math.min(1, region / requested);
+}
+
+/** A width the box is given, in whichever of the two forms it is given in. */
+type BoxWidth = { width: string } | { maxWidth: string };
+
+/**
+ * A width, and the centring that travels with it.
+ *
+ * The centring is not a property of any one of the shapes below — it is a
+ * property of HAVING a width. A box told how wide to be is narrower than the
+ * region it sits in, and a narrow box parked against the left edge reads as a
+ * layout that has broken rather than as a viewport being simulated.
+ *
+ * Stated here rather than at each `return` because it was previously stated at
+ * one of them. The other three set a width and omitted the margin, so the
+ * canvas centred while fitting and jumped to the left edge the moment an author
+ * chose a scale — the same tier, the same width, alignment deciding itself on
+ * which branch produced it. Taking a width only through this function is what
+ * makes that disagreement unspellable rather than merely fixed.
+ *
+ * The one branch that sets NO width does not call this, and must not: a box
+ * with no width fills the region, so there is no free space, and an author
+ * reading the canvas root would find a margin that governs nothing.
+ *
+ * `marginInline` rather than a flex or grid alignment on the region, because
+ * the margin resolves against whatever free space exists at the time. Measured
+ * across the range this canvas paints at: at half scale a 912px region gives
+ * 228px each side, and above 1 the box is wider than the region, the free space
+ * is negative, and the margins resolve to zero — so the overflow scrolls from
+ * the left edge with nothing clipped, which is what an author magnifying to
+ * inspect something needs. No branch on the scale is required to get both.
+ */
+function centred(width: BoxWidth): React.CSSProperties {
+  return { ...width, marginInline: "auto" };
 }
 
 /**
@@ -355,10 +562,8 @@ export function canvasScale(
  * Two shapes, because a request that fits and a request that does not are
  * different situations rather than one with a parameter.
  *
- * WHERE IT FITS, the width is a MAXIMUM with an auto inline margin. Centred
- * rather than left-aligned, which is what every builder surveyed does and is
- * not merely cosmetic: an off-centre narrow box reads as a layout that has
- * broken rather than as a viewport being simulated.
+ * WHERE IT FITS, the width is a MAXIMUM. Every width here is centred — see
+ * `centred` above for why that belongs to the width rather than to the branch.
  *
  * WHERE IT DOES NOT, the width is EXACT and a transform shrinks the box until
  * it does. That is the only way the widest tier stays editable at all: the
@@ -391,19 +596,87 @@ export function canvasScale(
  */
 function previewBoxStyle(
   preview: CanvasPreview | undefined,
-  scale: number
+  scale: number,
+  chosen: boolean
 ): React.CSSProperties {
-  if (preview === undefined) return {};
+  /*
+   * A CHOSEN scale applies with no preview at all.
+   *
+   * Previewing needs a container name and a site that declares viewport tiers;
+   * a site with neither — which the default configuration is — has no preview
+   * object, and returning nothing here left the zoom control moving a number
+   * on screen and changing nothing. How large the canvas draws is not a
+   * property of whether a viewport is being simulated.
+   */
+  if (preview === undefined) {
+    return chosen
+      ? { ...centred({ width: `calc(100% * ${scale})` }), zoom: scale }
+      : {};
+  }
   const container = previewContainerStyle(preview.container);
-  if (preview.width === undefined) return container;
-  if (scale >= 1) {
+  /*
+   * No requested width means the box fills the region, which is the widest
+   * tier and the state the editor opens in. There is nothing to FIT there —
+   * the box is already the region — but a chosen scale still applies: it
+   * magnifies or shrinks what is drawn and the region scrolls, which is the
+   * whole of what an author asked for. Returning early here left the control
+   * reporting a number that changed nothing at the tier it is used at most.
+   */
+  if (preview.width === undefined) {
+    if (!chosen) return container;
+    /*
+     * The width is PINNED before zooming, and that is the whole of this branch.
+     *
+     * `zoom` participates in layout, so it divides the logical width the
+     * container queries resolve against: at 200% a 911px region became 455px
+     * and the canvas silently started previewing the MOBILE tier. An author
+     * magnifying to look closely at something was shown a different layout
+     * instead — measured on screen, where the tier readout changed with the
+     * zoom.
+     *
+     * Fixing the box at the width it had leaves the queries resolving against
+     * that same width whatever the scale, so magnifying magnifies and nothing
+     * else moves. Without a measured region there is nothing to pin, and the
+     * scale is left off rather than applied against a width that would shift.
+     */
     return {
       ...container,
-      maxWidth: `${preview.width}px`,
-      marginInline: "auto",
+      // `100%` resolves against the containing block in this element's OWN
+      // coordinates, which `zoom` has already divided by the scale — so a
+      // plain full width comes out at `region / scale` logically. Multiplying
+      // it back restores the width the box had, and the scale then paints it
+      // larger without moving what the queries resolve against. No measurement
+      // is involved, so there is no observer to disagree with the layout.
+      ...centred({ width: `calc(100% * ${scale})` }),
+      zoom: scale,
     };
   }
-  return { ...container, width: `${preview.width}px`, zoom: scale };
+  /*
+   * A FIT that needs no shrinking is left unzoomed and centred, which is the
+   * shape a canvas showing a page at its own size has always had.
+   *
+   * A CHOSEN scale is applied whatever its value, including 1 and above. The
+   * two are not the same request: fitting to 1 means "it already fits", while
+   * choosing 1 means "draw it at actual size and let the region clip" — and at
+   * anything above 1 there is no reading of `maxWidth` that magnifies.
+   */
+  if (!chosen && scale >= 1) {
+    return { ...container, ...centred({ maxWidth: `${preview.width}px` }) };
+  }
+  /*
+   * Reached two ways, and only one of them has slack to centre.
+   *
+   * FITTING, the scale is derived from the region, so the box paints at exactly
+   * the region's width and the margins resolve to zero — measured, 912px into
+   * 912px. CHOSEN, the scale is the author's and owes the region nothing: a
+   * 375px tier at any scale at all paints narrower than the region it sits in,
+   * which is the case that was left against the left edge.
+   */
+  return {
+    ...container,
+    ...centred({ width: `${preview.width}px` }),
+    zoom: scale,
+  };
 }
 
 /**
@@ -420,7 +693,9 @@ function previewBoxStyle(
  */
 function useCanvasSurface(
   root: React.RefObject<HTMLElement | null>,
-  preview: CanvasPreview | undefined
+  preview: CanvasPreview | undefined,
+  zoom: CanvasZoom,
+  onScale: ((scale: number) => void) | undefined
 ): React.CSSProperties {
   // What the box GOT, reported outward to whoever asked.
   useReportedInlineWidth(root, preview?.onMeasured);
@@ -429,7 +704,37 @@ function useCanvasSurface(
   // nothing to scale, and an observer that exists to answer a question nobody
   // asked still fires on every pane drag.
   const region = useRegionWidth(root, preview?.width !== undefined);
-  return previewBoxStyle(preview, canvasScale(preview?.width, region));
+  const scale = canvasScale(preview?.width, region, zoom);
+  /*
+   * Reported through a ref, keyed on the scale and on whether anyone is
+   * listening — never on the reporter's identity.
+   *
+   * A host writing `onScale={s => setView({ ...view, scale: s })}` inline hands
+   * a new function every render. Depended on directly, each report updates the
+   * host, the update produces a new identity, and the new identity reports
+   * again: a render loop on a host that did nothing wrong.
+   *
+   * Existence is a dependency because it changes the answer. A host that wires
+   * the reporter after its first render — one resolving `onScale` from state,
+   * or a shell whose control mounts late — would otherwise hear nothing until
+   * the scale next moved, and sit on a stale number in the meantime.
+   */
+  const latestScaleReport = useRef(onScale);
+  useEffect(() => {
+    latestScaleReport.current = onScale;
+  }, [onScale]);
+  const reportingScale = onScale !== undefined;
+  useEffect(() => {
+    latestScaleReport.current?.(scale);
+  }, [reportingScale, scale]);
+  /*
+   * CHOSEN means a scale the author asked for AND this canvas can paint at.
+   * A refused one has already fallen back to fitting above, so treating it as
+   * chosen here would apply the fit's own scale as though it were a choice —
+   * writing `zoom: 1` onto a canvas that should carry no zoom at all.
+   */
+  const chosen = zoom.kind === "fixed" && usableScale(zoom.scale) !== null;
+  return previewBoxStyle(preview, scale, chosen);
 }
 
 /**
@@ -450,33 +755,279 @@ function useCanvasSurface(
  * a re-render replaces the elements, and an effect keyed on the selection alone
  * would leave the new tree carrying none at all.
  */
-function useSelectionMarkers(
+function useCanvasMarkers(
   box: React.RefObject<HTMLElement | null>,
   marked: readonly string[],
   selectedId: string | null,
-  page: React.ReactNode
+  page: React.ReactNode,
+  forcedState: StyleState | undefined,
+  drag: CanvasDragState | undefined,
+  lockedIds: ReadonlySet<string>
 ): void {
+  /*
+   * The drag's three marks are read into plain ids here rather than inside the
+   * walk, so the effect depends on the VALUES that change the answer instead of
+   * on the drag object's identity. `useCanvasDrag` returns a fresh object on
+   * every pointer move, and an effect keyed on it would re-walk the whole tree
+   * per frame while writing nothing new.
+   */
+  const sourceId = drag?.draggingId ?? null;
+  const parentId = drag?.target?.at.parentId ?? null;
+  const refusedId = drawnRefusal(drag)?.parentId ?? null;
   useEffect(() => {
     const container = box.current;
     if (container === null) return;
-    // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
-    // that declares its iterator, and this package compiles without one — so the
-    // loop that reads more naturally does not type-check here.
-    container.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-      const id = element.getAttribute(NODE_ID_ATTRIBUTE);
-      if (id === null || !marked.includes(id)) {
-        element.removeAttribute(SELECTED_ATTRIBUTE);
-        return;
+    /*
+     * NAMED and re-run rather than written straight into the effect, because
+     * the dependency list is not the only thing that changes the answer.
+     *
+     * A block whose `render` returns a promise commits its Suspense fallback
+     * first and its resolved root later. That second commit inserts the element
+     * carrying the node id while changing no prop, no state and no id in this
+     * list — so an effect that ran once would have marked a tree the resolved
+     * block was not in yet, and would leave it unmarked until an unrelated
+     * selection or document change happened to run this again. Selecting a
+     * `core/collection-loop` showed exactly that: no outline and no forced
+     * state, on an ordinary shipping block.
+     */
+    const mark = (): void => {
+      /*
+       * Every element a marker can land on OR currently carries one, which are
+       * not the same set. A render can move a node id from one existing element
+       * to another without touching the child list — the attribute case this
+       * effect subscribes to — and the element that LOST the id then matches
+       * nothing selected by node id. Left out, it keeps the selection attribute
+       * and the state class it was last given: a second outline around a block
+       * nothing is editing, and a hover appearance forced on it.
+       *
+       * The rendered PAGE ROOT is named explicitly rather than reached by one
+       * of the marker selectors: `PageRenderer` draws `.nx-pb-page` as a child
+       * of this container and the page tier compiles onto that element rather
+       * than onto the canvas wrapper, so it must be markable before it has ever
+       * been marked.
+       */
+      const touched = new Set<Element>([container]);
+      // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
+      // that declares its iterator, and this package compiles without one — so the
+      // loop that reads more naturally does not type-check here.
+      container
+        .querySelectorAll(
+          [
+            `.${PAGE_ROOT_CLASS}`,
+            `[${NODE_ID_ATTRIBUTE}]`,
+            `[${SELECTED_ATTRIBUTE}]`,
+            // The drag marks belong here for the reason the selection attribute
+            // does, and the case is the same one: an element that LOSES its node
+            // id matches nothing selected by node id, so leaving these out
+            // strands whatever they were last given. A block that stopped being
+            // the drag source would stay dimmed with nothing left to clear it.
+            `[${DRAG_SOURCE_ATTRIBUTE}]`,
+            `[${DROP_PARENT_ATTRIBUTE}]`,
+            `[${DROP_REFUSED_ATTRIBUTE}]`,
+            `[${LOCKED_ATTRIBUTE}]`,
+            ...STYLE_STATES.map(state => `.${previewStateClass(state)}`),
+          ].join(", ")
+        )
+        .forEach(element => touched.add(element));
+
+      touched.forEach(element => {
+        const id = element.getAttribute(NODE_ID_ATTRIBUTE);
+        if (id === null || !marked.includes(id)) {
+          // Guarded like the writes below: this walk now visits the page root
+          // and the container, which never carry the attribute, and removing an
+          // absent one still touches the element.
+          if (element.hasAttribute(SELECTED_ATTRIBUTE)) {
+            element.removeAttribute(SELECTED_ATTRIBUTE);
+          }
+          return;
+        }
+        // The VALUE carries which member the panels answer for. A boolean
+        // attribute could not, and a second attribute for the primary would be a
+        // state where a block is primary without being selected.
+        //
+        // Compared before writing, for the reason the class below is: this walk
+        // re-runs on every change to the rendered tree, and `setAttribute`
+        // queues a mutation record even when the value it writes is the value
+        // already there. Unguarded, marking a tree that did not change is
+        // itself a change — the spacing overlay observes this subtree and
+        // re-measures on one, so its own output would arrive back here as a
+        // reason to write again.
+        const value = id === selectedId ? "primary" : "";
+        if (element.getAttribute(SELECTED_ATTRIBUTE) !== value) {
+          element.setAttribute(SELECTED_ATTRIBUTE, value);
+        }
+      });
+
+      /*
+       * The drag's marks, in the SAME walk and over the SAME set, for the
+       * reason the forced state below is: all of them answer "what is marked on
+       * this element right now", and two walks over one question drift — one
+       * runs on a change the other does not.
+       *
+       * Over `touched` rather than a fresh query, so an element that has just
+       * LOST the node id is visited and cleared. Left out, a block that stopped
+       * being the drag source keeps the mark and stays dimmed after the drop.
+       */
+      const dragMarks: ReadonlyArray<readonly [string, string | null]> = [
+        [DRAG_SOURCE_ATTRIBUTE, sourceId],
+        [DROP_PARENT_ATTRIBUTE, parentId],
+        [DROP_REFUSED_ATTRIBUTE, refusedId],
+      ];
+      touched.forEach(element => {
+        if (!ownedByCanvas(element, container)) return;
+        const id = element.getAttribute(NODE_ID_ATTRIBUTE);
+        // Whether the engine would refuse to move this node, asked from the set
+        // rather than from the document per element: this walk re-runs on every
+        // change to the rendered tree, and a tree search per element would make
+        // that quadratic on a large page.
+        setFlag(element, LOCKED_ATTRIBUTE, id !== null && lockedIds.has(id));
+        for (const [attribute, wanted] of dragMarks) {
+          setFlag(element, attribute, id !== null && id === wanted);
+        }
+      });
+
+      /*
+       * The forced interaction state, in the SAME walk rather than a second one.
+       * Both answer "what is marked on this element right now", and two walks
+       * over one question drift — one runs on a change the other does not.
+       *
+       * On the PRIMARY alone. A page cannot force a pseudo-class on itself, so
+       * the compiler emits a class alternative beside each one and this puts it
+       * on the element the panel is editing. Forcing it page-wide would show
+       * every other block in a state nobody asked about.
+       *
+       * Cleared from everything first, including the primary: a state that
+       * changes from hover to focus, or a selection that moves, must not leave
+       * the previous class behind on an element nothing is editing.
+       */
+      /*
+       * WHICH ELEMENTS a forced state belongs on, ASKED of the engine rather
+       * than decided here.
+       *
+       * Whether a state propagates follows from the pseudo-class the compiler
+       * emits for it — an ancestor matches `:hover` and `:active` and does not
+       * match `:focus-visible` — so the two facts live together beside that
+       * definition. Encoding the rule here as well would be a second opinion
+       * about the CSS: changing `focus` to `:focus-within` would move the
+       * published rules and leave this canvas marking the wrong chain, with both
+       * sides type-correct.
+       *
+       * Where a state does propagate the chain is required rather than tidy: the
+       * page tier compiles onto the RENDERED page root, and a marker on a
+       * descendant cannot make its ancestor match.
+       */
+      const chain = new Set<Element>();
+      if (forcedState !== undefined && forcedState !== "base") {
+        /*
+         * EVERY rendering of the primary node, not the first one found.
+         *
+         * A node id is unique in a DOCUMENT and not in the tree drawn from it:
+         * `core/collection-loop` draws its children once per entry, so one
+         * selected node is many elements, and the walk above has already marked
+         * all of them primary. Taking `querySelector` here would preview the
+         * state on whichever copy came first in DOM order — the outline on ten
+         * rows and the hover appearance on one, which reads as the state being
+         * broken rather than as the preview being partial.
+         */
+        container
+          .querySelectorAll(`[${SELECTED_ATTRIBUTE}="primary"]`)
+          .forEach(primary => {
+            chain.add(primary);
+            if (!statePropagatesToAncestors(forcedState)) return;
+            for (
+              let node: Element | null = primary.parentElement;
+              node !== null && container.contains(node);
+              node = node.parentElement
+            ) {
+              chain.add(node);
+            }
+          });
       }
-      // The VALUE carries which member the panels answer for. A boolean
-      // attribute could not, and a second attribute for the primary would be a
-      // state where a block is primary without being selected.
-      element.setAttribute(
-        SELECTED_ATTRIBUTE,
-        id === selectedId ? "primary" : ""
-      );
-    });
-  }, [box, selectedId, marked, page]);
+
+      // The SAME set the selection was written from, so the two markers cannot
+      // disagree about which elements exist.
+      const marks: Element[] = Array.from(touched);
+
+      marks.forEach(element => {
+        // `base` is not a state anything forces: it is what applies when nothing
+        // else does, and the compiler emits no marker for it.
+        const wanted =
+          chain.has(element) && forcedState !== undefined
+            ? previewStateClass(forcedState)
+            : undefined;
+
+        /*
+         * WRITTEN ONLY WHEN IT CHANGES, which is not a micro-optimisation.
+         *
+         * `classList.remove` of a token that is not present still touches the
+         * attribute, and this canvas is observed: the empty-container appender
+         * watches its subtree for layout-relevant mutations and re-measures on
+         * one. An unconditional clear across every marked element therefore made
+         * every selection change schedule a re-measure of the whole overlay,
+         * which its own test caught — it asserts the control does NOT move for a
+         * mutation of its own output, and it moved.
+         */
+        for (const state of STYLE_STATES) {
+          const marker = previewStateClass(state);
+          if (marker !== wanted && element.classList.contains(marker)) {
+            element.classList.remove(marker);
+          }
+        }
+        if (wanted !== undefined && !element.classList.contains(wanted)) {
+          element.classList.add(wanted);
+        }
+      });
+    };
+
+    mark();
+    // Subscribed AFTER the first pass, because an observer reports what changes
+    // from the moment it attaches and says nothing about the tree already
+    // there. Writing the markers cannot re-enter this: what counts as the tree
+    // changing excludes every attribute `mark` writes.
+    return observeRenderedTree(container, mark);
+  }, [
+    box,
+    selectedId,
+    marked,
+    page,
+    forcedState,
+    sourceId,
+    parentId,
+    refusedId,
+    lockedIds,
+  ]);
+}
+
+/**
+ * Whether this element belongs to the canvas doing the marking.
+ *
+ * A node id is unique within a DOCUMENT and not across documents, so a block
+ * that renders a second canvas puts another document's ids inside the outer
+ * walk's reach. An inner node sharing the dragged id would then be dimmed by a
+ * drag it has no part in, and the refusal could anchor to it.
+ */
+function ownedByCanvas(element: Element, container: HTMLElement): boolean {
+  if (element === container) return true;
+  return element.closest(`.${CANVAS_ROOT_CLASS}`) === container;
+}
+
+/**
+ * Add or remove a boolean attribute, writing only when the answer changes.
+ *
+ * The comparison is the point rather than a saving. `setAttribute` queues a
+ * mutation record even when the value it writes is the value already there,
+ * the empty-container appender observes this subtree, and a drag re-marks on
+ * every pointer move — so an unguarded write is a re-measure per frame rather
+ * than one per drop.
+ *
+ * One function rather than the same three lines at each mark: they are one
+ * rule, and four copies of it are four chances for the guard to be dropped
+ * from whichever copy is edited next.
+ */
+function setFlag(element: Element, attribute: string, wanted: boolean): void {
+  if (wanted === element.hasAttribute(attribute)) return;
+  if (wanted) element.setAttribute(attribute, "");
+  else element.removeAttribute(attribute);
 }
 
 /**
@@ -506,10 +1057,15 @@ function markedIds(
  */
 function useCanvasPointer(
   onSelect: ((id: string | null, mode: SelectionMode) => void) | undefined,
-  onDoubleClick: ((event: React.MouseEvent<HTMLDivElement>) => void) | undefined
+  onDoubleClick:
+    | ((event: React.MouseEvent<HTMLDivElement>) => void)
+    | undefined,
+  marked: readonly string[]
 ): {
   onClick: (event: React.MouseEvent<HTMLDivElement>) => void;
   onDoubleClick: (event: React.MouseEvent<HTMLDivElement>) => void;
+  onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void;
+  onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
 } {
   const click = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -528,7 +1084,76 @@ function useCanvasPointer(
     },
     [onDoubleClick]
   );
-  return { onClick: click, onDoubleClick: doubleClick };
+  /*
+   * The secondary button selects, and says whether anything above this has a
+   * block to act on.
+   *
+   * Selecting FIRST is the whole point. A menu opened over one block while the
+   * selection sits on another acts on the other one, and the author is looking
+   * at the block they aimed at — so the destructive verbs on it would be aimed
+   * somewhere they cannot see.
+   *
+   * A block already in the selection is left alone rather than replacing it.
+   * Right-clicking one of several chosen blocks to act on all of them is what
+   * every comparable editor does, and re-selecting would silently drop the rest
+   * of the author's selection at the moment they went looking for a verb.
+   *
+   * Over the canvas BACKGROUND the event is stopped instead. There is no node,
+   * so a menu of block verbs would have no subject; stopping it here rather
+   * than opening an empty one keeps that decision next to the hit test that
+   * establishes it.
+   */
+  const contextMenu = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      /*
+       * Three ways to have no block to act on, stopped the same way and for
+       * separate reasons — see each predicate. Stopping rather than merely
+       * returning is what matters: a menu mounted ABOVE the canvas sees
+       * whatever this lets past, and the chrome and the appenders are drawn
+       * INSIDE the canvas root, so a bare return offers the selected block's
+       * verbs for a gesture aimed at a button that is not a block.
+       *
+       * `preventDefault` is deliberately not called, so the browser's own menu
+       * still appears wherever this one does not.
+       */
+      const id = contextMenuTargetOf(event.target, event.currentTarget);
+      if (id === null) {
+        event.stopPropagation();
+        return;
+      }
+      if (onSelect === undefined || marked.includes(id)) return;
+      onSelect(id, "replace");
+    },
+    [marked, onSelect]
+  );
+  /*
+   * The same withholding, for the gesture that carries no context event.
+   *
+   * A menu mounted above the canvas can open a touch or pen LONG PRESS from a
+   * timer of its own, started on this event — no `contextmenu` is ever
+   * dispatched, so the rule above never runs and every rejection it makes is
+   * skipped. Withholding the press from anything above keeps one decision
+   * governing both ways in.
+   *
+   * `stopPropagation` and NOT `preventDefault`, which is the whole point of
+   * doing it here. This fires at the start of every contact, long before
+   * anything knows whether it will become a long press, and cancelling the
+   * default that early takes caret placement and text selection away from an
+   * author who was only tapping into a sentence.
+   */
+  const pointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (contextMenuTargetOf(event.target, event.currentTarget) === null)
+        event.stopPropagation();
+    },
+    []
+  );
+  return {
+    onClick: click,
+    onDoubleClick: doubleClick,
+    onContextMenu: contextMenu,
+    onPointerDown: pointerDown,
+  };
 }
 
 /**
@@ -778,6 +1403,54 @@ export interface CanvasProps {
   /** The document being edited. */
   document: BlockDocument;
   /**
+   * Receives the canvas root element, for a caller that needs to measure
+   * against it.
+   *
+   * A drag that begins OUTSIDE the canvas — from a palette row — has no event
+   * whose `currentTarget` is this element, and it must resolve a drop position
+   * against the same box every other reader uses. This canvas owns that
+   * element, so handing it over is more honest than a caller finding it by
+   * class name: a query would be a second place that decides which element the
+   * canvas root is.
+   *
+   * READ IT IN A HANDLER, NOT AN EFFECT, and that is a property of the call
+   * site rather than of this prop — so it travels with nothing and has to be
+   * said here. A ref answers "where is the canvas now" at press time, long
+   * after mount. An effect asking the same ref reads `null` on its first run
+   * and is never told otherwise, because assigning `.current` changes no
+   * dependency and this canvas mounts only once styles have loaded. Anything
+   * that must REACT to the canvas arriving takes {@link CanvasProps.onRoot}.
+   */
+  rootRef?: React.RefObject<HTMLDivElement | null>;
+  /**
+   * The interaction state the panel is editing, forced on the primary
+   * selection so an author can SEE what they are editing.
+   *
+   * A page cannot force a pseudo-class on itself — there is no CSS or DOM way
+   * to make an element match `:hover` without a pointer. So the sheet has to be
+   * compiled with `previewStates`, which gives each state a class alternative
+   * beside its pseudo-class, and this canvas puts that class on one element.
+   * Passed a state without that compile, nothing happens and nothing breaks:
+   * the class is simply in no selector.
+   *
+   * `base` forces nothing. It is what applies when no state does.
+   */
+  forcedState?: StyleState;
+  /**
+   * The same element, published as a VALUE so a caller can react to it
+   * appearing.
+   *
+   * A ref is not reactive. This canvas mounts only once styles have loaded
+   * while the surfaces beside it stay mounted throughout, so a reader that
+   * captured `rootRef` on its first render sees `null` and is never told
+   * otherwise — assigning `.current` changes no dependency, so an effect
+   * listing the ref never looks again.
+   *
+   * `rootRef` stays for the readers that only ever ask "where is it now" during
+   * a gesture, where a ref is exactly right.
+   */
+  onRoot?: (root: HTMLDivElement | null) => void;
+  /**
    * The site sheet, the same value the published route passes. Required — see
    * the module docblock for why this one is not optional.
    */
@@ -844,6 +1517,45 @@ export interface CanvasProps {
    */
   dragHandlers?: CanvasDragHandlers;
   /**
+   * What the pointer currently means, or absent when nothing is being dragged.
+   *
+   * ONE object rather than separate `draggingId`, `target` and `refusal` props,
+   * for the reason {@link CanvasProps.dragHandlers} and
+   * {@link CanvasProps.preview} are each one: a set spread across several
+   * optional props can be PARTIALLY wired, and every partial wiring here fails
+   * silently. A host passing the refusal without the moving id explains a
+   * refusal while dimming nothing; one passing the id without the refusal is
+   * precisely the state this prop exists to end.
+   *
+   * It is the shape `useCanvasDrag` already returns, so a host forwards what it
+   * holds and restates none of it. Deriving a narrower view here would be a
+   * second answer to a question the hook has already answered.
+   *
+   * Drawing only. Nothing here decides where a block may land — `resolveDrop`
+   * does that, and this canvas draws whatever it was told.
+   */
+  drag?: CanvasDragState;
+  /**
+   * The layout scale this canvas applies to the page it lays out.
+   *
+   * Defaults to fitting, so a host that offers no zoom control never has to
+   * name a scale.
+   */
+  zoom?: CanvasZoom;
+  /**
+   * The scale the canvas is actually painting at, reported as it changes.
+   *
+   * On the CANVAS rather than on {@link CanvasProps.preview}, because the
+   * scale is not a property of previewing a viewport: a site that declares no
+   * tiers has no preview at all and is still laid out at some scale.
+   *
+   * Reported rather than exposed as state for the reason the width is: a
+   * control computing its own would be a second answer to what is on screen,
+   * and the two would disagree for the frame after a panel opens — which is
+   * the moment worth naming.
+   */
+  onScale?: (scale: number) => void;
+  /**
    * Raised when a double-click lands on the page.
    *
    * Separate from `onSelect` because the two gestures mean different things and
@@ -872,8 +1584,213 @@ export interface CanvasProps {
  * breaks the moment a sibling is inserted above it — silently, by pointing at a
  * different block rather than at nothing.
  */
+/**
+ * The element drawing a node, restricted to the canvas that owns it.
+ *
+ * {@link nodeElement} answers with the first match anywhere beneath the root,
+ * which is the wrong question once a block can render a canvas of its own: node
+ * ids are unique within a DOCUMENT, so an inner document may legitimately carry
+ * the same id and appear earlier in tree order.
+ */
+function ownedNodeElement(root: HTMLElement, id: string): Element | null {
+  for (const candidate of nodeElements(root)) {
+    if (candidate.getAttribute(NODE_ID_ATTRIBUTE) !== id) continue;
+    if (ownedByCanvas(candidate, root)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * The refusal a canvas should DRAW, which is not every refusal it is given.
+ *
+ * `useCanvasDrag` holds the committed target across a short crossing so the
+ * indicator does not flicker, while setting the refusal from the region under
+ * the pointer immediately — so both are non-null for the width of the switch
+ * threshold. Drawing the refusal there contradicts two things at once: the
+ * line still points at the held target, and releasing commits it. The chrome
+ * would say the block cannot land while letting go moves it.
+ *
+ * So a refusal is the honest answer only once there is no target to disagree
+ * with. One function rather than the same condition written at the mark and
+ * again at the message, because two spellings of one rule drift and the drift
+ * shows up as chrome that half-agrees with itself.
+ */
+function drawnRefusal(
+  drag: CanvasDragState | undefined
+): CanvasDragState["refusal"] {
+  if (drag === undefined || drag.target !== null) return null;
+  return drag.refusal;
+}
+
+/**
+ * The sentence a refused drop draws, over the container that refused it.
+ *
+ * Anchored to the CONTAINER rather than to the pointer. The drag state carries
+ * no pointer coordinate — reading one back would mean a second answer to a
+ * question `useCanvasDrag` already owns — and a message pinned to the region is
+ * steadier to read than one that moves with the hand.
+ *
+ * Measured in the canvas's own CONTENT coordinates, the space the drop
+ * indicator and the block toolbar are already positioned in, so the three agree
+ * at any scroll offset and under zoom.
+ *
+ * Keyed on the region and the reason rather than on the refusal OBJECT: the
+ * drag hook returns a fresh object every pointer move, and re-measuring per
+ * frame would cost a layout read for an answer that changes only when the
+ * pointer crosses into a different container.
+ */
+function DropRefusalNotice({
+  refusal,
+  movingType,
+  regionType,
+}: {
+  refusal: NonNullable<CanvasDragState["refusal"]>;
+  movingType: string;
+  regionType: string | undefined;
+}): React.JSX.Element {
+  const notice = useRef<HTMLDivElement | null>(null);
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const { parentId } = refusal;
+  const { headline, remedy } = refusalWording(refusal, movingType, regionType);
+
+  /*
+   * Measured BEFORE the browser paints, not after.
+   *
+   * A plain effect runs after paint, so the message draws once at the canvas's
+   * top-left — where an unpositioned absolute box lands — and jumps to the
+   * container on the next frame. During a drag that is not a single flash: a
+   * refusal is re-entered every time the pointer crosses into a region that
+   * will not take the block, so the jump repeats.
+   *
+   * The isomorphic form rather than `useLayoutEffect` directly, because a
+   * client component is still server-rendered and the plain hook warns there.
+   */
+  useIsomorphicLayoutEffect(() => {
+    const element = notice.current;
+    if (element === null) return;
+    const root = element.closest(`.${CANVAS_ROOT_CLASS}`);
+    if (!(root instanceof HTMLElement)) return;
+    const measure = (): void => {
+      // The root itself when the refusal is at the page level: there is no
+      // container node to point at, which is the whole of what
+      // `restricted-at-root` means.
+      /*
+       * Resolved within THIS canvas, for the reason the marks are: a node id is
+       * unique in a document and not across documents, so a block rendering a
+       * second canvas can put a matching id earlier in the tree — and the message
+       * would then be anchored over a block belonging to another document.
+       */
+      const region =
+        parentId === undefined ? root : ownedNodeElement(root, parentId);
+      if (region === null) return;
+      const rect = canvasContentRect(region, root);
+
+      /*
+       * Clamped into the part of the canvas the author can actually see.
+       *
+       * The anchor alone is not enough. A root refusal has no container to point
+       * at, so it resolves to the canvas itself and lands at the page origin —
+       * which on a long page is several screens above someone dragging near the
+       * bottom, so the explanation for what just refused them is drawn where they
+       * are not looking. A very tall container scrolled past does the same.
+       *
+       * The scroller defines "visible": the shell scrolls an ancestor rather than
+       * the canvas, and its rectangle measured in this canvas's own content
+       * coordinates is exactly the band on screen.
+       */
+      const within = scrollableAncestor(root);
+      if (within === null) {
+        setAt({ x: rect.x, y: rect.y });
+        return;
+      }
+      const band = canvasContentRect(within, root);
+      const inset = 12;
+      const lowest = band.y + band.height - inset - element.offsetHeight;
+      const top = band.y + inset;
+      // A band shorter than the message puts `lowest` above its own top, which
+      // makes the range inverted rather than narrow. Taking the top there keeps
+      // the message on screen instead of pinning it to a bound derived from a
+      // height that does not fit.
+      setAt({
+        x: rect.x,
+        y: lowest < top ? top : Math.max(top, Math.min(rect.y, lowest)),
+      });
+    };
+
+    measure();
+
+    /*
+     * Re-measured while the canvas scrolls under a stationary pointer.
+     *
+     * Autoscroll is the case that makes this necessary rather than tidy: a drag
+     * held near an edge keeps scrolling without the pointer moving, so the
+     * refusal does not change and nothing in this effect's inputs does either —
+     * while the band the message was clamped into travels away from it. The
+     * explanation would sit still and the page would leave.
+     *
+     * Passive, because this only reads geometry, and on the SCROLLER rather
+     * than the canvas: the canvas does not scroll, its ancestor does.
+     */
+    const scroller = scrollableAncestor(root);
+    if (scroller === null) return;
+    scroller.addEventListener("scroll", measure, { passive: true });
+    return () => {
+      scroller.removeEventListener("scroll", measure);
+    };
+    /*
+     * Re-measured when the WORDING changes, not merely when the container does.
+     *
+     * Two slots on one container share a `parentId` and a reason while carrying
+     * different permitted lists, so the message can be replaced without any of
+     * the identity this effect anchors on moving. A longer remedy wraps onto
+     * another line, and the clamp would still be holding the height of the
+     * sentence it replaced — which is exactly the case that pushes it back out
+     * of the band near the bottom of the viewport.
+     *
+     * Keyed on the rendered strings rather than on `regionId`, because height
+     * is a property of the text: two regions producing identical sentences need
+     * no re-measure, and one region whose list changed does.
+     */
+  }, [parentId, headline, remedy]);
+
+  return (
+    <div
+      ref={notice}
+      className="nx-drop-refusal"
+      // Chrome drawn over the page rather than part of it, so hit-testing and
+      // the style inspector both skip it.
+      {...{ [CHROME_ATTRIBUTE]: "" }}
+      style={at === null ? undefined : { left: at.x, top: at.y }}
+      /*
+       * NOT announced, matching {@link DropIndicator} rather than differing
+       * from it: this describes a POINTER gesture, and a live region here
+       * would speak to someone who is not the one dragging.
+       *
+       * The spoken counterpart is `keyboard-actions`, which refuses a move the
+       * nesting rule forbids and announces the same reason and remedy through
+       * its own live region. `keyboardMovePosition` stays purely positional —
+       * it answers where a block goes, never whether it may — so the question
+       * is asked by the wiring on both routes, of one function.
+       *
+       * Which is why announcing here would be wrong rather than redundant: it
+       * would put the sentence on a pointer gesture, spoken to someone who is
+       * not the one dragging.
+       */
+      aria-hidden="true"
+    >
+      <span className="nx-drop-refusal__why">{headline}</span>
+      {remedy === null ? null : (
+        <span className="nx-drop-refusal__takes">{remedy}</span>
+      )}
+    </div>
+  );
+}
+
 export function Canvas({
   document,
+  rootRef,
+  onRoot,
+  forcedState,
   siteStyles,
   selectedId = null,
   selectedIds,
@@ -881,11 +1798,41 @@ export function Canvas({
   render,
   className,
   dragHandlers,
+  drag,
+  zoom = FIT_ZOOM,
+  onScale,
   onDoubleClick,
   overlay,
   preview,
 }: CanvasProps) {
   const root = useRef<HTMLDivElement | null>(null);
+
+  /*
+   * ONE assignment site for both publications.
+   *
+   * They are two APIs because they answer two questions — `rootRef` is read in
+   * a pointer handler and asks "where is the canvas now"; `onRoot` is a value
+   * so a reader can REACT to the canvas arriving, which a ref cannot express
+   * because assigning `.current` changes no dependency. Neither can serve the
+   * other's caller.
+   *
+   * But two effects deciding what the element is could drift: an edit to one is
+   * invisible to the other, and the two would then hand out different answers
+   * with nothing to report it. One effect, one element, published twice.
+   *
+   * After paint rather than through a merged ref callback: the element is the
+   * same for the life of the mount, and one assignment here is easier to follow
+   * than a callback keeping two refs agreeing.
+   */
+  useEffect(() => {
+    const element = root.current;
+    if (rootRef !== undefined) rootRef.current = element;
+    onRoot?.(element);
+    return () => {
+      if (rootRef !== undefined) rootRef.current = null;
+      onRoot?.(null);
+    };
+  }, [rootRef, onRoot]);
 
   /*
    * What to mark. The primary alone when a host has not adopted the set yet,
@@ -895,7 +1842,16 @@ export function Canvas({
     () => markedIds(selectedIds, selectedId),
     [selectedIds, selectedId]
   );
-  const pointer = useCanvasPointer(onSelect, onDoubleClick);
+  const pointer = useCanvasPointer(onSelect, onDoubleClick, marked);
+  const dragPointerDown = dragHandlers?.onPointerDown;
+  const canvasPointerDown = pointer.onPointerDown;
+  const pointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      dragPointerDown?.(event);
+      canvasPointerDown(event);
+    },
+    [canvasPointerDown, dragPointerDown]
+  );
 
   // Keyed on the document identity so a re-render for an unrelated reason —
   // a selection change, a hover — does not rebuild the rendered tree.
@@ -905,7 +1861,7 @@ export function Canvas({
     preview
   );
 
-  const boxStyle = useCanvasSurface(root, active);
+  const boxStyle = useCanvasSurface(root, active, zoom, onScale);
 
   const page = useMemo(
     () => (
@@ -925,7 +1881,34 @@ export function Canvas({
     [rendered, document, sheet]
   );
 
-  useSelectionMarkers(root, marked, selectedId, page);
+  /*
+   * The locked nodes, collected in ONE traversal per document rather than asked
+   * per element inside the marker walk, which re-runs on every change to the
+   * rendered tree.
+   */
+  const lockedIds = useMemo(() => {
+    const ids = new Set<string>();
+    walkNodes(document.nodes, node => {
+      if (isLocked(node)) ids.add(node.id);
+    });
+    return ids;
+  }, [document]);
+
+  useCanvasMarkers(
+    root,
+    marked,
+    selectedId,
+    page,
+    forcedState,
+    drag,
+    lockedIds
+  );
+
+  // Bound once rather than called per prop: three calls would be three chances
+  // for the narrowing to be spelt differently, and the last one needed a
+  // non-null assertion to type-check at all.
+  const refusalDrawn = drawnRefusal(drag);
+  const refusedParentId = refusalDrawn?.parentId;
 
   return (
     <div
@@ -942,16 +1925,52 @@ export function Canvas({
       // a single name meaning both is the kind of thing that reads correctly
       // right up until someone writes a selector against the wrong one.
       data-nx-selected-id={selectedId ?? undefined}
+      /*
+       * What the pointer means, for the cursor.
+       *
+       * On the ROOT rather than per block, because a cursor during a drag is a
+       * property of the gesture and not of whatever happens to be under the
+       * pointer — and pointer capture means the events keep arriving here
+       * however far the hand travels.
+       *
+       * Absent when nothing is dragging, so the hover cursor on a block is not
+       * competing with a state that does not exist.
+       */
+      data-nx-dragging={
+        drag?.draggingBlockName == null
+          ? undefined
+          : refusalDrawn === null
+            ? ""
+            : "refused"
+      }
       onClick={pointer.onClick}
       onDoubleClick={pointer.onDoubleClick}
-      // Spread rather than merged with a handler of this component's own: the
-      // canvas has no pointer behaviour of its own apart from the drag, so
-      // there is nothing to combine, and merging would create a second place
-      // where the two could be ordered wrongly.
+      onContextMenu={pointer.onContextMenu}
+      // Spread whole, because the set cannot be partially applied — then the
+      // one member this component also has something to say about is composed
+      // over the top, drag first so its behaviour is exactly what it was.
       {...dragHandlers}
+      onPointerDown={pointerDown}
     >
       {page}
       {overlay}
+      {refusalDrawn === null ? null : (
+        <DropRefusalNotice
+          refusal={refusalDrawn}
+          movingType={drag?.draggingBlockName ?? ""}
+          /*
+           * The container's TYPE, resolved from the document the canvas is
+           * already drawing. The refusal names the node; what an author reads
+           * is the block's name, and the document is the only place that
+           * mapping exists.
+           */
+          regionType={
+            refusedParentId === undefined
+              ? undefined
+              : findNode(document.nodes, refusedParentId)?.type
+          }
+        />
+      )}
     </div>
   );
 }

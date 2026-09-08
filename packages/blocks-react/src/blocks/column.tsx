@@ -110,7 +110,10 @@ export const column = defineBlock<ContainerProps, PageContext>({
   // An unrestricted slot: a column holds anything a page holds. The row
   // restricts what may be a COLUMN; it says nothing about what a column holds.
   slots: {
-    children: { template: [] },
+    // No declared starting children, for the same reason the slot is
+    // unrestricted: a column holds anything, so no starting block is more
+    // correct than none.
+    children: {},
   },
   baseStyles: COLUMN_BASE_STYLES,
   supports: CONTAINER_SUPPORTS,

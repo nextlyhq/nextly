@@ -20,7 +20,13 @@ import type {
   UploadOptions,
   UploadResult,
   BulkDeleteResult,
+  StorageReadOptions,
 } from "nextly/storage";
+import {
+  fetchStoredBytes,
+  withDeadline,
+  DEFAULT_READ_TIMEOUT_MS,
+} from "nextly/storage/fetch-stored-bytes";
 import { UTApi } from "uploadthing/server";
 
 // ============================================================
@@ -132,6 +138,76 @@ export class UploadthingStorageAdapter extends BaseStorageAdapter {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Read a stored file back as bytes, or `null` when it is not there.
+   *
+   * A NETWORK round trip for the same reason as the Vercel adapter: the bytes
+   * live on UploadThing's CDN. A caller serving these from its own origin has
+   * to cache, or it pays the fetch on every request.
+   *
+   * The URL comes from `getFileUrls` rather than being assembled, because the
+   * service owns the address and this adapter never chose it.
+   *
+   * @param filePath - File key
+   * @returns The file's bytes, or `null` when no such key exists
+   */
+  async read(
+    filePath: string,
+    options?: StorageReadOptions
+  ): Promise<Buffer | null> {
+    /*
+     * NOT wrapped in a catch. This is a batch lookup, so a key that is not
+     * there comes back as an EMPTY `data` array — the branch below — rather
+     * than as a rejection. What a rejection means instead is an invalid token,
+     * an outage or a dropped connection, none of which say the file was
+     * deleted; folding those into `null` would let a caller overwrite a file
+     * that is still there.
+     *
+     * Stated as the reasoning rather than as a verified fact: the shape of a
+     * missing-key response is not pinned by the SDK's types, so if this service
+     * does reject for an absent key, `read` throws where the contract promises
+     * `null`. That direction is the safe one to be wrong in — a caller sees an
+     * error instead of a false "deleted" — which is why the uncertainty is
+     * resolved toward propagating rather than toward swallowing.
+     */
+    /*
+     * ONE deadline for both phases, started before the lookup — the key lookup
+     * can stall as readily as the fetch, and it runs first.
+     */
+    const deadline = AbortSignal.timeout(
+      options?.timeoutMs ?? DEFAULT_READ_TIMEOUT_MS
+    );
+
+    /*
+     * RACED rather than cancelled, because this SDK cannot be cancelled.
+     * UploadThing 7.7.4's `getFileUrls` reads only `keyType` and forwards no
+     * signal, so passing one bounds nothing — an option accepted and ignored,
+     * which reads as covered and behaves as absent. Racing at least returns
+     * within the deadline this method advertised; the request itself runs on in
+     * the background, which is the honest limit of what is available here.
+     */
+    const result = await withDeadline(
+      this.utapi.getFileUrls([filePath], { keyType: "fileKey" }),
+      deadline
+    );
+    const target = Array.from(result.data)[0]?.url;
+    if (target === undefined) return null;
+
+    /*
+     * Outside the catch, as in the Vercel adapter, and through the same shared
+     * helper: a fetch that fails after the key resolved is a transport failure,
+     * and reporting it as absence would let a caller treat a live file as
+     * deleted.
+     */
+    return await fetchStoredBytes(
+      target,
+      filePath,
+      "UploadThing",
+      options,
+      deadline
+    );
   }
 
   /**

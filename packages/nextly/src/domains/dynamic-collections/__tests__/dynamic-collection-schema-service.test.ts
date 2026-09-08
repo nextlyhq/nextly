@@ -172,6 +172,14 @@ describe("DynamicCollectionSchemaService.generateAlterTableMigration — Phase D
     expect(warnMessage).toContain("not compatible");
   });
 
+  // The type is `relationship`. `relation` is in NEITHER union -- not
+  // FieldType (collections/fields/types/base.ts) and not DynamicFieldType
+  // (schemas/dynamic-collections/legacy-types.ts, the UI-created shape) -- and
+  // the codebase has no field-type alias map, so it was reaching the
+  // unrecognised-type fallback and being treated as a plain column. That is
+  // why the junction-table guard never fired: `usesJunctionTable` keys on
+  // `type === "relationship"`. Same shape as the `toggle`/`row`/`tabs` cases
+  // in finding:layout-field-type-sets-are-empty-and-dead.
   it("does NOT auto-rename manyToMany relations (they use junction tables, not columns)", () => {
     // Old: tags as manyToMany relation, New: categories as same kind.
     // manyToMany doesn't create a column on the main table — renaming
@@ -183,14 +191,14 @@ describe("DynamicCollectionSchemaService.generateAlterTableMigration — Phase D
     const oldFields: FieldDefinition[] = [
       {
         name: "tags",
-        type: "relation",
+        type: "relationship",
         options: { relationType: "manyToMany", target: "tags" },
       },
     ];
     const newFields: FieldDefinition[] = [
       {
         name: "categories",
-        type: "relation",
+        type: "relationship",
         options: { relationType: "manyToMany", target: "tags" },
       },
     ];
@@ -211,14 +219,14 @@ describe("DynamicCollectionSchemaService.generateAlterTableMigration — Phase D
     const oldFields: FieldDefinition[] = [
       {
         name: "author",
-        type: "relation",
+        type: "relationship",
         options: { relationType: "manyToOne", target: "users" },
       },
     ];
     const newFields: FieldDefinition[] = [
       {
         name: "editor",
-        type: "relation",
+        type: "relationship",
         options: { relationType: "manyToOne", target: "users" },
       },
     ];
@@ -241,14 +249,14 @@ describe("DynamicCollectionSchemaService.generateAlterTableMigration — Phase D
     const oldFields: FieldDefinition[] = [
       {
         name: "author",
-        type: "relation",
+        type: "relationship",
         options: { relationType: "manyToOne", target: "users" },
       },
     ];
     const newFields: FieldDefinition[] = [
       {
         name: "editor",
-        type: "relation",
+        type: "relationship",
         options: { relationType: "manyToOne", target: "staff" },
       },
     ];

@@ -27,9 +27,11 @@ import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
 import { toSnakeCase } from "../../../lib/case-conversion";
+import { statusCondition } from "../../../lib/status-condition";
 import {
   expansionStatusScope,
   resolveStatusFilter,
+  type StatusFilter,
   type StatusOption,
 } from "../../../lib/status-filter";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
@@ -96,12 +98,15 @@ import {
 } from "../../../types/pagination";
 import type { PaginatedResponse } from "../../../types/pagination";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveTypeColumns } from "../../field-groups/storage/resolve-storage-names";
+import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
   buildCompanionExists,
   buildLocalizedOrderExpr,
   buildTranslationStatusCondition,
+  TRANSLATION_FILTER_STATES,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
   populateTranslationStatus,
@@ -114,7 +119,18 @@ import {
   resolveFallbackChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
-import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
+import {
+  resolveCompanionColumn,
+  resolveCompanionSchemaReadiness,
+} from "../../i18n/runtime/companion-readiness";
+import {
+  NO_DECISIONS,
+  type ReleaseDecisions,
+} from "../../releases/release-scope";
+import {
+  NO_RELEASE_VISIBILITY,
+  type ReleaseVisibility,
+} from "../../releases/release-visibility";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   draftDocumentFacts,
@@ -276,9 +292,44 @@ export class CollectionQueryService extends BaseService {
      * reads resolve translatable fields from the companion `_locales` table for the
      * requested locale with fallback. Absent → non-localized behavior (unchanged).
      */
-    private readonly localization?: SanitizedLocalizationConfig
+    private readonly localization?: SanitizedLocalizationConfig,
+    /**
+     * What a due release makes visible on this read.
+     *
+     * A null object by default, so a runtime with no releases wired needs no
+     * special case here and cannot silently narrow a read by forgetting one.
+     */
+    private readonly releaseVisibility: ReleaseVisibility = NO_RELEASE_VISIBILITY
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * The documents a due release would publish in this collection, if any.
+   *
+   * Costs a memo read while nothing is scheduled — see `createReleaseVisibility`
+   * — so the common case is not paying for a query it cannot use. Only asked
+   * for a PUBLISHED read: an unbounded or draft-only read has nothing to reveal.
+   */
+  private async releaseDecisions(
+    collectionName: string,
+    statusFilter: StatusFilter | null,
+    now: Date
+  ): Promise<ReleaseDecisions> {
+    // Asked of the workflow rather than compared against the word `published`:
+    // a release publishes into whatever state the workflow calls public, and a
+    // literal here would skip the lookup — and the due publication — for any
+    // team that renamed it.
+    // Read off the filter, which carries why its set was chosen. Asking the
+    // values again here would be a second answer to that question.
+    if (statusFilter === null || !statusFilter.isPublicRead) {
+      return NO_DECISIONS;
+    }
+    return this.releaseVisibility.decisions({
+      scopeKind: "collection",
+      scopeSlug: collectionName,
+      now,
+    });
   }
 
   // ============================================================
@@ -360,7 +411,7 @@ export class CollectionQueryService extends BaseService {
     rows: Record<string, unknown>[],
     locale: string | undefined,
     preloaded?: CompanionSchema | null,
-    statusFilterValue?: string | null
+    statusFilterValues?: readonly string[] | null
   ): Promise<void> {
     if (!this.localization || locale !== "all" || rows.length === 0) return;
     const companion =
@@ -376,9 +427,9 @@ export class CollectionQueryService extends BaseService {
       locales: this.localization.locales.map(l => l.code),
       // Only constrain by status on a status-enabled collection with a resolved
       // single status, so a published locale=all read drops draft translations.
-      statusValue:
-        companion.hasStatus && statusFilterValue
-          ? statusFilterValue
+      statusValues:
+        companion.hasStatus && statusFilterValues
+          ? statusFilterValues
           : undefined,
     });
   }
@@ -393,7 +444,7 @@ export class CollectionQueryService extends BaseService {
     collectionName: string,
     rows: Record<string, unknown>[],
     preloaded?: CompanionSchema | null,
-    statusFilterValue?: string | null
+    statusFilterValues?: readonly string[] | null
   ): Promise<void> {
     if (!this.localization || rows.length === 0) return;
     const companion =
@@ -410,20 +461,62 @@ export class CollectionQueryService extends BaseService {
       collectionName,
       rows.map(r => r.id).filter((id): id is string => typeof id === "string")
     );
+    // 🔴 Resolved ONCE and read twice. `populateTranslationStatus` returns immediately for any
+    // verdict but `ready`, so probing the column for a companion that is not there introspects a
+    // table that does not exist to answer a question nobody will ask — and since a negative column
+    // verdict is deliberately not remembered, it does that on every list read until the operator
+    // migrates. Resolving it inline in the argument list is what hid the ordering.
+    const readiness = await resolveCompanionSchemaReadiness(
+      this.adapter,
+      companion
+    );
     await populateTranslationStatus({
       db: this.db as never,
       companionTable: companion.table,
       pendingChangeLocales,
-      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      readiness,
       localizedFields: companion.localizedFields,
       rows,
       locales: this.localization.locales.map(l => l.code),
       defaultLocale: this.localization.defaultLocale,
       hasStatus: companion.hasStatus,
+      // 🔴 Supplied only when the companion PHYSICALLY carries the column, which is a different
+      // question from whether the schema declares it. `companion.hasUpdatedAt` reports the
+      // DECLARED shape and is unconditionally true, so trusting it would emit SQL naming a column
+      // a pre-existing companion may not have and fail the whole read for that collection.
+      //
+      // Omission is the mechanism rather than a flag, because absent is already the defined answer
+      // for a caller that cannot ask: every locale then reports UNKNOWN, which is never rendered
+      // as up to date. A wrong "needs review" is indistinguishable from a right one to the person
+      // reading it, so the conservative direction is the only safe default.
+      //
+      // Resolved on the pool BEFORE any transaction opens — a failed probe inside one marks the
+      // whole PostgreSQL transaction aborted and the error then names an innocent statement.
+      //
+      // Unconditional here, unlike the filter path, and the difference is that this read NEEDS the
+      // answer: there is no badge without it. A companion that already carries the column answers
+      // from the remembered verdict and costs nothing; one that predates it pays an introspection
+      // per list read, because a negative is deliberately not remembered and the migration that
+      // would end that cost runs in another process. That is the same trade `companion-readiness`
+      // already makes for an entity in a `pre-migration` state, and it is bounded the same way —
+      // it stops the moment the operator migrates.
+      staleness:
+        readiness === "ready" &&
+        (await resolveCompanionColumn(
+          this.adapter,
+          companion.companionTableName,
+          COMPANION_UPDATED_AT_COLUMN
+        ))
+          ? {
+              companionTableName: companion.companionTableName,
+              dialect: this.adapter.dialect,
+            }
+          : undefined,
+
       // On a status-scoped read, don't report a draft-only translation as present.
-      statusValue:
-        companion.hasStatus && statusFilterValue
-          ? statusFilterValue
+      statusValues:
+        companion.hasStatus && statusFilterValues
+          ? statusFilterValues
           : undefined,
     });
   }
@@ -499,12 +592,7 @@ export class CollectionQueryService extends BaseService {
     const cleanedWhere =
       Object.keys(rest).length > 0 ? (rest as WhereFilter) : undefined;
     const f = _translated as { locale?: unknown; state?: unknown };
-    const states: TranslationFilterState[] = [
-      "missing",
-      "translated",
-      "draft",
-      "published",
-    ];
+    const states: readonly TranslationFilterState[] = TRANSLATION_FILTER_STATES;
     if (
       typeof f?.locale !== "string" ||
       typeof f?.state !== "string" ||
@@ -538,6 +626,31 @@ export class CollectionQueryService extends BaseService {
       mainIdColumn,
       localizedColumns: companion.localizedFields.map(f => f.column),
       hasStatus: companion.hasStatus,
+      // 🔴 The PHYSICAL answer, not the declared one, and it is the same probe the per-row badge
+      // resolves — so the tab and the badge cannot disagree about whether the question is even
+      // askable for this collection.
+      //
+      // `companion.hasUpdatedAt` reports the DECLARED shape and is unconditionally true, which is
+      // a claim about a physical column that nothing has checked. Emitting SQL naming a column a
+      // pre-existing companion lacks would fail the query for that collection, and a filter that
+      // cannot be evaluated is worse than one returning nothing: the worklist would present every
+      // document as needing review.
+      //
+      // False leaves the `stale` arm answering `1=0` — nothing is KNOWN to be stale — which is
+      // the defined answer for "cannot ask" rather than a claim that nothing is.
+      //
+      // 🔴 Resolved ONLY for the state that reads it. The probe introspects, and a NEGATIVE verdict
+      // is deliberately not cached — so on a companion that predates the column, asking here
+      // unconditionally would put a catalogue query on every filtered list, twice per page, for a
+      // capability the other four states never consult. The one state that needs it pays for it.
+      hasUpdatedAt:
+        filter.state === "stale"
+          ? await resolveCompanionColumn(
+              this.adapter,
+              companion.companionTableName,
+              COMPANION_UPDATED_AT_COLUMN
+            )
+          : undefined,
       defaultLocale: this.localization.defaultLocale,
       filter,
     });
@@ -559,7 +672,7 @@ export class CollectionQueryService extends BaseService {
      * is filtered out so a draft translation never leaks — the field falls back to the published
      * default.
      */
-    statusFilterValue?: string | null
+    statusFilterValues?: readonly string[] | null
   ): Promise<void> {
     if (!localeChain || rows.length === 0) return;
     const companion =
@@ -572,9 +685,9 @@ export class CollectionQueryService extends BaseService {
       localizedFields: companion.localizedFields,
       rows,
       localeChain,
-      statusValue:
-        companion.hasStatus && statusFilterValue
-          ? statusFilterValue
+      statusValues:
+        companion.hasStatus && statusFilterValues
+          ? statusFilterValues
           : undefined,
     });
   }
@@ -772,11 +885,11 @@ export class CollectionQueryService extends BaseService {
     localeChain: string[] | null,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
     schema: any,
-    statusFilterValue?: string | null
+    statusFilterValues?: readonly string[] | null
   ): LocalizedQueryContext | null {
     if (!companion || !localeChain || localeChain.length === 0) return null;
     // The caller resolves the Draft/Published filter before building the context and
-    // passes it as `statusFilterValue`, so per-locale where/search/order subqueries
+    // passes it as `statusFilterValues`, so per-locale where/search/order subqueries
     // constrain by the resolved status too (a public read never matches a draft).
     return {
       companionTableName: companion.companionTableName,
@@ -785,9 +898,9 @@ export class CollectionQueryService extends BaseService {
       locale: localeChain[0],
       // Only constrain by status when the collection has per-locale status and the
       // read resolved to a single status; otherwise leave it unfiltered.
-      statusValue:
-        companion.hasStatus && statusFilterValue
-          ? statusFilterValue
+      statusValues:
+        companion.hasStatus && statusFilterValues
+          ? statusFilterValues
           : undefined,
     };
   }
@@ -1076,6 +1189,15 @@ export class CollectionQueryService extends BaseService {
      */
     extractGeo: boolean;
     /**
+     * The instant this read resolves a due release against.
+     *
+     * Taken from the caller rather than read here, because the rows and the
+     * total beside them are two calls into this method and a release becoming
+     * due between them would let one response carry pre-release rows next to a
+     * post-release count.
+     */
+    releaseNow: Date;
+    /**
      * The language filter, when the caller already stripped `_translated` from
      * the filter it forwarded. Otherwise it is taken from `where` here.
      */
@@ -1111,9 +1233,21 @@ export class CollectionQueryService extends BaseService {
       authenticatedScope: params.authenticatedScope,
       status: params.status,
     });
-    if (statusFilter && schema.status) {
-      conditions.push(eq(schema.status, statusFilter.value));
-    }
+    // The lifecycle predicate: the resolved status set, widened by whatever a
+    // due release has made public as of this read's instant. Built here rather
+    // than at each call site so the rows and the total beside them cannot
+    // disagree about which documents a release has revealed.
+    const releaseCondition = statusCondition({
+      filter: statusFilter,
+      statusColumn: schema.status,
+      idColumn: schema.id,
+      decisions: await this.releaseDecisions(
+        params.collectionName,
+        statusFilter,
+        params.releaseNow
+      ),
+    });
+    if (releaseCondition) conditions.push(releaseCondition);
 
     // AFTER the status filter, so localized where/search EXISTS checks
     // constrain by the per-locale status too — a published read must not match
@@ -1122,7 +1256,7 @@ export class CollectionQueryService extends BaseService {
       companion,
       localeChain,
       schema,
-      statusFilter?.value
+      statusFilter?.values
     );
 
     const searchCondition = await this.resolveSearchCondition({
@@ -1926,6 +2060,12 @@ export class CollectionQueryService extends BaseService {
       // Build base query using Drizzle (via BaseService db compatibility layer)
       let query = this.db.select().from(schema);
 
+      // ONE instant for this read. Each release lookup taking its own
+      // `new Date()` let a release become due between the row query and a
+      // sibling condition, so one response could carry pre-release rows beside
+      // a post-release count.
+      const readNow = new Date();
+
       // The predicate this request resolves to. The count below is built from
       // the SAME result, so the total cannot describe a different row set than
       // the page.
@@ -1940,6 +2080,7 @@ export class CollectionQueryService extends BaseService {
         translationFilter,
       } = await this.resolveReadConditions({
         collectionName: params.collectionName,
+        releaseNow: readNow,
         where: listQueryWhere,
         search: params.search,
         status: params.status,
@@ -2012,7 +2153,7 @@ export class CollectionQueryService extends BaseService {
             mainIdColumn: schema.id,
             column: localizedSortField.column,
             localeChain,
-            statusValue: localizedCtx?.statusValue, // don't sort by draft translations
+            statusValues: localizedCtx?.statusValues, // don't sort by draft translations
           });
           query = query.orderBy(sortDesc ? desc(orderExpr) : asc(orderExpr));
         } else if (column) {
@@ -2062,6 +2203,9 @@ export class CollectionQueryService extends BaseService {
             collectionName: params.collectionName,
             user: params.user,
             search: params.search,
+            // This count is part of THIS read, so it resolves releases against
+            // the same instant the rows did.
+            releaseNow: readNow,
             // Resolved once for this request; see the parameter's own note.
             resolvedComponentTables: componentTables,
             resolvedComponentTypeColumns: componentTypeColumns,
@@ -2137,7 +2281,7 @@ export class CollectionQueryService extends BaseService {
             entries,
             localeChain,
             companion,
-            statusFilter?.value ?? null // i18n M6: per-locale published filter
+            statusFilter?.values ?? null // i18n M6: per-locale published filter
           )
       );
       // `locale=all` → language-keyed values per localized field (admin/export).
@@ -2150,7 +2294,7 @@ export class CollectionQueryService extends BaseService {
             entries,
             params.locale,
             companion,
-            statusFilter?.value ?? null // i18n M6: per-locale published filter
+            statusFilter?.values ?? null // i18n M6: per-locale published filter
           )
       );
       // i18n M7: per-locale translation-status map for the admin overview (opt-in).
@@ -2163,7 +2307,7 @@ export class CollectionQueryService extends BaseService {
               params.collectionName,
               entries,
               companion,
-              statusFilter?.value ?? null // i18n M6: per-locale published filter
+              statusFilter?.values ?? null // i18n M6: per-locale published filter
             )
         );
       }
@@ -2428,6 +2572,15 @@ export class CollectionQueryService extends BaseService {
   async countEntries(params: {
     collectionName: string;
     user?: UserContext;
+    /**
+     * The instant the enclosing read resolved releases against.
+     *
+     * Set only by `listEntries`, which calls this as its own continuation. A
+     * standalone count takes its own clock; a nested one MUST take its
+     * parent's, or a release becoming due between the two makes the page report
+     * pre-release rows beside a post-release `totalDocs`.
+     */
+    releaseNow?: Date;
     /** Search query to filter entries by searchable fields */
     search?: string;
     /** Where clause for advanced filtering */
@@ -2572,11 +2725,16 @@ export class CollectionQueryService extends BaseService {
           ? await this.fileManager.loadCompanionSchema(params.collectionName)
           : null;
 
+      // The enclosing read's instant when this count is its continuation, and
+      // this count's own clock when it was called directly.
+      const readNow = params.releaseNow ?? new Date();
+
       // The same predicate `listEntries` builds, from the same method. The
       // total has to answer the question the rows answered, and it stopped
       // being possible for the two to disagree when they stopped being two.
       const { conditions: whereConditions } = await this.resolveReadConditions({
         collectionName: params.collectionName,
+        releaseNow: readNow,
         where: countWhere,
         search: params.search,
         status: params.status,
@@ -2899,13 +3057,30 @@ export class CollectionQueryService extends BaseService {
       // the pending draft. When nothing is overlaid after all, the 404 below
       // still refuses to return the published row to a draft-only view.
       const suppressDraftStatusFilter =
-        draftOverlayPossible && statusFilter?.value === "draft";
-      const statusCondition =
-        statusFilter && schema.status && !suppressDraftStatusFilter
-          ? eq(schema.status, statusFilter.value)
-          : null;
-      const whereParts = [idCondition, accessCondition, statusCondition].filter(
-        (c): c is NonNullable<typeof c> => c !== null
+        draftOverlayPossible &&
+        statusFilter !== null &&
+        !statusFilter.isPublicRead;
+      // Named `lifecycleCondition` rather than shadowing the imported
+      // `statusCondition` helper it now delegates to.
+      const readNow = new Date();
+      const lifecycleCondition = suppressDraftStatusFilter
+        ? undefined
+        : statusCondition({
+            filter: statusFilter,
+            statusColumn: schema.status,
+            idColumn: schema.id,
+            decisions: await this.releaseDecisions(
+              params.collectionName,
+              statusFilter,
+              readNow
+            ),
+          });
+      const whereParts = [
+        idCondition,
+        accessCondition,
+        lifecycleCondition,
+      ].filter(
+        (c): c is NonNullable<typeof c> => c !== null && c !== undefined
       );
       const whereCondition =
         whereParts.length === 1 ? whereParts[0] : and(...whereParts);
@@ -2943,7 +3118,7 @@ export class CollectionQueryService extends BaseService {
             [entry as Record<string, unknown>],
             localeChain,
             undefined,
-            statusFilter?.value ?? null // i18n M6: per-locale published filter
+            statusFilter?.values ?? null // i18n M6: per-locale published filter
           )
       );
       // `locale=all` → language-keyed values per localized field (admin/export).
@@ -2956,7 +3131,7 @@ export class CollectionQueryService extends BaseService {
             [entry as Record<string, unknown>],
             params.locale,
             undefined,
-            statusFilter?.value ?? null // i18n M6: per-locale published filter
+            statusFilter?.values ?? null // i18n M6: per-locale published filter
           )
       );
       // i18n M7: per-locale translation-status map for the admin per-language pills (opt-in).
@@ -2969,7 +3144,7 @@ export class CollectionQueryService extends BaseService {
               params.collectionName,
               [entry as Record<string, unknown>],
               undefined,
-              statusFilter?.value ?? null // i18n M6: per-locale published filter
+              statusFilter?.values ?? null // i18n M6: per-locale published filter
             )
         );
       }
@@ -3266,7 +3441,9 @@ export class CollectionQueryService extends BaseService {
       if (
         suppressDraftStatusFilter &&
         !draftOverlaid &&
-        (expandedEntry as { status?: unknown }).status !== statusFilter?.value
+        !(statusFilter?.values ?? []).includes(
+          (expandedEntry as { status?: unknown }).status as string
+        )
       ) {
         return {
           success: false,
@@ -3393,13 +3570,10 @@ export class CollectionQueryService extends BaseService {
     // Asked rather than read: the stored spelling of this key changes with the storage
     // migration, and a row written under the other one would read as untagged.
     const tagged = readFieldGroupType(instance);
-    const declared = (field as { component?: unknown }).component;
-    const slug =
-      typeof tagged === "string"
-        ? tagged
-        : typeof declared === "string"
-          ? declared
-          : undefined;
+    // Either spelling for the single-mode fallback, on the same rule the
+    // write and the diff resolve references by.
+    const declared = extractFieldGroupReferences(field).single;
+    const slug = typeof tagged === "string" ? tagged : declared;
     if (slug === undefined) return instance;
 
     const schema = componentSchemas.get(slug);
@@ -3470,7 +3644,7 @@ export class CollectionQueryService extends BaseService {
             mainIdColumn: localizedCtx.mainIdColumn,
             locale: localizedCtx.locale,
             valueCondition,
-            statusValue: localizedCtx.statusValue,
+            statusValues: localizedCtx.statusValues,
           });
         }
         const column = schema[fieldName];

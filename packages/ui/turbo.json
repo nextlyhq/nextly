@@ -3,20 +3,22 @@
   "extends": ["//"],
   "tasks": {
     "test": {
-      // The release-tag guard reads this package's OWN `dist/index.d.ts`: the
-      // tags it checks are written by the declaration bundler, so there is
-      // nothing to assert against until the package is built, and the root task
-      // depends on `^build`, which builds dependencies and not this package.
+      // `build` because guards here read this package's OWN `dist`, and the
+      // root task depends on `^build`, which builds dependencies and not this
+      // package.
       //
-      // This makes turbo do that one build, in order, and cache it. The runs
-      // turbo never sees — `pnpm --filter @nextlyhq/ui test`, and the watch,
-      // UI and coverage entry points, none of which read this file — are
-      // covered instead by `ensureDeclarations()` in the surface suite's
-      // `beforeAll`, which rebuilds the declarations itself. It rebuilds every
-      // time rather than testing for staleness, so the two do build twice on
-      // a cache miss; that is the deliberate trade, because deciding whether
-      // `dist` was current meant re-implementing turbo's input tracking and
-      // every error in it passed stale declarations.
+      // The declaration build the release-tag guard reads is a separate task,
+      // inherited through `$TURBO_EXTENDS$` from the root `test`. It used to
+      // happen inside that suite's `beforeAll` instead, under a wall-clock
+      // budget a loaded runner exceeded — failing this package on branches that
+      // had not touched it.
+      //
+      // A run turbo never sees — `pnpm --filter @nextlyhq/ui test`, or the
+      // watch and UI entry points — gets no task, so the suite refuses rather
+      // than reading whatever is there: it checks the declarations exist and
+      // are no older than this package's sources, and says which command to
+      // run. That question is answerable without re-implementing turbo's input
+      // tracking, which is what the previous attempt tried and abandoned.
       "dependsOn": ["$TURBO_EXTENDS$", "build"],
       // Two guards here read source from OTHER packages: the contrast
       // alpha-utilities scan, and the tab-indicator contract. Those trees are
@@ -71,12 +73,13 @@
     "test:coverage": {
       // The same ordering as `test`, for the same reason. Inheriting only
       // `^build` from the root left this task with no edge to this package's
-      // own `build`, so turbo was free to schedule them together: the surface
-      // suite's `beforeAll` runs `tsup` while `build:js` is removing `dist`
-      // underneath it, and a coverage task starting mid-build reads
-      // half-written artifacts. Coverage asserts on the same declarations
-      // `test` does, so it needs the same guarantee that they exist and are
-      // not being rewritten.
+      // own `build`, so turbo was free to schedule them together and a coverage
+      // task starting mid-build read half-written artifacts.
+      //
+      // Coverage runs the surface suite too, so it needs the declaration build
+      // as well — that edge is on the root `test:coverage` task and arrives
+      // through `$TURBO_EXTENDS$`. Without it `pnpm test:coverage` from a clean
+      // tree reaches a suite with nothing to read.
       "dependsOn": ["$TURBO_EXTENDS$", "build"],
       "inputs": [
         "$TURBO_EXTENDS$",

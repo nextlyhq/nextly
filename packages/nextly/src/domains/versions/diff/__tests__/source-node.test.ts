@@ -272,3 +272,50 @@ describe("sourceNode — what it cannot represent", () => {
     expect(node.status).toBe("added");
   });
 });
+
+describe("sourceNode — presence survives a refusal", () => {
+  /**
+   * A value with more distinct lines than the alignment alphabet holds cannot
+   * be aligned, and the node then reports that it is not comparable. What the
+   * refusal must NOT discard is which sides held anything: whether a field was
+   * added, removed, or edited is still known, and it is the answer a reader
+   * uses to decide whether to restore.
+   *
+   * The sibling branch above — content unreadable on one side — already keeps
+   * presence for exactly this reason. Two refusals in one function answering
+   * the same question differently is the divergence being closed.
+   */
+  const tooManyLines = Array.from({ length: 200_000 }, (_, i) => `l${i}`).join(
+    "\n"
+  );
+
+  it("reports an added field as added, not merely changed", () => {
+    const node = sourceNode(codeMeta, missing, at(tooManyLines), "javascript");
+    // The premise: this really is a refusal, so the assertion below is about
+    // the refusal path and not some ordinary comparison.
+    expect(node.lines.every(l => l.status === "unsupported")).toBe(true);
+    expect(node.status).toBe("added");
+  });
+
+  it("reports a removed field as removed, not merely changed", () => {
+    const node = sourceNode(codeMeta, at(tooManyLines), missing, "javascript");
+    expect(node.lines.every(l => l.status === "unsupported")).toBe(true);
+    expect(node.status).toBe("removed");
+  });
+
+  /**
+   * The control. With both sides present there is no presence answer to keep,
+   * so the refusal still reports `changed` — and if this ever came back as
+   * `added` or `removed`, presence would be being invented rather than
+   * preserved.
+   */
+  it("still reports changed when both sides held a value", () => {
+    const node = sourceNode(
+      codeMeta,
+      at(tooManyLines),
+      at(`${tooManyLines}\nextra`),
+      "javascript"
+    );
+    expect(node.status).toBe("changed");
+  });
+});

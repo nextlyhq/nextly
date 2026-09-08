@@ -69,8 +69,14 @@ DATABASE_URL=${database.envExample}
 # Authentication (auto-generated, change if needed)
 NEXTLY_SECRET=${generateNextlySecret()}
 
-# Application URL
+# Where the Nextly app itself lives: the admin, the API, and the origin its
+# emails and preview links point at.
 NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+# Where READERS find the public site. Used for canonical links, Open Graph
+# tags, the sitemap and RSS. Set it when the public site is served from a
+# different origin than the app above; otherwise the app's origin is used.
+# NEXT_PUBLIC_SITE_URL=https://example.com
 
 ${DIAGNOSTICS_BLOCK}`;
 }

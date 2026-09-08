@@ -42,12 +42,17 @@ export default function FieldGroupBuilderPage(): React.ReactElement | null {
   const handleSubmit = (values: BuilderSettingsValues) => {
     const singular = values.singularName.trim();
     const slug = values.slug?.trim() || toSnakeName(singular);
+    // Normalised once. The request and the manifest projection describe the
+    // same field group, so deriving them from one value is what keeps a
+    // whitespace-only description from being stored as text in the manifest
+    // while the row it mirrors holds NULL.
+    const description = values.description?.trim() || undefined;
 
     createFieldGroup(
       {
         slug,
         label: singular,
-        description: values.description?.trim() || undefined,
+        description,
         admin: {
           category: values.category?.trim() || undefined,
           icon: values.icon,
@@ -71,6 +76,11 @@ export default function FieldGroupBuilderPage(): React.ReactElement | null {
                   slug,
                   settings: {
                     singularName: singular,
+                    // Carried so the description reaches a database the
+                    // manifest is replayed against; the builder omits the
+                    // column when it is absent, so this is what supplies it
+                    // rather than what protects it.
+                    description,
                     // i18n: mirror the Internationalization flag into ui-schema.json.
                     localized: values.i18n === true,
                   },

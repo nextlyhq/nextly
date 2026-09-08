@@ -9,29 +9,16 @@ import {
 
 import type { AdminBranding } from "@admin/types/branding";
 import type { ApiCollection, ApiSingle } from "@admin/types/entities";
+import { buildCapabilities } from "@admin/hooks/useCurrentUserPermissions";
 import type { AdminCapabilities } from "@admin/types/permissions";
 
 // Tests run with a super-admin capabilities stub so the permission filter
 // never excludes anything — these tests are about ordering semantics.
-const superAdmin: AdminCapabilities = {
-  isSuperAdmin: true,
-  canViewCollections: true,
-  canViewUsers: true,
-  canViewRoles: true,
-  canViewMedia: true,
-  canViewSettings: true,
-  canViewWebhooks: true,
-  collections: {},
-  canManageUsers: true,
-  canManageRoles: true,
-  canManageMedia: true,
-  canManageSettings: true,
-  canManageEmailProviders: true,
-  canManageEmailTemplates: true,
-  canManageImageSizes: true,
-  canManageStoredFiles: true,
-  canManagePluginSettings: true,
-} as AdminCapabilities;
+// Derived rather than hand-built, for the reason the webhook nav test gives:
+// a literal keeps passing after the deriver stops setting a flag it still sets
+// for itself. These tests are about ordering, so the permission filter is
+// deliberately made to exclude nothing.
+const superAdmin: AdminCapabilities = buildCapabilities([], true);
 
 const noBranding: AdminBranding = {};
 

@@ -253,17 +253,59 @@ export async function generateMigration(
   const downSqlStatements = inverseOps.map(op => generateSQL(op, args.dialect));
 
   // 7b. Append UI metadata-row upserts for any touched UI-built table (§4.12.7).
+  const touched = new Set(operations.map(operationTableName));
   if (args.metadataUpserts && args.metadataUpserts.length > 0) {
-    const touched = new Set(operations.map(operationTableName));
     for (const m of args.metadataUpserts) {
       if (touched.has(m.tableName)) sqlStatements.push(m.sql);
     }
   }
 
-  // 8. Compose file content + write both files.
-  const collectionSlugs = args.collections.map(c => c.slug).sort();
-  const singleSlugs = args.singles.map(c => c.slug).sort();
-  const componentSlugs = args.components.map(c => c.slug).sort();
+  /*
+   * 8. Compose file content + write both files.
+   *
+   * 🔴 The entity headers name what this migration CHANGES, not everything the
+   * config describes. The header is the only per-file record of which entities
+   * a migration carries, and `migrate` reads it to decide whether a registry
+   * row is still waiting on something — a header listing the whole manifest
+   * makes every migration look like it touches every entity, which answers that
+   * question the same way for all of them and so answers it for none.
+   *
+   * Matched on the EXACT table name. A prefix match looks like it would also
+   * catch companion tables, and catches unrelated entities instead: a
+   * collection whose table is `dc_posts_archive` shares the `dc_posts_` prefix
+   * with `dc_posts`, so editing the archive would name `posts` as well and hold
+   * a dashboard it has nothing to do with. Over-naming fails in the expensive
+   * direction here — a withheld row is an empty dashboard with nothing on
+   * screen to explain it.
+   *
+   * A localization transition is not covered by THIS header and does not need
+   * to be: those are emitted as their own companion `.sql` files, which carry
+   * their own header naming the entity by kind.
+   *
+   * 🔴 An entity REMOVED from the config cannot be named, because the filter
+   * runs over the config as it is now and the entity is no longer in it — so a
+   * migration that drops its table declares scope and omits the entity whose
+   * table it drops. Naming it needs the previous entity manifest, which no
+   * caller passes; the previous SNAPSHOT holds tables, not slugs, so the
+   * mapping is not recoverable here. The consequence is under-naming, which
+   * leaves such a row promoted as it was before rather than withheld — the
+   * cheap direction, and the reason this is recorded rather than guessed at.
+   */
+  const namesTouched = (entity: MinimalConfigEntity): boolean =>
+    touched.has(entity.tableName);
+
+  const collectionSlugs = args.collections
+    .filter(namesTouched)
+    .map(c => c.slug)
+    .sort();
+  const singleSlugs = args.singles
+    .filter(namesTouched)
+    .map(c => c.slug)
+    .sort();
+  const componentSlugs = args.components
+    .filter(namesTouched)
+    .map(c => c.slug)
+    .sort();
   const sqlContent = formatMigrationFile({
     name: args.name,
     dialect: args.dialect,

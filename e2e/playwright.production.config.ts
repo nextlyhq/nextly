@@ -15,19 +15,20 @@ const BASE_URL = `http://localhost:${PORT}`;
 const E2E_DB_RELATIVE = "file:./data/e2e-prod.db";
 
 /**
- * The phase's exit demo, and the only suite here that runs a PRODUCTION build.
+ * The only suite here that runs a PRODUCTION build.
  *
  * A separate config rather than a project inside the dev one, because the two
  * cannot share a `webServer`: this needs `next build` before `next start`, and
- * the difference is the entire point. Task 179's 500-on-every-path reproduced
- * only in a production build and never in `next dev`, so a suite that boots the
- * dev server certifies the phase's exit criterion against the one environment
- * the failure could not appear in.
+ * the difference is the entire point. A production build resolves modules,
+ * bundles and prerenders differently enough that a route can answer 500 on
+ * every path there while serving correctly under `next dev` — so a suite that
+ * boots the dev server certifies the one environment in which that class of
+ * failure cannot appear.
  *
  * Dev auto-login is correctly hard-blocked here, so the spec signs in through
- * the real form with the seeded credentials. That is not incidental — an exit
- * demo that authenticated by a dev-only shortcut would prove a path no visitor
- * or editor ever takes.
+ * the real form with the seeded credentials. That is not incidental: a suite
+ * that authenticated by a dev-only shortcut would prove a path no visitor or
+ * editor ever takes.
  *
  * @module playwright.production.config
  */
@@ -37,7 +38,22 @@ export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   retries: 0,
   workers: 1,
-  reporter: process.env.CI ? [["github"], ["line"]] : [["line"]],
+  // The HTML reporter is what makes the CI artifact exist. With `github` and
+  // `line` alone the run annotates and prints, writes no report directory, and
+  // an upload step finds nothing — which is worst on the failing run that most
+  // needs the trace. Its own folder rather than the dev suite's, for the reason
+  // the port and the database are its own: on one machine a shared folder
+  // leaves whichever suite finished last as the only report either has.
+  reporter: process.env.CI
+    ? [
+        ["github"],
+        ["line"],
+        [
+          "html",
+          { outputFolder: "./.playwright/report-production", open: "never" },
+        ],
+      ]
+    : [["line"]],
   use: {
     baseURL: BASE_URL,
     trace: "retain-on-failure",

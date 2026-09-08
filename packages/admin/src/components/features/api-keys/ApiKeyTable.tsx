@@ -17,7 +17,10 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import { ListView, useListColumns } from "@admin/components/ui/table/list-view";
+import {
+  ListView,
+  useTableColumns,
+} from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { usePagination } from "@admin/hooks/usePagination";
 import type { ApiKeyMeta } from "@admin/services/apiKeyApi";
@@ -31,6 +34,15 @@ export interface ApiKeyTableProps {
   isLoading?: boolean;
   onEdit: (key: ApiKeyMeta) => void;
   onRevoke: (key: ApiKeyMeta) => void;
+  /**
+   * Whether this reader may edit a key, and revoke one.
+   *
+   * Required rather than defaulted: the list is now open to a reader holding
+   * only `read-api-keys`, and a default of `true` would leave every call site
+   * that forgets these offering actions the endpoint refuses.
+   */
+  canEdit: boolean;
+  canRevoke: boolean;
 }
 
 // ============================================================
@@ -108,6 +120,8 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
   isLoading = false,
   onEdit,
   onRevoke,
+  canEdit,
+  canRevoke,
 }) => {
   const [search, setSearch] = useState("");
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
@@ -204,25 +218,12 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
     ];
   }, []);
 
-  const toggleableColumns = useMemo(
-    () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
-    [allColumns]
-  );
-
-  /* The reader's column choice outlives the tab it was made in. */
-  const columnsControl = useListColumns({
+  // Resolves persisted column visibility while ensuring pinned API key names remain visible.
+  const { columns, columnsControl } = useTableColumns({
     storageKey: "api-keys",
-    columns: toggleableColumns,
+    columns: allColumns,
+    alwaysVisible: ALWAYS_VISIBLE,
   });
-
-  const columns = useMemo(
-    () =>
-      allColumns.map(col => ({
-        ...col,
-        hidden: !columnsControl.isColumnVisible(col.name),
-      })),
-    [allColumns, columnsControl]
-  );
 
   const filteredData = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -258,23 +259,30 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
   const rowActions = useCallback(
     (key: ApiKeyMeta): RowAction<ApiKeyMeta>[] => {
       if (!key.isActive) return [];
-      return [
-        {
+      // Offered only where the endpoint behind them would agree. Editing
+      // answers to `update-api-keys`; revoking accepts `delete-api-keys` or
+      // that same umbrella.
+      const actions: RowAction<ApiKeyMeta>[] = [];
+      if (canEdit) {
+        actions.push({
           id: "edit",
           label: "Edit",
           icon: <Edit className="h-4 w-4" />,
           onSelect: () => onEdit(key),
-        },
-        {
+        });
+      }
+      if (canRevoke) {
+        actions.push({
           id: "revoke",
           label: "Revoke",
           icon: <Trash2 className="h-4 w-4" />,
           destructive: true,
           onSelect: () => onRevoke(key),
-        },
-      ];
+        });
+      }
+      return actions;
     },
-    [onEdit, onRevoke]
+    [onEdit, onRevoke, canEdit, canRevoke]
   );
 
   return (
@@ -294,10 +302,18 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
       columns={columns}
       rows={paginatedData}
       loading={isLoading}
-      onRowClick={key => {
-        // Only active keys are editable; revoked keys are read-only.
-        if (key.isActive) onEdit(key);
-      }}
+      onRowClick={
+        // The row is a second door to the same edit route, so it answers to
+        // the same grant as the Edit item. Without this a read-only viewer
+        // opens the editor by clicking the row — or by activating it from the
+        // keyboard — and is refused there. Revoked keys are read-only for
+        // everyone.
+        canEdit
+          ? key => {
+              if (key.isActive) onEdit(key);
+            }
+          : undefined
+      }
       primaryColumn="name"
       rowActions={rowActions}
       registryKey="api-keys"

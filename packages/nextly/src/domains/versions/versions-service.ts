@@ -22,6 +22,8 @@ import type { VersionsDbApi } from "./db-api";
 import {
   VersionsRepository,
   type AutosaveWriteResult,
+  type PendingEditCursor,
+  type PendingEditOrder,
   type VersionMeta,
   type VersionRef,
   type VersionRow,
@@ -44,6 +46,31 @@ export class VersionsService {
 
   constructor(db: VersionsDbApi) {
     this.repo = new VersionsRepository(db);
+  }
+
+  /**
+   * One page of pending-edit ROWS, newest first.
+   *
+   * 🔴 Rows rather than documents, and the caller collapses them itself — after
+   * it has decided which it may show. A working draft is one row per document
+   * per locale, and a localized Single is authorized per language, so collapsing
+   * before that decision offers the newest locale alone and loses a readable
+   * older one. This service used to take the install's locale count to size a
+   * single read; that number does not bound the data, because drafts written
+   * under a locale since removed from the configuration are still rows.
+   */
+  async pendingEditRows(input: {
+    readableSlugs: readonly string[];
+    limit: number;
+    order: PendingEditOrder;
+    after?: PendingEditCursor;
+  }): Promise<VersionMeta[]> {
+    return this.repo.findPendingEditRows({
+      slugs: input.readableSlugs,
+      limit: input.limit,
+      order: input.order,
+      ...(input.after ? { after: input.after } : {}),
+    });
   }
 
   /** Version metadata for one document, newest-first. Never loads snapshots. */

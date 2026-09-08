@@ -115,3 +115,38 @@ export interface BlocksFieldConfig
     args: { data: Record<string, unknown>; req: RequestContext }
   ) => string | true | Promise<string | true>;
 }
+
+/**
+ * The options a field declares, as an object.
+ *
+ * The single reader of `field.blocks`. Both the validator and the admin editor
+ * need it, and two readings of one declaration is how a field ends up
+ * validated against one policy and edited under another — which is exactly the
+ * shape of a document seeded as a `page` into a field that accepts only
+ * patterns.
+ */
+export function blocksOptionsOf(field: unknown): BlocksFieldOptions {
+  // `unknown` rather than a shape with one optional key: a parameter whose
+  // properties are all optional has nothing in common with a field instance
+  // type, so the checker refuses the very callers this exists for.
+  const declared = (field as { blocks?: unknown })?.blocks;
+  if (typeof declared !== "object" || declared === null) return {};
+  // No cast: every property of the options is optional, so the narrowed
+  // `object` already satisfies the return type. An assertion here would be
+  // stating a fact the checker has, and would keep stating it after the
+  // options gain a required member — which is the moment it stops being true.
+  return declared;
+}
+
+/**
+ * Which document kinds a field accepts, or nothing when it says nothing.
+ *
+ * `undefined` and `["page"]` are not the same answer and are not collapsed
+ * here: a field that declares nothing takes the default, and the default is
+ * the caller's to apply.
+ */
+export function acceptedKinds(
+  field: unknown
+): readonly DocumentKind[] | undefined {
+  return blocksOptionsOf(field).kinds;
+}

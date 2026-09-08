@@ -1,4 +1,7 @@
+import type { ApiCollection } from "@admin/types/entities";
 import type { AdminCapabilities } from "@admin/types/permissions";
+
+import type { CollectionPlacement } from "./has-collections-section";
 
 interface PluginsSectionInputs {
   /** True while permissions or the collections query are still resolving. */
@@ -43,4 +46,23 @@ export function hasPluginsSection(
   // Pending counts as reachable so the entry does not flicker out and back in
   // while the collections query resolves.
   return inputs.isPending || inputs.hasVisiblePluginCollection;
+}
+
+/**
+ * Whether any plugin-owned collection is reachable through the plugins panel.
+ *
+ * The mirror of `belongsInCollectionsSection`: a plugin collection shows up
+ * HERE when its placement names this panel or names nothing, so the two
+ * sections partition the same set rather than each deciding on its own. Hidden
+ * collections and collections no plugin owns are not this panel's to offer.
+ */
+export function hasVisiblePluginCollection(
+  permittedCollections: readonly ApiCollection[],
+  placementOf: CollectionPlacement
+): boolean {
+  return permittedCollections.some(collection => {
+    if (!collection.admin?.isPlugin || collection.admin?.hidden) return false;
+    const placement = placementOf(collection);
+    return !placement || placement === "plugins";
+  });
 }

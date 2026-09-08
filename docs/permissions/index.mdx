@@ -1,0 +1,115 @@
+---
+title: Roles and Permissions
+description: Control who can do what, down to individual fields.
+---
+
+Access control answers three questions, at three levels of detail: what a role may do,
+which documents it may do it to, and which fields inside those documents it may see or
+change.
+
+## Availability
+
+| | |
+|---|---|
+| Built in | No plugin required, and not gated behind a paid tier |
+| Admin | A **Roles** screen for managing roles and their grants |
+| Applies to | The REST API and the admin. The Direct API runs as trusted server code and **bypasses collection and document rules by default** — see below |
+
+## Roles and grants
+
+A role holds grants named `<action>-<resource>`: `create-posts`, `delete-media`,
+`publish-content-releases`, `update-users`. A user's roles are the union of their grants.
+
+Because grants are per-resource, a role can be narrow in a way that is actually useful — a
+release manager who may schedule releases without holding a general read grant over
+everything.
+
+## Collection access
+
+Grants say what a role may do. Collection access says which documents:
+
+```ts
+import { defineCollection, relationship, text } from "nextly/config";
+
+export const Posts = defineCollection({
+  slug: "posts",
+  fields: [
+    text({ name: "title" }),
+    relationship({ name: "author", relationTo: "users" }),
+  ],
+  access: {
+    read: true,
+    create: ({ roles }) => roles.includes("editor") || roles.includes("admin"),
+  },
+});
+```
+
+`true` means anyone, including unauthenticated readers. A function receives the request
+context and decides.
+
+## Field-level access
+
+Any field takes its own `access`, with separate `create`, `read` and `update` rules:
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const Users = defineCollection({
+  slug: "users",
+  fields: [
+    text({ name: "name" }),
+    text({
+      name: "internalNotes",
+      access: {
+        read: ({ req }) => req.user?.role === "admin",
+        update: ({ req }) => req.user?.role === "admin",
+      },
+    }),
+  ],
+});
+```
+
+A field the reader may not see is removed from the response rather than blanked, and a
+field they may not change is rejected on write rather than silently dropped.
+
+This is the level most systems either do not have or sell separately. It is what lets one
+collection serve two audiences — an editor who sees the article, and a finance user who
+also sees the fields describing what it cost.
+
+## The Direct API bypasses these rules by default
+
+The Direct API is trusted server code, so `overrideAccess` defaults to `true` and collection
+and document rules are **skipped**. This is deliberate — server code fetching content for a
+page should not be filtered as though it were an anonymous visitor — but it means a query
+written on behalf of a request does not enforce anything unless you say so:
+
+```ts
+const posts = await nextly.find({
+  collection: "posts",
+  // Both are required. Without a user, an owner rule has nobody to compare
+  // against, so it is skipped rather than failed.
+  overrideAccess: false,
+  user: requestUser,
+});
+```
+
+<Callout type="warn">
+**Leaving `overrideAccess` at its default is the case that leaks.** Reading on behalf of a
+visitor without setting `overrideAccess: false` returns rows that visitor was not allowed to
+see. This is the easiest way to expose data with Nextly.
+</Callout>
+
+Forgetting the `user` is a different and much less dangerous mistake. An owner-based rule has
+nobody to compare against, so the request is refused rather than answered loosely — you get
+an authorization error, not somebody else's rows. If a query that should return data returns
+"authentication required", a missing `user` alongside `overrideAccess: false` is the first
+thing to check.
+
+Field-level rules behave differently: they run whenever `overrideAccess` is `false`, user or
+not, because "which fields may this writer set" has a sensible answer for nobody. Internal
+code that genuinely needs to write a protected field says so with `overrideAccess: true`.
+
+## Related
+
+- [Authentication](/docs/guides/authentication) — how a user proves who they are
+- [Audit log](/docs/audit-log) — what they did

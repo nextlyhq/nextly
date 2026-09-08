@@ -18,7 +18,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
   DialogDescription,
   Input,
   Label,
@@ -41,14 +40,7 @@ import {
 } from "lexical";
 import { useState, useCallback, useEffect } from "react";
 
-import {
-  AlertCircle,
-  Plus,
-  Trash2,
-  AlignLeft,
-  AlignCenter,
-  AlignRight,
-} from "@admin/components/icons";
+import { Plus, Trash2 } from "@admin/components/icons";
 
 import {
   $createButtonGroupNode,
@@ -58,6 +50,11 @@ import {
   type ButtonAlignment,
 } from "./ButtonGroupNode";
 import type { ButtonLinkSize, ButtonLinkVariant } from "./ButtonLinkNode";
+import {
+  useInsertDialogState,
+  InsertDialogFooter,
+  ButtonAlignmentControl,
+} from "./RichTextInsertDialog";
 
 // ============================================================
 // Commands
@@ -101,7 +98,6 @@ export function RichTextButtonGroupPlugin({
   disabled = false,
 }: RichTextButtonGroupPluginProps) {
   const [editor] = useLexicalComposerContext();
-  const [isOpen, setIsOpen] = useState(false);
   const [buttons, setButtons] = useState<DialogButton[]>([
     createDefaultButton(),
     createDefaultButton(),
@@ -116,12 +112,6 @@ export function RichTextButtonGroupPlugin({
     setError(null);
     setEditingNodeKey(null);
   }, []);
-
-  const openDialog = useCallback(() => {
-    if (disabled) return;
-    resetState();
-    setIsOpen(true);
-  }, [disabled, resetState]);
 
   const updateButton = useCallback(
     (index: number, updates: Partial<DialogButton>) => {
@@ -163,6 +153,16 @@ export function RichTextButtonGroupPlugin({
       return false;
     }
   }, []);
+
+  // Shared dialog shell: open/close lifecycle with reset-on-close and
+  // Enter-to-submit. Enter submission is new here — the other three dialogs
+  // already had it, and the shared shell is what makes the four agree.
+  const { isOpen, setIsOpen, openDialog, handleOpenChange, handleKeyDown } =
+    useInsertDialogState({
+      resetState,
+      onSubmit: () => insertButtonGroup(),
+      disabled,
+    });
 
   const insertButtonGroup = useCallback(() => {
     // Validate all buttons
@@ -235,17 +235,15 @@ export function RichTextButtonGroupPlugin({
 
     setIsOpen(false);
     resetState();
-  }, [editor, buttons, alignment, isValidUrl, resetState, editingNodeKey]);
-
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      if (!open) {
-        resetState();
-      }
-      setIsOpen(open);
-    },
-    [resetState]
-  );
+  }, [
+    editor,
+    buttons,
+    alignment,
+    isValidUrl,
+    setIsOpen,
+    resetState,
+    editingNodeKey,
+  ]);
 
   // Register commands
   useEffect(() => {
@@ -306,11 +304,14 @@ export function RichTextButtonGroupPlugin({
     return () => {
       window.removeEventListener("edit-button-group", handleEditEvent);
     };
-  }, []);
+  }, [setIsOpen]);
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-xl max-h-[85vh] overflow-y-auto">
+      <DialogContent
+        className="sm:max-w-xl max-h-[85vh] overflow-y-auto"
+        onKeyDown={handleKeyDown}
+      >
         <DialogHeader>
           <DialogTitle>
             {editingNodeKey ? "Edit Button Group" : "Insert Button Group"}
@@ -324,43 +325,12 @@ export function RichTextButtonGroupPlugin({
 
         <div className="space-y-4">
           {/* Alignment Controls */}
-          <div className="space-y-2">
-            <Label className="text-sm font-medium">
-              Button Group Alignment
-            </Label>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant={alignment === "left" ? "default" : "outline"}
-                size="md"
-                className="flex-1"
-                onClick={() => setAlignment("left")}
-              >
-                <AlignLeft className="h-4 w-4" />
-                Left
-              </Button>
-              <Button
-                type="button"
-                variant={alignment === "center" ? "default" : "outline"}
-                size="md"
-                className="flex-1"
-                onClick={() => setAlignment("center")}
-              >
-                <AlignCenter className="h-4 w-4" />
-                Center
-              </Button>
-              <Button
-                type="button"
-                variant={alignment === "right" ? "default" : "outline"}
-                size="md"
-                className="flex-1"
-                onClick={() => setAlignment("right")}
-              >
-                <AlignRight className="h-4 w-4" />
-                Right
-              </Button>
-            </div>
-          </div>
+          <ButtonAlignmentControl
+            value={alignment}
+            onChange={setAlignment}
+            label="Button Group Alignment"
+            disabled={disabled}
+          />
 
           {/* Individual Button Settings */}
           {buttons.map((button, index) => (
@@ -497,28 +467,21 @@ export function RichTextButtonGroupPlugin({
               Add Button
             </Button>
           )}
-
-          {/* Error */}
-          {error && (
-            <div className="flex items-center gap-2 text-destructive text-sm">
-              <AlertCircle className="h-4 w-4" />
-              {error}
-            </div>
-          )}
         </div>
 
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => handleOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button type="button" onClick={insertButtonGroup}>
-            {editingNodeKey ? "Update Button Group" : "Insert Button Group"}
-          </Button>
-        </DialogFooter>
+        {/* Shared footer: the error banner and Cancel/Confirm row every
+            insert dialog renders. Confirm is gated on every button having
+            text and a URL — emptiness only, matching the button-link dialog,
+            so a non-empty invalid URL still submits and shows the banner. */}
+        <InsertDialogFooter
+          error={error}
+          onCancel={() => handleOpenChange(false)}
+          onConfirm={insertButtonGroup}
+          confirmLabel={
+            editingNodeKey ? "Update Button Group" : "Insert Button Group"
+          }
+          confirmDisabled={buttons.some(b => !b.text.trim() || !b.url.trim())}
+        />
       </DialogContent>
     </Dialog>
   );

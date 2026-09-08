@@ -593,6 +593,42 @@ interface Frame {
 }
 
 /**
+ * A limit, validated as one that can actually bound a walk.
+ *
+ * Published because more than one walk is held to these numbers and they have
+ * to agree about what counts as a bound. A helper that accepts what
+ * {@link surveyDocument} rejects reports success on a document the gate refuses
+ * to measure at all — and it does so having walked the whole thing, which is
+ * the resource bound gone as well as the verdict wrong.
+ *
+ * A PRIMITIVE NUMBER, then the deliberately supported infinities. Testing for
+ * `NaN` alone was not enough: `Number.isNaN(undefined)` is false, and so is
+ * `Number.isNaN("wat")`, while every later `>` comparison coerces both to `NaN`
+ * and is false in turn. A JavaScript caller omitting a bound therefore removed
+ * it and was told the document fitted.
+ *
+ * `Infinity` is deliberately NOT rejected: an infinite byte limit is the
+ * supported way to ask for an exact count.
+ *
+ * Throws rather than refusing, because a limit is the CALLER's own
+ * configuration rather than the untrusted document — the same reason the survey
+ * throws for it — and a caller cannot be told about a bad bound through a list
+ * of issues describing a document.
+ */
+export function boundedLimit(
+  limit: number,
+  name: string,
+  subject: string
+): number {
+  if (typeof limit !== "number" || Number.isNaN(limit)) {
+    throw new RangeError(
+      `${subject}: ${name} must be a number, and ${String(limit)} would remove the bound it exists to impose.`
+    );
+  }
+  return limit;
+}
+
+/**
  * The array index a property name denotes, or -1 if it denotes none.
  *
  * `JSON.stringify` emits positions `0..length-1` and nothing else, so a name is
@@ -620,19 +656,8 @@ export function surveyDocument(
   // Infinity is deliberately NOT rejected: an infinite byte limit is the
   // supported way to ask for an exact count, and the walk terminates there on
   // the cycle set rather than on the cap.
-  const bounded = (limit: number, name: string): number => {
-    // A PRIMITIVE NUMBER, then the deliberately supported infinities. Testing
-    // for `NaN` alone was not enough: `Number.isNaN(undefined)` is false, and so
-    // is `Number.isNaN("wat")`, while every later `>` comparison coerces both to
-    // `NaN` and is false in turn. A JavaScript caller omitting a bound therefore
-    // removed it and was told the document fitted.
-    if (typeof limit !== "number" || Number.isNaN(limit)) {
-      throw new RangeError(
-        `surveyDocument: ${name} must be a number, and ${String(limit)} would remove the bound it exists to impose.`
-      );
-    }
-    return limit;
-  };
+  const bounded = (limit: number, name: string): number =>
+    boundedLimit(limit, name, "surveyDocument");
   // SNAPSHOT the validated numbers. Validating and then re-reading `limits.*`
   // through the walk lets an accessor or proxy answer `100` to the check and
   // `undefined` afterwards, and a document-supplied hook can mutate a shared

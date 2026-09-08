@@ -137,7 +137,7 @@ function ActivePanes({
         <ResizablePanel id="translation-source" minSize="25%" defaultSize="40%">
           <SourceDocumentPane source={source} />
         </ResizablePanel>
-        <ResizableHandle withGrip />
+        <ResizableHandle withGrip aria-label="Source and translation" />
         <ResizablePanel id="translation-target" minSize="30%">
           {/* A container of its own, and this is the whole of the editor's
               layout adaptation. `@container/content` is declared on the

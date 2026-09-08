@@ -7,6 +7,7 @@ import type {
 import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { RegisteredEmailProvider } from "../domains/email/provider-definition";
+import type { JobDefinition } from "../domains/jobs/job-registry";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import type { SingleConfig } from "../singles/config/types";
 
@@ -489,6 +490,15 @@ export interface PluginContributions {
   permissions?: PluginPermission[];
   /** @experimental Role bundles — named sets of permissions, seeded on boot. */
   roles?: PluginRole[];
+  /**
+   * @experimental Background job types this plugin can run.
+   *
+   * Each entry is a `defineJob(...)` result. Registered with the runtime job
+   * registry at boot, which is what makes the handler reachable: a definition
+   * that never reaches the registry is queueable and unrunnable, and silently
+   * so — the enqueue succeeds and every drain defers the row forever.
+   */
+  jobs?: JobDefinition[];
   /**
    * @experimental Custom services registered into DI. Each entry is a
    * factory `(ctx) => instance`; the service is exposed lazily (instantiated on

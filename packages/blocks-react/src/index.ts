@@ -85,6 +85,20 @@ export type {
  * that guesses.
  */
 export { sharedStyleInputs, type ReconciledStyleInputs } from "./page-renderer";
+/**
+ * The typographic baseline, and the one way to apply it.
+ *
+ * Both are public because a host replacing the baseline needs to read what it
+ * is replacing, and because a host assembling its own compile context must
+ * reach the same answer the renderer does. Spreading the record in by hand is
+ * the second implementation that would drift: `withTypographyDefaults` leaves a
+ * context that states its own `elementBases` alone, and a caller open-coding
+ * that check is one `??` away from overwriting a host's deliberate choice.
+ */
+export {
+  TYPOGRAPHY_DEFAULTS,
+  withTypographyDefaults,
+} from "./blocks/typography-defaults";
 
 export { BlockBoundary, BlockList } from "./block-boundary";
 // `NODE_ID_ATTRIBUTE` is published deliberately: an editor hit-testing on the
@@ -131,6 +145,11 @@ export {
   // every stored sheet would read as stale, and a site with a policy would
   // recompile its CSS on every render for ever.
   fetchPolicyLabel,
+  // The one question `"use client"` cannot answer: given a STORED page, does it
+  // contain a block that needs JavaScript? Public because the callers who need
+  // it are outside this package — a host deciding what to serve, an editor
+  // warning an author what a block costs.
+  islandsFor,
   resolvePageStyles,
   resolvePageStylesWithTrace,
   styleTextForInjection,
@@ -225,8 +244,11 @@ export type {
   BlockEditorMeta,
   BlockExample,
   BlockIcon,
+  BlockIsland,
   BlockMigrationInfo,
   BlockNode,
+  BlockOrigin,
+  BlockPart,
   BlockRenderResult,
   BlockSeoContribution,
   BlockSeoImage,
@@ -258,6 +280,14 @@ export type {
   SlotLock,
   SlotSpec,
   BreakpointContextOptions,
+  // Composition. `PrepareDocumentArgs` names the definitions map in a
+  // parameter position and the stages name what came back, so a host that
+  // cannot write these down cannot annotate the call it is required to make.
+  ComponentUnresolvedReason,
+  DefinitionsById,
+  ResolvedBlockNode,
+  ResolvedDocument,
+  UnresolvedInstance,
   StyleCompileContext,
   StyleOrigin,
   StyleState,
@@ -298,3 +328,13 @@ export {
   PREVIEW_CONTAINER_STYLE,
   previewContainerStyle,
 } from "./preview-container";
+
+// The render's own discovery, for a caller outside the render that needs the
+// same answer. Exported because a publish-time check walking stored documents
+// for component ids asks a DIFFERENT question — it reports gated instances,
+// discarded slot content and pre-override ids the renderer never requests.
+export {
+  unsuppliedComponentIds,
+  COMPONENT_DOCUMENT_FIELD,
+  type ComponentSource,
+} from "./component-source";

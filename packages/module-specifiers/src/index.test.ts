@@ -15,7 +15,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { UNRESOLVABLE_SPECIFIER, importedSpecifiers } from "./index";
+import {
+  UNRESOLVABLE_SPECIFIER,
+  importedSpecifiers,
+  moduleSpecifierRefs,
+} from "./index";
 
 const read = (text: string, fileName = "module.ts"): string[] =>
   importedSpecifiers(text, fileName);
@@ -144,5 +148,199 @@ describe("the JSDoc descent terminates", () => {
         "module.js"
       )
     ).toEqual(["pkg"]);
+  });
+});
+
+/**
+ * The kind half of the same walk.
+ *
+ * A guard about a BUNDLE needs only the references that survive to runtime, and one about an import
+ * BOUNDARY needs all of them. Both come from this one walk, so they cannot drift apart -- and the
+ * drift would be silent in the direction that answers "clean".
+ */
+describe("whether a reference survives to runtime", () => {
+  const refs = (text: string, fileName = "module.ts") =>
+    moduleSpecifierRefs(text, fileName);
+
+  it("reports a plain import as reaching runtime", () => {
+    expect(refs(`import a from "pkg";`)).toEqual([
+      { specifier: "pkg", typeOnly: false },
+    ]);
+  });
+
+  it("reports a bare side-effect import as reaching runtime", () => {
+    expect(refs(`import "pkg";`)).toEqual([
+      { specifier: "pkg", typeOnly: false },
+    ]);
+  });
+
+  it("reports an import type as erased", () => {
+    expect(refs(`import type { A } from "pkg";`)).toEqual([
+      { specifier: "pkg", typeOnly: true },
+    ]);
+  });
+
+  it("reports an export type as erased", () => {
+    expect(refs(`export type { A } from "pkg";`)).toEqual([
+      { specifier: "pkg", typeOnly: true },
+    ]);
+  });
+
+  it("reports a mixed clause as reaching runtime", () => {
+    // 🔴 The module is still loaded for the value binding. Reading the inline `type` keyword as
+    // governing the whole clause erases a real runtime edge, which is the direction that answers
+    // "clean" for a bundle guard.
+    expect(refs(`import { a, type B } from "pkg";`)).toEqual([
+      { specifier: "pkg", typeOnly: false },
+    ]);
+  });
+
+  it("reports a dynamic import as reaching runtime", () => {
+    expect(refs(`const f = () => import("pkg");`)).toEqual([
+      { specifier: "pkg", typeOnly: false },
+    ]);
+  });
+
+  it("reports require as reaching runtime", () => {
+    expect(refs(`const a = require("pkg");`)).toEqual([
+      { specifier: "pkg", typeOnly: false },
+    ]);
+  });
+
+  it("reports an import-equals as reaching runtime", () => {
+    expect(refs(`import a = require("pkg");`)).toEqual([
+      { specifier: "pkg", typeOnly: false },
+    ]);
+  });
+
+  it("reports typeof import as erased", () => {
+    expect(refs(`type A = typeof import("pkg");`)).toEqual([
+      { specifier: "pkg", typeOnly: true },
+    ]);
+  });
+
+  it("reports a JSDoc import as erased", () => {
+    expect(
+      refs(
+        `/** @typedef {import("pkg").T} T */\nexport const x = 1;`,
+        "module.js"
+      )
+    ).toEqual([{ specifier: "pkg", typeOnly: true }]);
+  });
+
+  it("reports a triple-slash type reference as erased", () => {
+    expect(refs(`/// <reference types="pkg" />\nexport const x = 1;`)).toEqual([
+      { specifier: "pkg", typeOnly: true },
+    ]);
+  });
+
+  it("keeps an unreadable target unreadable, and at runtime", () => {
+    // An unresolvable target has to stay a violation for both consumers.
+    expect(refs(`const a = require(name);`)).toEqual([
+      { specifier: UNRESOLVABLE_SPECIFIER, typeOnly: false },
+    ]);
+  });
+
+  it("is the source the string list is derived from", () => {
+    // 🔴 The control for the rule this file exists under. If `importedSpecifiers` ever grows its
+    // own walk again, this disagrees.
+    const text = [
+      `import a from "one";`,
+      `import type { B } from "two";`,
+      `const c = require("three");`,
+      `type D = typeof import("four");`,
+    ].join("\n");
+    expect(importedSpecifiers(text, "module.ts")).toEqual(
+      moduleSpecifierRefs(text, "module.ts").map(ref => ref.specifier)
+    );
+    expect(moduleSpecifierRefs(text, "module.ts").map(r => r.typeOnly)).toEqual(
+      [false, true, false, true]
+    );
+  });
+});
+
+/**
+ * `module.require` is the documented CommonJS method and resolves exactly as the
+ * free function does, so a reader that sees only the bare identifier reports a
+ * file loading nothing while it loads a driver.
+ */
+describe("module.require", () => {
+  it("reads it as a runtime resolve", () => {
+    expect(
+      importedSpecifiers(`const a = module.require("pkg");`, "m.ts")
+    ).toEqual(["pkg"]);
+    expect(
+      moduleSpecifierRefs(`const a = module.require("pkg");`, "m.ts")
+    ).toEqual([{ specifier: "pkg", typeOnly: false }]);
+  });
+
+  it("reads the bracket spelling the same way", () => {
+    // `a.b` and `a["b"]` are the same read, and a rule for one is a rule the
+    // other walks around.
+    expect(
+      importedSpecifiers(`const a = module["require"]("pkg");`, "m.ts")
+    ).toEqual(["pkg"]);
+  });
+
+  it("keeps an unreadable target unreadable", () => {
+    expect(
+      importedSpecifiers(`const a = module.require(name);`, "m.ts")
+    ).toEqual([UNRESOLVABLE_SPECIFIER]);
+  });
+
+  it("leaves a require method on some other object alone", () => {
+    // 🔴 The negative control. Treating every `.require` as a resolve reports
+    // ordinary code as a dependency nobody has, and a rule that fires on correct
+    // code stops being read.
+    expect(
+      importedSpecifiers(`const a = loader.require("pkg");`, "m.ts")
+    ).toEqual([]);
+    expect(
+      importedSpecifiers(`const a = holder["require"]("pkg");`, "m.ts")
+    ).toEqual([]);
+  });
+});
+
+/**
+ * The receiver, seen through what the language lets you write around it.
+ */
+describe("module.require through wrappers and shadows", () => {
+  it.each([
+    `const a = (module).require("pkg");`,
+    `const a = (module as NodeModule).require("pkg");`,
+    `const a = module!.require("pkg");`,
+    `const a = (module satisfies object).require("pkg");`,
+    `const a = ((module)).require("pkg");`,
+  ])("still reads it in %s", source => {
+    // 🔴 Each of these reads the same binding. A check on the receiver as
+    // written treats them as somebody else's property and reports the file as
+    // loading nothing, which is a bypass anyone can reach by accident.
+    expect(importedSpecifiers(source, "m.ts")).toEqual(["pkg"]);
+  });
+
+  it.each([
+    `function f(module: { require(id: string): unknown }) { return module.require("pkg"); }`,
+    `const module = { require: (id: string) => id };\nconst a = module.require("pkg");`,
+  ])(
+    "claims no dependency when the file declares its own module: %s",
+    source => {
+      // 🔴 The false direction for a guard. Renaming the identical receiver to
+      // `loader` already makes the report disappear, which is the tell that it was
+      // about the name rather than the thing.
+      expect(importedSpecifiers(source, "m.ts")).toEqual([]);
+    }
+  );
+
+  it("reports only the real import when module is a default binding", () => {
+    // The import itself is a specifier and stays one; what goes is the invented
+    // dependency on "pkg" that the file never loads.
+    const source = `import module from "elsewhere";\nconst a = module.require("pkg");`;
+    expect(importedSpecifiers(source, "m.ts")).toEqual(["elsewhere"]);
+  });
+
+  it("still sees a bare require in a file that shadows module", () => {
+    // The shadow is about the receiver, not about the file.
+    const source = `function f(module: unknown) { return module; }\nconst a = require("pkg");`;
+    expect(importedSpecifiers(source, "m.ts")).toEqual(["pkg"]);
   });
 });

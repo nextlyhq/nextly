@@ -31,6 +31,8 @@ import { z } from "zod";
 import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { AutosaveRecoveryBanner } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
+import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
+import { DocumentLockBanner } from "@admin/components/features/entries/EntryForm/DocumentLockBanner";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import {
   EntryFormContextProvider,
@@ -47,6 +49,7 @@ import {
   UnsavedWorkProvider,
   useFormUnsavedWork,
 } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
+import { useDocumentLockSurface } from "@admin/components/features/entries/EntryForm/useDocumentLockSurface";
 import {
   mapIntentToPayload,
   passwordFieldNames,
@@ -60,7 +63,6 @@ import { TranslationPanes } from "@admin/components/features/entries/Translation
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
@@ -71,11 +73,7 @@ import {
 } from "@admin/hooks/useDocumentAutosave";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import {
-  computeMainFields,
-  takeoverControllerNames,
-  takeoverTypesFromBranding,
-} from "@admin/lib/builder/takeoverLayout";
+import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
 import { cn } from "@admin/lib/utils";
@@ -136,6 +134,21 @@ export interface SingleDocumentData {
 }
 
 export interface SingleFormProps {
+  /**
+   * Document-level actions the PAGE owns, folded in with the form's own.
+   *
+   * DESCRIPTIONS paired with handlers, not rendered controls. Adding a document
+   * to a release is a fact about this document, so its control belongs with
+   * Publish and Duplicate — but releases are the page's concern, and a form that
+   * imported them would have to import translations and every later one too.
+   *
+   * Describing rather than rendering is what leaves the model free to place the
+   * action, order it against the built-ins, and disable it with a reason. A
+   * rendered node fixes all three at its call site, and the one that matters is
+   * the last: a control that cannot say why it is unavailable has to disappear,
+   * which an author cannot tell from a feature that does not exist.
+   */
+  documentActions?: readonly ContributedAction[];
   /** Single schema with field definitions */
   schema: SingleSchema;
   /** Current document data */
@@ -256,6 +269,7 @@ export function SingleForm({
   translation,
   sourceValues,
   className,
+  documentActions,
 }: SingleFormProps) {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
@@ -354,9 +368,27 @@ export function SingleForm({
   // Submit handler. The intent arg names the user's button click and
   // determines payload shape — same intent set as the collection
   // EntryForm (see EntryFormIntent). Mirrors the EntryForm pattern.
+  /*
+   * The advisory claim, derived before the first write is defined because every
+   * write has to be able to ask about it.
+   */
+  const lock = useDocumentLockSurface({
+    scopeKind: "single",
+    slug: schema.slug,
+    entryId: document.id,
+  });
+
   const handleSubmit = useCallback(
     async (e?: React.BaseSyntheticEvent, intent?: EntryFormIntent) => {
       e?.preventDefault();
+
+      // 🔴 The one gate every write passes through. Save, Publish, Unpublish, the
+      // keyboard shortcut and a native form submit all reach this function, and
+      // disabling the affordances one at a time is a list that the next write
+      // path gets added without. The affordances ARE disabled, so nothing offers
+      // what it cannot do - this is the guard that does not depend on anyone
+      // remembering.
+      if (lock.actionsDisabled) return;
 
       await form.handleSubmit(async rawData => {
         // Why: shared intent→payload helper mirrors the EntryForm
@@ -377,7 +409,7 @@ export function SingleForm({
         }
       })(e);
     },
-    [form, onSubmit, blankPasswordFields]
+    [form, onSubmit, blankPasswordFields, lock.actionsDisabled]
   );
 
   const handleCancel = useCallback(() => {
@@ -421,14 +453,8 @@ export function SingleForm({
   const slugField = allFields.find(f => "name" in f && f.name === "slug");
   // Takeover layout: a field flagged `layout: "takeover"` (when active) collapses the
   // body to itself + its condition controller. Generic — driven by field-type metadata.
-  const branding = useBranding();
-  const takeoverTypes = takeoverTypesFromBranding(branding.plugins);
-  const controllerNames = takeoverControllerNames(allFields, takeoverTypes);
-  const watched = controllerNames.length ? form.watch(controllerNames) : [];
-  const values = Object.fromEntries(
-    controllerNames.map((n, i) => [n, watched[i]])
-  );
-  const mainFields = computeMainFields(allFields, { takeoverTypes, values });
+  // Asked of the shared hook so the entry editor cannot answer it differently.
+  const { mainFields, controllerNames } = useTakeoverLayout(allFields, form);
 
   // Status flag — singles can opt into Draft/Published via schema.status.
   // When true, EntrySystemHeader shows Save Draft / Update split, and
@@ -585,25 +611,25 @@ export function SingleForm({
     () => autosaveScopeFor("single", schema.slug, document?.id),
     [schema.slug, document?.id]
   );
+  /*
+   * The same advisory claim the entry editor holds, on the same terms. A single
+   * is addressed by its slug and the row behind it, and before that row exists
+   * there is nothing to claim and nobody else can be in it.
+   */
+
   const autosave = useDocumentAutosave({
     scope: autosaveScope,
     form,
     locale: locale ?? null,
+    // Held off while a colleague holds the document: the recovery point is a
+    // write to the same row, so leaving it running is the overwrite the claim
+    // exists to prevent.
     enabled: !isSubmitting,
   });
   const recovery = useAutosaveRecovery({
     scope: autosaveScope,
+    form,
   });
-  const restoreRecovery = useCallback(() => {
-    if (!recovery.offer) return;
-    // `keepDefaultValues` so the form goes DIRTY: the recovered values are not
-    // what the server holds, and treating them as the new baseline would let
-    // the reader navigate away believing they were stored.
-    form.reset(recovery.offer.snapshot as Record<string, unknown>, {
-      keepDefaultValues: true,
-    });
-    recovery.dismiss();
-  }, [recovery, form]);
 
   return (
     // A single is only ever edited standalone, so unlike the entry editor there
@@ -717,11 +743,14 @@ export function SingleForm({
                            that toggles a flag nothing reads is worse than no
                            button. */
                             {...previewPane.toggle}
+                            contributedActions={documentActions}
                             toolbarSlot={
-                              <EntryFormToolbarSlots
-                                context="single"
-                                controllerField={controllerNames[0]}
-                              />
+                              <>
+                                <EntryFormToolbarSlots
+                                  context="single"
+                                  controllerField={controllerNames[0]}
+                                />
+                              </>
                             }
                             onSaveDraft={() => {
                               void handleSubmit(undefined, "save-draft");
@@ -749,6 +778,9 @@ export function SingleForm({
                               void handleSubmit(undefined, "unpublish");
                             }}
                             onDiscardWorkingDraft={async () => {
+                              // Through the same gate: this reaches the row
+                              // directly and never passed `handleSubmit`.
+                              if (lock.actionsDisabled) return;
                               await discardMutation.mutateAsync();
                             }}
                             onCancel={handleCancel}
@@ -759,6 +791,7 @@ export function SingleForm({
                  instead of entryApi. */
                             scope="single"
                             lockIdentity
+                            documentLocked={lock.readOnly}
                             isRailCollapsed={railCollapsed}
                             onToggleRail={toggleRail}
                           />
@@ -774,10 +807,15 @@ export function SingleForm({
                   editor. Placed above the flex row it sat UNDER the sticky
                   header, which intercepted pointer events: the offer was
                   visible and its buttons were not clickable. */}
+                          <DocumentLockBanner
+                            notice={lock.notice}
+                            onTakeOver={lock.takeOver}
+                            className="mx-6 mt-3"
+                          />
                           {recovery.offer ? (
                             <AutosaveRecoveryBanner
                               savedAt={recovery.offer.savedAt}
-                              onRestore={restoreRecovery}
+                              onRestore={recovery.restore}
                               onDismiss={recovery.dismiss}
                               className="mx-6 mt-3"
                             />
@@ -797,6 +835,7 @@ export function SingleForm({
                               )}
                             >
                               <LanguagePanel
+                                actionsDisabled={lock.actionsDisabled}
                                 {...(singleTranslations === undefined
                                   ? {}
                                   : { translations: singleTranslations })}
@@ -816,6 +855,7 @@ export function SingleForm({
                               <EntryFormContent
                                 fields={mainFields}
                                 disabled={isSubmitting}
+                                readOnly={lock.readOnly}
                                 withCard
                               />
                             </div>

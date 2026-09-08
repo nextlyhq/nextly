@@ -114,6 +114,7 @@ const SheetOverlay = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
+    data-slot="sheet-overlay"
     className={cn(
       // A modal scrim, from the `--nx-overlay` token rather than a surface
       // token. A black wash is the point — painting it from `background` would

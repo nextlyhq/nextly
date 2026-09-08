@@ -25,6 +25,7 @@ import {
   toPageStyles,
   type PageStyles,
 } from "./styles";
+import { withTypographyDefaults } from "./blocks/typography-defaults";
 
 const blocks = createBlockResolver([]);
 
@@ -523,7 +524,7 @@ describe("a preview artifact read back UNDER a context", () => {
       compilePageCss(doc(styled), context(previewContainer) as never),
       undefined,
       undefined,
-      sharedStyleInputsId(context(previewContainer))
+      sharedStyleInputsId(withTypographyDefaults(context(previewContainer)))
     );
     return { ...compiled, css: `${compiled.css}\n/* stored-copy */` };
   };
@@ -560,5 +561,49 @@ describe("a preview artifact read back UNDER a context", () => {
     // Recompiled rather than withheld: a context was available, so the right
     // answer is a correct sheet rather than an empty one.
     expect(styles.css).toContain("@media (max-width: 991px)");
+  });
+});
+
+describe("the parts a block declares for elements it renders", () => {
+  /** A block whose root and caption are styled separately. */
+  const captioned = createBlockResolver([
+    {
+      name: "test/text",
+      version: 1,
+      description: "A block that draws a caption beside its own content.",
+      example: { props: {} },
+      render: () => null,
+      baseStyles: { base: { base: { color: "#111" } } },
+      parts: {
+        caption: { baseStyles: { base: { base: { fontSize: "0.875em" } } } },
+      },
+    },
+  ] as unknown as Parameters<typeof createBlockResolver>[0]);
+
+  it("reaches the sheet without the caller mirroring them into the context", () => {
+    // The coupling this closes is the one `blockBasesFor` already closes for a
+    // block's root styles: the renderer holds the definitions, so a caller
+    // repeating them into the context is a step that is easy to miss and silent
+    // when missed — the element renders and simply has no rule.
+    const { css } = resolvePageStyles(
+      doc(node("n1")),
+      undefined,
+      { breakpoints: { viewport: [], container: [] } },
+      captioned
+    );
+    expect(css).toContain("nx-bp-test--text--caption");
+    expect(css).toContain("font-size: 0.875em");
+  });
+
+  it("does not invent parts for a block that declares none", () => {
+    // The control the assertion above needs: a resolver that answered
+    // `figcaption` for every block would satisfy it while reading nothing.
+    const { css } = resolvePageStyles(
+      doc(node("n1")),
+      undefined,
+      { breakpoints: { viewport: [], container: [] } },
+      blocks
+    );
+    expect(css).not.toContain("nx-bp-");
   });
 });

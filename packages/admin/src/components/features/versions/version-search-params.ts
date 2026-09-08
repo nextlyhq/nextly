@@ -47,6 +47,27 @@ export function readVersionParam(
  * this feature exists to support. The request that follows is what decides
  * whether the versions exist.
  */
+/**
+ * The content language a comparison is about, from the address.
+ *
+ * A version's locale decides which text the document HAS, so it decides what
+ * the document is called. Carried in the URL rather than inferred, because the
+ * page is addressable: a link shared from a French history has to open on the
+ * French comparison, named in French, for someone whose editor was last in
+ * English.
+ *
+ * Absent means the default language, which is what the server resolves when no
+ * locale is asked for — so a non-localized document needs no parameter and
+ * gains none.
+ */
+export function readLocaleParam(
+  raw: string | string[] | undefined
+): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
 export function resolvePair(
   versions: readonly PairableVersion[],
   from: number | undefined,

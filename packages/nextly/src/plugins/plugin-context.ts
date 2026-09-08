@@ -11,6 +11,10 @@
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
+import {
+  createJobsNamespace,
+  type JobsNamespace,
+} from "../direct-api/namespaces/jobs";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
 import type { EventBus, EventHandler, EventName } from "../events/event-bus";
@@ -296,6 +300,13 @@ export interface PluginContext {
      * writes to it. Listing creates nothing; see `plugin-singles`.
      */
     singles: PluginSinglesService;
+    /**
+     * @experimental Queue background work — `ctx.services.jobs.queue({...})`.
+     *
+     * Declaring a job type is `defineJob` in `contributes.jobs`; this is how a
+     * plugin asks for one of them to happen.
+     */
+    jobs: JobsNamespace;
     /**
      * @experimental Services contributed by plugins, keyed by plugin name
      * then service name. Lazily resolved (instantiated on first access). Runtime
@@ -959,6 +970,18 @@ export function createPluginContext(
       // must not require the registry to have been resolved first.
       get singles() {
         return wrapSinglesForPlugin(getServiceFn("singleRegistryService"));
+      },
+      // Queueing work for later. Lazy like its neighbours above and for the same
+      // reason: this module is exported, so a context built by a caller that
+      // never queues a job must not require the runner to be resolved first.
+      //
+      // Reached through `ctx.services` rather than by re-exporting the Direct
+      // API from the SDK. A plugin that declares a job type with `defineJob`
+      // needs somewhere to ASK for one; without this the only route was
+      // importing the core `nextly` entry directly, crossing the boundary the
+      // SDK exists to draw.
+      get jobs() {
+        return createJobsNamespace();
       },
       plugins: buildPluginServicesNamespace(),
     },

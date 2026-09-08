@@ -854,7 +854,12 @@ describe("Database Lifecycle Hooks Integration", () => {
       const startTime = Date.now();
 
       // Execute hooks through the registry for realistic performance measurement
-      const { getHookRegistry } = await import("..");
+      // `".."` resolves to the FILE src/hooks.ts, not to src/hooks/index.ts --
+      // a sibling file and directory share the name, and the file wins. That
+      // file is the package's public hook API (src/index.ts re-exports it) and
+      // it does not expose the registry, so this import returned undefined.
+      // Imported from the module that defines it instead.
+      const { getHookRegistry } = await import("../hook-registry");
       const registry = getHookRegistry();
 
       for (let i = 0; i < 100; i++) {
@@ -887,7 +892,12 @@ describe("Database Lifecycle Hooks Integration", () => {
       expect(getHookCount("beforeCreate", "posts")).toBe(10);
 
       // Verify execution with multiple hooks is still fast
-      const { getHookRegistry } = await import("..");
+      // `".."` resolves to the FILE src/hooks.ts, not to src/hooks/index.ts --
+      // a sibling file and directory share the name, and the file wins. That
+      // file is the package's public hook API (src/index.ts re-exports it) and
+      // it does not expose the registry, so this import returned undefined.
+      // Imported from the module that defines it instead.
+      const { getHookRegistry } = await import("../hook-registry");
       const registry = getHookRegistry();
 
       const startTime = Date.now();

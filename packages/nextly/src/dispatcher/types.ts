@@ -11,6 +11,7 @@ import type { NextlyError } from "../errors/nextly-error";
 
 export type ServiceType =
   | "users"
+  | "releases"
   | "rbac"
   | "auth"
   | "posts"
@@ -23,11 +24,14 @@ export type ServiceType =
   | "emailTemplates"
   | "apiKeys"
   | "webhooks"
+  | "jobs"
   | "generalSettings"
   | "previewLinks"
   | "previewUrl"
   | "imageSizes"
   | "dashboard"
+  | "documentLock"
+  | "translations"
   | "email"
   | "schema";
 

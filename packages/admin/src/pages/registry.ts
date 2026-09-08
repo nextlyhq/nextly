@@ -1,11 +1,17 @@
 import { lazy } from "react";
 
+import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
+import {
+  API_KEYS_LIST_PERMISSIONS,
+  RELEASE_SECTION_PERMISSIONS,
+} from "../constants/navigation";
 import { type PublicRoutePath, ROUTES } from "../constants/routes";
 import {
   builderSection,
   collectionContentSection,
   overridableBy,
 } from "../lib/navigation/section-resolvers";
+import { apiKeyGrantsFor } from "../lib/permissions/api-key-actions";
 import type { PageProps } from "../lib/routing";
 import type { RouteSection } from "../types/route-section";
 
@@ -32,12 +38,15 @@ import PluginsOverviewPage from "./dashboard/plugins/index";
 import CollectionsLandingRedirect from "./dashboard/redirects/CollectionsLandingRedirect";
 import FieldGroupsLandingRedirect from "./dashboard/redirects/FieldGroupsLandingRedirect";
 import SinglesLandingRedirect from "./dashboard/redirects/SinglesLandingRedirect";
+import ReleaseDetailPage from "./dashboard/releases/[id]";
+import ReleasesPage from "./dashboard/releases/index";
 import RolesPage from "./dashboard/roles";
 import RolesCreatePage from "./dashboard/roles/create";
 import RolesEditPage from "./dashboard/roles/edit";
 import CreateApiKeyPage from "./dashboard/settings/api-keys/create";
 import EditApiKeyPage from "./dashboard/settings/api-keys/edit/[id]";
 import ApiKeysPage from "./dashboard/settings/api-keys/index";
+import BackgroundJobsPage from "./dashboard/settings/background-jobs/index";
 import CreateEmailProviderPage from "./dashboard/settings/email-providers/create";
 import EditEmailProviderPage from "./dashboard/settings/email-providers/edit/[id]";
 import EmailProvidersPage from "./dashboard/settings/email-providers/index";
@@ -58,6 +67,7 @@ import SingleAPIPlaygroundPage from "./dashboard/singles/[slug]/api";
 import SingleEditPage from "./dashboard/singles/[slug]/index";
 import SingleVersionsPage from "./dashboard/singles/[slug]/versions";
 import SinglesPage from "./dashboard/singles/index";
+import TranslationsPage from "./dashboard/translations/index";
 import CreateUserPage from "./dashboard/users/create";
 import EditUserPage from "./dashboard/users/edit";
 import CreateUserFieldPage from "./dashboard/users/fields/create";
@@ -185,6 +195,39 @@ export const routeConfig: Record<string, RouteConfig> = {
     type: "private",
     requiredPermission: "read-media",
     section: overridableBy("media"),
+  },
+  [ROUTES.RELEASES]: {
+    component: ReleasesPage,
+    type: "private",
+    // Gated on the SEEDED slug. The resource is `content-releases`, not
+    // `releases`: registering the shorter name would reserve a word real sites
+    // use for content. A permission that is not seeded matches nobody, so
+    // naming one here would hide the page from every user including an
+    // administrator, with nothing erroring to say so.
+    requiredPermission: RELEASE_SECTION_PERMISSIONS,
+    section: overridableBy("releases"),
+  },
+  [ROUTES.RELEASES_DETAIL]: {
+    component: ReleaseDetailPage,
+    type: "private",
+    // The same grants as the list. A detail route gated more loosely than the
+    // list it is reached from would be a way around the list's own gate.
+    requiredPermission: RELEASE_SECTION_PERMISSIONS,
+    section: overridableBy("releases"),
+  },
+  [ROUTES.TRANSLATIONS]: {
+    component: TranslationsPage,
+    type: "private",
+    // No permission of its own: the page lists nothing the caller may not
+    // already read. Every row comes back through the collection read rules, so
+    // a reader with access to one collection sees exactly that collection's
+    // outstanding work, and one with access to none sees an empty list rather
+    // than a refusal.
+    //
+    // Its own rail section rather than Collections': the page exists to cross
+    // collection boundaries, so highlighting one collection's rail while
+    // showing every collection's work would point at the wrong thing.
+    section: overridableBy("translations"),
   },
 
   // ============================================================
@@ -355,10 +398,21 @@ export const routeConfig: Record<string, RouteConfig> = {
   },
 
   // Settings routes
+  // Any grant that reaches SOMETHING in the panel may open the panel's own URL.
+  // Narrowing it to `manage-settings` turned the rail entry into a door that
+  // closed in the face of anyone whose only destination was further in.
+  //
+  // This guard admits them; it does not place them. The page behind it is
+  // General Settings, whose own query answers to `manage-settings`, so a reader
+  // admitted here without that grant sees a 403. Nothing on the page sends them
+  // elsewhere. The rail is what keeps them off this URL: `resolveSettingsLanding`
+  // picks the first destination in the panel they can actually open, and every
+  // grant in `settingsPanelSlugs()` opens one, so the fallthrough to
+  // `/admin/settings` is unreachable for anyone this guard admits.
   [ROUTES.SETTINGS]: {
     component: SettingsPage,
     type: "private",
-    requiredPermission: "manage-settings",
+    requiredPermission: settingsPanelSlugs(),
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS]: {
@@ -406,13 +460,17 @@ export const routeConfig: Record<string, RouteConfig> = {
   [ROUTES.SETTINGS_API_KEYS]: {
     component: ApiKeysPage,
     type: "private",
-    requiredPermission: "update-api-keys",
+    requiredPermission: [...API_KEYS_LIST_PERMISSIONS],
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_API_KEYS_CREATE]: {
     component: CreateApiKeyPage,
     type: "private",
-    requiredPermission: "create-api-keys",
+    // The endpoint accepts `create-api-keys` OR the `update-api-keys`
+    // umbrella, so the route does too. Guarding on the narrower grant alone
+    // turned the Create control into a door that closed on a holder the API
+    // would have served.
+    requiredPermission: apiKeyGrantsFor("create"),
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_API_KEYS_EDIT]: {
@@ -425,6 +483,15 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Webhooks settings. `update-webhooks` is the backend's management umbrella
   // (it satisfies read/create/delete too), so each route accepts it in addition
   // to the specific slug — a role with only `update-webhooks` still reaches them.
+  // The background job monitor is a READ, but it is gated on the management
+  // permission: `lastError` is whatever a handler threw, and there is no seeded
+  // read-only slug for this resource to widen to.
+  [ROUTES.SETTINGS_BACKGROUND_JOBS]: {
+    component: BackgroundJobsPage,
+    type: "private",
+    requiredPermission: "manage-background-jobs",
+    section: overridableBy("settings"),
+  },
   [ROUTES.SETTINGS_WEBHOOKS]: {
     component: WebhooksPage,
     type: "private",

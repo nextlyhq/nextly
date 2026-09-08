@@ -1,0 +1,230 @@
+/**
+ * Reading pending edits across collections, against a real database.
+ *
+ * The SQL distinct-count tests that stood here are gone with the code they
+ * described. Counting documents in the database could not survive
+ * authorization: a stored read rule lives on the collection rather than on the
+ * version row, so the number it produced included documents the caller may not
+ * open, and using it even as a BOUND made one caller's card depend on data they
+ * cannot see. The count is a walk over authorized rows now, covered where that
+ * walk lives.
+ *
+ * What a database still has to settle is here: which rows a scope admits, and
+ * that a document drafted in several languages is one document.
+ */
+import { afterEach, describe, expect, it } from "vitest";
+
+import { defineCollection, text } from "../../../config";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+import { VERSIONS_TABLE } from "../../../schemas/versions/types";
+import { newestPerDocument, VersionsRepository } from "../versions-repository";
+
+let current: TestNextly | undefined;
+
+afterEach(async () => {
+  await current?.destroy();
+  current = undefined;
+});
+
+async function boot(dialect: TestDialect): Promise<TestNextly> {
+  current = await createTestNextly({
+    dialect,
+    collections: [
+      defineCollection({
+        slug: "posts",
+        versions: { drafts: true },
+        fields: [text({ name: "title" })],
+      }),
+    ],
+  });
+  return current;
+}
+
+function draft(patch: {
+  entryId: string;
+  locale: string | null;
+  scopeSlug?: string;
+  isAutosave?: boolean;
+  updatedAt?: Date;
+}) {
+  return {
+    id: crypto.randomUUID(),
+    scopeKind: "collection",
+    scopeSlug: patch.scopeSlug ?? "posts",
+    entryId: patch.entryId,
+    versionNo: null,
+    status: "draft",
+    isAutosave: patch.isAutosave ?? false,
+    snapshot: JSON.stringify({ secret: "unpublished body" }),
+    label: null,
+    locale: patch.locale,
+    sourceVersionNo: null,
+    createdBy: null,
+    createdAt: new Date("2020-01-01T00:00:00Z"),
+    updatedAt: patch.updatedAt ?? new Date("2026-01-01T00:00:00Z"),
+  };
+}
+
+describe.each(getConfiguredTestDialects())("pending edits (%s)", dialect => {
+  it("counts and lists only the collections the caller may read", async () => {
+    const app = await boot(dialect);
+    const repo = new VersionsRepository(app.adapter);
+
+    await app.adapter.insert(
+      VERSIONS_TABLE,
+      draft({ entryId: "e1", locale: null })
+    );
+    await app.adapter.insert(
+      VERSIONS_TABLE,
+      draft({ entryId: "e2", locale: null, scopeSlug: "secrets" })
+    );
+
+    const listed = await repo.findPendingEditRows({
+      slugs: ["posts"],
+      order: "recency" as const,
+      limit: 10,
+    });
+    expect(listed.map(row => row.scopeSlug)).toEqual(["posts"]);
+  });
+
+  it("answers ZERO and an empty list for a caller who may read nothing", async () => {
+    // 🔴 `[]` means exactly nothing, and it is the only empty answer the
+    // allowlist has — there is no value meaning "no filter". Reading it as
+    // unfiltered hands every document to a caller granted none, which is the
+    // widest possible wrong answer.
+    const app = await boot(dialect);
+    const repo = new VersionsRepository(app.adapter);
+    await app.adapter.insert(
+      VERSIONS_TABLE,
+      draft({ entryId: "e1", locale: null })
+    );
+
+    expect(
+      await repo.findPendingEditRows({
+        slugs: [],
+        limit: 10,
+        order: "recency" as const,
+      })
+    ).toEqual([]);
+  });
+
+  it("lists one row per DOCUMENT, so locales cannot crowd out other work", async () => {
+    // 🔴 The separating case for the collapse. A document translated into two
+    // languages is two rows, so limiting the query alone gives one document both
+    // slots and the second document never appears -- while the count beside it,
+    // being document-based, says two. The card's `select` omits `locale`, so
+    // those two rows render as the same line twice.
+    const app = await boot(dialect);
+    const repo = new VersionsRepository(app.adapter);
+
+    for (const row of [
+      draft({
+        entryId: "translated",
+        locale: "en",
+        updatedAt: new Date("2026-06-03T00:00:00Z"),
+      }),
+      draft({
+        entryId: "translated",
+        locale: "fr",
+        updatedAt: new Date("2026-06-02T00:00:00Z"),
+      }),
+      draft({
+        entryId: "other",
+        locale: "en",
+        updatedAt: new Date("2026-06-01T00:00:00Z"),
+      }),
+    ]) {
+      await app.adapter.insert(VERSIONS_TABLE, row);
+    }
+
+    // The collapse is the CALLER's now, applied after it has authorized what it
+    // may show: a localized Single is authorized per language, so collapsing
+    // inside the read would offer only each document's newest locale and lose a
+    // readable older one. The repository returns rows; this is the same
+    // property, asserted where it now lives.
+    const rows = newestPerDocument(
+      await repo.findPendingEditRows({
+        slugs: ["posts"],
+        order: "recency" as const,
+        limit: 10,
+      }),
+      2
+    );
+    expect(rows.map(row => row.entryId)).toEqual(["translated", "other"]);
+    // The row kept is the document's LATEST instant, which is what makes the
+    // list agree with the order it claims.
+    expect(rows[0]?.locale).toBe("en");
+  });
+
+  it("returns every row asked for, past the ceiling a scan used to carry", async () => {
+    // 🔴 The regression this file exists to hold. The row fetch used to take
+    // `Math.min` against a ceiling declared beside it, and that ceiling did not
+    // know what the caller had asked for: a request for a thousand documents
+    // read five hundred rows and returned five hundred documents, so the caller
+    // under-reported while every feasibility check it had made said its answer
+    // was exact. 501 is one past that old ceiling, which is the smallest input
+    // that separates the two implementations.
+    //
+    // The bound is the caller's alone now, and the caller pages until it has the
+    // DOCUMENTS it wants -- so no number taken from configuration stands between
+    // the request and the rows. Drafts written under a locale since removed from
+    // the config are still rows, and a bound derived from the live locale count
+    // cannot see them.
+    const app = await boot(dialect);
+    const repo = new VersionsRepository(app.adapter);
+
+    for (let index = 0; index < 501; index++) {
+      await app.adapter.insert(
+        VERSIONS_TABLE,
+        draft({ entryId: `e${index}`, locale: null })
+      );
+    }
+
+    const rows = await repo.findPendingEditRows({
+      slugs: ["posts"],
+      order: "recency" as const,
+      limit: 1000,
+    });
+    expect(rows).toHaveLength(501);
+    // Asserted on IDENTITY too: a scan that returned 501 of the wrong rows, or
+    // 501 with a duplicate, has the same length.
+    expect(new Set(rows.map(row => row.entryId)).size).toBe(501);
+  });
+
+  it("lists the most recently touched first, and never the snapshot", async () => {
+    const app = await boot(dialect);
+    const repo = new VersionsRepository(app.adapter);
+
+    await app.adapter.insert(
+      VERSIONS_TABLE,
+      draft({
+        entryId: "old",
+        locale: null,
+        updatedAt: new Date("2020-06-01T00:00:00Z"),
+      })
+    );
+    await app.adapter.insert(
+      VERSIONS_TABLE,
+      draft({
+        entryId: "new",
+        locale: null,
+        updatedAt: new Date("2026-06-01T00:00:00Z"),
+      })
+    );
+
+    const rows = await repo.findPendingEditRows({
+      slugs: ["posts"],
+      order: "recency" as const,
+      limit: 10,
+    });
+    expect(rows.map(row => row.entryId)).toEqual(["new", "old"]);
+    // The snapshot is the document's unpublished content and the largest column
+    // in the table; a card listing titles has no use for it.
+    expect(rows.every(row => !("snapshot" in row))).toBe(true);
+  });
+});

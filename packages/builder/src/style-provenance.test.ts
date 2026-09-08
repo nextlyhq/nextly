@@ -478,6 +478,49 @@ describe("ranking winners from two live states", () => {
       ...over,
     }) as never;
 
+  it("does not let a block DEFAULT's hover outrank a node's own link", () => {
+    /*
+     * The cross-state comparison ranks through the engine's own weighting.
+     * Counting pseudo-classes here was the same answer only while every tier
+     * carried one class-worth of prefix, and a default no longer does: it is
+     * anchored to a single page-root class with its descendant inside
+     * `:where()`, so ` a:hover` weighs `0-1-0` against the node's ` a` at
+     * `0-3-1`. The browser shows the node's value; a count names the default.
+     *
+     * The control addresses the HOVERED link, which is what makes both rules
+     * candidates at all: `reachesControl` admits a less-specific descendant and
+     * refuses a more-specific one, so a query about plain `a` never sees the
+     * `a:hover` entry and the ranking is never reached. Asked that way this case
+     * passes against the count it exists to reject.
+     */
+    const trace = [
+      at({
+        origin: { kind: "blockType", type: "acme/box" },
+        descendant: " a:hover",
+        value: "#default",
+        state: "base",
+      }),
+      at({ descendant: " a", value: "#node", state: "hover" }),
+    ];
+    const result = styleProvenance({
+      trace: trace as never,
+      subject,
+      cssProperty: "color",
+      descendant: "a:hover",
+      state: "hover",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+      liveStates: ["hover", "base"],
+    });
+
+    // Inherited from the NODE — its plain-link rule is what a hovered link
+    // displays here. Ranked by pseudo-class count the default wins instead, and
+    // the panel names this block's defaults for a colour they are not applying.
+    expect(result.kind).toBe("inherited");
+    expect(result.kind === "inherited" && result.entry.value).toBe("#node");
+    expect(result.kind === "inherited" && result.from.kind).toBe("node");
+  });
+
   it("prefers descendant SPECIFICITY over emission order", () => {
     /*
      * `styleOrigin` ranks by specificity within ONE state, and is asked once per

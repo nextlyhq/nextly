@@ -100,6 +100,7 @@ const EXPECTED_BLOCKS = [
   "core/image",
   "core/list",
   "core/quote",
+  "core/rich-text",
   "core/section",
   "core/spacer",
   "core/text",
@@ -313,6 +314,8 @@ function renderArgs(
     props,
     node: nodeFor(block, props),
     className: classNameFor(block),
+    // Required by the render contract; these fixtures declare no parts.
+    partClass: () => "",
     ctx,
     renderSlot: () => <span>child</span>,
     ...(hostPolicy === undefined ? {} : { hostPolicy }),

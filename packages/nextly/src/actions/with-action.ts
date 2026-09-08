@@ -3,7 +3,6 @@
 // full rationale — both Node ESM and Turbopack accept the
 // CommonJS-style resolution path while neither accepts a single
 // shared `import` statement.
-import { createRequire } from "node:module";
 
 import { generateRequestId } from "../api/request-id";
 import { isDbError } from "../database/errors";
@@ -12,27 +11,7 @@ import { getNextlyLogger } from "../observability/logger";
 import { getGlobalOnError, type OnErrorHook } from "../observability/on-error";
 
 import type { ActionResult } from "./action-result";
-
-type HeadersFn = () => Promise<{ get(name: string): string | null }>;
-type UnstableRethrow = (err: unknown) => void;
-let cachedHeaders: HeadersFn | null = null;
-let cachedUnstableRethrow: UnstableRethrow | null = null;
-function getHeaders(): HeadersFn {
-  if (cachedHeaders) return cachedHeaders;
-  const require = createRequire(import.meta.url);
-  const mod = require("next/headers") as { headers: HeadersFn };
-  cachedHeaders = mod.headers;
-  return cachedHeaders;
-}
-function getUnstableRethrow(): UnstableRethrow {
-  if (cachedUnstableRethrow) return cachedUnstableRethrow;
-  const require = createRequire(import.meta.url);
-  const mod = require("next/navigation") as {
-    unstable_rethrow: UnstableRethrow;
-  };
-  cachedUnstableRethrow = mod.unstable_rethrow;
-  return cachedUnstableRethrow;
-}
+import { getHeaders, getUnstableRethrow } from "./next-runtime";
 
 type WithActionOptions = {
   /** Per-call observability hook. Fired before the global hook. */

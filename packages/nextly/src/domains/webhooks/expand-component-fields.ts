@@ -14,7 +14,10 @@
  * @module domains/webhooks/expand-component-fields
  */
 
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import {
+  extractFieldGroupReferences,
+  isFieldGroupType,
+} from "../field-groups/storage/field-group-field-type";
 
 import type { SensitiveFieldSource } from "./sensitive-fields";
 
@@ -34,29 +37,15 @@ export type ComponentFieldResolver = (
  * reaches the deny list.
  */
 function referencedSlugs(field: SensitiveFieldSource): string[] {
-  if (field.type !== STORAGE_FORMAT.fieldType) return [];
-  const candidate = field as {
-    component?: unknown;
-    componentSlug?: unknown;
-    components?: unknown;
-  };
-
+  if (!isFieldGroupType(field.type)) return [];
+  const { single, many } = extractFieldGroupReferences(field);
   const slugs: string[] = [];
-  // Read into a local: narrowing an indexed access does not carry to a second
-  // lookup, so the pushed value would widen back to `unknown`.
-  const legacySlug = candidate[STORAGE_FORMAT.refKeys.legacy];
-  if (typeof legacySlug === "string") slugs.push(legacySlug);
-  const singleSlug = candidate[STORAGE_FORMAT.refKeys.single];
-  if (typeof singleSlug === "string") slugs.push(singleSlug);
-  const manySlugs = candidate[STORAGE_FORMAT.refKeys.many];
-  if (Array.isArray(manySlugs)) {
-    for (const slug of manySlugs) {
-      if (typeof slug === "string") slugs.push(slug);
+  if (single) slugs.push(single);
+  if (many) {
+    for (const slug of many) {
+      slugs.push(slug);
     }
   }
-  // A field could name the same slug twice (`component` plus a `components`
-  // entry); resolution is memoized anyway, but deduping keeps the grafted tree
-  // from carrying the component's fields more than once.
   return [...new Set(slugs)];
 }
 

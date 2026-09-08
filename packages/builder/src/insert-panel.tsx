@@ -21,12 +21,37 @@
  * `filterEntries` — two answers to "does this row match", disagreeing about
  * block names and keywords, with the tested one silently overruled.
  *
+ * ## The layout is two-dimensional and the KEYBOARD is not
+ *
+ * Tiles sit in a grid, and Down still moves to the next tile rather than the
+ * one below. That reads as an oversight and is a deliberate retreat from the
+ * opposite, which was built and removed.
+ *
+ * The primitives publish a `listbox`, whose keyboard model is one-dimensional
+ * by definition: a screen reader announces "option 4 of 18" and Down means the
+ * next option. Moving by a ROW instead makes the announcement a lie — Down
+ * silently skips two — so a grid keyboard is only honest alongside a grid
+ * accessibility tree, with rows, cells and coordinates.
+ *
+ * That tree is not something this file can add on top. `aria-activedescendant`
+ * and the scroll-into-view are driven from the primitives' own navigation, and
+ * a controlled `value` set from outside updates neither: the highlight and
+ * this panel's description strip would follow while the announced option and
+ * the scroll position stayed where they were. Owning them instead means owning
+ * roving focus and the ARIA wiring — the second implementation of this widget
+ * that the paragraphs above exist to refuse.
+ *
+ * So the grid is a LAYOUT. Reading order is left to right and then down, which
+ * is the order the primitives already move in, and search is what makes a long
+ * palette reachable without arrowing at all.
+ *
  * @module insert-panel
  */
 
 import {
   allBlocks,
   getBlock,
+  planInsertPattern,
   registryNestingSource,
   type AnyBlockDefinition,
   type BlockNode,
@@ -39,22 +64,30 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  useCommandHighlight,
 } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
+import type { InsertDragEntry } from "./canvas-drag";
 import type { EditorState } from "./editor-state";
 import {
   allowedEntries,
+  blockSourceFor,
   catalogFrom,
   filterEntries,
   groupByCategory,
   insertionPointFor,
   nodeForEntry,
+  patternEntriesFrom,
   registrySlotSource,
+  type InsertGroup,
   type InsertionPoint,
   type InsertEntry,
+  type PatternInsertEntry,
+  type SavedPattern,
 } from "./inserter";
+import type { BuilderOp } from "./ops";
 
 export interface InsertPanelProps {
   /**
@@ -78,6 +111,18 @@ export interface InsertPanelProps {
    * up again at insert time.
    */
   definitions?: readonly AnyBlockDefinition[];
+  /**
+   * Saved patterns to offer beside the blocks. Defaults to none.
+   *
+   * Supplied rather than fetched, for the reason `definitions` is: this panel
+   * draws what it is given and reads nothing. A pattern lives in a plugin's
+   * collection, and how a host loads that — a route, a cache, a preloaded
+   * page — is the host's question, not one the palette should answer.
+   *
+   * Rows the planner could not place are dropped when the catalogue is built,
+   * so a caller may hand over whatever its query returned.
+   */
+  patterns?: readonly SavedPattern[];
   /** How nesting is resolved. Defaults to the live registry. */
   nesting?: NestingSource;
   /**
@@ -91,6 +136,240 @@ export interface InsertPanelProps {
   categoryOrder?: readonly string[];
   /** Notified after a successful insert, with the node that was added. */
   onInsert?: (node: BlockNode) => void;
+  /**
+   * Begins a drag carrying an entry, when the host has a canvas to drop onto.
+   *
+   * Optional, and its absence changes nothing: the rows still insert on click,
+   * which is the route WCAG 2.2 SC 2.5.7 requires and the one this only ever
+   * supplements. A panel mounted without a canvas — a story, a test — simply
+   * has nothing to drag onto.
+   *
+   * The node is built HERE, by a thunk the drag calls at the release, because
+   * this panel's definitions are one snapshot taken per mount. Resolving the
+   * type again inside the drag would read the registry a second time, and the
+   * row an author dragged could then differ from the subtree that lands.
+   */
+  beginInsertDrag?: (
+    event: React.PointerEvent<HTMLElement>,
+    entry: InsertDragEntry
+  ) => void;
+}
+
+/**
+ * How many tiles sit in a row.
+ *
+ * A CONSTANT rather than a count derived from the panel's measured width:
+ * measuring would need the layout to have happened before anything could read
+ * it. Three because the panel opens at 300px and its padding and gaps leave
+ * about 85px per tile there — a glyph and a short word. It is also what keeps
+ * the grid from REFLOWING while the author drags the panel's edge, which would
+ * move a tile out from under the cursor mid-drag.
+ *
+ * LAYOUT ONLY. No keyboard behaviour derives from it, and that is deliberate
+ * rather than an omission: arrow keys stepping by a row would contradict the
+ * listbox semantics the palette announces. See this module's documentation.
+ */
+const GRID_COLUMNS = 3;
+
+/**
+ * The strip describing whichever tile the palette has highlighted.
+ *
+ * A component of its own, and rendered INSIDE the palette, because that is
+ * where the highlight lives: `useCommandHighlight` reads the palette's own
+ * store,
+ * so this follows a pointer, an arrow key and a filter alike without the panel
+ * keeping a second copy of which tile is current.
+ *
+ * Hidden from assistive technology while it shows the whole sentence. That
+ * sentence is already the option's own accessible description, so exposing the
+ * region as well would have a screen reader read every description twice —
+ * once on the tile and once from a region that changed because of it. It
+ * becomes a named, focusable region only when it has a tail no pointer-free
+ * reader could otherwise reach.
+ */
+function DescriptionStrip({
+  groups,
+  tokens,
+}: {
+  groups: readonly InsertGroup<InsertEntry>[];
+  tokens: ReadonlyMap<string, string>;
+}): React.JSX.Element | null {
+  // Empty string is the palette's "nothing highlighted", which is a different
+  // answer from an entry it does not hold — both fall back, but only one of
+  // them would silently match an entry whose token was the empty string.
+  const highlighted = useCommandHighlight();
+  const described = describedEntry(
+    groups,
+    tokens,
+    highlighted === "" ? undefined : highlighted
+  );
+  /*
+   * Back to the top whenever the subject changes.
+   *
+   * The strip is scrollable, and React reuses this same element as the
+   * highlight moves — so a description that was scrolled leaves the next one
+   * opening partway through its own text, with the block's name and first
+   * lines above the fold. The reader is then looking at the middle of a
+   * sentence about a block they have only just pointed at.
+   *
+   * Keyed on the entry's id rather than on the element: two entries can carry
+   * the same description, and scrolling is about which BLOCK is being read.
+   */
+  const body = React.useRef<HTMLParagraphElement>(null);
+  const subject = described?.id;
+  /*
+   * Whether this description has text the box is not showing.
+   *
+   * Measured rather than assumed from length, because whether a sentence
+   * overflows depends on the panel's width — which an author drags — and on
+   * the reader's own font size. A character count would be wrong at both ends
+   * of that range.
+   */
+  const [clipped, setClipped] = React.useState(false);
+  /*
+   * Re-measured from TWO signals, because clipping changes for two unrelated
+   * kinds of reason and neither covers the other.
+   *
+   * The box changes without React knowing: an author drags the panel wider,
+   * changes the browser zoom, or raises their font size. None of those
+   * re-render anything here, so an effect alone would leave a newly overflowing
+   * description out of the tab order with its tail unreachable — and leave a
+   * dead focus stop behind when it stops overflowing.
+   *
+   * The CONTENT changes without the box changing: a longer sentence inside a
+   * strip already at its bound grows `scrollHeight` while the border box stays
+   * exactly where it was, so a `ResizeObserver` never fires. That is a render,
+   * which is why the effect below carries no dependency list — every commit is
+   * a chance for the text to have changed, and naming which ones would be a
+   * second list to keep in step with the first.
+   *
+   * Setting the same boolean back is inert: React compares and does not
+   * re-render, so an effect with no dependencies cannot loop here.
+   */
+  const remeasure = React.useCallback(() => {
+    const element = body.current;
+    if (element === null) return;
+    setClipped(element.scrollHeight > element.clientHeight);
+  }, []);
+  React.useEffect(remeasure);
+  React.useEffect(() => {
+    const element = body.current;
+    if (element === null) return;
+    // Guarded by CALLABILITY rather than presence: jsdom defines the global on
+    // some setups without a working constructor, so a property test passes and
+    // the construction throws.
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(remeasure);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, [remeasure]);
+  React.useEffect(() => {
+    if (body.current !== null) body.current.scrollTop = 0;
+  }, [subject]);
+  if (described === undefined) return null;
+  /*
+   * Reachable by keyboard ONLY while there is something hidden to reach.
+   *
+   * The strip is bounded and scrollable, so a description longer than the box
+   * has a tail that a pointer can scroll to and a keyboard cannot: focus stays
+   * in the search field, and nothing else can direct a scroll here.
+   *
+   * Made focusable only when it actually overflows, rather than always. A
+   * permanent stop between the search field and the tiles costs every author a
+   * keystroke on the way to the thing they came for, and buys nothing in the
+   * ordinary case where the whole sentence is already visible.
+   *
+   * `aria-hidden` goes with it, because hiding a focusable element is a
+   * contradiction assistive technology has no good answer to. Nothing is lost
+   * by that: the same sentence is the option's own description, so a screen
+   * reader hears it on the tile whether or not this region exists. What the
+   * region adds when it is reachable is a NAME saying what it holds, so
+   * arriving here is not arriving at unlabelled prose.
+   */
+  return (
+    <p
+      ref={body}
+      className="nx-insert-panel__describes"
+      {...(clipped
+        ? { tabIndex: 0, role: "group", "aria-label": "Block description" }
+        : { "aria-hidden": true })}
+    >
+      <b className="nx-insert-panel__describes-name">{described.label}</b>
+      {` ${described.description}`}
+    </p>
+  );
+}
+
+/**
+ * What a press does, for the pointer that has no other way to ask.
+ *
+ * A press moves the highlight, so the strip above describes the tile under the
+ * finger before it lifts. That is the affordance a touch author could not
+ * discover: on a pointer that cannot hover, the only way to read a tile looked
+ * like the way to take it.
+ *
+ * WHAT IT DOES NOT CLAIM. An earlier wording offered "slide off to cancel",
+ * and that is not reliably true: the canvas sits beside this panel and IS a
+ * drop target, so a finger sliding horizontally out of the tile can start a
+ * palette drag and insert on release. Only a release over nothing declines,
+ * and which regions those are depends on the layout the host mounted. Both
+ * clauses here hold wherever the panel is mounted — pressing reads, lifting
+ * commits — and an author who knows lifting commits can hold and think.
+ *
+ * SHOWN FROM THE POINTER THAT WAS ACTUALLY USED, not from a media query.
+ * `(pointer: coarse)` describes the PRIMARY pointer, so a touchscreen laptop
+ * driven by its trackpad reports `fine` and hides this from the author the
+ * moment they reach up and touch the screen. The pointer type on the event is
+ * the input in hand rather than the one the device is classified by, and it
+ * has the side benefit of appearing exactly when it is relevant: after the
+ * first press, which is when the question arises.
+ *
+ * `aria-hidden`, deliberately. It describes a POINTER gesture, and a screen
+ * reader on a touch device does not activate a control by lifting a finger
+ * from it — the guidance would be wrong for exactly the people an accessible
+ * name is for. The block's description reaches them through each tile's own
+ * `aria-describedby` regardless.
+ */
+function TouchGestureHint({
+  shown,
+}: {
+  shown: boolean;
+}): React.JSX.Element | null {
+  if (!shown) return null;
+  return (
+    <p aria-hidden className="nx-insert-panel__gesture-hint">
+      Press to read · lift to insert
+    </p>
+  );
+}
+
+/**
+ * The entry a command value names, or the first one offered.
+ *
+ * Scoped to the GROUPS rather than to the whole catalog, because a filter can
+ * remove the highlighted entry between renders and describing something the
+ * author cannot see is worse than describing nothing.
+ *
+ * The fallback is what keeps the strip from being blank on the pass before
+ * anything has been highlighted, and after a search removes the entry that
+ * was. It is DERIVED rather than written into state: a fallback that stored
+ * itself would be a second writer racing the primitives' own selection.
+ */
+function describedEntry(
+  groups: readonly InsertGroup<InsertEntry>[],
+  tokens: ReadonlyMap<string, string>,
+  active: string | undefined
+): InsertEntry | undefined {
+  if (active !== undefined) {
+    for (const group of groups) {
+      for (const entry of group.entries) {
+        if (tokens.get(entry.id) === active) return entry;
+      }
+    }
+  }
+  return groups[0]?.entries[0];
 }
 
 /** Sentence describing where the next insert will land. */
@@ -109,19 +388,51 @@ function placementLabel(point: InsertionPoint, label?: string): string {
 export function InsertPanel({
   editor,
   definitions,
+  patterns,
   nesting,
   categoryOrder,
   onInsert,
+  beginInsertDrag,
 }: InsertPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
+  /*
+   * Whether a TOUCH has pressed a tile in this panel yet.
+   *
+   * Set from the pointer that was actually used rather than read from a media
+   * query, because `(pointer: coarse)` describes the device's PRIMARY pointer:
+   * a touchscreen laptop driven by its trackpad reports `fine`, and the
+   * guidance would be hidden from an author the moment they reach up and touch
+   * the screen. It also appears exactly when it is relevant — after the first
+   * press, which is when the question arises — and never for a pointer that
+   * reads a tile by hovering it.
+   */
+  const [touchPressed, setTouchPressed] = React.useState(false);
 
-  const catalog = React.useMemo(
-    () => catalogFrom(definitions ?? allBlocks()),
+  // ONE snapshot, taken per mount, that both the catalog and the default
+  // expansion below read. The panel documents its palette as read once per
+  // mount rather than subscribed to, and a second reading of the registry
+  // taken later is a different list: a plugin registering while the panel is
+  // open would leave a row offering one definition's version and props while
+  // its children came from another.
+  const palette = React.useMemo(
+    () => definitions ?? allBlocks(),
     [definitions]
   );
   const source = React.useMemo(
     () => nesting ?? registryNestingSource(),
     [nesting]
+  );
+  // Blocks first, then whatever saved patterns the host supplied. One list
+  // rather than two, because the filter, the grouping and the keyboard all run
+  // across both — and a second list would have to be flattened by every one of
+  // them. `groupByCategory` puts each pattern under its own heading, so the two
+  // tiers read apart without the panel deciding anything about order.
+  const catalog = React.useMemo<InsertEntry[]>(
+    () => [
+      ...catalogFrom(palette),
+      ...patternEntriesFrom(patterns ?? [], source),
+    ],
+    [palette, patterns, source]
   );
 
   // Recomputed from the CURRENT document and selection on every render rather
@@ -130,6 +441,14 @@ export function InsertPanel({
   // changing — a memo keyed on the selection alone would keep a position whose
   // index no longer names the same place.
   const slotSource = React.useMemo(registrySlotSource, []);
+
+  // Derived from the SAME snapshot the catalog is, so the row an author sees
+  // and the subtree an insert builds cannot come from two different readings.
+  // The palette may be a caller-supplied subset holding a definition the
+  // registry does not, and the block being inserted is the one whose
+  // declaration is read — so resolving only against the registry would offer
+  // that block and then insert it without the children it declares.
+  const blockSource = React.useMemo(() => blockSourceFor(palette), [palette]);
   const point = insertionPointFor(
     editor.document,
     editor.selectedId,
@@ -153,9 +472,87 @@ export function InsertPanel({
           categoryOrder
         );
 
+  /*
+   * One opaque TOKEN per catalog entry, standing in for it everywhere the DOM
+   * needs a string: the command value, and the id `aria-describedby` points at.
+   *
+   * Opaque rather than the entry's own id, and that is load-bearing twice over.
+   *
+   * The command primitives TRIM the value they report, so two variation names
+   * differing only in trailing space — both valid, since nothing validates a
+   * variation name — collapse to one value. Pointing at the second would then
+   * describe and insert the first, silently. A token cannot collapse because
+   * it carries no author-supplied text at all.
+   *
+   * `aria-describedby` is a space-separated list of id REFERENCES, so an id
+   * built from `block#wide card` names two ids that do not exist and the tile
+   * is announced with no description — also silently, since a reference that
+   * resolves to nothing is not an error.
+   *
+   * Prefixed from `useId` because two inserters can be mounted at once — a
+   * panel and a palette, or two editors side by side — and duplicate ids would
+   * have every tile in one describe itself with the other's sentence.
+   *
+   * Built from the CATALOG rather than the filtered groups, so a token belongs
+   * to an entry for the life of the mount instead of changing as an author
+   * types.
+   */
+  const idPrefix = React.useId();
+  /*
+   * Allocated ONCE per entry and never reused, rather than taken from the
+   * entry's position.
+   *
+   * A host may replace `definitions` while the panel is mounted, and inserting
+   * one definition shifts the position of every entry after it. Positional
+   * tokens would then be reassigned underneath a highlight the palette is
+   * still holding: the same string would name a different block, so the strip
+   * would describe it and Enter would insert it.
+   *
+   * The allocation lives in a ref because it must survive re-renders without
+   * being one — it is DOM identity, not state, and nothing renders differently
+   * because a token was issued. Handing out a token for an id already in the
+   * store is what makes this idempotent, so a repeated call cannot renumber
+   * anything.
+   */
+  const issued = React.useRef({ next: 0, byEntry: new Map<string, string>() });
+  const tokens = React.useMemo(() => {
+    const store = issued.current;
+    const byEntry = new Map<string, string>();
+    for (const entry of catalog) {
+      const existing = store.byEntry.get(entry.id);
+      const token = existing ?? `${idPrefix}-b${store.next}`;
+      if (existing === undefined) {
+        store.next += 1;
+        store.byEntry.set(entry.id, token);
+      }
+      byEntry.set(entry.id, token);
+    }
+    return byEntry;
+  }, [catalog, idPrefix]);
+
+  /*
+   * The entry the strip describes, falling back to the first one offered.
+   *
+   * The fallback is what keeps the strip from being blank on the pass before
+   * anything has been highlighted, and after a search removes the entry that
+   * was. It is DERIVED rather than written into state: a fallback that stored
+   * itself would be a second writer racing the primitives' own selection.
+   */
+
   const insert = (entry: InsertEntry) => {
     if (point === null) return;
-    const node = nodeForEntry(entry);
+    if (entry.kind === "pattern") {
+      insertPattern(entry);
+      return;
+    }
+    // `nesting` rather than `source`. They differ exactly when the caller
+    // supplied no rules: `source` has already defaulted to the REGISTRY, which
+    // knows nothing about a supplied definition and so reports every one of its
+    // types as unrestricted. Passing it defeats the fallback in
+    // `expandSlotDefaults`, which derives the rules from these same
+    // definitions — the only source that can see a supplied block's `parent`
+    // and its slots' `allow`.
+    const node = nodeForEntry(entry, blockSource, nesting);
     // `apply` is the only path a document changes by, so undo covers this
     // insert for free. It answers null when the op is refused, and a refusal
     // must not be reported as an insert — the panel offers only placements the
@@ -165,6 +562,42 @@ export function InsertPanel({
     // it, so repeated inserts build downward instead of stacking at one point.
     editor.select(node.id);
     onInsert?.(node);
+  };
+
+  /**
+   * Place a saved pattern: a whole forest, re-identified, as ONE edit.
+   *
+   * Through `planInsertPattern` rather than by building ops here. The planner
+   * is the dry run — it mints ids that do not collide with the page, records
+   * where each root was copied from, and refuses everything the apply would —
+   * so a second construction in this file would be a second answer to what
+   * inserting a pattern means.
+   *
+   * `applyAll`, so the whole group is one undo step. A pattern placed as
+   * several inserts would come back one root at a time, which is not what the
+   * author did.
+   */
+  const insertPattern = (entry: PatternInsertEntry) => {
+    if (point === null) return;
+    const plan = planInsertPattern(
+      editor.document,
+      { id: entry.patternId, document: entry.document },
+      point.at,
+      source
+    );
+    // A refusal here means the document moved underneath the panel: the
+    // catalogue offers only patterns the planner accepts, judged against the
+    // same rules. Reported as no insert rather than as a failed one.
+    if (plan.pageOps === undefined) return;
+    if (editor.applyAll(plan.pageOps) === null) return;
+
+    // The FIRST root, so a second insert lands after the group rather than
+    // inside it — the same rule the block path follows by selecting what it
+    // just added.
+    const first = plan.pageOps.find((op: BuilderOp) => op.kind === "insert");
+    if (first === undefined || first.kind !== "insert") return;
+    editor.select(first.node.id);
+    onInsert?.(first.node);
   };
 
   if (point === null) {
@@ -180,7 +613,21 @@ export function InsertPanel({
   }
 
   return (
-    <div className="nx-insert-panel">
+    <div
+      className="nx-insert-panel"
+      /* The column count, handed to the stylesheet rather than spelled again
+         in it, so the layout has one source.
+
+         LAYOUT ONLY. Nothing reads it to move a highlight — arrow keys are the
+         command primitives' and step by one option, which is what their
+         listbox semantics announce. See this module's documentation.
+
+         On the PANEL rather than on each group, because the primitives own the
+         element the grid is applied to — their items container — and a
+         property set on a wrapper inside it would be inherited by the tiles
+         instead of read by the grid. */
+      style={{ "--nx-insert-columns": GRID_COLUMNS } as React.CSSProperties}
+    >
       <Command shouldFilter={false} label="Insert a block">
         <CommandInput
           value={query}
@@ -211,12 +658,89 @@ export function InsertPanel({
                   // unique across blocks AND their variations, while a label is
                   // not — two plugins may both label a block "Card".
                   key={entry.id}
-                  value={entry.id}
+                  value={tokens.get(entry.id)}
                   onSelect={() => insert(entry)}
+                  /*
+                   * NAMED by the block and DESCRIBED by its sentence, rather
+                   * than named by the two run together.
+                   *
+                   * An element with no label is named from its CONTENTS, and
+                   * that computation trims each node and joins them with no
+                   * separator — so a label and a description in adjacent spans
+                   * are announced as "TextA paragraph of plain text". Whether
+                   * any separator appears depends on the elements' `display`,
+                   * which makes the spoken name a property of the stylesheet
+                   * rather than of the markup.
+                   *
+                   * Stating both removes the guess: the block's name, then its
+                   * sentence, in that order and as two separate things. The
+                   * label is exactly the visible text, so a spoken command
+                   * still matches what is written on the tile.
+                   */
+                  aria-label={entry.label}
+                  aria-describedby={tokens.get(entry.id)}
+                  // Beside `onSelect`, never instead of it. A press stays a
+                  // click until it has travelled far enough to mean a drag, so
+                  // this does not consume the row's own activation — and a host
+                  // that supplies no drag leaves the row exactly as it was.
+                  onPointerDown={event => {
+                    /*
+                     * The input in hand, recorded before anything else in this
+                     * handler can return early.
+                     */
+                    if (event.pointerType === "touch") setTouchPressed(true);
+                    /*
+                     * Describe this tile on the PRESS, not only on a hover.
+                     *
+                     * A touch screen produces no `pointermove` before contact,
+                     * and hover is what the primitives report a highlight
+                     * from — so on touch the strip would still be describing
+                     * whatever was current when the panel opened, and the tap
+                     * that finally moved it is the same tap that inserts. A
+                     * finger resting on a tile now reads its sentence before
+                     * lifting, and a finger dragging across tiles reads each
+                     * one it passes.
+                     */
+                    /*
+                     * Replayed through the primitives' OWN handler rather
+                     * than by setting the highlight directly. They move it on
+                     * `pointermove`, which a touch screen never sends before
+                     * contact — so without this the strip on touch describes
+                     * whatever was current when the panel opened, and the tap
+                     * that finally moves it is the same tap that inserts.
+                     *
+                     * Dispatching the event they already listen for keeps the
+                     * announced option and the scroll in step, which setting
+                     * the value from outside does not.
+                     */
+                    event.currentTarget.dispatchEvent(
+                      new PointerEvent("pointermove", { bubbles: true })
+                    );
+                    // Blocks only. A drag carries ONE node to a drop target,
+                    // and a pattern is a forest placed as a group — so there is
+                    // no node to hand the drag, and offering the gesture would
+                    // start something that cannot finish. A pattern is inserted
+                    // by the click path, which places the whole group.
+                    if (entry.kind !== "block") return;
+                    beginInsertDrag?.(event, {
+                      blockName: entry.blockName,
+                      makeNode: () => nodeForEntry(entry, blockSource, nesting),
+                      // The same notification the click path sends, so a host
+                      // cannot see one kind of insert and miss the other.
+                      onInserted: onInsert,
+                    });
+                  }}
                 >
                   <BlockIconMark icon={entry.icon} />
                   <span className="nx-insert-panel__label">{entry.label}</span>
-                  <span className="nx-insert-panel__description">
+                  {/* Kept in the tile and no longer drawn: `aria-describedby`
+                      needs an element to point at, and keeping it here is what
+                      stops a tile and the sentence describing it from being
+                      rendered apart. */}
+                  <span
+                    className="nx-insert-panel__description"
+                    id={tokens.get(entry.id)}
+                  >
                     {entry.description}
                   </span>
                 </CommandItem>
@@ -224,6 +748,13 @@ export function InsertPanel({
             </CommandGroup>
           ))}
         </CommandList>
+        <DescriptionStrip groups={groups} tokens={tokens} />
+        {/*
+          Not drawn while nothing is offered: with the search filtered to no
+          matches the panel would show "No blocks match" beside an instruction
+          about pressing tiles, and spend scarce panel height doing it.
+        */}
+        <TouchGestureHint shown={touchPressed && groups.length > 0} />
       </Command>
     </div>
   );

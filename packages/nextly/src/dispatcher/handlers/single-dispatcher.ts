@@ -81,10 +81,7 @@ import { withSessionCacheHeaders } from "../../routeHandler";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
-import {
-  isSuperAdmin,
-  listEffectivePermissions,
-} from "../../services/lib/permissions";
+import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-slug-guard";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import {
@@ -480,26 +477,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         ? String(p._authenticatedUserId)
         : undefined;
 
-      // Resolve the per-user readable-slug allowlist BEFORE the registry
-      // call. Super admins (and unauthenticated callers, who are gated at
-      // the route layer) pass through with `slugAllowlist: undefined`,
-      // which means "no filter". Authenticated non-super-admins get an
-      // explicit list (possibly empty); the registry short-circuits an
-      // empty list to a zero-row, zero-total response.
-      let slugAllowlist: string[] | undefined;
-      if (userId) {
-        const superAdmin = await isSuperAdmin(userId);
-        if (!superAdmin) {
-          const permissionPairs = await listEffectivePermissions(userId);
-          slugAllowlist = Array.from(
-            new Set(
-              permissionPairs
-                .filter(pair => pair.endsWith(":read"))
-                .map(pair => pair.split(":")[0])
-            )
-          );
-        }
-      }
+      // Resolved BEFORE the registry call, through the SHARED resolver the
+      // collections listing asks too. Super admins and unauthenticated callers
+      // (gated at the route layer) pass through with `undefined`, which means
+      // "no filter"; an authenticated non-super-admin gets an explicit list,
+      // possibly empty, which the registry short-circuits to a zero-row,
+      // zero-total response.
+      const slugAllowlist = await readableSlugAllowlist(userId);
 
       const result = await svc.registry.listSingles({
         source: p.source as "code" | "ui" | "built-in" | undefined,

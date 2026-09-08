@@ -22,14 +22,12 @@
  */
 import type { rebuildClassUsageIndex } from "./class-usage-index-rebuild";
 import type { maintainClassUsage } from "./class-usage-maintenance";
-import type { rebuildClassUsage } from "./class-usage-rebuild";
 
 /** True when `K` must be supplied — that is, when it does not admit `undefined`. */
 type RequiredKey<T, K extends keyof T> = undefined extends T[K] ? false : true;
 
 type RebuildIndexArgs = Parameters<typeof rebuildClassUsageIndex>[0];
 type MaintainArgs = Parameters<typeof maintainClassUsage>[0];
-type RebuildUsedClassesArgs = Parameters<typeof rebuildClassUsage>[0];
 
 /**
  * Every boundary a caller invokes demands the bounds explicitly.
@@ -42,35 +40,34 @@ type RebuildUsedClassesArgs = Parameters<typeof rebuildClassUsage>[0];
  */
 const rebuildIndexDemandsLimits: RequiredKey<RebuildIndexArgs, "limits"> = true;
 const maintainDemandsLimits: RequiredKey<MaintainArgs, "limits"> = true;
-const rebuildUsedClassesDemandsLimits: RequiredKey<
-  RebuildUsedClassesArgs,
-  "limits"
-> = true;
 
 /**
  * The positive control, and it is load-bearing.
  *
- * `RequiredKey` returning `true` for everything would satisfy the three
- * assertions above without discriminating, so a key that IS optional has to
- * come out `false`. `collection` on the legacy rebuild is optional today; if it
- * ever becomes required this line fails and says so, which is the correct
- * outcome — the control has to be re-pointed at something still optional
- * rather than deleted.
+ * `RequiredKey` returning `true` for everything would satisfy the assertions
+ * above without discriminating, so a key that IS optional has to come out
+ * `false`.
+ *
+ * Declared here rather than borrowed from an entry point, because what this
+ * control establishes is a property of `RequiredKey` and not of any argument
+ * type. Every key on both entry points is required, so borrowing one would
+ * mean keeping a key optional to serve a test — and a control that fails when
+ * unrelated code tightens its bounds reports on the wrong subject.
  */
-const optionalKeyReadsAsOptional: RequiredKey<
-  RebuildUsedClassesArgs,
-  "collection"
-> = false;
+interface OptionalKeyProbe {
+  required: string;
+  optional?: string;
+}
 
-export type {
-  RebuildIndexArgs,
-  MaintainArgs,
-  RebuildUsedClassesArgs,
-  RequiredKey,
-};
+const requiredKeyReadsAsRequired: RequiredKey<OptionalKeyProbe, "required"> =
+  true;
+const optionalKeyReadsAsOptional: RequiredKey<OptionalKeyProbe, "optional"> =
+  false;
+
+export type { RebuildIndexArgs, MaintainArgs, OptionalKeyProbe, RequiredKey };
 export {
   rebuildIndexDemandsLimits,
   maintainDemandsLimits,
-  rebuildUsedClassesDemandsLimits,
+  requiredKeyReadsAsRequired,
   optionalKeyReadsAsOptional,
 };

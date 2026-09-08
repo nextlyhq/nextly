@@ -5,8 +5,9 @@
  * shell (which provides `@nextlyhq/admin` + React).
  *
  * @public Graduated in P9 — `plugin-form-builder` exercises the menu/pages/views
- *   registration. Dashboard widgets (`PluginAdminWidget`, D22) remain
- *   `@experimental` until M8. See `STABILITY.md`.
+ *   registration. Dashboard widgets (`PluginAdminWidget`, D22) render, but the
+ *   contribution shape is still settling, so they remain `@experimental`.
+ *   See `STABILITY.md`.
  */
 export {
   registerComponent,
@@ -26,6 +27,22 @@ export {
  */
 export { useDocumentIdentity, type DocumentIdentity } from "@nextlyhq/admin";
 export type { ComponentPath } from "@nextlyhq/admin";
+
+/**
+ * The props a custom collection Edit view is handed (@experimental).
+ *
+ * A plugin registering `admin.components.views.Edit.Component` receives these,
+ * and had no way to type against them without reaching into the admin package
+ * directly. `documentLock` is the pair a colleague's claim withholds: it is
+ * absent while creating, which has no document to claim, and absent from a view
+ * rendered outside the entry page.
+ *
+ * 🔴 Republished rather than restated. The admin declares the shape and derives
+ * the lock pair from the affordances the editor itself acts on, so a plugin
+ * typing its own copy would go on compiling while an affordance renamed there
+ * quietly stopped reaching the write gates that read it.
+ */
+export type { CustomEditViewProps, DocumentLockGates } from "@nextlyhq/admin";
 
 /**
  * Which language the surrounding document is being edited in (@experimental).
@@ -84,22 +101,41 @@ export {
 export { useReportUnsavedWork } from "@nextlyhq/admin";
 
 /**
- * Render the entry's remaining fields inside a takeover surface (@experimental).
+ * The entry's remaining fields, drawn for a takeover surface (@experimental).
  *
- * A field whose type is registered as a TAKEOVER collapses the form body to
- * itself, so an entry edited through one has its SEO, its relations and its
- * custom fields removed from the page — not merely covered. This returns a
- * renderer for exactly those, so the surface that took the body over can offer
- * them back without the author leaving it.
+ * A field whose type is registered as a TAKEOVER covers the whole form, so an
+ * entry edited through one has its title, its slug, its SEO and its relations
+ * put out of reach. This is how the surface that covered them offers them back
+ * without the author leaving it and losing their undo history.
  *
- * Null when nothing is hidden, which is a different answer from a renderer that
- * draws nothing: the first means offer no panel, the second means offer an
- * empty one. A shell that reserves width to display nothing reads as a broken
- * control rather than an absent feature.
+ * Pass the asking field's path; it is excluded from what comes back, along with
+ * any field whose condition currently hides it. What you get is the fields
+ * ALREADY DRAWN, or `null`.
  *
- * The renderer is built from the FORM'S OWN control, so what the surface draws
- * and what the form submits are one thing. Constructing a second form would
- * fork the state and lose the edit made in whichever copy did not save.
+ * ```tsx
+ * const fields = useEntryFieldsPanel(name);
+ * // One value answers both questions, so a rail and its panel cannot disagree.
+ * const panels = fields === null ? BASE_PANELS : [...BASE_PANELS, "settings"];
+ * // ...and the same value is what fills it.
+ * renderPanel={panel => (panel === "settings" ? fields : null)}
+ * ```
+ *
+ * `null` means OFFER NO PANEL, and it covers both reasons that can be true:
+ * there is no surrounding entry form — a preview, a standalone harness — or
+ * there is one with nothing left to show. A surface that reserves width to
+ * display nothing reads as a broken control rather than an absent feature, so
+ * the two are deliberately not distinguished: a caller does the same thing with
+ * either.
+ *
+ * A NODE rather than a renderer, because a caller makes two decisions from this
+ * — whether to offer a region, and what to put in it — and those must not be
+ * able to disagree. Handed a renderer, the only thing a caller could gate on
+ * was whether the renderer existed, which is true for every entry form whether
+ * or not it draws anything.
+ *
+ * It is built from the FORM'S OWN control, so what the surface draws and what
+ * the form submits are one thing. Constructing a second form would fork the
+ * state and lose the edit made in whichever copy did not save.
  */
 export { useEntryFieldsPanel } from "@nextlyhq/admin";
 
@@ -128,6 +164,82 @@ export { useEntryFieldsPanel } from "@nextlyhq/admin";
  * ```
  */
 export { loadRichTextEditorKit, type RichTextEditorKit } from "@nextlyhq/admin";
+
+/**
+ * Edit ONE passage in place, anywhere on your own surface (@experimental).
+ *
+ * The companion to {@link loadRichTextEditorKit}, for the case that kit cannot
+ * serve on its own: building an editor from the registry means calling
+ * `createEditor`, which means importing Lexical — and a second declarer of
+ * Lexical is exactly the failure sharing the registry exists to prevent. This
+ * hands over the operations instead, so a consumer edits rich text without ever
+ * naming a Lexical type.
+ *
+ * ONE editor, moved between elements. `attach` releases whatever it held
+ * before and hands back a SESSION, so at most one passage is live at a time —
+ * which is both what Lexical's own ecosystem supports and an honest model of a
+ * caret. A session that has been superseded reads as nothing and detaches as a
+ * no-op, so a consumer that lost the editor cannot read another's passage or
+ * tear down the live one.
+ *
+ * The element is made editable on attach and given back exactly as it arrived
+ * on detach, markup included — `setRootElement` neither sets `contentEditable`
+ * nor undoes the attribute, inline styles and replaced children it writes, and
+ * a consumer should not have to know that.
+ *
+ * `attach` answers with a STATUS, and a caller must narrow it rather than
+ * treating a refusal as a failure to report. It refuses for two unrelated
+ * reasons and says which, because only one of them is anything a caller can
+ * act on:
+ *
+ * - `"unsupported"` — this passage cannot be represented here, and nothing
+ *   about it changes by waiting: a node type this registry does not know, or a
+ *   decorator node whose visible output comes from `decorate()` and is mounted
+ *   by a React plugin this raw editor does not use. Either way the editor would
+ *   hold less than the document does and the next keystroke would write that
+ *   back, so leaving the passage as the page rendered it is the only outcome
+ *   that cannot lose work.
+ * - `"held"` — the editor is busy protecting an edit whose words exist nowhere
+ *   else, because writing it back was refused. Nothing is wrong with the
+ *   passage you asked for; the surface holding on has to finish first. Worth
+ *   SAYING to whoever is looking at the screen, or their gesture appears to do
+ *   nothing at all.
+ *
+ * Its undo history is created at `attach` and given away at `detach`, so it
+ * covers the open passage alone. A surface with its own history — the page
+ * builder's document ops are one — keeps everything larger, and a finished edit
+ * is one entry there rather than one per keystroke.
+ *
+ * Values cross as `unknown` in both directions: the stored shape is defined in
+ * `@nextlyhq/blocks-engine`, which this package does not depend on, and
+ * restating it here would be a second declaration of one format. Narrow a
+ * result with that package's own `isRichTextValue`.
+ *
+ * ASYNC for the same 630KB reason the kit is.
+ *
+ * @example
+ * ```ts
+ * const editor = await loadInlineRichTextEditor();
+ * const attachment = editor.attach(element, node.props.content);
+ * if (attachment.status === "refused") {
+ *   // Only one of the two is worth telling anyone about.
+ *   if (attachment.reason === "held") notify("Finish the other edit first.");
+ *   return;
+ * }
+ * const { session } = attachment;
+ * session.focus();
+ * // ...the author types...
+ * const next = session.read();
+ * session.detach();
+ * ```
+ */
+export {
+  loadInlineRichTextEditor,
+  type InlineRichTextAttachment,
+  type InlineRichTextEditor,
+  type InlineRichTextRefusal,
+  type InlineRichTextSession,
+} from "@nextlyhq/admin";
 
 /**
  * Record a recovery point for the surrounding document (@experimental).
@@ -324,6 +436,23 @@ export {
   drawsAnyValidationRule,
   EDITABLE_VALIDATION_RULES,
 } from "@nextlyhq/admin";
+
+/**
+ * @experimental Upload a file into the media library, as the admin's own
+ * dropzone does.
+ *
+ * The one route a plugin has to put bytes on this site. It matters because
+ * several things a plugin may author cannot reference a file anywhere else:
+ * a `@font-face` is refused unless its `src` is a path on this origin, so a
+ * plugin offering a font has to store the file here first and point at the id
+ * it gets back.
+ *
+ * `mutateAsync({ file })` resolves to the stored `Media` record — its `id`
+ * addresses the bytes, and its `mimeType` is the type upload validation
+ * settled on rather than the one the browser guessed, which is the value to
+ * carry into anything that names a format.
+ */
+export { useUploadMedia } from "@nextlyhq/admin";
 
 /**
  * @experimental Reads the `clientConfig` this plugin declared in

@@ -92,6 +92,62 @@ export function ownEntry<T>(
 }
 
 /**
+ * The own keys of an untrusted record, or `null` when there are too many.
+ *
+ * Counted with `for...in` and stopped at the budget rather than calling
+ * `Object.keys` first. The difference is the whole point: `Object.keys`
+ * materialises EVERY key into an array before any caller can look at the
+ * length, so a record with a hundred thousand keys is fully enumerated and
+ * allocated before the cap that exists to prevent it gets a turn. A budget
+ * checked after the allocation bounds only what happens next.
+ *
+ * `null` rather than a truncated list, because a caller that got fewer keys
+ * than the record holds cannot tell that from a small record, and the two
+ * deserve opposite treatment: one is ordinary, the other is a document to
+ * refuse.
+ */
+/**
+ * The own keys of an untrusted record, however many there are.
+ *
+ * The counterpart to {@link boundedOwnKeys}, and choosing between them is a
+ * question about what the record IS. A budget belongs where the record is a
+ * declared envelope whose size the format decides — a component's exposed
+ * properties, say — because a record past that size is a document to refuse.
+ * It does not belong where the record is opaque content a block defines for
+ * itself, because nothing in the format caps that, and a traversal that gave up
+ * at a borrowed limit would return such a record UNCHANGED and call it done.
+ *
+ * That is not hypothetical: a prop record of a thousand keys walked past the
+ * component-envelope budget and had its link left addressing an id that had
+ * been re-minted, silently, because a bound copied from a neighbouring concern
+ * read as a refusal in one place and as "nothing to do" in the other.
+ *
+ * Enumerated the same way, so the two cannot disagree about what an own key is.
+ */
+export function ownKeys(record: object): string[] {
+  const keys: string[] = [];
+  for (const key in record) {
+    // The record's own keys are stored data, so it may carry a
+    // `hasOwnProperty` of its own and answer the question with it.
+    if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
+    keys.push(key);
+  }
+  return keys;
+}
+
+export function boundedOwnKeys(record: object, limit: number): string[] | null {
+  const keys: string[] = [];
+  for (const key in record) {
+    // The record's own keys are stored data, so it may carry a
+    // `hasOwnProperty` of its own and answer the question with it.
+    if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
+    if (keys.length >= limit) return null;
+    keys.push(key);
+  }
+  return keys;
+}
+
+/**
  * ## What is already safe, so nobody "fixes" it
  *
  * Only ASSIGNMENT is affected. These define rather than assign, and each

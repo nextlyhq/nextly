@@ -12,18 +12,22 @@
  *
  * **Every element is a DIRECT child of the form, which is the layout.** The
  * root is a grid, so each label and each control becomes its own row and the
- * label sits above the control it names. The alternative — wrapping each pair
- * in a `<label>` — needs a rule on a DESCENDANT to stack them, and the style
- * catalog compiles one selector per node; only a handful of catalog entries
- * (`linkColor` among them) reach inside a block at all, and none of them
- * reaches an arbitrary child. Flattening puts the whole layout on the one
- * selector that exists.
+ * label sits above the control it names. Nothing is wrapped: a `<label>` around
+ * each pair would be a second element per field, and the grouping it exists to
+ * produce is available without one.
  *
- * What that costs is grouping: one `gap` separates a label from its control and
- * one field from the next, so the rows are evenly spaced rather than clustered
- * into fields. It is honest spacing rather than wrong spacing, and a site
- * stylesheet can tighten it. Inline styles are not an option and should not
- * be — see `root-inline-styles.test.tsx` for why a block may not write one.
+ * **The grouping comes from TWO distances rather than one.** A single `gap`
+ * spaced a label from the control it names exactly as far as from the next
+ * question, so nothing read as belonging together. The `gap` is now the smaller
+ * of the two — label to its own control — and each control states the larger one
+ * below itself, which falls between fields and before the submit. Stating it
+ * below the control rather than above the label is what keeps the FIRST label
+ * flush with the top of the form instead of pushed down by a leading margin.
+ *
+ * The control's distance is a PART, which is how a block states a rule for an
+ * element it renders inside its own root. Inline styles are not an option and
+ * should not be — see `root-inline-styles.test.tsx` for why a block may not
+ * write one.
  *
  * **Labels are associated explicitly, not by wrapping.** `htmlFor` and `id` are
  * the association that survives the flattening above, and the id is derived
@@ -36,6 +40,7 @@ import type { ReactElement, ReactNode } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { BUTTON_BASE_STYLES } from "./button";
 import { INTERACTIVE } from "./categories";
 import { flag, oneOf, text, url } from "./props";
 
@@ -110,27 +115,27 @@ const MAX_FIELDS = 100;
  * this block shipped with.** It first read `{ $token: "space.4" }`, on the
  * argument that `container.tsx` wants spacing from a token and that `space.4`
  * is in `defaultSiteTokens()`. Both halves are true and the conclusion was
- * still wrong: a token reference compiles to `var(--site-space-4)`, and
- * **nothing in this repository ever emits that variable.**
- *
- * Measured, three ways that agree: `compileSiteSheet` — the only thing that
- * writes token CSS — has ZERO consumers outside `blocks-engine`;
- * `emitTokenBlocks` is called only by that function, its own tests and a
- * benchmark; and the string `--site-` appears in no source file outside the
- * engine at all (positive control: `--nx-` appears in four). So
- * `defaultSiteTokens()` guarantees nothing today — it is a default nobody
- * applies.
+ * still wrong AT THE TIME: a token reference compiles to `var(--site-space-4)`,
+ * and nothing in the repository then emitted that variable.
  *
  * An undefined custom property makes the declaration invalid at computed-value
  * time, so `gap` fell back to `normal`, which for a grid is zero. The form
  * rendered with its fields touching, and every check passed: the property is in
  * `STYLE_CATALOG`, the declaration reached the compiled stylesheet, and the
  * test asserted exactly that. **Whether the `var()` RESOLVES is a third
- * question, and nothing asks it.**
+ * question, and nothing asked it.**
  *
- * A length is correct until the site stylesheet is wired into the render path.
- * `1rem` because that is what `space.4` itself declares, so the value does not
- * change when this becomes a token again.
+ * **That emptiness is over, and this line still does not go back.**
+ * `PageRenderer` compiles a site sheet by default, so a rendered page defines
+ * `--site-space-4` and a reference would now resolve. The reason this stays a
+ * length is therefore no longer the plumbing — it is the one below, and it
+ * would hold even if it had never been the plumbing.
+ *
+ * The VALUE is no longer `space.4`, and that is a change of meaning rather than
+ * of taste: this gap once carried the whole of the form's spacing, and now
+ * carries only the distance from a label to the control it names. The field
+ * separation moved to the control's own part, where the two together still come
+ * to `1rem`. So a future token here is a label-to-control token, not `space.4`.
  *
  * Both `display` and `gap` are in `STYLE_CATALOG`. A property that is not is
  * dropped by the compiler rather than passed through, so the test asserts the
@@ -141,7 +146,126 @@ export const FORM_BASE_STYLES = {
   base: {
     base: {
       display: "grid",
-      gap: "1rem",
+      // The gap is now the distance from a label to the control it names, NOT
+      // the distance between fields. One even gap spaced a label as far from
+      // its own input as from the next question, so nothing grouped; the field
+      // separation is stated by the control instead, which is the only element
+      // that knows a field has ended.
+      gap: "0.25rem",
+    },
+  },
+} as const;
+
+/**
+ * The control a field's label names.
+ *
+ * Carried on the CONTROL rather than the label, and the difference is the whole
+ * reason there is no leading gap inside the form: a margin above each label
+ * separates fields equally well and also pushes the FIRST label down, which
+ * reads as stray padding nobody asked for. Below the control the same distance
+ * falls only between fields and before the submit, where it is wanted.
+ */
+const FORM_PARTS = {
+  control: {
+    baseStyles: {
+      base: {
+        base: {
+          margin: { blockEnd: "0.75rem" },
+          /*
+           * The control has to LOOK like a control.
+           *
+           * A user agent draws a border and a background on an input; a host
+           * reset takes both away, and Tailwind's Preflight — which the
+           * scaffold ships — is one. This part existed and stated only
+           * spacing, so a form rendered as a column of labels with nothing
+           * under them: the field was there, focusable and submittable, and
+           * invisible.
+           *
+           * Colours are tokens because a literal is wrong in whichever of
+           * light and dark it was not chosen for. Spacing and the radius are
+           * literals, which is safe for the same reason `core/card` gives.
+           */
+          boxSizing: "border-box",
+          width: "100%",
+          padding: {
+            blockStart: "0.5rem",
+            blockEnd: "0.5rem",
+            inlineStart: "0.75rem",
+            inlineEnd: "0.75rem",
+          },
+          backgroundColor: { $token: "color.background" },
+          color: { $token: "color.text" },
+          borderRadius: "6px",
+          border: {
+            // Per LOGICAL side, so it follows writing direction rather than
+            // assuming left-to-right.
+            width: {
+              blockStart: "1px",
+              blockEnd: "1px",
+              inlineStart: "1px",
+              inlineEnd: "1px",
+            },
+            style: "solid",
+            /*
+             * `color.border-strong`, NOT the hairline `color.border`.
+             *
+             * This control takes the page's own background above, so the border
+             * is the ONLY thing telling a person where the field is — which
+             * WCAG 2.2 SC 1.4.11 requires to clear 3:1. The hairline is
+             * decorative and does not: measured `#e5e7eb` on `#ffffff` is
+             * 1.24:1, and `#1f2937` on `#0b0f19` is 1.30:1. A control outlined
+             * in it is the same invisible field this part exists to fix, one
+             * property in and passing every test that checked the border was
+             * "defined".
+             */
+            color: { $token: "color.border-strong" },
+          },
+        },
+      },
+    },
+  },
+  /**
+   * The submit, wearing `core/button`'s own appearance.
+   *
+   * Reused rather than restated: a form's submit and a button block are the
+   * same control to an author, and describing that twice is how one page comes
+   * to carry two different-looking primary actions. `width: "fit-content"` is
+   * the only addition — the form is a grid, so a stretched item would otherwise
+   * run the full column width and stop reading as a button at all.
+   *
+   * The obvious spelling for that is `justify-self: start`, and it is NOT what
+   * this uses. The catalog carries no grid ITEM properties, so the compiler
+   * drops that declaration without a word; see the note on the addition itself.
+   */
+  submit: {
+    /*
+     * The WHOLE envelope, not its base leaf.
+     *
+     * Spreading `BUTTON_BASE_STYLES.base.base` copies today's base
+     * declarations and silently drops every other state and breakpoint the
+     * button might grow. The first hover or responsive default added to
+     * `core/button` would reach the button block and not the form's submit,
+     * and the two controls this part exists to keep identical would diverge
+     * with nothing saying so.
+     */
+    baseStyles: {
+      ...BUTTON_BASE_STYLES,
+      base: {
+        ...BUTTON_BASE_STYLES.base,
+        base: {
+          ...BUTTON_BASE_STYLES.base.base,
+          /*
+           * Sized to its words rather than to the column.
+           *
+           * The form is a grid and a grid item stretches, so without this the
+           * submit runs the full width and stops reading as a button. The
+           * obvious spelling is `justify-self: start` and the catalog does not
+           * carry it — the compiler drops a property it does not know, so that
+           * declaration would have been written, dropped, and invisible.
+           */
+          width: "fit-content",
+        },
+      },
     },
   },
 } as const;
@@ -155,6 +279,7 @@ export function renderForm({
   props,
   node,
   className,
+  partClass,
 }: BlockRenderArgs<FormProps>): ReactElement {
   // A stored array can hold anything: a migration, a hand edit, or an older
   // version of this block can all leave a member that is not a field. Sliced
@@ -198,9 +323,23 @@ export function renderForm({
         {required ? <span aria-hidden="true"> *</span> : null}
       </label>,
       type === "textarea" ? (
-        <textarea key={id} id={id} name={name} required={required} rows={4} />
+        <textarea
+          key={id}
+          id={id}
+          name={name}
+          required={required}
+          rows={4}
+          className={partClass("control")}
+        />
       ) : (
-        <input key={id} id={id} name={name} type={type} required={required} />
+        <input
+          key={id}
+          id={id}
+          name={name}
+          type={type}
+          required={required}
+          className={partClass("control")}
+        />
       )
     );
   });
@@ -212,7 +351,9 @@ export function renderForm({
       {...(action === undefined ? {} : { action })}
     >
       {rows}
-      <button type="submit">{submitText}</button>
+      <button className={partClass("submit")} type="submit">
+        {submitText}
+      </button>
     </form>
   );
 }
@@ -254,6 +395,7 @@ export const form = defineBlock<FormProps, PageContext>({
     },
   },
   baseStyles: FORM_BASE_STYLES,
+  parts: FORM_PARTS,
   supports: {
     typography: true,
     color: true,

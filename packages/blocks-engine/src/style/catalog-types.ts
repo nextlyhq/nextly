@@ -51,7 +51,8 @@ export type StyleGroup =
   | "shadow"
   | "effects"
   | "position"
-  | "container";
+  | "container"
+  | "list";
 
 /** A group and the label an editor shows for it. */
 export interface StyleGroupDef {
@@ -76,6 +77,7 @@ export const STYLE_GROUP_DEFS: readonly StyleGroupDef[] = [
   { key: "effects", label: "Effects" },
   { key: "position", label: "Position" },
   { key: "container", label: "Container queries" },
+  { key: "list", label: "List" },
 ];
 
 export const STYLE_GROUPS: readonly StyleGroup[] = STYLE_GROUP_DEFS.map(

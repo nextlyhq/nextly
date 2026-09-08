@@ -12,7 +12,6 @@
  * @module domains/versions/version-conflict
  */
 
-import { isDbError } from "../../database/errors";
 import { NextlyError } from "../../errors/nextly-error";
 
 /**
@@ -45,67 +44,18 @@ export class VersionConflictError extends NextlyError {
   }
 }
 
-// Raw driver unique-violation identifiers by dialect. The transaction-context
-// insert path throws the driver error directly — it is NOT normalized to a
-// nextly `DbError` until it escapes the transaction — so capture must recognize
-// the raw driver codes (and the adapter's own `DatabaseError`) at the insert
-// site, where it still knows the insert targeted `nextly_versions`.
-const RAW_UNIQUE_CODES = new Set<string>([
-  "23505", // PostgreSQL unique_violation (SQLSTATE)
-  "ER_DUP_ENTRY", // MySQL
-  "SQLITE_CONSTRAINT_UNIQUE", // better-sqlite3
-  "SQLITE_CONSTRAINT_PRIMARYKEY",
-]);
-
-/**
- * True when `err` is a unique-constraint violation in ANY of the forms it can
- * take between the driver and the nextly service layer: a raw driver error
- * (tx-context insert path), the adapter's `DatabaseError` (`kind:
- * "unique_violation"`, underscore), or a fully-normalized nextly `DbError`
- * (`kind: "unique-violation"`, hyphen). Capture only inserts into
- * `nextly_versions`, whose sole unique index is the version_no sequence, so any
- * unique violation from that insert is a version_no collision.
- */
-function isUniqueViolationShape(err: unknown): boolean {
-  // Fully-normalized nextly DbError (service-layer boundary).
-  if (isDbError(err) && err.kind === "unique-violation") return true;
-  if (typeof err !== "object" || err === null) return false;
-  const e = err as { code?: unknown; errno?: unknown; kind?: unknown };
-  // Adapter-layer DatabaseError: distinct name, underscore kind.
-  if (e.kind === "unique_violation") return true;
-  // MySQL surfaces the duplicate as errno 1062.
-  if (e.errno === 1062) return true;
-  // pg SQLSTATE / mysql code string / sqlite constraint code.
-  if (typeof e.code === "string" && RAW_UNIQUE_CODES.has(e.code)) return true;
-  return false;
-}
-
 /**
  * True when `err`, or anything in its `cause` chain, is a unique-constraint
  * violation.
  *
- * The walk is depth-bounded rather than one level deep, matching
- * {@link findVersionConflict} below. One level is not enough for the ordinary
- * case: a failed query arrives as the adapter's `DatabaseError` wrapping a
- * `DrizzleQueryError` wrapping the driver's error, so the only object carrying
- * `SQLITE_CONSTRAINT_UNIQUE` sits at depth TWO. This returned `false` for a
- * real duplicate key until that was measured.
- *
- * The existing caller was unaffected because version capture catches at the
- * tx-insert site, where the driver error is still near the surface — which is
- * why the gap stayed latent rather than harmless.
- *
- * The bound also guards a cyclic chain: an error whose `cause` points back at
- * itself would otherwise hang the check.
+ * Re-exported rather than defined here: the job queue became a second consumer
+ * and `domains/jobs` has nothing to do with versions, so the shared question
+ * moved to `shared/lib/unique-violation` and this keeps the name its existing
+ * callers import. Capture only inserts into `nextly_versions`, whose sole
+ * unique index is the version_no sequence, so any unique violation from that
+ * insert is a version_no collision.
  */
-export function isUniqueViolation(err: unknown): boolean {
-  let cursor: unknown = err;
-  for (let depth = 0; depth < 10 && cursor != null; depth++) {
-    if (isUniqueViolationShape(cursor)) return true;
-    cursor = (cursor as { cause?: unknown }).cause;
-  }
-  return false;
-}
+export { isUniqueViolation } from "../../shared/lib/unique-violation";
 
 /**
  * Find the {@link VersionConflictError} in `err`'s `cause` chain, if any. The

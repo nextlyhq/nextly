@@ -137,6 +137,10 @@ export async function recordSettingsActivity(
     action: input.action,
     collection: input.collection,
     entryId: input.entityId,
+    // Stated rather than left to the registry: an upgraded install may hold a
+    // real collection under this same namespace, and the feed must not treat a
+    // credential rotation as a document in it.
+    subjectKind: "settings",
     entryTitle: input.entityTitle,
     metadata: {
       ...input.metadata,

@@ -77,10 +77,14 @@ describe("plugin-sdk public export surface", () => {
     expect(exportedNames("routing.ts")).toMatchSnapshot();
   });
 
+  it("`./widgets` surface is unchanged", () => {
+    expect(exportedNames("widgets.ts")).toMatchSnapshot();
+  });
+
   // The name/kind extractor cannot see through `export *` re-exports, so a star
   // export would add names to the public surface that the snapshots never
   // record. Fail loudly if one is introduced, so the guard stays complete.
-  it.each(["index.ts", "admin.ts", "client.ts", "routing.ts"])(
+  it.each(["index.ts", "admin.ts", "client.ts", "routing.ts", "widgets.ts"])(
     "%s uses only named exports (no `export *`, which the guard cannot track)",
     file => {
       const source = readFileSync(path.join(SRC, file), "utf8");

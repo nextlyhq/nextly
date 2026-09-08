@@ -35,6 +35,8 @@
  * @packageDocumentation
  */
 
+import { Table, getTableName, is } from "drizzle-orm";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
@@ -268,6 +270,37 @@ async function dropAllTables(
  *
  * @public
  */
+/**
+ * Point the adapter at the dialect's table bundle.
+ *
+ * Separate from schema CREATION on purpose: the DDL says what exists in the
+ * database, this says what the adapter can NAME. A test can have the first
+ * without the second, and the failure then blames the wrong one.
+ */
+async function installTableResolver(
+  adapter: DrizzleAdapter,
+  type: AdapterType
+): Promise<void> {
+  const dialect = toDialect(type);
+  const bundle =
+    dialect === "postgresql"
+      ? await import("../../schemas/_dialect-bundles/postgres")
+      : dialect === "mysql"
+        ? await import("../../schemas/_dialect-bundles/mysql")
+        : await import("../../schemas/_dialect-bundles/sqlite");
+
+  // `getTableName` and the base `Table` class, rather than a per-dialect
+  // `getTableConfig`: this helper serves all three dialects, and the bundle it
+  // just imported is whichever one the test asked for.
+  const byName = new Map<string, unknown>();
+  for (const value of Object.values(bundle)) {
+    if (is(value, Table)) byName.set(getTableName(value), value);
+  }
+  adapter.setTableResolver({
+    getTable: (tableName: string) => byName.get(tableName) ?? null,
+  });
+}
+
 export async function createTestDatabase(
   options: CreateTestDatabaseOptions = {}
 ): Promise<TestDatabase> {
@@ -286,6 +319,17 @@ export async function createTestDatabase(
     type,
     url: databaseUrl,
   });
+
+  // Let the adapter resolve tables by NAME, the way boot does in production.
+  //
+  // `adapter.select("users", …)` maps a name to a Drizzle table through a
+  // resolver, and without one the adapter refuses with "not found in schema
+  // registry" — which reads as a missing TABLE rather than missing wiring, and
+  // sends the reader to check DDL that is perfectly fine.
+  //
+  // Built from the dialect's own bundle, so a name the adapter resolves is a
+  // table the schema actually declares.
+  await installTableResolver(adapter, type);
 
   // Create schema if requested
   if (shouldCreateSchema) {

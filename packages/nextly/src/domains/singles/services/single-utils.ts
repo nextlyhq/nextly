@@ -268,9 +268,13 @@ export function getDefaultValue(field: FieldConfig): unknown {
       // only bindable one is a real date.
       return "required" in field && field.required ? new Date() : null;
 
+    // The migrated spelling seeds identically: a different empty value here
+    // would persist through `logicalDefaults` and make a later functional
+    // default depend on which side of the storage migration wrote the field.
     case "relationship":
     case "upload":
     case "component":
+    case "fieldGroup":
       return null;
 
     default:

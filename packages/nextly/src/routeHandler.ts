@@ -36,11 +36,18 @@ import {
   updateApiKey,
   revokeApiKey,
 } from "./api/api-keys";
+import { readAccessCaller, readCaller } from "./api/authenticated-read";
 import {
   getDashboardStats,
   getDashboardRecentEntries,
   getDashboardActivity,
 } from "./api/dashboard";
+import {
+  acquireLock,
+  readLock,
+  releaseLock,
+  renewLock,
+} from "./api/document-lock";
 import { POST as emailSend } from "./api/email-send";
 import { POST as emailSendWithTemplate } from "./api/email-send-template";
 import {
@@ -54,8 +61,11 @@ import {
   updateImageSize,
   deleteImageSize,
 } from "./api/image-sizes";
+import { listJobsRoute } from "./api/jobs-list-route";
+import { runJobsRoute } from "./api/jobs-run-route";
 import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
 import { resolveEntryPreviewUrl } from "./api/preview-url";
+import { handleReleaseRequest } from "./api/releases";
 import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // canonical respondX wire shapes (spec §5.1) instead of the
 // hand-rolled `{ data: <payload> }` envelope.
@@ -65,6 +75,7 @@ import {
   respondMutation,
 } from "./api/response-shapes";
 import { getSchemaJournal } from "./api/schema-journal";
+import { getTranslationWorklist } from "./api/translations";
 import {
   listWebhooks,
   getWebhookById,
@@ -80,9 +91,26 @@ import {
   redeliverWebhookDelivery,
   drainWebhooks,
 } from "./api/webhooks";
+import {
+  deleteWidgetLayout,
+  getWidgetLayout,
+  putWidgetLayout,
+} from "./api/widget-layout";
+import { postWidgetQuery } from "./api/widget-query";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
+import { readableEntities } from "./auth/entity-read-access";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
+import { contributedWidgets } from "./domains/widgets/canonical";
+import {
+  generatedCollectionSlug,
+  generatedWidgets,
+  readableGeneratedWidgets,
+  refreshCollectionWidgets,
+} from "./domains/widgets/collection-widgets";
+import type { WidgetDefinition } from "./domains/widgets/definition";
+import { publishableWidgets } from "./domains/widgets/publish";
+import { listWidgets } from "./domains/widgets/registry";
 import { NextlyError } from "./errors/nextly-error";
 import {
   currentFlattenedErrors,
@@ -96,6 +124,7 @@ import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
 import { runPluginRoute } from "./plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
+import { assertAdminWidgets } from "./plugins/validate-admin-widgets";
 import { assertClientConfigs } from "./plugins/validate-client-config";
 import {
   parseRestRoute,
@@ -340,11 +369,15 @@ async function handleApiKeyRequest(
 const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
   "webhooks",
+  "releases",
+  "jobs",
   "generalSettings",
   "previewLinks",
   "previewUrl",
   "imageSizes",
   "dashboard",
+  "documentLock",
+  "translations",
   "schema",
   "email",
 ]);
@@ -474,9 +507,73 @@ async function handleDashboardRequest(
       return getDashboardRecentEntries(req);
     case "getDashboardActivity":
       return getDashboardActivity(req);
+    case "postWidgetQuery":
+      return postWidgetQuery(req);
+    case "getWidgetLayout":
+      return getWidgetLayout(req);
+    case "putWidgetLayout":
+      return putWidgetLayout(req);
+    case "deleteWidgetLayout":
+      return deleteWidgetLayout(req);
     default:
       return new Response(
         JSON.stringify({ error: "Unknown dashboard operation" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+  }
+}
+
+/**
+ * Delegate a document-lock request to its handler.
+ *
+ * Advisory locking: every one of these reports a claim and none of them refuses
+ * a write, so nothing on the mutation path consults this.
+ */
+async function handleDocumentLockRequest(
+  req: Request,
+  method: string
+): Promise<Response> {
+  switch (method) {
+    case "readDocumentLock":
+      return readLock(req);
+    case "acquireDocumentLock":
+      return acquireLock(req);
+    case "renewDocumentLock":
+      return renewLock(req);
+    case "releaseDocumentLock":
+      return releaseLock(req);
+    default:
+      // Reached only if the parser and this switch disagree, which is a new or
+      // mistyped route rather than anything the caller did. A canonical error
+      // carries the code and request id a client needs to report it; an ad hoc
+      // `{ error }` body is unreadable exactly when someone is debugging.
+      throw NextlyError.notFound({
+        logContext: { service: "documentLock", method },
+      });
+  }
+}
+
+// ============================================================================
+// Translations Direct Dispatch
+// ============================================================================
+
+/**
+ * Delegate a translation-worklist request to its handler.
+ *
+ * One method today. Kept as a switch rather than a direct call so a second
+ * read (a per-language count, say) lands beside it instead of growing another
+ * dispatch branch above.
+ */
+async function handleTranslationsRequest(
+  req: Request,
+  method: string
+): Promise<Response> {
+  switch (method) {
+    case "getTranslationWorklist":
+      return getTranslationWorklist(req);
+    default:
+      return new Response(
+        JSON.stringify({ error: "Unknown translations operation" }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
   }
@@ -564,6 +661,7 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   "countEntries",
   "duplicateEntry",
   "publishAllLocales",
+  "unpublishAllLocales",
   // Version history is guarded by the same per-collection read permission as
   // the entry itself; the document-level rules run inside the methods.
   "listEntryVersions",
@@ -992,6 +1090,33 @@ async function handleServiceRequest(
     return handleWebhookRequest(req, method, routeParams);
   }
 
+  // ==================== CONTENT RELEASES DIRECT DISPATCH ====================
+  // Beside the handlers above and for the same reason: it owns its auth and
+  // parses its own JSON, so it must stay above the shared body read below or
+  // the stream reaches it consumed.
+  if (service === "releases") {
+    return handleReleaseRequest(req, method, routeParams);
+  }
+
+  // ==================== JOBS DIRECT DISPATCH ====================
+  // Beside the webhook drain and for the same reason: the handler owns its own
+  // authorization, and it must stay above the shared body read below.
+  if (service === "jobs") {
+    // Branch on the parsed method rather than the HTTP verb: the trigger
+    // accepts GET as well, so a verb test would send a list request to the
+    // runner and drain the queue as a side effect of reading it.
+    // Matched explicitly, both ways. A ternary would make the SIDE-EFFECTING
+    // runner the default, so a jobs route added later — or a method name
+    // mistyped in the parser — would drain the queue instead of failing. The
+    // dangerous operation must never be what an unrecognised name falls into.
+    if (method === "listJobs") return listJobsRoute(req);
+    if (method === "runJobs") return runJobsRoute(req);
+    throw NextlyError.notFound({
+      message: `Unknown jobs operation: ${method}`,
+      logContext: { service: "jobs", method },
+    });
+  }
+
   // ==================== PREVIEW LINKS DIRECT DISPATCH ====================
   // Above the body read below, like the handlers beside it: these parse their
   // own JSON, and a consumed stream would reach them empty.
@@ -1036,10 +1161,28 @@ async function handleServiceRequest(
   }
 
   // ==================== DASHBOARD DIRECT DISPATCH ====================
-  // Dashboard handlers own their auth (requireAuthentication). Read-only
-  // endpoints — no body to consume, but keeping consistent dispatch pattern.
+  // Dashboard handlers own their auth (requireAuthentication). Intercepting
+  // here keeps the pattern consistent with API keys and general settings; the
+  // GET endpoints have no body, and postWidgetQuery and putWidgetLayout read
+  // their own via req.json() before anything else touches the stream.
   if (service === "dashboard") {
     return handleDashboardRequest(req, method);
+  }
+
+  // ==================== DOCUMENT LOCK DIRECT DISPATCH ====================
+  // Owns its auth (requireAuthentication) and reads its own body, so it
+  // intercepts here for the same reason dashboard does: before `req.text()`,
+  // which the read has no body for.
+  if (service === "documentLock") {
+    return handleDocumentLockRequest(req, method);
+  }
+
+  // ==================== TRANSLATIONS DIRECT DISPATCH ====================
+  // Owns its auth (requireAuthentication) and is read-only, so it intercepts
+  // here for the same reason dashboard does: before `req.text()`, which a GET
+  // has no body for.
+  if (service === "translations") {
+    return handleTranslationsRequest(req, method);
   }
 
   // ==================== SCHEMA DIRECT DISPATCH (F10 PR 4) ====================
@@ -1313,7 +1456,16 @@ async function handleServiceRequest(
  * written and drift afterwards, and the drift is invisible because both halves
  * look correct alone.
  */
-async function buildAdminMeta(): Promise<{
+async function buildAdminMeta(
+  /**
+   * Cards core DERIVED for this reader's readable collections.
+   *
+   * A parameter rather than a call, because which of them a reader may be told
+   * about depends on the reader and this builder is shared with the PUBLIC
+   * branding route. Empty for that route, which discards `workspace` anyway.
+   */
+  generatedForCaller: WidgetDefinition[] = []
+): Promise<{
   branding: Record<string, unknown>;
   workspace: Record<string, unknown>;
 }> {
@@ -1400,6 +1552,26 @@ async function buildAdminMeta(): Promise<{
     if (publicPlugins.length > 0) {
       branding.pluginClientConfigs = publicPlugins;
     }
+  }
+
+  // The widget REGISTRY, beside the contributions above. The two are different
+  // channels to the same grid and neither subsumes the other: a contribution is
+  // DECLARED in `contributes.admin.widgets` and travels with the plugin's
+  // config, while a registration is an imperative `registerWidget` call made
+  // during boot. Serializing only the first left an app that used the public
+  // registration API invisible to the renderer built around that registry --
+  // its card never drew and its query never entered the batch.
+  //
+  // Only this half of the payload can carry it. The registry is populated
+  // during boot, and `handleAdminMetaWorkspaceRequest` is the caller that
+  // awaits `ensureServicesInitialized()` first; the public branding route is
+  // served without it and would answer from an empty store. That the workspace
+  // half already describes the RUNNING installation rather than the configured
+  // one -- `showBuilder` from the live resolver, `customGroups` from the
+  // database -- is the same property this relies on.
+  const widgets = [...publishableWidgets(), ...generatedForCaller];
+  if (widgets.length > 0) {
+    workspace.widgets = widgets;
   }
 
   // Override config branding with DB values when available
@@ -1527,7 +1699,62 @@ async function handleAdminMetaWorkspaceRequest(
   // of the running one.
   await ensureServicesInitialized();
 
-  const { workspace } = await buildAdminMeta();
+  // Re-derived per request, and HERE rather than inside `buildAdminMeta`. A
+  // collection drawn in the Schema Builder exists the moment it is saved, so a
+  // set frozen at boot describes an install that has since changed -- and in
+  // production "the next restart" means the next deploy.
+  //
+  // 🔴 Only on this route. `buildAdminMeta` is shared with the PUBLIC branding
+  // handler, which deliberately does not initialise services: refreshing there
+  // asked an empty container for the collection registry on every anonymous
+  // login-page request, logging a registry-unavailable error for a payload that
+  // discards `workspace.widgets` anyway -- and, once initialised, made a cheap
+  // branding read load every collection's schema from the database.
+  await refreshCollectionWidgets();
+
+  // 🔴 The generated cards are resolved HERE rather than inside `buildAdminMeta`,
+  // because which of them a reader may be told about depends on the reader.
+  // Their id, title and query all name a COLLECTION, so publishing the whole
+  // set would disclose the slug and the existence of every collection in the
+  // install to any authenticated caller — including the ones the layout and
+  // query endpoints deliberately hide from them. That the admin would not draw
+  // the card is not a control; the payload is JSON, and reading it is the
+  // bypass. The verdicts come from the same implementation the layout endpoint
+  // filters with, so the two cannot disagree about what this reader may see.
+  const caller = readAccessCaller(await readCaller(auth));
+  // The verdict the QUERY path takes. `canReadEntity` evaluates a collection's
+  // code-defined `access.read` as well as the stamped grant, and
+  // `callerHoldsPermission` does not -- so an API key those rules reject is
+  // refused by the query endpoint and would have been told the collection
+  // exists by this payload. One question, one answer.
+  const readableCollectionSlugs = await readableEntities(
+    generatedWidgets()
+      .map(generatedCollectionSlug)
+      .filter((slug): slug is string => slug !== undefined),
+    caller
+  );
+  const readable = readableGeneratedWidgets(
+    slug => readableCollectionSlugs.has(slug),
+    // Every DECLARED id, registrations included. Filtering only contributions
+    // left a registration colliding with a generated card published TWICE in
+    // this payload -- once as itself and once as core's derived guess -- and the
+    // canonical set resolves that collision in the registration's favour, so the
+    // two halves of the response disagreed about which declaration the card is.
+    //
+    // 🔴 From `listWidgets()`, the registry ITSELF, not from the publishable
+    // projection of it. `publishableWidgets` drops a definition that cannot
+    // survive `JSON.stringify` -- a `BigInt` in `query.where`, say -- and that
+    // definition is still in the registry, so `canonicalWidgets` still resolves
+    // its id to the registration. Detecting collisions against the narrower set
+    // would publish core's generated card under an id the server had already
+    // given to somebody else, which is the same disagreement one level down.
+    new Set([
+      ...contributedWidgets().map(widget => widget.id),
+      ...listWidgets().map(widget => widget.id),
+    ])
+  );
+
+  const { workspace } = await buildAdminMeta(readable);
   return withSessionCacheHeaders(respondAdminMeta(workspace));
 }
 
@@ -1697,6 +1924,11 @@ export function createDynamicHandlers(options?: {
     // instead of at startup. This module runs when the route file is imported,
     // which is the earliest deterministic point the config exists.
     assertClientConfigs(options.config.plugins ?? []);
+    // And the widgets beside it. `/api/admin-meta/workspace` serializes both
+    // halves through one `JSON.stringify`, so a widget carrying a bigint takes
+    // the whole authenticated workspace payload down for every admin -- a
+    // wider failure than a bad `clientConfig`, reached the same way.
+    assertAdminWidgets(options.config.plugins ?? []);
     setHandlerConfig(options.config);
   }
 

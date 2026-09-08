@@ -42,6 +42,7 @@ import {
   getPgDrizzleKit,
   getSQLiteDrizzleKit,
 } from "../../../database/drizzle-kit-lazy";
+import { isMissingColumnError } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
 
 import { currentMysqlDatabaseName } from "./database-url";
@@ -50,11 +51,7 @@ import {
   filterUnsafeStatements,
   findUnexpectedDestructiveStatements,
 } from "./filter-unsafe-statements";
-import {
-  isIdempotencyError,
-  isMissingColumnError,
-  splitStatements,
-} from "./sql-statement-utils";
+import { isIdempotencyError, splitStatements } from "./sql-statement-utils";
 
 // Re-exported so existing importers (v1-golden suite) keep working; the
 // implementation lives in sql-statement-utils.ts.

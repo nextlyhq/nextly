@@ -19,6 +19,8 @@
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 
+import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
+import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
 import {
   SingleForm,
   type SingleSchema,
@@ -204,6 +206,19 @@ export default function SingleEditPage({
     translateFrom,
   });
 
+  /*
+   * Above this page's loading and error returns, because it is a hook. What it
+   * produces is only read once those guards pass; while the schema or the
+   * document is still loading it reports no action, which is correct.
+   */
+  const release = useAddToReleaseAction({
+    scopeKind: "single",
+    scopeSlug: slug,
+    entryId: document?.id,
+    lifecycleEnabled: schema?.status,
+    onDefaultLocale: !isNonDefaultLocale,
+  });
+
   // Update mutation — routes the save to the active language's companion row.
   const { mutateAsync: updateDocument, isPending: isUpdating } =
     useUpdateSingleDocument(slug || "", locale);
@@ -331,12 +346,30 @@ export default function SingleEditPage({
           would keep the two-pane translation surface inside the content
           measure while the entry editor beside it took the whole panel. */}
       <MeasuredPageFrame>
+        {/* Full width and first, for the reason the entry editor gives. */}
+        <ScheduledReleaseBanner
+          document={
+            slug
+              ? { scopeKind: "single", scopeSlug: slug, entryId: document.id }
+              : undefined
+          }
+          onDefaultLocale={!isNonDefaultLocale}
+        />
+        {release.dialog}
         <SingleForm
           // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
           // expects FieldConfig[] (discriminated). The runtime payload is the
           // same; widening here until the schema layer unifies on FieldConfig.
           schema={schema as unknown as SingleSchema}
           document={document}
+          /* A Single is a release member exactly as a collection entry is — the
+             engine models both and the release detail page links to both — so
+             omitting this control here would leave the Single half reachable
+             only through the API. With the form's own actions, matching the
+             collection editor. */
+          documentActions={
+            release.contributed === null ? [] : [release.contributed]
+          }
           onSubmit={handleSubmit}
           isSubmitting={isUpdating}
           onCancel={handleCancel}

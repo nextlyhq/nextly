@@ -31,6 +31,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryOptions,
 } from "@tanstack/react-query";
 
@@ -239,6 +240,48 @@ export function useSingle(
  * }
  * ```
  */
+/**
+ * Forget everything a slug meant, because it now means something else.
+ *
+ * Creating or deleting a Single does not change a document, but it changes
+ * WHICH document — and which schema — a slug names. A slug reused by a
+ * recreated Single otherwise goes on serving its predecessor's, id and fields
+ * and all. That id is a cache scope elsewhere: the version history and its
+ * diffs are keyed on it, so a comparison mounted meanwhile belongs to an
+ * incarnation that no longer exists, and the builder reading a stale schema can
+ * apply the old fields to the new Single with one save.
+ *
+ * Slug-scoped entries are RESET rather than invalidated or removed, and the
+ * three differ in ways that matter here. Invalidation marks a query stale and
+ * KEEPS its data, so the next read is handed the predecessor while a refetch
+ * runs — and a refetch that fails leaves it indefinitely. Removal drops the
+ * data but does not notify an observer already mounted against that key, which
+ * goes on presenting the result it last saw. Reset does both: the data goes and
+ * anything watching is told to fetch again.
+ *
+ * The LIST is only invalidated. It carries no identity, and a briefly stale
+ * list refetches behind the reader at no cost.
+ *
+ * Nothing at all happens for an empty slug list, which is what a wholly failed
+ * bulk delete produces: those Singles still exist, and discarding their caches
+ * would lose valid content during the failure that already inconvenienced the
+ * reader.
+ */
+function clearSingleIdentityCaches(
+  queryClient: QueryClient,
+  slugs: readonly string[]
+): void {
+  if (slugs.length === 0) return;
+  void queryClient.invalidateQueries({ queryKey: singleKeys.lists() });
+  for (const slug of slugs) {
+    void queryClient.resetQueries({ queryKey: singleKeys.detail(slug) });
+    void queryClient.resetQueries({ queryKey: singleKeys.schema(slug) });
+    void queryClient.resetQueries({
+      queryKey: singleDocumentKeys.detail(slug),
+    });
+  }
+}
+
 export function useCreateSingle() {
   const queryClient = useQueryClient();
 
@@ -250,8 +293,12 @@ export function useCreateSingle() {
     mutationFn: async (singleData: UpdateSinglePayload) => {
       return await singleApi.create(singleData);
     },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
+    onSuccess: (created, submitted) => {
+      // The slug the server assigned where it reports one, and the submitted
+      // slug otherwise: a create that adjusted the slug must clear the name it
+      // actually took, not the one that was asked for.
+      const slug = created?.data?.slug ?? submitted.slug;
+      clearSingleIdentityCaches(queryClient, slug ? [slug] : []);
     },
   });
 }
@@ -342,8 +389,8 @@ export function useDeleteSingle() {
       }
       return result;
     },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
+    onSuccess: (_, slug) => {
+      clearSingleIdentityCaches(queryClient, [slug]);
     },
     // Disable retry for delete operations - if deletion succeeds on first attempt,
     // a retry would fail with 404 (already deleted) and incorrectly show an error
@@ -381,8 +428,11 @@ export function useBulkDeleteSingles() {
       await singleApi.deleteSingle(slug);
     },
     defaultOptions: {
-      onComplete: () => {
-        void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
+      // `onComplete` runs after every item settles, including when all of them
+      // failed. Clearing then would discard caches for Singles that still
+      // exist, during the very failure that already cost the reader something.
+      onComplete: result => {
+        clearSingleIdentityCaches(queryClient, result.succeededIds);
       },
     },
   });

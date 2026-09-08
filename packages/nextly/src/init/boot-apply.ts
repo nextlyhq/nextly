@@ -33,6 +33,8 @@
 // runs first. Both need the same boot-apply behavior, so the logic
 // is centralized here and called from both.
 
+import { reloadDynamicTables } from "./reload-dynamic-tables";
+
 const callerLabel = (caller?: string): string =>
   caller ? `[Nextly:${caller}]` : "[Nextly]";
 
@@ -56,11 +58,11 @@ export async function runBootTimeApplyIfDev(opts?: {
     // Any metadata-table-to-physical-table mismatch self-heals on next boot.
     await registerMigrationMetadata(label);
 
-    // Step 1.6: Reload dynamic tables into schema registry
-    // After migration metadata is registered, we need to reload the dynamic
-    // tables so the schema registry picks up the newly registered collections.
-    // Without this, queries against migration-created collections fail because
-    // the registry was loaded before the metadata was inserted.
+    // Step 1.6: Reload dynamic tables into the schema registry.
+    // The registry was built by `registerServices` before any of the above ran,
+    // so without this a migration-created collection is addressable in metadata
+    // and unqueryable. Shared with the production path, which needs the same
+    // step for the same reason.
     await reloadDynamicTables(label);
 
     // Step 2: Apply code-first schema changes
@@ -85,102 +87,6 @@ export async function runBootTimeApplyIfDev(opts?: {
         `but code-first edits won't be applied until next restart, ` +
         `HMR fires, or you run \`nextly db:sync\`. ` +
         `Set NEXTLY_BOOT_APPLY_FAIL_LOUDLY=1 for full error details.`
-    );
-  }
-}
-
-/**
- * Reload dynamic tables into the schema registry after migration metadata registration.
- *
- * After registerMigrationMetadata() inserts rows into dynamic_collections/dynamic_singles,
- * the schema registry needs to be reloaded so those collections become queryable.
- *
- * This is called AFTER migration metadata is registered because the initial schema
- * registry load (during registerServices) happens before migration metadata exists.
- */
-async function reloadDynamicTables(label: string): Promise<void> {
-  try {
-    const { container } = await import("../di/container");
-    const { loadDynamicTables } = await import("../di/load-dynamic-tables");
-    const { generateRuntimeSchema } = await import(
-      "../domains/schema/services/runtime-schema-generator"
-    );
-
-    // Get services from container
-    const adapter = container.get("adapter");
-    const schemaRegistry = container.get("schemaRegistry");
-
-    if (!schemaRegistry) {
-      console.warn(
-        `${label} Schema registry not available for reload. Collections from migrations may not be queryable.`
-      );
-      return;
-    }
-
-    if (!adapter) {
-      console.warn(
-        `${label} Adapter not available for reload. Collections from migrations may not be queryable.`
-      );
-      return;
-    }
-
-    // Get dialect using adapter's getCapabilities method
-    const getCapabilities = (
-      adapter as {
-        getCapabilities: () => { dialect: "postgresql" | "mysql" | "sqlite" };
-      }
-    ).getCapabilities;
-    const dialect = getCapabilities().dialect;
-
-    // Reload collections
-    await loadDynamicTables(
-      adapter as Parameters<typeof loadDynamicTables>[0],
-      "dynamic_collections",
-      (tableName, fields, hasStatus, localized) => {
-        const { table } = generateRuntimeSchema(
-          tableName,
-          fields as Parameters<typeof generateRuntimeSchema>[1],
-          dialect,
-          { status: hasStatus === true, localized: localized === true }
-        );
-        (
-          schemaRegistry as {
-            registerDynamicSchema: (tableName: string, table: unknown) => void;
-          }
-        ).registerDynamicSchema(tableName, table);
-        return Promise.resolve();
-      }
-    );
-
-    // Reload singles
-    await loadDynamicTables(
-      adapter as Parameters<typeof loadDynamicTables>[0],
-      "dynamic_singles",
-      (tableName, fields, hasStatus, localized) => {
-        const { table } = generateRuntimeSchema(
-          tableName,
-          fields as Parameters<typeof generateRuntimeSchema>[1],
-          dialect,
-          { status: hasStatus === true, localized: localized === true }
-        );
-        (
-          schemaRegistry as {
-            registerDynamicSchema: (tableName: string, table: unknown) => void;
-          }
-        ).registerDynamicSchema(tableName, table);
-        return Promise.resolve();
-      }
-    );
-
-    console.log(
-      `${label} ✅ Schema registry reloaded with migration collections`
-    );
-  } catch (err) {
-    // Schema registry reload failed - log but don't block startup
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(
-      `${label} Schema registry reload failed: ${msg}. ` +
-        `Collections from migrations may not be queryable.`
     );
   }
 }

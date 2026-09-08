@@ -9,6 +9,7 @@ import {
   createMockTxContext,
   createMockComponentRegistry,
   createMockRelationshipService,
+  TX_DRIZZLE_HANDLE,
   seoComponentField,
   repeatableComponentField,
   multiComponentField,
@@ -508,6 +509,17 @@ describe("FieldGroupDataService", () => {
 
       expect(tx.delete).toHaveBeenCalledTimes(1);
       expect(ctx.adapter.delete).not.toHaveBeenCalled();
+
+      // The component is resolved on the TRANSACTION's connection, not the
+      // pool's. On a single-connection pool the delete transaction already
+      // holds the only connection, so a pooled registry read here waits on
+      // itself and the delete hangs. Asserted on the handle rather than on
+      // "some second argument", because the pool's handle would satisfy that
+      // and is exactly the value that deadlocks.
+      expect(ctx.registry.getComponent).toHaveBeenCalledWith(
+        "seo",
+        TX_DRIZZLE_HANDLE
+      );
     });
   });
 

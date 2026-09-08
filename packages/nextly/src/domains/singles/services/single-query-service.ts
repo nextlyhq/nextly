@@ -42,6 +42,7 @@ import { absolutizeMediaUrls } from "../../../lib/media-variant";
 import {
   expansionStatusScope,
   resolveStatusFilter,
+  type StatusFilter,
 } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
@@ -81,6 +82,7 @@ import {
 import type { Logger } from "../../../shared/types";
 import { relationKey } from "../../collections/services/collection-relationship-service";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
   populateCompanionFields,
   populateTranslationStatus,
@@ -98,8 +100,13 @@ import {
 } from "../../i18n/runtime/companion-io";
 import {
   isCompanionReady,
+  resolveCompanionColumn,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import {
+  NO_RELEASE_VISIBILITY,
+  type ReleaseVisibility,
+} from "../../releases/release-visibility";
 import {
   getColumnDescriptor,
   isTextStorageKind,
@@ -705,6 +712,67 @@ export class SingleQueryService extends BaseService {
   /** Persists version snapshots; used when a versioned Single is auto-created. */
   private readonly versionCapture = new VersionCaptureService();
 
+  /**
+   * Whether this Single is visible to a lifecycle-bounded read, releases
+   * included.
+   *
+   * A collection read filters rows in SQL, so a release widens the filter.
+   * A Single is one row per slug and is never filtered — it is loaded and then
+   * REFUSED with a 404 when its status is not what the caller may see. So here
+   * the release has to reach the refusal rather than the query.
+   *
+   * The WHOLE rule lives here, not just the release half, because two call
+   * sites apply it and a rule split between a helper and its callers drifts:
+   * one of them would learn about withdrawals and the other would not, and a
+   * Single would be gone from one entry point and present from the other.
+   *
+   * Only the release lookup is skipped for a non-published read: an unbounded
+   * or draft-only view has nothing for a release to reveal, and asking anyway
+   * would spend the lookup on a question whose answer cannot change the
+   * outcome.
+   */
+  private async isSingleVisible(input: {
+    slug: string;
+    documentId: unknown;
+    storedStatus: string | undefined;
+    statusFilter: StatusFilter;
+    /**
+     * The instant this READ resolves releases against.
+     *
+     * One `get` asks this twice — once to screen the stored row before a
+     * deferred rule runs, once on the document it finally returns. Taking a
+     * fresh clock reading in each would let a release become due between them:
+     * the first admits the row and lets `beforeOperation`/`beforeRead` hooks
+     * and rule assembly run, and the second then 404s, so a request that was
+     * ultimately refused has already caused its read side effects.
+     */
+    now: Date;
+  }): Promise<boolean> {
+    // Membership, not equality: a read bounded to "not yet public" covers every
+    // state the workflow does not publish, and comparing against one of them
+    // would hide a Single sitting in any of the others.
+    const matchesStatus =
+      input.storedStatus !== undefined &&
+      input.statusFilter.values.includes(input.storedStatus);
+    // Read off the filter rather than re-derived. Only a public read is widened
+    // by a due release; a read of pending work has nothing for one to reveal.
+    if (!input.statusFilter.isPublicRead) {
+      return matchesStatus;
+    }
+    if (typeof input.documentId !== "string") return matchesStatus;
+
+    const decisions = await this.releaseVisibility.decisions({
+      scopeKind: "single",
+      scopeSlug: input.slug,
+      now: input.now,
+    });
+    // A withdrawal outranks the stored status: the row still says published,
+    // and that is precisely what the release is undoing. Checked BEFORE the
+    // stored status, so a due takedown 404s a Single that is published today.
+    if (decisions.hide.includes(input.documentId)) return false;
+    return matchesStatus || decisions.reveal.includes(input.documentId);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -715,7 +783,14 @@ export class SingleQueryService extends BaseService {
     // i18n: when set and the single is localized, reads resolve translatable fields
     // from the companion `single_<slug>_locales` table for the requested locale.
     private readonly localization?: SanitizedLocalizationConfig,
-    accessControlService?: AccessControlService
+    accessControlService?: AccessControlService,
+    /**
+     * What a due release makes visible.
+     *
+     * A null object by default, so a construction site without releases wired
+     * needs no special case and cannot narrow a read by forgetting one.
+     */
+    private readonly releaseVisibility: ReleaseVisibility = NO_RELEASE_VISIBILITY
   ) {
     super(adapter, logger);
     // Evaluates the Single's stored access rules. Defaulted rather than
@@ -910,7 +985,7 @@ export class SingleQueryService extends BaseService {
     singleMeta: DynamicSingleRecord;
     doc: SingleDocument;
     options: GetSingleOptions;
-    statusFilterValue: string | undefined;
+    statusFilterValues: readonly string[] | undefined;
     /**
      * Whether to apply the TARGET collection's field rules to related rows.
      * Off for the copy an access rule is judged on: redaction removes the very
@@ -944,7 +1019,7 @@ export class SingleQueryService extends BaseService {
       slug,
       singleMeta,
       options,
-      statusFilterValue,
+      statusFilterValues,
       enforceRelatedFieldAccess,
       strict = false,
     } = params;
@@ -963,7 +1038,7 @@ export class SingleQueryService extends BaseService {
           doc,
           options.locale,
           options.fallbackLocale,
-          statusFilterValue
+          statusFilterValues
         );
       } catch (error) {
         // Normalized whether or not the caller is judging an access rule on the result. A
@@ -1272,7 +1347,7 @@ export class SingleQueryService extends BaseService {
     singleMeta: DynamicSingleRecord;
     doc: SingleDocument;
     options: GetSingleOptions;
-    statusFilterValue: string | undefined;
+    statusFilterValues: readonly string[] | undefined;
     skipLocalizedOverlay?: boolean;
   }): Promise<SingleDocument> {
     let references: SingleDocument | undefined;
@@ -1359,7 +1434,7 @@ export class SingleQueryService extends BaseService {
     singleMeta: DynamicSingleRecord;
     accessRules: CollectionAccessRules | undefined;
     options: GetSingleOptions;
-    statusFilterValue: string | undefined;
+    statusFilterValues: readonly string[] | undefined;
     /** The stored row, already loaded and already screened for visibility. */
     row: SingleDocument | null;
   }): Promise<{
@@ -1371,7 +1446,7 @@ export class SingleQueryService extends BaseService {
      */
     prospective?: DefaultDocumentDraft;
   }> {
-    const { slug, singleMeta, accessRules, options, statusFilterValue, row } =
+    const { slug, singleMeta, accessRules, options, statusFilterValues, row } =
       params;
     if (!accessRules) return {};
 
@@ -1401,7 +1476,7 @@ export class SingleQueryService extends BaseService {
       singleMeta,
       doc: row ?? prospective!.document,
       options,
-      statusFilterValue,
+      statusFilterValues,
       skipLocalizedOverlay: !row,
     });
 
@@ -1569,6 +1644,11 @@ export class SingleQueryService extends BaseService {
   ): Promise<SingleResult> {
     this.logger.debug("Getting Single document", { slug, options });
 
+    // ONE instant for this read. Both visibility checks below resolve releases
+    // against it, so a release becoming due between them cannot admit the row
+    // for the deferred-rule screen and then 404 the document it returns.
+    const readNow = new Date();
+
     try {
       // 1. Get Single metadata from registry
       const singleMeta = await resolveSingleForRequest(
@@ -1658,7 +1738,13 @@ export class SingleQueryService extends BaseService {
         if (
           storedRow &&
           statusFilter &&
-          (storedRow as { status?: string }).status !== statusFilter.value
+          !(await this.isSingleVisible({
+            slug,
+            documentId: (storedRow as { id?: unknown }).id,
+            storedStatus: (storedRow as { status?: string }).status,
+            statusFilter,
+            now: readNow,
+          }))
         ) {
           return {
             success: false,
@@ -1695,7 +1781,7 @@ export class SingleQueryService extends BaseService {
           singleMeta,
           accessRules: singleMeta.accessRules,
           options,
-          statusFilterValue: statusFilter ? statusFilter.value : undefined,
+          statusFilterValues: statusFilter ? statusFilter.values : undefined,
           row: storedRow,
         });
         if (custom.denied) return custom.denied;
@@ -1773,7 +1859,7 @@ export class SingleQueryService extends BaseService {
             singleMeta,
             accessRules: singleMeta.accessRules,
             options,
-            statusFilterValue: statusFilter ? statusFilter.value : undefined,
+            statusFilterValues: statusFilter ? statusFilter.values : undefined,
             row: null,
           });
           if (lateDraft.denied) return lateDraft.denied;
@@ -1796,7 +1882,13 @@ export class SingleQueryService extends BaseService {
       // as a not-yet-created Single.
       if (
         statusFilter &&
-        (doc as { status?: string }).status !== statusFilter.value
+        !(await this.isSingleVisible({
+          slug,
+          documentId: (doc as { id?: unknown }).id,
+          storedStatus: (doc as { status?: string }).status,
+          statusFilter,
+          now: readNow,
+        }))
       ) {
         return {
           success: false,
@@ -1827,7 +1919,7 @@ export class SingleQueryService extends BaseService {
         singleMeta,
         doc,
         options,
-        statusFilterValue: statusFilter ? statusFilter.value : undefined,
+        statusFilterValues: statusFilter ? statusFilter.values : undefined,
         enforceRelatedFieldAccess: true,
         // An ordinary read is still served when a companion query fails, but a
         // read about to be judged cannot be: the rule would decide on values
@@ -2010,7 +2102,7 @@ export class SingleQueryService extends BaseService {
     doc: Record<string, unknown>,
     locale: string | undefined,
     fallbackLocale: string | false | undefined,
-    statusFilterValue: string | undefined
+    statusFilterValues: readonly string[] | undefined
   ): Promise<void> {
     const localeChain = this.resolveLocaleChain(locale, fallbackLocale);
     if (!localeChain) return;
@@ -2036,9 +2128,9 @@ export class SingleQueryService extends BaseService {
       // Public reads pass the published filter so a draft translation never leaks;
       // admin/status=all passes undefined (no filter). Only meaningful when the
       // companion carries a per-locale `_status`.
-      statusValue:
-        companion.hasStatus && statusFilterValue
-          ? statusFilterValue
+      statusValues:
+        companion.hasStatus && statusFilterValues
+          ? statusFilterValues
           : undefined,
       // A pooled read, so this may resolve rather than only read what is remembered.
       readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
@@ -2112,6 +2204,12 @@ export class SingleQueryService extends BaseService {
             [docId]
           )
         : undefined;
+    // Resolved once and read twice — see the collection path for why probing a companion that is
+    // not `ready` costs an introspection for an answer that is discarded.
+    const readiness = await resolveCompanionSchemaReadiness(
+      this.adapter,
+      companion
+    );
     await populateTranslationStatus({
       db: this.adapter.getDrizzle(),
       companionTable: companion.table,
@@ -2123,7 +2221,28 @@ export class SingleQueryService extends BaseService {
       hasStatus: companion.hasStatus,
       // The Single's own row id keys the companion `_parent`, same as the collection path.
       idKey: "id",
-      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      readiness,
+      // 🔴 Singles carry the signal too, and the same physical check gates it. Every companion
+      // write is stamped whatever the entity, so a Single's languages accumulate truthful
+      // timestamps and the comparison is as valid here as on a collection.
+      //
+      // What a Single does NOT get is the history back-fill — `versionScopeForEntityKind` returns
+      // nothing for it by scope, not by structure. That leaves languages written before this
+      // shipped with no stamp, and no stamp is absent from the answer rather than reported fresh.
+      // So a Single reports staleness for what it can vouch for and stays silent about the rest,
+      // which is the same conservative direction the whole feature takes.
+      staleness:
+        readiness === "ready" &&
+        (await resolveCompanionColumn(
+          this.adapter,
+          companion.companionTableName,
+          COMPANION_UPDATED_AT_COLUMN
+        ))
+          ? {
+              companionTableName: companion.companionTableName,
+              dialect: this.adapter.dialect,
+            }
+          : undefined,
     });
   }
 

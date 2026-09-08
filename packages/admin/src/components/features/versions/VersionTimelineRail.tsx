@@ -11,10 +11,12 @@
  */
 
 import { Badge, Button, Skeleton } from "@admin/components/ui";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { formatDateTime } from "@admin/lib/dates/format";
 import type { VersionMeta, VersionScope } from "@admin/services/versionApi";
 
 import { predecessorOf, type Predecessor } from "./version-pairing";
+import { VersionLocaleBadge } from "./VersionLocaleBadge";
 import { VersionSummaryLine } from "./VersionSummaryLine";
 
 /** How many rows fetch their summary. Beyond this a reader has to scroll. */
@@ -37,6 +39,14 @@ export interface VersionTimelineRailProps {
   hasNextPage?: boolean;
   isFetchingNextPage?: boolean;
   onLoadMore?: () => void;
+  /**
+   * Why the last Load more failed, or null when it did not.
+   *
+   * Separate from `isError`, which asks whether the HISTORY could be read at
+   * all: a page that failed after others loaded leaves every row on screen
+   * valid, so it is reported beside the retry rather than in place of the list.
+   */
+  nextPageError?: unknown;
 }
 
 function RailSkeleton() {
@@ -64,6 +74,7 @@ function RowHeading({ version }: { version: VersionMeta }) {
           ? "Autosave"
           : `Version ${version.versionNo}`}
       </span>
+      <VersionLocaleBadge locale={version.locale} />
       {version.status ? (
         <Badge variant={version.status === "published" ? "success" : "outline"}>
           {version.status}
@@ -75,6 +86,65 @@ function RowHeading({ version }: { version: VersionMeta }) {
         </span>
       ) : null}
     </span>
+  );
+}
+
+/**
+ * Why a row cannot be compared, or null when it can.
+ *
+ * The two answers are different and a reader needs to tell them apart: the
+ * oldest version has nothing before it and never will, while a version whose
+ * predecessor lies beyond the loaded pages becomes comparable as soon as more
+ * history is fetched. Collapsing them into one disabled state would say the
+ * history ends here, which for the second is untrue.
+ */
+function unpairableReason(previous: Predecessor): string | null {
+  if (previous.kind === "version") return null;
+  return previous.kind === "first"
+    ? "Nothing before this version to compare it against"
+    : "Load more history to compare this version";
+}
+
+/**
+ * The control that extends the history, and what happened last time it was used.
+ *
+ * A failed request clears `isFetchingNextPage` and returns the button to its
+ * resting label, so without a message the click appears to have done nothing.
+ * The rows already on screen stay valid, which is why the failure is reported
+ * beside the retry rather than in place of the list.
+ */
+function LoadMoreFooter({
+  isFetchingNextPage,
+  nextPageError,
+  onLoadMore,
+}: {
+  isFetchingNextPage?: boolean;
+  nextPageError: unknown;
+  onLoadMore?: () => void;
+}) {
+  const failed = nextPageError !== null && nextPageError !== undefined;
+  const label = isFetchingNextPage
+    ? "Loading…"
+    : failed
+      ? "Try again"
+      : "Load more";
+  return (
+    <div className="flex flex-col gap-2 p-4">
+      {failed ? (
+        <p role="status" className="text-xs text-destructive">
+          {apiErrorMessage(nextPageError, "Could not load more history.")}
+        </p>
+      ) : null}
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full"
+        disabled={isFetchingNextPage}
+        onClick={onLoadMore}
+      >
+        {label}
+      </Button>
+    </div>
   );
 }
 
@@ -98,19 +168,35 @@ function TimelineRow({
   // shown without being selectable rather than hidden — it is still a record of
   // the document having been touched.
   const versionNo = version.versionNo;
+  // Choosing a row compares it against the version before it, so a row with no
+  // predecessor TO compare against cannot be chosen — and says which of the two
+  // reasons applies rather than accepting the click and doing nothing. Left
+  // enabled, the button reported success by changing nothing, which reads as a
+  // page that has stopped responding.
+  const unpairable = versionNo === null ? null : unpairableReason(previous);
   return (
     <li>
       <button
         type="button"
         aria-current={active ? "true" : undefined}
-        disabled={versionNo === null}
-        onClick={() => versionNo !== null && onSelect(versionNo)}
+        disabled={versionNo === null || unpairable !== null}
+        onClick={() =>
+          versionNo !== null && unpairable === null && onSelect(versionNo)
+        }
         className={`w-full border-b border-border px-4 py-3 text-left transition-colors hover:bg-muted/60 disabled:opacity-60 ${
           active ? "bg-muted" : ""
         }`}
       >
         <RowHeading version={version} />
         <span className="mt-0.5 flex flex-col gap-0.5">
+          {/* Rendered as text rather than a `title` tooltip. The button is
+              disabled, so it is not focusable and no tooltip is reachable by
+              keyboard; a touch user has no hover to reveal one either. Left
+              there, the row would say it is unavailable without saying that
+              loading more history makes it available. */}
+          {unpairable === null ? null : (
+            <span className="text-xs text-muted-foreground">{unpairable}</span>
+          )}
           <span className="text-xs text-muted-foreground">
             {version.author?.name ?? "Unknown author"} &middot;{" "}
             {formatDateTime(version.createdAt)}
@@ -139,6 +225,7 @@ export function VersionTimelineRail({
   hasNextPage = false,
   isFetchingNextPage = false,
   onLoadMore,
+  nextPageError = null,
 }: VersionTimelineRailProps) {
   if (isLoading) return <RailSkeleton />;
 
@@ -189,17 +276,11 @@ export function VersionTimelineRail({
       </ul>
 
       {hasNextPage ? (
-        <div className="p-4">
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full"
-            disabled={isFetchingNextPage}
-            onClick={onLoadMore}
-          >
-            {isFetchingNextPage ? "Loading…" : "Load more"}
-          </Button>
-        </div>
+        <LoadMoreFooter
+          isFetchingNextPage={isFetchingNextPage}
+          nextPageError={nextPageError}
+          onLoadMore={onLoadMore}
+        />
       ) : null}
     </nav>
   );

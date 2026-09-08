@@ -7,9 +7,10 @@ import type {
   UploadResult,
 } from "../storage/types";
 
+import { PNG_1X1 } from "./upload-validation/__tests__/format-fixtures";
 import { UploadService } from "./upload-service";
 
-const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const PNG = PNG_1X1;
 
 function stubStorage(): IStorageAdapter {
   return {

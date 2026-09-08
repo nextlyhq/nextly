@@ -17,6 +17,8 @@
  * @module shared/lib/normalize-stored-value
  */
 
+import { isFieldGroupType } from "../../domains/field-groups/storage/field-group-field-type";
+
 /**
  * The minimal field shape normalization reads. Declared structurally (rather
  * than as the full `FieldConfig`) so the function states exactly what it
@@ -104,37 +106,65 @@ export function normalizeStoredValue(
   const value =
     isJsonBacked(field) && typeof raw === "string" ? parseJson(raw) : raw;
 
+  return reshapeTypedValue(field, value);
+}
+
+/** Every encoding the three supported dialects produce for a boolean. */
+function coerceBooleanEncoding(value: unknown): boolean {
+  return value === true || value === "true" || value === 1 || value === "1";
+}
+
+/** A chips value is always a list; a lone string is a legacy single entry. */
+function chipsList(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  return typeof value === "string" ? [value] : [];
+}
+
+/** A number arrives rounded through storage as a numeric string, or absent. */
+function numberValue(field: NormalizableField, value: unknown): unknown {
+  if (hasMany(field)) return Array.isArray(value) ? value : [];
+  const num = typeof value === "string" ? Number(value) : value;
+  return typeof num === "number" && !Number.isNaN(num) ? num : null;
+}
+
+/**
+ * The instance a field group's value holds. Populated from its own table, a
+ * non-repeatable one arrives as a one-element array; only a repeatable field
+ * stays a list.
+ */
+function fieldGroupValue(field: NormalizableField, value: unknown): unknown {
+  if (!field.repeatable && Array.isArray(value)) return value[0] ?? null;
+  return value;
+}
+
+/**
+ * Apply the type-specific reshaping one parsed stored value still needs.
+ *
+ * Split from {@link normalizeStoredValue} so the shared preconditions above
+ * stay readable apart from the per-type mapping below.
+ */
+function reshapeTypedValue(field: NormalizableField, value: unknown): unknown {
   // `boolean` is not in the config field-type union but can reach here as a
   // runtime alias for `checkbox`; both are matched.
   if (field.type === "checkbox" || field.type === "boolean") {
-    // Every encoding the three supported dialects produce for a boolean.
-    return value === true || value === "true" || value === 1 || value === "1";
+    return coerceBooleanEncoding(value);
+  }
+
+  // Asked through the shared predicate: only the legacy spelling in the unwrap
+  // would leave a migrated definition's array in place, and the nested diff
+  // would then read the array — not the instance — as the value object,
+  // losing every child.
+  if (isFieldGroupType(field.type)) {
+    return fieldGroupValue(field, value);
   }
 
   switch (field.type) {
-    case "chips": {
-      // A chips value is always a list. A single stored string is a legacy
-      // single-entry value, not a list of its characters.
-      if (Array.isArray(value)) return value;
-      return typeof value === "string" ? [value] : [];
-    }
-
-    case "component": {
-      // Components arrive as an array even when the field holds one instance,
-      // because they are populated from their own table.
-      if (!field.repeatable && Array.isArray(value)) return value[0] ?? null;
-      return value;
-    }
-
+    case "chips":
+      return chipsList(value);
     case "repeater":
       return Array.isArray(value) ? value : [];
-
-    case "number": {
-      if (hasMany(field)) return Array.isArray(value) ? value : [];
-      const num = typeof value === "string" ? Number(value) : value;
-      return typeof num === "number" && !Number.isNaN(num) ? num : null;
-    }
-
+    case "number":
+      return numberValue(field, value);
     default:
       return value;
   }

@@ -7,7 +7,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { translationCounts, untranslatedLocales } from "../translation-meta";
+import {
+  languageState,
+  languageStateLabel,
+  translationCounts,
+  untranslatedLocales,
+} from "../translation-meta";
 
 const CODES = ["en", "es", "fr", "de"] as const;
 const DEFAULT = "en";
@@ -127,5 +132,48 @@ describe("untranslatedLocales", () => {
     expect(untranslatedLocales(translations, LOCALES, "en")).toHaveLength(
       total - translated
     );
+  });
+});
+
+describe("staleness is a qualifier, not a state (i18n B2)", () => {
+  it("still classifies a stale translation by the state it is IN", () => {
+    // 🔴 The decision the whole vocabulary rests on. `languageState` returns
+    // exactly one value per locale, so had `stale` been added to
+    // `LANGUAGE_STATES` this would answer "stale" and the entry list's dots,
+    // the header control and this panel would all stop reporting a live
+    // translation as live. A translation whose source moved is still published;
+    // it just also needs a look.
+    expect(
+      languageState({ translated: true, status: "published", stale: true })
+    ).toBe("published");
+    expect(
+      languageState({ translated: true, status: "draft", stale: true })
+    ).toBe("draft");
+  });
+
+  it("appends the qualifier to the state rather than replacing it", () => {
+    expect(languageStateLabel("published", { stale: true })).toBe(
+      "published · source changed since"
+    );
+    // The control: without the flag the label is untouched, so the appending is
+    // conditional rather than the state having been rewritten.
+    expect(languageStateLabel("published")).toBe("published");
+  });
+
+  it("carries both qualifiers at once, in a fixed order", () => {
+    // They are independent facts and either can hold alone, so a label that
+    // showed only one would drop something an author has to act on. Order is
+    // pinned because a row whose markers reorder by which happens to be set
+    // reads as a different kind of row.
+    expect(
+      languageStateLabel("published", { pendingChange: true, stale: true })
+    ).toBe("published · source changed since · unpublished changes");
+  });
+
+  it("says nothing when staleness is unknown", () => {
+    // Absent is not false. A translation written before `_updated_at` existed
+    // reports no flag, and must not be labelled either stale OR explicitly
+    // current -- the label simply does not raise the question.
+    expect(languageStateLabel("translated", {})).toBe("translated");
   });
 });

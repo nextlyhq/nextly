@@ -97,6 +97,15 @@ export {
   type RegisterSingleHooksResult,
 } from "./hooks/register-single-hooks";
 
+// The advisory channel a post-commit hook reports through. Exported because a
+// PLUGIN is the caller: raising is how a hook says a side effect broke, and a
+// plugin that learns something true about the state a write leaves behind has
+// no other way to tell the caller without dressing it as a failure.
+export {
+  recordAdvisoryNotice,
+  type HookWarning,
+} from "./hooks/side-effect-warnings";
+
 // ============================================================
 // INITIALIZATION API
 // ============================================================
@@ -454,10 +463,63 @@ export {
   type PluginAdminContributions,
   type PluginAdminPage,
   type PluginAdminWidget,
+  type PluginAdminCustomWidget,
+  type PluginAdminDataWidget,
+  type PluginAdminStatsWidget,
+  type PluginAdminDeclarativeWidget,
+  type PluginAdminQuerylessWidget,
+  type DeclarativeWidgetArchetype,
   type PluginCollectionView,
   type PluginMenuItem,
   type PluginNavSection,
 } from "./plugins";
+
+// The widget domain's public surface: the registry every core and
+// plugin-contributed widget shares, the source registry a query names, and
+// the validated query shape itself.
+// Every contract a published shape NAMES is published beside it. There is no
+// `nextly/widgets` subpath, so this is the only place a plugin author can
+// reach them, and a public property whose type has no public name can be
+// inferred but never annotated: `WidgetDefinition.defaultHeight` is a
+// `WidgetHeight`, and `WidgetSource` is built out of `WidgetSourceField`,
+// `WidgetSourceKind` and `WidgetOp`.
+export {
+  WIDGET_SIZES,
+  WIDGET_CHROME,
+  WIDGET_HEIGHTS,
+  WIDGET_ARCHETYPES,
+  WIDGET_SOURCE_KINDS,
+  WIDGET_SOURCE_FIELD_TYPES,
+  WIDGET_OPS,
+  registerWidget,
+  overrideWidget,
+  extendWidget,
+  deregisterWidget,
+  getWidget,
+  listWidgets,
+  registerSource,
+  listSources,
+  validateWidgetQuery,
+  MAX_WIDGET_LIMIT,
+  type WidgetDefinition,
+  type WidgetAction,
+  type WidgetSetting,
+  type WidgetStatCell,
+  type WidgetQuery,
+  type WidgetSize,
+  type WidgetChrome,
+  type WidgetHeight,
+  type WidgetArchetype,
+  type DataWidgetArchetype,
+  type QuerylessWidgetArchetype,
+  type CellWidgetArchetype,
+  type WidgetSource,
+  type WidgetSourceField,
+  type WidgetSourceFieldType,
+  type WidgetSourceKind,
+  type WidgetOp,
+  type WidgetPatch,
+} from "./domains/widgets";
 
 // Value exports for the email provider contract. A plugin calls
 // defineEmailProvider so its own config type is checked where the definition is
@@ -578,6 +640,17 @@ export type {
   DraftSplitDisabledReason,
 } from "./domains/versions/draft-split-eligibility";
 
+// Which fields a level addresses, with presentational groups flattened.
+// Exported because a plugin that walks a collection's fields was otherwise
+// reaching into core's file layout, and a second copy of this walk is a second
+// answer to one question.
+export { addressableFields } from "./shared/addressable-fields";
+export type {
+  AddressableFieldsOptions,
+  AddressableField,
+  UnvalidatedAddressableField,
+} from "./shared/addressable-fields";
+
 // What a form answers a visitor who reaches it. Exported because the plugin
 // that contributes the forms collection refuses submissions too, and a second
 // implementation of this is how the four public paths came to disagree.
@@ -610,7 +683,63 @@ export {
 // TAKES, because that is the only thing a plugin author choosing between the
 // two can see.
 export { schemaDraftSplit as resolvedCollectionDraftSplit } from "./domains/versions/draft-split-eligibility";
+
+// Background jobs. Exported from the root entry rather than only from the
+// domain barrel: a barrel that no published entry re-exports is unreachable
+// from an installed application, so the feature would exist for this
+// repository's own tests and for nobody else.
+export {
+  DEFAULT_MAX_ATTEMPTS,
+  MAX_JOB_SLUG_LENGTH,
+  defineJob,
+  JobRegistry,
+} from "./domains/jobs/job-registry";
+export type {
+  JobContext,
+  JobDefinition,
+  JobDefinitionInput,
+  JobRetryPolicy,
+} from "./domains/jobs/job-registry";
+export { JobsRepository } from "./domains/jobs/jobs-repository";
+export type {
+  EnqueueResult,
+  JobRow,
+  NewJob,
+} from "./domains/jobs/jobs-repository";
+export { runJobsPass } from "./domains/jobs/jobs-runner";
+export type { RunJobsPassOptions } from "./domains/jobs/jobs-runner";
+export type { RunJobsResult } from "./domains/jobs/run-jobs";
+// The QUEUE side. `nextly.jobs.queue` is the call almost every application
+// makes; everything above it is the machinery that then runs the work, and only
+// an application assembling its own runner needs those.
+export type {
+  JobInputFor,
+  JobSlug,
+  QueueJobArgs,
+  QueueJobResult,
+} from "./direct-api/types/jobs";
+
+// The release materialiser, as a job definition. Exported so an application can
+// register it with the runner today: the periodic trigger that would register it
+// automatically is separate work, and until it lands a definition nobody can
+// reach is a definition that never runs.
+export {
+  RELEASES_DRAIN_JOB,
+  createReleasesDrainJob,
+} from "./domains/releases/releases-drain-job";
+export { applyDueReleases } from "./domains/releases/apply-due-releases";
+export type {
+  ApplyDueReleasesResult,
+  MaterialisationFailure,
+} from "./domains/releases/apply-due-releases";
+
 export type { SchemaEligibilityCollection as ResolvedDraftSplitCollection } from "./domains/versions/draft-split-eligibility";
+
+// The projection that makes the line above USABLE from its documented
+// producer. `getCollection()` is declared to return `Collection`, which has no
+// root-level `fields`, `status` or `versions`, so its result is not assignable
+// to `ResolvedDraftSplitCollection` however faithfully the record carries them.
+export { resolvedCollectionView } from "./domains/versions/resolved-collection-view";
 
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
 export {
@@ -765,6 +894,15 @@ export {
 
 // Component field type (also exported from ./collections/fields via barrel export)
 export type { FieldGroupFieldConfig } from "./collections/fields/types/component";
+
+// The field-group storage vocabulary: which type tokens and reference keys a
+// stored definition may carry. Renderers that dispatch on a field's type — the
+// admin entry form among them — ask the predicate rather than compare either
+// literal, so a migrated definition renders as what it is.
+export {
+  extractFieldGroupReferences,
+  isFieldGroupType,
+} from "./domains/field-groups/storage/field-group-field-type";
 
 // Declares an entry field whose type a plugin contributed. `FieldConfig` is a
 // closed union whose arms carry each built-in type's own errors, so it cannot

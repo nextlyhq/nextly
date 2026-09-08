@@ -223,6 +223,21 @@ function buildCompanionColumnRecord(
           : sqliteText("_status").notNull().default("draft");
   }
 
+  // 🔴 `_updated_at` is deliberately NOT declared here (i18n B2), and the reason is an upgrade
+  // path rather than a preference.
+  //
+  // This runtime table is registered for EVERY localized entity, including collections created in
+  // the Schema Builder and stored in the registry. `reconcileCompanionColumns` — the only thing
+  // that adds the column to a companion that predates it — runs solely over entities declared in
+  // `nextly.config`, so a registry-owned companion has no path that adds it. Declaring the column
+  // here anyway would make `populateCompanionFields`'s bare `select()` name a column those tables
+  // do not have, and EVERY localized read on them would fail after an upgrade.
+  //
+  // The stamps are read separately instead, by a helper that projects them explicitly and treats
+  // a missing column as UNKNOWN — see `readCompanionStamps` in `../../i18n/companion-join`. The
+  // worklist's SQL filter is unaffected either way: it names the column in raw SQL and is guarded
+  // by `hasUpdatedAt`.
+
   // Localized field columns — always nullable (localized-required is app-layer, M2).
   for (const col of columns) {
     const desc: ColumnDescriptor = {

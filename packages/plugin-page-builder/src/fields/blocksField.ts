@@ -28,6 +28,7 @@ import { siteBreakpoints } from "../site-style";
 
 import { emptyBlockDocument } from "./blocks-document";
 import type { BlocksFieldOptions } from "./blocks-options";
+import { blocksOptionsOf } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
 
 /** The field type id. Was a built-in token; now this plugin's to own. */
@@ -42,9 +43,10 @@ export const BLOCKS_FIELD_COMPONENT =
 
 /** The policy a field declares, in the loosest shape worth reading. */
 function policyOf(field: PluginFieldInstance): BlocksFieldOptions {
-  const declared = field.blocks;
-  if (typeof declared !== "object" || declared === null) return {};
-  return declared;
+  // Delegated rather than repeated. The admin editor asks the same question of
+  // the same declaration, and a field validated under one reading and edited
+  // under another is how an editor seeds a document its own field rejects.
+  return blocksOptionsOf(field);
 }
 
 /**

@@ -40,6 +40,23 @@ import { MediaService } from "../../../services/media";
 import type { RequestContext } from "../../../services/shared";
 import type { WebhookFastDrainScheduler } from "../after-drain";
 import type { WebhookEvent } from "../types";
+// 🔴 Every `size` below is derived from the fixture's own bytes rather than
+// stated as a literal. `MediaService.uploadMedia` persists the size it is GIVEN
+// and puts it in the webhook payload -- it never measures the buffer -- so a
+// fixture declaring 1 for a ten-byte file writes a row that claims something
+// untrue about itself, and any later test of size propagation would pass on a
+// broken implementation because both numbers were arbitrary anyway.
+import { pdfDocument } from "../../../services/upload-validation/__tests__/format-fixtures";
+
+// 🔴 ONE buffer per fixture, reused for both the uploaded bytes and the size
+// that describes them. `MediaService` persists the size it is GIVEN and puts it
+// in the webhook payload -- it never measures the buffer -- so a declared size
+// taken from a SEPARATE `pdfDocument(...)` call describes a throwaway. The two
+// agree today only because the helper happens to be deterministic; if it ever
+// gains call-dependent output they diverge silently, which is precisely the
+// guarantee this is here to make unbreakable.
+const PDF_NOT_REALLY_AN_IMAGE = pdfDocument("not-really-an-image");
+const PDF_X = pdfDocument("x");
 
 let current: TestNextly | undefined;
 
@@ -93,14 +110,51 @@ describe("webhook outbox capture — media (integration)", () => {
     current = await createTestNextly({});
   });
 
+  it("records the size of the bytes stored, not the one declared", async () => {
+    /*
+     * `uploadMedia` is exported, so the buffer and the `size` beside it are two
+     * separate claims a caller can make disagree. The row has to describe the
+     * object it points at: a smaller declared number would be persisted, sent
+     * in the webhook payload, and later read by anything that has to know how
+     * large the stored file is.
+     *
+     * Declared deliberately UNEQUAL here. Every other fixture in this file
+     * declares the true length, which is correct for what those cases test and
+     * is exactly why none of them can tell the two implementations apart.
+     */
+    const bytes = pdfDocument("declared-wrongly");
+    const media = service(current!);
+
+    const result = await media.uploadMedia(
+      {
+        file: bytes,
+        filename: "doc.pdf",
+        mimeType: "application/pdf",
+        size: 1,
+        uploadedBy: null,
+      },
+      { type: "user", id: "user-1" }
+    );
+
+    expect(bytes.length).toBeGreaterThan(1);
+    expect(result.data!.size).toBe(bytes.length);
+
+    const uploaded = (await events(current!)).filter(
+      r => r.type === "media.uploaded"
+    );
+    expect((envelopeOf(uploaded[0]).data as { size?: number }).size).toBe(
+      bytes.length
+    );
+  });
+
   it("records media.uploaded on upload", async () => {
     const media = service(current!);
     const result = await media.uploadMedia(
       {
-        file: Buffer.from("not-really-an-image"),
+        file: PDF_NOT_REALLY_AN_IMAGE,
         filename: "doc.pdf",
         mimeType: "application/pdf",
-        size: 19,
+        size: PDF_NOT_REALLY_AN_IMAGE.length,
         uploadedBy: null,
       },
       { type: "user", id: "user-1" }
@@ -118,16 +172,24 @@ describe("webhook outbox capture — media (integration)", () => {
     const env = envelopeOf(rows[0]);
     expect((env.data as { filename?: string }).filename).toBeTruthy();
     expect(env.previous).toBeNull();
+
+    // The row describes its own bytes truthfully. Asserted rather than left to
+    // the fixture, so a future edit that puts a literal back here fails instead
+    // of quietly restoring metadata nothing can rely on.
+    expect(result.data!.size).toBe(PDF_NOT_REALLY_AN_IMAGE.length);
+    expect((env.data as { size?: number }).size).toBe(
+      PDF_NOT_REALLY_AN_IMAGE.length
+    );
   });
 
   it("records media.updated with the prior state on a metadata edit", async () => {
     const media = service(current!);
     const uploaded = await media.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: PDF_X,
         filename: "doc.pdf",
         mimeType: "application/pdf",
-        size: 1,
+        size: PDF_X.length,
         uploadedBy: null,
       },
       { type: "user", id: "user-1" }
@@ -154,10 +216,10 @@ describe("webhook outbox capture — media (integration)", () => {
     const media = service(current!);
     const uploaded = await media.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: PDF_X,
         filename: "doc.pdf",
         mimeType: "application/pdf",
-        size: 1,
+        size: PDF_X.length,
         uploadedBy: null,
       },
       { type: "user", id: "user-1" }
@@ -184,10 +246,10 @@ describe("webhook outbox capture — media (integration)", () => {
     const media = service(current!);
     const uploaded = await media.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: PDF_X,
         filename: "doc.pdf",
         mimeType: "application/pdf",
-        size: 1,
+        size: PDF_X.length,
         uploadedBy: null,
       },
       { type: "user", id: "user-1" }
@@ -218,10 +280,10 @@ describe("webhook outbox capture — media (integration)", () => {
     const media = service(current!);
     const uploaded = await media.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: PDF_X,
         filename: "doc.pdf",
         mimeType: "application/pdf",
-        size: 1,
+        size: PDF_X.length,
         uploadedBy: null,
       },
       { type: "user", id: "user-1" }
@@ -252,10 +314,10 @@ describe("webhook outbox capture — media (integration)", () => {
     await seedUser(current!, "editor-7");
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: PDF_X,
         name: "doc.pdf",
         mimetype: "application/pdf",
-        size: 1,
+        size: PDF_X.length,
       },
       user: { id: "editor-7" },
     });
@@ -287,10 +349,10 @@ describe("webhook outbox capture — media (integration)", () => {
     await seedUser(current!, "editor-7");
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: PDF_X,
         name: "doc.pdf",
         mimetype: "application/pdf",
-        size: 1,
+        size: PDF_X.length,
       },
       user: { id: "editor-7" },
     });
@@ -321,10 +383,10 @@ describe("webhook outbox capture — media (integration)", () => {
     });
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: PDF_X,
         name: "doc.pdf",
         mimetype: "application/pdf",
-        size: 1,
+        size: PDF_X.length,
       },
       user: { id: "editor-7" },
     });
@@ -356,10 +418,10 @@ describe("webhook outbox capture — media (integration)", () => {
     });
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: PDF_X,
         name: "doc.pdf",
         mimetype: "application/pdf",
-        size: 1,
+        size: PDF_X.length,
       },
       user: { id: "editor-7" },
     });
@@ -403,10 +465,10 @@ describe("webhook outbox capture — media (integration)", () => {
 
     await legacy.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: PDF_X,
         filename: "doc.pdf",
         mimeType: "application/pdf",
-        size: 1,
+        size: PDF_X.length,
         uploadedBy: null,
       },
       { type: "user", id: "user-1" }
@@ -427,10 +489,10 @@ describe("webhook outbox capture — media (integration)", () => {
 
     await current!.nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: PDF_X,
         name: "doc.pdf",
         mimetype: "application/pdf",
-        size: 1,
+        size: PDF_X.length,
       },
       user: { id: "editor-7" },
     });
@@ -452,10 +514,10 @@ describe("webhook outbox capture — media (integration)", () => {
 
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: PDF_X,
         name: "doc.pdf",
         mimetype: "application/pdf",
-        size: 1,
+        size: PDF_X.length,
       },
       folder: folder.id,
       user: { id: "editor-7" },

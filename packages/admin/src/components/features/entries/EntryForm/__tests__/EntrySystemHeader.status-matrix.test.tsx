@@ -110,7 +110,19 @@ describe("EntrySystemHeader — button matrix", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("edit + published clean → Save changes (disabled) + Unpublish", () => {
+  /*
+   * UNPUBLISH IS NO LONGER A BUTTON, and the four cases below were rewritten to
+   * say so rather than loosened to pass.
+   *
+   * It sat beside Publish — the two most consequential and opposite verbs in
+   * the editor, one slip apart and styled almost alike — and it is rare, public
+   * and reversible only by re-publishing. It is now a destructive item in the
+   * menu. What is asserted here is the promotion side: the toolbar holds the
+   * one action an author is reaching for, and the menu holds the rest.
+   * `document-actions.test` covers which actions exist in which state; these
+   * cover what the header draws.
+   */
+  it("edit + published clean → Save changes leads, Unpublish demoted", () => {
     render(
       <Harness
         mode="edit"
@@ -125,7 +137,12 @@ describe("EntrySystemHeader — button matrix", () => {
     expect(saveChanges).toBeInTheDocument();
     expect(saveChanges).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: /^unpublish$/i })
+      screen.queryByRole("button", { name: /^unpublish$/i })
+    ).not.toBeInTheDocument();
+    // It has somewhere to be, though — a verb that vanished entirely would
+    // satisfy the line above and take the capability with it.
+    expect(
+      screen.getByRole("button", { name: /more actions/i })
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /^save draft$/i })
@@ -135,7 +152,7 @@ describe("EntrySystemHeader — button matrix", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("edit + published dirty → Save changes (enabled) + Unpublish", () => {
+  it("edit + published dirty → Save changes leads, enabled", () => {
     render(
       <Harness
         mode="edit"
@@ -149,8 +166,33 @@ describe("EntrySystemHeader — button matrix", () => {
     });
     expect(saveChanges).toBeEnabled();
     expect(
-      screen.getByRole("button", { name: /^unpublish$/i })
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: /^unpublish$/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("!hasStatus → the save SUBMITS, carrying no intent", () => {
+    /*
+     * The regression this pins. A collection with no status column has no
+     * `status` to write, and every save handler a host exposes carries an
+     * intent — the draft one writes `status: "draft"`. Routing this control
+     * through a callback turned both Create and Save into a failing write, so
+     * it stays a native submit exactly as it always was.
+     */
+    render(<Harness mode="create" hasStatus={false} />);
+    const create = screen.getByRole("button", { name: /^create$/i });
+    expect(create.getAttribute("type")).toBe("submit");
+    expect(create.getAttribute("form")).toBe("entry-form");
+  });
+
+  it("a collection WITH a lifecycle does not submit — its saves carry intent", () => {
+    // The control, and it must come out different: those handlers exist
+    // precisely to attach an intent, so a submit there would bypass them.
+    render(
+      <Harness mode="edit" hasStatus entry={{ id: "x", status: "draft" }} />
+    );
+    expect(
+      screen.getByRole("button", { name: /^save draft$/i }).getAttribute("type")
+    ).toBe("button");
   });
 
   it("!hasStatus → single Save / Create button", () => {
@@ -169,7 +211,7 @@ describe("EntrySystemHeader — button matrix", () => {
 });
 
 describe("EntrySystemHeader — drafts-enabled working-draft matrix", () => {
-  it("published + drafts on, no pending draft → Save (not Save changes), Unpublish, no Publish", () => {
+  it("published + drafts on, no pending draft → Save leads, no Publish", () => {
     render(
       <Harness
         mode="edit"
@@ -188,11 +230,11 @@ describe("EntrySystemHeader — drafts-enabled working-draft matrix", () => {
       screen.queryByRole("button", { name: /^publish$/i })
     ).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /^unpublish$/i })
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: /^unpublish$/i })
+    ).not.toBeInTheDocument();
   });
 
-  it("published + drafts on + pending working draft → Save + Publish + Unpublish", () => {
+  it("published + drafts on + pending working draft → two controls, not three", () => {
     render(
       <Harness
         mode="edit"
@@ -205,15 +247,23 @@ describe("EntrySystemHeader — drafts-enabled working-draft matrix", () => {
         }}
       />
     );
-    // A pending working draft can be promoted, so Publish appears alongside the
-    // status-less Save and the Unpublish action.
+    /*
+     * The state this whole change is about. It drew Save, Publish and Unpublish
+     * side by side at equal weight, so an author read three buttons to find the
+     * one they wanted. Two now: the act, and the quieter way to keep the work
+     * private.
+     *
+     * The label carries the rest — "Publish changes" rather than "Publish",
+     * which on a document already live reads as a no-op and says nothing about
+     * the draft it promotes.
+     */
     expect(screen.getByRole("button", { name: /^save$/i })).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /^publish$/i })
+      screen.getByRole("button", { name: /^publish changes$/i })
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /^unpublish$/i })
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: /^unpublish$/i })
+    ).not.toBeInTheDocument();
   });
 });
 

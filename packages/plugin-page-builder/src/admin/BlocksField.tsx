@@ -4,9 +4,16 @@
  * The blocks field's control: a summary of what the field holds, and the way in
  * to the editor that changes it.
  *
- * Composes `BlocksSummary` rather than replacing it. The summary is a pure
- * read-only account of the document and stays that way — it is what the form
- * shows at rest, and it is worth keeping testable without an editor around it.
+ * At rest it draws `PageBuilderCard`: the page itself, small and inert, and one
+ * way in. A list of block TYPE NAMES was what stood here, and it read as an
+ * inert summary rather than as the door to the editor — the confusion
+ * Gutenberg's own design discussion of editor switching warns about.
+ *
+ * `BlocksSummary` is NOT deleted. It remains exported and registered at the
+ * component path `@nextlyhq/plugin-page-builder/admin#BlocksSummary`, which a
+ * host may address by string, so removing it would break a published surface.
+ * It stays a pure read-only account of the document; both it and the card ask
+ * `page-summary` what the document holds, so they cannot disagree.
  *
  * ## Why the editor opens OVER the form rather than inside it
  *
@@ -35,34 +42,47 @@
 
 import {
   resolveSiteTokens,
+  getBlock,
   hasBlock,
   registerBlocks,
   registryNestingSource,
   previewContainerFor,
+  newId,
   type BlockDocument,
+  type DocumentKind,
   type BreakpointSet,
+  type NamedClass,
   type SiteTokenSet,
   type BreakpointId,
+  type FontFaceDef,
+  type StyleState,
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
-import { registrySlotSource } from "@nextlyhq/builder";
+import {
+  DEFAULT_PREFERENCES,
+  registrySlotSource,
+  type LeftPanel,
+} from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
   authoredBreakpoints,
   BlockToolbar,
   BreakpointManager,
   BreakpointSwitcher,
+  type CanvasZoom,
   breakpointsAtWidth,
   editedBreakpointAtWidth,
-  offeredTiers,
   selectableTiers,
   widthForBreakpoint,
+  BlockContextMenu,
   EditorCommandPalette,
   BuilderShell,
   Canvas,
   DropIndicator,
+  EmptyContainerAppenders,
   InsertPanel,
   InspectorPanel,
+  selectionIsInspectable,
   pageStyleTrace,
   LayersPanel,
   TokensPanel,
@@ -72,15 +92,35 @@ import {
   useBuilderChecklist,
   useCanvasDrag,
   useEditorState,
-  useInlineText,
+  useInlineEditing,
+  documentAfter,
+  type InlineEditOutcome,
+  ClassManagerPanel,
+  type ClassCreation,
+  FontsPanel,
+  type FontsPanelProps,
+  type FontFaceUpload,
+  type ClassRenameOutcome,
 } from "@nextlyhq/builder/shell";
 import {
+  loadInlineRichTextEditor,
   useDocumentCheckpoint,
   usePluginClientConfig,
   useEntryFieldsPanel,
   useReportUnsavedWork,
   useSuppressAdminChrome,
+  useUploadMedia,
 } from "@nextlyhq/plugin-sdk/admin";
+// From @nextlyhq/ui rather than sonner: the Toaster the admin mounts is ui's,
+// and sonner keeps its queue in module state, so a toast published into another
+// bundled copy would never reach it.
+import {
+  chordMatches,
+  detectApplePlatform,
+  parseKeys,
+  toast,
+} from "@nextlyhq/ui";
+import { WEB_FONT_FORMATS } from "nextly/config";
 import {
   useCallback,
   useEffect,
@@ -91,27 +131,36 @@ import {
 } from "react";
 import {
   useController,
+  useFormState,
   useWatch,
   type Control,
   type FieldValues,
   type Path,
 } from "react-hook-form";
 
+import { classUsageOf } from "../class-usage";
 import { emptyBlockDocument } from "../fields/blocks-document";
+import { acceptedKinds } from "../fields/blocks-options";
 import { hostFetchPolicy, readRemotePatterns } from "../host-policy";
 import {
+  classOverrideOf,
   tokenOverrideOf,
   tokenSaveOutcome,
-  siteBreakpoints,
   siteSheet,
   type SiteStyleData,
 } from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
 
-import { BlocksSummary } from "./BlocksSummary";
 import { DocumentStatusPill } from "./DocumentStatusPill";
+import { pageRenderInputs, readDocumentLimits } from "./page-render-inputs";
+import { PageBuilderCard } from "./PageBuilderCard";
+/* The save state, which the status pill cannot carry: it renders nothing on a
+   collection with no publish lifecycle, and took the only reading of unsaved
+   work down with it. */
 import { useSaveSiteStyle, useSiteStyle } from "./site-style-client";
 import { withValueAtPath } from "./snapshot-merge";
+import { UnsavedChangesPill } from "./UnsavedChangesPill";
+import { useRestingPageRender } from "./use-resting-page-render";
 import { useShown } from "./use-shown";
 
 export interface BlocksFieldProps<
@@ -121,6 +170,21 @@ export interface BlocksFieldProps<
   name: Path<TFieldValues>;
   /** React Hook Form control the entry form owns. */
   control: Control<TFieldValues>;
+  /**
+   * The field's own declaration, as the admin passes it to every plugin field
+   * editor.
+   *
+   * Read for the kinds it accepts, and for nothing else. Without it the editor
+   * has to guess what an empty document should be, and its only available
+   * guess is a page — which is the one answer a pattern or component store
+   * refuses.
+   *
+   * Named `field` because that is the name the admin passes it under
+   * (`FieldRenderer` spreads `{ ...commonProps, field }` into every plugin
+   * field editor). A prop named for what this file wants to call it would type
+   * fine, arrive never, and leave the defect in place looking fixed.
+   */
+  field?: { blocks?: unknown };
   /**
    * The document is being READ, not edited, so no way in is offered.
    *
@@ -152,7 +216,13 @@ export interface BlocksFieldProps<
  * and shrink the canvas to show it, which is why this grows one entry at a time
  * rather than being declared ahead of the panels.
  */
-const AVAILABLE_PANELS = ["insert", "layers", "tokens"] as const;
+const AVAILABLE_PANELS = [
+  "insert",
+  "layers",
+  "tokens",
+  "fonts",
+  "classes",
+] as const;
 
 /**
  * With an entry-fields panel to fill, `settings` joins them.
@@ -196,6 +266,23 @@ function ensureCoreBlocksRegistered(): void {
 }
 
 /**
+ * Whether the empty-container appender should be suppressed right now.
+ *
+ * Two independent reasons collapse into one boolean here, named, rather than
+ * inlined at the JSX call site: a drag in progress, where the document is
+ * mid-change, and the author having turned empty-container chrome off, where
+ * the container this control would sit over has collapsed to zero height. A
+ * bare `||` at the call site reads as one condition; naming it is what says
+ * these are two unrelated causes that happen to share an operator.
+ */
+function emptyContainerAppenderHidden(
+  dragging: boolean,
+  showEmptyElements: boolean
+): boolean {
+  return dragging || !showEmptyElements;
+}
+
+/**
  * A stored value that is not a usable document is treated as absent.
  *
  * The field's value arrives from storage, so it is whatever a previous version,
@@ -205,16 +292,28 @@ function ensureCoreBlocksRegistered(): void {
  * rather than at this boundary, and an editor that crashes on open gives an
  * author no way to repair the value.
  *
+ * The KINDS the field accepts are a parameter rather than a default, because
+ * the substitute has to be a document the same field will accept. Seeding a
+ * `page` into a field declaring `kinds: ["pattern"]` produces an editor that
+ * looks like it works and a save the server refuses with
+ * `DISALLOWED_DOCUMENT_KIND` — so the store cannot be authored at all through
+ * the UI that advertises it, and nothing says why until the author presses
+ * Done.
+ *
  * Exported for its own tests: it is the only place a malformed stored document
  * is turned into a safe one, and it is worth asserting directly rather than
  * through a rendered editor.
  */
-export function documentFrom(value: unknown): BlockDocument {
-  if (typeof value !== "object" || value === null) return emptyBlockDocument();
+export function documentFrom(
+  value: unknown,
+  kinds?: readonly DocumentKind[]
+): BlockDocument {
+  if (typeof value !== "object" || value === null)
+    return emptyBlockDocument(kinds);
   const candidate = value as Partial<BlockDocument>;
   return Array.isArray(candidate.nodes)
     ? (value as BlockDocument)
-    : emptyBlockDocument();
+    : emptyBlockDocument(kinds);
 }
 
 /**
@@ -244,11 +343,42 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   control,
   readOnly = false,
   disabled = false,
+  // Renamed locally because `field` is also what `useController` calls the
+  // bound value below, and the two are different things: this is the schema's
+  // declaration, that is the form's state.
+  field: declaration,
 }: BlocksFieldProps<TFieldValues>) {
   const [open, setOpen] = useState(false);
   const { field } = useController({ name, control });
 
+  // What an empty document has to be for THIS field. Asked once and passed
+  // down, so the resting card and the open editor cannot seed different kinds.
+  const kinds = acceptedKinds(declaration);
+
   const editable = canEditBlocks({ readOnly, disabled });
+
+  /*
+   * The site's own style, read at REST as well as inside the editor.
+   *
+   * The miniature below is the published renderer, so it needs the sheet that
+   * renderer needs. Omitting it is not a neutral choice: `PageRenderer` still
+   * emits the DEFAULT token set, so the page draws plausibly while missing this
+   * site's named classes and block-type defaults — which is the failure
+   * `canvas.tsx` makes the prop required to prevent.
+   *
+   * The same query the editor makes, so the two share one cache entry rather
+   * than fetching twice; `pending` is forwarded so the card can decline to draw
+   * a page it cannot draw faithfully yet.
+   */
+  /*
+   * What the resting card draws with, asked as ONE question.
+   *
+   * The site's style, whether it has arrived, its config and a container name
+   * for this field's own box — four reads, each of which produces a
+   * faithful-looking wrong page when got subtly wrong. They belong together and
+   * not in a control whose job is choosing between two surfaces.
+   */
+  const resting = useRestingPageRender(PLUGIN_SOURCE);
 
   /*
    * Closed if the form becomes read-only while the editor is up.
@@ -268,6 +398,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
       // undo stack rather than carrying it into a document it cannot describe.
       key={String(field.value === undefined ? "empty" : "seeded")}
       initialValue={field.value}
+      kinds={kinds}
       onCommit={field.onChange}
       onClose={() => setOpen(false)}
       // Named and controlled so the editor can record its live document as
@@ -276,28 +407,17 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
       control={control}
     />
   ) : (
-    <div className="flex flex-col gap-3">
-      <BlocksSummary name={name} control={control} />
-      {/*
-        No button at all rather than a disabled one.
-        
-        A disabled control says "you could do this, but not now", which is the
-        wrong sentence for a document that cannot be edited at all — and the
-        summary above already says what the field holds. An affordance that
-        cannot ever act here is one an author spends attention on.
-      */}
-      {editable ? (
-        <div>
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="inline-flex h-9 items-center rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Edit blocks
-          </button>
-        </div>
-      ) : null}
-    </div>
+    <PageBuilderCard
+      document={documentFrom(field.value, kinds)}
+      siteStyles={resting.siteStyles}
+      styleState={resting.styleState}
+      render={resting.render}
+      // The gate is passed through rather than restated: `canEditBlocks`
+      // already answers it for the editor above, and two readings of "may this
+      // author edit" is one more than the question has.
+      canEdit={editable}
+      onOpen={() => setOpen(true)}
+    />
   );
 }
 
@@ -373,6 +493,48 @@ function useCheckpoints<TFieldValues extends FieldValues>({
  * "the question was never asked" and offers no picker at all — which is the
  * truth here, and is different from a site that defines no tokens.
  */
+/**
+ * The faces the site loads, or `undefined` while that is not yet known.
+ *
+ * The same third state `offerableTokens` keeps, and for the same reason: a site
+ * that self-hosts nothing legitimately has no faces, so a surface cannot tell
+ * "none stored" from "the read has not come back" by looking at the value. The
+ * fonts panel draws those two differently, and would otherwise report a site
+ * mid-load as one loading no fonts at all.
+ *
+ * Unlike tokens there are no engine defaults to layer underneath — a font file
+ * is something a site provides or does not — so the resolved list is returned
+ * as it stands, including an empty one.
+ */
+function offerableFaces(
+  style: SiteStyleData | undefined,
+  pending: boolean,
+  error: unknown
+): readonly FontFaceDef[] | undefined {
+  if (pending || error !== null) return undefined;
+  return style?.fonts ?? [];
+}
+
+/**
+ * The tokens as the PAGE renders them, defaults included.
+ *
+ * Deliberately not `offerableTokens`. A studio edits what the site AUTHORED —
+ * showing the engine's defaults as rows an author can rename would offer edits
+ * that write nothing — while a report on what the page draws has to read what
+ * the page draws. `resolveSiteTokens` layers the engine's own underneath, and
+ * one of them is `font.body: system-ui`, a real typeface every site renders
+ * with. Reading the authored set had the panel announce "no typeface tokens"
+ * for a site whose every page was using one.
+ */
+function renderedTokens(
+  style: SiteStyleData | undefined,
+  pending: boolean,
+  error: unknown
+): SiteTokenSet | undefined {
+  if (pending || error !== null) return undefined;
+  return resolveSiteTokens(style?.tokens);
+}
+
 function offerableTokens(
   style: SiteStyleData | undefined,
   pending: boolean,
@@ -510,6 +672,680 @@ function TokensStudio({
  * three fields of the record are owned by other studios and are not read here in
  * order to write this one.
  */
+/**
+ * Create a named class in the site's library, answering with its new id.
+ *
+ * Two documents are involved and this owns only one. The class lives in the
+ * site style; putting it on a block is a node write the inspector already
+ * performs, so this returns the id rather than applying it — one application
+ * path, and the per-node bound stays enforced in a single place.
+ *
+ * The id is minted with the engine's own `newId`, which is where every other id
+ * in this repository comes from. Deliberately not derived from the slug:
+ * `NamedClass` keeps `id` and `slug` apart precisely so a rename cannot orphan
+ * the documents referencing it, and a slug-seeded id would be a fossil of
+ * whatever the class was called first.
+ *
+ * `orderIndex` is one past the highest in the library, so a class an author has
+ * just created and applied wins over the ones already there rather than being
+ * silently overridden by them.
+ */
+/**
+ * One serialised writer for every whole-section class write.
+ *
+ * Every write here is read-modify-write over the WHOLE section: the payload is
+ * the complete class list, because that is what `saveSection` stores. So the
+ * list a write composes from decides what survives it, and the rendered
+ * `library` is stale for as long as a save takes to come back through the
+ * cache.
+ *
+ * Two things follow, and each was a separate defect.
+ *
+ * **Composition must happen inside the queue, not before it.** Serialising
+ * only TRANSMISSION is not enough: both callers compose their payload, then
+ * queue, so the second was already built without the first. `run` therefore
+ * takes a FUNCTION and calls it after the previous write settles, so every
+ * payload is composed against the result of the one before it.
+ *
+ * **One base, shared.** Creating and renaming are the same read-modify-write
+ * over the same list. Two independent bases meant a rename that had not yet
+ * refreshed was invisible to a creation, which then wrote a list carrying the
+ * old slug — and in the other order, dropped the new class.
+ *
+ * A completed write ADVANCES the base; a fresh read from the host REPLACES it,
+ * because the server's answer is authoritative the moment it arrives.
+ */
+interface ClassWrites {
+  /**
+   * Run one whole-section write, composed against the freshest list.
+   *
+   * The callback receives the base and answers with the payload it composed
+   * plus its own result. Returning `next` separately is what lets this advance
+   * the base ONLY when the write succeeded — a refused write changed nothing,
+   * and building the following edit on it would persist something the server
+   * rejected.
+   */
+  run: <T>(
+    write: (existing: readonly NamedClass[] | undefined) => Promise<{
+      result: T;
+      next?: readonly NamedClass[];
+    }>
+  ) => Promise<T>;
+}
+
+function useClassWrites(
+  library: readonly NamedClass[] | undefined
+): ClassWrites {
+  const held = useRef(library);
+  /*
+   * The host's answer supersedes anything composed locally. This runs only
+   * when `library` changes identity, which is exactly when a re-read has
+   * landed — during a save's window the identity is unchanged and the base
+   * keeps whatever the writes advanced it to.
+   */
+  useEffect(() => {
+    held.current = library;
+  }, [library]);
+
+  // The chain every write joins. Held as a ref so it survives re-renders: a
+  // queue recreated on render would let two writes run concurrently again.
+  const tail = useRef<Promise<unknown>>(Promise.resolve());
+
+  const run = useCallback(
+    <T,>(
+      write: (existing: readonly NamedClass[] | undefined) => Promise<{
+        result: T;
+        next?: readonly NamedClass[];
+      }>
+    ): Promise<T> => {
+      const started = tail.current.then(async () => {
+        const answered = await write(held.current);
+        if (answered.next !== undefined) held.current = answered.next;
+        return answered.result;
+      });
+      // The chain must not break on a rejection, or every later write is
+      // rejected with an error belonging to an edit the author has forgotten.
+      tail.current = started.then(
+        () => undefined,
+        () => undefined
+      );
+      return started;
+    },
+    []
+  );
+
+  return { run };
+}
+
+/**
+ * Whether a read has FAILED rather than merely not finished yet.
+ *
+ * A separate function because "not arrived" and "will never arrive" are
+ * different states with different wording, and reading them from one
+ * expression inside the hook made the hook answer two questions at once.
+ */
+function classReadFailed(pending: boolean, error: unknown): boolean {
+  return !pending && error !== null && error !== undefined;
+}
+
+/**
+ * The library to show, or `undefined` while it is not known.
+ *
+ * `undefined` while the read is in flight, and the resolved list once it is
+ * not — including an empty one. `useSiteStyle` names `pending` as a real third
+ * state for exactly this reason: the defaults alone are a legitimate answer, so
+ * a surface cannot tell "nothing is stored" from "the read has not come back"
+ * by looking at the value.
+ */
+/**
+ * The empty library, as ONE value rather than a fresh array each time.
+ *
+ * `?? []` builds a new array on every render, and `useClassWrites` reads a
+ * changed identity as "the host has re-read" — so a site whose stored style
+ * declares no classes looked like it was re-reading continuously, and any
+ * render during an in-flight save reset the write base to the stale list. The
+ * next queued write then composed from it and discarded the edit before it,
+ * while reporting success.
+ */
+const NO_CLASSES: readonly NamedClass[] = Object.freeze([]);
+
+function readableClassLibrary(
+  siteStyle: { classes?: readonly NamedClass[] } | undefined,
+  pending: boolean,
+  failed: boolean
+): readonly NamedClass[] | undefined {
+  if (pending || failed) return undefined;
+  // `undefined` above and `NO_CLASSES` here stay distinct: the first is a read
+  // that has not answered, the second is one that answered with nothing.
+  return siteStyle?.classes ?? NO_CLASSES;
+}
+
+function useClassSurface(
+  siteStyle: { classes?: readonly NamedClass[] } | undefined,
+  pending: boolean,
+  error: unknown,
+  /** The site's own config, whose classes storage layers over. */
+  config: { classes?: readonly NamedClass[] } | undefined
+) {
+  // Derived outside the hook, so this decides nothing and only distributes what
+  // was decided — which is what keeps the component rendering the inspector
+  // free of the branch.
+  const failed = classReadFailed(pending, error);
+  const library = readableClassLibrary(siteStyle, pending, failed);
+  const configured = config?.classes;
+  /*
+   * ONE writer for both edits. Creating and renaming are the same
+   * read-modify-write over the same list, so two independent queues let a
+   * rename that had not yet refreshed be invisible to a creation — which then
+   * wrote a list carrying the old slug, and in the other order dropped the new
+   * class.
+   */
+  const writes = useClassWrites(library);
+  /*
+   * Which name each class is heading for while its rename is on the network.
+   *
+   * Held HERE because it must survive the manager panel being unmounted, which
+   * the rail does on every switch. State rather than a ref: the panel renders
+   * from it, so a change has to reach the screen.
+   */
+  const [pendingSlugs, setPendingSlugs] = useState<Record<string, string>>({});
+  const markPending = useCallback(
+    (classId: string, slug: string | undefined) => {
+      setPendingSlugs(current => {
+        if (slug === undefined) {
+          if (!(classId in current)) return current;
+          const { [classId]: _gone, ...rest } = current;
+          return rest;
+        }
+        if (current[classId] === slug) return current;
+        return { ...current, [classId]: slug };
+      });
+    },
+    []
+  );
+  return {
+    library,
+    /*
+     * Which absence, so the selector can say so. A read that FAILED will not
+     * finish, and a surface that goes on saying "loading" describes a state
+     * the site is not in — the distinction the tokens studio already draws.
+     */
+    absence: failed ? ("failed" as const) : ("pending" as const),
+    /*
+     * Withheld while the library is unknown. A failed read leaves
+     * `useSiteStyle` answering with the config defaults alone, so creating
+     * against it would compose a library missing everything stored — and the
+     * save would then delete those classes rather than add one.
+     */
+    create: useCreateClass(writes, configured),
+    /** Which classes are mid-rename, for the manager's no-op check. */
+    pendingSlugs,
+    /*
+     * Withheld the same way and for the same reason: renaming against a
+     * library missing everything stored would save that partial list, which
+     * deletes the classes it could not see rather than renaming one.
+     */
+    rename: useRenameClass(writes, configured, markPending),
+  };
+}
+
+function useCreateClass(
+  writes: ClassWrites,
+  configured: readonly NamedClass[] | undefined
+) {
+  // Its own write handle rather than one passed in. The caller is already the
+  // largest component in this file, and a dependency a hook can obtain for
+  // itself is a statement that does not need to live there.
+  const { save: saveSection } = useSaveSiteStyle();
+  return useCallback(
+    async (slug: string) =>
+      // Composed INSIDE the queue, so a creation following a rename builds on
+      // that rename rather than on the list they both started from.
+      //
+      // The result type is stated rather than inferred: inference takes the
+      // first branch it meets, which is the refusal, and the success branch
+      // then fails to assign.
+      writes.run<ClassCreation>(async existing => {
+        if (existing === undefined) {
+          return {
+            result: {
+              ok: false as const,
+              reason:
+                "This site's classes could not be read, so none can be added.",
+            },
+          };
+        }
+        const classId = newId();
+        const next: NamedClass[] = [
+          ...existing,
+          {
+            id: classId,
+            slug,
+            orderIndex: nextOrderIndex(existing),
+            styles: {},
+          },
+        ];
+        /*
+         * Only what DIFFERS from the site's own config classes. The base is the
+         * MERGED set the canvas compiles, so saving it whole would copy every
+         * config class into the database on the first creation and mask the
+         * site's code from then on — the argument `tokenOverrideOf` already
+         * makes for tokens.
+         */
+        const result = await saveSection(
+          "classes",
+          classOverrideOf(configured, next)
+        );
+        // `next` is returned ONLY on success, so a refused write never becomes
+        // the base the following edit builds on.
+        if (result.saved) {
+          return { result: { ok: true as const, classId }, next };
+        }
+        const reasons = Object.values(result.issues);
+        // An empty `issues` is still a refusal — the transport could not
+        // describe it. Reporting it as saved is the one outcome that must never
+        // be silent, which is the rule the breakpoints writer below follows too.
+        return {
+          result: {
+            ok: false as const,
+            reason:
+              reasons.length > 0
+                ? reasons.join(" ")
+                : "This class could not be saved.",
+          },
+        };
+      }),
+    [writes, configured, saveSection]
+  );
+}
+
+/**
+ * Rename one class, through the same section write that creates one.
+ *
+ * Answers the OUTCOME rather than reporting success by staying quiet. A site
+ * style save is a network write and the panel clears its field as soon as the
+ * author finishes typing, so a refusal that returned nothing would leave the
+ * row reading as renamed until the next read contradicted it.
+ */
+function useRenameClass(
+  writes: ClassWrites,
+  configured: readonly NamedClass[] | undefined,
+  /**
+   * Record which name a class is heading for while its write is in flight.
+   *
+   * Held by the CALLER rather than by the panel, because a rename outlives the
+   * panel: switching rail panels unmounts the manager, and a field remembering
+   * its own pending name lost it on exactly the switch that makes the window
+   * long enough to matter. Without it, an author who reverts a rename after
+   * coming back has the revert read as a no-op while the first write lands.
+   */
+  markPending: (classId: string, slug: string | undefined) => void
+) {
+  const { save: saveSection } = useSaveSiteStyle();
+  return useCallback(
+    async (classId: string, slug: string): Promise<ClassRenameOutcome> => {
+      markPending(classId, slug);
+      try {
+        return await writes.run<ClassRenameOutcome>(async existing => {
+          if (existing === undefined) {
+            return {
+              result: {
+                ok: false as const,
+                reason:
+                  "This site's classes could not be read, so none can be renamed.",
+              },
+            };
+          }
+          const next = existing.map(entry =>
+            entry.id === classId ? { ...entry, slug } : entry
+          );
+          const result = await saveSection(
+            "classes",
+            classOverrideOf(configured, next)
+          );
+          if (result.saved) return { result: { ok: true as const }, next };
+          const reasons = Object.values(result.issues);
+          return {
+            result: {
+              ok: false as const,
+              reason:
+                reasons.length > 0
+                  ? reasons.join(" ")
+                  : "This class could not be renamed.",
+            },
+          };
+        });
+      } finally {
+        /*
+         * Cleared however it went, and in a `finally` so a rejection cannot
+         * leave a class permanently reading as mid-rename. A refused write
+         * leaves the class with the name it had; a successful one is followed
+         * by a read carrying the new one. Either way the stored slug is the
+         * answer again.
+         */
+        markPending(classId, undefined);
+      }
+    },
+    [writes, configured, saveSection, markPending]
+  );
+}
+
+/** One past the highest position in the library, or zero for an empty one. */
+function nextOrderIndex(library: readonly NamedClass[]): number {
+  return library.reduce(
+    (highest, entry) =>
+      Number.isFinite(entry.orderIndex)
+        ? Math.max(highest, entry.orderIndex + 1)
+        : highest,
+    0
+  );
+}
+
+/**
+ * The record an upload answers with, derived from the hook rather than restated.
+ *
+ * Naming the shape here would be this file's second opinion about what the
+ * media pipeline returns, and it would go on compiling after that shape moved.
+ */
+type UploadedMedia = Awaited<
+  ReturnType<ReturnType<typeof useUploadMedia>["mutateAsync"]>
+>;
+
+/**
+ * Store a font file on this site, then declare the `@font-face` that loads it.
+ *
+ * Two writes that have to happen in this order and cannot be one: the file must
+ * exist and have an id before anything can point at it, and a face pointing at
+ * an id that was never stored is a family the page silently fails to load.
+ *
+ * The face is built from what upload validation SETTLED on rather than from
+ * what the browser guessed — `media.mimeType` is the type the bytes were proved
+ * to be, so the `format()` hint in the emitted rule cannot disagree with the
+ * file the route will serve.
+ *
+ * @param stored - The faces already declared, which the new one is appended to
+ * @returns A writer answering with a message when it refused, `undefined` when
+ *   the face is stored
+ */
+function useFontFaceWriter(
+  stored: readonly FontFaceDef[] | undefined,
+  storedPending: boolean,
+  unreadableFonts: readonly string[]
+): (request: FontFaceUpload) => Promise<string | undefined> {
+  const { save: saveSiteStyle } = useSaveSiteStyle();
+  const { mutateAsync: uploadMedia } = useUploadMedia();
+  /*
+   * Every face this writer has saved, kept until the read reports it back.
+   *
+   * `useUpdateSingleDocument` starts its invalidation with `void`, so the save
+   * resolves BEFORE the refetch that carries the new face into `stored`. An
+   * author adding a family's regular and its bold in quick succession reaches
+   * the second add while `stored` still describes the document as it was, and
+   * a base taken from it saves the second face over the first.
+   *
+   * Held rather than reset on arrival, and UNIONED with `stored` below: once
+   * the read catches up the two agree and the union is `stored` exactly, so
+   * there is no moment when this has to be judged stale. The union is also
+   * what keeps a face added from another surface in the meantime — a reset
+   * base would drop it.
+   */
+  const written = useRef<readonly FontFaceDef[]>([]);
+  /*
+   * The last file that reached storage, and what it became.
+   *
+   * The two writes cannot be one — the bytes must have an id before a face can
+   * point at one — so a refused style write leaves a stored object no face
+   * references. The form keeps the `File` on a refusal so the author can fix
+   * the descriptors and resubmit, and without this each attempt uploaded the
+   * same bytes again: a run of validation failures left a copy per attempt.
+   *
+   * Keyed on the `File` itself, which is the identity the picker hands over
+   * and which changes exactly when the author chooses a different file.
+   */
+  const uploaded = useRef<{ file: File; media: UploadedMedia } | null>(null);
+
+  return useCallback(
+    async (request: FontFaceUpload): Promise<string | undefined> => {
+      /*
+       * Refused rather than guessed at. `save` replaces the section outright,
+       * so appending to a stored tier that has not arrived writes the new face
+       * ALONE and discards every face already stored — and the author is told
+       * it saved.
+       *
+       * The panel does not render the form while the read is in flight, so
+       * nothing reaches this through the UI and no test drives it. It stays
+       * because the callback is the host's to hand out and a boolean over a
+       * value already in hand costs nothing, while the failure it prevents is
+       * silent data loss.
+       */
+      if (storedPending) {
+        return "This site's fonts are still loading. Try again in a moment.";
+      }
+
+      /*
+       * Refused BEFORE the upload, because the alternative is deletion.
+       *
+       * `stored` is the read's value, which drops any row it cannot type, and
+       * `save` replaces the section outright — so appending to it saves a list
+       * those rows are missing from, and the write succeeds, because what it
+       * sends is exactly what the checker approves.
+       *
+       * Not a capability withdrawn: `refusing` in the storage module rejects a
+       * write over any issue at all, so such a row already blocks every save of
+       * this section. Refusing here names it, and does so before an upload
+       * whose bytes nothing would reference.
+       */
+      if (unreadableFonts.length > 0) {
+        return `This site stores a font this version cannot read (${unreadableFonts.join(", ")}), and adding one would replace it. Repair or remove that entry first.`;
+      }
+
+      const stored_ = await storeOnce(request.file, uploaded, uploadMedia);
+      if (typeof stored_ === "string") return stored_;
+      const media = stored_;
+
+      /*
+       * The picker's `accept` is a hint a caller can bypass, and the media
+       * pipeline accepts far more than fonts. A PNG stored here would be saved
+       * as a face with no `format()` — which `validateFontFace` permits — and
+       * the byte route answers 404 for every type outside the servable set, so
+       * the site would carry a family that silently never loads.
+       *
+       * Decided on the type upload validation SETTLED on rather than the one
+       * the browser guessed, which is the same value the route will check the
+       * bytes against.
+       */
+      const format = fontFormatFor(media.mimeType);
+      if (format === undefined) {
+        return `A font file has to be .woff2 or .woff — this one was stored as ${media.mimeType}.`;
+      }
+
+      const face: FontFaceDef = {
+        family: request.family,
+        /*
+         * The route that serves bytes to a reader with no session. A stored
+         * media URL is not usable here: `validateFontFace` refuses anything
+         * carrying a scheme or an authority, and a backend that stores absolute
+         * URLs would produce exactly that.
+         */
+        src: [{ url: `/api/media/${media.id}/raw`, format }],
+        weight: request.weight,
+        style: request.style,
+      };
+
+      const next = [...appendBase(stored, written.current), face];
+      const result = await saveSiteStyle("fonts", next);
+      if (result.saved) {
+        // Stored and referenced, so the next add starts clean rather than
+        // pointing a second face at the first face's bytes.
+        uploaded.current = null;
+        written.current = next;
+        return undefined;
+      }
+      /*
+       * Joined rather than picked from, for the reason the breakpoint writer
+       * joins: `issues` is keyed by path, and taking the first tells an author
+       * about one refused field while a second is also refused.
+       */
+      const reasons = Object.values(result.issues);
+      return reasons.length > 0
+        ? reasons.join(" ")
+        : "That font could not be saved.";
+    },
+    [saveSiteStyle, stored, storedPending, unreadableFonts, uploadMedia]
+  );
+}
+
+/**
+ * Everything a new face must be saved alongside: what was read, plus what this
+ * writer saved that the read has not reported back yet.
+ *
+ * A union rather than a choice between the two. Picking `written` while it
+ * looks ahead would drop a face added from another surface since; picking
+ * `stored` drops the one just saved. Order follows `stored`, so a face keeps
+ * the position the document gives it and an unreported one lands after —
+ * where it will be once the read catches up.
+ *
+ * @param stored - The read's faces, or `undefined` before it arrives
+ * @param written - Faces this writer has saved, oldest first
+ * @returns The faces to append to
+ */
+function appendBase(
+  stored: readonly FontFaceDef[] | undefined,
+  written: readonly FontFaceDef[]
+): readonly FontFaceDef[] {
+  const base = stored ?? [];
+  const present = new Set(base.map(faceIdentity));
+  return [...base, ...written.filter(face => !present.has(faceIdentity(face)))];
+}
+
+/**
+ * What makes two face records the same stored row.
+ *
+ * The sources carry it: a face added here points at one media object, whose id
+ * is minted by the upload, so two adds never collide and a re-read of the same
+ * row always matches. Family, weight and style join it because a document may
+ * legitimately point two faces at one file — a variable font serving both an
+ * upright and a synthesised oblique is the ordinary case.
+ */
+function faceIdentity(face: FontFaceDef): string {
+  return [
+    face.family,
+    face.weight ?? "",
+    face.style ?? "",
+    face.src.map(source => source.url).join("|"),
+  ].join("::");
+}
+
+/**
+ * The fonts panel, with the writer that adds a face.
+ *
+ * Its own component rather than another hook in the editor: the editor already
+ * carries more state than one screen can hold, and a panel that needs a writer
+ * is the thing that should own it. The upload also concerns nobody else on this
+ * surface, so the editor gains one element and no new state.
+ */
+function FontsPanelWithUpload({
+  faces,
+  tokens,
+  absence,
+  onOpenTokens,
+  storedFaces,
+  storedPending,
+  unreadableFonts,
+}: FontsPanelProps & {
+  storedFaces: readonly FontFaceDef[] | undefined;
+  storedPending: boolean;
+  unreadableFonts: readonly string[];
+}): React.JSX.Element {
+  const addFontFace = useFontFaceWriter(
+    storedFaces,
+    storedPending,
+    unreadableFonts
+  );
+  return (
+    <FontsPanel
+      absence={absence}
+      acceptFiles={FONT_FILE_ACCEPT}
+      faces={faces}
+      onAddFace={addFontFace}
+      onOpenTokens={onOpenTokens}
+      tokens={tokens}
+    />
+  );
+}
+
+/**
+ * Put a file on this site, at most once per file.
+ *
+ * The two writes an added face needs cannot be one — the bytes must have an id
+ * before a face can point at one — so a refused style write leaves a stored
+ * object no face references. The form keeps the `File` on a refusal so the
+ * author can correct the descriptors and press Add again, and re-uploading on
+ * each attempt turned a run of refusals into a copy per attempt.
+ *
+ * @param file - What the author chose, and the identity this remembers by
+ * @param seen - Where the last stored file and its record are kept
+ * @param upload - The media pipeline's own mutation
+ * @returns The stored record, or a message the author can act on
+ */
+async function storeOnce(
+  file: File,
+  seen: React.MutableRefObject<{ file: File; media: UploadedMedia } | null>,
+  upload: (input: { file: File }) => Promise<UploadedMedia>
+): Promise<UploadedMedia | string> {
+  const remembered = seen.current;
+  if (remembered !== null && remembered.file === file) return remembered.media;
+
+  try {
+    const media = await upload({ file });
+    seen.current = { file, media };
+    return media;
+  } catch (reason) {
+    /*
+     * The upload's own refusal, which is the one an author can act on: it names
+     * the format, the size cap or the signature mismatch. Replacing it with
+     * wording of our own would describe a policy this surface does not hold.
+     */
+    return reason instanceof Error
+      ? reason.message
+      : "That file could not be uploaded.";
+  }
+}
+
+/**
+ * The `format()` hint for a validated media type.
+ *
+ * Read from the same table the upload gate, the public byte route and the
+ * admin dropzone read, so this panel cannot come to disagree with any of them
+ * about what a web font is. A restated map is the shape that drifts: a format
+ * core adds would be stored and served while this panel refused the type it
+ * had just accepted, and the author would see a font the site handles
+ * everywhere except the one screen offering to add it.
+ *
+ * An unrecognised type contributes no hint at all rather than a guessed one:
+ * `format()` is advisory, and a browser told the wrong format skips the source
+ * entirely.
+ */
+function fontFormatFor(mimeType: string): string | undefined {
+  const settled = mimeType.toLowerCase().trim();
+  return WEB_FONT_FORMATS.find(format => format.mimeType === settled)
+    ?.formatKeyword;
+}
+
+/**
+ * What the file picker offers, in the two vocabularies a picker accepts.
+ *
+ * Both, because neither alone is enough. A `.woff2` chosen from disk is
+ * reported with no type at all on the platforms that do not carry fonts in
+ * their registry, so a types-only `accept` hides the file the author came to
+ * add; an extensions-only one hides a font handed over by a tool that names it
+ * correctly and spells it differently.
+ */
+const FONT_FILE_ACCEPT: string = WEB_FONT_FORMATS.flatMap(format => [
+  format.extension,
+  format.mimeType,
+]).join(",");
+
 function useBreakpointWriter(
   configSiteStyle: SiteStyleData | undefined
 ): (next: BreakpointSet) => Promise<string | undefined> {
@@ -588,14 +1424,184 @@ function siteStyleStatus(
   return error === null ? "ready" : "unavailable";
 }
 
+/**
+ * Whether anything in the editor is work the author has not saved.
+ *
+ * An OPEN inline edit counts, on top of the document's own history. Inline
+ * editing does not touch the document until an edit finishes, so `undoDepth` is
+ * still zero while an author is typing into a block — and a navigation or an
+ * access-driven removal at that moment tears the canvas down without a blur,
+ * leaving the guard as the only thing that could have asked first.
+ *
+ * Reported for an edit that is merely OPEN rather than one known to have
+ * changed something, because nothing here can tell those apart until the write
+ * happens. A prompt an author dismisses costs a click; the other direction
+ * costs the paragraph they were writing.
+ */
+function hasUnsavedWork(
+  editor: { undoDepth: number },
+  inline: { editing: unknown; editingRich: unknown }
+): boolean {
+  return (
+    editor.undoDepth > 0 ||
+    inline.editing !== null ||
+    inline.editingRich !== null
+  );
+}
+
+/**
+ * What to tell the author when an inline edit did not save, or `null` when
+ * there is nothing to say.
+ *
+ * Said at all because nothing else would. An inline edit lives in the element
+ * until it ends, so the document never records it, the dirty flag never moves,
+ * and an edit that could not be written leaves no trace for the author to
+ * notice — they would find the old words back on the page and no reason given.
+ *
+ * The two refusals are separated because only one of them is theirs to act on:
+ * a passage that outgrew the page can be shortened, while one that was edited
+ * elsewhere cannot be reconciled from here, and the useful thing to say is that
+ * their version is still on screen for as long as they leave it there.
+ */
+function inlineEditProblem(outcome: InlineEditOutcome): string | null {
+  if (outcome.status === "unavailable")
+    return "Another block is still holding text that has not been saved. Finish that one first.";
+  if (outcome.status === "discarded")
+    return "That block changed while you were editing it, so your text was not saved.";
+  if (outcome.status !== "refused") return null;
+  return outcome.reason === "moved-on"
+    ? "That block was edited somewhere else while you were typing. Your text is still in it \u2014 copy what you need before you leave."
+    : "Your text could not be saved into this page. Shortening it may help.";
+}
+
+/**
+ * Finish whatever inline edit was open, and say what the host may now do.
+ *
+ * An inline edit lives in the element until it ends — that is what keeps the
+ * caret still while an author types — so the document a caller is holding is
+ * the one from before it, and committing that would save a page missing the
+ * words they were in the middle of writing.
+ *
+ * Says nothing to the author: the surface reports every finished edit through
+ * one callback, including the ones started here, so reporting again from this
+ * return value would announce the same edit twice.
+ *
+ * `mayClose` is separate from the document because the two answers differ: a
+ * refused passage changed nothing, so there is a perfectly good document to
+ * save, and the only thing that must not happen is unmounting the editor still
+ * holding the words.
+ */
+function finishInlineEdit(
+  inline: { commit: () => InlineEditOutcome },
+  held: BlockDocument
+): { document: BlockDocument; mayClose: boolean } {
+  const outcome = inline.commit();
+  return {
+    document: documentAfter(outcome, held),
+    mayClose: outcome.status !== "refused",
+  };
+}
+
+/**
+ * The form's save shortcut, parsed from the SAME spec the form registers.
+ *
+ * Asked of the shortcut library rather than written out here. A hand-rolled
+ * `key === "s" && (metaKey || ctrlKey)` treats modifiers as a minimum, so it
+ * also fires on Ctrl+Shift+S and Ctrl+Alt+S — which the manager rejects,
+ * meaning the form does NOT save. Ctrl+Shift+S is the browser's Save As on
+ * several platforms, so the author would have got a dialog, an inline edit
+ * closed underneath it, and a field changed by a keystroke that saved nothing.
+ */
+const SAVE_CHORD = parseKeys("mod+s")[0];
+
+/** Whether a key event is the form's save shortcut on this platform. */
+function isSaveChord(event: KeyboardEvent): boolean {
+  return (
+    SAVE_CHORD !== undefined &&
+    chordMatches(SAVE_CHORD, event.key, event, detectApplePlatform())
+  );
+}
+
+/**
+ * The interaction state to SHOW, given the state being edited and how many
+ * blocks are selected.
+ *
+ * Suppressed rather than reset whenever the switcher is not on screen. The
+ * inspector replaces its whole tab strip — for a multi-selection, and for a
+ * selection it cannot inspect at all — so the state control goes with it, and
+ * the panel's own tab handler cannot catch either case because the stored tab
+ * value is still `style` and no tab change happens. A forced state outliving
+ * its control is a canvas drawn mid-hover with nothing on screen explaining
+ * why.
+ *
+ * Decides WHETHER THE CONTROL IS THERE rather than taking a selection count,
+ * because a count cannot see the second case: an unregistered block type reads
+ * as one ordinary selection while the panel shows no tabs for it. The
+ * inspectability half is asked of the same predicate the panel's own early
+ * return uses, so the two cannot disagree about what is inspectable.
+ *
+ * Derived rather than written back, so the author's choice SURVIVES: they
+ * shift-click a second block, the canvas returns to the normal appearance, and
+ * clicking back to one block restores the state they were editing. Writing
+ * `base` into the state instead would silently discard it.
+ */
+function shownStyleStateFor(
+  editing: StyleState,
+  document: BlockDocument,
+  selectedIds: readonly string[],
+  selectedId: string | null
+): StyleState {
+  const switcherIsOnScreen =
+    selectedIds.length <= 1 && selectionIsInspectable(document, selectedId);
+  return switcherIsOnScreen ? editing : "base";
+}
+
+/**
+ * Whether this document holds unsaved work, from EITHER surface that writes it.
+ *
+ * The status pill otherwise reads the editor's `undoDepth` alone, which is its
+ * own history and says nothing about the form — so an author who renamed the
+ * page and touched no block was told the document was saved. Two surfaces now
+ * write to one document, and the pill has to answer for both.
+ *
+ * The blocks field is COUNTED here, and an earlier version excluded it. The
+ * reasoning for excluding it was that the editor owns that field and reports
+ * its own history, so counting it would double the undo depth or report saved
+ * work. Both halves were wrong. Double-counting cannot matter to a boolean, and
+ * the form's baseline advances on a successful submit — `useEntryForm` resets
+ * it — so a dirty blocks field means genuinely unsaved blocks.
+ *
+ * Excluding it lost the one case that has no other witness: an author who edits
+ * blocks, leaves the editor, and opens it again before saving. Leaving commits
+ * the document into the form, so the field is dirty; reopening builds a fresh
+ * editor whose `undoDepth` is zero. With the field excluded, nothing was left
+ * to say the document had unsaved work, and the pill read clean over blocks
+ * that had never been saved.
+ *
+ * The editor's own history is taken as an argument rather than combined at the
+ * call site, so "is this document dirty" is answered in one place. It is also
+ * one fewer branch inside the largest component in this package, which the
+ * complexity gate refuses to let grow.
+ */
+function useDocumentDirty<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>,
+  editorDirty: boolean
+): boolean {
+  const { dirtyFields } = useFormState({ control });
+  return editorDirty || Object.keys(dirtyFields).length > 0;
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
+  kinds,
   onCommit,
   onClose,
   name,
   control,
 }: {
   initialValue: unknown;
+  /** The kinds the field accepts, so a seeded document is one it will take. */
+  kinds: readonly DocumentKind[] | undefined;
   onCommit: (value: BlockDocument) => void;
   onClose: () => void;
   name: Path<TFieldValues>;
@@ -608,8 +1614,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   ensureCoreBlocksRegistered();
 
   const initialDocument = useMemo(
-    () => documentFrom(initialValue),
-    [initialValue]
+    () => documentFrom(initialValue, kinds),
+    [initialValue, kinds]
   );
   const editor = useEditorState({ initialDocument });
 
@@ -624,19 +1630,139 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const slots = useMemo(registrySlotSource, []);
   const nesting = useMemo(registryNestingSource, []);
-  const drag = useCanvasDrag({ editor, slots, nesting });
+  // The canvas root, published by `Canvas` below and read by the drag when a
+  // gesture begins somewhere that is not the canvas — a palette row, whose
+  // pointerdown has no `currentTarget` the drag could measure against.
+  const canvasRoot = useRef<HTMLDivElement | null>(null);
+  /*
+   * The same element as STATE, beside the ref rather than instead of it.
+   *
+   * The drag reads "where is the canvas now" during a gesture, which is what a
+   * ref is for. The inspector has to REACT to the canvas appearing: it stays
+   * mounted while the canvas mounts only once styles have loaded, and a ref is
+   * not reactive — assigning `.current` changes no dependency, so a reader
+   * listing the ref would see `null` once and never look again.
+   */
+  const [canvasElement, setCanvasElement] = useState<HTMLDivElement | null>(
+    null
+  );
+  /*
+   * The interaction state being edited, owned HERE so the panel and the canvas
+   * cannot disagree about it.
+   *
+   * One value handed to both surfaces rather than two defaults that happen to
+   * match: the panel states no `liveStates`, so provenance falls back to the
+   * edited state plus base — correct exactly while the canvas is simulating
+   * that state. Wired from one value that precondition holds by construction.
+   *
+   * ONE value reaching both surfaces, which is the property that matters: the
+   * panel states no `liveStates`, so its provenance falls back to the edited
+   * state plus base — correct exactly while the canvas is simulating the state
+   * being edited, and wrong the moment it is not. Held here rather than in
+   * either consumer so that precondition holds by construction; held in both,
+   * a control would report a value the canvas is not showing and nothing would
+   * say so.
+   *
+   * Editor state, not document state. Which state an author is LOOKING at is
+   * not a property of the page, so it is neither stored nor undoable, and two
+   * people editing one page can be looking at different states.
+   */
+  const [styleState, setStyleState] = useState<StyleState>("base");
+  /*
+   * Memoised because it is a PROP OBJECT: rebuilt on every render it would be a new
+   * identity every time, and the panel it feeds is the one surface here that
+   * holds a draft. `setStyleState` is stable, so this changes exactly when the
+   * state does.
+   */
+  // ONE derivation feeding BOTH consumers, which is what keeps the panel and the
+  // canvas showing the same thing. See `shownStyleStateFor`.
+  const shownStyleState = shownStyleStateFor(
+    styleState,
+    editor.document,
+    editor.selection.ids,
+    editor.selectedId
+  );
+  const styleStateBinding = useMemo(
+    () => ({ state: shownStyleState, onChange: setStyleState }),
+    [shownStyleState]
+  );
+  const drag = useCanvasDrag({ editor, slots, nesting, canvasRoot });
+  /*
+   * Is a drag happening — of EITHER kind.
+   *
+   * Not `draggingId`, which is the moving node's id and is null for the whole
+   * of a drag from the palette: the block has no node until the release makes
+   * one. Chrome gated on the id stays up while an author drags a new block in,
+   * and the toolbar sits above the drop indicator, covering the position being
+   * aimed at.
+   *
+   * Derived once and shared by the three surfaces below, so they cannot come to
+   * disagree about what counts as a drag.
+   */
+  const dragging = drag.draggingBlockName !== null;
+
+  /*
+   * The empty-container appender's only read of a block's definition: its
+   * accessible label. `{ get: getBlock }` satisfies its `BlockLookup` with no
+   * adapter, because `getBlock` already returns `AnyBlockDefinition | undefined`
+   * and that type carries the one field the appender reads.
+   */
+  const blocks = useMemo(() => ({ get: getBlock }), []);
 
   /*
    * Typing a block's text on the canvas. The hook owns the caret; which values
-   * may be typed into is the block's own declaration, read by the builder.
+   * may be typed into is the block's own declaration, read by the builder, and
+   * WHICH editor a value gets is that declaration too.
+   *
+   * The rich-text loader is passed rather than imported by the builder, because
+   * it reaches Lexical and the builder must not: one copy of Lexical is what
+   * keeps its node classes recognisable, and this package is already on the
+   * admin side of that line.
    */
-  const inline = useInlineText(editor);
+  /*
+   * ONE place the author is told about an inline edit that did not save.
+   *
+   * Passed to the hook rather than read from what `commit` returns here,
+   * because most edits do not end by this component calling `commit`. Leaving
+   * the passage ends one; so does opening another, and so does this canvas
+   * unmounting. The outcome that most needs saying — a passage whose block was
+   * deleted or locked while the author typed into it — is reached almost
+   * entirely by the first of those, so reporting from the return value alone
+   * said nothing on the common path.
+   */
+  const announce = useCallback((outcome: InlineEditOutcome) => {
+    const problem = inlineEditProblem(outcome);
+    if (problem !== null) toast.error(problem);
+  }, []);
+  const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
 
   /*
-   * The entry's other fields, or null when there is no surrounding form. Null
-   * is what withholds the panel rather than opening an empty one.
+   * The entry's other fields, ALREADY DRAWN, or null when there are none.
+   *
+   * One value feeds both the rail's availability and the panel's body below,
+   * so the two cannot disagree about whether there is anything to show. Asking
+   * separately is what put an empty Settings panel on the rail: every entry
+   * form has a renderer, so a gate on the renderer's existence is true even for
+   * a collection whose only fields are its title, its slug and this one.
    */
-  const renderEntryFields = useEntryFieldsPanel();
+  const entryFields = useEntryFieldsPanel(name);
+
+  /*
+   * `hasUnsavedWork` rather than `undoDepth` alone, so an inline edit that is
+   * OPEN counts. Until it commits, the typed value lives in the DOM and neither
+   * the editor's history nor the form's dirty fields have moved — so a reading
+   * built on those two says "nothing outstanding" while an author is midway
+   * through a paragraph.
+   *
+   * The same answer the navigation guard reports, asked once here. The guard
+   * keeps reporting only the EDITOR's half, because it tells the form about
+   * work the form's own values do not contain; this composes that half with the
+   * form's own dirtiness, which is what a reading of the whole document needs.
+   */
+  const documentDirty = useDocumentDirty(
+    control,
+    hasUnsavedWork(editor, inline)
+  );
 
   /*
    * The getting-started card, and the host's switch for it.
@@ -678,9 +1804,20 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   );
   const {
     siteStyle: canvasSiteStyle,
+    stored: storedSiteStyle,
+    unreadableFonts: unreadableStoredFonts,
     pending: siteStylePending,
     error: siteStyleError,
   } = useSiteStyle(configSiteStyle);
+
+  // The site-style half of the class surface. The node half stays with the
+  // inspector, which already writes nodes — see `useClassSurface`.
+  const classes = useClassSurface(
+    canvasSiteStyle,
+    siteStylePending,
+    siteStyleError,
+    configSiteStyle
+  );
 
   /*
    * The hosts this site loads media from, read back from the same client
@@ -699,6 +1836,18 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const remotePatterns = useMemo(
     () => readRemotePatterns(clientConfig?.remotePatterns),
+    [clientConfig]
+  );
+
+  /*
+   * The site's document caps, read once.
+   *
+   * Two readers now — the renderer inputs, which repair the document against
+   * them, and the class-usage count. Read separately they would agree until the
+   * day one of them was pointed at a different config.
+   */
+  const documentLimits = useMemo(
+    () => readDocumentLimits(clientConfig),
     [clientConfig]
   );
 
@@ -840,42 +1989,60 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const [requestedTier, setRequestedTier] = useState<BreakpointId | undefined>(
     undefined
   );
+  /*
+   * The zoom, and the scale it produces, held apart.
+   *
+   * The first is what the author ASKED for and the shell persists it. The
+   * second is what the canvas is painting at, which while fitting is derived
+   * from a region only the canvas measures — so it is reported back rather
+   * than computed here, where a second derivation would disagree with the
+   * screen for exactly the frame after a panel opens.
+   */
+  /*
+   * The zoom the SHELL owns, mirrored here only to draw the canvas with it.
+   *
+   * Nothing writes it from this side. The shell persists the choice and reports
+   * it, including the value restored on load; this holds the last report so the
+   * canvas can be scaled by it. Holding it as a second source of truth and
+   * syncing BACK is what produced an oscillating write of `fit, 2, fit, 2` on
+   * every open — two owners, each correcting the other.
+   *
+   * Seeded with the same default the shell starts from, so there is no absent
+   * state for the canvas to interpret. That is safe only because this direction
+   * is one-way: with nothing sending a zoom back, a default held here can never
+   * reach the store to overwrite what the author chose.
+   */
+  const [zoom, setZoom] = useState<CanvasZoom>(DEFAULT_PREFERENCES.zoom);
+  const [appliedScale, setAppliedScale] = useState(1);
   const [measuredWidth, setMeasuredWidth] = useState<number | undefined>(
     undefined
   );
 
-  const canvasRender = useMemo(() => {
-    /*
-     * ONE read of the site's breakpoints, feeding both the context and the
-     * decision about whether to preview at all.
-     *
-     * Two calls returned equal sets today and would stop the day `siteBreakpoints`
-     * normalises or defaults anything — and then preview eligibility would be
-     * answering from a different set than the canvas renders, which is the
-     * box/compile mismatch this whole seam exists to make unrepresentable. The
-     * docblock above already says this about the context's THREE readers; the
-     * eligibility question is a fourth.
-     */
-    const breakpoints = siteBreakpoints(canvasSiteStyle);
-    return {
-      styleContext: {
-        breakpoints,
-        /*
-         * Carried on the SAME context the cascade and the inspector read, so
-         * all three describe one compile. Supplied unconditionally rather than
-         * only while a tier is selected: at the full width the box is still a
-         * box, and a region narrower than the widest tier is already showing a
-         * narrower tier's rules. Compiling `@media` there would answer for the
-         * admin WINDOW instead — a wide window around a narrow canvas reports
-         * the desktop tier live while the box paints the tablet one.
-         */
-        ...(offeredTiers(breakpoints).length === 0 ? {} : { previewContainer }),
-      },
-      ...(remotePatterns === undefined
-        ? {}
-        : { hostPolicy: { remotePatterns } }),
-    };
-  }, [canvasSiteStyle, remotePatterns, previewContainer]);
+  /*
+   * The renderer inputs, from the ONE derivation the entry screen's miniature
+   * also asks.
+   *
+   * This used to be assembled here, and the resting field assembled a poorer
+   * copy of its own — which is how the miniature came to render with no
+   * breakpoint container, no host policy and default caps while the canvas had
+   * all three. Two surfaces drawing one document must not answer "what does
+   * this site render like" separately.
+   *
+   * `previewStates` is the editor's alone: the canvas needs a class alternative
+   * beside each pseudo-class rule so it can show an author the state being
+   * edited, and a surface showing the page as published must not have one.
+   */
+  const canvasRender = useMemo(
+    () =>
+      pageRenderInputs({
+        siteStyle: canvasSiteStyle,
+        clientConfig,
+        previewContainer,
+        previewStates: true,
+        limits: documentLimits,
+      }),
+    [canvasSiteStyle, clientConfig, previewContainer, documentLimits]
+  );
 
   /*
    * What the canvas is previewing under, read back from the ONE context that
@@ -1009,6 +2176,31 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   useCheckpoints({ name, control, document: editor.document });
 
   /*
+   * Which classes the OPEN document renders, for the manager's on-this-page
+   * filter.
+   *
+   * `classUsageOf` rather than a walk written here: it is the same traversal
+   * the style compiler and the usage index already share, and two walks with
+   * equal limits reached by different routes select different nodes — a class
+   * on a node one walk reaches and the other does not would be reported as
+   * absent from a page that renders it.
+   *
+   * `complete` is deliberately unread. It says whether the walk hit the
+   * document's node ceiling, which bounds what this could CLAIM about usage —
+   * and this claims nothing about usage. It answers one question, "does the
+   * open page apply this class", and a truncated walk answers that for fewer
+   * nodes rather than answering it wrongly.
+   */
+  const documentClasses = useMemo(
+    // The HOST's limits, not the engine's defaults. A site that raised or
+    // lowered them renders under those, and a walk here under different bounds
+    // selects different nodes — which would report a class as absent from a
+    // page that renders it, or present on one that does not.
+    () => classUsageOf(editor.document, documentLimits),
+    [editor.document, documentLimits]
+  );
+
+  /*
    * Tell the form this editor holds work its values do not contain, so the
    * navigation guard warns and the save shortcut works while the canvas is
    * open. `undoDepth` rather than comparing documents: an edit and its undo
@@ -1018,7 +2210,40 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * Retracted when this component unmounts, which is the same moment `done`
    * commits the document and makes the form dirty for real.
    */
-  useReportUnsavedWork(`blocks:${name}`, editor.undoDepth > 0);
+  useReportUnsavedWork(`blocks:${name}`, hasUnsavedWork(editor, inline));
+
+  /*
+   * Finish an open passage before the form is asked to save it.
+   *
+   * An inline edit lives in the element until it ends, so the field still holds
+   * the value from before it. Reporting the edit as unsaved work is what lets
+   * the form submit — and reporting cannot write to the form, by that context's
+   * own contract — so a save taken while a passage is open would send the
+   * previous value and report success.
+   *
+   * Capture phase, so this runs before the form's own handler sees the chord.
+   *
+   * This closes the SHORTCUT. A save started any other way — a button, a
+   * command palette — still leaves an open passage behind, because nothing lets
+   * a surface holding uncommitted work be asked to flush before submission.
+   * That is a contract the form does not have, not something this can reach.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isSaveChord(event)) return;
+      /*
+       * Saved even when the passage was refused, and NOT closed either way.
+       * The document is right and complete for everything except the passage
+       * still open, so withholding the save would lose the rest of their work
+       * to protect a paragraph that is not going anywhere: it stays in the
+       * editor, on screen, and the message is what tells them it is still
+       * there.
+       */
+      onCommit(finishInlineEdit(inline, editor.document).document);
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [editor.document, inline, onCommit]);
 
   /*
    * Writing back on the way out rather than on every keystroke.
@@ -1029,9 +2254,72 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * editor's undo two answers to one question.
    */
   const done = useCallback(() => {
-    onCommit(editor.document);
+    /*
+     * The open inline edit is finished FIRST, and the document it produced is
+     * the one handed over.
+     *
+     * An inline edit lives in the element until it ends — that is what keeps
+     * the caret still while an author types — so `editor.document` here is the
+     * one from before it. Committing that would hand the form a document
+     * missing the words the author was in the middle of writing, and the exit
+     * gesture is the most common way to leave a passage open.
+     */
+    const finished = finishInlineEdit(inline, editor.document);
+    /*
+     * A REFUSED commit kept the passage open because the author's words are in
+     * it and nowhere else. Closing unmounts the canvas and takes the editor
+     * with it, so leaving is declined until they deal with it — they have been
+     * told what happened, and their text is still where they left it.
+     */
+    if (!finished.mayClose) return;
+    onCommit(finished.document);
     onClose();
-  }, [editor.document, onCommit, onClose]);
+  }, [editor.document, inline, onCommit, onClose]);
+
+  /*
+   * Opens the insert panel from the canvas itself, for the empty-container
+   * appender: pressing its "+" must select the container AND show the panel
+   * that fills it as one gesture, never two.
+   *
+   * A counter bumped on every press, not a boolean: `BuilderShell` reads this
+   * as "open it AGAIN", including when the author has since closed the panel
+   * by hand, and a value that repeated itself would look unchanged and do
+   * nothing the second time. Starts `undefined` rather than `0` so mounting
+   * the editor is not itself a press.
+   */
+  /*
+   * A request to open one panel, carrying its own count so the shell can tell a
+   * second press from the first. One piece of state for every panel that asks:
+   * the appender opens `insert`, and the fonts panel sends an author to
+   * `tokens` to fix a typeface the site does not provide.
+   */
+  const [openPanelRequest, setOpenPanelRequest] = useState<
+    { panel: LeftPanel; count: number } | undefined
+  >(undefined);
+  const requestPanel = useCallback((panel: LeftPanel) => {
+    setOpenPanelRequest(current => ({
+      panel,
+      count: (current?.count ?? 0) + 1,
+    }));
+  }, []);
+  const openInsertPanel = useCallback(() => {
+    requestPanel("insert");
+  }, [requestPanel]);
+
+  /*
+   * Whether the author wants empty-container chrome showing at all, mirrored
+   * from the shell so the appender mounted below can answer the same question
+   * the dashed placeholder box's own CSS rule already answers.
+   *
+   * Starts at the preference's own default rather than an assumed `true`: the
+   * shell reports the real value once it has read it, but that report lands
+   * one render after this component's first — an assumed value would be a
+   * SECOND declaration of the default that goes stale the day the shell's own
+   * changes and this one does not.
+   */
+  const [showEmptyElements, setShowEmptyElements] = useState(
+    DEFAULT_PREFERENCES.showEmptyElements
+  );
 
   /*
    * The editor takes the window: the shell draws its own rail, panels, top bar
@@ -1061,17 +2349,31 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
       <BuilderShell
         onExit={done}
         availablePanels={
-          renderEntryFields === null
+          entryFields === null
             ? AVAILABLE_PANELS
             : AVAILABLE_PANELS_WITH_SETTINGS
         }
+        // Forces the insert panel open from the empty-container appender,
+        // which lives on the canvas below rather than beside the rail that
+        // normally opens a panel.
+        openPanelRequest={openPanelRequest}
+        // The read half of the same gap: mirrors the shell's own preference
+        // so the appender below can be suppressed by the SAME switch that
+        // already suppresses the placeholder box it sits over.
+        onShowEmptyElementsChange={setShowEmptyElements}
+        onZoomChange={setZoom}
+        appliedScale={appliedScale}
         // Whether the page is live, which the admin's own chrome would have
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
         // editor is open, because the document is committed on the way out.
         topBar={
           <>
-            <DocumentStatusPill isDirty={editor.undoDepth > 0} />
+            <DocumentStatusPill isDirty={documentDirty} />
+            {/* Beside the publish state, not folded into it. The two answer
+                different questions and one of them has no answer where a
+                collection declares no lifecycle. */}
+            <UnsavedChangesPill isDirty={documentDirty} />
             {/*
              * Gated on the SAME read the canvas and the cascade are gated on.
              * Until the stored style has answered, `canvasSiteStyle` is the
@@ -1151,6 +2453,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         inspector={
           <InspectorPanel
             editor={editor}
+            // The SAME ref the canvas publishes its root through, so the style
+            // tab reads the element a node is actually drawn as rather than
+            // inferring one from the document. Two refs would let the panel
+            // read a canvas that is not the one on screen.
+            canvasRoot={canvasElement}
+            styleState={styleStateBinding}
+            classLibrary={classes.library}
+            classLibraryAbsence={classes.absence}
+            onCreateClass={classes.create}
             policy={stylePolicy}
             cascade={styleCascade}
             breakpoints={canvasRender.styleContext.breakpoints}
@@ -1205,14 +2516,31 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           ) : undefined
         }
         renderPanel={panel => {
-          if (panel === "insert") {
-            return (
-              <InsertPanel editor={editor} categoryOrder={CORE_CATEGORIES} />
-            );
-          }
-          if (panel === "layers") return <LayersPanel editor={editor} />;
-          if (panel === "tokens") {
-            return (
+          /*
+            A lookup rather than a chain of comparisons, so the arrow answers
+            in one step and adding a panel is one entry rather than one more
+            branch. It also states the pairing the shell needs: every key here
+            is a panel this file can fill, and `AVAILABLE_PANELS` is what the
+            rail offers — reading them side by side is how a panel that is
+            offered and renders nothing gets noticed.
+          */
+          const panels: Partial<Record<string, () => React.ReactNode>> = {
+            insert: () => (
+              <InsertPanel
+                editor={editor}
+                categoryOrder={CORE_CATEGORIES}
+                beginInsertDrag={drag.beginInsertDrag}
+              />
+            ),
+            /*
+              The panel cannot work this out for itself. It is drawn here, in
+              the shell's panel region, while `BlockKeyboardActions` below wraps
+              the shell's CHILDREN — sibling subtrees, so nothing the panel can
+              read from where it sits reports what this file knows by writing
+              both. Passed as a fact rather than inferred.
+            */
+            layers: () => <LayersPanel editor={editor} moveHints />,
+            tokens: () => (
               <TokensStudio
                 merged={offerableTokens(
                   canvasSiteStyle,
@@ -1222,17 +2550,73 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 supplied={configSiteStyle?.tokens}
                 pending={siteStylePending}
               />
-            );
-          }
-          /*
-           * The entry's own fields — SEO, relations, whatever this collection
-           * declares — which the takeover removed from the page behind this
-           * editor. Rendered by the ADMIN's closure, not reconstructed here: how
-           * a field is drawn is the entry form's contract, and a second
-           * renderer would drift from it.
-           */
-          if (panel === "settings") return renderEntryFields?.(name) ?? null;
-          return null;
+            ),
+            classes: () => (
+              <ClassManagerPanel
+                absence={classes.absence}
+                pendingSlugs={classes.pendingSlugs}
+                documentClassIds={documentClasses.ids}
+                /*
+                  Whether that walk reached the whole document. It stops at the
+                  node ceiling, and a class applied past it is missing from the
+                  list — which the panel must not read as "not on this page".
+                */
+                documentScan={documentClasses.complete ? "complete" : "partial"}
+                library={classes.library}
+                onRename={classes.rename}
+                /*
+                  No `usage`, and no `onDelete`. The usage index is a
+                  collection and this surface has no read for one, so the panel
+                  reports that nothing was read rather than reporting an empty
+                  index — which would say every class is unused. Deleting needs
+                  that same reach plus a write stripping the class from every
+                  document holding it, so it is withheld entirely rather than
+                  offered as a control that cannot keep its promise.
+                */
+                suppliedClassIds={configSiteStyle?.classes?.map(
+                  entry => entry.id
+                )}
+              />
+            ),
+            fonts: () => (
+              <FontsPanelWithUpload
+                faces={offerableFaces(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                tokens={renderedTokens(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                absence={siteStyleError !== null ? "failed" : "pending"}
+                /*
+                  The fix for a token naming a family this site does not provide
+                  is to edit that token, and editing belongs to the studio. This
+                  shell offers one, so the jump is wired: without the callback
+                  the panel suppresses the action and an author is left to find
+                  the right panel and the right row themselves.
+                */
+                onOpenTokens={() => requestPanel("tokens")}
+                storedFaces={storedSiteStyle?.fonts}
+                storedPending={siteStylePending}
+                unreadableFonts={unreadableStoredFonts}
+              />
+            ),
+            /*
+              The document's title and slug, and the entry's own fields — SEO,
+              relations, whatever this collection declares — which this editor
+              covered when it took the window. Drawn by the ADMIN, not
+              reconstructed here: how a field is drawn is the entry form's
+              contract, and a second renderer would drift from it.
+
+              The same value the rail was derived from, so a panel is never
+              offered that this returns nothing for.
+            */
+            settings: () => entryFields,
+          };
+          return panels[panel]?.() ?? null;
         }}
       >
         {/*
@@ -1288,52 +2672,104 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 : "This site\u2019s styles could not be loaded, so the canvas would not match the published page. Reload to try again."}
             </p>
           ) : (
-            <Canvas
-              document={editor.document}
-              siteStyles={siteSheet(canvasSiteStyle)}
-              selectedId={editor.selectedId}
-              selectedIds={editor.selection.ids}
-              onSelect={editor.select}
-              // The style context and the host policy, derived above so both are
-              // one object with one identity rather than rebuilt per render.
-              render={canvasRender}
-              // The box the tiers are compiled against, the width it is asked
-              // to take, and the reporter that closes the loop: the request is
-              // a ceiling, and everything downstream is derived from what the
-              // box actually got rather than from what it was offered.
-              preview={canvasPreview}
-              dragHandlers={drag.handlers}
-              // The pointer route into typing a block's text. Its keyboard
-              // counterpart is the Enter binding above, registered in the same
-              // place so a surface cannot gain one without the other.
-              onDoubleClick={inline.onDoubleClick}
-              // Both pieces of chrome go through the canvas rather than beside it,
-              // because both are positioned in the canvas's own content
-              // coordinates and the canvas root is what establishes them.
-              overlay={
-                <>
-                  <DropIndicator target={drag.target} />
-                  {/*
+            /*
+              Wrapped rather than passed in, because the menu opens over the
+              WHOLE canvas and reads which block from the selection the canvas
+              has already moved. The wrapper generates no box, so the canvas
+              lays out exactly as it did.
+            */
+            <BlockContextMenu editor={editor}>
+              <Canvas
+                zoom={zoom}
+                /*
+                  On the CANVAS, not inside `preview`. The scale is reported
+                  whether or not a viewport is being previewed, and an extra key
+                  on that inferred object is accepted and ignored rather than
+                  refused — so the reporter simply never ran.
+                */
+                onScale={setAppliedScale}
+                document={editor.document}
+                rootRef={canvasRoot}
+                onRoot={setCanvasElement}
+                forcedState={shownStyleState}
+                siteStyles={siteSheet(canvasSiteStyle)}
+                selectedId={editor.selectedId}
+                selectedIds={editor.selection.ids}
+                onSelect={editor.select}
+                // The style context and the host policy, derived above so both are
+                // one object with one identity rather than rebuilt per render.
+                render={canvasRender}
+                // The box the tiers are compiled against, the width it is asked
+                // to take, and the reporter that closes the loop: the request is
+                // a ceiling, and everything downstream is derived from what the
+                // box actually got rather than from what it was offered.
+                preview={canvasPreview}
+                dragHandlers={drag.handlers}
+                // The same object those handlers came from, forwarded whole.
+                // The canvas draws what the pointer currently means — which
+                // block is in flight, which container is receiving it, and why
+                // a region will not take it — and decides none of it.
+                //
+                // Whole rather than picked apart for the reason the handlers
+                // are: a set spread across several props can be partially
+                // wired, and a canvas told about a refusal but not about the
+                // block in flight explains a refusal while dimming nothing.
+                drag={drag}
+                // The pointer route into typing a block's text. Its keyboard
+                // counterpart is the Enter binding above, registered in the same
+                // place so a surface cannot gain one without the other.
+                onDoubleClick={inline.onDoubleClick}
+                // Both pieces of chrome go through the canvas rather than beside it,
+                // because both are positioned in the canvas's own content
+                // coordinates and the canvas root is what establishes them.
+                overlay={
+                  <>
+                    <DropIndicator target={drag.target} />
+                    {/*
                   Suppressed for the duration of a drag. The bar would otherwise
                   sit over the canvas the author is aiming at, naming a block
                   that is in the middle of moving.
                 */}
-                  <BlockToolbar
-                    editor={editor}
-                    hidden={drag.draggingId !== null}
-                  />
-                  {/*
+                    <BlockToolbar editor={editor} hidden={dragging} />
+                    {/*
                   Suppressed for the same reason and by the same signal. The
                   bands report a layout that is mid-change during a drag, so
                   every value on them is about to be wrong.
                 */}
-                  <SpacingOverlay
-                    editor={editor}
-                    hidden={drag.draggingId !== null}
-                  />
-                </>
-              }
-            />
+                    <SpacingOverlay editor={editor} hidden={dragging} />
+                    {/*
+                  Suppressed during a drag for the same reason the toolbar and
+                  the bands are: the document is mid-change, so a control
+                  offering to fill a container names a shape that is about to
+                  be different.
+                  ALSO suppressed while the author has turned empty-container
+                  chrome off: the dashed placeholder box collapses to zero
+                  height under the same preference (`builder-chrome.css`'s
+                  `[data-nx-slots]:empty` rule already matches it), and a "+"
+                  left floating over nothing after that would make the
+                  preference lie about what a visitor sees.
+                */}
+                    <EmptyContainerAppenders
+                      document={editor.document}
+                      slots={slots}
+                      blocks={blocks}
+                      hidden={emptyContainerAppenderHidden(
+                        dragging,
+                        showEmptyElements
+                      )}
+                      onAppend={nodeId => {
+                        // Select first, then open. The inserter derives its
+                        // target from the selection, so selecting the container
+                        // is what makes the next insert land inside it — there
+                        // is no second targeting path to keep in step.
+                        editor.select(nodeId);
+                        openInsertPanel();
+                      }}
+                    />
+                  </>
+                }
+              />
+            </BlockContextMenu>
           )}
         </BlockKeyboardActions>
       </BuilderShell>

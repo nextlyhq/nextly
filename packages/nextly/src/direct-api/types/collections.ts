@@ -395,6 +395,18 @@ export interface CountArgs<TSlug extends CollectionSlug = CollectionSlug>
    * looser.
    */
   frameworkFilter?: true;
+
+  /**
+   * As {@link FindArgs.status}, and present for the same reason a count mirrors
+   * every other one of `find`'s filters: the total has to describe the rows a
+   * list would return. Without it an untrusted count silently answers
+   * `published` only -- `resolveStatusFilter`'s default for a caller that
+   * states nothing -- so `count()` and `find({ status: "all" }).meta.total`
+   * disagree about one collection, and neither says why.
+   *
+   * The query service has always accepted this; only the Direct API dropped it.
+   */
+  status?: "published" | "draft" | "all";
 }
 
 /**

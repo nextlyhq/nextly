@@ -1,3 +1,16 @@
+import type {
+  WidgetChrome,
+  DataWidgetArchetype,
+  CellWidgetArchetype,
+  WidgetStatCell,
+  WidgetAction,
+  QuerylessWidgetArchetype,
+  WidgetArchetype,
+  WidgetQuery,
+  WidgetSetting,
+  WidgetSize,
+} from "../domains/widgets";
+
 import type { PermissionSlug } from "./contributions";
 
 /**
@@ -98,6 +111,33 @@ export interface PluginMenuItem {
   label: string;
   /** Admin path to navigate to, e.g. `"/admin/collections/forms"`. */
   to: string;
+  /**
+   * The DECLARED slug of one of this plugin's own collections, when the item
+   * points at that collection's list.
+   *
+   * An integrator may `.rename({ forms: "contact-forms" })`, and the schema
+   * then registers only the renamed collection and seeds only its
+   * permissions. An item that spelled the declared slug into `to` would send
+   * every reader to a list that does not exist, and one that spelled it into
+   * `requiredPermission` would be withheld from the readers who hold the
+   * permission that WAS seeded. Naming the collection instead lets
+   * `buildPluginAdminMeta` re-derive both from the slug the host actually
+   * registered.
+   *
+   * `to` stays required, and stays the item's destination when nothing is
+   * renamed. Both are written from one slug constant at the declaration site,
+   * so they cannot say different things.
+   *
+   * Declaring this also gates the item on being able to READ that collection,
+   * because an item pointing at a list is worth offering only to someone the
+   * list will open for. An item that must carry no gate omits `collection`
+   * and writes its own `to`.
+   *
+   * Resolved away during serialization: the admin receives `to` and
+   * `requiredPermission` already carrying the resolved slug, and never sees
+   * this field.
+   */
+  collection?: string;
   /** Lucide icon name (resolved client-side). */
   icon?: string;
   /** Sort order within the plugin's items; lower = higher. Default 100. */
@@ -136,18 +176,261 @@ export interface PluginAdminPage {
 }
 
 /**
- * @experimental A plugin-contributed dashboard widget.
+ * The archetypes core draws ITSELF.
  *
- * RESERVED — the contract is published for forward-compatibility, but
- * widget rendering / the dashboard grid is **deferred** and is NOT
- * built. Declaring widgets has no effect yet.
+ * `custom` is excluded by definition: it is the archetype that means "the
+ * plugin draws its own body", so it is the one that cannot describe a
+ * host-drawn card.
+ *
+ * DERIVED from the two vocabularies in `domains/widgets/definition` rather than
+ * spelled as `Exclude<WidgetArchetype, "custom">`. That spelling looks
+ * equivalent and is not: it flattens a distinction core makes and this contract
+ * has to honour, since `text` and `actions` are drawn with NO query and the
+ * registry validator REFUSES one on them. Restating the rule here got it
+ * backwards and made those two undeclarable.
  */
-export interface PluginAdminWidget {
+export type DeclarativeWidgetArchetype =
+  | DataWidgetArchetype
+  | CellWidgetArchetype
+  | QuerylessWidgetArchetype;
+
+/** Everything a contributed widget may carry whichever way it is drawn. */
+interface PluginAdminWidgetBase {
   id: string;
-  component: ComponentPath;
+  /** Column span the current grid honours: `half` spans 6 of 12, `full` spans 12. */
   size?: "full" | "half";
-  requiredPermission?: PermissionSlug;
+  /**
+   * Gates whether the CARD renders. An ARRAY means any-of.
+   *
+   * 🔴 The array form has to be accepted HERE as well as on `WidgetDefinition`,
+   * and the reason is a fail-open rather than a missing feature. Boot validates
+   * a contribution through the same `widgetValueProblem` that accepts an array,
+   * so a plugin declaring one passes registration -- and the summary layout
+   * resolution reads is built by a separate reader, which used to take strings
+   * only. It dropped the array, the layout endpoint saw no gate at all, and the
+   * card's id and default placement went to every authenticated reader while
+   * the browser hid it. Declaring the type narrower than what boot accepts is
+   * what made that reachable.
+   */
+  requiredPermission?: PermissionSlug | readonly PermissionSlug[];
+  title?: string;
+  description?: string;
+  icon?: string;
+  category?: string;
+  defaultSize?: WidgetSize;
+  minSize?: WidgetSize;
+  maxSize?: WidgetSize;
+  link?: { label: string; href: string };
+  /**
+   * Where this widget sits by default, ascending; omitted means "after
+   * everything that states one".
+   *
+   * On the BASE because position is not an archetype's business -- any widget
+   * may state one, and a plugin that could not would sit wherever the
+   * resolver's channel ordering happened to leave it.
+   */
+  defaultOrder?: number;
+  /**
+   * What a reader may change about this card, drawn by the settings panel.
+   *
+   * On the BASE for the same reason `defaultOrder` is: any widget may offer
+   * settings, whatever draws its body. Declaring it only on the archetypes core
+   * draws would leave a plugin shipping its own component unable to expose one
+   * through the supported surface — while `validatedAdminWidgets` published the
+   * field anyway, so the contract would be narrower than the channel.
+   */
+  settings?: WidgetSetting[];
 }
+
+/**
+ * @experimental A widget the PLUGIN draws, by shipping a component.
+ *
+ * The archetype is optional here and unconstrained: a widget may ship a
+ * component AND name a data archetype, which is how it supplies a body for an
+ * archetype this admin release cannot draw yet. `WidgetDefinition` forbids that
+ * pairing on the registry side and this contract deliberately allows it -- a
+ * registered definition is complete by construction, while a contribution
+ * crosses a version boundary and may be describing a card for a core that has
+ * not shipped the renderer.
+ */
+interface PluginAdminCustomWidgetBase extends PluginAdminWidgetBase {
+  /** Component rendered for this widget. */
+  component: ComponentPath;
+  /** Still executed server-side, and handed to the component as its slot. */
+  query?: WidgetQuery;
+}
+
+/**
+ * @experimental A widget that ships its own component.
+ *
+ * `archetype` stays open because a component is also the FALLBACK body for an
+ * archetype this admin release cannot draw -- `{ component, archetype: "metric" }`
+ * with no query is a real declaration, and core reports that card as undrawable
+ * so the component is what renders.
+ *
+ * `chrome` is the part that cannot stay open. It is split across two
+ * alternatives so `"none"` is only WRITABLE where it is legal: a widget that
+ * declines the frame must supply the surface itself, and for every archetype
+ * core draws the card IS the surface the body is composed against -- it owns
+ * the title, the footer and the busy state. Expressed as a constraint rather
+ * than left to `validateChrome`, which still refuses the pair at boot: a type
+ * that permits it makes the runtime refusal the FIRST time an author learns,
+ * after the plugin ships.
+ */
+export type PluginAdminCustomWidget = PluginAdminCustomWidgetBase &
+  (
+    | { archetype?: "custom"; chrome?: WidgetChrome }
+    | { archetype: Exclude<WidgetArchetype, "custom">; chrome?: never }
+  );
+
+/**
+ * @experimental A widget the HOST draws from a query result.
+ *
+ * The pair is the unit: core fills a `metric`, `table` or `list` FROM that
+ * result, so one declared without a query describes a card core can never fill
+ * -- no request is made for it, no slot ever arrives, and the grid reads that
+ * absence as still loading for the life of the page.
+ */
+export interface PluginAdminDataWidget extends PluginAdminWidgetBase {
+  archetype: DataWidgetArchetype;
+  /** The widget's data request, validated and executed server-side. */
+  query: WidgetQuery;
+  /**
+   * Optional FALLBACK body, for an archetype this admin release cannot draw
+   * yet. Omit it and the card says so by name.
+   */
+  component?: ComponentPath;
+}
+
+/**
+ * @experimental A widget the HOST draws as several labelled numbers.
+ *
+ * `cells` rather than `query`, and the registry validator refuses the pair:
+ * each cell carries its own count, which is what keeps every number an ordinary
+ * access-controlled read instead of one composite answer covering all of them.
+ *
+ * Declared here because the authoring union is what a TypeScript plugin writes
+ * against. An archetype core CLASSIFIES but this union cannot express is
+ * accepted by the boot gate -- which derives its rule from the vocabulary --
+ * and rejected by the type, with nothing anywhere saying so.
+ */
+export interface PluginAdminStatsWidget extends PluginAdminWidgetBase {
+  archetype: CellWidgetArchetype;
+  /** One entry per number, each with its own count query and optional link. */
+  cells: WidgetStatCell[];
+  /**
+   * Optional FALLBACK body, for an admin release that cannot draw this
+   * archetype yet. Omit it and the card says so by name.
+   */
+  component?: ComponentPath;
+}
+
+/**
+ * @experimental A widget the HOST draws from its declared prose.
+ *
+ * No query -- the registry validator refuses one -- and no actions, which
+ * belong to the archetype named for them.
+ */
+export interface PluginAdminTextWidget extends PluginAdminWidgetBase {
+  archetype: "text";
+  query?: never;
+  actions?: never;
+  /**
+   * Optional FALLBACK body, for an archetype this admin release cannot draw
+   * yet. Omit it and the card says so by name.
+   */
+  component?: ComponentPath;
+}
+
+/**
+ * @experimental A widget the HOST draws as a card of shortcuts.
+ *
+ * `actions` is REQUIRED, because the widget is its list: one declaring none
+ * describes an empty card. Split from `text` rather than left optional on a
+ * shared queryless shape, so both mistakes fail where they are written --
+ * `{ archetype: "actions" }` with no shortcuts, and `{ archetype: "text" }`
+ * carrying some. Optional on one shape made the first a boot failure and let
+ * the second pass boot and silently drop what it declared.
+ */
+export interface PluginAdminActionsWidget extends PluginAdminWidgetBase {
+  archetype: "actions";
+  query?: never;
+  actions: WidgetAction[];
+  /**
+   * Optional FALLBACK body, for an archetype this admin release cannot draw
+   * yet. Omit it and the card says so by name.
+   */
+  component?: ComponentPath;
+}
+
+/**
+ * The queryless archetypes NO arm above covers -- `never` while all are armed.
+ *
+ * The arms ENUMERATE because each carries a different payload -- prose for one,
+ * shortcuts for the other -- so they cannot be derived from the vocabulary the
+ * way `DeclarativeWidgetArchetype` is. Adding a third queryless archetype to
+ * core must therefore be a decision about what it carries, and this type is
+ * what makes skipping that decision observable.
+ *
+ * Exported only so `__tests__/queryless-arms.test-d.ts` can ASSERT it is
+ * `never`. This was previously stated here as
+ * `type _Unused = <this> extends never ? true : never`, which enforced nothing:
+ * a standalone alias resolving to `never` is a perfectly valid unused alias and
+ * `tsc` reports no diagnostic for it, so the guard passed with an unarmed
+ * archetype present. Only an assertion the checker EVALUATES separates the two.
+ */
+export type UnarmedQuerylessArchetype = Exclude<
+  QuerylessWidgetArchetype,
+  PluginAdminTextWidget["archetype"] | PluginAdminActionsWidget["archetype"]
+>;
+
+/** @experimental A widget the HOST draws without asking for data. */
+export type PluginAdminQuerylessWidget =
+  | PluginAdminTextWidget
+  | PluginAdminActionsWidget;
+
+/** @experimental Either shape of a widget the host draws. */
+export type PluginAdminDeclarativeWidget =
+  | PluginAdminDataWidget
+  | PluginAdminStatsWidget
+  | PluginAdminQuerylessWidget;
+
+/**
+ * @experimental A plugin-contributed dashboard widget, drawn one of two ways.
+ *
+ * A union rather than one interface with everything optional, because "either a
+ * component, or an archetype and a query" is the actual rule and an interface
+ * cannot say it. Spelling it as optional fields would accept `{ id }` -- a
+ * widget describing no body at all -- at the type level and leave the boot
+ * check as the only thing that ever said so.
+ *
+ * `component` was REQUIRED on every widget until this release, and the reason
+ * it was is worth recording because it stopped being true rather than being
+ * wrong. `PluginWidgetGrid` was the only consumer, it rendered
+ * `PluginSlot path={widget.component}` and nothing else, so a widget declaring
+ * an archetype and no component drew an empty cell: accepted everywhere,
+ * rendering nothing, reporting nothing. This contract said the requirement
+ * would become conditional "when that grid exists and can draw a widget from
+ * its archetype alone". `WidgetGrid` now does exactly that, draws `metric` from
+ * a query, and names any archetype it cannot draw yet -- and the grid that
+ * required a component has since been deleted. The consumer is behind the
+ * change rather than ahead of it.
+ *
+ * Both arms allow `component`, so every existing `{ id, component, size }`
+ * declaration keeps compiling untouched. What the union adds is the second
+ * route, not a constraint on the first.
+ *
+ * `size` is the sizing the grid reads when a widget declares no `defaultSize`;
+ * `defaultSize` is the enum and wins where both appear, because a plugin that
+ * adopted the newer field meant it.
+ *
+ * `requiredPermission` decides whether the CARD renders. It does NOT constrain
+ * the rows a widget's query returns -- the query executor enforces that, and
+ * it is not optional there.
+ */
+export type PluginAdminWidget =
+  | PluginAdminCustomWidget
+  | PluginAdminDeclarativeWidget;
 
 /**
  * @public Per-collection admin view overrides + injection points,
@@ -173,8 +456,11 @@ export interface PluginCollectionView {
  * @public Declarative admin-UI contributions. Introspectable
  * by the host without running the plugin.
  *
- * Consumed: `menu`, `pages` + `settings`, `views`.
- * `widgets` is RESERVED — deferred; not rendered.
+ * Consumed: `menu`, `pages` + `settings`, `views`, `widgets`.
+ * `widgets` is consumed twice over: the admin grid draws the card and the
+ * server validates and executes `query`. `component` is CONDITIONAL -- required
+ * only for a widget the plugin draws itself -- because that archetype-driven
+ * grid now exists (see `PluginAdminWidget`).
  */
 export interface PluginAdminContributions {
   /** Sidebar navigation entries. */
@@ -184,8 +470,8 @@ export interface PluginAdminContributions {
   /** Plugin settings UI rendered at `/admin/plugins/<slug>`. */
   settings?: { component: ComponentPath };
   /**
-   * @experimental Dashboard widgets — now rendered by `PluginWidgetGrid`
-   * on the admin dashboard, permission-gated. Graduates per D55.
+   * @experimental Dashboard widgets — rendered by `WidgetGrid` on the admin
+   * dashboard, permission-gated. Graduates per D55.
    */
   widgets?: PluginAdminWidget[];
   /** Per-collection view overrides + injection points, keyed by slug. */

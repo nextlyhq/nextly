@@ -244,7 +244,11 @@ describe("FieldGroupRegistryService", () => {
       >;
       const where = opts.where as Record<string, unknown>;
       expect((where.and as Array<Record<string, unknown>>)[0]).toMatchObject({
-        column: "migration_status",
+        // The SCHEMA PROPERTY, not the physical column. The adapter here is a
+        // mock that accepts any name, which is exactly why the physical
+        // spelling survived in the query for so long: only a real database
+        // refuses it.
+        column: "migrationStatus",
         value: "pending",
       });
     });
@@ -596,7 +600,11 @@ describe("FieldGroupRegistryService", () => {
       const where = opts.where as Record<string, unknown>;
       const andArr = where.and as Array<Record<string, unknown>>;
       expect(andArr[0]).toMatchObject({
-        column: "migration_status",
+        // The SCHEMA PROPERTY, not the physical column. The adapter here is a
+        // mock that accepts any name, which is exactly why the physical
+        // spelling survived in the query for so long: only a real database
+        // refuses it.
+        column: "migrationStatus",
         value: ["pending", "generated"],
       });
     });

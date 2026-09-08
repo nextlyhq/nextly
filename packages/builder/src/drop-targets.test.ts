@@ -453,12 +453,62 @@ describe("resolveDrop", () => {
 
     // A refusal rather than an absent target, because the canvas has to say
     // WHY: the author aimed at this region.
+    //
+    // `parentId` travels with it for the same reason `permitted` does. A region
+    // is identified by `"<parentId>::<slot>"`, which is a composite the surface
+    // drawing the refusal would otherwise have to take apart with a string
+    // split — and a container is the thing that has to be outlined and named,
+    // so the id of the node is the fact a caller actually needs.
     expect(resolution).toEqual({
       kind: "refused",
       refusal: {
         regionId: "acc::panels",
+        parentId: "acc",
         reason: "not-allowed-in-slot",
         permitted: ["core/accordion-item"],
+      },
+    });
+  });
+
+  it("carries no parent on a refusal at the ROOT region", () => {
+    // The root has no container node, so there is nothing to outline or name.
+    // Absent rather than a sentinel: a caller can then ask whether there is a
+    // container at all, which is exactly what separates `restricted-at-root`
+    // from a refusal an author can fix by aiming somewhere else.
+    const resolution = resolveDrop(
+      {
+        blockName: "core/accordion-item",
+        forbiddenParents: new Set(),
+        regions: [
+          {
+            id: ROOT_REGION,
+            at: { at: "root" },
+            depth: 0,
+            rect: { x: 0, y: 0, width: 400, height: 200 },
+            axis: "y",
+            childIds: [],
+          } satisfies DropRegion,
+        ],
+        rects: rectsOf({}),
+        nesting: {
+          parentsOf: () => ["core/accordion"],
+          slotAllowOf: () => undefined,
+        },
+      },
+      { x: 100, y: 100 }
+    );
+
+    // `toStrictEqual`, not `toEqual`. The looser matcher IGNORES properties
+    // whose value is undefined, so it passes whether the key is absent or
+    // present-and-empty — which is the exact distinction being asserted, and
+    // the one the docblock promises. A test that cannot see the difference is
+    // not coverage of it.
+    expect(resolution).toStrictEqual({
+      kind: "refused",
+      refusal: {
+        regionId: ROOT_REGION,
+        reason: "restricted-at-root",
+        permitted: ["core/accordion"],
       },
     });
   });

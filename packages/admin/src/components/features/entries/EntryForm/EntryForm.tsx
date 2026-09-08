@@ -26,8 +26,8 @@ import { HistoricalDocumentBanner } from "@admin/components/features/versions/Hi
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { snapshotToFormValues } from "@admin/components/features/versions/snapshot-to-form-values";
 import { VersionSnapshotForm } from "@admin/components/features/versions/VersionSnapshotForm";
+import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { Alert, AlertDescription, Skeleton, toast } from "@admin/components/ui";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
@@ -39,11 +39,10 @@ import { previewMessage, useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePreviewLink } from "@admin/hooks/usePreviewLink";
+import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import {
   computeMainFields,
-  takeoverControllerNames,
-  computeFieldsBeside,
-  takeoverTypesFromBranding,
+  conditionFieldNames,
 } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
 
@@ -58,12 +57,15 @@ import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
 import { AutosaveRecoveryBanner } from "./AutosaveRecoveryBanner";
+import type { ContributedAction } from "./DocumentActionBar";
+import { DocumentLockBanner } from "./DocumentLockBanner";
 import {
   effectiveEntryStatus,
   isSlugPerLocale,
   previewLinkLocale,
   useHasPublicAddress,
 } from "./entry-address";
+import { fieldsBesidePanel } from "./EntryFieldsPanel";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import {
@@ -79,6 +81,7 @@ import { FormErrorSummary } from "./FormErrorSummary";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
+import { useDocumentLockSurface } from "./useDocumentLockSurface";
 import {
   useEntryForm,
   getCollectionFields,
@@ -136,6 +139,30 @@ export interface EntryFormProps {
    * - Layout is single column
    */
   embedded?: boolean;
+  /**
+   * Opens this entry's API response.
+   *
+   * Supplied by the route, which is what knows how to navigate. Without it the
+   * header offers no way to inspect the document at all: `Show JSON` used to
+   * fill that role and the menu now names this instead, so an unwired callback
+   * is a capability removed rather than replaced.
+   */
+  onViewApi?: () => void;
+  /**
+   * Document-level actions the PAGE owns, folded in with the form's own.
+   *
+   * DESCRIPTIONS paired with handlers, not rendered controls. Adding a document
+   * to a release is a fact about this document, so its control belongs with
+   * Publish and Duplicate — but releases are the page's concern, and a form that
+   * imported them would have to import translations and every later one too.
+   *
+   * Describing rather than rendering is what leaves the model free to place the
+   * action, order it against the built-ins, and disable it with a reason. A
+   * rendered node fixes all three at its call site, and the one that matters is
+   * the last: a control that cannot say why it is unavailable has to disappear,
+   * which an author cannot tell from a feature that does not exist.
+   */
+  documentActions?: readonly ContributedAction[];
   /** Additional CSS classes for the form container */
   /**
    * i18n: translation mode — the language being translated FROM, the source
@@ -252,6 +279,8 @@ export function EntryForm({
   translation,
   embedded = false,
   className,
+  onViewApi,
+  documentActions,
 }: EntryFormProps) {
   /*
    * Whether the preview pane is open, and when the document last saved.
@@ -279,9 +308,9 @@ export function EntryForm({
 
   const {
     form,
-    handleSubmit,
-    handleDelete,
-    handleDiscardWorkingDraft,
+    handleSubmit: submitEntry,
+    handleDelete: deleteEntry,
+    handleDiscardWorkingDraft: discardWorkingDraft,
     handleCancel,
     isSubmitting,
     isDirty,
@@ -344,6 +373,7 @@ export function EntryForm({
   });
 
   const collectionSlug = collection.slug ?? collection.name;
+
   const localeCtx = useEntryLocaleContext({
     locale,
     defaultLocale,
@@ -380,14 +410,11 @@ export function EntryForm({
   // active (its condition passes), show only that field + its condition controller;
   // otherwise the full body. Generic — driven by field-type metadata, not by any
   // specific plugin. (title/slug/status are separate system components, always kept.)
-  const branding = useBranding();
-  const takeoverTypes = takeoverTypesFromBranding(branding.plugins);
-  const controllerNames = takeoverControllerNames(allFields, takeoverTypes);
-  const watched = controllerNames.length ? form.watch(controllerNames) : [];
-  const values = Object.fromEntries(
-    controllerNames.map((n, i) => [n, watched[i]])
+  // Asked of the shared hook so the Single editor cannot answer it differently.
+  const { mainFields, controllerNames, takeoverTypes } = useTakeoverLayout(
+    allFields,
+    form
   );
-  const mainFields = computeMainFields(allFields, { takeoverTypes, values });
 
   /*
    * A renderer for the entry's OTHER fields, handed to whatever surface takes
@@ -408,17 +435,6 @@ export function EntryForm({
    * form submits are one thing. A second `EntryForm` would fork the state and
    * lose the edit made in whichever copy did not save.
    */
-  const renderEntryFields = useCallback(
-    (excludePath: string) => (
-      <EntryFormContent
-        fields={computeFieldsBeside(allFields, excludePath)}
-        disabled={isSubmitting}
-        mode={mode}
-      />
-    ),
-    [allFields, isSubmitting, mode]
-  );
-
   // Get form errors and submit attempt count. submitCount gates the
   // top-level "Please fix the following errors" toast in FormErrorSummary
   // so it only appears after the user actually clicks Save / Publish, not
@@ -506,6 +522,51 @@ export function EntryForm({
     mutationPending: isSubmitting,
   });
 
+  /*
+   * The values every field CONDITION watches, read through `watch` so the panel
+   * recomputes as an author changes them rather than only when the form
+   * remounts.
+   *
+   * `watch` answers a name list POSITIONALLY, so the result is zipped back onto
+   * the names it was asked for — the same shape `useTakeoverLayout` needs, and
+   * for the same reason: handed the bare array, every condition would be
+   * evaluated against `undefined` and each conditional field would be judged on
+   * a value nobody supplied.
+   */
+  const conditionNames = useMemo(
+    () => conditionFieldNames(allFields),
+    [allFields]
+  );
+  const watchedConditions = form.watch(conditionNames);
+  const conditionValues = useMemo(
+    () =>
+      Object.fromEntries(
+        conditionNames.map((name, i) => [name, watchedConditions[i]])
+      ),
+    [conditionNames, watchedConditions]
+  );
+
+  /*
+   * Delegated whole, including the decision to answer NULL when there is
+   * nothing to draw — which is what withholds the panel rather than opening an
+   * empty one. Kept out of this callback so the rule is reachable by a test
+   * without standing up the entire form.
+   *
+   * Declared here rather than beside the other field derivations because it
+   * needs `hasPublicAddress`: a surface offering the slug has to carry the same
+   * warning the meta strip it covers would have shown.
+   */
+  const renderEntryFields = useCallback(
+    (excludePath: string) =>
+      fieldsBesidePanel(allFields, excludePath, {
+        disabled: isSubmitting,
+        mode,
+        values: conditionValues,
+        hasPublicAddress,
+      }),
+    [allFields, isSubmitting, mode, conditionValues, hasPublicAddress]
+  );
+
   useAutoSlug({
     form,
     titleFieldName: titleField?.name ?? "title",
@@ -543,24 +604,57 @@ export function EntryForm({
   // once the entry has an id: a document that has never been saved has nothing
   // for the endpoint to address, and `null` turns recording off rather than
   // inventing one.
+
+  /*
+   * An advisory claim on the document, so two editors are told about each other
+   * rather than discovering it when one overwrites the other.
+   *
+   * Off while creating: a document with no id is nothing to claim, and nobody
+   * else can be in it.
+   *
+   * 🔴 Held THROUGH a past version, which reading alone would not need. The
+   * history view offers Restore, and restoring writes the live document — so
+   * dropping the claim here would let someone study an old snapshot, never see
+   * the colleague who arrived meanwhile, and overwrite them from a surface that
+   * looked read-only. The autosave is still held off while a version is on
+   * screen, which is a different question: what it would RECORD.
+   */
+  const lock = useDocumentLockSurface({
+    scopeKind: "collection",
+    slug: collectionSlug,
+    entryId: entry?.id,
+    enabled: mode === "edit",
+  });
+
+  /*
+   * The one gate every write passes through.
+   *
+   * 🔴 Not the controls. Save, Publish, Unpublish, Delete, discarding a working
+   * draft, the keyboard shortcut, a native form submit and the quick-edit modal
+   * all reach these three functions. Disabling the affordances one at a time is
+   * a list that the next write path gets added without, and the failure is
+   * silent: the banner says the document is somebody else's while the editor
+   * overwrites them. The affordances ARE disabled, so nothing offers what it
+   * cannot do — this is the guard that does not depend on remembering.
+   */
+  const handleSubmit: typeof submitEntry = (event, intent) =>
+    lock.actionsDisabled ? Promise.resolve() : submitEntry(event, intent);
+  const handleDelete = () => {
+    if (!lock.actionsDisabled) deleteEntry();
+  };
+  const handleDiscardWorkingDraft = () =>
+    lock.actionsDisabled ? Promise.resolve() : discardWorkingDraft();
+
   const autosaveScope = useMemo(
     () => autosaveScopeFor("collection", collection.name, savedEntryId),
     [savedEntryId, collection.name]
   );
-  // The other half of recording: offer the work back when the editor opens.
+  // The other half of recording: offer the work back when the editor opens, and
+  // write it into this form when the author accepts.
   const recovery = useAutosaveRecovery({
     scope: autosaveScope,
+    form,
   });
-  const restoreRecovery = useCallback(() => {
-    if (!recovery.offer) return;
-    // `reset` with `keepDefaultValues` so the form goes DIRTY: the recovered
-    // values are not what the server holds, and treating them as the new
-    // baseline would let the reader navigate away believing they were stored.
-    form.reset(recovery.offer.snapshot as Record<string, unknown>, {
-      keepDefaultValues: true,
-    });
-    recovery.dismiss();
-  }, [recovery, form]);
 
   /*
    * Work a FIELD holds that the form's values do not contain. The page builder
@@ -587,6 +681,11 @@ export function EntryForm({
      * reads "you have unsaved changes", and accepting it silently reverts the
      * document to whatever the reader happened to be looking at. Reading is not
      * editing, and the write is the only part of that which is recoverable.
+     */
+    /*
+     * And held off while a colleague holds the document. The recovery point is a
+     * write to the same row, so leaving it running is the overwrite the claim
+     * exists to prevent, made quieter by happening on a timer nobody watches.
      */
     enabled: !isSubmitting && viewingVersion === null,
   });
@@ -697,6 +796,15 @@ export function EntryForm({
           className={className}
         >
           <div className="space-y-6">
+            {/* 🔴 Here too, not only in the standalone layout. Quick-edit from a
+                relationship picker claims the related entry exactly as the full
+                editor does, so without this a colleague's claim renders every
+                field in the modal uneditable with nothing saying why and no way
+                to take it over — a locked form that reads as a broken one. */}
+            <DocumentLockBanner
+              notice={lock.notice}
+              onTakeOver={lock.takeOver}
+            />
             {/* Error summary at top of form */}
             <FormErrorSummary errors={errors} submitCount={submitCount} />
             {/* This branch renders every collection field, the editable slug among them, but not
@@ -717,6 +825,7 @@ export function EntryForm({
             <EntryFormContent
               fields={getCollectionFields(collection)}
               disabled={isSubmitting}
+              readOnly={lock.readOnly}
               mode={mode}
             />
             <EntryFormActions
@@ -807,14 +916,27 @@ export function EntryForm({
                           The two modal callers never had that padding either. */}
                         <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
                           {/* Main column */}
-                          <div className="flex-1 min-w-0 flex flex-col">
+                          <div
+                            className="flex-1 min-w-0 flex flex-col mx-auto w-full"
+                            // The measure lives on the FIELD column, not on
+                            // the page: the rail is a fixed-width sibling,
+                            // so a page-level cap would bound the two
+                            // together and spend the rail's width out of
+                            // the author's. `mx-auto` centres what is left
+                            // once the rail has taken its share.
+                            style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+                          >
                             {/* No horizontal negative inset here. These bands fill the Main column,
                     which is already as wide as the content column allows;
                     pulling them wider pushed both ~32px past the page edges
                     and clipped the title's first character on the left and
                     the rail toggle on the right. */}
                             <EntrySystemHeader
+                              {...(onViewApi === undefined
+                                ? {}
+                                : { onViewApi })}
                               mode={mode}
+                              documentLocked={lock.readOnly}
                               titleField={titleField}
                               hasStatus={hasStatus}
                               draftsEnabled={collection.draftsEnabled === true}
@@ -860,11 +982,14 @@ export function EntryForm({
                                     },
                                   })}
                               isCopyingLink={previewLink.isPending}
+                              contributedActions={documentActions}
                               toolbarSlot={
-                                <EntryFormToolbarSlots
-                                  context="collection"
-                                  controllerField={controllerNames[0]}
-                                />
+                                <>
+                                  <EntryFormToolbarSlots
+                                    context="collection"
+                                    controllerField={controllerNames[0]}
+                                  />
+                                </>
                               }
                               onSaveDraft={() => {
                                 void handleSubmit(undefined, "save-draft");
@@ -892,12 +1017,19 @@ export function EntryForm({
                                 mode === "edit" ? toggleRail : undefined
                               }
                             />
+                            {/* First of the strips: a document somebody else is in
+                      changes what every affordance below it means, so it is read
+                      before the offer to restore work into it. */}
+                            <DocumentLockBanner
+                              notice={lock.notice}
+                              onTakeOver={lock.takeOver}
+                            />
                             {/* Above the fields and below the header: the reader sees
                       the document it refers to without the offer covering it. */}
                             {recovery.offer ? (
                               <AutosaveRecoveryBanner
                                 savedAt={recovery.offer.savedAt}
-                                onRestore={restoreRecovery}
+                                onRestore={recovery.restore}
                                 onDismiss={recovery.dismiss}
                               />
                             ) : null}
@@ -914,7 +1046,8 @@ export function EntryForm({
                                 }
                                 // Offered only when the panel says this caller may write.
                                 onRestore={
-                                  restoreAffordance?.canRestore
+                                  restoreAffordance?.canRestore &&
+                                  !lock.actionsDisabled
                                     ? restoreAffordance.request
                                     : undefined
                                 }
@@ -927,6 +1060,8 @@ export function EntryForm({
                             <EntryMetaStrip
                               slugField={slugField}
                               hasStatus={hasStatus}
+                              // The slug is a write, and the same claim withholds it.
+                              lockSlug={lock.readOnly}
                               // The pill reports the language being edited, matching the header's submit
                               // affordances. Reading the main row instead would show "Published" beside a
                               // Publish button whenever a translation lags its default language.
@@ -978,7 +1113,10 @@ export function EntryForm({
                                     ? {}
                                     : { onSelect: onLocaleChange })}
                                   hasStatus={hasStatus}
-                                  actionsDisabled={viewingVersion !== null}
+                                  actionsDisabled={
+                                    viewingVersion !== null ||
+                                    lock.actionsDisabled
+                                  }
                                 />
                               </div>
                             )}
@@ -1034,6 +1172,7 @@ export function EntryForm({
                                   <EntryFormContent
                                     fields={mainFields}
                                     disabled={isSubmitting}
+                                    readOnly={lock.readOnly}
                                     withCard
                                     mode={mode}
                                   />
@@ -1062,7 +1201,10 @@ export function EntryForm({
                                   {...(onLocaleChange === undefined
                                     ? {}
                                     : { onLocaleChange })}
-                                  actionsDisabled={viewingVersion !== null}
+                                  actionsDisabled={
+                                    viewingVersion !== null ||
+                                    lock.actionsDisabled
+                                  }
                                   isDirty={isDirty}
                                 />
                               </div>

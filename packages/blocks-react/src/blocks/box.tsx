@@ -46,7 +46,10 @@ export const box = defineBlock<ContainerProps, PageContext>({
   defaultProps: { as: "div", contained: false },
   example: { props: { as: "div" } },
   slots: {
-    children: { template: [] },
+    // No declared starting children: a box is a general-purpose container with
+    // no allow-list, so there is no child type it exists to hold and nothing to
+    // default to that would be righter than empty.
+    children: {},
   },
   supports: CONTAINER_SUPPORTS,
   render: renderContainer,

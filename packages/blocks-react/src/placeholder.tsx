@@ -6,6 +6,19 @@ export type PlaceholderReason =
   | "unknown-block"
   /** The node could not be upgraded to its block's current schema version. */
   | "migration-failed"
+  /**
+   * A component instance could not be replaced by the tree it stands for.
+   *
+   * ONE member for five causes — the component is missing, it reaches itself,
+   * it is nested too deep, its own tree is too deep, or the node names no
+   * component at all. Which one it was travels in `DocumentReadStages`
+   * instead, because that is the channel with a reader who can act: the
+   * publish readiness check lists the components a page embeds that are not
+   * published yet, and it needs the cause per instance, not per page. The DOM
+   * marker's audience is monitoring, and "a component did not resolve, here"
+   * is what monitoring can do something with.
+   */
+  | "unresolved-component"
   /** The node was saved against a newer definition than this app has. */
   | "version-ahead"
   /** The whole document is in a format version this renderer does not know. */
@@ -32,6 +45,7 @@ export interface BlockPlaceholderProps {
 const REASON_TEXT: Readonly<Record<PlaceholderReason, string>> = {
   "unknown-block": "No block is registered for this type",
   "migration-failed": "This block could not be upgraded to its current version",
+  "unresolved-component": "This component could not be loaded",
   "version-ahead": "This block was saved by a newer version of the app",
   "unsupported-format": "This page is stored in a format this app cannot read",
   "render-error": "This block failed to render",

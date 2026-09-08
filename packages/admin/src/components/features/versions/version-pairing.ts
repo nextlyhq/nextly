@@ -96,16 +96,24 @@ export function predecessorOf(
 /**
  * A pair to compare, or the reason there is none.
  *
- * The reasons are kept apart because they are three different situations and a
- * reader acts differently on each: a document with no history at all, one whose
- * history holds a single version, and one whose older versions simply have not
- * been fetched. Collapsing them into a null pair made the pane tell someone
- * with no versions that they had exactly one.
+ * The reasons are kept apart because a reader acts differently on each: a
+ * document with no history at all, one whose history holds a single version,
+ * one where only THIS language holds a single version and another language has
+ * its own, and one whose older versions simply have not been fetched.
+ * Collapsing them into a null pair made the pane tell someone with no versions
+ * that they had exactly one.
  */
 export type PairResolution =
   | { kind: "pair"; from: number; to: number }
   | { kind: "no-history" }
   | { kind: "only-version" }
+  /**
+   * This language holds one version; the document holds more, in others.
+   * Distinct from `only-version` because the remedy is: there is somewhere
+   * else to look, and saying "there is only one version" would contradict a
+   * rail listing several.
+   */
+  | { kind: "only-in-locale" }
   | { kind: "not-loaded" };
 
 /**
@@ -122,9 +130,17 @@ export function defaultPair(
   if (previous.kind === "version") {
     return { kind: "pair", from: previous.versionNo, to: newest.versionNo };
   }
-  // `first` means this document really does hold one version; `unknown` means
-  // its predecessor is beyond the loaded pages and "Load more" would find it.
-  return previous.kind === "first"
+  if (previous.kind !== "first") {
+    // `unknown`: the predecessor is beyond the loaded pages, and Load more
+    // would find it.
+    return { kind: "not-loaded" };
+  }
+  // `first` is a LOCALE-SCOPED answer — `predecessorOf` looks only within one
+  // language — so it means nothing older exists in THIS one. Whether the
+  // document holds one version is a question about the whole history, and it
+  // is asked here rather than inferred from an answer that cannot carry it.
+  const comparable = versions.filter(v => v.versionNo !== null).length;
+  return comparable <= 1
     ? { kind: "only-version" }
-    : { kind: "not-loaded" };
+    : { kind: "only-in-locale" };
 }

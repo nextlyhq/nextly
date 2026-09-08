@@ -1,0 +1,60 @@
+---
+title: Dynamic Collections
+description: What the Visual Schema Builder creates, and how it coexists with collections defined in code.
+---
+
+A collection defined in `nextly.config.ts` exists because you wrote it. A collection built
+in the [Visual Schema Builder](/docs/schema-builder) exists because someone created it in
+the admin, and its definition lives in the database. The second kind is a **dynamic
+collection**.
+
+Both produce the same thing downstream: real database tables, the same REST and Direct API,
+the same admin screens, the same access control. The difference is where the definition is
+stored and who can change it.
+
+## Availability
+
+| | |
+|---|---|
+| Built in | Created through the Visual Schema Builder at `/admin/builder/collections` |
+| Permission | Creating and editing schema is an admin capability, separate from editing content |
+
+## Which to use
+
+| Use code-first when | Use the Schema Builder when |
+|---|---|
+| The shape is part of your application's logic | The shape is part of the site's content |
+| You want it reviewed in a pull request | You want a non-developer to add a field without a deploy |
+| It ships with your repository | It differs between environments, or is created by a client |
+
+The two coexist. A project can define `posts` in code and let an editor add a `testimonials`
+collection in the admin, and nothing about either changes because the other exists.
+
+## Moving between them
+
+A collection can be handed from code to the builder, so schema editing moves to the admin
+without recreating anything or losing content.
+
+## What differs from a code-first collection
+
+- Its **runtime definition** lives in a database row. The generated migration, however,
+  carries both the table DDL and a serialized copy of the field definition, so once you commit
+  it the shape *is* in git and *is* reviewable in a pull request.
+- A metadata-only edit — renaming a label, changing help text — emits **no SQL migration**,
+  because nothing about the table changed. In development the builder also mirrors the entity
+  into a committable `ui-schema.json`, so such an edit usually still leaves something to
+  review. That mirror is best-effort and development-only: treat the absence of a migration as
+  the reliable signal, and the manifest as a convenience rather than a guarantee.
+- The trade is narrower than "no oversight": structural changes arrive as a committed
+  migration you can review, and presentational ones usually arrive in the development
+  manifest.
+- It **does** generate a SQL migration file under your `migrationsDir`, and that file is
+  what recreates the table and its registry row in another environment. **Commit it.**
+  Deploying without it leaves the collection unreproducible outside the database it was
+  created in.
+
+## Related
+
+- [Visual Schema Builder](/docs/schema-builder) — the interface that creates these
+- [Collections](/docs/configuration/collections) — the code-first equivalent
+- [Production migrations](/docs/guides/production-migrations)

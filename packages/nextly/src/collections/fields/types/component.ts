@@ -16,6 +16,7 @@
  * @since 1.0.0
  */
 
+import type { MIGRATION_TARGET } from "../../../domains/field-groups/migration/target";
 import type { STORAGE_FORMAT } from "../../../schemas/storage-format";
 
 import type { BaseFieldConfig } from "./base";
@@ -74,7 +75,11 @@ import type { BaseFieldConfig } from "./base";
  * ```
  */
 export interface FieldGroupFieldConfig extends BaseFieldConfig {
-  type: typeof STORAGE_FORMAT.fieldType;
+  // Both storage spellings: the one on disk today and the one the storage
+  // migration moves to. A guard that accepts either must narrow to a type
+  // that also carries either, or the narrowed value lies about its own
+  // discriminator and every reference read below it reads the wrong keys.
+  type: typeof STORAGE_FORMAT.fieldType | typeof MIGRATION_TARGET.fieldType;
 
   /**
    * Single component mode: embed one specific component type.
@@ -85,6 +90,16 @@ export interface FieldGroupFieldConfig extends BaseFieldConfig {
   component?: string;
 
   /**
+   * The migrated spelling of `component`, on stored definitions rewritten by
+   * the storage migration. Read both through
+   * `extractFieldGroupReferences` rather than per key, so the two spellings
+   * dispatch identically.
+   *
+   * @example 'seo'
+   */
+  fieldGroup?: string;
+
+  /**
    * Multi-component mode (dynamic zone): allow editor to pick from
    * multiple component types.
    * Mutually exclusive with `component`.
@@ -92,6 +107,14 @@ export interface FieldGroupFieldConfig extends BaseFieldConfig {
    * @example ['hero', 'cta', 'content', 'image-gallery']
    */
   components?: string[];
+
+  /**
+   * The migrated spelling of `components`. Read both through
+   * `extractFieldGroupReferences`.
+   *
+   * @example ['hero', 'cta', 'content', 'image-gallery']
+   */
+  fieldGroups?: string[];
 
   /**
    * Whether this field allows multiple instances (array).

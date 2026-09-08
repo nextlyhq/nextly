@@ -209,7 +209,18 @@ export function sourceNode(
   }
 
   const alignment = alignUnits(beforeLines.compare, afterLines.compare);
-  if (!alignment.aligned) return refuse(meta, language, "changed");
+  // Alignment refused, because the value holds more distinct lines than its
+  // alphabet can encode. Presence survives that exactly as it survives
+  // unreadable content above: which sides held anything is still known, and it
+  // is what a reader decides to restore from. Reporting `changed` for a field
+  // that was added describes an edit to something that was not there.
+  if (!alignment.aligned) {
+    return refuse(
+      meta,
+      language,
+      presenceStatus(!before.present, !after.present, "changed")
+    );
+  }
 
   const lines = alignment.pairs.map(pair =>
     toLine(pair, beforeLines, afterLines)

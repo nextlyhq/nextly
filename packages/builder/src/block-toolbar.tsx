@@ -327,15 +327,18 @@ export function BlockToolbar({
              * alone never reaches a keyboard author, who is exactly the person
              * the reason is for.
              *
-             * No keystroke hint, deliberately. Every binding here is spelled
-             * `mod`, which the shortcut manager resolves to Command on Apple
-             * platforms and Control everywhere else — so any fixed string is
-             * wrong on one of them, and "Ctrl+D" on a Mac teaches a keystroke
-             * that does nothing. The manager's own `detectApplePlatform` is the
-             * one rule that answers this, and it is not on `@nextlyhq/ui`'s
-             * public entry; spelling the platform a second time here would let
-             * a tooltip disagree with the binding it describes. The hint
-             * returns when that export does.
+             * No keystroke hint here yet. A binding spelled `mod` resolves to
+             * Command on Apple platforms and Control everywhere else, so any
+             * fixed string is wrong on one of them and "Ctrl+D" on a Mac
+             * teaches a keystroke that does nothing.
+             *
+             * That is answerable now — `detectApplePlatform` is on
+             * `@nextlyhq/ui`'s public entry, and `key-hint.ts` spells a binding
+             * for the platform in hand. What is missing is the other half: the
+             * bar knows an action id, and the id alone does not say which
+             * binding runs it. The moves come from one table and the rest from
+             * the keystroke registrations, so a hint here needs those joined
+             * without writing a third list that can disagree with both.
              */
             title={action.reason ?? action.label}
             tabIndex={index === activeIndex ? 0 : -1}

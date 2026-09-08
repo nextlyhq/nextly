@@ -26,7 +26,7 @@ import { isSvgMimeType } from "../../storage/svg-security";
 import { isBlockedExtension } from "./extensions";
 import { validateFilename } from "./filename";
 import { detectAndCompareMime } from "./magic-bytes";
-import { resolveAllowlist, validateMimeType } from "./mime";
+import { canonicalMimeType, resolveAllowlist, validateMimeType } from "./mime";
 import {
   SvgEmptyAfterSanitizeError,
   SvgTooLargeError,
@@ -73,7 +73,18 @@ export async function validateAndSanitizeUpload(
   input: { buffer: Buffer; filename: string; mimeType: string },
   config: ValidationConfig
 ): Promise<ValidationResult> {
-  const { buffer, filename, mimeType } = input;
+  const { buffer, filename } = input;
+  /*
+   * The claim in one spelling, before anything compares against it. Callers
+   * reach this boundary by several routes — the mounted handler, the server
+   * action, `UploadService` used directly — and a route that normalised its
+   * own claim left the others meeting a canonicalised allowlist with a raw
+   * one, refusing a format the install had allowed under its legacy name.
+   *
+   * It is also what gets STORED: the row then names the format the way the
+   * allowlist and every later comparison do.
+   */
+  const mimeType = canonicalMimeType(input.mimeType);
 
   const fn = validateFilename(filename);
   if (!fn.ok) {

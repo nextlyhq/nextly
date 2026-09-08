@@ -71,6 +71,9 @@ const SHAPES: Record<DynamicFieldType, Array<Record<string, unknown>>> = {
   group: [{ type: "group", fields: [] }],
   json: [{ type: "json" }],
   component: [{ type: "component", options: { target: "hero" } }],
+  // The migrated spelling of "component" — same storage, so the same rename
+  // agreement is required of it.
+  fieldGroup: [{ type: "fieldGroup", fieldGroup: "hero" }],
   chips: [{ type: "chips" }],
 };
 

@@ -121,7 +121,7 @@ export default defineConfig({
 | `typescript` | `TypeScriptConfig` | See below | Generated types path and module augmentation. |
 | `db` | `DatabaseConfig` | See below | Where Drizzle schema and migration files are written. |
 | `rateLimit` | `RateLimitingConfig` | Enabled (100 read / 30 write per minute) | Global API rate limiting. |
-| `apiKeys` | `ApiKeysConfig` | 1000 req/hour, 1-hour window | Per-API-key rate limit (applies when `Authorization: Bearer sk_...` is used). |
+| `apiKeys` | `ApiKeysConfig` | 1000 req/hour, 1-hour window | Per-API-key rate limit (applies when `Authorization: Bearer nx_live_...` is used). |
 | `auth` | `AuthConfig` | `{ revealRegistrationConflict: false }` | Auth-related opt-in flags. |
 | `storage` | `StoragePlugin[]` | `[]` (local disk used) | Cloud storage plugins. Default storage is local disk under `./public/uploads/`. |
 | `plugins` | `PluginDefinition[]` | `[]` | Plugins extending Nextly with collections, hooks, sidebar items, etc. |
@@ -297,7 +297,7 @@ rateLimit: {
 apiKeys?: { rateLimit?: { requestsPerHour?: number; windowMs?: number } };
 ```
 
-Per-key rate limit applied when a request authenticates with an API key (`Authorization: Bearer sk_...`). Session-cookie requests use the global `rateLimit` block instead. Omitting this block falls back to built-in defaults.
+Per-key rate limit applied when a request authenticates with an API key (`Authorization: Bearer nx_live_...`). Session-cookie requests use the global `rateLimit` block instead. Omitting this block falls back to built-in defaults.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
@@ -553,11 +553,11 @@ admin: {
 
 `defineConfig()` performs these checks at startup:
 
-- **Duplicate slugs** — collection, single, and field group slugs must be unique across all three.
-- **Cross-type conflicts** — a single cannot share a slug with a collection or field group.
-- **Field group nesting** — circular field group references and excessive nesting (max depth 3) are rejected.
-- **User config** — only the allowed scalar field types are accepted.
-- **API-key bounds** — `apiKeys.rateLimit.requestsPerHour` and `apiKeys.rateLimit.windowMs` must be positive.
+- **Duplicate slugs.** Collection, single, and field group slugs must be unique across all three.
+- **Cross-type conflicts.** A single cannot share a slug with a collection or field group.
+- **Field group nesting.** Circular field group references and excessive nesting (max depth 3) are rejected.
+- **User config.** Only the allowed scalar field types are accepted.
+- **API-key bounds.** `apiKeys.rateLimit.requestsPerHour` and `apiKeys.rateLimit.windowMs` must be positive.
 
 Validation failures throw a descriptive error at startup so misconfigurations surface immediately.
 

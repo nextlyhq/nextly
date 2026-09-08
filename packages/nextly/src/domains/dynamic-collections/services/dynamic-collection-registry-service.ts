@@ -1,11 +1,12 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, and, or, like, asc, desc, count } from "drizzle-orm";
+import { eq, and, or, like, asc, desc, count, inArray } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
 import type { RevalidateConfig } from "../../../revalidation/types";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
+  StoredHookConfig,
   MigrationStatus,
   StoredWebhookRecording,
 } from "../../../schemas/dynamic-collections/types";
@@ -82,7 +83,12 @@ export interface CollectionMetadata {
     publish?: { type: string; allowedRoles?: string[] };
     unpublish?: { type: string; allowedRoles?: string[] };
   };
-  hooks?: Record<string, unknown>[];
+  /**
+   * The canonical stored-hook shape, not a looser record: the registry row
+   * these feed is typed with it, and the executor reads `config` and `order`
+   * off every entry.
+   */
+  hooks?: StoredHookConfig[];
   createdBy?: string;
 }
 
@@ -96,6 +102,21 @@ export interface ListCollectionsOptions {
   sortOrder?: "asc" | "desc";
   includeSchema?: boolean;
   source?: "code" | "ui" | "built-in";
+  /**
+   * Restrict results to collections whose `slug` is in this list.
+   *
+   * 🔴 Applied in the WHERE clause, so the COUNT and the page see the same
+   * rows. A caller that filters the returned page in application code instead
+   * gets a `total` describing rows the reader may not see -- which both leaks
+   * how many exist and collapses `totalPages` to 1, because the recomputed
+   * total is at most one page. The consumer then reads "there is no next page"
+   * and stops, with the rest of what it may see unreachable.
+   *
+   * `undefined` means no allowlist. `[]` means nothing is visible and
+   * short-circuits, rather than emitting `WHERE slug IN ()`, whose meaning
+   * differs by dialect.
+   */
+  slugAllowlist?: string[];
 }
 
 export interface ListCollectionsResponse<
@@ -339,9 +360,30 @@ export class DynamicCollectionRegistryService extends BaseService {
       sortOrder = "desc",
       includeSchema = true as TIncludeSchema,
       source,
+      slugAllowlist,
     } = options || {};
 
+    // An empty allowlist means the caller may see nothing. Answered here
+    // rather than as a query, because `WHERE slug IN ()` is a dialect-specific
+    // footgun and because a zero-row read is work nobody needs done.
+    if (slugAllowlist && slugAllowlist.length === 0) {
+      return {
+        collections: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 0,
+      };
+    }
+
     const conditions = [];
+
+    // 🔴 A CONDITION, not a filter over the result. Both the count below and
+    // the page query read `whereClause`, so the total describes exactly the
+    // rows this caller may see and `totalPages` counts pages of those.
+    if (slugAllowlist) {
+      conditions.push(inArray(this.dynamicCollections.slug, slugAllowlist));
+    }
 
     if (search) {
       const searchPattern = `%${search}%`;

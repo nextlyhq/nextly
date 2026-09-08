@@ -331,6 +331,61 @@ describe("computeVersionDiff — per field kind", () => {
     }
   });
 
+  // A migrated definition stores both the type token and the zone whitelist
+  // under the fieldGroup spellings. Reading only the legacy keys would treat
+  // this zone as a single-schema field and drop its nested values from the
+  // diff entirely, so these cases pin the nested diff itself, not just the
+  // node kind.
+  it("diffs a migrated non-repeatable fieldGroups zone through its instance schema", () => {
+    const zone = field({
+      name: "layout",
+      type: "fieldGroup",
+      fieldGroups: ["hero", "cta"],
+      componentSchemas: {
+        hero: { fields: [field({ name: "heading", type: "text" })] },
+        cta: { fields: [field({ name: "label", type: "text" })] },
+      },
+    });
+    // Populated from its own table, a non-repeatable zone arrives as a
+    // one-element array; normalization unwraps the instance.
+    const diff = computeVersionDiff(
+      { layout: [{ _fieldGroupType: "hero", heading: "Hi" }] },
+      { layout: [{ _fieldGroupType: "hero", heading: "Hello" }] },
+      [zone]
+    );
+    const group = diff.fields[0];
+    expect(group.kind).toBe("group");
+    if (group.kind === "group") {
+      // The nested value node itself is the point: the zone's whitelist and
+      // its instance type are both stored under migrated spellings, and the
+      // heading diffed through the resolved hero schema.
+      expect(group.fields.find(n => n.name === "heading")).toMatchObject({
+        status: "changed",
+      });
+    }
+  });
+
+  it("diffs a migrated single fieldGroup through its enriched schema", () => {
+    const seo = field({
+      name: "seo",
+      type: "fieldGroup",
+      fieldGroup: "seo",
+      componentFields: [field({ name: "metaTitle", type: "text" })],
+    });
+    const diff = computeVersionDiff(
+      { seo: [{ metaTitle: "A" }] },
+      { seo: [{ metaTitle: "B" }] },
+      [seo]
+    );
+    const group = diff.fields[0];
+    expect(group.kind).toBe("group");
+    if (group.kind === "group") {
+      expect(group.fields.find(n => n.name === "metaTitle")).toMatchObject({
+        status: "changed",
+      });
+    }
+  });
+
   it("diffs a many relationship as a target set", () => {
     const diff = computeVersionDiff(
       { tags: ["a", "b"] },

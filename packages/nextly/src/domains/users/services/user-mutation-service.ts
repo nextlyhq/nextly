@@ -44,11 +44,17 @@ import type {
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
+import {
+  layoutRowId,
+  widgetLayoutTables,
+  WIDGET_LAYOUT_TABLE,
+} from "../../../schemas/widget-layout";
 import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
 import { ServiceContainer } from "../../../services/index";
 import type { Logger } from "../../../services/shared";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
+import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import type { UserConfig, UserFieldConfig } from "../../../users/config/types";
 import { eraseActorPersonalData } from "../../audit/erase-actor-personal-data";
 import {
@@ -671,7 +677,35 @@ export class UserMutationService extends BaseService {
         });
       }
 
-      // Derive password hash once (supports pre-hashed inputs while prioritizing plain passwords)
+      const { users } = this.tables;
+
+      // 🔴 Derive the hash BEFORE the duplicate lookup, and keep it that way.
+      //
+      // The obvious reordering -- look the address up first, and skip a
+      // deliberately expensive key derivation for a request that is going to be
+      // rejected -- was applied here and then reverted, so the reasoning is
+      // recorded rather than left to be rediscovered by whoever tries it next.
+      //
+      // It creates an ACCOUNT-ENUMERATION ORACLE. `/api/auth/register` answers
+      // a taken address and a free one with byte-identical responses on purpose
+      // (spec §13.2 silent-success), so duration is the only channel left --
+      // and `stallResponse` is a FLOOR, not a fixed duration: it pads a fast
+      // response up to `loginStallTimeMs` (500ms) and does nothing to a slow
+      // one. Check-first therefore returns a taken address at ~500ms and a free
+      // one at however long bcrypt takes, measured here at ~2.9s locally and
+      // ~9.8s on a loaded runner. The two identical responses become trivially
+      // distinguishable by a stopwatch.
+      //
+      // And it buys almost nothing against the availability concern it was
+      // written for. An attacker burning CPU has no reason to send a REGISTERED
+      // address: unregistered ones still reach the hash on every request, so
+      // check-first only avoids the work in the case nobody attacking would
+      // choose. What actually bounds that cost is the per-IP limiter, which
+      // already covers this route -- `register` is in the shared auth bucket in
+      // `auth/handlers/router.ts` and is checked before dispatch.
+      //
+      // So both paths pay the hash, both leave at the same time, and the
+      // enumeration property the endpoint is designed around holds.
       let passwordHash: string | null = null;
       if (userData.password && userData.password.length > 0) {
         const looksPlain =
@@ -681,13 +715,11 @@ export class UserMutationService extends BaseService {
           : userData.password;
       }
 
-      const { users } = this.tables;
-
-      // Check existing. Account-enumeration sensitive: the public message
-      // stays generic ("Resource already exists.") via NextlyError.duplicate;
-      // the email + entity flow only through logContext.
+      // Account-enumeration sensitive: the public message stays generic
+      // ("Resource already exists.") via NextlyError.duplicate; the email and
+      // entity travel only through logContext.
       const existingUser = await this.db.query.users.findFirst({
-        where: { email: userData.email },
+        where: { email: requireFilterValue(userData.email, "email") },
         columns: { id: true, email: true },
       });
       if (existingUser) {
@@ -899,7 +931,7 @@ export class UserMutationService extends BaseService {
 
       // Fetch created user
       const user = await this.db.query.users.findFirst({
-        where: { email: userData.email },
+        where: { email: requireFilterValue(userData.email, "email") },
         columns: {
           id: true,
           email: true,
@@ -1024,7 +1056,7 @@ export class UserMutationService extends BaseService {
       // 1) Load current user. §13.8 + spec note: user existence is sensitive
       // (account enumeration); the public message stays generic.
       const currentUser = await this.db.query.users.findFirst({
-        where: { id: userId },
+        where: { id: requireFilterValue(userId, "userId") },
         columns: {
           id: true,
           email: true,
@@ -1054,7 +1086,7 @@ export class UserMutationService extends BaseService {
           normalizedNewEmail !== currentEmailNormalized
         ) {
           const existing = await this.db.query.users.findFirst({
-            where: { email: normalizedNewEmail },
+            where: { email: requireFilterValue(normalizedNewEmail, "email") },
             columns: { id: true, email: true },
           });
 
@@ -1276,7 +1308,7 @@ export class UserMutationService extends BaseService {
 
       // Fetch updated user
       const user = await this.db.query.users.findFirst({
-        where: { id: currentUser.id },
+        where: { id: requireFilterValue(currentUser.id, "userId") },
         columns: {
           id: true,
           email: true,
@@ -1475,6 +1507,30 @@ export class UserMutationService extends BaseService {
     } catch {
       mediaExists = true;
     }
+
+    // The account's dashboard arrangement, probed out here for the same reason
+    // as the three above: a failed statement aborts an open Postgres
+    // transaction and there would be no way back.
+    //
+    // The row carries the account's identifier and its opaque per-placement
+    // configuration, and nothing else removes it — `scope_id` holds a user id
+    // by convention rather than by a foreign key, precisely so a future role
+    // scope can share the table. Left behind, that configuration outlives the
+    // person indefinitely, and an external identity provider that reuses an
+    // identifier hands the replacement account its predecessor's dashboard.
+    //
+    // An unanswerable probe is treated as PRESENT, matching the media and
+    // deliveries decisions above: attempting the delete against a genuinely
+    // absent table fails the statement and takes the deletion with it, which is
+    // the invariant those two protect — an account is never removed while data
+    // belonging to it is left behind. Databases without the table exist, since
+    // the SQLite fallback bootstrap created a subset of the core tables.
+    let widgetLayoutExists: boolean;
+    try {
+      widgetLayoutExists = await this.adapter.tableExists(WIDGET_LAYOUT_TABLE);
+    } catch {
+      widgetLayoutExists = true;
+    }
     // The two answer a legacy shape differently, because what happens to an
     // un-erased row differs. A legacy `activity_log` still cascades from the
     // account, so its rows go with the deletion and there is nothing left to
@@ -1560,6 +1616,19 @@ export class UserMutationService extends BaseService {
 
         // Delete user accounts
         await txDb.delete(accounts).where(eq(accounts.userId, userId));
+
+        // And the dashboard arrangement, addressed by the SAME derivation the
+        // layout service writes with rather than by a second spelling of the
+        // key — two derivations of one identifier agree until one is edited,
+        // and the failure here is silent: the delete matches no row, the
+        // account goes, and the layout stays.
+        if (widgetLayoutExists) {
+          const layoutTable = widgetLayoutTables(this.dialect)
+            .nextlyWidgetLayout as unknown as { id: Column };
+          await txDb
+            .delete(layoutTable)
+            .where(eq(layoutTable.id, layoutRowId("user", String(userId))));
+        }
 
         // Strip the person out of the audit trail while leaving the trail
         // standing. `activity_log.user_id` carries no foreign key precisely so

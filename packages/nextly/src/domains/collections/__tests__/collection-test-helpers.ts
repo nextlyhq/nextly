@@ -157,8 +157,29 @@ export function createMockAdapter(db: MockRecord): MockRecord {
           lockRow: vi.fn().mockResolvedValue(undefined),
           execute: vi.fn().mockResolvedValue([]),
           selectOne: vi.fn().mockResolvedValue(null),
-          insert: vi.fn().mockResolvedValue({}),
-          update: vi.fn().mockResolvedValue([{}]),
+          // A created row, not `{}`. The write path derives this entry's cache
+          // tags from the id it just wrote, and `requireSegment` REFUSES a
+          // blank segment on purpose -- a bare `nextly:` tag would
+          // over-invalidate and a blank id would silently never match. So an
+          // idless insert does not produce a slightly-wrong tag, it throws,
+          // and the write is reported as a 500 from a cache concern the test
+          // was not exercising. The top-level `insert` above already returns a
+          // row; this one is the same write seen from inside the transaction
+          // and has to agree with it.
+          insert: vi.fn().mockResolvedValue({
+            id: "new-entry-id",
+            title: "Test",
+            created_at: new Date(),
+            updated_at: new Date(),
+          }),
+          update: vi.fn().mockResolvedValue([
+            {
+              id: "updated-entry-id",
+              title: "Updated",
+              created_at: new Date(),
+              updated_at: new Date(),
+            },
+          ]),
           delete: vi.fn().mockResolvedValue(undefined),
         })
       ),
@@ -300,6 +321,13 @@ export function createMockComponentDataService(): MockRecord {
       .fn()
       .mockImplementation(async () => new Map<string, boolean>()),
     deleteComponentData: vi.fn().mockResolvedValue(undefined),
+    // The mirror of `saveComponentDataInTransaction` above, and missing for the
+    // same reason: the collection DELETE removes its field-group rows inside
+    // the same transaction that removes the entry, so it calls the in-tx
+    // variant and never the standalone one. Absent from the double, the delete
+    // threw partway through and surfaced as a 500 -- which reads as an access
+    // or persistence failure rather than as a gap in the double.
+    deleteComponentDataInTransaction: vi.fn().mockResolvedValue(undefined),
   };
 }
 

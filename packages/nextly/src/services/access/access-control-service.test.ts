@@ -56,6 +56,36 @@ describe("AccessControlService role-based access (OR-membership)", () => {
   });
 });
 
+describe("AccessControlService without a user", () => {
+  const service = new AccessControlService();
+
+  it("denies an owner-only rule rather than skipping it", async () => {
+    // Nobody to compare an owner against is a refusal, not an absence of
+    // opinion. What a missing user skips is the coarse RBAC gate, one layer up,
+    // which needs a user in order to have permissions to check; the pairing is
+    // exercised end to end in `collection-access-anonymous.test.ts`.
+    const result = await service.evaluateAccess(
+      { update: { type: "owner-only" } } as CollectionAccessRules,
+      "update",
+      { user: undefined } as RequestContext
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("Authentication required");
+  });
+
+  it("allows an operation that has no rule at all", async () => {
+    // The other half, and the one that surprises: absent means public here.
+    // `collection-access-service.ts` fails publish and unpublish closed on top
+    // of this, so the default is not the whole answer for those.
+    const result = await service.evaluateAccess(
+      { read: { type: "owner-only" } } as CollectionAccessRules,
+      "update",
+      { user: undefined } as RequestContext
+    );
+    expect(result.allowed).toBe(true);
+  });
+});
+
 describe("AccessControlService owner-only default field", () => {
   const service = new AccessControlService();
 

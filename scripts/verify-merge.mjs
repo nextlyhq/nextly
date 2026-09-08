@@ -799,6 +799,27 @@ const verdict = await sibling("ci-verdict.mjs");
 // before any of this file runs, turning the gate's deliberate exit 2 into an
 // exit 1.
 const { isCliEntry } = await sibling("cli-entry.mjs");
+// The advisory-thread policy lives in ONE implementation, loaded rather than
+// restated. A reviewer the policy excludes from blocking must not hold the
+// merge through a thread either, and two gates answering that question
+// separately agree only until one of them is edited.
+//
+// Through `sibling` for the reason its docblock gives: a static import resolves
+// against the module URL, so a symlinked entry finds no neighbour and dies with
+// ERR_MODULE_NOT_FOUND before this file runs, turning a deliberate exit 2 into
+// an exit 1.
+//
+// The FIELD SELECTION comes from there too. The count delegates to
+// `canonicalActorLogin`, so a selection restated here would leave this gate
+// asking for less than the other and reaching a different verdict on the same
+// pull request.
+const countUnresolvedThreads = verdict.unresolvedThreads;
+/**
+ * The review-thread fields this gate asks GitHub for, taken whole from the
+ * sibling that owns the count, and re-exported in the same way as everything
+ * else here so a test reads the value this file actually sends.
+ */
+export const REVIEW_THREAD_NODE_FIELDS = verdict.REVIEW_THREAD_NODE_FIELDS;
 export const SUBMITTED_REVIEW_STATES = verdict.SUBMITTED_REVIEW_STATES;
 /**
  * The revision a reviewer's comment reports having read.
@@ -862,6 +883,42 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO = "nextlyhq/nextly";
+
+/**
+ * Reviewers whose findings are advisory: real, worth reading, and not a merge
+ * blocker.
+ *
+ * RESOLVED by the sibling from the environment it reads, rather than listed
+ * here. That policy is configurable through `CI_VERDICT_ADVISORY`, so a second
+ * list would name the default while the other gate honoured the override, and
+ * the two would clear and reject the same pull request.
+ *
+ * Reduced by the sibling's own overlap rule, so a login named in BOTH policies
+ * keeps its blocking status here as it does there. Applying the raw advisory
+ * list would exempt a reviewer that is simultaneously required, letting this
+ * gate pass a pull request the other one holds.
+ *
+ * A policy that cannot be resolved yields no exemptions, so every thread
+ * counts. That is the strict direction: a gate unable to read its policy must
+ * not hand out exemptions it cannot justify.
+ */
+/** The overlap rule, from the sibling that owns it, so both gates apply one. */
+export const advisoryExemptions = verdict.advisoryExemptions;
+
+export const ADVISORY_REVIEWERS = (() => {
+  const policy = verdict.resolveReviewers(process.env);
+  return verdict.advisoryExemptions(policy.blocking, policy.advisory);
+})();
+
+/**
+ * The second reviewer's account, for the COVERAGE question — whether it has
+ * reviewed this revision at all.
+ *
+ * Separate from the list above, which answers whether a thread may block. A
+ * reviewer can be required to look without being able to hold the merge, and
+ * collapsing the two would make one answer the other.
+ */
+export const CODERABBIT = "coderabbitai[bot]";
 
 /** Set by `main` once the head repository is known; a fork keeps its own. */
 let REMOTE_FOR_FETCH = "origin";
@@ -1155,7 +1212,11 @@ export function main(argv) {
   // Paginated. A pull request with more than 100 review threads would
   // otherwise have everything past the first page counted as resolved, which
   // is the reassuring direction.
-  let threads = 0;
+  // Nodes are collected rather than counted per page, because whether a thread
+  // counts is no longer a property of the thread alone — it depends on who
+  // opened it, and that judgement belongs to the shared policy below, not to a
+  // `jq` filter repeated here in a second dialect.
+  const threadNodes = [];
   let cursor = null;
   for (;;) {
     const after = cursor ? `, after: "${cursor}"` : "";
@@ -1164,12 +1225,18 @@ export function main(argv) {
         "api",
         "graphql",
         "-f",
-        `query=query { repository(owner:"nextlyhq",name:"nextly"){ pullRequest(number:${pr}){ reviewThreads(first:100${after}){ pageInfo { hasNextPage endCursor } nodes { isResolved } } } } }`,
+        `query=query { repository(owner:"nextlyhq",name:"nextly"){ pullRequest(number:${pr}){ reviewThreads(first:100${after}){ pageInfo { hasNextPage endCursor } nodes { ${REVIEW_THREAD_NODE_FIELDS} } } } } }`,
         "--jq",
-        "{n:[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length, more:.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage, cur:.data.repository.pullRequest.reviewThreads.pageInfo.endCursor}",
+        "{nodes:.data.repository.pullRequest.reviewThreads.nodes, more:.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage, cur:.data.repository.pullRequest.reviewThreads.pageInfo.endCursor}",
       ])
     );
-    threads += page.n;
+    // A page without a node array is not an empty page. Pushing nothing would
+    // silently shrink the count; leaving `threadNodes` un-arrayed is what makes
+    // the policy below refuse instead.
+    if (!Array.isArray(page.nodes)) {
+      throw new Error("review threads: page carried no nodes array");
+    }
+    threadNodes.push(...page.nodes);
     if (!page.more) break;
     // A cursor that does not advance would loop for ever, re-reading one page
     // and adding its count each time. Both failures are silent in opposite
@@ -1180,6 +1247,10 @@ export function main(argv) {
     }
     cursor = page.cur;
   }
+  // Advisory threads do not block. Same function, same advisory list and same
+  // canonical login shape the sibling script uses, so the two cannot drift into
+  // disagreeing about whether a given pull request is mergeable.
+  const threads = countUnresolvedThreads(threadNodes, ADVISORY_REVIEWERS);
 
   // PREFERRED from the review RECORD's own `commit_id`, because only the record
   // carries a sha the server assigned and nobody can edit afterwards.
@@ -1236,11 +1307,7 @@ export function main(argv) {
     knownRevisions,
   });
   // Scoped to THIS revision: a review of an earlier one is not coverage of it.
-  const coderabbit = reviewsCoveringTip(
-    reviews,
-    tip,
-    "coderabbitai[bot]"
-  ).length;
+  const coderabbit = reviewsCoveringTip(reviews, tip, CODERABBIT).length;
 
   // Commit STATUSES are a separate surface from check-runs, and this
   // repository's title check and CodeRabbit both report through it.

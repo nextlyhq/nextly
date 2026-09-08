@@ -31,6 +31,13 @@ export interface TakeoverType {
 export interface LayoutField {
   name?: string;
   type?: string;
+  /**
+   * A structured field's children, when it has any.
+   *
+   * Loose for the same reason `admin` is: every field-config shape must stay
+   * assignable to this, and only the traversal below reads it.
+   */
+  fields?: readonly LayoutField[];
   // Loose on purpose: any field config (FieldConfig, ManifestField, …) must be
   // assignable to LayoutField so the generic `T` binds to the caller's type. The
   // condition is cast to FieldCondition where it's actually evaluated.
@@ -69,6 +76,130 @@ export function isTakeoverField(
 /** The name of the field a takeover field's condition watches, if any. */
 function controllerName(f: LayoutField): string | undefined {
   return (f.admin?.condition as FieldCondition | undefined)?.field;
+}
+
+/**
+ * Whether a field's own condition currently lets it render.
+ *
+ * `FieldRenderer` returns `null` for a field whose condition is false, so a
+ * caller counting fields without asking this counts rows that will not appear —
+ * which is how a panel comes to be offered with a heading over a blank body.
+ * Only the CONDITION is duplicated here, never the verdict: both sides call
+ * `evaluateCondition`, so the semantics have one implementation and this adds
+ * the lookup the renderer does with `useWatch`.
+ *
+ * A field with no condition is visible, and so is one whose condition names a
+ * field this caller did not watch — an unwatched name reads as `undefined`,
+ * and hiding a field on the strength of a value nobody supplied would withhold
+ * a panel that has content in it.
+ */
+function isConditionallyVisible(
+  f: LayoutField,
+  values: Record<string, unknown>,
+  basePath = ""
+): boolean {
+  const condition = f.admin?.condition as FieldCondition | undefined;
+  const watches = watchedName(f, basePath);
+  if (condition !== undefined && watches !== undefined) {
+    if (watches in values && !evaluateCondition(condition, values[watches])) {
+      return false;
+    }
+  }
+  /*
+   * A GROUP is only as visible as its contents. Its own condition passing says
+   * the group may render; it does not say anything will be inside it, and
+   * `GroupInput` sends each child through `FieldRenderer`, which answers null
+   * for a condition that is false. A group whose every child is hidden draws
+   * its label and its gutter over nothing — which, counted as content, offers
+   * a panel with a heading and no control in it.
+   *
+   * An EMPTY `fields` list is left visible rather than hidden: a group that
+   * declares no children is a schema the author wrote on purpose, and this is
+   * not the place to decide it was a mistake.
+   */
+  const base = childBase(f, basePath);
+  if (base === null || f.fields === undefined || f.fields.length === 0) {
+    return true;
+  }
+  /*
+   * A HIDDEN child counts for nothing, the same way a hidden field does at the
+   * top level. `FieldWrapper` returns null for one, so it draws nothing — and a
+   * group's commonest shape is exactly the trap: a hidden controller field
+   * beside the controls whose conditions read it. Counting the controller kept
+   * such a group alive with every visible control conditioned away, which is
+   * the blank panel this rule exists to prevent.
+   *
+   * Filtering here rather than inside the walk above, because the two questions
+   * differ: the walk collects the names a condition WATCHES, and a hidden
+   * controller is precisely the field that must still be watched.
+   */
+  return f.fields.some(
+    child => !isHidden(child) && isConditionallyVisible(child, values, base)
+  );
+}
+
+/**
+ * Every field name a condition on these fields watches.
+ *
+ * The set a caller must observe for {@link computeFieldsBeside} to answer about
+ * the fields as they currently render rather than as they were declared. Kept
+ * beside the rule that consumes it so the two cannot name different sets.
+ */
+export function conditionFieldNames<T extends LayoutField>(
+  fields: readonly T[]
+): string[] {
+  const names = new Set<string>();
+  collectConditionNames(fields, "", names);
+  return [...names];
+}
+
+/**
+ * The qualified name a field's condition watches, or undefined for no condition.
+ *
+ * QUALIFIED BY THE PATH, because `FieldRenderer` resolves a nested condition
+ * against the field's own base — a child of the `seo` group watching `mode`
+ * watches `seo.mode`. Collecting the bare name would subscribe to a top-level
+ * field that usually does not exist, and judging visibility against it would
+ * read `undefined` for a condition that is really satisfied.
+ */
+function watchedName(f: LayoutField, basePath: string): string | undefined {
+  const watches = (f.admin?.condition as FieldCondition | undefined)?.field;
+  if (watches === undefined) return undefined;
+  return basePath === "" ? watches : `${basePath}.${watches}`;
+}
+
+/**
+ * The path a structured field's children are addressed under, or null when this
+ * field's children are not addressed from the form root at all.
+ *
+ * A GROUP's children render directly and their values live at
+ * `group.child`, so the walk continues into them. A REPEATER's `fields` are a
+ * ROW TEMPLATE — they describe what each row contains, their conditions are
+ * evaluated per row against that row's values, and the repeater itself renders
+ * its add control whether or not it holds any. Walking into one would collect
+ * names that address nothing and could hide a repeater that draws perfectly
+ * well, so it deliberately stops here.
+ */
+function childBase(f: LayoutField, basePath: string): string | null {
+  if (f.type !== "group" || f.fields === undefined) return null;
+  const own = f.name ?? "";
+  if (own === "") return basePath;
+  return basePath === "" ? own : `${basePath}.${own}`;
+}
+
+function collectConditionNames(
+  fields: readonly LayoutField[],
+  basePath: string,
+  into: Set<string>
+): void {
+  for (const f of fields) {
+    const watches = watchedName(f, basePath);
+    if (watches !== undefined) into.add(watches);
+    const base = childBase(f, basePath);
+    if (base !== null && f.fields !== undefined) {
+      collectConditionNames(f.fields, base, into);
+    }
+  }
 }
 
 /**
@@ -151,7 +282,23 @@ export function computeMainFields<T extends LayoutField>(
 }
 
 /**
- * The body fields a surface may offer BESIDE the one it was opened for.
+ * What a takeover surface offers back, split the way its panel presents it.
+ *
+ * Two groups rather than one list, because they are answerable to different
+ * things: `page` is what every document has and what a surface covering the
+ * form takes away, while `content` is whatever this collection happens to
+ * declare. A single list would put a page's slug between two of its own
+ * relations, ordered by nothing an author can predict.
+ */
+export interface FieldsBeside<T> {
+  /** The document's identity — title and slug — in the order declared. */
+  page: T[];
+  /** Everything else the form body would show. */
+  content: T[];
+}
+
+/**
+ * The fields a surface may offer BESIDE the one it was opened for.
  *
  * Everything the form body would show, minus the field at `excludePath` — the
  * field whose own surface is asking. A page builder rendering this inside its
@@ -166,13 +313,23 @@ export function computeMainFields<T extends LayoutField>(
  * and while a full-screen surface covers the body, showing them is the only
  * way an author reaches them without leaving it.
  *
- * System fields are already stripped, so the title and slug drawn by the system
- * header are not offered a second, competing editor here.
+ * TITLE AND SLUG ARE OFFERED HERE, which they were not, and the reason they
+ * were withheld is the reason they now belong: they are drawn by the system
+ * header, so offering them again would have been a second, competing editor.
+ * A surface that COVERS the form suppresses that header — the page builder
+ * names it in `useSuppressAdminChrome` — so there is no second editor to
+ * compete with and no first one to fall back on. Withholding them left the
+ * commonest shape a collection takes, a title, a slug and a builder field,
+ * with nothing to put in the panel at all: it was offered and opened blank,
+ * and a document's own name could not be read from inside the editor.
+ *
+ * They stay grouped rather than merged so the panel can say which is which.
  */
 export function computeFieldsBeside<T extends LayoutField>(
   fields: T[],
-  excludePath: string
-): T[] {
+  excludePath: string,
+  values: Record<string, unknown> = {}
+): FieldsBeside<T> {
   /*
    * The field whose value decides whether the asking field is visible at all is
    * withheld too.
@@ -185,13 +342,19 @@ export function computeFieldsBeside<T extends LayoutField>(
    */
   const asking = fields.find(f => (f.name ?? "") === excludePath);
   const controller = asking === undefined ? undefined : controllerName(asking);
-  return fields.filter(
+  const offered = fields.filter(
     f =>
-      !SYSTEM_FIELDS.has(f.name ?? "") &&
       !isHidden(f) &&
+      isConditionallyVisible(f, values) &&
       (f.name ?? "") !== excludePath &&
       (f.name ?? "") !== controller
   );
+  // Partitioned from ONE filtered list rather than filtered twice, so a field
+  // cannot land in both groups or in neither if the two predicates ever drift.
+  return {
+    page: offered.filter(f => SYSTEM_FIELDS.has(f.name ?? "")),
+    content: offered.filter(f => !SYSTEM_FIELDS.has(f.name ?? "")),
+  };
 }
 
 /** Resolve the value a field's condition source currently holds. */

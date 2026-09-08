@@ -14,7 +14,7 @@
  * @module components/entries/fields/structured/BlocksSummary
  */
 
-import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { LayoutGrid } from "lucide-react";
 import { useMemo } from "react";
 import {
@@ -23,6 +23,8 @@ import {
   type FieldValues,
   type Path,
 } from "react-hook-form";
+
+import { countByType, documentNodes, totalBlocks } from "./page-summary";
 
 export interface BlocksSummaryProps<
   TFieldValues extends FieldValues = FieldValues,
@@ -33,41 +35,15 @@ export interface BlocksSummaryProps<
   control: Control<TFieldValues>;
 }
 
-/** Every block type in the tree with how many times it appears, in tree order. */
-function countByType(nodes: readonly BlockNode[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  const visit = (list: readonly BlockNode[]): void => {
-    for (const node of list) {
-      if (!node || typeof node.type !== "string") continue;
-      counts.set(node.type, (counts.get(node.type) ?? 0) + 1);
-      // Children live under named slots, so a container's contents are counted
-      // too rather than the summary reporting only the top level.
-      for (const slot of Object.values(node.slots ?? {})) {
-        if (Array.isArray(slot)) visit(slot);
-      }
-    }
-  };
-  visit(nodes);
-  return counts;
-}
-
 export function BlocksSummary<TFieldValues extends FieldValues = FieldValues>({
   name,
   control,
 }: BlocksSummaryProps<TFieldValues>) {
   const value = useWatch({ control, name }) as BlockDocument | null | undefined;
 
-  const counts = useMemo(() => {
-    const nodes = value?.nodes;
-    return Array.isArray(nodes)
-      ? countByType(nodes)
-      : new Map<string, number>();
-  }, [value]);
+  const counts = useMemo(() => countByType(documentNodes(value)), [value]);
 
-  const total = useMemo(
-    () => [...counts.values()].reduce((sum, n) => sum + n, 0),
-    [counts]
-  );
+  const total = useMemo(() => totalBlocks(counts), [counts]);
 
   if (total === 0) {
     return (

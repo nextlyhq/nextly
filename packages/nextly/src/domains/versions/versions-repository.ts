@@ -17,6 +17,7 @@ import type {
   VersionScopeKind,
   VersionStatus,
 } from "../../schemas/versions/types";
+import { VERSIONS_TABLE } from "../../schemas/versions/types";
 
 import type {
   VersionsDbApi,
@@ -26,7 +27,32 @@ import type {
 import type { PrunableVersion } from "./retention";
 import { workingDraftKey } from "./working-draft-key";
 
-const TABLE = "nextly_versions";
+const TABLE = VERSIONS_TABLE;
+
+/**
+ * What makes a row a WORKING DRAFT, independent of which document it belongs to.
+ *
+ * 🔴 The single declaration of "pending edit", spread by both the per-document
+ * predicate and the cross-document ones. It is one value rather than one comment
+ * asking two predicates to agree: a working draft is the only non-autosave row
+ * carrying no version number (durable history rows always take a sequence
+ * number; autosave rows set `isAutosave = true`), and the day that definition
+ * changes it must change for the document read and the dashboard together. Two
+ * spellings would keep answering, and the disagreement would surface as a count
+ * that does not match the documents it points at.
+ *
+ * Never mutated -- both consumers spread it into a fresh `and` array.
+ *
+ * Exported so `nextly_versions_pending_edits_idx` can be checked against it
+ * rather than against a second list of the same column names: an index that
+ * does not cover every predicate here stops serving the query it exists for,
+ * and a copy of this shape in a test could not notice that.
+ */
+export const WORKING_DRAFT_SHAPE: readonly VersionsWhereCondition[] = [
+  { column: "isAutosave", op: "=", value: false },
+  { column: "versionNo", op: "IS NULL" },
+  { column: "status", op: "=", value: "draft" },
+];
 
 // Ids deleted per statement. Each id binds one parameter and SQLite's default
 // SQLITE_MAX_VARIABLE_NUMBER is 999 (the lowest across supported dialects), so
@@ -51,6 +77,138 @@ const VERSION_META_COLUMNS = [
   "createdAt",
   "updatedAt",
 ] as const;
+
+/**
+ * A document's identity across locales.
+ *
+ * NUL-joined rather than concatenated, so a slug ending in the separator cannot
+ * spell the same key as a different slug and entry id pair -- the columns are
+ * free strings and a delimiter that can occur inside one is a collision waiting
+ * for the install that names a collection unusually.
+ *
+ * Exported because the collapse it keys now happens AFTER authorization, in the
+ * caller: a version row's identity belongs to this module, and the decision
+ * about which rows a reader may see belongs to the read path, so the two meet at
+ * the caller rather than one reimplementing the other.
+ */
+export function documentKey(row: VersionMeta): string {
+  return [row.scopeKind, row.scopeSlug, row.entryId].join("\u0000");
+}
+
+/**
+ * One row per document -- its newest -- keeping at most `limit` of them.
+ *
+ * Relies on the caller's `updatedAt DESC` ordering: the first row seen for a
+ * document IS its latest instant, so keeping the first and dropping the rest
+ * needs no comparison.
+ *
+ * 🔴 Run this AFTER authorization, never before. The key deliberately excludes
+ * `locale`, because a document is one thing to publish however many languages
+ * it is drafted in -- but a localized Single is authorized PER LANGUAGE, so
+ * collapsing first hands the visibility filter only the newest locale. Where
+ * that one is denied and an older one is readable, the document disappears from
+ * a card its reader is entitled to see, and no test that uses an unlocalized
+ * document can tell.
+ */
+export function newestPerDocument(
+  rows: readonly VersionMeta[],
+  limit: number
+): VersionMeta[] {
+  const seen = new Set<string>();
+  const newest: VersionMeta[] = [];
+  for (const row of rows) {
+    const key = documentKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    newest.push(row);
+    if (newest.length === limit) break;
+  }
+  return newest;
+}
+
+/**
+ * Where a page of pending edits left off.
+ *
+ * The ordering key in full, which is what a cursor has to be: `updatedAt` alone
+ * is not unique, so a cursor carrying only the instant cannot say WHICH of the
+ * rows sharing it was the last one read.
+ */
+export interface PendingEditCursor {
+  updatedAt: Date;
+  id: string;
+}
+
+/**
+ * How a paged pending-edit read is ordered, and why the choice is the CALLER's.
+ *
+ * - `recency` — newest first, which is what a "recently edited" card means.
+ * - `identity` — by row id, which means nothing to a reader and is STABLE.
+ *
+ * 🔴 A count pages by identity, and that is a correctness decision rather than a
+ * preference. `updatedAt` advances every time somebody types, so a draft not yet
+ * read can move AHEAD of a recency cursor and be excluded from every later page
+ * — not a race window but a guaranteed miss for the rest of the walk, which
+ * makes a total silently too small. A working-draft update rewrites `snapshot`,
+ * `createdBy` and `updatedAt` and never the id, so an identity cursor cannot be
+ * outrun by the rows it is enumerating.
+ */
+export type PendingEditOrder = "recency" | "identity";
+
+/**
+ * Strictly after `cursor` in `updatedAt DESC, id DESC` order.
+ *
+ * 🔴 A cursor rather than an OFFSET, because the rows being paged are the most
+ * MUTABLE in the system: a working draft's `updatedAt` advances every time
+ * somebody types. Under OFFSET, a row updated between two pages moves ahead of
+ * the offset, so the next page repeats a row already seen and SKIPS one that was
+ * never read — and the skipped document is lost silently, since de-duplicating
+ * what arrived cannot reveal what did not. Anchoring to the last row read makes
+ * the pages disjoint whatever moves behind them.
+ *
+ * Spelled as the two-branch disjunction rather than a row constructor, because
+ * `(a, b) < (x, y)` is not portable across the three dialects this must run on.
+ */
+function olderThan(
+  cursor: PendingEditCursor,
+  order: PendingEditOrder
+): VersionsWhere {
+  if (order === "identity") {
+    return { and: [{ column: "id", op: "<", value: cursor.id }] };
+  }
+  return {
+    or: [
+      { and: [{ column: "updatedAt", op: "<", value: cursor.updatedAt }] },
+      {
+        and: [
+          { column: "updatedAt", op: "=", value: cursor.updatedAt },
+          { column: "id", op: "<", value: cursor.id },
+        ],
+      },
+    ],
+  };
+}
+
+/**
+ * The ordering clause for `order`, unique in both cases so a cursor is exact.
+ *
+ * 🔴 No `nulls` placement, and its absence is deliberate. `updated_at` is
+ * NOT NULL on all three dialects, so no row can sit in either group and the
+ * per-dialect default has nothing to disagree about — but asking for one is not
+ * free: the adapter spells `nulls` as a LEADING `updated_at IS NULL` sort key,
+ * an expression `nextly_versions_pending_edits_idx` cannot supply, so SQLite
+ * sorted the rows in a temp B-tree rather than reading them in index order. It
+ * bought a guarantee the column's own nullability already gives, and paid for
+ * it in the one place this ordering is used.
+ */
+function orderClause(
+  order: PendingEditOrder
+): { column: string; direction: "desc" }[] {
+  if (order === "identity") return [{ column: "id", direction: "desc" }];
+  return [
+    { column: "updatedAt", direction: "desc" },
+    { column: "id", direction: "desc" },
+  ];
+}
 
 /** Identifies the document a version belongs to. */
 export interface VersionRef {
@@ -237,12 +395,100 @@ export class VersionsRepository {
     return {
       and: [
         ...this.docWhere(ref),
-        { column: "isAutosave", op: "=", value: false },
-        { column: "versionNo", op: "IS NULL" },
-        { column: "status", op: "=", value: "draft" },
+        ...WORKING_DRAFT_SHAPE,
         this.localeCondition(locale),
       ],
     };
+  }
+
+  /**
+   * The working-draft predicate WITHOUT a document scope.
+   *
+   * 🔴 Derived from {@link WORKING_DRAFT_SHAPE}, the same value
+   * `workingDraftWhere` spreads, so the per-document read and the cross-document
+   * reads cannot disagree about what a pending edit IS. Two spellings of
+   * "non-autosave, no version number, draft" would answer the same question
+   * differently the first time one of them changed, and the disagreement would
+   * show as a dashboard number that does not match the document it points at.
+   */
+  private pendingEditWhere(slugs: readonly string[]): VersionsWhere {
+    return {
+      and: [
+        ...WORKING_DRAFT_SHAPE,
+        // Always applied, because this read is bounded by what its caller may
+        // see and the allowlist is enumerated for every caller -- a super admin
+        // included. An empty list therefore means exactly nothing, and the
+        // callers below short-circuit it rather than emitting `IN ()`.
+        { column: "scopeSlug", op: "IN", value: [...new Set(slugs)] },
+      ],
+    };
+  }
+
+  /**
+   * One PAGE of pending-edit rows, newest first — rows, not documents.
+   *
+   * 🔴 It returns rows and collapses nothing, and that ordering is the point. A
+   * working draft is one row per document per LOCALE, and a document is one
+   * thing to publish however many languages it is drafted in — so the two views
+   * are both needed and the collapse has to happen AFTER the caller has
+   * authorized what it may see. Collapsing here handed the visibility filter
+   * only each document's newest locale, and a localized Single is authorized per
+   * language: where its newest pending locale is denied and an older one is
+   * readable, the document vanished from a card its reader was entitled to.
+   * {@link newestPerDocument} is exported for the caller to apply on the far
+   * side of that decision.
+   *
+   * 🔴 Paged by CURSOR rather than bounded by an arithmetic guess. The bound
+   * used to be `limit * maxPerDocument`, where `maxPerDocument` was the
+   * install's CURRENT locale count — which does not bound the data: working
+   * drafts written under a locale since removed from the configuration are still
+   * rows, so the read could return too few rows to yield `limit` documents while
+   * the caller's feasibility check said its answer was exact. Paging makes the
+   * caller's real bound — how many DOCUMENTS it wants — the only one; the cursor
+   * is what keeps the pages disjoint while the rows underneath them move. See
+   * {@link olderThan}.
+   *
+   * The snapshot is projected away. It is the largest column in the table and a
+   * card that lists titles has no use for it.
+   */
+  /**
+   * 🔴 Served by `nextly_versions_pending_edits_idx`, and by nothing else on
+   * this table. Every other index leads with `scope_kind`, which this query
+   * never constrains, so before that index existed SQLite answered the count
+   * with `SCAN nextly_versions USING INDEX sqlite_autoindex_nextly_versions_1`
+   * and the list with `SCAN nextly_versions` plus a temp B-tree, per page.
+   * Proving the count had seen every pending edit therefore meant reading every
+   * version ever captured: the caller's row budget bounded the rows it RECEIVED
+   * and nothing about the work the database did to find them.
+   *
+   * The index columns are this WHERE clause in order, then the cursor's own
+   * ordering. A single-collection install reads it in order and sorts nothing;
+   * with several collections the `IN` list is several ranges no engine here can
+   * merge, and the sort that follows is over working drafts alone rather than
+   * the whole table -- proportional to the number the card reports, not to the
+   * history behind it.
+   */
+  async findPendingEditRows(input: {
+    slugs: readonly string[];
+    limit: number;
+    order: PendingEditOrder;
+    after?: PendingEditCursor;
+  }): Promise<VersionMeta[]> {
+    if (input.slugs.length === 0 || input.limit <= 0) return [];
+    const scope = this.pendingEditWhere(input.slugs);
+    return this.db.select<VersionMeta>(TABLE, {
+      columns: [...VERSION_META_COLUMNS],
+      where: input.after
+        ? { and: [scope, olderThan(input.after, input.order)] }
+        : scope,
+      // Both orderings end in a UNIQUE column, which is what lets a cursor name
+      // a position exactly: `updatedAt` alone is not total -- SQLite stores
+      // whole seconds, so drafts saved together tie -- and a cursor over a
+      // non-unique key cannot say which of the tied rows a page ended on.
+      // Neither states a `nulls` placement; `orderClause` says why.
+      orderBy: orderClause(input.order),
+      limit: input.limit,
+    });
   }
 
   /**

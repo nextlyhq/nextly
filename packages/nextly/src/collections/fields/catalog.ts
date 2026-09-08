@@ -391,7 +391,7 @@ export const FORM_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<FormFieldCa
  */
 export type BlockFieldCatalogType = Exclude<
   FieldType,
-  "password" | "component"
+  "password" | "component" | "fieldGroup"
 >;
 
 /** Every block-prop field type, in catalog order. */
@@ -501,6 +501,9 @@ export const FIELD_TYPE_BINDING_KIND: Readonly<
   group: null,
   json: "json",
   component: null,
+  // A field group binds like a component: its parts are bound individually,
+  // never the whole container.
+  fieldGroup: null,
   chips: "list",
 };
 
@@ -577,6 +580,7 @@ export const FIELD_TYPE_VALIDATION_RULES: Readonly<
   group: ["required", "message"],
   json: ["required", "message"],
   component: ["required", "message"],
+  fieldGroup: ["required", "message"],
   chips: ["required", "message"],
 };
 

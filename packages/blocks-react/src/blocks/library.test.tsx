@@ -61,6 +61,10 @@ function args<P>(
     props,
     node: NODE,
     className: "nx-n1",
+    // Required by the render contract. These fixtures declare no parts, so the
+    // answer is empty for every name — but a renderer that could omit it would
+    // leave every block's parts unmarked with nothing to report.
+    partClass: () => "",
     ctx,
     drawnWith,
     renderSlot: (_name: string, override?: PageContext) => {
@@ -308,13 +312,17 @@ describe("core/collection-loop", () => {
     expect(children.map(child => child.key)).toEqual(["7", "8"]);
   });
 
-  it("leaves its empty template structurally editable", () => {
-    // The template starts empty, and a content-only lock forbids exactly the
-    // edits that would fill it, so an author could never insert the blocks the
-    // loop repeats. Locking a finished template is worth having; locking an
-    // empty one only stops it being written.
+  it("leaves its empty body structurally editable", () => {
+    // The body starts empty, and a content-only lock forbids exactly the edits
+    // that would fill it, so an author could never insert the blocks the loop
+    // repeats. Locking a finished body is worth having; locking an empty one
+    // only stops it being written.
+    //
+    // Nor is a declared default the answer: what one entry should look like is
+    // a property of the collection being looped, which the block cannot see
+    // from its own declaration.
     expect(collectionLoop.slots?.children.lock).toBeUndefined();
-    expect(collectionLoop.slots?.children.template).toEqual([]);
+    expect(collectionLoop.slots?.children.defaultBlock).toBeUndefined();
   });
 
   it("treats a cleared collection name as no collection", () => {

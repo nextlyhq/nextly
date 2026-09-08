@@ -65,13 +65,23 @@ function harness(
     // used the collection service's inner `{ docs, hasNextPage }` payload and a
     // bare document, and every test passed while no index row was ever found
     // and no classes were ever derived.
-    find: vi.fn(async () => ({ items: [], meta: { hasNext: false } })),
+    find: vi.fn(async (a: { collection?: string }) =>
+      a.collection !== INDEX
+        ? {
+            items: [{ id: "p1", content: documentUsing("hero") }],
+            meta: { hasNext: false },
+          }
+        : { items: [], meta: { hasNext: false } }
+    ),
     findByID: vi.fn(async (args: { draft?: boolean }) => ({
       id: "p1",
       title: "unrelated",
       content: documentUsing("hero"),
       ...(args.draft === true ? { _isWorkingDraft: true } : {}),
     })),
+    // BOTH variants are read by id above; only `draft` differs between them,
+    // and it selects the working-draft overlay. `find` therefore models the
+    // INDEX store alone, never a document read.
     create: vi.fn(async () => ({})),
     delete: vi.fn(async () => ({})),
   };
@@ -92,7 +102,22 @@ function harness(
       ...over,
     });
 
-  return { registered, fire, api, errors };
+  /**
+   * Fire the handler registered for the DELETE phase.
+   *
+   * Addressed by the phase it was registered under rather than by position, so
+   * that adding a phase cannot silently point this at the wrong handler — which
+   * would make a delete test exercise reconciliation and still pass.
+   */
+  const fireDelete = (over: Record<string, unknown> = {}) =>
+    handlers[registered.indexOf("afterDelete:*")]?.({
+      collection: "pages",
+      data: { id: "p1" },
+      req: { nextly: api },
+      ...over,
+    });
+
+  return { registered, fire, fireDelete, api, errors };
 }
 
 describe("what maintenance is registered on", () => {
@@ -103,7 +128,137 @@ describe("what maintenance is registered on", () => {
     // collections that were added after it.
     const { registered } = harness();
 
-    expect(registered).toEqual(["afterCreate:*", "afterUpdate:*"]);
+    expect(registered).toEqual([
+      "afterCreate:*",
+      "afterUpdate:*",
+      "afterDelete:*",
+    ]);
+  });
+});
+
+describe("a document that was deleted", () => {
+  it("removes its rows, bound on the DOCUMENT and not on a subject", async () => {
+    // A delete removes the document in every language and both lifecycle
+    // states at once, so every subject it owned goes with it. Binding field,
+    // locale or variant would leave the rows that did not match behind, with
+    // no document left to reconcile them against.
+    const { fireDelete, api } = harness();
+    api.find.mockImplementation(async (a: { collection?: string }) =>
+      a.collection === INDEX
+        ? {
+            items: [
+              {
+                id: "r1",
+                scope: "collection",
+                entity: "pages",
+                entityKey: "p1",
+                field: "content",
+                locale: "",
+                variant: "published",
+                classId: "hero",
+              },
+            ],
+            meta: { hasNext: false },
+          }
+        : { items: [], meta: { hasNext: false } }
+    );
+
+    await fireDelete();
+
+    expect(api.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: INDEX,
+        where: {
+          scope: { equals: "collection" },
+          entity: { equals: "pages" },
+          entityKey: { equals: "p1" },
+        },
+      })
+    );
+    expect(api.delete).toHaveBeenCalledWith(
+      expect.objectContaining({ collection: INDEX, id: "r1" })
+    );
+  });
+
+  it("does NOT read the collection's configuration", async () => {
+    // Maintenance asks which blocks fields a collection has because it derives
+    // a row per field. A delete has nothing to derive. Asking anyway would be
+    // actively wrong: a blocks field REMOVED from the collection after its rows
+    // were written makes the collection look untracked, and every row that
+    // field owned would survive the delete for ever.
+    const getCollection = vi.fn(async () => ({
+      fields: [{ type: "blocks", name: "content" }],
+    }));
+    const { fireDelete, fire, api } = harness({ getCollection });
+
+    await fireDelete();
+
+    expect(getCollection).not.toHaveBeenCalled();
+    // Controls, both on this harness: the delete DID run, and a SAVE on the
+    // same context does read the configuration. Without them this would hold
+    // for a delete handler that never ran and for a stubbed-out reader.
+    expect(api.find).toHaveBeenCalled();
+    await fire();
+    expect(getCollection).toHaveBeenCalled();
+  });
+
+  it("SKIPS a delete inside a caller-owned transaction", async () => {
+    // The hook runs before that transaction commits, and the pooled Direct API
+    // cannot join it. The rebuild is what repairs a subject a write bypassed.
+    const { fireDelete, api } = harness();
+
+    // Control first, on the SAME harness: an ordinary delete does reach the
+    // index. Without it this assertion would hold just as well for a handler
+    // that was never registered, or one that does nothing at all.
+    await fireDelete();
+    expect(api.find).toHaveBeenCalled();
+    api.find.mockClear();
+    api.delete.mockClear();
+
+    await fireDelete({ executor: {} });
+
+    expect(api.find).not.toHaveBeenCalled();
+    expect(api.delete).not.toHaveBeenCalled();
+  });
+
+  it("SKIPS its own index collection, whose rows this deletes", async () => {
+    // Every row removed here is itself a delete on the index collection, which
+    // fires this same handler again.
+    const { fireDelete, api } = harness();
+
+    await fireDelete();
+    expect(api.find).toHaveBeenCalled();
+    api.find.mockClear();
+
+    await fireDelete({ collection: INDEX });
+
+    expect(api.find).not.toHaveBeenCalled();
+  });
+
+  it("SKIPS a Single, which a wildcard registration also receives", async () => {
+    // Core namespaces a Single's hooks as `single:<slug>`. The index models
+    // Single subjects but a plugin has no supported way to read one, so none
+    // are written and there are none to forget.
+    const { fireDelete, api } = harness();
+
+    await fireDelete();
+    expect(api.find).toHaveBeenCalled();
+    api.find.mockClear();
+
+    await fireDelete({ collection: "single:site-style" });
+
+    expect(api.find).not.toHaveBeenCalled();
+  });
+
+  it("RAISES when the rows cannot be removed, so the caller is told", async () => {
+    // The delete itself is already committed and cannot be rolled back. A
+    // swallowed failure would report a clean deletion while the rows stay
+    // behind counting towards their classes — and they name a document that no
+    // longer exists, so no later write reconciles them.
+    const { fireDelete, api } = harness();
+    api.find.mockRejectedValue(new Error("index unreachable"));
+
+    await expect(fireDelete()).rejects.toThrow(/could not forget/);
   });
 });
 
@@ -175,7 +330,19 @@ describe("the draft split it asks for", () => {
 
     await fire();
 
-    expect(api.findByID.mock.calls.map(c => c[0].draft)).toEqual([false, true]);
+    // Both subjects are read by id, because a lifecycle filter constrains the
+    // main row and the localized companion together and drops documents that
+    // are legitimately in neither state. The variants differ only in whether
+    // they opt into the working-draft overlay.
+    expect(api.findByID).toHaveBeenCalledTimes(2);
+    expect(api.findByID.mock.calls.map(c => c[0].draft)).toEqual([
+      undefined,
+      true,
+    ]);
+    // The document is never read through the list path.
+    expect(
+      api.find.mock.calls.filter(c => c[0].collection === "pages")
+    ).toHaveLength(0);
   });
 
   it("enumerates only the published variant when it does not", async () => {
@@ -187,7 +354,15 @@ describe("the draft split it asks for", () => {
 
     await fire();
 
-    expect(api.findByID.mock.calls.map(c => c[0].draft)).toEqual([false]);
+    // Published only, and read WITHOUT opting into the working draft. Its row
+    // is not filtered by lifecycle: this collection has status but no draft
+    // split, so the single subject must be read whatever state that row is in
+    // — filtering it to published indexes an unpublished document nowhere.
+    expect(api.findByID).toHaveBeenCalledTimes(1);
+    expect(api.findByID.mock.calls[0]?.[0].draft).toBeUndefined();
+    expect(
+      api.find.mock.calls.filter(c => c[0].collection === "pages")
+    ).toHaveLength(0);
   });
 });
 
@@ -227,7 +402,7 @@ describe("failure, on a write that has already committed", () => {
     const { fire, api, errors } = harness({
       draftSplit: async () => ({ eligible: true }),
     });
-    api.find.mockRejectedValueOnce(new Error("index unavailable"));
+    api.findByID.mockRejectedValueOnce(new Error("document unreadable"));
 
     await expect(fire()).rejects.toThrow(/1 of 2 subject\(s\)/);
 
@@ -293,7 +468,6 @@ describe("a Single, which a wildcard registration also receives", () => {
       fire({ collection: "single:site-style" })
     ).resolves.toBeUndefined();
 
-    expect(api.findByID).not.toHaveBeenCalled();
     expect(api.create).not.toHaveBeenCalled();
     expect(errors).toEqual([]);
   });

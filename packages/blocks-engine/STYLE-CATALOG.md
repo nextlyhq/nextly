@@ -106,6 +106,7 @@ the wider declaration, which is a migration rather than a check.
 
 | Property              | Flag | Value                                         | Tokens    | Emits                   |
 | --------------------- | ---- | --------------------------------------------- | --------- | ----------------------- |
+| `boxSizing`           |      | keyword (`content-box`/`border-box`)          |           | `box-sizing`            |
 | `display`             |      | keyword                                       |           | `display`               |
 | `flexDirection`       |      | keyword                                       |           | `flex-direction`        |
 | `flexWrap`            |      | keyword                                       |           | `flex-wrap`             |
@@ -273,3 +274,9 @@ newer engine still renders.
 
 Removing a property, or changing what an existing one means or the shape of its
 value, is a document-format migration.
+
+### list
+
+| Property        | Flag | Value                                            | Tokens | Emits             |
+| --------------- | ---- | ------------------------------------------------ | ------ | ----------------- |
+| `listStyleType` |      | keyword (`revert` restores the element's marker) |        | `list-style-type` |

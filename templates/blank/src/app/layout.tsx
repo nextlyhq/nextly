@@ -3,6 +3,7 @@ import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
 
 import "./globals.css";
+import { SITE_URL } from "@/lib/site-url";
 
 /**
  * The faces are imported as STYLESHEETS from packages in `node_modules`, rather
@@ -37,9 +38,7 @@ import "./globals.css";
  * blank-template pages can use relative OG image URLs without breaking.
  */
 export const metadata: Metadata = {
-  metadataBase: new URL(
-    process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"
-  ),
+  metadataBase: new URL(SITE_URL),
   title: { default: "Nextly", template: "%s — Nextly" },
   description: "A Nextly project.",
 };

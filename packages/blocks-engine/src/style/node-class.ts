@@ -43,6 +43,32 @@ export const PAGE_ROOT_SELECTOR = `.${PAGE_ROOT_CLASS}.${PAGE_ROOT_CLASS}`;
 export const BLOCK_TYPE_CLASS_PREFIX = "nx-bt-";
 
 /**
+ * What a class marking one of a block's own rendered elements starts with.
+ *
+ * Separate from the block-type prefix because the two answer different
+ * questions — which block this element belongs to, versus which element of it
+ * this is — and a reader scanning a rendered page can tell them apart without
+ * knowing the vocabulary.
+ */
+export const BLOCK_PART_CLASS_PREFIX = "nx-bp-";
+
+/**
+ * The class an element wears to opt into the site's content width.
+ *
+ * Here rather than beside the container block that applies it, because the rule
+ * behind it is emitted by the site stylesheet — and a selector written in one
+ * package against a name owned by another is a contract with two definitions,
+ * which is the arrangement this file exists to refuse.
+ *
+ * A CLASS rather than a block-type default, and the distinction is what makes
+ * it necessary: containment is a PROP, so every container of a given type wears
+ * the same block-type class whether it opted in or not. A default keyed by type
+ * would constrain the ones that declined. The same argument the typographic
+ * defaults make about a heading's level, one tier along.
+ */
+export const CONTENT_WIDTH_CLASS = `${NODE_CLASS_PREFIX}contained`;
+
+/**
  * A 53-bit hash of an id, in base 36.
  *
  * Two FNV-1a lanes with different multipliers, combined into one integer that a
@@ -150,4 +176,26 @@ export function nodeClassName(id: string): string {
  */
 export function blockTypeClassName(type: string): string {
   return BLOCK_TYPE_CLASS_PREFIX + type.replace(/\//g, "--");
+}
+
+/**
+ * The class marking one element a block renders inside its own root.
+ *
+ * The block type is encoded INTO the class rather than left as an ancestor
+ * selector, and that is the whole point rather than a shortening. A rule
+ * written as `.nx-bt-core--form label` matches every `label` beneath the form,
+ * including labels rendered by other blocks sitting in its slots — so a
+ * container's defaults reach markup it does not own, and the deeper the tree
+ * the more it takes. A single class matches exactly the elements the block
+ * itself marked, whatever is nested inside it.
+ *
+ * Both separators are the doubled dash for the reason
+ * {@link blockTypeClassName} gives: a part name is
+ * `[a-z0-9]+(-[a-z0-9]+)*`, so a doubled dash cannot occur inside one and is
+ * free to mean a boundary. Without that, `core/image` + `caption-wide` and
+ * `core/image-caption` + `wide` would both spell `core--image-caption-wide`
+ * and one block's defaults would silently apply to another's element.
+ */
+export function blockPartClassName(type: string, part: string): string {
+  return `${BLOCK_PART_CLASS_PREFIX}${type.replace(/\//g, "--")}--${part}`;
 }

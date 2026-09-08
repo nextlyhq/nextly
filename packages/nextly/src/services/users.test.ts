@@ -3,7 +3,11 @@ import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { createTestDb, type TestDb } from "../__tests__/fixtures/db";
+import {
+  createTestDb,
+  type TestDb,
+  testLogger,
+} from "../__tests__/fixtures/db";
 import { roleFactory } from "../__tests__/fixtures/roles";
 import { userFactory, bulkUsersFactory } from "../__tests__/fixtures/users";
 import {
@@ -23,12 +27,12 @@ describe("UsersService", () => {
 
   beforeEach(async () => {
     testDb = await createTestDb();
-    service = new UsersService(testDb.db as any, testDb.schema);
+    service = new UsersService(testDb.adapter, testLogger);
   });
 
   afterEach(async () => {
     await testDb.reset();
-    testDb.close();
+    await testDb.close();
   });
 
   // Note: Skipping listUsers() tests - schema mismatch with test database
@@ -45,7 +49,6 @@ describe("UsersService", () => {
         const result = await service.listUsers({ page: 1, limit: 10 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 10);
         expectPaginationMeta(result, {
           total: 25,
@@ -64,7 +67,6 @@ describe("UsersService", () => {
         const result = await service.listUsers({ page: 2, limit: 10 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 10);
         expectPaginationMeta(result, {
           page: 2,
@@ -82,7 +84,6 @@ describe("UsersService", () => {
         const result = await service.listUsers({ page: 3, limit: 10 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 5); // Last page has 5 items
         expectPaginationMeta(result, {
           page: 3,
@@ -99,7 +100,6 @@ describe("UsersService", () => {
         const result = await service.listUsers({ page: 10, limit: 10 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 0);
         expectPaginationMeta(result, {
           total: 5,
@@ -117,7 +117,6 @@ describe("UsersService", () => {
         const result = await service.listUsers({ page: 1, limit: 25 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 25);
         expectPaginationMeta(result, {
           total: 50,
@@ -135,7 +134,6 @@ describe("UsersService", () => {
         const result = await service.listUsers();
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 10); // Default limit
         expectPaginationMeta(result, {
           page: 1, // Default page
@@ -158,9 +156,8 @@ describe("UsersService", () => {
         const result = await service.listUsers({ search: "Alice" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
-        expect(result.data!.every(u => u.name?.includes("Alice"))).toBe(true);
+        expect(result.every(u => u.name?.includes("Alice"))).toBe(true);
       });
 
       it("should search users by email", async () => {
@@ -176,9 +173,8 @@ describe("UsersService", () => {
         const result = await service.listUsers({ search: "example" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
-        expect(result.data!.every(u => u.email.includes("example"))).toBe(true);
+        expect(result.every(u => u.email.includes("example"))).toBe(true);
       });
 
       it("should return empty array when search has no matches", async () => {
@@ -190,7 +186,6 @@ describe("UsersService", () => {
         const result = await service.listUsers({ search: "nonexistent" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 0);
       });
     });
@@ -210,9 +205,8 @@ describe("UsersService", () => {
         const result = await service.listUsers({ emailVerified: true });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
-        expect(result.data!.every(u => u.emailVerified !== null)).toBe(true);
+        expect(result.every(u => u.emailVerified !== null)).toBe(true);
       });
 
       it("should filter by emailVerified=false", async () => {
@@ -229,9 +223,8 @@ describe("UsersService", () => {
         const result = await service.listUsers({ emailVerified: false });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
-        expect(result.data!.every(u => u.emailVerified === null)).toBe(true);
+        expect(result.every(u => u.emailVerified === null)).toBe(true);
       });
 
       it("should filter by hasPassword=true", async () => {
@@ -247,7 +240,6 @@ describe("UsersService", () => {
         const result = await service.listUsers({ hasPassword: true });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
       });
 
@@ -264,7 +256,6 @@ describe("UsersService", () => {
         const result = await service.listUsers({ hasPassword: false });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
       });
     });
@@ -286,7 +277,6 @@ describe("UsersService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].email).toBe("alice@test.com");
         expect(result.data![1].email).toBe("bob@test.com");
         expect(result.data![2].email).toBe("charlie@test.com");
@@ -308,7 +298,6 @@ describe("UsersService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].email).toBe("charlie@test.com");
         expect(result.data![1].email).toBe("bob@test.com");
         expect(result.data![2].email).toBe("alice@test.com");
@@ -326,10 +315,8 @@ describe("UsersService", () => {
       const result = await service.getUserById(user.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data).toBeDefined();
-      expect(result.data!.id).toBe(user.id);
-      expect(result.data!.email).toBe(user.email);
+      expect(result.id).toBe(user.id);
+      expect(result.email).toBe(user.email);
     });
 
     it("should return user with roles from UserRoleService", async () => {
@@ -347,18 +334,24 @@ describe("UsersService", () => {
       const result = await service.getUserById(user.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data!.roles).toBeDefined();
-      expect(result.data!.roles).toContain(role.id);
+      expect(result.roles).toBeDefined();
+      expect(result.roles).toContain(role.id);
     });
 
     it("should return 404 for non-existent user", async () => {
-      // Act
-      const result = await service.getUserById(randomUUID());
-
-      // Assert
-      expectErrorResponse(result, 404);
-      expect(result.message).toBe("User not found");
+      // The public message stays GENERIC on purpose: a message naming the
+      // user would let an unauthenticated caller probe which accounts exist.
+      // The id travels in logContext instead, so that is what is asserted --
+      // the old expectation of "User not found" would today be asserting the
+      // enumeration leak the service was changed to close.
+      const error = await service.getUserById(randomUUID()).then(
+        () => null,
+        (e: unknown) => e
+      );
+      expect(error).toMatchObject({ code: "NOT_FOUND", statusCode: 404 });
+      expect((error as { publicMessage: string }).publicMessage).toBe(
+        "Not found."
+      );
     });
 
     // This test expects 400 but getUserById returns 404 for invalid ID
@@ -380,9 +373,8 @@ describe("UsersService", () => {
       const result = await service.getUserById(user.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data!.roles).toBeDefined();
-      expect(result.data!.roles).toEqual([]);
+      expect(result.roles).toBeDefined();
+      expect(result.roles).toEqual([]);
     });
 
     // Roles need unique names too, skipping to avoid constraint errors
@@ -406,9 +398,8 @@ describe("UsersService", () => {
       const result = await service.createLocalUser(userData);
 
       // Assert
-      expectSuccessResponse(result, 201);
-      expect(result.data!.email).toBe(userData.email);
-      expect(result.data!.name).toBe(userData.name);
+      expect(result.email).toBe(userData.email);
+      expect(result.name).toBe(userData.name);
 
       // Verify password was hashed
       const user = await testDb.db.query.users.findFirst({
@@ -431,7 +422,6 @@ describe("UsersService", () => {
       const result = await service.createLocalUser(userData);
 
       // Assert
-      expectSuccessResponse(result, 201);
 
       const user = await testDb.db.query.users.findFirst({
         where: { email: userData.email },
@@ -455,12 +445,11 @@ describe("UsersService", () => {
       const result = await service.createLocalUser(userData);
 
       // Assert
-      expectSuccessResponse(result, 201);
-      expect(result.data!.roles).toEqual([role.id]);
+      expect(result.roles).toEqual([role.id]);
 
       // Verify role assignment in database
       const userRole = await testDb.db.query.userRoles.findFirst({
-        where: { userId: result.data!.id },
+        where: { userId: result.id },
       });
       expect(userRole).toBeDefined();
       expect(userRole!.roleId).toBe(role.id);
@@ -478,11 +467,10 @@ describe("UsersService", () => {
       const result = await service.createLocalUser(userData);
 
       // Assert
-      expectSuccessResponse(result, 201);
 
       // Verify super-admin role was assigned
       const userRoles = await testDb.db.query.userRoles.findMany({
-        where: { userId: result.data!.id },
+        where: { userId: result.id },
       });
       expect(userRoles.length).toBeGreaterThan(0);
     });
@@ -551,7 +539,6 @@ describe("UsersService", () => {
       const result = await service.createLocalUser(userData);
 
       // Assert
-      expectSuccessResponse(result, 201);
 
       const user = await testDb.db.query.users.findFirst({
         where: { email: userData.email },
@@ -572,8 +559,7 @@ describe("UsersService", () => {
       const result = await service.updateUser(user.id, updates);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data!.email).toBe(updates.email);
+      expect(result.email).toBe(updates.email);
     });
 
     it("should update user name and image", async () => {
@@ -590,9 +576,8 @@ describe("UsersService", () => {
       const result = await service.updateUser(user.id, updates);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data!.name).toBe(updates.name);
-      expect(result.data!.image).toBe(updates.image);
+      expect(result.name).toBe(updates.name);
+      expect(result.image).toBe(updates.image);
     });
 
     it("should update and hash password", async () => {
@@ -603,13 +588,16 @@ describe("UsersService", () => {
       });
       await testDb.db.insert(testDb.schema.users).values(user);
 
-      const nextPlain = "NewPassword123";
+      // The update schema reuses PasswordSchema, which requires a special
+      // character alongside the length, case and digit rules. A password
+      // without one is rejected before any hashing happens, so this value
+      // has to satisfy the policy for the test to reach what it is named for.
+      const nextPlain = "NewPassword123!";
 
       // Act
       const result = await service.updateUser(user.id, { password: nextPlain });
 
       // Assert
-      expectSuccessResponse(result, 200);
 
       const updatedUser = await testDb.db.query.users.findFirst({
         where: { id: user.id },
@@ -639,8 +627,7 @@ describe("UsersService", () => {
       const result = await service.updateUser(user.id, updates);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data!.emailVerified).toBeTruthy();
+      expect(result.emailVerified).toBeTruthy();
     });
 
     // Role updates need unique names, skipping to avoid constraint errors
@@ -660,17 +647,21 @@ describe("UsersService", () => {
       const result = await service.updateUser(user.id, updates);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data!.isActive).toBe(true);
+      expect(result.isActive).toBe(true);
     });
 
     it("should return 404 for non-existent user", async () => {
-      // Act
-      const result = await service.updateUser(randomUUID(), { name: "Test" });
-
-      // Assert
-      expectErrorResponse(result, 404);
-      expect(result.message).toBe("User not found");
+      // Generic public message by design -- see getUserById() above.
+      const error = await service
+        .updateUser(randomUUID(), { name: "Test" })
+        .then(
+          () => null,
+          (e: unknown) => e
+        );
+      expect(error).toMatchObject({ code: "NOT_FOUND", statusCode: 404 });
+      expect((error as { publicMessage: string }).publicMessage).toBe(
+        "Not found."
+      );
     });
 
     it("should return 409 for duplicate email", async () => {
@@ -682,11 +673,18 @@ describe("UsersService", () => {
       const updates = { email: "user2@example.com" };
 
       // Act
-      const result = await service.updateUser(user1.id, updates);
+      const error = await service.updateUser(user1.id, updates).then(
+        () => null,
+        (e: unknown) => e
+      );
 
-      // Assert
-      expectErrorResponse(result, 409);
-      expect(result.message).toContain("already exists");
+      // Assert: DUPLICATE, and the conflicting address must NOT appear in the
+      // public message -- echoing it back would confirm to any caller that
+      // user2@example.com is registered.
+      expect(error).toMatchObject({ code: "DUPLICATE", statusCode: 409 });
+      expect((error as { publicMessage: string }).publicMessage).not.toContain(
+        "user2@example.com"
+      );
     });
 
     it("should return 400 for invalid email format", async () => {
@@ -696,12 +694,11 @@ describe("UsersService", () => {
 
       const updates = { email: "invalid-email" };
 
-      // Act
-      const result = await service.updateUser(user.id, updates);
-
-      // Assert
-      expectErrorResponse(result, 400);
-      expect(result.message).toContain("Invalid");
+      // Act + Assert: the update schema rejects it before any write.
+      await expect(service.updateUser(user.id, updates)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
     });
 
     it("should return 400 when no changes provided", async () => {
@@ -709,12 +706,13 @@ describe("UsersService", () => {
       const user = userFactory();
       await testDb.db.insert(testDb.schema.users).values(user);
 
-      // Act - no changes
-      const result = await service.updateUser(user.id, {});
-
-      // Assert
-      expectErrorResponse(result, 400);
-      expect(result.message).toContain("No changes");
+      // Act + Assert: documented as VALIDATION_ERROR -- "on schema-validation
+      // failure OR when no actionable changes are provided". An empty change
+      // set is a caller mistake, not a silent no-op write.
+      await expect(service.updateUser(user.id, {})).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
     });
 
     // This test is wrong - service returns success if only email unchanged
@@ -734,8 +732,7 @@ describe("UsersService", () => {
       const result = await service.updateUser(user.id, updates);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data!.image).toBeNull();
+      expect(result.image).toBeNull();
     });
   });
 
@@ -750,7 +747,6 @@ describe("UsersService", () => {
       const result = await service.deleteUser(user.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
       expect(result.message).toBe("User deleted successfully");
 
       // Verify user was deleted
@@ -801,8 +797,7 @@ describe("UsersService", () => {
       const result = await service.getCurrentUser(user.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data!.id).toBe(user.id);
+      expect(result.id).toBe(user.id);
     });
 
     it("should return same result as getUserById", async () => {
@@ -831,8 +826,7 @@ describe("UsersService", () => {
       const result = await service.updateCurrentUser(user.id, changes);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data!.name).toBe(changes.name);
+      expect(result.name).toBe(changes.name);
     });
 
     it("should update user image", async () => {
@@ -846,19 +840,21 @@ describe("UsersService", () => {
       const result = await service.updateCurrentUser(user.id, changes);
 
       // Assert
-      expectSuccessResponse(result, 200);
-      expect(result.data!.image).toBe(changes.image);
+      expect(result.image).toBe(changes.image);
     });
 
     it("should return 404 for non-existent user", async () => {
-      // Act
-      const result = await service.updateCurrentUser(randomUUID(), {
-        name: "Test",
-      });
-
-      // Assert
-      expectErrorResponse(result, 404);
-      expect(result.message).toBe("User not found");
+      // Generic public message by design -- see getUserById() above.
+      const error = await service
+        .updateCurrentUser(randomUUID(), { name: "Test" })
+        .then(
+          () => null,
+          (e: unknown) => e
+        );
+      expect(error).toMatchObject({ code: "NOT_FOUND", statusCode: 404 });
+      expect((error as { publicMessage: string }).publicMessage).toBe(
+        "Not found."
+      );
     });
   });
 
@@ -903,7 +899,6 @@ describe("UsersService", () => {
       const result = await service.updatePasswordHash(user.id, newHash);
 
       // Assert
-      expectSuccessResponse(result, 200);
 
       // Verify password was updated
       const updatedUser = await testDb.db.query.users.findFirst({

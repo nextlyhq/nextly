@@ -16,6 +16,17 @@ beforeAll(() => {
 // secret keeps it, and a file testing the absent case can still delete it.
 process.env.NEXTLY_SECRET ??= "nextly-test-encryption-secret-at-least-32-chars";
 
+// The dialect these suites actually run on. `DB_DIALECT` defaults to
+// `postgresql`, which then demands a `DATABASE_URL` — so any unit test whose
+// subject happened to read the environment failed validation for a database it
+// never touches. The fixtures here are in-memory SQLite, and saying so is what
+// makes the environment describe the run rather than contradict it.
+//
+// Assigned rather than overwritten, like the secret above: an integration run
+// that supplies its own dialect keeps it, and a file testing the unset case can
+// still delete it.
+process.env.DB_DIALECT ??= "sqlite";
+
 /**
  * Fail any test that leaves a PostgreSQL transaction aborted.
  *

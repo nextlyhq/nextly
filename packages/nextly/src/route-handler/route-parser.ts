@@ -96,6 +96,18 @@ export function requiresAuthOnly(service: string, method: string): boolean {
 }
 
 /**
+ * The all-locales lifecycle routes, by their URL token.
+ *
+ * A table rather than a branch per direction. The takedown was built, tested and
+ * reachable by nothing for exactly as long as its wiring was a second copy of
+ * the publish branch that nobody wrote.
+ */
+const ALL_LOCALES_ENTRY_ROUTES: Record<string, string> = {
+  "publish-all": "publishAllLocales",
+  "unpublish-all": "unpublishAllLocales",
+};
+
+/**
  * Map parsed route operation to permission action.
  *
  * More reliable than `getActionFromMethod()` for bulk operations where the
@@ -746,19 +758,28 @@ function parseCollectionEntryPublishAllRoute(
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
+  // Both directions of the all-locales lifecycle, as a lookup rather than two
+  // branches. They differ only in the token and the method it names, and stating
+  // that difference twice is how a route and its twin start to disagree about
+  // the shape they both match.
+  const allLocales = ALL_LOCALES_ENTRY_ROUTES[additionalParams[0] ?? ""];
   if (
     id &&
     subresource === "entries" &&
     subId &&
-    additionalParams[0] === "publish-all" &&
+    allLocales &&
     httpMethod === "POST"
   ) {
     routeParams.collectionName = id;
     routeParams.entryId = subId;
     return {
       service: "collections",
+      // Authorized as an `update` in BOTH directions: no route-level gate can
+      // express publish or unpublish, so the service judges a scoped key's own
+      // grant on top of this. Giving either its own operation would invent a
+      // permission name nothing seeds.
       operation: "update",
-      method: "publishAllLocales",
+      method: allLocales,
       routeParams,
     };
   }
@@ -1709,6 +1730,7 @@ function parseEmailProviderRoutes(
  * - GET /api/email-templates/[id] → get template by id
  * - PATCH /api/email-templates/[id] → update template
  * - DELETE /api/email-templates/[id] → delete template
+ * - POST /api/email-templates/preview → render unsaved fields (draft)
  * - POST /api/email-templates/[id]/preview → preview with sample data
  */
 function parseEmailTemplateRoutes(
@@ -1733,6 +1755,27 @@ function parseEmailTemplateRoutes(
       service: "emailTemplates",
       operation: "create",
       method: "createTemplate",
+      routeParams,
+    };
+  }
+
+  // POST /api/email-templates/preview → render UNSAVED fields
+  //
+  // Ahead of every `[id]` branch because this segment is a ROUTE, not an id.
+  // Read as an id it matches no POST operation at all, so the mounted admin's
+  // live preview answered not-found on every keystroke while the standalone
+  // route module worked in isolation — the catch-all is what a generated app
+  // actually mounts.
+  //
+  // `single` matches its id-addressed sibling below: both are non-CRUD reads
+  // returning one rendered artifact. The operation does not select the
+  // permission here — that comes from the HTTP method — so POST resolves to
+  // create-or-manage on email-templates either way.
+  if (id === "preview" && !subresource && httpMethod === "POST") {
+    return {
+      service: "emailTemplates",
+      operation: "single",
+      method: "previewDraft",
       routeParams,
     };
   }
@@ -2005,6 +2048,203 @@ function parseApiKeyRoutes(
   return null;
 }
 
+/**
+ * The `/api/releases` route table.
+ *
+ * Declared as data rather than as a branch per route. Eight routes written as
+ * eight `if` blocks is one function with twenty-five paths through it, and the
+ * shape they all match on — id, subresource, sub-id, verb — is identical, so the
+ * branches differ only in their values. Stating the values once means a new
+ * route is a row, and means the depth guard and the verb gate cannot be
+ * forgotten for one of them.
+ *
+ * `operation` is the dispatcher's shared vocabulary — list, single, create,
+ * update, delete — and deliberately does NOT carry the release authority. The
+ * three seeded permissions are read / create / publish, and `publish` has no
+ * member in that union; widening a type every service shares to describe one of
+ * them would be the wrong trade. The authority each method needs is declared in
+ * `api/releases`, beside the handler that enforces it.
+ */
+interface ReleaseRoute {
+  /** Whether the path carries a release id. */
+  id: boolean;
+  /** The segment after the id, or `null` for none. */
+  subresource: string | null;
+  /** Whether the path carries a fourth segment, such as a member id. */
+  subId: boolean;
+  verb: string;
+  operation: OperationType;
+  method: string;
+}
+
+const RELEASE_ROUTES: ReleaseRoute[] = [
+  {
+    id: false,
+    subresource: null,
+    subId: false,
+    verb: "GET",
+    operation: "list",
+    method: "listReleases",
+  },
+  {
+    id: false,
+    subresource: null,
+    subId: false,
+    verb: "POST",
+    operation: "create",
+    method: "createRelease",
+  },
+  {
+    id: true,
+    subresource: null,
+    subId: false,
+    verb: "GET",
+    operation: "single",
+    method: "getRelease",
+  },
+  {
+    id: true,
+    subresource: "members",
+    subId: false,
+    verb: "GET",
+    operation: "list",
+    method: "listReleaseMembers",
+  },
+  {
+    id: true,
+    subresource: "members",
+    subId: false,
+    verb: "POST",
+    operation: "create",
+    method: "addReleaseMember",
+  },
+  {
+    id: true,
+    subresource: "members",
+    subId: true,
+    verb: "DELETE",
+    operation: "delete",
+    method: "removeReleaseMember",
+  },
+  // Scheduling and cancelling are separate routes rather than one `PATCH` with a
+  // state in the body: they are the two directions of the authority the seed
+  // calls "schedule or cancel", and a body field is not something a route table
+  // or an audit log can see.
+  {
+    id: true,
+    subresource: "schedule",
+    subId: false,
+    verb: "POST",
+    operation: "update",
+    method: "scheduleRelease",
+  },
+  {
+    id: true,
+    subresource: "cancel",
+    subId: false,
+    verb: "POST",
+    operation: "update",
+    method: "cancelRelease",
+  },
+  // A READ, and deliberately its own route rather than a field on the detail.
+  // Answering it costs an identity lookup over every member, which the detail
+  // read must not pay to tell the overwhelming majority of callers that nothing
+  // is wrong — the state already said that. Asked instead at the moment
+  // somebody is about to commit to an instant.
+  {
+    id: true,
+    subresource: "blockers",
+    subId: false,
+    verb: "GET",
+    operation: "list",
+    method: "listReleaseBlockers",
+  },
+];
+
+/**
+ * `/api/releases` — the content-release surface.
+ *
+ * A release is a first-class object with its own lifecycle rather than a
+ * sub-resource of the documents it batches, so it gets a top-level route. That
+ * is the shape Contentful, Strapi and Sanity all give it, and the only one that
+ * answers "what is going live on Friday?" without starting from a document.
+ */
+function parseReleaseRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  additionalParams: string[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // Nothing deeper than the table exists. Guarded once, so a longer path 404s
+  // instead of matching a shorter route and silently ignoring the tail — which
+  // would make `.../schedule/tomorrow` schedule the release.
+  if (additionalParams.length > 0) return null;
+
+  const route = RELEASE_ROUTES.find(
+    candidate =>
+      candidate.id === Boolean(id) &&
+      candidate.subresource === (subresource ?? null) &&
+      candidate.subId === Boolean(subId) &&
+      candidate.verb === httpMethod
+  );
+  if (!route) return null;
+
+  if (id) routeParams.releaseId = id;
+  if (subId) routeParams.memberId = subId;
+
+  return {
+    service: "releases",
+    operation: route.operation,
+    method: route.method,
+    routeParams,
+  };
+}
+
+/**
+ * GET /api/jobs → list the most recently touched jobs.
+ * GET or POST /api/jobs/run → run one background job pass.
+ *
+ * `run` is the only path under `jobs`, and it is an operation rather than an
+ * id: there is no per-job REST surface yet, so nothing can collide with it.
+ * GET is accepted because Vercel Cron triggers with a GET; the pass is
+ * idempotent under its lease, and the route authorizes either method.
+ */
+function parseJobRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // GET /api/jobs → the recent-runs read. Ahead of the `run` branch because it
+  // is the only shape with no id at all, and a reader must not fall through to
+  // a trigger: this route is a read, and running the queue is a side effect
+  // nobody asked for by listing it.
+  if (id === undefined && !subresource && httpMethod === "GET") {
+    return {
+      service: "jobs",
+      operation: "list",
+      method: "listJobs",
+      routeParams,
+    };
+  }
+
+  if (id !== "run" || subresource) return null;
+  if (httpMethod !== "POST" && httpMethod !== "GET") return null;
+  // Running the queue is not a CRUD OperationType, but the dispatch guard
+  // rejects a route with no operation before the direct-dispatch jobs branch
+  // runs, so a truthy value is required. The handler does its own
+  // authorization and this value is otherwise unused — the same accommodation
+  // the webhook drain makes one function below.
+  return {
+    service: "jobs",
+    operation: "single",
+    method: "runJobs",
+    routeParams,
+  };
+}
+
 function parseWebhookRoutes(
   id: string | undefined,
   subresource: string | undefined,
@@ -2221,50 +2461,170 @@ function parseWebhookRoutes(
 // ============================================================================
 
 /**
- * Parse dashboard-related routes.
+ * Parse the translation worklist route.
  *
- *   GET /api/dashboard/stats          → getDashboardStats
- *   GET /api/dashboard/recent-entries → getDashboardRecentEntries
- *   GET /api/dashboard/activity       → getDashboardActivity
+ *   GET /api/translations → getTranslationWorklist
  *
- * All dashboard endpoints are GET-only and require authentication
- * (no specific permission). Handlers manage their own auth.
+ * GET-only and authenticated; the handler owns its own auth, and which rows come
+ * back is decided per row by each collection's read rules.
+ *
+ * Bare rather than nested under a language (`/translations/es`): the language is
+ * a filter over one list, not a different resource, and it travels as a query
+ * parameter beside the state and the limit it belongs with.
  */
-function parseDashboardRoutes(
+function parseTranslationRoutes(
   id: string | undefined,
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
   if (httpMethod !== "GET") return null;
+  if (id !== undefined) return null;
+  return {
+    service: "translations",
+    operation: "list",
+    method: "getTranslationWorklist",
+    routeParams,
+  };
+}
 
-  if (id === "stats") {
-    return {
-      service: "dashboard",
-      operation: "list",
-      method: "getDashboardStats",
-      routeParams,
-    };
-  }
-
-  if (id === "recent-entries") {
-    return {
-      service: "dashboard",
+/**
+ * Every `/api/dashboard` route, as a table keyed by verb and then by id.
+ *
+ * A table rather than a ladder of `if`s. The ladder's cyclomatic complexity
+ * grew with the route count and tripped the repository's threshold at the
+ * sixth route, and each new arm restated four lines of the same object literal
+ * — so a route added under the wrong `operation` looked exactly like one added
+ * under the right one.
+ */
+const DASHBOARD_ROUTES: Readonly<
+  Record<
+    string,
+    Readonly<
+      Record<
+        string,
+        { operation: NonNullable<ParsedRoute["operation"]>; method: string }
+      >
+    >
+  >
+> = {
+  GET: {
+    stats: { operation: "list", method: "getDashboardStats" },
+    "recent-entries": {
       operation: "list",
       method: "getDashboardRecentEntries",
-      routeParams,
-    };
-  }
+    },
+    activity: { operation: "list", method: "getDashboardActivity" },
+    layout: { operation: "list", method: "getWidgetLayout" },
+  },
+  POST: {
+    query: { operation: "list", method: "postWidgetQuery" },
+  },
+  PUT: {
+    layout: { operation: "update", method: "putWidgetLayout" },
+  },
+  DELETE: {
+    layout: { operation: "delete", method: "deleteWidgetLayout" },
+  },
+};
 
-  if (id === "activity") {
-    return {
-      service: "dashboard",
-      operation: "list",
-      method: "getDashboardActivity",
-      routeParams,
-    };
-  }
+/**
+ * Parse dashboard-related routes.
+ *
+ *   GET  /api/dashboard/stats          → getDashboardStats
+ *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
+ *   GET  /api/dashboard/activity       → getDashboardActivity
+ *   GET  /api/dashboard/layout         → getWidgetLayout
+ *   PUT  /api/dashboard/layout         → putWidgetLayout
+ *   DELETE /api/dashboard/layout       → deleteWidgetLayout
+ *   POST /api/dashboard/query          → postWidgetQuery
+ *
+ * All require authentication (no specific permission). Handlers manage their
+ * own auth.
+ */
+function parseDashboardRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // Nothing deeper than the top-level id segment exists under `/dashboard`.
+  // Guarded once, so a longer path 404s instead of matching a shorter route
+  // and silently ignoring the tail — which would let
+  // `/api/dashboard/query/extra` reach the widget-query executor. Segments
+  // are contiguous, so a truthy `subresource` is the only way a sub-id or
+  // anything past it could exist — the same shape `parseJobRoutes` uses.
+  if (subresource || id === undefined) return null;
 
-  return null;
+  // 🔴 `Object.hasOwn` on BOTH lookups, because both keys come off the URL.
+  // A plain `TABLE[key]` reaches `Object.prototype`, so `OPTIONS` is safely
+  // absent but `constructor` is not: `DASHBOARD_ROUTES.constructor` is a
+  // function, and `.constructor.constructor` a truthy object, so
+  // `/api/dashboard/constructor` would get past a bare presence check and
+  // dispatch on `route.method` read off `Object`. This is the same hole the
+  // widget span-class and archetype tables already closed.
+  if (!Object.hasOwn(DASHBOARD_ROUTES, httpMethod)) return null;
+  const byId = DASHBOARD_ROUTES[httpMethod];
+  if (!Object.hasOwn(byId, id)) return null;
+
+  const route = byId[id];
+  return {
+    service: "dashboard",
+    operation: route.operation,
+    method: route.method,
+    routeParams,
+  };
+}
+
+// ============================================================================
+// Document Lock Routes Parser
+// ============================================================================
+
+/**
+ * Parse advisory document-lock routes.
+ *
+ *   GET    /api/document-lock → who holds it
+ *   POST   /api/document-lock → claim it
+ *   PATCH  /api/document-lock → extend a claim
+ *   DELETE /api/document-lock → give it up
+ *
+ * One resource and no id segment: the document is named by `scopeKind`, `slug`
+ * and `entryId` together, and a slug carrying the path separator would be a
+ * document this could not address. They travel in the query for the read and
+ * the body for the rest, which the handler validates through the same function
+ * the repository keys rows with.
+ *
+ * The method table is a closed record rather than a lookup on the URL's own
+ * string, so no prototype key can reach it and there is nothing for
+ * `Object.hasOwn` to guard.
+ */
+function parseDocumentLockRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // Nothing deeper than the resource exists, so a longer path 404s rather than
+  // matching this and silently ignoring its tail.
+  if (id !== undefined || subresource !== undefined) return null;
+
+  const method =
+    httpMethod === "GET"
+      ? "readDocumentLock"
+      : httpMethod === "POST"
+        ? "acquireDocumentLock"
+        : httpMethod === "PATCH"
+          ? "renewDocumentLock"
+          : httpMethod === "DELETE"
+            ? "releaseDocumentLock"
+            : null;
+  if (method === null) return null;
+
+  return {
+    service: "documentLock",
+    operation: httpMethod === "GET" ? "single" : "update",
+    method,
+    routeParams,
+  };
 }
 
 // ============================================================================
@@ -2559,6 +2919,19 @@ export function parseRestRoute(
     if (result) return result;
   }
 
+  // Handle content releases
+  if (resource === "releases") {
+    const result = parseReleaseRoutes(
+      id,
+      subresource,
+      subId,
+      additionalParams,
+      httpMethod,
+      routeParams
+    );
+    if (result) return result;
+  }
+
   // Handle Webhook endpoint management
   if (resource === "webhooks") {
     const result = parseWebhookRoutes(
@@ -2572,9 +2945,37 @@ export function parseRestRoute(
     if (result) return result;
   }
 
+  // Handle the background job trigger
+  if (resource === "jobs") {
+    const result = parseJobRoutes(id, subresource, httpMethod, routeParams);
+    if (result) return result;
+  }
+
+  // Handle the translation worklist
+  if (resource === "translations") {
+    const result = parseTranslationRoutes(id, httpMethod, routeParams);
+    if (result) return result;
+  }
+
   // Handle Dashboard endpoints
   if (resource === "dashboard") {
-    const result = parseDashboardRoutes(id, httpMethod, routeParams);
+    const result = parseDashboardRoutes(
+      id,
+      subresource,
+      httpMethod,
+      routeParams
+    );
+    if (result) return result;
+  }
+
+  // Handle advisory document locking
+  if (resource === "document-lock") {
+    const result = parseDocumentLockRoutes(
+      id,
+      subresource,
+      httpMethod,
+      routeParams
+    );
     if (result) return result;
   }
 

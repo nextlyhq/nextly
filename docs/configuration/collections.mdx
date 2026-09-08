@@ -121,17 +121,17 @@ Every collection row has these. Never declare them yourself.
 - `title`
 - `slug`
 
-If your `fields` array includes a field named `title` or `slug`, your definition replaces the auto-inject - same column, your shape. If you don't declare them, the framework adds bare-bones columns with no validation, no uniqueness, no admin form input.
+If your `fields` array includes a field named `title` or `slug`, your definition replaces the auto-inject - same column, your shape. If you don't declare them, Nextly adds bare-bones columns with no validation, no uniqueness, no admin form input.
 
 ### Should you redeclare `title` and `slug`?
 
-Almost always **yes**, even though the framework will inject them anyway. Five reasons:
+Almost always **yes**, even though Nextly will inject them anyway. Five reasons:
 
 1. **Uniqueness on `slug`** - the auto-injected `slug` is a plain `text NOT NULL` column with no unique constraint. To require unique slugs (the typical case for URL-routed content), declare your own field with `unique: true`.
 2. **Admin form visibility** - Nextly's admin builds the create/edit form from your `fields` array. The auto-injected columns are database-only and don't appear in the form. If you don't declare `title`, the admin shows no title input.
 3. **Validation and hooks** - auto-injected columns have no field config. Declared fields can attach `required`, `minLength`, `beforeChange` hooks (e.g. `auto-slug` to derive slug from title), defaults, and so on.
 4. **Custom UI** - placeholders, descriptions, field ordering, `admin: { readOnly: true }` all live on the field declaration.
-5. **Self-documentation** - a contributor reading the collection file sees the full surface in one place, without having to know the framework's reserved-column behavior.
+5. **Self-documentation** - a contributor reading the collection file sees the full surface in one place, without having to know Nextly's reserved-column behavior.
 
 You can legitimately skip declaring them when the collection is internal-only (e.g. an `audit-log`) and you don't need form visibility, validation, or unique slugs.
 
@@ -440,5 +440,5 @@ hooks: {
 - [Fields](/docs/configuration/fields) - every field type and validation option
 - [Singles](/docs/configuration/singles) - single-document content like site settings
 - [Field Groups](/docs/configuration/field-groups) - reusable field groups for collections and singles
-- [Visual Schema Builder](/docs/admin/builder) - create collections visually with drag-and-drop
+- [Visual Schema Builder](/docs/schema-builder) - create collections visually with drag-and-drop
 - [Direct API](/docs/api-reference/direct-api) - query collections from server-side code

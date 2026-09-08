@@ -27,6 +27,7 @@ import { drizzleTableToTableSpec } from "./_internal/drizzle-to-tablespec";
 import { apiKeyTables } from "./api-keys";
 import { auditTables } from "./audit";
 import { authTokenTables } from "./auth-tokens";
+import { documentLockTables } from "./document-lock";
 import {
   dynamicCollectionsPg,
   dynamicCollectionsMysql,
@@ -50,6 +51,7 @@ import { emailTemplatesMysql } from "./email-templates/mysql";
 import { emailTemplatesPg } from "./email-templates/postgres";
 import { emailTemplatesSqlite } from "./email-templates/sqlite";
 import { fieldGroupLockTables } from "./field-group-lock";
+import { jobsTables } from "./jobs";
 import { mediaTables } from "./media";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
@@ -66,6 +68,7 @@ import { userFieldDefinitionsSqlite } from "./user-field-definitions/sqlite";
 import { userTables } from "./users";
 import { versionsTables } from "./versions";
 import { webhookTables } from "./webhooks";
+import { widgetLayoutTables } from "./widget-layout";
 
 // =============================================================================
 // Public API — populated incrementally by Plan A tasks 4–14.
@@ -167,6 +170,11 @@ export function getCoreSchema(
     // without this a column could never be added to an existing installation's copy. Same reasoning
     // as `nextly_schema_events` and `nextly_i18n_archive` below.
     ...Object.values(fieldGroupLockTables(dialect)),
+    // `nextly_document_lock` — one row per document being edited right now.
+    // Declared here because it is the set `nextly migrate` pushes: a table
+    // outside it is never created on a real installation, however completely
+    // its own module declares it.
+    ...Object.values(documentLockTables(dialect)),
     ...Object.values(apiKeyTables(dialect)),
     // `nextly_schema_events` (the migration ledger) is a first-class managed
     // table. It is still bootstrapped out-of-band via `getSchemaEventsDdl` so
@@ -191,7 +199,14 @@ export function getCoreSchema(
     // — a table absent from this snapshot is never created by db:sync, and the
     // SQLite bootstrap fallback would hide that on one dialect only.
     ...Object.values(releasesTables(dialect)),
+    ...Object.values(jobsTables(dialect)),
     ...Object.values(webhookTables(dialect)),
+    // `nextly_widget_layout` — one row per reader who has arranged the
+    // dashboard. Declared here for the same reason as every table above: the
+    // snapshot is the set `nextly migrate` pushes, so a table outside it is
+    // never created on a real installation however completely its own module
+    // declares it.
+    ...Object.values(widgetLayoutTables(dialect)),
   ];
 
   const fieldGroupRegistry = fieldGroupRegistryFor(dialect, options);
@@ -246,7 +261,11 @@ export function getCoreSchema(
   }
 
   return {
-    tables: tables.map(drizzleTableToTableSpec),
+    // 🔴 An arrow, not a bare reference. `map` passes the ARRAY INDEX as the
+    // second argument, which this function now reads as a dialect -- so
+    // `tables.map(drizzleTableToTableSpec)` would hand table 0 the dialect `0`
+    // and silently drop every table's indexes but one.
+    tables: tables.map(table => drizzleTableToTableSpec(table, dialect)),
   };
 }
 
@@ -275,6 +294,8 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   // Read by live introspection. Absent here, the table is created and then invisible to every
   // snapshot, so the drift check proposes adding it again on every run.
   "nextly_field_group_lock",
+  "nextly_document_lock",
+  "nextly_widget_layout",
   "dynamic_collections",
   "dynamic_singles",
   STORAGE_FORMAT.registryTable,
@@ -288,6 +309,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_versions",
   "nextly_releases",
   "nextly_release_members",
+  "nextly_jobs",
   "nextly_events",
   "nextly_webhooks",
   "nextly_webhook_deliveries",
@@ -364,3 +386,13 @@ export {
   nextlyWebhookDeliveries,
 } from "./webhooks/postgres";
 export * from "./security-config"; // Zod — review in Task 19
+
+// Content-release lifecycle vocabulary. Types only: the admin renders a state
+// and must not be able to name one the engine cannot produce, and a second
+// spelling of these unions in a client is how a screen starts describing a
+// state the server has never sent.
+export type {
+  ReleaseState,
+  ReleaseMemberAction,
+  ReleaseBlockerReason,
+} from "./releases/types";

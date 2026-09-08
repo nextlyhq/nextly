@@ -37,6 +37,7 @@ import {
   type BreakpointId,
   type BreakpointSet,
   type ContrastResult,
+  type NamedClass,
   type NodeStyles,
   type SiteTokenSet,
   type TokenMode,
@@ -71,8 +72,12 @@ import * as React from "react";
 
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
+import { ClassSelector, type ClassSelectorProps } from "./class-selector";
+import { commitOnEnter } from "./commit-on-enter";
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
+import type { BuilderOp } from "./ops";
+import type { SideOrientation } from "./side-orientation";
 import {
   activeTokenMode,
   colourHexOf,
@@ -96,6 +101,7 @@ import {
   inspectStyle,
   type InspectedStyleProperty,
   type StyleSection,
+  type StyleInspection,
 } from "./style-inspector";
 import {
   CSS_NUMBER,
@@ -115,6 +121,7 @@ import {
   type BreakpointSource,
   type StyleProvenance,
 } from "./style-provenance";
+import { sideBoxFor, sideOf, type SideBox } from "./style-sides";
 import { styleSubjectFor } from "./style-subject";
 import {
   readStyleValue,
@@ -171,7 +178,50 @@ export interface StyleInspectorPanelProps {
    * omitting it does not mean "allow" — it means the question was never asked.
    */
   policy?: StylePolicy;
-  /** The interaction state being edited. `base` when the host says nothing. */
+  /**
+   * The element the selected node is DRAWN as, or `undefined` when nobody can
+   * say.
+   *
+   * Only the typographic baseline needs it: those rules land on `h1` itself, so
+   * nothing in the document says whether one reaches this node — `core/heading`
+   * takes its tag from a prop, and `core/rich-text` renders a `div` with its
+   * headings inside.
+   *
+   * Resolved by the caller rather than read here, the same way `cascade` and
+   * `liveBreakpoints` are. Reading it needs a subscription to the canvas, and
+   * the reader that decides which control shows a value should not also own
+   * one. Omitted, a heading's baseline is reported as reaching nothing, which
+   * is the quiet answer a host that cannot supply a canvas should get rather
+   * than a guess.
+   */
+  renderedTag?: string;
+  /**
+   * How the selected node's element runs, when the canvas could be read.
+   *
+   * `undefined` is NOT KNOWN rather than left-to-right. A per-side property is
+   * drawn as a box only when this resolves, because the arrangement is a claim
+   * about which physical edge each logical side is and only the edited element
+   * settles it. Resolved by the wrapper, which owns the canvas subscription.
+   */
+  sideOrientation?: SideOrientation;
+  /**
+   * The interaction state being edited. `base` when the host says nothing.
+   *
+   * A host that renders a canvas should hand the SAME value to
+   * `Canvas.forcedState`, and the two are one decision rather than two.
+   * Provenance depends on it: this panel states no `liveStates`, so
+   * `styleProvenance` falls back to the edited state plus base — correct
+   * exactly when the canvas is simulating the state being edited, and wrong the
+   * moment it is not. Wired from one value, that precondition holds by
+   * construction; wired from two, a control reports a value the browser is not
+   * showing and nothing says so.
+   *
+   * Measuring the real pseudo-classes instead was considered and declined. The
+   * pointer is in the inspector whenever anyone is reading the panel, so a
+   * measured `:hover` is false every time and every hover control would report
+   * unset permanently — the affordance switched off in the exact state the
+   * author opened it to inspect.
+   */
   state?: StyleState;
   /** The breakpoint being edited. The unconditional one when the host says nothing. */
   breakpoint?: BreakpointId;
@@ -257,10 +307,198 @@ export interface StyleInspectorPanelProps {
    * than absent.
    */
   onJumpToBreakpoint?: (breakpoint: BreakpointId) => void;
+  /**
+   * The site's class library, when the host has one to give.
+   *
+   * Two signals, not one. {@link StyleInspectorPanelProps.onCreateClass} says
+   * whether the host has a class surface at all; this says what it holds. So
+   * `undefined` here means the library is absent rather than unasked-for, and
+   * it covers BOTH a read in flight and a read that failed —
+   * {@link StyleInspectorPanelProps.classLibraryAbsence} says which. They need
+   * different words: one will finish and the other will not, and only the
+   * first has a field about to fill.
+   */
+  classLibrary?: readonly NamedClass[];
+  /** Why the library is absent, when it is. Forwarded to the selector. */
+  classLibraryAbsence?: ClassSelectorProps["libraryAbsence"];
+  /**
+   * Create a class under this slug and put it on the selected block.
+   *
+   * Supplying it is what OPTS IN to the class surface: a host that cannot
+   * write the site style has no way to create one, and a selector that offered
+   * to would report an intent nobody acts on.
+   *
+   * One callback rather than two, because this surface cannot mint an id — the
+   * class has no identity until the host has stored it, so "create it and
+   * apply it" is a single intent and splitting it would leave the caller
+   * correlating them.
+   *
+   * Applying and removing an EXISTING class needs no callback: those are edits
+   * to the selected node, which this panel already writes through the editor.
+   */
+  onCreateClass?: ClassSelectorProps["onCreateClass"];
+}
+
+/**
+ * The op that stores a node's class ids.
+ *
+ * An empty list REMOVES the field rather than storing `[]`. The two mean the
+ * same thing to every reader, and the field is optional, so writing the empty
+ * array would leave a document carrying a key that says nothing — and an
+ * inverse built from it would restore that key on undo.
+ */
+function nodeClassesOp(nodeId: string, classIds: readonly string[]): BuilderOp {
+  if (classIds.length === 0) {
+    return { kind: "update", id: nodeId, patch: {}, unset: ["classes"] };
+  }
+  return { kind: "update", id: nodeId, patch: { classes: [...classIds] } };
+}
+
+/**
+ * Why this panel has nothing to style, drawn, or `null` when it does.
+ *
+ * All four ask ONE question — can an edit here mean what it appears to mean —
+ * and each is refused for a different reason. Gathered so the panel body holds
+ * one branch instead of four: the reasons are stable and the panel is not, and
+ * a large function that grows a branch per release is how one arrives over the
+ * complexity gate without anyone deciding to.
+ */
+type StyleAvailability =
+  | { readonly available: false; readonly reason: React.JSX.Element }
+  | { readonly available: true; readonly inspection: StyleInspection };
+
+function styleUnavailable(
+  editor: EditorState,
+  inspection: StyleInspection | null
+): StyleAvailability {
+  if (editor.selection.ids.length > 1) {
+    return {
+      available: false,
+      reason: (
+        <div className="nx-style-inspector" data-empty="many-selected">
+          <p className="nx-inspector__note">
+            {editor.selection.ids.length} blocks selected. Select one to style
+            it.
+          </p>
+        </div>
+      ),
+    };
+  }
+
+  /*
+   * A block whose id is not unique cannot be styled, and saying so is the only
+   * honest answer this panel has.
+   *
+   * The compiler already reaches this conclusion for the same reason, and its
+   * words are worth keeping: a class is derived from the id, so two nodes
+   * sharing one share a class, and "writing corrupts a node the author did not
+   * touch". It refuses to emit their rules.
+   *
+   * The editor has to refuse for a second reason the compiler does not face. The
+   * cascade is read from the PREPARED tree, where read-time repair has already
+   * dropped the later duplicate — but gating runs first, so a gated first node
+   * leaves a LATER one owning that id there, while every lookup in the stored
+   * document returns the first. The controls would then show and write one
+   * block while the provenance dots describe another, and typing into a field
+   * would silently change a block that is not on screen.
+   *
+   * Refused rather than reconciled: pointing the controls at the rendered node
+   * would not help, because a write is addressed by id and would still land on
+   * the first. There is no edit here that means what it appears to mean.
+   */
+  if (editor.selectedId !== null && sharesItsId(editor, editor.selectedId)) {
+    return {
+      available: false,
+      reason: (
+        <div className="nx-style-inspector" data-empty="duplicate-id">
+          <p className="nx-inspector__note">
+            Another block on this page has the same id, so styles written here
+            could not be told apart. Give one of them a new id to style either.
+          </p>
+        </div>
+      ),
+    };
+  }
+
+  if (inspection === null) {
+    return {
+      available: false,
+      reason: (
+        <div className="nx-style-inspector" data-empty="no-selection">
+          <p className="nx-inspector__note">Select a block to style it.</p>
+        </div>
+      ),
+    };
+  }
+
+  /*
+   * A block offering no style properties is NOT unavailable, and that is the
+   * distinction this function turns on. The three refusals above are about
+   * there being no single node an edit could address — a multi-selection, an
+   * ambiguous id, nothing selected. This one is only about the block's own
+   * controls, and named classes compile independently of them: such a block
+   * can still carry a class, so the class surface has to survive it.
+   */
+  return { available: true, inspection };
+}
+
+/**
+ * The class surface for the selected block, or nothing.
+ *
+ * Its own component rather than a conditional in the panel body: the panel is
+ * already near the complexity the gate allows, and a branch plus two inline
+ * callbacks is exactly the kind of growth that pushes a large function over
+ * without anyone deciding to.
+ *
+ * `onCreateClass` is what OPTS IN. `library` being undefined then means the
+ * read is in flight, which the selector draws as such — two signals, so a host
+ * mid-load and a host with no class surface are never the same picture.
+ */
+function SelectedNodeClasses({
+  editor,
+  nodeId,
+  library,
+  libraryAbsence,
+  onCreateClass,
+}: {
+  editor: EditorState;
+  nodeId: string;
+  library: readonly NamedClass[] | undefined;
+  libraryAbsence: ClassSelectorProps["libraryAbsence"];
+  onCreateClass: ClassSelectorProps["onCreateClass"] | undefined;
+}): React.JSX.Element | null {
+  if (onCreateClass === undefined) return null;
+  return (
+    <ClassSelector
+      nodeId={nodeId}
+      /*
+       * Keyed by NODE, for the reason the style sections are. The typed query
+       * and the highlighted row are state about the node in hand; unkeyed,
+       * React reuses this component when the selection changes and Enter can
+       * apply the previous block's pending choice to the new one.
+       */
+      key={nodeId}
+      library={library}
+      libraryAbsence={libraryAbsence}
+      nodeClassIds={findNode(editor.document.nodes, nodeId)?.classes ?? []}
+      onNodeClassesChange={classIds =>
+        // `applyAll` answers null when the store refuses — a document at its
+        // byte limit rejects an edit the class rules found perfectly valid.
+        // Reported back so the selector keeps the draft rather than clearing
+        // it as though the write had landed.
+        editor.applyAll([nodeClassesOp(nodeId, classIds)]) === null
+          ? "refused"
+          : "applied"
+      }
+      onCreateClass={onCreateClass}
+    />
+  );
 }
 
 export function StyleInspectorPanel({
   editor,
+  renderedTag,
+  sideOrientation,
   policy,
   tokens,
   state,
@@ -270,6 +508,9 @@ export function StyleInspectorPanel({
   previewContainer,
   liveBreakpoints,
   onJumpToBreakpoint,
+  classLibrary,
+  classLibraryAbsence,
+  onCreateClass,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
@@ -328,65 +569,15 @@ export function StyleInspectorPanel({
    * and writing to every block — is a different surface with its own rules
    * about what a shared value means, and it does not exist yet.
    */
-  if (editor.selection.ids.length > 1) {
-    return (
-      <div className="nx-style-inspector" data-empty="many-selected">
-        <p className="nx-inspector__note">
-          {editor.selection.ids.length} blocks selected. Select one to style it.
-        </p>
-      </div>
-    );
-  }
-
   /*
-   * A block whose id is not unique cannot be styled, and saying so is the only
-   * honest answer this panel has.
-   *
-   * The compiler already reaches this conclusion for the same reason, and its
-   * words are worth keeping: a class is derived from the id, so two nodes
-   * sharing one share a class, and "writing corrupts a node the author did not
-   * touch". It refuses to emit their rules.
-   *
-   * The editor has to refuse for a second reason the compiler does not face. The
-   * cascade is read from the PREPARED tree, where read-time repair has already
-   * dropped the later duplicate — but gating runs first, so a gated first node
-   * leaves a LATER one owning that id there, while every lookup in the stored
-   * document returns the first. The controls would then show and write one
-   * block while the provenance dots describe another, and typing into a field
-   * would silently change a block that is not on screen.
-   *
-   * Refused rather than reconciled: pointing the controls at the rendered node
-   * would not help, because a write is addressed by id and would still land on
-   * the first. There is no edit here that means what it appears to mean.
+   * One branch here, four inside. Narrowed through the RESULT rather than
+   * re-tested afterwards: a second `inspection === null` check in this body
+   * would put the branch back that the extraction removed, and a non-null
+   * assertion would state as fact what the guard already proved.
    */
-  if (editor.selectedId !== null && sharesItsId(editor, editor.selectedId)) {
-    return (
-      <div className="nx-style-inspector" data-empty="duplicate-id">
-        <p className="nx-inspector__note">
-          Another block on this page has the same id, so styles written here
-          could not be told apart. Give one of them a new id to style either.
-        </p>
-      </div>
-    );
-  }
-
-  if (inspection === null) {
-    return (
-      <div className="nx-style-inspector" data-empty="no-selection">
-        <p className="nx-inspector__note">Select a block to style it.</p>
-      </div>
-    );
-  }
-
-  if (inspection.sections.length === 0) {
-    return (
-      <div className="nx-style-inspector" data-empty="no-style-support">
-        <p className="nx-inspector__note">
-          This block does not offer style properties.
-        </p>
-      </div>
-    );
-  }
+  const availability = styleUnavailable(editor, inspection);
+  if (!availability.available) return availability.reason;
+  const inspected = availability.inspection;
 
   /*
    * ONE subject for the whole panel, and one live-breakpoint set.
@@ -399,30 +590,30 @@ export function StyleInspectorPanel({
    * is: both are only valid against the document they were read from, and an
    * edit anywhere changes the document and the values shown together.
    */
-  const subject = selectedSubject(editor, cascade);
+  const subject = selectedSubject(editor, cascade, renderedTag);
   /*
    * What the panel is editing, so an inherited label can say what DIFFERS from
    * it. Built once beside the subject for the same reason: every control is
    * asking about one node at one address.
    */
   const editing: EditedAddress = {
-    nodeId: inspection.nodeId,
+    nodeId: inspected.nodeId,
     blockType: subject?.blockType,
-    state: inspection.state,
-    breakpoint: inspection.breakpoint,
+    state: inspected.state,
+    breakpoint: inspected.breakpoint,
     labelOf: id => breakpointLabel(breakpoints, id),
   };
   const provenanceOf = provenanceReader({
     cascade,
     subject,
     live,
-    state: inspection.state,
-    breakpoint: inspection.breakpoint,
+    state: inspected.state,
+    breakpoint: inspected.breakpoint,
     breakpoints,
     onJumpToBreakpoint,
   });
 
-  const groups = inspection.sections.map(section => section.group);
+  const groups = inspected.sections.map(section => section.group);
   // Held rather than left to the accordion, so the open section survives a
   // change of selection. Falling back to the first is what keeps it valid when
   // the newly selected block does not offer the section that was open — an
@@ -434,32 +625,56 @@ export function StyleInspectorPanel({
   // know the vocabulary rather than reading it off the sections in hand.
   const available = new Set<string>(groups);
   const open = openSection(openGroup, available, groups[0] ?? "");
+  /*
+   * What every section and field below needs from this panel, assembled once.
+   *
+   * One object rather than ten props repeated at the call site: the section
+   * forwards the identical set to each property, so a value spelled here and
+   * again there is a value that can go missing from one of them silently.
+   */
+  const surroundings: StyleFieldSurroundings = {
+    orientation: sideOrientation,
+    nodeId: inspected.nodeId,
+    state: inspected.state,
+    breakpoint: inspected.breakpoint,
+    editor,
+    policy,
+    tokens,
+    prefersDark,
+    provenanceOf,
+    editing,
+    onChooseForm: chooseForm,
+  };
 
   return (
     <div className="nx-style-inspector">
+      {/*
+       * Above the sections, because applying a class is the frequent action and
+       * it decides what the controls below are even editing. Webflow puts its
+       * selector field at the top of the Style panel for the same reason.
+       */}
+      <SelectedNodeClasses
+        editor={editor}
+        nodeId={inspected.nodeId}
+        library={classLibrary}
+        libraryAbsence={classLibraryAbsence}
+        onCreateClass={onCreateClass}
+      />
+      <NoStyleProperties count={inspected.sections.length} />
       <Accordion
         type="single"
         collapsible
         value={open}
         onValueChange={setOpenGroup}
       >
-        {inspection.sections.map(section => (
+        {inspected.sections.map(section => (
           <StyleSectionItem
             // Keyed by node AND group: a bare group would let React reuse one
             // block's inputs for the next block's same-named section, so a field
             // would keep the previous block's uncommitted text.
-            key={`${inspection.nodeId}:${section.group}`}
+            key={`${inspected.nodeId}:${section.group}`}
             section={section}
-            nodeId={inspection.nodeId}
-            state={inspection.state}
-            breakpoint={inspection.breakpoint}
-            editor={editor}
-            policy={policy}
-            tokens={tokens}
-            prefersDark={prefersDark}
-            provenanceOf={provenanceOf}
-            editing={editing}
-            onChooseForm={chooseForm}
+            {...surroundings}
           />
         ))}
       </Accordion>
@@ -591,9 +806,121 @@ function useLiveBreakpoints(
   return preview === undefined ? matches : stated;
 }
 
+/**
+ * The note shown when a block offers no style properties at all.
+ *
+ * A component rather than a conditional in the panel's own body: the panel
+ * decides what to draw, and "there is nothing to draw" is this element's own
+ * business. It returns nothing when there is something.
+ *
+ * @param props - how many sections the block offers
+ * @returns the note, or nothing
+ */
+function NoStyleProperties({
+  count,
+}: {
+  count: number;
+}): React.JSX.Element | null {
+  if (count > 0) return null;
+  return (
+    <p className="nx-inspector__note" data-empty="no-style-support">
+      This block does not offer style properties.
+    </p>
+  );
+}
+
+/**
+ * Everything a style field needs from the panel around it.
+ *
+ * Named once because the section and the property list pass the identical set
+ * down, and two copies of ten props drift the moment one gains an eleventh —
+ * silently, since the section would simply stop forwarding what it no longer
+ * declares.
+ */
+interface StyleFieldSurroundings {
+  /**
+   * How the edited element runs, or `undefined` when the canvas could not say.
+   *
+   * Only the per-side box reads it, and `undefined` means NOT KNOWN rather than
+   * left-to-right: a box drawn on an unknown orientation is a positional claim
+   * with nothing behind it.
+   */
+  orientation: SideOrientation | undefined;
+  nodeId: string;
+  state: StyleState;
+  breakpoint: BreakpointId;
+  editor: EditorState;
+  policy: StylePolicy | undefined;
+  tokens: SiteTokenSet | undefined;
+  prefersDark: boolean;
+  provenanceOf: ProvenanceOf;
+  editing: EditedAddress;
+  onChooseForm: ChooseForm;
+}
+
+/**
+ * The element that carries the box arrangement, wrapping ONLY the four sides.
+ *
+ * Its own element rather than the property container, and that is the whole
+ * point of it. The container also holds the property's heading, the form
+ * selectors and the notice for a withdrawn property, and those must go on
+ * reading in the PANEL's axes. Putting the edited element's `writing-mode` on
+ * the container rotated everything inside it: in a vertical writing mode the
+ * row reserved above the diagram becomes a physical column beside it, so the
+ * heading ends up next to the box rather than over it, and the narrow fallback
+ * — which stacks the sides with `flex-direction: column` — runs sideways.
+ *
+ * Scoped here, the axes reach exactly what they are about: the grid whose
+ * columns and rows ARE the inline and block axes of the element being edited.
+ *
+ * A plain wrapper when there is no box, so the fields stay direct children of
+ * the property in the ordinary case and nothing about the row layout changes.
+ *
+ * @param props - the settled box decision and the fields to place
+ * @returns the sides, framed if they are a box
+ */
+function SideBoxFrame({
+  box,
+  children,
+}: {
+  box: SideBox;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  if (!box.boxed || box.axes === undefined) return <>{children}</>;
+  return (
+    <div
+      className="nx-style-inspector__side-box"
+      // Read by the stylesheet, which owns the arrangement.
+      data-sides="logical"
+      /*
+       * The EDITED ELEMENT's axes, so this grid's own placement resolves in
+       * them: columns run along the inline axis and rows along the block axis,
+       * so column one is the inline start in either direction and a vertical
+       * mode transposes the pair — with no table of physical edges written here
+       * to keep in step with CSS.
+       *
+       * Passed as custom PROPERTIES rather than applied as `writing-mode` and
+       * `direction` directly. An inline declaration outranks every selector, so
+       * the stylesheet could then only take the axes back by shouting; handed
+       * over as values, the property that uses them is set by a rule, and the
+       * narrow fallback overrides it by ordinary cascade order.
+       */
+      style={
+        {
+          "--nx-side-writing-mode": box.axes.writingMode,
+          "--nx-side-direction": box.axes.direction,
+        } as React.CSSProperties
+      }
+    >
+      {children}
+    </div>
+  );
+}
+
 /** One catalog group, as a section that opens onto its properties. */
 function StyleSectionItem({
   section,
+  orientation,
   nodeId,
   state,
   breakpoint,
@@ -606,17 +933,7 @@ function StyleSectionItem({
   onChooseForm,
 }: {
   section: StyleSection;
-  nodeId: string;
-  state: StyleState;
-  breakpoint: BreakpointId;
-  editor: EditorState;
-  policy: StylePolicy | undefined;
-  tokens: SiteTokenSet | undefined;
-  prefersDark: boolean;
-  provenanceOf: ProvenanceOf;
-  editing: EditedAddress;
-  onChooseForm: ChooseForm;
-}): React.JSX.Element {
+} & StyleFieldSurroundings): React.JSX.Element {
   // How many of this section's properties this node sets HERE, so an author can
   // see which sections they have touched without opening each one.
   const setCount = section.properties.filter(property => property.set).length;
@@ -641,6 +958,7 @@ function StyleSectionItem({
             <StylePropertyFields
               key={`${nodeId}:${property.property}`}
               property={property}
+              orientation={orientation}
               nodeId={nodeId}
               state={state}
               breakpoint={breakpoint}
@@ -669,6 +987,7 @@ function StyleSectionItem({
  */
 function StylePropertyFields({
   property,
+  orientation,
   nodeId,
   state,
   breakpoint,
@@ -681,18 +1000,15 @@ function StylePropertyFields({
   onChooseForm,
 }: {
   property: InspectedStyleProperty;
-  nodeId: string;
-  state: StyleState;
-  breakpoint: BreakpointId;
-  editor: EditorState;
-  policy: StylePolicy | undefined;
-  tokens: SiteTokenSet | undefined;
-  prefersDark: boolean;
-  provenanceOf: ProvenanceOf;
-  editing: EditedAddress;
-  onChooseForm: ChooseForm;
-}): React.JSX.Element {
+} & StyleFieldSurroundings): React.JSX.Element {
   const many = property.controls.length > 1;
+  /*
+   * Whether this property is drawn as a box, and in what order — one decision,
+   * settled outside the component. Each side still keeps its own control, so it
+   * commits on its own and undo stays per side; the grouping is for the DRAWING
+   * only.
+   */
+  const box = sideBoxFor(property.controls, orientation);
   return (
     <div
       className="nx-style-inspector__property"
@@ -743,36 +1059,39 @@ function StylePropertyFields({
           the page and can be cleared.
         </p>
       )}
-      {property.controls.map(control => (
-        <StyleControlField
-          // The ADDRESS, not just the position: a host switching state or
-          // breakpoint leaves this field mounted, and where the old and new
-          // addresses hold the same value — both unset, most often — the
-          // synchronisation effect does not run either. An unfinished draft
-          // from the base breakpoint would then commit into the hover state.
-          key={[state, breakpoint, property.property, ...control.path].join(
-            "."
-          )}
-          control={control}
-          label={
-            many
-              ? fieldLabel(control.path[control.path.length - 1] ?? "")
-              : property.label
-          }
-          summary={many ? undefined : property.summary}
-          propertyLabel={property.label}
-          clearOnly={!property.offered}
-          nodeId={nodeId}
-          state={state}
-          breakpoint={breakpoint}
-          editor={editor}
-          policy={policy}
-          tokens={tokens}
-          prefersDark={prefersDark}
-          provenanceOf={provenanceOf}
-          editing={editing}
-        />
-      ))}
+      <SideBoxFrame box={box}>
+        {box.controls.map(control => (
+          <StyleControlField
+            // The ADDRESS, not just the position: a host switching state or
+            // breakpoint leaves this field mounted, and where the old and new
+            // addresses hold the same value — both unset, most often — the
+            // synchronisation effect does not run either. An unfinished draft
+            // from the base breakpoint would then commit into the hover state.
+            key={[state, breakpoint, property.property, ...control.path].join(
+              "."
+            )}
+            control={control}
+            side={sideOf(box, control)}
+            label={
+              many
+                ? fieldLabel(control.path[control.path.length - 1] ?? "")
+                : property.label
+            }
+            summary={many ? undefined : property.summary}
+            propertyLabel={property.label}
+            clearOnly={!property.offered}
+            nodeId={nodeId}
+            state={state}
+            breakpoint={breakpoint}
+            editor={editor}
+            policy={policy}
+            tokens={tokens}
+            prefersDark={prefersDark}
+            provenanceOf={provenanceOf}
+            editing={editing}
+          />
+        ))}
+      </SideBoxFrame>
     </div>
   );
 }
@@ -910,8 +1229,60 @@ function FormChoice({
 type CommitOutcome = "applied" | "refused" | "unchanged";
 
 /** One editable position, drawn as the control its leaf kind resolves to. */
+/**
+ * A style field's label: its words, and the dot saying where the value came from.
+ *
+ * Its own component because the two parts are hidden INDEPENDENTLY. Inside a
+ * box of logical sides the words are noise — position is saying which edge this
+ * is — while the provenance dot says whether the side is authored or inherited,
+ * which position cannot tell anyone. So the words are wrapped in an element the
+ * stylesheet can clip on its own; clipping the label would take the dot and its
+ * focus-revealed explanation with it.
+ *
+ * @param props - the label's identity, its words, and the provenance to show
+ * @returns the label element
+ */
+function StyleFieldLabel({
+  id,
+  htmlFor,
+  readOnly,
+  title,
+  label,
+  answer,
+  editing,
+  descendant,
+}: {
+  id: string;
+  htmlFor: string;
+  /**
+   * Whether the control cannot be edited, in which case the label names NOTHING.
+   *
+   * A label pointing at a read-only field would move focus into a control an
+   * author cannot use. Decided here rather than by the caller so the field is
+   * left saying what it wants drawn rather than how to draw it.
+   */
+  readOnly: boolean;
+  title: string | undefined;
+  label: string;
+  answer: ProvenanceAnswer | undefined;
+  editing: EditedAddress;
+  descendant: string | undefined;
+}): React.JSX.Element {
+  return (
+    <Label id={id} htmlFor={readOnly ? undefined : htmlFor} title={title}>
+      <span className="nx-style-inspector__field-label-text">{label}</span>
+      <ProvenanceDot
+        answer={answer}
+        editing={editing}
+        descendant={descendant}
+      />
+    </Label>
+  );
+}
+
 function StyleControlField({
   control,
+  side,
   label,
   summary,
   propertyLabel,
@@ -927,6 +1298,17 @@ function StyleControlField({
   editing,
 }: {
   control: StyleControl;
+  /**
+   * Which side of a box this field draws, when the property is drawn as one.
+   *
+   * Present only where the panel decided a box is justified, and read by the
+   * stylesheet to PLACE the field. Placement by identity rather than by the
+   * field's position among its siblings, because that list varies: the property
+   * heading, a form selector and the notice for a withdrawn property are all
+   * siblings, so a rule counting elements moves every side the moment one of
+   * them appears.
+   */
+  side?: string;
   label: string;
   summary: string | undefined;
   /**
@@ -1026,15 +1408,23 @@ function StyleControlField({
   }
 
   return (
-    <div className="nx-inspector__field" data-control={control.kind}>
-      <Label id={labelId} htmlFor={readOnly ? undefined : id} title={summary}>
-        {label}
-        <ProvenanceDot
-          answer={answer}
-          editing={editing}
-          descendant={control.leaf.descendant}
-        />
-      </Label>
+    <div
+      className="nx-inspector__field"
+      data-control={control.kind}
+      // Absent when this is not a side: React omits an `undefined` attribute, so
+      // the value says whether the field is in a box without a branch here.
+      data-side={side}
+    >
+      <StyleFieldLabel
+        id={labelId}
+        htmlFor={id}
+        readOnly={readOnly}
+        title={summary}
+        label={label}
+        answer={answer}
+        editing={editing}
+        descendant={control.leaf.descendant}
+      />
       <ControlValue
         id={id}
         labelledBy={labelId}
@@ -1076,13 +1466,20 @@ function StyleControlField({
  */
 function selectedSubject(
   editor: EditorState,
-  cascade: PageStyleCascade | undefined
+  cascade: PageStyleCascade | undefined,
+  tag: string | undefined
 ): StyleSubject | undefined {
   if (editor.selectedId === null) return undefined;
-  return styleSubjectFor(
+  const subject = styleSubjectFor(
     cascade?.nodes ?? editor.document.nodes,
     editor.selectedId
   );
+  // Spread only when there is one, so a host with no canvas leaves the field
+  // ABSENT rather than present-and-undefined. `styleOrigin` reads it as "the
+  // caller cannot say" either way, and an absent key says that more plainly to
+  // anyone reading a logged subject.
+  if (subject === undefined || tag === undefined) return subject;
+  return { ...subject, tag };
 }
 
 /**
@@ -2067,6 +2464,12 @@ function originSubject(
         : "an enclosing block's defaults";
     case "page":
       return "the page";
+    // Named for what an author can act on. "the `h1` baseline" rather than the
+    // tier's internal name, because the next thing they do is either override
+    // it on this block or replace the baseline for the whole site, and both
+    // start from knowing which element it keys on.
+    case "element":
+      return `the ${origin.tag} typography baseline`;
     case "node":
       if (origin.id !== editing.nodeId) return "an enclosing block";
       return control ?? "this block";
@@ -2953,14 +3356,14 @@ function ToggleField({
 }: {
   id: string;
   labelledBy: string;
-  options: readonly [string, string];
+  options: readonly string[];
   stored: StyleValue | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   return (
     <div
-      // The field's id sits on the GROUP rather than on either button. The
+      // The field's id sits on the GROUP rather than on any one button. The
       // field label carries `htmlFor`, and a label pointing at a button
       // forwards a click to it — so naming the first option that way would make
       // clicking the property label press it, or clear it when already pressed,
@@ -2988,8 +3391,8 @@ function ToggleField({
             // announces the message as a hint rather than as a failure.
             aria-invalid={describedBy === undefined ? undefined : true}
             // Pressing the pressed option CLEARS rather than re-writing it,
-            // which is the only way a two-button group can reach unset without
-            // a third button standing for "neither".
+            // which is the only way a group of options can reach unset without
+            // spending a button on "neither".
             onClick={() => onCommit(pressed ? null : option)}
           >
             {option}
@@ -3219,11 +3622,7 @@ function TextField({
       onChange={event => setDraft(event.target.value)}
       onBlur={commit}
       onKeyDown={event => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          commit();
-          return;
-        }
+        if (commitOnEnter(event, commit)) return;
         if (onStep === undefined) return;
         const delta = arrowStep(event);
         if (delta === null) return;

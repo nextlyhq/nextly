@@ -33,6 +33,7 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
+import { applyOps, type BuilderOp } from "./ops";
 import { InspectorPanel } from "./inspector-panel";
 import {
   breakpointLabel,
@@ -87,7 +88,18 @@ function documentOf(styles?: NodeStyles): BlockDocument {
     formatVersion: 1,
     kind: "page",
     nodes: [
-      { id: "a", type: "acme/box", version: 1, props: {}, styles },
+      {
+        id: "a",
+        type: "acme/box",
+        version: 1,
+        props: {},
+        // OMITTED rather than set to `undefined` when there are no styles. A
+        // node holding `undefined` is not a document the product can produce —
+        // it will not serialise — and the op layer refuses to edit one, so a
+        // fixture carrying the key made the unstyled case unusable for any
+        // assertion that applies an op.
+        ...(styles === undefined ? {} : { styles }),
+      },
     ] as BlockNode[],
   } as BlockDocument;
 }
@@ -184,6 +196,273 @@ describe("the Style tab beside Content", () => {
   });
 });
 
+describe("when there is nothing to style", () => {
+  it("says to select a block, rather than rendering an empty panel", () => {
+    /*
+     * Not covered by the wrapper's own no-selection case: that one renders
+     * `InspectorPanel`, which says "Select a block to edit it." This panel says
+     * "style", and a query matching one does not match the other.
+     */
+    register({ spacing: true });
+    const { container } = render(
+      <StyleInspectorPanel editor={editorFor(documentOf(), null)} />
+    );
+    expect(
+      container.querySelector('[data-empty="no-selection"]')
+    ).not.toBeNull();
+    expect(screen.getByText(/select a block to style it/i)).toBeDefined();
+  });
+});
+
+describe("the class selector, mounted above the style sections", () => {
+  const LIBRARY = [
+    { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} },
+    { id: "id-card", slug: "card", orderIndex: 1, styles: {} },
+  ];
+
+  /** The panel with a node carrying classes, and a host that opted in. */
+  function mountWithClasses(
+    options: {
+      classIds?: string[];
+      library?: typeof LIBRARY | undefined;
+      optIn?: boolean;
+    } = {}
+  ) {
+    register({ spacing: true });
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          ...(options.classIds === undefined
+            ? {}
+            : { classes: options.classIds }),
+        },
+      ] as BlockNode[],
+    } as BlockDocument;
+    const editor = editorFor(document);
+    const onCreateClass = vi.fn(async () => ({
+      ok: true as const,
+      classId: "id-new",
+    }));
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        {...(options.optIn === false ? {} : { onCreateClass })}
+        {...(options.library === undefined
+          ? {}
+          : { classLibrary: options.library })}
+      />
+    );
+    return { editor, onCreateClass };
+  }
+
+  it("is absent entirely when the host never opted in", () => {
+    /*
+     * `onCreateClass` is what opts in, NOT the library. A host that cannot
+     * write the site style has no way to create a class, and a selector that
+     * offered to would report an intent nobody acts on.
+     */
+    mountWithClasses({ optIn: false, library: LIBRARY });
+    expect(screen.queryByRole("combobox", { name: /add a class/i })).toBeNull();
+  });
+
+  it("shows the loading state when the host opted in but is still reading", () => {
+    // The distinction that would otherwise collapse: an absent library means
+    // "in flight" only BECAUSE opting in is signalled separately. Drawn the
+    // same way, a host mid-load and a host with no class surface at all would
+    // be indistinguishable, and only one of them has a field about to fill.
+    mountWithClasses({ library: undefined });
+    expect(screen.getByText(/loading classes/i)).toBeDefined();
+  });
+
+  it("shows the classes the selected node carries", () => {
+    mountWithClasses({ classIds: ["id-card"], library: LIBRARY });
+    expect(screen.getByRole("button", { name: /remove card/i })).toBeDefined();
+  });
+
+  it("writes an applied class through the editor, with no host callback", () => {
+    // Applying an EXISTING class is a node edit, which this panel already
+    // knows how to write. Requiring a callback for it would make the host
+    // rebuild an op the panel is holding all the parts of.
+    const { editor, onCreateClass } = mountWithClasses({ library: LIBRARY });
+    fireEvent.change(screen.getByRole("combobox", { name: /add a class/i }), {
+      target: { value: "hero" },
+    });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: /add a class/i }), {
+      key: "Enter",
+    });
+
+    expect(onCreateClass).not.toHaveBeenCalled();
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: { classes: ["id-hero"] },
+    });
+  });
+
+  it("UNSETS the field when the last class is removed", () => {
+    /*
+     * Not `classes: []`. The field is optional and the two mean the same to
+     * every reader, so writing the empty array leaves a key that says nothing
+     * — and an inverse built from it would restore that key on undo.
+     */
+    const { editor } = mountWithClasses({
+      classIds: ["id-hero"],
+      library: LIBRARY,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /remove hero/i }));
+
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: {},
+      unset: ["classes"],
+    });
+  });
+
+  it("appears for a block that offers no style properties at all", () => {
+    /*
+     * Named classes compile independently of a block's own style support, so
+     * such a block can still carry one. Exiting early on an empty section list
+     * left the only surface that can apply a class unreachable for exactly the
+     * blocks whose styling has to come from classes.
+     */
+    register({});
+    const editor = editorFor(documentOf());
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
+        classLibrary={LIBRARY}
+      />
+    );
+
+    expect(
+      screen.getByRole("combobox", { name: /add a class/i })
+    ).toBeDefined();
+    // And it still says the block has no style controls, rather than pretending.
+    expect(screen.getByText(/does not offer style properties/i)).toBeDefined();
+  });
+
+  it("forgets a typed query when the selection moves to another block", () => {
+    /*
+     * The query and the highlighted row are state about the node in hand.
+     * Unkeyed, React reuses the component across a selection change while the
+     * write callback switches to the new node — so Enter applies the PREVIOUS
+     * block's pending choice to the block now selected.
+     */
+    register({ spacing: true });
+    const first = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "acme/box", version: 1, props: {} },
+        { id: "b", type: "acme/box", version: 1, props: {} },
+      ] as BlockNode[],
+    } as BlockDocument;
+
+    const view = render(
+      <StyleInspectorPanel
+        editor={editorFor(first, "a")}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
+        classLibrary={LIBRARY}
+      />
+    );
+    const field = () => screen.getByRole("combobox", { name: /add a class/i });
+    fireEvent.change(field(), { target: { value: "hero" } });
+    expect((field() as HTMLInputElement).value).toBe("hero");
+
+    view.rerender(
+      <StyleInspectorPanel
+        editor={editorFor(first, "b")}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
+        classLibrary={LIBRARY}
+      />
+    );
+    expect((field() as HTMLInputElement).value).toBe("");
+  });
+
+  it("tells the selector when the document refused the write", () => {
+    /*
+     * `applyAll` answers null when the store refuses — a page at its byte limit
+     * rejects an edit the class rules found valid. Discarded, the selector
+     * clears the query and resets as though the class had been applied, so the
+     * author loses the typed choice and is told nothing.
+     */
+    register({ spacing: true });
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "acme/box", version: 1, props: {} },
+      ] as BlockNode[],
+    } as BlockDocument;
+    const editor = editorFor(document);
+    editor.applyAll.mockReturnValue(null);
+
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
+        classLibrary={LIBRARY}
+      />
+    );
+    const field = () => screen.getByRole("combobox", { name: /add a class/i });
+    fireEvent.change(field(), { target: { value: "hero" } });
+    fireEvent.keyDown(field(), { key: "Enter" });
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect((field() as HTMLInputElement).value).toBe("hero");
+    expect(screen.getByRole("alert").textContent).toMatch(
+      /could not be applied/i
+    );
+  });
+
+  it("reports a creation to the host, then writes the id it answers with", async () => {
+    /*
+     * Asserting only that no write happened YET is satisfied by the promise not
+     * having settled, and would hold for a panel that never applies the class.
+     * The write has to be observed after the microtask runs.
+     */
+    const { editor, onCreateClass } = mountWithClasses({ library: LIBRARY });
+    fireEvent.change(screen.getByRole("combobox", { name: /add a class/i }), {
+      target: { value: "call-to-action" },
+    });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: /add a class/i }), {
+      key: "Enter",
+    });
+
+    expect(onCreateClass).toHaveBeenCalledWith("call-to-action");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    await React.act(async () => {});
+
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: { classes: ["id-new"] },
+    });
+  });
+});
+
 describe("sections", () => {
   it("opens one section at a time", () => {
     mount({ spacing: true, effects: true });
@@ -268,6 +547,31 @@ describe("controls", () => {
     // `multiply` is the catalog's, not a list written here — a value absent
     // from `mix-blend-mode` would fail to appear.
     expect(screen.getByRole("option", { name: "multiply" })).toBeDefined();
+  });
+
+  it("writes on Enter, and stops the entry form from submitting", () => {
+    /*
+     * Both halves matter and neither implies the other. Committing without
+     * `preventDefault` submits the surrounding entry form, saving or
+     * publishing the entry when the author meant to finish one field; and
+     * preventing without committing loses the edit silently. Nothing covered
+     * this before, which is how the handler came to be refactored unguarded.
+     */
+    const editor = mount({ spacing: true });
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.change(field, { target: { value: "12px" } });
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    field.dispatchEvent(event);
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("writes through the store on blur, not on every keystroke", () => {
@@ -965,19 +1269,22 @@ describe("a free-form value the panel must let an author repair", () => {
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
-  it("still draws a SELECT for a value the keyword arm accepts", () => {
+  it("still draws the KEYWORD control for a value the keyword arm accepts", () => {
     // The control that separates "the rank learned something" from "the panel
-    // stopped drawing selects".
+    // stopped drawing keyword controls and hands everything a text field".
+    //
+    // Which keyword control it is, is not the property under test. `fontStyle`
+    // offers three short values, so it draws them as a group of buttons rather
+    // than a menu — the discriminator here is that an accepted keyword does NOT
+    // fall through to the free-form field the case above repairs in.
     const styles = {
       base: { [BASE_BREAKPOINT]: { fontStyle: "italic" } },
     } as NodeStyles;
     mount({ typography: true }, styles);
 
-    // Named, because a union property draws TWO comboboxes — the form selector
-    // and the value — and an unnamed query would pass on either.
     expect(fieldsOf("fontStyle").queryByRole("textbox")).toBeNull();
     expect(
-      fieldsOf("fontStyle").getByRole("combobox", { name: "Font style" })
+      fieldsOf("fontStyle").getByRole("button", { name: "italic" })
     ).toBeDefined();
   });
 });
@@ -2412,5 +2719,376 @@ describe("the action a control's breakpoint provenance earns", () => {
     fireEvent.click(action("jump") as HTMLElement);
 
     expect(jumped).toEqual(["tablet"]);
+  });
+});
+
+/**
+ * The segmented control, exercised as a control rather than as a rendering.
+ *
+ * These four assertions could not be written until a catalog property reached
+ * the toggle: it draws only where the whole keyword vocabulary fits, and until
+ * that admitted three options no supported property produced one. `fontStyle`
+ * does now, so the behaviours below are reachable — and each of them has been
+ * wrong once already, found by reading rather than by any test, because there
+ * was nothing that could render the control to ask.
+ */
+describe("a segmented keyword control behaves as a toggle", () => {
+  /** The buttons of the `fontStyle` toggle, by their option name. */
+  const optionButton = (name: string) =>
+    fieldsOf("fontStyle").getByRole("button", { name });
+
+  /**
+   * Every option button, found through the group BY ITS ACCESSIBLE NAME.
+   *
+   * Named rather than merely located, because the name is what makes the group
+   * mean anything to a screen reader: without `aria-labelledby` the buttons are
+   * three unattached options with no property attached to them, and a query
+   * asking only for a group cannot tell those two states apart.
+   */
+  const allOptions = () =>
+    within(
+      fieldsOf("fontStyle").getByRole("group", { name: "Font style" })
+    ).getAllByRole("button") as HTMLButtonElement[];
+
+  /**
+   * The node's styles AFTER the recorded ops are applied to the document.
+   *
+   * Applied rather than read out of the patch, because reading the patch cannot
+   * tell a removal from an operation that does nothing: an update carrying no
+   * `styles` key at all answers `undefined` exactly as a clear does, so every
+   * clear assertion below would pass against a handler that submits an empty
+   * edit and leaves the value on the page. `applyOps` also REFUSES an update
+   * that changes nothing, so a no-op cannot even reach a document to be read.
+   */
+  const styleAfter = (
+    editor: ReturnType<typeof editorFor>
+  ): string | undefined => {
+    const ops = editor.applyAll.mock.calls[0]?.[0] as
+      | readonly BuilderOp[]
+      | undefined;
+    if (ops === undefined) throw new Error("no ops were applied");
+    const applied = applyOps(editor.document, ops);
+    if (applied.document === null) {
+      throw new Error("the ops were refused, so nothing was applied");
+    }
+    const node = applied.document.nodes[0] as { styles?: NodeStyles };
+    return node.styles?.base?.[BASE_BREAKPOINT]?.fontStyle as
+      | string
+      | undefined;
+  };
+
+  /** The panel with one `fontStyle` value already stored, or none. */
+  const mountWith = (stored?: string | undefined) =>
+    mount(
+      { typography: true },
+      stored === undefined
+        ? undefined
+        : ({ base: { [BASE_BREAKPOINT]: { fontStyle: stored } } } as NodeStyles)
+    );
+
+  /*
+   * Every case below is driven from MORE THAN ONE option, and that is the point
+   * rather than thoroughness for its own sake. `fontStyle` offers three, so an
+   * implementation special-cased to whichever one a fixture happens to store —
+   * pressing `italic` whenever anything is set, committing `oblique` for every
+   * unpressed button, clearing only when `italic` is the pressed one — passes a
+   * suite that only ever exercises that value, and passes it while being wrong
+   * about the other two.
+   */
+  it.each(["normal", "italic", "oblique"])(
+    "shows %s as the pressed option when it is the stored value",
+    stored => {
+      mountWith(stored);
+
+      for (const button of allOptions()) {
+        expect(button.getAttribute("aria-pressed")).toBe(
+          String(button.textContent?.trim() === stored)
+        );
+      }
+    }
+  );
+
+  it.each(["normal", "italic", "oblique"])(
+    "CLEARS when the pressed option %s is pressed again",
+    stored => {
+      /*
+       * The only route to unset that does not spend a button on "neither".
+       *
+       * BOTH assertions are load-bearing. Re-writing a value the document
+       * already holds produces NO ops — the write path treats "the document
+       * already says this" as nothing to do — so `applyAll` is never reached
+       * and the styles it would have left read as absent. Absent is also what a
+       * clear leaves, so the value assertion alone passes for the very
+       * implementation it exists to reject.
+       */
+      const editor = mountWith(stored);
+
+      fireEvent.click(optionButton(stored));
+
+      // Exactly once: a handler committing twice would satisfy "was called" and
+      // spend two history entries on one gesture.
+      expect(editor.applyAll).toHaveBeenCalledTimes(1);
+      expect(styleAfter(editor)).toBeUndefined();
+    }
+  );
+
+  it.each([
+    ["italic", "normal"],
+    ["italic", "oblique"],
+    ["normal", "oblique"],
+    // `italic` as a DESTINATION, which the rows above never make it: they only
+    // ever click it while it is already pressed. Without this a handler reading
+    // `pressed || option === "italic" ? null : option` clears instead of
+    // storing it, and every row still passes.
+    ["normal", "italic"],
+    // And from UNSET, which is the state a newly styled node is in. A handler
+    // treating an absent value as nothing-to-do would make the first click on
+    // any option do nothing, with only this row to say so.
+    [undefined, "italic"],
+  ])("writes %s -> %s when a different option is pressed", (stored, next) => {
+    /*
+     * The positive control for the clear case, and the option-to-value mapping
+     * with it: a handler that committed one constant for every unpressed button
+     * would leave the clear assertions green while storing the wrong style.
+     */
+    const editor = mountWith(stored);
+
+    fireEvent.click(optionButton(next));
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(styleAfter(editor)).toBe(next);
+  });
+
+  it("marks EVERY button invalid when the store refuses the edit", () => {
+    /*
+     * A control described by a refusal and not marked invalid announces the
+     * message as a HINT rather than as a failure. `aria-invalid` sits on the
+     * buttons rather than on the group because `role="group"` does not support
+     * the state, so setting it there is an attribute a reader may ignore.
+     *
+     * Asserted across the whole control: one refused control has one state, and
+     * marking only the button that was clicked would leave the other two
+     * reading as valid parts of a control that is not.
+     */
+    const editor = mount({ typography: true });
+
+    // The positive control, BEFORE the refusal. Without it an implementation
+    // that marks every button invalid unconditionally passes — and that
+    // regression announces untouched, perfectly editable controls as erroneous.
+    for (const button of allOptions()) {
+      expect(button.getAttribute("aria-invalid")).toBeNull();
+    }
+
+    editor.applyAll.mockReturnValue(null);
+    fireEvent.click(optionButton("italic"));
+
+    for (const button of allOptions()) {
+      expect(button.getAttribute("aria-invalid")).toBe("true");
+    }
+    /*
+     * Both identifiers are required to EXIST before they are compared. Omitting
+     * the alert's id and the group's `aria-describedby` leaves both reads
+     * `null`, and `null === null` would report the message as associated with
+     * the control while nothing connects them.
+     */
+    const messageId = screen.getByRole("alert").getAttribute("id");
+    const describedBy = fieldsOf("fontStyle")
+      .getByRole("group")
+      .getAttribute("aria-describedby");
+    expect(messageId).toBeTruthy();
+    expect(describedBy).toBeTruthy();
+    expect(describedBy).toBe(messageId);
+  });
+
+  it("does not submit the entry it is mounted inside", () => {
+    /*
+     * The builder mounts inside the entry's `<form>` — `inspector-panel.test`
+     * states it, and guards the same hazard for Enter in a text field. A button
+     * with no explicit `type` defaults to `submit` there, so clicking a style
+     * option would SAVE THE WHOLE ENTRY as well as applying the style.
+     *
+     * Rendered under a form deliberately: every other case here mounts at the
+     * document root, where a missing `type` costs nothing and the defect is
+     * invisible. The host context is part of the behaviour.
+     */
+    const submitted = vi.fn((event: React.FormEvent) => event.preventDefault());
+    register({ typography: true });
+    const editor = editorFor(documentOf());
+    render(
+      <form onSubmit={submitted}>
+        <StyleInspectorPanel editor={editor} />
+      </form>
+    );
+
+    fireEvent.click(optionButton("italic"));
+
+    expect(submitted).not.toHaveBeenCalled();
+    // The positive control: the click still did its own job, so this does not
+    // pass merely because nothing happened at all.
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not write anything when the field's LABEL is clicked", () => {
+    /*
+     * The defect this guards is a click that edits the document without the
+     * author touching a control: a `<label>` with `htmlFor` forwards its click
+     * to the named element, so naming a button there would press it — or clear
+     * it, when already pressed. The group's id sits on a `div`, which is not
+     * labelable, so the association is inert by construction.
+     */
+    const editor = mountWith("italic");
+
+    fireEvent.click(fieldsOf("fontStyle").getByText("Font style"));
+
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A per-side property drawn as the box it describes.
+ *
+ * Two things are asserted here that no CSS file can state: that the box is
+ * drawn ONLY when the edited element's axes are known, and that each side is
+ * marked with WHICH side it is so the stylesheet can place it by identity
+ * rather than by counting siblings.
+ *
+ * The orientation is supplied rather than measured in most of these, because
+ * jsdom computes neither `writing-mode` nor `direction` — which is the same
+ * reason the panel treats an unreadable orientation as a reason to draw rows.
+ * The last test does the measuring, through the wrapper that owns the canvas.
+ */
+describe("a per-side property is drawn as a box", () => {
+  const LTR = { writingMode: "horizontal-tb", direction: "ltr" } as const;
+
+  /** The Style panel with an orientation already resolved, or deliberately not. */
+  function mountWithOrientation(
+    orientation: { writingMode: string; direction: string } | undefined
+  ) {
+    register({ spacing: true });
+    const editor = editorFor(documentOf());
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        {...(orientation === undefined ? {} : { sideOrientation: orientation })}
+      />
+    );
+    return document.querySelector(
+      '[data-property="padding"]'
+    ) as HTMLElement | null;
+  }
+
+  /** The element carrying the box arrangement, which is INSIDE the property. */
+  const frameOf = (box: HTMLElement | null) =>
+    box?.querySelector(".nx-style-inspector__side-box") as HTMLElement | null;
+
+  it("marks each side with WHICH side it is, not with its position", () => {
+    /*
+     * The property the stylesheet places on. The heading, a form selector and
+     * the notice for a withdrawn property are all siblings of the four sides,
+     * so a rule counting elements moves every side the moment one appears.
+     */
+    const box = mountWithOrientation(LTR);
+
+    expect(frameOf(box)?.getAttribute("data-sides")).toBe("logical");
+    expect(
+      Array.from(box?.querySelectorAll("[data-side]") ?? [], field =>
+        field.getAttribute("data-side")
+      )
+    ).toEqual(["blockStart", "inlineStart", "inlineEnd", "blockEnd"]);
+  });
+
+  it("carries the EDITED ELEMENT's axes, so its grid resolves in them", () => {
+    /*
+     * Grid columns run along the inline axis, so putting the element's own
+     * writing mode on the box is what makes column one the inline START edge in
+     * a right-to-left page as well as a left-to-right one. Read from the style
+     * attribute because that is the whole mechanism — there is no map from
+     * logical side to physical edge anywhere to assert instead.
+     */
+    const box = mountWithOrientation({
+      writingMode: "vertical-rl",
+      direction: "rtl",
+    });
+
+    /*
+     * Read as custom properties, which is how they are handed over: applied
+     * inline they would outrank every selector, and the narrow fallback could
+     * only take the axes back by shouting.
+     */
+    expect(frameOf(box)?.style.getPropertyValue("--nx-side-writing-mode")).toBe(
+      "vertical-rl"
+    );
+    expect(frameOf(box)?.style.getPropertyValue("--nx-side-direction")).toBe(
+      "rtl"
+    );
+  });
+
+  it("draws ROWS, not a box, when the element's axes are unknown", () => {
+    /*
+     * The whole reason the reading is allowed to fail. A box is a positional
+     * claim — this control is the leading edge — and an unknown orientation
+     * cannot support one. Four labelled rows name their side in words instead,
+     * which is true whichever way the element runs.
+     *
+     * `undefined` here is the ordinary state, not an error: the canvas mounts
+     * after styles load, and a block whose render returns a promise shows a
+     * fallback first.
+     */
+    const box = mountWithOrientation(undefined);
+
+    expect(frameOf(box)).toBeNull();
+    expect(box?.querySelectorAll("[data-side]").length).toBe(0);
+    // The sides are still all there and still named — the fallback is a layout
+    // change, never a control that goes missing.
+    expect(
+      within(box as HTMLElement).getByLabelText("Block start")
+    ).toBeDefined();
+    expect(
+      within(box as HTMLElement).getByLabelText("Inline start")
+    ).toBeDefined();
+  });
+
+  it("resolves the axes from the CANVAS, through the panel that owns it", () => {
+    /*
+     * The forwarding hop, and the only test here that measures rather than is
+     * told. `StyleInspectorPanel` taking an orientation proves nothing about
+     * `InspectorPanel` reading one, and that is the component the page-builder
+     * plugin mounts.
+     */
+    const canvasRoot = document.createElement("div");
+    const drawn = document.createElement("div");
+    drawn.setAttribute("data-nx-node", "a");
+    canvasRoot.append(drawn);
+    document.body.append(canvasRoot);
+
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation(((
+      element: Element,
+      pseudo?: string | null
+    ) =>
+      element === drawn
+        ? ({
+            writingMode: "horizontal-tb",
+            direction: "rtl",
+          } as unknown as CSSStyleDeclaration)
+        : real(element, pseudo)) as typeof window.getComputedStyle);
+
+    register({ spacing: true });
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf())}
+        canvasRoot={canvasRoot}
+      />
+    );
+    // The Inspector opens on Content, and the box lives in the Style tab.
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    const box = document.querySelector(
+      '[data-property="padding"]'
+    ) as HTMLElement | null;
+    expect(frameOf(box)?.getAttribute("data-sides")).toBe("logical");
+    expect(frameOf(box)?.style.getPropertyValue("--nx-side-direction")).toBe(
+      "rtl"
+    );
   });
 });

@@ -27,5 +27,6 @@ export const AUTHORING_SUPPORTS: {
   effects: [],
   position: [],
   container: [],
+  list: [],
   customCss: [],
 };

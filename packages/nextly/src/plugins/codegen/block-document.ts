@@ -251,6 +251,26 @@ const conditionSchema = z.looseObject({
  * SHOWN at a breakpoint. Conflating them would mean a conditioned node either
  * leaks into the payload or a hidden-on-mobile node stops being indexed.
  */
+/**
+ * Where a copied subtree came from.
+ *
+ * A union rather than one loose object, because the two arms genuinely differ:
+ * a pattern copy carries a digest of what it copied and a detached component
+ * does not. One object with an optional digest would accept a pattern origin
+ * that cannot answer the question it exists for.
+ */
+const blockOriginSchema = z.union([
+  z.looseObject({
+    from: z.literal("pattern"),
+    id: z.string(),
+    digest: z.string(),
+  }),
+  z.looseObject({
+    from: z.literal("component"),
+    id: z.string(),
+  }),
+]);
+
 const nodeVisibilitySchema = z.looseObject({
   conditions: z.array(z.array(conditionSchema)).optional(),
   devices: typedRecord(
@@ -468,6 +488,7 @@ const blockNodeObject = z.looseObject({
     "Expected an object of strings"
   ).optional(),
   migrationFailed: z.boolean().optional(),
+  origin: blockOriginSchema.optional(),
 });
 
 const blockNodeSchema = blockNodeObject;

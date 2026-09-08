@@ -1,6 +1,6 @@
 {
   "name": "playground",
-  "version": "0.1.2-alpha.4",
+  "version": "0.1.2-alpha.7",
   "description": "Nextly contributor playground (internal — not for end users)",
   "private": true,
   "scripts": {
@@ -34,7 +34,7 @@
     "@nextlyhq/plugin-sdk": "workspace:^",
     "@nextlyhq/ui": "workspace:^",
     "drizzle-orm": "1.0.0-rc.4",
-    "mysql2": "^3.15.0",
+    "mysql2": "^3.23.1",
     "next": "^16.2.11",
     "nextly": "workspace:^",
     "pg": "^8.16.3",

@@ -36,6 +36,9 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { getDialectTables } from "../../database/index";
+import { SchemaRegistry } from "../../database/schema-registry";
+import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
   isLocalizationIntentRefusal,
@@ -51,7 +54,12 @@ import {
 } from "../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
+import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
+import {
+  ENTITY_HEADER_GUIDANCE,
+  parseEntityHeaders,
+} from "../../domains/schema/migrate-create/format-file";
 import {
   EMPTY_SNAPSHOT,
   parseSnapshotFile,
@@ -246,6 +254,8 @@ export async function runMigrate(
     process.exit(1);
   }
 
+  installRegistryResolver(adapter as unknown as DrizzleAdapter);
+
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
     const cwd = options.cwd ?? process.cwd();
@@ -298,7 +308,7 @@ export async function runMigrate(
     // extraneous table) and BEFORE the event is recorded; idempotent. A thrown
     // error here maps to a non-zero CLI exit (the core itself never exits).
     try {
-      const { applied } = await migrateCore({
+      const { applied, metadata } = await migrateCore({
         dialect,
         db,
         adapter,
@@ -323,9 +333,21 @@ export async function runMigrate(
       });
 
       logger.newline();
+
+      /*
+       * 🔴 "Up to date" is a claim about the REGISTRY as well as the files.
+       * Phase 3 can leave rows outstanding while no migration file applied --
+       * a row whose table is absent produces no per-row warning, by design --
+       * so reporting only `applied` let a run announce a current database while
+       * registry work it had just measured was still owed.
+       */
+      reportMetadataOutcome(metadata, logger);
+
       logger.success(
         applied === 0
-          ? "Nothing to migrate. Database is up to date."
+          ? metadata.stillPending > 0 || metadata.unreadable.length > 0
+            ? "No migration files to apply."
+            : "Nothing to migrate. Database is up to date."
           : `${formatCount(applied, "migration")} applied.`
       );
     } catch (err) {
@@ -416,6 +438,8 @@ export interface MigrateCoreDeps {
   /** Junction tables the config names outright; see `runFileMigrations`. */
   knownJunctions?: ReadonlySet<string>;
   withLock?: typeof withMigrateLock;
+  /** Seam for tests; defaults to the real metadata reconciliation. */
+  reconcileMetadataFn?: typeof reconcileMigrationMetadata;
 }
 
 export interface MigrateCoreResult {
@@ -431,6 +455,22 @@ export interface MigrateCoreResult {
    * migrations that never started.
    */
   ran: boolean;
+  /**
+   * Registry rows this run brought into agreement with the tables.
+   *
+   * Reported so a caller can say what happened rather than implying it from
+   * `applied`, which counts migration FILES: a run can apply no files and still
+   * record a row whose table landed on a previous one.
+   */
+  metadata: {
+    collectionsRegistered: number;
+    singlesRegistered: number;
+    marked: number;
+    stillPending: number;
+    awaitingMigration: number;
+    unscopedMigrations: string[];
+    unreadable: string[];
+  };
 }
 
 /** Clear a stale migrate lock when `--force-unlock` was passed (else no-op). */
@@ -443,14 +483,134 @@ export async function maybeForceUnlock(
   await forceUnlock(db, dialect);
 }
 
+/**
+ * Give the adapter a way to resolve core table NAMES to Drizzle tables.
+ *
+ * 🔴 Without this, the metadata reconciliation silently does nothing.
+ * `adapter.select` maps a name through a resolver and refuses with "not found
+ * in schema registry" when none is installed. A CLI run has no boot to install
+ * one — which is why `prune`, `webhooks-prune`, `migrate-field-groups` and
+ * `dev-server` each wire it up the same way before touching adapter CRUD.
+ *
+ * Missing here, every registry read in the sweep threw, the per-registry guard
+ * caught all three, and the command reported success having repaired nothing:
+ * a no-op in exactly the production case the phase exists for.
+ *
+ * Both spellings of the field-group registry are registered, because a database
+ * whose storage migration has run has no handle for it under the other name.
+ *
+ * Its own exported function so the wiring can be asserted by its OUTCOME — that
+ * the registry table resolves — rather than by whether a call appears in the
+ * source.
+ */
+export function installRegistryResolver(
+  adapter: DrizzleAdapter
+): SchemaRegistry {
+  const { dialect } = adapter.getCapabilities();
+  const schemaRegistry = new SchemaRegistry(dialect);
+  schemaRegistry.registerStaticSchemas({
+    ...getDialectTables(dialect),
+    ...getFieldGroupRegistryAliases(dialect),
+  });
+  adapter.setTableResolver(schemaRegistry);
+  return schemaRegistry;
+}
+
+/**
+ * Say what Phase 3 did, and what it could not do.
+ *
+ * Extracted from the command body because the reporting is four independent
+ * decisions about one result — could the registries be read, what was recorded,
+ * what is waiting for a migration to exist, what is waiting for one to run —
+ * and interleaving them with the migrate flow made both harder to follow than
+ * either is alone.
+ */
+function reportMetadataOutcome(
+  metadata: MigrateCoreResult["metadata"],
+  logger: CommandContext["logger"]
+): void {
+  const {
+    marked,
+    stillPending,
+    awaitingMigration,
+    unscopedMigrations,
+    unreadable,
+  } = metadata;
+
+  if (unreadable.length > 0) {
+    // Not a count of rows: this is "the sweep could not look". Reported
+    // separately because zero repaired and zero readable are the same
+    // number and opposite facts.
+    logger.warn(
+      `Could not read the ${unreadable.join(", ")} registry, so migration ` +
+        `status was not reconciled. The tables are in place; re-run \`nextly migrate\`.`
+    );
+  }
+
+  if (marked > 0) {
+    logger.success(
+      `${formatCount(marked, "registry row")} recorded as applied.`
+    );
+  }
+
+  /*
+   * Split, because the two causes send an operator to different places. A row
+   * whose table is absent is waiting for a migration to be GENERATED; a row
+   * whose shape disagrees with the applied migrations has one generated and
+   * not yet run, or has been edited since. One combined count says "something
+   * is owed" and leaves them to guess which.
+   */
+  if (unscopedMigrations.length > 0) {
+    /*
+     * Named, because the remedy is to add one line to those files. Silence here
+     * would leave an operator with rows recorded as migrated by a rule that
+     * could not see the migration that changes them.
+     */
+    logger.warn(
+      `${formatCount(unscopedMigrations.length, "pending migration")} name no collection, single or field group, ` +
+        `so registry rows were recorded from their tables alone: ${unscopedMigrations.join(", ")}. ` +
+        // Taken from the formatter rather than restated, because a remediation
+        // that drifts from the format tells an operator to do something that
+        // does not work — which is exactly how this line came to name only
+        // `-- Collections:` while the template named all three.
+        `${ENTITY_HEADER_GUIDANCE}.`
+    );
+  }
+
+  const awaitingTable = stillPending - awaitingMigration;
+  if (awaitingTable > 0) {
+    logger.warn(
+      `${formatCount(awaitingTable, "registry row")} still awaiting a migration. ` +
+        `Run \`nextly migrate:create\` if the change has no migration yet.`
+    );
+  }
+  if (awaitingMigration > 0) {
+    logger.warn(
+      `${formatCount(awaitingMigration, "registry row")} awaiting a migration that has not been applied. ` +
+        `Run \`nextly migrate\` without --step to apply it.`
+    );
+  }
+}
+
 export async function migrateCore(
   deps: MigrateCoreDeps
 ): Promise<MigrateCoreResult> {
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
+  const reconcileMetadata =
+    deps.reconcileMetadataFn ?? reconcileMigrationMetadata;
   const lock = deps.withLock ?? withMigrateLock;
   let applied = 0;
   let coreChanged = false;
+  let metadata = {
+    collectionsRegistered: 0,
+    singlesRegistered: 0,
+    marked: 0,
+    stillPending: 0,
+    awaitingMigration: 0,
+    unscopedMigrations: [] as string[],
+    unreadable: [] as string[],
+  };
 
   const outcome = await lock(
     deps.db,
@@ -488,6 +648,46 @@ export async function migrateCore(
         logger: deps.logger,
         knownJunctions: deps.knownJunctions,
       });
+
+      /*
+       * Phase 3 — make the registry agree with the tables Phase 2 just created.
+       *
+       * 🔴 Inside the lock, unlike the dev-boot path, which runs its equivalent
+       * outside because several dev-server workers race there. A CLI invocation
+       * already holds the lock, so this sweep cannot interleave with another
+       * migrate and needs no conflict tolerance of its own.
+       *
+       * CAUGHT, and the command still succeeds. The DDL has landed by now, and
+       * MySQL commits DDL implicitly, so there is no transaction to roll back
+       * into: a bookkeeping failure leaves working tables beside a row that is
+       * behind. Failing here would report a migration that worked as broken,
+       * and the next invocation repairs the row because this runs every time.
+       */
+      deps.logger.info("Phase 3: recording migration metadata...");
+      try {
+        metadata = await reconcileMetadata({
+          adapter: deps.adapter as unknown as DrizzleAdapter,
+          dialect: deps.dialect,
+          migrationsDir: deps.migrationsDir,
+          logger: {
+            info: (m: string) => deps.logger.debug(m),
+            warn: (m: string) => deps.logger.warn(m),
+            debug: (m: string) => deps.logger.debug(m),
+          },
+        });
+      } catch (error) {
+        // The whole pass failed, so nothing was read: say so in the result
+        // rather than returning zeroes that read like "nothing needed doing".
+        metadata = {
+          ...metadata,
+          unreadable: ["collection", "single", "field group"],
+        };
+        deps.logger.warn(
+          `Migration metadata was not recorded: ${
+            error instanceof Error ? error.message : String(error)
+          }. The tables are in place; run \`nextly migrate\` again to record it.`
+        );
+      }
     },
     {
       mode: deps.lockMode ?? "fail-fast",
@@ -500,7 +700,7 @@ export async function migrateCore(
     }
   );
 
-  return { applied, coreChanged, ran: outcome.ran };
+  return { applied, coreChanged, ran: outcome.ran, metadata };
 }
 
 /**
@@ -784,29 +984,7 @@ function parseMigrationFile(
   const checksumMatch = content.match(/^-- Checksum:\s*([a-f0-9]+)/m);
   const originalChecksum = checksumMatch?.[1];
 
-  const collectionsMatch = content.match(/^-- Collections?:\s*(.+)$/m);
-  const collections = collectionsMatch
-    ? collectionsMatch[1]
-        .split(",")
-        .map(c => c.trim())
-        .filter(c => c.length > 0)
-    : [];
-
-  const singlesMatch = content.match(/^-- Singles?:\s*(.+)$/m);
-  const singles = singlesMatch
-    ? singlesMatch[1]
-        .split(",")
-        .map(s => s.trim())
-        .filter(s => s.length > 0)
-    : [];
-
-  const componentsMatch = content.match(/^-- Components?:\s*(.+)$/m);
-  const components = componentsMatch
-    ? componentsMatch[1]
-        .split(",")
-        .map(c => c.trim())
-        .filter(c => c.length > 0)
-    : [];
+  const { collections, singles, components } = parseEntityHeaders(content);
 
   const timestampMatch = name.match(/^(\d{8}_\d{6})/);
   const timestamp = timestampMatch?.[1] ?? name;
@@ -963,6 +1141,214 @@ function quoteOpenerAt(
   return undefined;
 }
 
+/**
+ * Whether a string literal opening at `index` honours backslash escapes.
+ *
+ * 🔴 A PROPERTY OF THE LITERAL, not of the dialect alone. MySQL escapes with
+ * backslashes in every string; SQLite never does; PostgreSQL does so only in an
+ * `E'...'` escape string and treats a backslash in an ordinary literal as an
+ * ordinary character. Deciding by dialect alone is wrong in both directions --
+ * it mis-splits a valid PostgreSQL escape string, and applying parity to every
+ * dialect mis-splits an ordinary value ending in a backslash.
+ */
+function opensBackslashEscapedString(
+  text: string,
+  index: number,
+  opener: string,
+  dialect: SupportedDialect | undefined
+): boolean {
+  // A quoted IDENTIFIER never escapes — a backtick or a bracket delimits a name,
+  // not a literal — so only the two literal quotes are candidates.
+  if (opener !== "'" && opener !== '"') return false;
+  // 🔴 MySQL escapes in BOTH literal quotes. Under its default SQL mode a
+  // double quote also delimits a string, so backslash handling has to apply to
+  // whichever of the two opened the region. Gating on the single quote alone
+  // leaves `SELECT "left \"; right"` splitting at the semicolon INSIDE the
+  // value.
+  if (dialect === "mysql") return true;
+  if (dialect !== "postgresql") return false;
+  // PostgreSQL's escape strings are single-quoted only: `E"…"` is not one.
+  if (opener !== "'") return false;
+  const prev = text[index - 1];
+  if (prev !== "E" && prev !== "e") return false;
+  // Not part of a longer word: `VALUES (E'x')` opens an escape string, while an
+  // identifier merely ending in `e` before a literal does not.
+  const before = text[index - 2];
+  return before === undefined || !/[A-Za-z0-9_$]/.test(before);
+}
+
+/**
+ * Whether a quote at `index` CLOSES the literal it appears in.
+ *
+ * The two questions — does this literal escape at all, and is this particular
+ * quote escaped — are answered here rather than in the scanning loop, which is
+ * long enough that one more condition inside it is one more thing to read past.
+ */
+function closesLiteral(
+  text: string,
+  index: number,
+  escapesWithBackslash: boolean
+): boolean {
+  return !(escapesWithBackslash && precededByOddBackslashes(text, index));
+}
+
+/**
+ * Whether the character at `index` is escaped by the backslash run before it.
+ *
+ * 🔴 PARITY, not the single preceding character. A doubled backslash is one
+ * LITERAL backslash — which is how MySQL string escaping writes it — so a value
+ * ending in a backslash puts `\\` immediately before its closing quote.
+ * Reading only that last character calls the quote escaped, leaves the splitter
+ * inside a string it has actually left, swallows the statement's semicolon, and
+ * concatenates the next statement onto it. A driver with multi-statements
+ * disabled then rejects the pair, after earlier statements in the same file
+ * have already run.
+ *
+ * An EVEN run means the backslashes escape each other and the character stands
+ * on its own; an odd run means the last one escapes it.
+ */
+function precededByOddBackslashes(text: string, index: number): boolean {
+  let run = 0;
+  for (let k = index - 1; k >= 0 && text[k] === "\\"; k -= 1) run += 1;
+  return run % 2 === 1;
+}
+
+/** Where a scan currently stands with respect to an open string literal. */
+type LiteralState = {
+  inString: boolean;
+  stringChar: string;
+  escapesWithBackslash: boolean;
+};
+
+/**
+ * Advance `state` across the character at `index`.
+ *
+ * The splitter and the line pre-scan both have to agree about where a literal
+ * begins and ends; two copies of this decision would drift, and the drift would
+ * be silent because each looks correct beside its own caller.
+ */
+function advanceLiteralState(
+  text: string,
+  index: number,
+  dialect: SupportedDialect | undefined,
+  state: LiteralState
+): number {
+  const char = text[index];
+  if (!state.inString) {
+    const opener = quoteOpenerAt(char, dialect);
+    if (opener) {
+      state.inString = true;
+      state.stringChar = opener;
+      // Recorded when the literal OPENS: the `E` prefix is only visible here,
+      // and by the closing quote it is long past.
+      state.escapesWithBackslash = opensBackslashEscapedString(
+        text,
+        index,
+        opener,
+        dialect
+      );
+    }
+    return 1;
+  }
+
+  if (char !== state.stringChar) return 1;
+
+  // Backslash-escaped: an ordinary character that happens to be the delimiter.
+  if (!closesLiteral(text, index, state.escapesWithBackslash)) return 1;
+
+  // 🔴 A DOUBLED delimiter escapes the delimiter and does NOT leave the
+  // literal. Closing on the first and reopening on the second looks harmless
+  // -- the state toggles twice and comes back correct -- but the REOPENED
+  // literal is a different one: `escapesWithBackslash` is recorded from the
+  // prefix at the opening quote, and the second quote of a pair is no longer
+  // adjacent to the `E` of a Postgres escape string. The mode is silently
+  // lost, so a later `\'` reads as the closing quote and the statement is cut
+  // at the next semicolon INSIDE the value.
+  if (text[index + 1] === state.stringChar) return 2;
+
+  state.inString = false;
+  return 1;
+}
+
+/**
+ * End index (exclusive) of the comment beginning at `index`, or -1 if none.
+ *
+ * Both comment forms in one place because a scan that knows about `--` and not
+ * about a block comment disagrees with one that knows about both -- and an
+ * apostrophe inside `/* it's a note *\/` then reads as an opening quote,
+ * putting the rest of the file "inside a literal" for that scan alone.
+ */
+function commentEndAt(
+  text: string,
+  index: number,
+  dialect?: SupportedDialect
+): number {
+  if (isLineCommentAt(text, index, dialect)) {
+    const lineEnd = text.indexOf("\n", index);
+    return lineEnd === -1 ? text.length : lineEnd;
+  }
+  if (text[index] === "/" && text[index + 1] === "*") {
+    const close = text.indexOf("*/", index + 2);
+    return close === -1 ? text.length : close + 2;
+  }
+  return -1;
+}
+
+/**
+ * For every character of `sql`, whether it sits inside a string literal.
+ *
+ * 🔴 The cleanup below both DROPS lines and REWRITES them, and each is an edit
+ * to whatever it touches. A description carrying a comment marker or a
+ * breakpoint marker is data, and editing it stores a silently truncated value
+ * in the replayed database -- the migration still succeeds, so nothing reports
+ * it. A per-LINE answer is not enough: a literal can open midway through a line
+ * that began as ordinary SQL.
+ */
+function literalMask(sql: string, dialect?: SupportedDialect): boolean[] {
+  const mask: boolean[] = new Array(sql.length).fill(false);
+  const state: LiteralState = {
+    inString: false,
+    stringChar: "",
+    escapesWithBackslash: false,
+  };
+
+  for (let i = 0; i < sql.length; i++) {
+    if (!state.inString) {
+      const commentEnd = commentEndAt(sql, i, dialect);
+      if (commentEnd !== -1) {
+        i = commentEnd - 1;
+        continue;
+      }
+    }
+    const consumed = advanceLiteralState(sql, i, dialect, state);
+    mask[i] = state.inString;
+    if (consumed === 2) {
+      mask[i + 1] = state.inString;
+      i += 1;
+    }
+  }
+
+  return mask;
+}
+
+/** Remove breakpoint markers that lie OUTSIDE a literal, leaving data intact. */
+function stripMarkersOutsideLiterals(
+  line: string,
+  lineStart: number,
+  mask: boolean[]
+): string {
+  const MARKER = "--> statement-breakpoint";
+  let out = "";
+  for (let i = 0; i < line.length; i++) {
+    if (!mask[lineStart + i] && line.startsWith(MARKER, i)) {
+      i += MARKER.length - 1;
+      continue;
+    }
+    out += line[i];
+  }
+  return out;
+}
+
 export function splitSqlStatements(
   sql: string,
   dialect?: SupportedDialect
@@ -973,9 +1359,19 @@ export function splitSqlStatements(
   //   2. Inline: `SQL_STATEMENT;--> statement-breakpoint` on the same line (after CREATE INDEX/ALTER)
   // Both must be cleaned out before executing, otherwise the marker text
   // ends up as invalid SQL in the next statement.
+  // Where every literal sits, so neither half of the cleanup edits data.
+  const mask = literalMask(sql, dialect);
+  let lineStart = 0;
   const cleanedSql = sql
     .split("\n")
-    .filter(line => {
+    .map(line => {
+      const entry = { line, start: lineStart };
+      lineStart += line.length + 1;
+      return entry;
+    })
+    .filter(({ line, start }) => {
+      // A line that BEGINS inside a literal is a continuation of a value.
+      if (mask[start]) return true;
       const trimmed = line.trim();
       if (trimmed.startsWith("--> statement-breakpoint")) return false;
       // Remove pure SQL comment lines (but keep lines that have SQL after comments)
@@ -992,32 +1388,36 @@ export function splitSqlStatements(
     // Strip inline markers (pattern 2) that appear after semicolons on the
     // same line, e.g. `CREATE INDEX ...;--> statement-breakpoint`. Without
     // this, the text after the semicolon pollutes the next accumulated
-    // statement and causes a MySQL syntax error.
-    .map(line => line.replace(/--> statement-breakpoint/g, ""))
+    // statement and causes a MySQL syntax error. Per OCCURRENCE rather than
+    // per line: a literal can open midway through a line of ordinary SQL, and
+    // rewriting the whole line edits the value inside it.
+    .map(({ line, start }) => stripMarkersOutsideLiterals(line, start, mask))
     .join("\n");
 
   const statements: string[] = [];
   let current = "";
-  let inString = false;
-  let stringChar = "";
+  const state: LiteralState = {
+    inString: false,
+    stringChar: "",
+    escapesWithBackslash: false,
+  };
 
   for (let i = 0; i < cleanedSql.length; i++) {
     const char = cleanedSql[i];
-    const prevChar = cleanedSql[i - 1];
 
     // Comments are copied through verbatim without being scanned, because the
     // characters inside one are prose rather than SQL. An apostrophe in a
     // retained comment ("SQLite doesn't support ...") would otherwise open a
     // string that never closes, and every semicolon after it stops separating
     // statements — the whole file then reaches the driver as one statement.
-    if (!inString && isLineCommentAt(cleanedSql, i, dialect)) {
+    if (!state.inString && isLineCommentAt(cleanedSql, i, dialect)) {
       const lineEnd = cleanedSql.indexOf("\n", i);
       const end = lineEnd === -1 ? cleanedSql.length : lineEnd;
       current += cleanedSql.slice(i, end);
       i = end - 1;
       continue;
     }
-    if (!inString && char === "/" && cleanedSql[i + 1] === "*") {
+    if (!state.inString && char === "/" && cleanedSql[i + 1] === "*") {
       const close = cleanedSql.indexOf("*/", i + 2);
       const end = close === -1 ? cleanedSql.length : close + 2;
       current += cleanedSql.slice(i, end);
@@ -1033,15 +1433,14 @@ export function splitSqlStatements(
     // The bracket and backtick forms are applied per dialect rather than
     // everywhere: `[` is not a quote in Postgres, where it subscripts an array,
     // so treating it as one there would swallow ordinary SQL.
-    const opener = quoteOpenerAt(char, dialect);
-    if (!inString && opener) {
-      inString = true;
-      stringChar = opener;
-    } else if (inString && char === stringChar && prevChar !== "\\") {
-      inString = false;
+    const consumed = advanceLiteralState(cleanedSql, i, dialect, state);
+    if (consumed === 2) {
+      current += cleanedSql[i] + cleanedSql[i + 1];
+      i += 1;
+      continue;
     }
 
-    if (char === ";" && !inString) {
+    if (char === ";" && !state.inString) {
       const statement = current.trim();
       const hasSQL =
         /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|SELECT|TRUNCATE|GRANT|REVOKE)\b/i.test(

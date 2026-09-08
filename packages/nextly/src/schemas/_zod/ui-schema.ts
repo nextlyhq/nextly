@@ -15,6 +15,7 @@
 
 import { z } from "zod";
 
+import { isFieldGroupType } from "../../domains/field-groups/storage/field-group-field-type";
 import { reservedSystemFieldNames } from "../../lib/system-columns";
 import {
   isPluginOptionContainer,
@@ -22,6 +23,7 @@ import {
 } from "../../plugins/plugin-options";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { pluginStorageFieldType } from "../../shared/lib/plugin-storage";
+import type { StoredHookConfig } from "../dynamic-collections/types";
 
 /**
  * Canonical field-type tokens supported in ui-schema.json. Mirrors the set
@@ -46,6 +48,7 @@ export const UI_FIELD_TYPES = [
   "repeater",
   "group",
   "component",
+  "fieldGroup",
   "json",
   "chips",
 ] as const;
@@ -201,7 +204,16 @@ export type FieldNode = {
   initCollapsed?: boolean;
   rowLabelField?: string;
   component?: string;
+  /**
+   * The migrated spelling of `component`, on fields rewritten by the storage
+   * migration. Declared so the parser KEEPS the key — an undeclared key is
+   * stripped before any refinement runs, and the exactly-one-reference check
+   * below would then reject a valid migrated manifest.
+   */
+  fieldGroup?: string;
   components?: string[];
+  /** The migrated spelling of `components`, kept for the same reason. */
+  fieldGroups?: string[];
   repeatable?: boolean;
   fields?: FieldNode[];
 };
@@ -288,7 +300,11 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       initCollapsed: z.boolean().optional(),
       rowLabelField: z.string().optional(),
       component: z.string().optional(),
+      // Declared rather than stripped: the refinement below judges migrated
+      // references, and a key the object shape omits never reaches it.
+      fieldGroup: z.string().optional(),
       components: z.array(z.string()).optional(),
+      fieldGroups: z.array(z.string()).optional(),
       repeatable: z.boolean().optional(),
       // Nested fields for inline container types (repeater/group).
       fields: z.array(uiSchemaFieldSchema).optional(),
@@ -336,44 +352,64 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
           path: ["fields"],
         });
       }
-      // A component field references a component schema by slug: either a
-      // single `component`, or a `components[]` whitelist for a polymorphic
-      // slot. Exactly one form must be present, and every referenced slug
-      // must be a real slug — a blank or malformed reference points at no
-      // loadable component, so runtime writes to it would be silently dropped.
-      if (f.type === STORAGE_FORMAT.fieldType) {
-        const hasSingle = f.component !== undefined;
-        const hasMulti = f.components !== undefined;
-        if (hasSingle === hasMulti) {
+      // A component / field-group field references a schema by slug: either a
+      // single `component` / `fieldGroup`, or a `components[]` / `fieldGroups[]` whitelist
+      // for a polymorphic slot. Exactly one KEY must be declared, and every referenced slug
+      // must be a real slug — a blank or malformed reference points at no loadable
+      // definition, so runtime writes to it would be silently dropped. The keys are
+      // counted BEFORE any value is read: coalescing the two spellings of one shape
+      // first would silently prefer the legacy value and accept an ambiguous field
+      // the code-first validator rejects.
+      if (isFieldGroupType(f.type)) {
+        // Both spellings are declared on the object above, so they survive
+        // parsing and are readable off the node without a cast.
+        const singleKeys = ["component", "fieldGroup"] as const;
+        const multiKeys = ["components", "fieldGroups"] as const;
+        const declaredSingle = singleKeys.filter(k => f[k] !== undefined);
+        const declaredMulti = multiKeys.filter(k => f[k] !== undefined);
+        const declaredCount = declaredSingle.length + declaredMulti.length;
+
+        if (declaredCount > 1) {
+          const found = [...declaredSingle, ...declaredMulti]
+            .map(k => `'${k}'`)
+            .join(", ");
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `component fields must declare exactly one reference key (found ${found})`,
+            path: [[...declaredSingle, ...declaredMulti][1]],
+          });
+        } else if (declaredCount === 0) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message:
               "component fields require either a `component` slug or a `components[]` list, but not both",
-            path: [
-              hasSingle
-                ? STORAGE_FORMAT.refKeys.many
-                : STORAGE_FORMAT.refKeys.single,
-            ],
+            path: ["component"],
           });
-        } else if (hasSingle) {
-          if (typeof f.component !== "string" || !SLUG_RE.test(f.component)) {
+        } else if (declaredSingle.length > 0) {
+          const key = declaredSingle[0];
+          const singleRef = f[key];
+          if (typeof singleRef !== "string" || !SLUG_RE.test(singleRef)) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               message: "component must be a valid component slug",
-              path: [STORAGE_FORMAT.refKeys.single],
+              path: [key],
             });
           }
-        } else if (
-          !Array.isArray(f.components) ||
-          f.components.length === 0 ||
-          !f.components.every(s => typeof s === "string" && SLUG_RE.test(s))
-        ) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message:
-              "components must be a non-empty list of valid component slugs",
-            path: [STORAGE_FORMAT.refKeys.many],
-          });
+        } else {
+          const key = declaredMulti[0];
+          const multiRef = f[key];
+          if (
+            !Array.isArray(multiRef) ||
+            multiRef.length === 0 ||
+            !multiRef.every(s => typeof s === "string" && SLUG_RE.test(s))
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "components must be a non-empty list of valid component slugs",
+              path: [key],
+            });
+          }
         }
       }
       if (RESERVED_FIELD_NAMES.has(f.name)) {
@@ -429,10 +465,84 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
     })
 );
 
+/**
+ * A stored hook config, validated as the executor actually requires it.
+ *
+ * 🔴 NOT a loose record. `StoredHookExecutor` reads `config` and `order` off
+ * each entry, so a manifest carrying `{ hookId, hookType, enabled }` and
+ * nothing else parses, deploys, and then throws on the next content write —
+ * an accepted manifest turning into failed writes, which is worse than a
+ * refused one.
+ *
+ * The assertion below is what keeps this in step with `StoredHookConfig`
+ * rather than drifting from it: if that interface gains a required field, this
+ * stops being assignable and the build says so.
+ */
+const storedHookConfig = z.object({
+  hookId: z.string().min(1),
+  hookType: z.enum([
+    "beforeOperation",
+    "beforeCreate",
+    "afterCreate",
+    "beforeUpdate",
+    "afterUpdate",
+    "beforeDelete",
+    "afterDelete",
+    "beforeRead",
+    "afterRead",
+    "beforeChange",
+    "afterChange",
+  ]),
+  enabled: z.boolean(),
+  config: z.record(z.string(), z.unknown()),
+  order: z.number(),
+});
+
+/**
+ * Compile-time proof that the schema and the stored shape describe each other.
+ *
+ * 🔴 BOTH directions, because each catches a different drift and neither
+ * catches the other's. Schema-to-interface fails when the schema goes wider
+ * than the runtime accepts. Interface-to-schema fails when the schema goes
+ * NARROWER — a lifecycle point added to `StoredHookType` leaves this enum short,
+ * and a one-way proof still passes while every manifest naming the new hook is
+ * silently refused. The narrow direction is the quiet one, so it is the one
+ * worth stating.
+ *
+ * `StoredHookType` is a union in a module with no runtime exports, so the enum
+ * is spelled here rather than derived from a shared array; keeping that module
+ * type-only is worth more than removing this pair of assertions.
+ */
+type SchemaAcceptsOnlyStoredHooks =
+  z.infer<typeof storedHookConfig> extends StoredHookConfig ? true : never;
+type SchemaAcceptsEveryStoredHook =
+  StoredHookConfig extends z.infer<typeof storedHookConfig> ? true : never;
+const _schemaAcceptsOnlyStoredHooks: SchemaAcceptsOnlyStoredHooks = true;
+const _schemaAcceptsEveryStoredHook: SchemaAcceptsEveryStoredHook = true;
+void _schemaAcceptsOnlyStoredHooks;
+void _schemaAcceptsEveryStoredHook;
+
+/**
+ * The admin presentation a UI-built entity carries.
+ *
+ * 🔴 WIDER than the three keys this began with, because the Schema Builder
+ * stores more than it could express here. A zod object strips what it does not
+ * declare, so a collection created hidden, with an icon, an explicit order or a
+ * sidebar group lost all four on the way into a manifest -- and a migration
+ * generated from that manifest rebuilt a visibly different collection
+ * elsewhere: shown when it was hidden, unordered, no icon.
+ *
+ * These are presentation only. Nothing here changes a table, which is why they
+ * can be added without a migration concern of their own.
+ */
 const admin = z.object({
   useAsTitle: z.string().optional(),
   defaultColumns: z.array(z.string()).optional(),
   group: z.string().optional(),
+  icon: z.string().optional(),
+  hidden: z.boolean().optional(),
+  order: z.number().optional(),
+  sidebarGroup: z.string().optional(),
 });
 
 function entity(kind?: "collection" | "single" | "component") {
@@ -440,6 +550,21 @@ function entity(kind?: "collection" | "single" | "component") {
     .object({
       slug,
       labels: z.object({ singular: z.string(), plural: z.string() }).optional(),
+      /**
+       * The entity's own help text, distinct from a FIELD's `admin.description`
+       * declared above. The Builder collects one and stores it on the registry
+       * row; without it here the manifest could not carry it, so a migration
+       * generated from either path rebuilt the entity with no description.
+       */
+      description: z.string().optional(),
+      /**
+       * Stored hook CONFIGS, which are data rather than functions — the hook
+       * service reads them off the registry row and runs them. Declared here so
+       * a migration can carry them: without it a collection created with hooks
+       * ran them where it was authored and silently ran none where the file was
+       * replayed.
+       */
+      hooks: z.array(storedHookConfig).optional(),
       admin: admin.optional(),
       status: z.boolean().optional(),
       localized: z.boolean().optional(),
@@ -556,6 +681,18 @@ function entity(kind?: "collection" | "single" | "component") {
           code: z.ZodIssueCode.custom,
           message: "'webhooks' is not supported on components",
           path: ["webhooks"],
+        });
+      }
+      // 🔴 Only `dynamic_collections` has a `hooks` column. Singles and
+      // components have none, so their upsert builders cannot emit one — and a
+      // manifest that ACCEPTED hooks there would validate, deploy, and run
+      // none of them, with nothing saying why. Refusing the key is the honest
+      // answer: a setting the deployment cannot honour should not parse.
+      if (kind !== "collection" && e.hooks !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `'hooks' is only supported on collections`,
+          path: ["hooks"],
         });
       }
       // `status` reserved as a field name only when the lifecycle column is on.

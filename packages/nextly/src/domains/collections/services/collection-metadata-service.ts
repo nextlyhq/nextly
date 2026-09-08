@@ -11,6 +11,7 @@ import { toDbError } from "../../../database/errors";
 import type { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
 import { NextlyError, isProgrammerError } from "../../../errors";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
+import type { StoredHookConfig } from "../../../schemas/dynamic-collections/types";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -376,7 +377,12 @@ export class CollectionMetadataService extends BaseService {
      */
     webhooks?: boolean;
     fields: FieldDefinition[];
-    hooks?: Record<string, unknown>[];
+    /**
+     * The canonical stored-hook shape, not a looser record: the registry row
+     * these feed is typed with it, and the executor reads `config` and `order`
+     * off every entry.
+     */
+    hooks?: StoredHookConfig[];
     createdBy?: string;
   }): Promise<MetadataServiceResult> {
     try {
@@ -392,7 +398,13 @@ export class CollectionMetadataService extends BaseService {
 
       if (this.isDevelopment()) {
         try {
-          await this.fileManager.runMigration(artifacts.migrationSQL);
+          // The artefact carries the registry-row upsert so the committed file
+          // recreates it where the Builder has never run. This database gets
+          // that row from `registerCollection` below, and it refuses a slug
+          // that already exists -- so what runs HERE is the DDL alone.
+          await this.fileManager.runMigration(
+            artifacts.localMigrationSQL ?? artifacts.migrationSQL
+          );
           // Verify table was actually created before marking as applied
           const tableExists = await this.adapter.tableExists(
             artifacts.tableName
@@ -484,6 +496,11 @@ export class CollectionMetadataService extends BaseService {
     sortBy?: "name" | "slug" | "createdAt" | "updatedAt";
     sortOrder?: "asc" | "desc";
     includeSchema?: boolean;
+    /**
+     * Restrict results to these slugs, applied as a query condition so the
+     * `total` this returns counts only rows the caller may see.
+     */
+    slugAllowlist?: string[];
   }): Promise<MetadataServiceResult> {
     try {
       // Include schema by default since the UI needs field counts
@@ -722,7 +739,12 @@ export class CollectionMetadataService extends BaseService {
       /** Toggle webhook recording. Honoured when defined; undefined leaves it unchanged. */
       webhooks?: boolean;
       fields?: FieldDefinition[];
-      hooks?: Record<string, unknown>[];
+      /**
+       * The canonical stored-hook shape, not a looser record: the registry row
+       * these feed is typed with it, and the executor reads `config` and `order`
+       * off every entry.
+       */
+      hooks?: StoredHookConfig[];
     }
   ): Promise<MetadataServiceResult> {
     try {

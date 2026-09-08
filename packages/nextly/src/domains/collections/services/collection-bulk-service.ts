@@ -135,6 +135,61 @@ function failureFromThrown(
 }
 
 /**
+ * The most specific message an error carries, for operator logs that must
+ * name WHAT failed. NextlyError keeps its own message public-facing and
+ * moves the operational detail onto the cause chain, so this reads the
+ * deepest cause's message and falls back to the thrown message. Cause
+ * graphs are arbitrary — a driver can hand back a cycle — so the walk
+ * tracks the errors it has visited rather than trusting the chain to end.
+ */
+function detailedErrorMessage(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const visited = new Set<Error>();
+  let message = error.message;
+  let cause: Error | undefined = error;
+  while (cause.cause instanceof Error && !visited.has(cause.cause)) {
+    visited.add(cause.cause);
+    cause = cause.cause;
+    message = cause.message;
+  }
+  return message;
+}
+
+/**
+ * The message returned accounting may carry. A typed NextlyError
+ * contributes its public envelope message; anything untyped gets the
+ * generic message, because a bare error carries no public contract — its
+ * message or cause may be raw driver text with hostnames or credentials,
+ * which belongs in the operator log alone.
+ */
+function batchErrorMessage(error: unknown): string {
+  if (NextlyError.is(error)) return error.publicMessage;
+  return "An unexpected error occurred.";
+}
+
+/**
+ * Rebuild a rolled-back delete's accounting as exactly one error per
+ * requested id, in index order. The per-id invariant is asserted here
+ * rather than assumed of the accounting: the rebuild is the last stop
+ * before the result, and `errors` exceeding one entry per id would give
+ * a client duplicate detail and disagree with `failed`.
+ */
+function rebuildRolledBackDeleteErrors(
+  state: LegacyBatchState,
+  ids: string[],
+  rollbackNote: string
+): void {
+  const byIndex = new Map<number, string>();
+  for (const e of state.errors) {
+    if (!byIndex.has(e.index)) byIndex.set(e.index, e.error);
+  }
+  state.errors = [];
+  for (let i = 0; i < ids.length; i += 1) {
+    state.errors.push({ index: i, error: byIndex.get(i) ?? rollbackNote });
+  }
+}
+
+/**
  * Partition Promise.allSettled outcomes into the canonical
  * BulkOperationResult shape.
  *
@@ -188,6 +243,221 @@ function partitionOutcomes<T>(
       result.failedCount++;
     }
   });
+  return result;
+}
+
+// ============================================================
+// Legacy batch loop (createEntries / updateEntries / deleteEntries
+// and their InTransaction twins)
+// ============================================================
+
+/**
+ * One item's verdict inside a legacy batch loop, already normalized so the
+ * loop never has to know which worker shape produced it.
+ */
+type LegacyBatchVerdict =
+  | {
+      ok: true;
+      id: string;
+      eventRecorded?: boolean;
+      revalidationIntent?: RevalidationIntent;
+    }
+  | {
+      ok: false;
+      message: string;
+      eventRecorded?: boolean;
+      revalidationIntent?: RevalidationIntent;
+    };
+
+/**
+ * The accounting one legacy batch accumulates while its items run. Carried as
+ * one mutable object so a mid-loop throw (stopOnError, an integrity abort)
+ * leaves the partial state the surrounding envelope's rollback rewrite reads.
+ */
+interface LegacyBatchState {
+  successful: number;
+  failed: number;
+  ids: string[];
+  errors: Array<{ index: number; error: string }>;
+  /**
+   * Tri-state like the public field: unset until an item records, true once
+   * one has, false after a rollback clears it.
+   */
+  eventRecorded: boolean | undefined;
+  /** Every committed item's intent, including committed-then-failed ones. */
+  intents: RevalidationIntent[];
+  /** Set when the operation's abort policy fired on a thrown error. */
+  integrityAbort: boolean;
+}
+
+function newLegacyBatchState(): LegacyBatchState {
+  return {
+    successful: 0,
+    failed: 0,
+    ids: [],
+    errors: [],
+    eventRecorded: undefined,
+    intents: [],
+    integrityAbort: false,
+  };
+}
+
+/**
+ * The batch options every legacy entry point accepts, defaulted — one
+ * decision shared by all six methods rather than six identical destructures.
+ */
+function batchOptions(options?: BulkOperationOptions): {
+  batchSize: number;
+  stopOnError: boolean;
+  skipHooks: boolean;
+} {
+  const {
+    batchSize = 100,
+    stopOnError = false,
+    skipHooks = false,
+  } = options ?? {};
+  // A size that cannot advance the slice window (zero or negative) would
+  // pin the loop, and a fractional one slices overlapping batches. The
+  // option is developer configuration, so the refusal names the value it
+  // received.
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw NextlyError.invalidInput({
+      message: `batchSize must be a positive whole number, received ${batchSize}.`,
+    });
+  }
+  return { batchSize, stopOnError, skipHooks };
+}
+
+/**
+ * Run ONE item of a legacy batch: normalize the worker's verdict into the
+ * shared accounting, and decide from the policies whether the batch may
+ * continue. Throws to abort the surrounding transaction — never returns a
+ * signal — so the caller's rollback rewrite is the only place an abort is
+ * interpreted.
+ *
+ * The two subtle rules the six hand-rolled loops encoded live here once: an
+ * item's outbox signal and revalidation intent are collected whether it is
+ * reported a success or a committed-then-failed failure, and a returned
+ * failure under stopOnError throws so the surrounding transaction rolls
+ * back — recorded ONCE, because the abort is thrown outside the catch that
+ * accounts for worker throws; counting the wrapper as well would report a
+ * single returned failure as two.
+ *
+ * `abortOnError` is the operation's own policy for THROWN errors: create and
+ * update re-throw only marked write-integrity failures, delete treats every
+ * throw as one (the snapshot it builds is the last record of the row).
+ */
+async function runLegacyBatchItem<TItem>(
+  index: number,
+  item: TItem,
+  options: { stopOnError: boolean },
+  state: LegacyBatchState,
+  worker: (item: TItem) => Promise<LegacyBatchVerdict>,
+  abortOnError: (error: unknown) => boolean
+): Promise<void> {
+  let verdict: LegacyBatchVerdict;
+  try {
+    verdict = await worker(item);
+  } catch (error: unknown) {
+    state.failed++;
+    // Returned accounting carries only what the error's public contract
+    // allows: a typed NextlyError's envelope message, never the driver
+    // detail riding its cause.
+    state.errors.push({
+      index,
+      error:
+        error instanceof Error
+          ? batchErrorMessage(error)
+          : "Unknown error occurred",
+    });
+
+    if (abortOnError(error)) {
+      state.integrityAbort = true;
+      throw error;
+    }
+
+    if (options.stopOnError) {
+      throw error;
+    }
+    return;
+  }
+
+  if (verdict.revalidationIntent) {
+    state.intents.push(verdict.revalidationIntent);
+  }
+  if (verdict.eventRecorded) state.eventRecorded = true;
+
+  if (verdict.ok) {
+    state.successful++;
+    state.ids.push(verdict.id);
+    return;
+  }
+
+  state.failed++;
+  state.errors.push({ index, error: verdict.message });
+
+  if (options.stopOnError) {
+    // A typed internal failure: a returned worker failure may be a hook,
+    // access, or server problem rather than caller input, so the public
+    // message stays generic and the per-index detail rides the cause,
+    // which the wire never serializes. The item above is already recorded
+    // once — this throw is the transaction's abort signal, not a second
+    // failure of the same item, so nothing records it on the way out.
+    throw NextlyError.internal({
+      cause: new Error(`Entry at index ${index} failed: ${verdict.message}`),
+    });
+  }
+}
+
+/**
+ * The per-item loop every legacy batch method shares: iterate the items in
+ * batchSize slices and hand each to `runLegacyBatchItem`. Everything around
+ * it — opening (or not) a transaction, pre-resolving authorization and
+ * readiness, and the rollback rewrite — stays with each method.
+ */
+async function runLegacyBatch<TItem>(
+  tx: TransactionContext,
+  items: TItem[],
+  options: { batchSize: number; stopOnError: boolean },
+  state: LegacyBatchState,
+  worker: (item: TItem) => Promise<LegacyBatchVerdict>,
+  abortOnError: (error: unknown) => boolean
+): Promise<void> {
+  for (let i = 0; i < items.length; i += options.batchSize) {
+    const batch = items.slice(i, Math.min(i + options.batchSize, items.length));
+
+    for (let j = 0; j < batch.length; j++) {
+      await runLegacyBatchItem(
+        i + j,
+        batch[j],
+        options,
+        state,
+        worker,
+        abortOnError
+      );
+    }
+  }
+}
+
+/**
+ * Project a run's accounting onto the public batch shape. The projection, not
+ * the callers, owns which optional fields are present: `eventRecorded` and
+ * `revalidationIntents` appear only when the run set them, matching the
+ * field-by-field presence the six methods produced before the loop was shared.
+ */
+function toBatchResult(state: LegacyBatchState): BatchOperationResult {
+  const result: BatchOperationResult = {
+    successful: state.successful,
+    failed: state.failed,
+    ids: state.ids,
+    errors: state.errors,
+  };
+  if (state.eventRecorded !== undefined) {
+    result.eventRecorded = state.eventRecorded;
+  }
+  if (state.intents.length > 0) {
+    result.revalidationIntents = state.intents;
+  }
   return result;
 }
 
@@ -996,24 +1266,12 @@ export class CollectionBulkService extends BaseService {
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const {
-      batchSize = 100,
-      stopOnError = false,
-      skipHooks = false,
-    } = options ?? {};
-
-    // Initialize result tracking
-    const result: BatchOperationResult = {
-      successful: 0,
-      failed: 0,
-      errors: [],
-      ids: [],
-    };
-
-    // Early return for empty input
+    // Early return for empty input before batch options validation
     if (entries.length === 0) {
-      return result;
+      return { successful: 0, failed: 0, errors: [], ids: [] };
     }
+
+    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
 
     // 1. Check collection-level access FIRST (once for all entries).
     // `overrideAccess` (D35 system elevation) bypasses the check — mirrors the
@@ -1066,144 +1324,42 @@ export class CollectionBulkService extends BaseService {
     // outbound event would silently omit every localized component value.
     await this.mutationService.warmLocalizedReadiness(params.collectionName);
 
-    // The revalidation intents of every committed create, applied to the result
-    // only after the shared transaction commits — a rollback undoes every insert.
-    const collectedIntents: RevalidationIntent[] = [];
-    // Set inside the transaction when a marked capture/recording failure forced
-    // the rollback. Tracked on a flag rather than re-checked on the caught error
-    // because the adapter re-wraps the error as it aborts the transaction, so the
-    // integrity mark (by object identity) is not visible on the outer catch.
-    let integrityRollback = false;
-    // Process all entries within a single transaction
+    // The shared batch loop accumulates into one mutable state so the rollback
+    // rewrite below can read the partial accounting a mid-batch abort leaves
+    // behind.
+    const state = newLegacyBatchState();
     try {
       await this.adapter.transaction(async tx => {
-        // Process in batches for memory efficiency
-        for (let i = 0; i < entries.length; i += batchSize) {
-          const batch = entries.slice(
-            i,
-            Math.min(i + batchSize, entries.length)
-          );
-
-          // Process each entry in the batch
-          for (let j = 0; j < batch.length; j++) {
-            const entryIndex = i + j;
-            const entryData = batch[j];
-
-            try {
-              // Create entry using transaction method
-              const createResult =
-                await this.mutationService.createSingleEntryInTransaction(
-                  tx,
-                  { ...params, transitionAuth },
-                  entryData,
-                  skipHooks
-                );
-
-              // Collect regardless of success: the worker sets an intent only
-              // once the row was written, so a committed item whose after-hook
-              // then threw (returning success:false) still busts its tags.
-              if (createResult.revalidationIntent) {
-                collectedIntents.push(createResult.revalidationIntent);
-              }
-              // Aggregate the outbox signal so the wrapper drains only when at
-              // least one item actually recorded — a batch of only opted-out
-              // (`webhooks: false`) creates records nothing and owes no drain.
-              if (createResult.eventRecorded) result.eventRecorded = true;
-              if (createResult.success && createResult.data) {
-                result.successful++;
-                result.ids.push(
-                  (createResult.data as Record<string, unknown>).id as string
-                );
-              } else {
-                result.failed++;
-                result.errors.push({
-                  index: entryIndex,
-                  error: createResult.message,
-                });
-
-                // If stopOnError, throw to trigger transaction rollback
-                if (stopOnError) {
-                  throw new Error(
-                    `Entry at index ${entryIndex} failed: ${createResult.message}`
-                  );
-                }
-              }
-            } catch (error: unknown) {
-              // A post-write capture/recording failure is marked to abort the
-              // whole batch: the row is already inserted on this shared
-              // transaction with no per-item savepoint, so continuing would
-              // commit it without its version/event. Re-throw regardless of
-              // stopOnError so the transaction rolls back; record it on a flag
-              // the outer catch reads (the error is re-wrapped by then).
-              if (isWriteIntegrityFailure(error)) {
-                integrityRollback = true;
-                throw error;
-              }
-              // Handle unexpected errors during entry creation
-              result.failed++;
-              result.errors.push({
-                index: entryIndex,
-                error:
-                  error instanceof Error
-                    ? error.message
-                    : "Unknown error occurred",
-              });
-
-              if (stopOnError) {
-                throw error; // Re-throw to trigger transaction rollback
-              }
-            }
-          }
-        }
+        await this.runCreateBatch(
+          tx,
+          params,
+          transitionAuth,
+          entries,
+          { batchSize, stopOnError, skipHooks },
+          state
+        );
       });
-      // Reached only when the transaction committed, so the collected intents
-      // describe rows that actually persist.
-      if (collectedIntents.length > 0) {
-        result.revalidationIntents = collectedIntents;
-      }
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case). Any outbox events an
       // item recorded before the abort were rolled back too, so clear the
-      // aggregated flag unconditionally — even when the first item recorded and
-      // aborted before ANY item was counted successful, so the wrapper never
-      // drains for events that never committed.
-      result.eventRecorded = false;
-      if (integrityRollback) {
-        // A marked capture/recording failure forced a full rollback even under
-        // the default stopOnError:false: nothing persisted, so report EVERY
-        // requested item as failed (not just the triggering one) and drop any
-        // provisional successes, keeping successful + failed === entries.length.
-        this.logger.warn("Bulk create rolled back", {
-          collectionName: params.collectionName,
-          successfulBeforeRollback: result.successful,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        result.successful = 0;
-        result.ids = [];
-        result.failed = entries.length;
-        // One error per requested index (not a single sentinel): the public
-        // BatchOperationResult contract maps errors to input indices, and every
-        // input was rolled back. Use a generic message — the raw operational
-        // error (a missing table, a component-registry failure) is logged above,
-        // never surfaced to the caller.
-        const message = "The write could not be completed and was rolled back.";
-        result.errors = entries.map((_, index) => ({ index, error: message }));
-      } else if (stopOnError && result.successful > 0) {
-        this.logger.warn("Bulk create rolled back due to stopOnError", {
-          collectionName: params.collectionName,
-          successfulBeforeRollback: result.successful,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        // Clear successful entries since they were rolled back
-        const rolledBackCount = result.successful;
-        result.successful = 0;
-        result.ids = [];
-        // Add rollback info to first error
-        if (result.errors.length > 0) {
-          result.errors[0].error += ` (${rolledBackCount} successful entries were rolled back)`;
-        }
-      }
+      // aggregated signal unconditionally — even when the first item recorded
+      // and aborted before ANY item was counted successful, so the wrapper
+      // never drains for events that never committed. The same is true of the
+      // collected intents: a rolled-back row's tags must not be busted.
+      state.eventRecorded = false;
+      state.intents.length = 0;
+      this.rewriteCreateUpdateRollback(
+        state,
+        entries,
+        stopOnError,
+        params.collectionName,
+        "Bulk create",
+        error
+      );
     }
+    // Reached with a committed transaction when the catch was skipped, so the
+    // collected intents describe rows that actually persist.
+    const result = toBatchResult(state);
 
     this.logger.info("Bulk create completed", {
       collectionName: params.collectionName,
@@ -1261,24 +1417,12 @@ export class CollectionBulkService extends BaseService {
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const {
-      batchSize = 100,
-      stopOnError = false,
-      skipHooks = false,
-    } = options ?? {};
-
-    // Initialize result tracking
-    const result: BatchOperationResult = {
-      successful: 0,
-      failed: 0,
-      errors: [],
-      ids: [],
-    };
-
-    // Early return for empty input
+    // Early return for empty input before batch options validation
     if (entries.length === 0) {
-      return result;
+      return { successful: 0, failed: 0, errors: [], ids: [] };
     }
+
+    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
 
     // 1. Check collection-level access FIRST (once for all entries). This runs
     // inside the caller's transaction, so the RBAC/metadata reads are bound to
@@ -1322,76 +1466,20 @@ export class CollectionBulkService extends BaseService {
         executor: tx.getDrizzle(),
       });
 
-    // Process in batches for memory efficiency
-    for (let i = 0; i < entries.length; i += batchSize) {
-      const batch = entries.slice(i, Math.min(i + batchSize, entries.length));
+    // The shared batch loop. The intents and outbox signal it accumulates are
+    // surfaced on the result for the CALLER to flush after ITS commit (as it
+    // does for the webhook drain) — this method cannot flush pre-commit.
+    const state = newLegacyBatchState();
+    await this.runCreateBatch(
+      tx,
+      params,
+      transitionAuth,
+      entries,
+      { batchSize, stopOnError, skipHooks },
+      state
+    );
 
-      // Process each entry in the batch
-      for (let j = 0; j < batch.length; j++) {
-        const entryIndex = i + j;
-        const entryData = batch[j];
-
-        try {
-          const createResult =
-            await this.mutationService.createSingleEntryInTransaction(
-              tx,
-              { ...params, transitionAuth },
-              entryData,
-              skipHooks
-            );
-
-          // Surface the worker's intent on the result regardless of success (set
-          // only once the row was written). The caller owns the transaction, so
-          // it flushes these after IT commits (as it does for the webhook drain)
-          // — this method cannot flush pre-commit.
-          if (createResult.revalidationIntent) {
-            (result.revalidationIntents ??= []).push(
-              createResult.revalidationIntent
-            );
-          }
-          // Aggregate the outbox signal (set even on a committed-but-hook-failed
-          // item) so the caller offers the post-commit fast drain, matching the
-          // update-in-transaction loop; a batch that recorded nothing owes none.
-          if (createResult.eventRecorded) result.eventRecorded = true;
-          if (createResult.success && createResult.data) {
-            result.successful++;
-            result.ids.push(
-              (createResult.data as Record<string, unknown>).id as string
-            );
-          } else {
-            result.failed++;
-            result.errors.push({
-              index: entryIndex,
-              error: createResult.message,
-            });
-
-            if (stopOnError) {
-              throw new Error(
-                `Entry at index ${entryIndex} failed: ${createResult.message}`
-              );
-            }
-          }
-        } catch (error: unknown) {
-          // A post-write capture/recording failure is marked to abort the whole
-          // batch: the row is already written on the caller's shared transaction
-          // with no per-item savepoint, so continuing would commit it without its
-          // version/event. Re-throw regardless of stopOnError.
-          if (isWriteIntegrityFailure(error)) throw error;
-          result.failed++;
-          result.errors.push({
-            index: entryIndex,
-            error:
-              error instanceof Error ? error.message : "Unknown error occurred",
-          });
-
-          if (stopOnError) {
-            throw error; // Caller's transaction will be rolled back
-          }
-        }
-      }
-    }
-
-    return result;
+    return toBatchResult(state);
   }
 
   /**
@@ -1444,24 +1532,12 @@ export class CollectionBulkService extends BaseService {
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const {
-      batchSize = 100,
-      stopOnError = false,
-      skipHooks = false,
-    } = options ?? {};
-
-    // Initialize result tracking
-    const result: BatchOperationResult = {
-      successful: 0,
-      failed: 0,
-      errors: [],
-      ids: [],
-    };
-
-    // Early return for empty input
+    // Early return for empty input before batch options validation
     if (entries.length === 0) {
-      return result;
+      return { successful: 0, failed: 0, errors: [], ids: [] };
     }
+
+    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
 
     // 1. Check collection-level access FIRST (once for all entries)
     // Note: For update, we check access without document since we don't have it yet
@@ -1513,142 +1589,41 @@ export class CollectionBulkService extends BaseService {
     // its outbound event would silently omit every localized component value.
     await this.mutationService.warmLocalizedReadiness(params.collectionName);
 
-    // The revalidation intents of every committed update, applied only after the
-    // shared transaction commits — a rollback undoes every update.
-    const collectedIntents: RevalidationIntent[] = [];
-    // Set inside the transaction when a marked capture/recording failure forced
-    // the rollback. Tracked on a flag rather than re-checked on the caught error
-    // because the adapter re-wraps the error as it aborts the transaction, so the
-    // integrity mark (by object identity) is not visible on the outer catch.
-    let integrityRollback = false;
-    // Process all entries within a single transaction
+    // The shared batch loop accumulates into one mutable state so the rollback
+    // rewrite below can read the partial accounting a mid-batch abort leaves
+    // behind.
+    const state = newLegacyBatchState();
     try {
       await this.adapter.transaction(async tx => {
-        // Process in batches for memory efficiency
-        for (let i = 0; i < entries.length; i += batchSize) {
-          const batch = entries.slice(
-            i,
-            Math.min(i + batchSize, entries.length)
-          );
-
-          // Process each entry in the batch
-          for (let j = 0; j < batch.length; j++) {
-            const entryIndex = i + j;
-            const { id, data } = batch[j];
-
-            try {
-              // Update entry using transaction method
-              const updateResult =
-                await this.mutationService.updateSingleEntryInTransaction(
-                  tx,
-                  { ...params, transitionAuth },
-                  id,
-                  data,
-                  skipHooks
-                );
-
-              // Collect regardless of success: the worker sets an intent only
-              // once the row was updated, so a committed item whose after-hook
-              // then threw (returning success:false) still busts its tags.
-              if (updateResult.revalidationIntent) {
-                collectedIntents.push(updateResult.revalidationIntent);
-              }
-              // Aggregate the outbox signal (see the batch-create loop).
-              if (updateResult.eventRecorded) result.eventRecorded = true;
-              if (updateResult.success && updateResult.data) {
-                result.successful++;
-                result.ids.push(
-                  (updateResult.data as Record<string, unknown>).id as string
-                );
-              } else {
-                result.failed++;
-                result.errors.push({
-                  index: entryIndex,
-                  error: updateResult.message,
-                });
-
-                // If stopOnError, throw to trigger transaction rollback
-                if (stopOnError) {
-                  throw new Error(
-                    `Entry at index ${entryIndex} failed: ${updateResult.message}`
-                  );
-                }
-              }
-            } catch (error: unknown) {
-              // A post-write capture/recording failure is marked to abort the
-              // whole batch: the row is already updated on this shared
-              // transaction with no per-item savepoint, so continuing would
-              // commit it without its version/event. Re-throw regardless of
-              // stopOnError so the transaction rolls back; record it on a flag
-              // the outer catch reads (the error is re-wrapped by then).
-              if (isWriteIntegrityFailure(error)) {
-                integrityRollback = true;
-                throw error;
-              }
-              // Handle unexpected errors during entry update
-              result.failed++;
-              result.errors.push({
-                index: entryIndex,
-                error:
-                  error instanceof Error
-                    ? error.message
-                    : "Unknown error occurred",
-              });
-
-              if (stopOnError) {
-                throw error; // Re-throw to trigger transaction rollback
-              }
-            }
-          }
-        }
+        await this.runUpdateBatch(
+          tx,
+          params,
+          transitionAuth,
+          entries,
+          { batchSize, stopOnError, skipHooks },
+          state
+        );
       });
-      // Reached only when the transaction committed, so the collected intents
-      // describe rows that actually persist.
-      if (collectedIntents.length > 0) {
-        result.revalidationIntents = collectedIntents;
-      }
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case). Clear the aggregated
-      // outbox flag unconditionally — an item can record before the abort even
+      // outbox signal unconditionally — an item can record before the abort even
       // when none is counted successful — so the wrapper never drains for events
-      // that never committed.
-      result.eventRecorded = false;
-      if (integrityRollback) {
-        // A marked capture/recording failure forced a full rollback even under
-        // the default stopOnError:false: nothing persisted, so report EVERY
-        // requested item as failed (not just the triggering one) and drop any
-        // provisional successes, keeping successful + failed === entries.length.
-        this.logger.warn("Bulk update rolled back", {
-          collectionName: params.collectionName,
-          successfulBeforeRollback: result.successful,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        result.successful = 0;
-        result.ids = [];
-        result.failed = entries.length;
-        // One error per requested index (not a single sentinel): the public
-        // BatchOperationResult contract maps errors to input indices, and every
-        // input was rolled back. Use a generic message — the raw operational
-        // error (a missing table, a component-registry failure) is logged above,
-        // never surfaced to the caller.
-        const message = "The write could not be completed and was rolled back.";
-        result.errors = entries.map((_, index) => ({ index, error: message }));
-      } else if (stopOnError && result.successful > 0) {
-        this.logger.warn("Bulk update rolled back due to stopOnError", {
-          collectionName: params.collectionName,
-          successfulBeforeRollback: result.successful,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        // Clear successful entries since they were rolled back
-        const rolledBackCount = result.successful;
-        result.successful = 0;
-        result.ids = [];
-        // Add rollback info to first error
-        if (result.errors.length > 0) {
-          result.errors[0].error += ` (${rolledBackCount} successful entries were rolled back)`;
-        }
-      }
+      // that never committed. The collected intents go with it: a rolled-back
+      // row's tags must not be busted.
+      state.eventRecorded = false;
+      state.intents.length = 0;
+      this.rewriteCreateUpdateRollback(
+        state,
+        entries,
+        stopOnError,
+        params.collectionName,
+        "Bulk update",
+        error
+      );
     }
+    // Reached with a committed transaction when the catch was skipped, so the
+    // collected intents describe rows that actually persist.
+    const result = toBatchResult(state);
 
     this.logger.info("Bulk update completed", {
       collectionName: params.collectionName,
@@ -1705,24 +1680,12 @@ export class CollectionBulkService extends BaseService {
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const {
-      batchSize = 100,
-      stopOnError = false,
-      skipHooks = false,
-    } = options ?? {};
-
-    // Initialize result tracking
-    const result: BatchOperationResult = {
-      successful: 0,
-      failed: 0,
-      errors: [],
-      ids: [],
-    };
-
-    // Early return for empty input
+    // Early return for empty input before batch options validation
     if (entries.length === 0) {
-      return result;
+      return { successful: 0, failed: 0, errors: [], ids: [] };
     }
+
+    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
 
     // 1. Check collection-level access FIRST (once for all entries). This runs
     // inside the caller's transaction, so the RBAC/metadata reads are bound to
@@ -1766,73 +1729,20 @@ export class CollectionBulkService extends BaseService {
         executor: tx.getDrizzle(),
       });
 
-    // Process in batches for memory efficiency
-    for (let i = 0; i < entries.length; i += batchSize) {
-      const batch = entries.slice(i, Math.min(i + batchSize, entries.length));
+    // The shared batch loop. The intents and outbox signal it accumulates are
+    // surfaced on the result for the CALLER to flush after ITS commit — this
+    // method cannot flush pre-commit.
+    const state = newLegacyBatchState();
+    await this.runUpdateBatch(
+      tx,
+      params,
+      transitionAuth,
+      entries,
+      { batchSize, stopOnError, skipHooks },
+      state
+    );
 
-      // Process each entry in the batch
-      for (let j = 0; j < batch.length; j++) {
-        const entryIndex = i + j;
-        const { id, data } = batch[j];
-
-        try {
-          const updateResult =
-            await this.mutationService.updateSingleEntryInTransaction(
-              tx,
-              { ...params, transitionAuth },
-              id,
-              data,
-              skipHooks
-            );
-
-          // Surface the worker's intent regardless of success (set only once the
-          // row was updated); the caller flushes it after committing its tx.
-          if (updateResult.revalidationIntent) {
-            (result.revalidationIntents ??= []).push(
-              updateResult.revalidationIntent
-            );
-          }
-          // Aggregate the outbox signal (see the batch-create loop).
-          if (updateResult.eventRecorded) result.eventRecorded = true;
-          if (updateResult.success && updateResult.data) {
-            result.successful++;
-            result.ids.push(
-              (updateResult.data as Record<string, unknown>).id as string
-            );
-          } else {
-            result.failed++;
-            result.errors.push({
-              index: entryIndex,
-              error: updateResult.message,
-            });
-
-            if (stopOnError) {
-              throw new Error(
-                `Entry at index ${entryIndex} failed: ${updateResult.message}`
-              );
-            }
-          }
-        } catch (error: unknown) {
-          // A post-write capture/recording failure is marked to abort the whole
-          // batch: the row is already written on the caller's shared transaction
-          // with no per-item savepoint, so continuing would commit it without its
-          // version/event. Re-throw regardless of stopOnError.
-          if (isWriteIntegrityFailure(error)) throw error;
-          result.failed++;
-          result.errors.push({
-            index: entryIndex,
-            error:
-              error instanceof Error ? error.message : "Unknown error occurred",
-          });
-
-          if (stopOnError) {
-            throw error; // Caller's transaction will be rolled back
-          }
-        }
-      }
-    }
-
-    return result;
+    return toBatchResult(state);
   }
 
   /**
@@ -1883,24 +1793,12 @@ export class CollectionBulkService extends BaseService {
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const {
-      batchSize = 100,
-      stopOnError = false,
-      skipHooks = false,
-    } = options ?? {};
-
-    // Initialize result tracking
-    const result: BatchOperationResult = {
-      successful: 0,
-      failed: 0,
-      errors: [],
-      ids: [],
-    };
-
-    // Early return for empty input
+    // Early return for empty input before batch options validation
     if (ids.length === 0) {
-      return result;
+      return { successful: 0, failed: 0, errors: [], ids: [] };
     }
+
+    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
 
     // 1. Check collection-level access FIRST (once for all entries)
     // Note: For delete, we check access without document since we don't have it yet
@@ -1931,92 +1829,26 @@ export class CollectionBulkService extends BaseService {
     // there will ever be — would silently omit every localized component value.
     await this.mutationService.warmLocalizedReadiness(params.collectionName);
 
-    // Whether any item appended an outbox event in the shared transaction. Read
-    // back onto the result only after the transaction commits (below), so a
-    // rollback — which undoes every delete and its event — never reports a
-    // durable event that isn't there.
-    let anyRecorded = false;
-    // The revalidation intents of every committed delete, applied to the result
-    // only after the shared transaction commits (below) — a rollback undoes every
-    // delete, so its tags must not be busted.
-    const collectedIntents: RevalidationIntent[] = [];
-    // Process all entries within a single transaction
+    // The shared batch loop accumulates into one mutable state so the rollback
+    // rewrite below can read the partial accounting a mid-batch abort leaves
+    // behind.
+    const state = newLegacyBatchState();
+    let callbackThrew = false;
     try {
       await this.adapter.transaction(async tx => {
-        // Process in batches for memory efficiency
-        for (let i = 0; i < ids.length; i += batchSize) {
-          const batch = ids.slice(i, Math.min(i + batchSize, ids.length));
-
-          // Process each entry in the batch
-          for (let j = 0; j < batch.length; j++) {
-            const entryIndex = i + j;
-            const entryId = batch[j];
-
-            try {
-              // Delete entry using transaction method
-              const deleteResult =
-                await this.mutationService.deleteSingleEntryInTransaction(
-                  tx,
-                  params,
-                  entryId,
-                  skipHooks
-                );
-              // A committed item owes a delivery even if its afterDelete hook
-              // then threw (returned success:false).
-              if (deleteResult.eventRecorded) anyRecorded = true;
-              if (deleteResult.revalidationIntent) {
-                collectedIntents.push(deleteResult.revalidationIntent);
-              }
-
-              // Aggregate the outbox signal (see the batch-create loop).
-              if (deleteResult.eventRecorded) result.eventRecorded = true;
-              if (deleteResult.success) {
-                result.successful++;
-                result.ids.push(entryId);
-              } else {
-                result.failed++;
-                result.errors.push({
-                  index: entryIndex,
-                  error: deleteResult.message,
-                });
-
-                // If stopOnError, throw to trigger transaction rollback
-                if (stopOnError) {
-                  throw new Error(
-                    `Entry at index ${entryIndex} failed: ${deleteResult.message}`
-                  );
-                }
-              }
-            } catch (error: unknown) {
-              // A THROWN error (as opposed to a returned {success:false}) is
-              // unexpected and may have left a partial write in this SHARED
-              // transaction — e.g. the row was deleted but its entry.deleted
-              // outbox event failed to insert. A shared transaction cannot
-              // partially roll back, so committing would break the outbox
-              // guarantee (a delete with no event). Abort the whole batch rather
-              // than soft-failing this item and committing the rest. Expected
-              // per-item failures (access denied, not found) are RETURNED above,
-              // not thrown, so partial success is unaffected.
-              result.failed++;
-              result.errors.push({
-                index: entryIndex,
-                error:
-                  error instanceof Error
-                    ? error.message
-                    : "Unknown error occurred",
-              });
-
-              throw error; // Roll the whole batch back.
-            }
-          }
+        try {
+          await this.runDeleteBatch(
+            tx,
+            params,
+            ids,
+            { batchSize, stopOnError, skipHooks },
+            state
+          );
+        } catch (innerError) {
+          callbackThrew = true;
+          throw innerError;
         }
       });
-      // The transaction committed (this line is skipped if it rejected), so any
-      // events it recorded are durable; surface that for the post-write drain.
-      result.eventRecorded = anyRecorded;
-      if (collectedIntents.length > 0) {
-        result.revalidationIntents = collectedIntents;
-      }
     } catch (error: unknown) {
       // The shared transaction rolled back — either stopOnError tripped on a
       // returned failure, or an unexpected error (e.g. a failed outbox insert
@@ -2024,36 +1856,44 @@ export class CollectionBulkService extends BaseService {
       // was undone, so nothing committed: report ALL requested ids as failed
       // (not just those processed before the abort) and surface the batch error,
       // so a caller is not told 0 succeeded / 1 failed for a 3-id request.
-      const rolledBackCount = result.successful;
-      if (rolledBackCount > 0) {
-        this.logger.warn("Bulk delete rolled back", {
-          collectionName: params.collectionName,
-          successfulBeforeRollback: rolledBackCount,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-      result.successful = 0;
-      result.ids = [];
-      result.failed = ids.length;
+      const rolledBackCount = state.successful;
+      this.logger.warn("Bulk delete rolled back", {
+        collectionName: params.collectionName,
+        successfulBeforeRollback: rolledBackCount,
+        error: detailedErrorMessage(error),
+      });
+      state.successful = 0;
+      state.ids = [];
+      state.failed = ids.length;
       // The rolled-back deletes recorded no committed events, so clear the
-      // aggregated flag to keep the wrapper from draining uncommitted events.
-      result.eventRecorded = false;
-      const batchError = error instanceof Error ? error.message : String(error);
-      const rollbackNote = `Batch rolled back; no entries were deleted: ${batchError}`;
-      // Rebuild errors as exactly one entry per requested id, in index order.
-      // A `stopOnError` returned-failure pushes both the item error and a thrown
-      // wrapper for the same index, so dedupe (first wins) before filling the
-      // rolled-back ids that had no entry — otherwise `errors` would exceed
-      // `failed` and give a client duplicate detail for one id.
-      const byIndex = new Map<number, string>();
-      for (const e of result.errors) {
-        if (!byIndex.has(e.index)) byIndex.set(e.index, e.error);
+      // aggregated signal to keep the wrapper from draining uncommitted events;
+      // their intents go with them — an undone delete busts no tags.
+      state.eventRecorded = false;
+      state.intents.length = 0;
+      // When the transaction callback itself threw (stopOnError or worker throw),
+      // the aborting failure is the highest-index error recorded by the loop.
+      // If the callback completed normally and the transaction failed on COMMIT,
+      // the batch rolled back due to the commit failure rather than a historical
+      // soft failure, so report the caught transaction error instead.
+      const firstRecord = state.errors[0];
+      let aborting = callbackThrew ? firstRecord : undefined;
+      if (aborting !== undefined) {
+        for (const e of state.errors) {
+          if (e.index > aborting.index) aborting = e;
+        }
       }
-      result.errors = [];
-      for (let i = 0; i < ids.length; i += 1) {
-        result.errors.push({ index: i, error: byIndex.get(i) ?? rollbackNote });
-      }
+      const abortDetail =
+        aborting !== undefined
+          ? `Entry at index ${aborting.index} failed: ${aborting.error}`
+          : batchErrorMessage(error);
+      const rollbackNote = `Batch rolled back; no entries were deleted: ${abortDetail}`;
+      rebuildRolledBackDeleteErrors(state, ids, rollbackNote);
     }
+    // Delete always reports the outbox signal, even when nothing recorded:
+    // the previous shape read its own flag back after commit (true) or after
+    // rollback (false), never left it absent.
+    state.eventRecorded = state.eventRecorded ?? false;
+    const result = toBatchResult(state);
 
     this.logger.info("Bulk delete completed", {
       collectionName: params.collectionName,
@@ -2111,24 +1951,12 @@ export class CollectionBulkService extends BaseService {
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const {
-      batchSize = 100,
-      stopOnError = false,
-      skipHooks = false,
-    } = options ?? {};
-
-    // Initialize result tracking
-    const result: BatchOperationResult = {
-      successful: 0,
-      failed: 0,
-      errors: [],
-      ids: [],
-    };
-
-    // Early return for empty input
+    // Early return for empty input before batch options validation
     if (ids.length === 0) {
-      return result;
+      return { successful: 0, failed: 0, errors: [], ids: [] };
     }
+
+    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
 
     // 1. Check collection-level access FIRST (once for all entries). This runs
     // inside the caller's transaction, so the RBAC/metadata reads are bound to
@@ -2159,67 +1987,241 @@ export class CollectionBulkService extends BaseService {
       };
     }
 
-    // Process in batches for memory efficiency
-    for (let i = 0; i < ids.length; i += batchSize) {
-      const batch = ids.slice(i, Math.min(i + batchSize, ids.length));
+    // The shared batch loop. The intents and outbox signal it accumulates are
+    // surfaced on the result for the CALLER to flush after ITS commit — this
+    // method cannot flush pre-commit.
+    const state = newLegacyBatchState();
+    await this.runDeleteBatch(
+      tx,
+      params,
+      ids,
+      { batchSize, stopOnError, skipHooks },
+      state
+    );
+    // Unlike the self-transaction twin, a caller-owned batch reports the
+    // outbox signal only when an item recorded one: the caller owns the
+    // commit, so absence — not a coerced false — is what it reads back.
+    return toBatchResult(state);
+  }
 
-      // Process each entry in the batch
-      for (let j = 0; j < batch.length; j++) {
-        const entryIndex = i + j;
-        const entryId = batch[j];
+  // ============================================================
+  // Per-operation batch workers — one loop per operation, called
+  // by both of its entry points
+  // ============================================================
 
-        try {
-          const deleteResult =
-            await this.mutationService.deleteSingleEntryInTransaction(
-              tx,
-              params,
-              entryId,
-              skipHooks
-            );
-
-          // Surface the worker's intent regardless of success (set only once the
-          // row was deleted); the caller flushes it after committing its tx.
-          if (deleteResult.revalidationIntent) {
-            (result.revalidationIntents ??= []).push(
-              deleteResult.revalidationIntent
-            );
-          }
-          // Aggregate the outbox signal (see the batch-create loop).
-          if (deleteResult.eventRecorded) result.eventRecorded = true;
-          if (deleteResult.success) {
-            result.successful++;
-            result.ids.push(entryId);
-          } else {
-            result.failed++;
-            result.errors.push({
-              index: entryIndex,
-              error: deleteResult.message,
-            });
-
-            if (stopOnError) {
-              throw new Error(
-                `Entry at index ${entryIndex} failed: ${deleteResult.message}`
-              );
-            }
-          }
-        } catch (error: unknown) {
-          // A THROWN error may have left a partial write in the CALLER'S
-          // transaction — e.g. a row deleted but its entry.deleted outbox event
-          // failed to insert. Propagate it so the caller's transaction rolls
-          // back rather than committing a delete with no event. Expected per-item
-          // failures are RETURNED above, not thrown, so partial success stands.
-          result.failed++;
-          result.errors.push({
-            index: entryIndex,
-            error:
-              error instanceof Error ? error.message : "Unknown error occurred",
-          });
-
-          throw error; // Caller's transaction will be rolled back.
+  /**
+   * Rewrite a self-transaction create/update batch's accounting after its
+   * transaction rolled back, shared by both operations — their rollback
+   * policies are one decision, differing only in the operation name their log
+   * lines carry. An integrity abort reports every requested item as failed
+   * with one generic error per index (the public contract maps errors to
+   * input indices, and the raw operational detail stays in the log); a
+   * stopOnError abort clears the provisional successes and annotates the
+   * first recorded error with how many were rolled back.
+   */
+  private rewriteCreateUpdateRollback(
+    state: LegacyBatchState,
+    items: unknown[],
+    stopOnError: boolean,
+    collectionName: string,
+    operationLabel: string,
+    error: unknown
+  ): void {
+    // Log lines name WHAT aborted the batch, so read the abort's cause
+    // chain: a typed NextlyError's own message is the wire-generic text.
+    const errorText = detailedErrorMessage(error);
+    if (state.integrityAbort) {
+      this.logger.warn(`${operationLabel} rolled back`, {
+        collectionName,
+        successfulBeforeRollback: state.successful,
+        error: errorText,
+      });
+      state.successful = 0;
+      state.ids = [];
+      state.failed = items.length;
+      const message = "The write could not be completed and was rolled back.";
+      state.errors = items.map((_, index) => ({ index, error: message }));
+    } else if (stopOnError) {
+      if (state.successful > 0) {
+        this.logger.warn(`${operationLabel} rolled back due to stopOnError`, {
+          collectionName,
+          successfulBeforeRollback: state.successful,
+          error: errorText,
+        });
+        const rolledBackCount = state.successful;
+        state.successful = 0;
+        state.ids = [];
+        if (state.errors.length > 0) {
+          state.errors[0].error += ` (${rolledBackCount} successful entries were rolled back)`;
         }
       }
+    } else {
+      this.logger.warn(`${operationLabel} rolled back`, {
+        collectionName,
+        successfulBeforeRollback: state.successful,
+        error: errorText,
+      });
+      state.successful = 0;
+      state.ids = [];
+      state.failed = items.length;
+      const message = batchErrorMessage(error);
+      state.errors = items.map((_, index) => ({ index, error: message }));
     }
+  }
 
-    return result;
+  /**
+   * The create batch's per-item worker and abort policy, shared by both entry
+   * points so the operation's loop exists exactly once. Only marked
+   * write-integrity failures abort a create batch; every other throw
+   * soft-fails its item unless stopOnError says otherwise.
+   */
+  private async runCreateBatch(
+    tx: TransactionContext,
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+      overrideAccess?: boolean;
+    },
+    transitionAuth: Awaited<
+      ReturnType<CollectionMutationService["resolveTransitionAuthorization"]>
+    >,
+    entries: Record<string, unknown>[],
+    options: { batchSize: number; stopOnError: boolean; skipHooks: boolean },
+    state: LegacyBatchState
+  ): Promise<void> {
+    await runLegacyBatch(
+      tx,
+      entries,
+      options,
+      state,
+      async entryData => {
+        const createResult =
+          await this.mutationService.createSingleEntryInTransaction(
+            tx,
+            { ...params, transitionAuth },
+            entryData,
+            options.skipHooks
+          );
+        return createResult.success && createResult.data
+          ? {
+              ok: true,
+              id: (createResult.data as Record<string, unknown>).id as string,
+              eventRecorded: createResult.eventRecorded,
+              revalidationIntent: createResult.revalidationIntent,
+            }
+          : {
+              ok: false,
+              message: createResult.message,
+              eventRecorded: createResult.eventRecorded,
+              revalidationIntent: createResult.revalidationIntent,
+            };
+      },
+      isWriteIntegrityFailure
+    );
+  }
+
+  /**
+   * The update batch's per-item worker and abort policy, shared by both entry
+   * points so the operation's loop exists exactly once. Only marked
+   * write-integrity failures abort an update batch; every other throw
+   * soft-fails its item unless stopOnError says otherwise.
+   */
+  private async runUpdateBatch(
+    tx: TransactionContext,
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
+    transitionAuth: Awaited<
+      ReturnType<CollectionMutationService["resolveTransitionAuthorization"]>
+    >,
+    entries: BulkUpdateEntry[],
+    options: { batchSize: number; stopOnError: boolean; skipHooks: boolean },
+    state: LegacyBatchState
+  ): Promise<void> {
+    await runLegacyBatch(
+      tx,
+      entries,
+      options,
+      state,
+      async ({ id, data }) => {
+        const updateResult =
+          await this.mutationService.updateSingleEntryInTransaction(
+            tx,
+            { ...params, transitionAuth },
+            id,
+            data,
+            options.skipHooks
+          );
+        return updateResult.success && updateResult.data
+          ? {
+              ok: true,
+              id: (updateResult.data as Record<string, unknown>).id as string,
+              eventRecorded: updateResult.eventRecorded,
+              revalidationIntent: updateResult.revalidationIntent,
+            }
+          : {
+              ok: false,
+              message: updateResult.message,
+              eventRecorded: updateResult.eventRecorded,
+              revalidationIntent: updateResult.revalidationIntent,
+            };
+      },
+      isWriteIntegrityFailure
+    );
+  }
+
+  /**
+   * The delete batch's per-item worker and abort policy, shared by both entry
+   * points so the operation's loop exists exactly once. A THROWN error (as
+   * opposed to a returned {success:false}) may have left a partial write in
+   * the shared transaction — e.g. the row was deleted but its entry.deleted
+   * outbox event failed to insert — so every throw aborts the batch. Expected
+   * per-item failures (access denied, not found) are RETURNED by the worker,
+   * not thrown, so partial success is unaffected.
+   */
+  private async runDeleteBatch(
+    tx: TransactionContext,
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      /** Who performed the delete, recorded on each entry's outbox event. */
+      actor?: RequestActor;
+    },
+    ids: string[],
+    options: { batchSize: number; stopOnError: boolean; skipHooks: boolean },
+    state: LegacyBatchState
+  ): Promise<void> {
+    await runLegacyBatch(
+      tx,
+      ids,
+      options,
+      state,
+      async entryId => {
+        const deleteResult =
+          await this.mutationService.deleteSingleEntryInTransaction(
+            tx,
+            params,
+            entryId,
+            options.skipHooks
+          );
+        return deleteResult.success
+          ? {
+              ok: true,
+              id: entryId,
+              eventRecorded: deleteResult.eventRecorded,
+              revalidationIntent: deleteResult.revalidationIntent,
+            }
+          : {
+              ok: false,
+              message: deleteResult.message,
+              eventRecorded: deleteResult.eventRecorded,
+              revalidationIntent: deleteResult.revalidationIntent,
+            };
+      },
+      () => true
+    );
   }
 }

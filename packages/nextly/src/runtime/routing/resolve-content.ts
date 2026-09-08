@@ -17,6 +17,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { TRUSTS_EVERY_COLLECTION } from "../../services/collections/trust-grant";
 import { cachedFind } from "../cache/cached-find";
 import { nextlyTags } from "../cache/nextly-tags";
+import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 
 import { markDynamic } from "./mark-dynamic";
 
@@ -603,6 +604,11 @@ export async function resolveContent(
     return read();
   }
 
+  // How long this read may live, bounded by the next scheduled release.
+  // Shared with the Single route, and resolving the adapter from the container
+  // rather than off the reader — see `release-cache-window`.
+  const cacheSeconds = await releaseBoundedRevalidate(options.revalidate);
+
   return cachedFind(read, {
     // Tag by the collection so any write to it makes this read fresh, plus any
     // caller-supplied tags (related collections a populated read depends on).
@@ -638,9 +644,6 @@ export async function resolveContent(
     // Trusted reads don't depend on an access decision, so tag-only busting is
     // safe; an explicit positive `revalidate` adds a time-based safety net, and
     // a non-positive value degrades to tag-only (`unstable_cache` rejects `0`).
-    revalidate:
-      typeof options.revalidate === "number" && options.revalidate > 0
-        ? options.revalidate
-        : false,
+    revalidate: cacheSeconds,
   });
 }

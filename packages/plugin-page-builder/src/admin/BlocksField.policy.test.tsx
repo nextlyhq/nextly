@@ -21,6 +21,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
 /** Props the recorders captured on the most recent render. */
 const seen: {
@@ -92,6 +93,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     InspectorPanel: record("inspector"),
     Canvas: record("canvas"),
     BlockKeyboardActions: passthrough,
+    /*
+     * Passed THROUGH, not stubbed to nothing: the canvas renders inside it, so
+     * a stub would take the recorder below out of the tree along with it. The
+     * real one reads the verbs context, which the passthrough above does not
+     * provide.
+     */
+    BlockContextMenu: passthrough,
     BlockToolbar: nothing,
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
@@ -105,7 +113,16 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       steps: [],
       dismiss: () => {},
     }),
-    useCanvasDrag: () => ({ handlers: {}, target: null }),
+    // `draggingBlockName` is part of the state this hook reports and is what
+    // the editor asks "is a drag happening" — a stub omitting it answers
+    // `undefined`, which is not `null`, so the editor hides its chrome for a
+    // drag that is not happening.
+    useCanvasDrag: () => ({
+      handlers: {},
+      target: null,
+      draggingId: null,
+      draggingBlockName: null,
+    }),
     useEditorState: () => ({
       document: { formatVersion: 1, kind: "page", nodes: [] },
       selectedId: null,
@@ -124,6 +141,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 });
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  /*
+   * Never awaited by these cases: the loader is reached only when an author
+   * double-clicks a passage, and none of them do. Present because the mock
+   * REPLACES the module wholesale, so an export the subject imports and this
+   * omits is a missing-export error rather than an unused stub.
+   */
+  loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
   useEntryFieldsPanel: () => null,
@@ -159,7 +183,7 @@ function Host(): React.JSX.Element {
 /** Mount the field and open the editor, which is where the two surfaces live. */
 function openEditor(): void {
   render(<Host />);
-  fireEvent.click(screen.getByRole("button", { name: "Edit blocks" }));
+  fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 }
 
 beforeEach(() => {

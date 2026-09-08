@@ -110,7 +110,12 @@ describe("readInlineStyle", () => {
       sanitizeInlineStyle(
         "text-decoration-color:red;text-decoration:underline blue;text-decoration-color:green"
       )
-    ).toBe("text-decoration:underline blue;text-decoration-color:green");
+      // Expanded to longhands: the shorthand assigns all three, and the later
+      // longhand then rewrites the colour in its own place. What the cascade
+      // resolves to, rather than the declarations as written.
+    ).toBe(
+      "text-decoration-line:underline;text-decoration-style:solid;text-decoration-color:green"
+    );
   });
 
   it("reads a property name however the document spells it", () => {
@@ -244,6 +249,71 @@ describe("a declaration carrying !important", () => {
   });
 });
 
+describe("a shorthand and its own longhands", () => {
+  it("lets a later longhand rewrite what the shorthand set", () => {
+    // `text-decoration: underline; text-decoration-line: line-through` draws
+    // only a STRIKE — the longhand replaces the line the shorthand set. Reading
+    // the two properties independently sees `underline` under its own key and
+    // concludes the opposite.
+    expect(
+      read("text-decoration: underline; text-decoration-line: line-through")[
+        "text-decoration-line"
+      ]
+    ).toBe("line-through");
+  });
+
+  it("lets a later shorthand rewrite what a longhand set", () => {
+    // The other order, which is the control: the shorthand assigns EVERY
+    // longhand it owns, including ones it does not mention.
+    expect(
+      read("text-decoration-line: line-through; text-decoration: underline")[
+        "text-decoration-line"
+      ]
+    ).toBe("underline");
+  });
+
+  it("resets a longhand the shorthand does not mention", () => {
+    // What makes it a shorthand rather than a partial write. A style set
+    // before it does not survive it.
+    expect(
+      read("text-decoration-style: wavy; text-decoration: underline")[
+        "text-decoration-style"
+      ]
+    ).toBe("solid");
+  });
+
+  it("makes every longhand important when the SHORTHAND is", () => {
+    /*
+     * `text-decoration: underline blue !important; text-decoration-color: green`
+     * keeps BLUE. A priority on a shorthand applies to every longhand it
+     * assigns, so the later plain colour cannot take it.
+     *
+     * The other direction of the same rule, and it needed its own case: writing
+     * the expansion as never-important passes every other test here, because
+     * they all put the important declaration on a longhand.
+     */
+    const resolved = read(
+      "text-decoration: underline blue !important; text-decoration-color: green"
+    );
+    expect(resolved["text-decoration-color"]).toBe("blue");
+  });
+
+  it("carries priority across the shorthand boundary", () => {
+    /*
+     * `text-decoration-color: red !important; text-decoration: underline blue`
+     * keeps RED. The shorthand assigns the colour longhand, so the important
+     * declaration it would overwrite is the SAME property — but only once the
+     * shorthand has been expanded. Tracked by literal property name, the two
+     * names differ and the important colour was silently reset to blue.
+     */
+    const resolved = read(
+      "text-decoration-color: red !important; text-decoration: underline blue"
+    );
+    expect(resolved["text-decoration-color"]).toBe("red");
+    expect(resolved["text-decoration-line"]).toBe("underline");
+  });
+});
+
 describe("a format bit and a style that contradict it", () => {
   it.each([
     ["BOLD", TEXT_FORMAT.BOLD, "font-weight: normal", "font-weight"],
@@ -296,8 +366,8 @@ describe("a format bit and a style that contradict it", () => {
       "UNDERLINE",
       TEXT_FORMAT.UNDERLINE,
       "text-decoration: underline wavy red",
-      "text-decoration",
-      "underline wavy red",
+      "text-decoration-line",
+      "underline",
     ],
   ])(
     "keeps a value that REINFORCES %s",
@@ -328,14 +398,19 @@ describe("a format bit and a style that contradict it", () => {
      * The shorthand replaces the line list WITHIN its own element. It does not
      * reach the wrapper's.
      */
-    expect(
-      read("text-decoration: underline wavy red", TEXT_FORMAT.STRIKETHROUGH)[
-        "text-decoration"
-      ]
-    ).toBe("underline wavy red");
+    // Read under the LONGHAND, because the shorthand is resolved into its three
+    // and never emitted under its own name. The style and the colour it carried
+    // arrive under their own longhands beside the line.
+    const strikeThenUnderline = read(
+      "text-decoration: underline wavy red",
+      TEXT_FORMAT.STRIKETHROUGH
+    );
+    expect(strikeThenUnderline["text-decoration-line"]).toBe("underline");
+    expect(strikeThenUnderline["text-decoration-style"]).toBe("wavy");
+    expect(strikeThenUnderline["text-decoration-color"]).toBe("red");
     expect(
       read("text-decoration: line-through", TEXT_FORMAT.UNDERLINE)[
-        "text-decoration"
+        "text-decoration-line"
       ]
     ).toBe("line-through");
   });
@@ -391,6 +466,24 @@ describe("the declaration list", () => {
     expect(read('font-family: local("A;B"); color: red')["color"]).toBe("red");
   });
 
+  it("keeps whitespace that is INSIDE a quoted value", () => {
+    /*
+     * `"A  B"` is a family whose NAME carries two spaces, and a browser looks up
+     * exactly that name. The list used to be flattened whole, before anything
+     * knew where its strings were — so the collapse happened first, the
+     * quote-aware splitter never saw the original, and the page asked for a
+     * family nobody has.
+     */
+    expect(read('font-family: "A  B"')["font-family"]).toBe('"A  B"');
+  });
+
+  it("still flattens whitespace outside one", () => {
+    // The control. Normalizing only inside strings, or not at all, would leave
+    // a stored `Font-Size :   16px` unreadable — which is what the flattening
+    // was for.
+    expect(read("Font-Size :   16px")["font-size"]).toBe("16px");
+  });
+
   it("still splits the ordinary case", () => {
     // The control. A splitter that never split would satisfy neither assertion
     // above by accident, but one that got its quote state stuck would.
@@ -440,6 +533,23 @@ describe("INLINE_STYLE_PROPERTIES", () => {
     // a declaration the differ cannot see.
     for (const property of INLINE_STYLE_PROPERTIES) {
       expect(isInlineStyleProperty(property), property).toBe(true);
+      /*
+       * `text-decoration` is the one property on the list the reader never
+       * returns under its own name, and that is deliberate rather than a gap:
+       * it is a SHORTHAND, resolved into the three longhands it assigns — all
+       * three of which are on this list too, so nothing it can express is lost.
+       *
+       * It stays on the list because the list answers "would a reader notice
+       * this property changing", and a differ comparing stored text sees the
+       * shorthand under that name. Removing it would make a real change
+       * invisible to the one caller the list exists for.
+       */
+      if (property === "text-decoration") {
+        expect(Object.keys(read(`${property}: underline`))).toEqual(
+          expect.arrayContaining(["text-decoration-line"])
+        );
+        continue;
+      }
       expect(read(`${property}: inherit`)[property], property).toBe("inherit");
     }
   });

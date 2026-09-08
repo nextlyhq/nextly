@@ -79,6 +79,10 @@ describe("release enums", () => {
       "scheduled",
       "published",
       "cancelled",
+      // A release the drain will never be able to apply. Listed last because
+      // the order is the lifecycle's, and this is the only state reached by
+      // failing rather than by anyone deciding anything.
+      "blocked",
     ]);
     expect([...RELEASE_MEMBER_ACTIONS]).toEqual(["publish", "unpublish"]);
   });

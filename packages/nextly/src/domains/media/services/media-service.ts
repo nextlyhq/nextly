@@ -340,7 +340,13 @@ export class MediaService {
     // Validate file size. Field-level message names the path ("size") but
     // never the value; the actual byte count + driver-supplied reason live
     // in logContext for operators.
-    const sizeValidation = validateFileSize(input.size);
+    // The cap comes from the validator's resolved config, not from this
+    // helper's default: a constant here refused files the configured policy
+    // permits, and the refusal named a limit the install never set.
+    const sizeValidation = validateFileSize(
+      input.size,
+      this.uploadValidator.config().maxSize
+    );
     if (!sizeValidation.valid) {
       throw NextlyError.validation({
         errors: [

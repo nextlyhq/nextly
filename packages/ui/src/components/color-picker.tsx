@@ -15,6 +15,7 @@ import {
   surfacePointFor,
   toHex,
 } from "../lib/color";
+import { useIsomorphicLayoutEffect } from "../lib/isomorphic-layout-effect";
 import { cn } from "../lib/utils";
 
 import { Button } from "./button";
@@ -136,6 +137,21 @@ interface EyeDropperLike {
 }
 
 /**
+ * Whether an event target is a node in ANY document.
+ *
+ * `instanceof Node` cannot answer this: it is bound to one JavaScript realm, so
+ * a target from an iframe or a pop-out fails it while being a perfectly good
+ * node. Probing for the property the DOM guarantees is realm-independent, and
+ * `Partial<Node>` is the honest shape to probe through — the value is not known
+ * to be a node until this returns.
+ */
+function isNode(value: EventTarget | null): value is Node {
+  return (
+    value !== null && typeof (value as Partial<Node>).nodeType === "number"
+  );
+}
+
+/**
  * A colour control: a saturation square, a hue strip, optional alpha, a hex
  * field, and any presets the host supplies.
  *
@@ -167,18 +183,60 @@ export function ColorPicker<TValue = string>({
   className,
 }: ColorPickerProps<TValue>) {
   const fieldId = React.useId();
+  /** The picker's own subtree, for telling a press inside it from a dismissal. */
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  /**
+   * Whether a press that began INSIDE this picker is still in progress, so a
+   * blur carrying no destination can be told from focus genuinely leaving.
+   */
+  const insidePress = React.useRef(false);
+  /**
+   * Whether a finish was DEFERRED rather than declined: a blur carrying no
+   * destination arrived during an inside press, so the press's own action was
+   * given the chance to supersede the draft instead.
+   */
+  const owedFinish = React.useRef(false);
+  /** Undoes a touch press that is waiting to see whether it becomes a tap. */
+  const pendingTap = React.useRef<(() => void) | null>(null);
+  /**
+   * The current way to finish a draft, for a deferred tap whose wait may span a
+   * render. Refreshed where the listeners are registered, at layout timing, so
+   * it is settled before any later native event can read it.
+   */
+  const latestCommit = React.useRef<() => void>(() => undefined);
+  /**
+   * The saturation area, whose BOX is what turns a pointer position into a
+   * saturation and brightness pair — the mapping needs the rectangle, not the
+   * element.
+   */
   const surfaceRef = React.useRef<HTMLDivElement>(null);
   const [hsva, setHsva] = React.useState<Hsva>(() => toHsva(color));
   // What the hex field shows while it is being typed into. A half-typed value
   // is not a colour, and reformatting it on every keystroke moves the caret.
   const [draftHex, setDraftHex] = React.useState<string | null>(null);
+  /*
+   * The same draft, held where a SECOND finish in the same dispatch can see it.
+   *
+   * `setDraftHex(null)` is queued, not applied, so two paths that both finish —
+   * an outside press moving focus, and the blur that press produces — can each
+   * read a still-non-null draft and report the colour twice. React renders
+   * between them only if something flushes, which is what makes a test
+   * dispatching the events separately miss it entirely.
+   */
+  const draftRef = React.useRef<string | null>(null);
 
   // Re-seeded when the host supplies a colour this picker did not produce.
   // Comparing the RENDERED hex rather than the prop avoids a loop: the same
   // colour has several spellings, and `#FFF` arriving back as `#ffffff` would
   // otherwise reset the surface on every change.
   const rendered = toHexString(hsva, showAlpha);
-  React.useEffect(() => {
+  /*
+   * At LAYOUT timing, matching the listener below. A passive effect leaves the
+   * stale draft readable for a moment the native capture listener is already
+   * refreshed for, so an outside press arriving in between publishes the old
+   * text over the colour the host has just supplied.
+   */
+  useIsomorphicLayoutEffect(() => {
     const incoming = parseHex(color);
     if (
       incoming &&
@@ -188,13 +246,268 @@ export function ColorPicker<TValue = string>({
       // in must not silently move the surface's hue to red. Read from the
       // updater rather than from `hsva`, so the effect does not re-run on a
       // hue change it is not interested in.
+      /*
+       * The DRAFT goes with it. A colour arriving from the host — an undo, an
+       * edit made elsewhere — replaces what is stored, so text typed against
+       * the old value is stale: left in place, the next blur would publish it
+       * back over the value that just arrived.
+       */
+      dropDraft();
       setHsva(prev => hsvaFrom(incoming, incoming.alpha, prev.h));
     }
   }, [color, rendered, showAlpha]);
 
+  /*
+   * A typed colour is reported when the author FINISHES it, never per
+   * keystroke.
+   *
+   * `parseHex` accepts 3, 4, 6 and 8 digits, so a PREFIX of a valid colour is
+   * itself a valid colour: typing `#123456` passes through `#123` and `#1234`
+   * on the way. Reporting each of those made the last one stick whenever the
+   * author paused or the surface went away — `#12345` left the host holding
+   * `#11223344`, a colour nobody typed, silently replacing the stored one.
+   *
+   * So the field holds a draft and this is the only thing that publishes it:
+   * Enter, and leaving the field. Dragging is untouched and still reports
+   * continuously, which is what its coalescing exists for — a drag has no
+   * finish to wait for, and typing does.
+   *
+   * DISMISSAL IS NOT A FINISH, deliberately. Escape means cancel, so a draft
+   * dying with the surface is the conventional answer rather than a loss; and
+   * clicking away moves focus out of the field first, so that path commits
+   * through the blur below. Reporting from an unmount instead would arrive
+   * after a host that coalesces a gesture on close has already decided what to
+   * write, which is a value published into nothing.
+   */
+  /*
+   * Forget the draft without reporting it, for everything that SUPERSEDES one:
+   * a preset, a recent colour, a drag, or the host pushing a new colour in. The
+   * ref and the state move together, and the ref moves synchronously, because a
+   * blur that has already been queued will read it before React renders.
+   */
+  const dropDraft = (): void => {
+    owedFinish.current = false;
+    draftRef.current = null;
+    setDraftHex(null);
+  };
+
+  const commitDraft = (): void => {
+    owedFinish.current = false;
+    const text = draftRef.current;
+    // Taken BEFORE anything else, so a second caller in this same dispatch
+    // finds nothing to report rather than the value this one is publishing.
+    draftRef.current = null;
+    // NOTHING TYPED, nothing to report. Reading the field's value instead would
+    // publish the colour already on screen every time focus merely passed
+    // through — a save for an edit nobody made, and a second one for an edit
+    // already reported by Enter.
+    if (text === null) return;
+    setDraftHex(null);
+    const parsed = parseHex(text);
+    // An unfinishable draft is DISCARDED rather than reported. The field
+    // returns to the colour that is actually stored, so what is shown and what
+    // is saved agree — which they did not when a stale intermediate stood in
+    // for the text on screen.
+    if (!parsed) return;
+    setHsva(prev => hsvaFrom(parsed, parsed.alpha, prev.h));
+    onColorChange(toHex(parsed, showAlpha ? parsed.alpha : 1));
+  };
+
+  /*
+   * A press OUTSIDE is a finish, and it is the one a blur cannot catch.
+   *
+   * Measured rather than assumed: a dismissable layer runs from the outside
+   * `pointerdown` and unmounts this content there, so the focus change that
+   * would have produced a blur never happens and a complete typed colour was
+   * lost with no report at all. A test driving `blur` directly cannot see that
+   * — the blur is the thing in question — so the case that proves it presses
+   * outside for real.
+   *
+   * CAPTURE, because the ordering is the whole point: a capture listener on the
+   * document runs before the dismiss layer's own, so the value is reported
+   * while this is still mounted. Reporting from an unmount instead was tried
+   * and removed — a host that coalesces a picker gesture on close has already
+   * decided what to write by then.
+   *
+   * RE-REGISTERED every render, with no dependency list, and at LAYOUT timing.
+   * A passive effect leaves the previous listener installed until its cleanup
+   * runs, so a native press arriving after a render that changed `showAlpha` or
+   * `onColorChange` would reach the closure from the render before it — an old
+   * alpha, or a consumer that is no longer the current one.
+   * The obvious alternative keeps the handler in a ref refreshed by an effect,
+   * and that ref is not guaranteed fresh when a NATIVE listener fires: a
+   * passive effect runs after the commit, and this listener is outside React's
+   * event system, so an outside press arriving in between would call the
+   * previous closure and discard the draft it was holding. Swapping one
+   * listener per render costs nothing measurable and has no such window.
+   *
+   * Escape is untouched and still cancels: it dismisses without a pointer, so
+   * nothing here runs and the draft dies with the surface, which is what a
+   * cancel means.
+   */
+  useIsomorphicLayoutEffect(() => {
+    const root = rootRef.current;
+    if (root === null) return;
+    latestCommit.current = commitDraft;
+    const onPointerDown = (event: Event): void => {
+      /*
+       * Any new press ENDS whatever the last one was waiting for. A touch that
+       * became a scroll produces no click, so its pending completion would
+       * otherwise sit installed and be finished by the next unrelated click
+       * anywhere — including a press on the hex field to move the caret, which
+       * would publish text still being edited.
+       */
+      pendingTap.current?.();
+      pendingTap.current = null;
+      /*
+       * A press INSIDE is not a dismissal — a swatch, a slider, the field
+       * itself — and committing there would report a draft the press is about
+       * to replace.
+       *
+       * Recognised through the COMPOSED PATH first, because a composed event
+       * crossing a shadow boundary is retargeted to the host by the time it
+       * reaches this document: `root` does not contain that host, so a press on
+       * the hex field itself would read as outside and publish a half-typed
+       * prefix — clicking to move the caret after `#123` would store `#112233`.
+       *
+       * The containment test behind it covers the ordinary case and is written
+       * WITHOUT `instanceof`, which is realm-bound: in an iframe or a pop-out
+       * the target belongs to that document's own JavaScript realm and is not
+       * an instance of this one's `Node`. `contains` is a tree operation and
+       * does not care which realm a node came from.
+       */
+      const path =
+        typeof event.composedPath === "function" ? event.composedPath() : [];
+      const inside =
+        path.includes(root) ||
+        (isNode(event.target) && root.contains(event.target));
+      /*
+       * RECORDED, because a blur cannot always tell where focus went. Some
+       * engines do not focus a button on press, so the field's `focusout`
+       * arrives with a null `relatedTarget` and reads as focus leaving the
+       * picker entirely — finishing the draft before the swatch or eyedropper
+       * click can supersede it, which is the double report this all exists to
+       * avoid. Cleared when the press ends.
+       */
+      insidePress.current = true;
+      // A press inside decides NOTHING about the draft. Whether it becomes a
+      // replacement is not knowable here — the eyedropper's button is inside
+      // and its sampling can be cancelled, leaving nothing to replace with —
+      // so each path that actually replaces the value drops the draft as part
+      // of doing so, and the blur below declines to report one while focus is
+      // moving within this picker.
+      if (inside) return;
+      /*
+       * A TOUCH press is not yet a tap. It may become a scroll or a long press,
+       * and a dismissable layer waits for the resulting click before dismissing
+       * for exactly that reason — so finishing here would publish a draft while
+       * the picker stays open and the field is still being edited. The click
+       * that follows a completed tap is what finishes it; a scroll produces
+       * none, and the listener is discarded with the effect.
+       */
+      /*
+       * Read off the event rather than narrowed by `instanceof PointerEvent`,
+       * which is realm-bound for the same reason the node test above avoids it.
+       * A listener registered for `pointerdown` receives a pointer event; the
+       * property is absent only where the environment does not implement them,
+       * and an absent type is not a touch.
+       */
+      const pointerType = (event as Partial<PointerEvent>).pointerType;
+      if (pointerType === "touch") {
+        const onClick = (): void => {
+          owner.removeEventListener("click", onClick, true);
+          pendingTap.current = null;
+          // The CURRENT commit, not this render's: a wait that spans a rerender
+          // would otherwise report through the closure it was created in — an
+          // old alpha, or a consumer no longer current. The ref is refreshed in
+          // the same layout effect that registers these listeners, so it is
+          // settled before any later native event.
+          latestCommit.current();
+        };
+        owner.addEventListener("click", onClick, true);
+        pendingTap.current = () => {
+          owner.removeEventListener("click", onClick, true);
+        };
+        return;
+      }
+      commitDraft();
+    };
+    /*
+     * The picker's OWN document, not the global one. Rendered into an iframe or
+     * a pop-out window this component's presses happen in a different document
+     * entirely, and a listener on the parent global would never see them —
+     * which is the case where a dismiss layer unmounts the picker and the draft
+     * goes with it.
+     */
+    const owner = root.ownerDocument;
+    /*
+     * A cancelled gesture ends the wait too, and is the signal the platform
+     * gives when a press becomes a scroll rather than a tap.
+     */
+    const onPointerCancel = (): void => {
+      insidePress.current = false;
+      pendingTap.current?.();
+      pendingTap.current = null;
+    };
+    // The press ENDING is what releases the blur above, whether or not it
+    // became a click.
+    const onPointerUp = (): void => {
+      insidePress.current = false;
+    };
+    /*
+     * The finish a null-destination blur DEFERRED rather than cancelled.
+     *
+     * On engines that do not focus a button when it is pressed, the field's
+     * blur is skipped so the press's own action can supersede the draft. Where
+     * that action replaces nothing — a swatch with no handler, a cancelled
+     * sample — the draft would otherwise sit pending with focus already outside
+     * the picker, and no further blur is coming to finish it.
+     *
+     * BUBBLE phase, so the action has already run: a swatch that did replace
+     * the value has dropped the draft by now and there is nothing left to
+     * report. Only a draft that survived its own press, with focus outside,
+     * finishes here.
+     */
+    const onClickResolve = (): void => {
+      // Only a finish that was actually deferred. Reading focus alone would
+      // finish on any click that happens to land while focus is elsewhere,
+      // including one this picker had no part in.
+      if (!owedFinish.current) return;
+      latestCommit.current();
+    };
+    owner.addEventListener("pointerdown", onPointerDown, true);
+    owner.addEventListener("pointercancel", onPointerCancel, true);
+    owner.addEventListener("pointerup", onPointerUp, true);
+    owner.addEventListener("click", onClickResolve, false);
+    return () => {
+      owner.removeEventListener("pointerdown", onPointerDown, true);
+      owner.removeEventListener("pointercancel", onPointerCancel, true);
+      owner.removeEventListener("pointerup", onPointerUp, true);
+      owner.removeEventListener("click", onClickResolve, false);
+    };
+  });
+
+  /*
+   * A pending tap outlives an ordinary RERENDER and dies with the component.
+   *
+   * The effect above re-runs on every render so its closures stay current, and
+   * ending the wait in its cleanup killed a legitimate one: an outside target
+   * that sets state from its own `pointerdown` rerenders this picker before the
+   * click arrives, so the completion was removed and a finished colour never
+   * reached the host. What ends a wait is a new press, a cancelled gesture, or
+   * this component going away — never a render.
+   */
+  useIsomorphicLayoutEffect(
+    () => () => {
+      pendingTap.current?.();
+      pendingTap.current = null;
+    },
+    []
+  );
+
   const commit = (next: Hsva): void => {
     setHsva(next);
-    setDraftHex(null);
+    dropDraft();
     onColorChange(toHexString(next, showAlpha));
   };
 
@@ -250,10 +563,28 @@ export function ColorPicker<TValue = string>({
       | (new () => EyeDropperLike)
       | undefined;
     if (!ctor) return;
+    /*
+     * This press OWNS whatever finish its own blur deferred. Sampling either
+     * replaces the draft or is cancelled, and both answers arrive later than
+     * the click — so leaving the deferral to be settled on that click reports
+     * the typed colour first and the sampled one after it, two edits for the
+     * one the author made.
+     *
+     * Claimed synchronously, before the first await, because the click that
+     * would otherwise settle it is already on its way.
+     */
+    const owed = owedFinish.current;
+    owedFinish.current = false;
     let sampled: string;
     try {
       sampled = (await new ctor().open()).sRGBHex;
     } catch {
+      /*
+       * Dismissed, so nothing replaces the draft and the finish its own blur
+       * deferred is now due: focus has already left the field, and no further
+       * blur is coming to carry it.
+       */
+      if (owed) commitDraft();
       // The user dismissed the picker. Not an error, and nothing to report.
       // Scoped to `open()` alone: with the commit inside this block, a host
       // whose `onColorChange` throws — a failing save, a rejected validation —
@@ -268,7 +599,37 @@ export function ColorPicker<TValue = string>({
   };
 
   return (
-    <div className={cn("w-64 space-y-3", className)}>
+    <div
+      ref={rootRef}
+      className={cn("w-64 space-y-3", className)}
+      /*
+       * The finish that focus can express, watched at the PICKER rather than at
+       * the field. `onBlur` is delivered from the bubbling `focusout`, so this
+       * sees focus leaving any descendant.
+       *
+       * At the field alone it missed the keyboard route entirely: tab from the
+       * field to a preset and then out without activating it, and the field's
+       * own blur was declined — focus had moved to something inside — while
+       * nothing watched the boundary the focus actually crossed. The pointer
+       * listener cannot cover it either, since no pointer was involved.
+       *
+       * `relatedTarget` names where focus is going, and is null when it leaves
+       * the document entirely, which is also a finish.
+       */
+      onBlur={event => {
+        const next = event.relatedTarget;
+        const root = rootRef.current;
+        if (root !== null && isNode(next) && root.contains(next)) return;
+        // A blur with NO destination during a press that began inside is that
+        // press, not a departure: some engines do not focus a button when it is
+        // pressed, and finishing here would beat the click that supersedes it.
+        if (next === null && insidePress.current) {
+          owedFinish.current = true;
+          return;
+        }
+        commitDraft();
+      }}
+    >
       <div
         ref={surfaceRef}
         role="application"
@@ -366,19 +727,32 @@ export function ColorPicker<TValue = string>({
           id={`${fieldId}-hex`}
           className="font-mono"
           value={draftHex ?? rendered}
+          /*
+           * A keystroke moves the DRAFT and nothing else — not the surface, not
+           * the host. Moving the surface here would also fight the re-seeding
+           * effect above, which compares the rendered hex against the host's
+           * prop and would pull a half-typed value straight back.
+           */
           onChange={event => {
-            const text = event.target.value;
-            setDraftHex(text);
-            const parsed = parseHex(text);
-            // Only a value that IS a colour is published. A field mid-typing is
-            // the ordinary state of one, and reporting `#ab` as a colour would
-            // repaint the surface black under the person typing it.
-            if (parsed) {
-              setHsva(hsvaFrom(parsed, parsed.alpha, hsva.h));
-              onColorChange(toHex(parsed, showAlpha ? parsed.alpha : 1));
-            }
+            draftRef.current = event.target.value;
+            setDraftHex(event.target.value);
           }}
-          onBlur={() => setDraftHex(null)}
+          onKeyDown={event => {
+            if (event.key !== "Enter") return;
+            /*
+             * An Enter that ACCEPTS AN IME CANDIDATE is not a finish. Consuming
+             * it blocks the acceptance and reports whatever was in the field
+             * before the composition resolved. Both signals are read because
+             * older engines report the composition only as `keyCode` 229, and
+             * this repository's other IME guards check the pair for that
+             * reason.
+             */
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+            // Kept off the surrounding form, which may have a submit of its own:
+            // finishing a colour is not submitting whatever contains it.
+            event.preventDefault();
+            commitDraft();
+          }}
         />
         {canPickFromScreen && (
           <Button
@@ -405,7 +779,22 @@ export function ColorPicker<TValue = string>({
                 aria-label={swatch.label}
                 className="size-6 rounded border shadow-sm"
                 style={{ backgroundColor: swatch.color }}
-                onClick={() => onSwatchSelect?.(swatch)}
+                onClick={() => {
+                  /*
+                   * The swatch REPLACES what was being typed, so the draft goes
+                   * with it — but only where the host can actually perform the
+                   * replacement. `onSwatchSelect` is optional and the type
+                   * permits swatches without it, and dropping a draft for a
+                   * callback that does nothing loses the typed colour and puts
+                   * nothing in its place.
+                   *
+                   * The other replacement paths drop it inside `commit`; this
+                   * one reports through the host and has to say so itself.
+                   */
+                  if (onSwatchSelect === undefined) return;
+                  dropDraft();
+                  onSwatchSelect(swatch);
+                }}
               />
             ))}
           </div>

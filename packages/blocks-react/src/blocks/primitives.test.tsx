@@ -66,6 +66,10 @@ function args<P>(
     props,
     node: NODE,
     className: "nx-n1",
+    // Required by the render contract. These fixtures declare no parts, so the
+    // answer is empty for every name — but a renderer that could omit it would
+    // leave every block's parts unmarked with nothing to report.
+    partClass: () => "",
     ctx,
     renderSlot: () => null,
     ...(hostPolicy === undefined ? {} : { hostPolicy }),
@@ -144,8 +148,25 @@ describe("core/quote", () => {
       renderQuote(args({ text: "Words", attribution: "Ada", source: "A Book" }))
     );
     expect(out).toContain("<figure");
-    expect(out).toContain("<blockquote><p>Words</p></blockquote>");
-    expect(out).toContain("<figcaption>Ada, <cite>A Book</cite></figcaption>");
+    // The quotation holds the words and NOTHING else. Asserted on what sits
+    // BETWEEN the tags, captured non-greedily: a match run across the closing
+    // tag reaches the figcaption and reports the attribution as inside the
+    // quotation when it is beside it. The element's own attributes are left
+    // out of the comparison, so a class the block needs for its defaults does
+    // not read as the attribution leaking in.
+    const quoted = /<blockquote[^>]*>([\s\S]*?)<\/blockquote>/.exec(out)?.[1];
+    expect(quoted).toBe("<p>Words</p>");
+
+    // The quotation carries no block-type class of its own. The figure is the
+    // root and already has it, so repeating it here would apply the whole
+    // default twice — indenting an attributed quote further than a bare one,
+    // and leaving the inner copy standing when a node-local style overrides
+    // the root.
+    expect(out).not.toMatch(/<blockquote[^>]*nx-bt-core--quote/);
+    // The figcaption is a PART now, so it carries a class. Asserted on the
+    // content and the element rather than on the exact opening tag, which is
+    // what made this pin markup the block is free to change.
+    expect(out).toContain("Ada, <cite>A Book</cite></figcaption>");
   });
 
   it("is a bare blockquote when there is nothing to attribute", () => {
@@ -386,12 +407,46 @@ describe("core/image", () => {
       await renderImage(args({ src: "/a.jpg", caption: "A view" }))
     );
     expect(out).toContain('<figure class="nx-n1">');
-    expect(out).toContain("<figcaption>A view</figcaption>");
+    expect(out).toContain("A view</figcaption>");
     expect(out).not.toContain('<img class="nx-n1"');
   });
 });
 
 describe("core/embed", () => {
+  it("has a SHAPE before an author gives it one", () => {
+    /*
+     * A user agent sizes an `<iframe>` at 300x150, and this block declared no
+     * defaults at all — so a video dropped on a page rendered postage-stamp
+     * sized in the corner of a full-width column. Measured on a published page
+     * before this: 300 by 150 with `aspect-ratio: auto`.
+     *
+     * The pair is the point. A ratio alone still resolves against the 300px
+     * the user agent starts from, so the width is what makes the frame fill
+     * its column and the ratio is what takes its height from that width.
+     *
+     * These assert the VALUES. That they reach a compiled stylesheet at all is
+     * `base-styles.test.tsx`'s job, and it covers this block automatically now
+     * that it declares defaults — the two checks are complementary rather than
+     * one restated.
+     */
+    const base = embed.baseStyles?.base?.base as
+      | Record<string, unknown>
+      | undefined;
+    expect(base).toBeDefined();
+    expect(base?.width).toBe("100%");
+    expect(base?.aspectRatio).toBe("16 / 9");
+  });
+
+  it("still lets an author override the shape", () => {
+    /*
+     * `16 / 9` is what the sources this block exists for actually serve, and it
+     * is a DEFAULT rather than a rule — an audio player or a square embed needs
+     * to say otherwise. `dimensions` in `supports` is what makes that
+     * reachable, so the default is only safe while that stays declared.
+     */
+    expect(embed.supports?.dimensions).toBe(true);
+  });
+
   it("sandboxes without granting same-origin alongside scripts", () => {
     // Both together let the frame remove its own sandbox.
     const out = html(
@@ -615,7 +670,7 @@ describe("through the boundary", () => {
 
     expect(html).toContain("<figure");
     expect(html).toContain("nx-node");
-    expect(html).toContain("<figcaption>A view</figcaption>");
+    expect(html).toContain("A view</figcaption>");
   });
 
   it("awaits an async primitive rather than rendering its promise", async () => {

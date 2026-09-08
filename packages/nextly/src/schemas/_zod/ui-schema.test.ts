@@ -193,3 +193,61 @@ describe("parseUiSchema", () => {
     expect(js).toHaveProperty("properties");
   });
 });
+
+describe("a manifest hook is validated as the executor requires it", () => {
+  // A hook the executor can actually run: `StoredHookExecutor` reads `config`
+  // and `order` off every entry, so those are as load-bearing as `hookId`.
+  const RUNNABLE = {
+    hookId: "auto-slug",
+    hookType: "beforeChange",
+    enabled: true,
+    config: { sourceField: "title", targetField: "slug" },
+    order: 0,
+  };
+
+  function manifestWithHooks(hooks: unknown) {
+    return {
+      version: 1,
+      collections: [
+        {
+          slug: "articles",
+          labels: { singular: "Article", plural: "Articles" },
+          fields: [{ name: "title", type: "text" }],
+          hooks,
+        },
+      ],
+    };
+  }
+
+  it("KEEPS a runnable hook rather than merely accepting it", () => {
+    // 🔴 The control the rejection below needs, and it asserts the value
+    // SURVIVES rather than that the parse succeeded. Zod strips what a schema
+    // does not declare, so a manifest whose hooks are silently dropped parses
+    // exactly as cleanly as one whose hooks are carried — and the deployed
+    // collection then runs no hooks, which is the failure this key exists to
+    // prevent.
+    const result = parseUiSchema(manifestWithHooks([RUNNABLE]));
+    expect(result.success).toBe(true);
+    expect(result.data?.collections[0]?.hooks).toEqual([RUNNABLE]);
+  });
+
+  it("REFUSES a hook missing the fields the executor destructures", () => {
+    // 🔴 The shape a hand-written manifest most plausibly carries: the three
+    // keys a reader would guess, and neither of the two the executor reads.
+    // Accepted, it deploys and then throws on the next content write — an
+    // accepted manifest turning into failed writes, which is strictly worse
+    // than a refused one because the refusal names the file.
+    const { config: _config, order: _order, ...missingBoth } = RUNNABLE;
+    expect(parseUiSchema(manifestWithHooks([missingBoth])).success).toBe(false);
+  });
+
+  it("REFUSES a hookType the runtime cannot dispatch", () => {
+    // A plausible typo, and the one a loose record could never catch: the
+    // value is a string of the right type and simply names no lifecycle point.
+    expect(
+      parseUiSchema(
+        manifestWithHooks([{ ...RUNNABLE, hookType: "beforeSave" }])
+      ).success
+    ).toBe(false);
+  });
+});

@@ -61,15 +61,6 @@ import type { ContainerProps } from "./container";
 export { COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
 
 /**
- * How many columns a freshly placed row starts with.
- *
- * Two rather than one, because a row of one is a box and an author who wanted
- * a box would have reached for one; and rather than three, because removing a
- * column is a click and adding one is a decision.
- */
-export const INITIAL_COLUMNS = 2;
-
-/**
  * The row's default layout, in properties the compiler actually accepts.
  *
  * `auto-fit` collapses empty tracks and `minmax(240px, 1fr)` makes every
@@ -89,6 +80,34 @@ export const COLUMNS_BASE_STYLES = {
       // column's `min-width: 0`, which governs the item rather than the track.
       // Capping the minimum by the available width lets that last track fit.
       gridTemplateColumns: "repeat(auto-fit, minmax(min(240px, 100%), 1fr))",
+      /*
+       * The gutter between columns, which this block laid out and then left at
+       * zero.
+       *
+       * `gap` on a grid defaults to `normal`, which computes to zero — so the
+       * one block whose whole purpose is side-by-side content rendered its
+       * columns touching. Measured on a published page: three tracks of 427px
+       * with no space between them.
+       *
+       * A LITERAL, matching `core/gallery` and `core/accordion`, and the reason
+       * is no longer the one those two were given. Both of them shipped
+       * `{ $token: "space.4" }` and rendered their children touching because
+       * nothing turned a token set into CSS; that is fixed, and `PageRenderer`
+       * now compiles a site sheet by default.
+       *
+       * It was not safe HERE until the renderer stopped withholding the token
+       * tier from a consumer holding a stored `styles` artifact. On that path
+       * the stored page CSS carried `gap: var(--site-space-4)` with the property
+       * undeclared, which is invalid at computed-value time, and `gap` fell back
+       * to `normal` — zero for a grid, and the exact defect this block was fixed
+       * for. Measured on that same path now: `--site-space-4` is declared and
+       * resolves to `1rem`, which is the value the literal was standing in for.
+       *
+       * So the gutter follows the site again. A site that redefines `space.4`
+       * moves this row with it, which is what a token set is for and what a
+       * length hard-coded here could never do.
+       */
+      gap: { $token: "space.4" },
     },
   },
 } as const;
@@ -120,25 +139,23 @@ export const columns = defineBlock<ContainerProps, PageContext>({
     children: {
       allow: [COLUMN_BLOCK],
       /**
-       * EMPTY, deliberately, until something expands templates.
+       * The two columns a freshly placed row starts with.
        *
-       * A seeded template needs its ids minted per INSTANCE: two rows
-       * expanded from one literal template carry the same node ids, and the
-       * engine reports `duplicate-node-id` on the second. Nothing in the
-       * repository reads `SlotSpec.template`, so there is no expansion path
-       * to do that minting — and shipping nodes whose ids are correct only if
-       * a future reader remembers to replace them is a trap rather than a
-       * default.
+       * A row must start with children at all, because this slot admits only
+       * `core/column` and that block names this one as its only parent — so an
+       * empty row is a container whose single legal child can be placed nowhere
+       * else on the page, and the author has to build both halves by hand.
        *
-       * Naming the ids "placeholders" was the first attempt and it changed no
-       * behaviour: the collision is a property of the nodes, not of what they
-       * are called. An empty template makes it unreachable instead.
+       * Two rather than one, because a row of one is a box and an author who
+       * wanted a box would have reached for one; and rather than three, because
+       * removing a column is a click and adding one is a decision.
        *
-       * The two-column default belongs with the expander, which is the layer
-       * that can mint ids. `INITIAL_COLUMNS` records the intended number so
-       * that work does not have to re-derive it.
+       * The entries are written out rather than repeated from a count. Each
+       * declares one child, so an unequal split — a different width per column —
+       * is a change to an entry rather than a change of shape, and this list is
+       * the only place the number lives.
        */
-      template: [],
+      defaultBlock: [{ type: COLUMN_BLOCK }, { type: COLUMN_BLOCK }],
     },
   },
   baseStyles: COLUMNS_BASE_STYLES,

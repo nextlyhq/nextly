@@ -34,6 +34,8 @@ import type {
   FormActionsProps,
   FormSectionProps,
   ComponentPath,
+  CustomEditViewProps,
+  DocumentLockGates,
   PluginAdminContributions,
   PluginAdminPage,
   PluginCollectionView,
@@ -58,6 +60,32 @@ expectTypeOf<PluginCollectionView>().toMatchTypeOf<{
   list?: ComponentPath;
 }>();
 expectTypeOf<RootAdminContributions>().toEqualTypeOf<PluginAdminContributions>();
+
+// ---------------------------------------------------------------------------
+// The custom Edit view contract.
+//
+// A plugin registering `views.Edit.Component` is handed these, and the pair a
+// colleague's claim withholds travels with them. The assertion that earns its
+// place is the SECOND one: the contract's field and the published type are the
+// same type, so a plugin typing a prop as `DocumentLockGates` is typing it as
+// whatever the contract carries rather than as a copy that agreed once.
+//
+// The first pins the shape. It is a restatement on purpose — renaming an
+// affordance in the admin should have to be a deliberate act here rather than
+// a silent one, and this is the line that says so.
+// ---------------------------------------------------------------------------
+
+expectTypeOf<DocumentLockGates>().toEqualTypeOf<{
+  readonly readOnly: boolean;
+  readonly actionsDisabled: boolean;
+}>();
+expectTypeOf<CustomEditViewProps["documentLock"]>().toEqualTypeOf<
+  DocumentLockGates | undefined
+>();
+expectTypeOf<CustomEditViewProps>().toMatchTypeOf<{
+  collectionSlug: string;
+  isCreating: boolean;
+}>();
 
 // ---------------------------------------------------------------------------
 // Control primitives.

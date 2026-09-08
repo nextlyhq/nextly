@@ -86,6 +86,8 @@ export interface BuilderFieldInput {
 export interface BuilderSettingsInput {
   singularName?: string;
   pluralName?: string;
+  /** The entity's own help text, distinct from a field's description. */
+  description?: string;
   status?: boolean;
   /** i18n: collection has translatable fields (companion `_locales` table). */
   localized?: boolean;
@@ -151,6 +153,16 @@ export interface ManifestField {
 export interface ManifestEntity {
   slug: string;
   labels?: { singular: string; plural: string };
+  /**
+   * The entity's own help text.
+   *
+   * Carried so the description reaches a database the manifest is replayed
+   * against, where the Builder's local row does not exist. The upsert omits
+   * the column when a manifest carries none, so this SUPPLIES the value rather
+   * than protecting it — the standing limitation being that a cleared
+   * description cannot propagate through a migration.
+   */
+  description?: string;
   admin?: { useAsTitle?: string; defaultColumns?: string[]; group?: string };
   status?: boolean;
   /** i18n: collection has translatable fields. */
@@ -234,6 +246,7 @@ export function applyCommonSettings(
   settings: BuilderSettingsInput
 ): void {
   const {
+    description,
     useAsTitle,
     defaultColumns,
     group,
@@ -251,6 +264,11 @@ export function applyCommonSettings(
   }
   if (group) admin.group = group;
   if (Object.keys(admin).length > 0) entity.admin = admin;
+  // 🔴 Carried so the description reaches a database the manifest is replayed
+  // against. The upsert omits the column when a manifest carries none, so a
+  // partial projection leaves the stored value alone rather than erasing it;
+  // this supplies the value, it does not protect it.
+  if (description !== undefined) entity.description = description;
   if (status !== undefined) entity.status = status;
   if (localized !== undefined) entity.localized = localized;
   if (versions !== undefined) entity.versions = versions;

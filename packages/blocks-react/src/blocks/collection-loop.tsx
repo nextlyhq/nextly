@@ -162,12 +162,16 @@ export const collectionLoop = defineBlock<CollectionLoopProps, PageContext>({
   slots: {
     // The template repeated per entry, structurally editable.
     //
-    // It starts empty, and `contentOnly` forbids exactly the edits that would
-    // fill it: an author could never insert the blocks that make up the
-    // template, so the loop could never show an entry. Locking a template is
-    // worth having once there is a way to lock a FINISHED one; locking an empty
-    // one only prevents it from being written.
-    children: { template: [] },
+    // It declares no starting children, and `contentOnly` would forbid exactly
+    // the edits that fill it: an author could never insert the blocks the loop
+    // repeats, so the loop could never show an entry. Locking is worth having
+    // once there is a way to lock a FINISHED body; locking an empty one only
+    // prevents it from being written.
+    //
+    // Nor could a default supply that body. What one entry should look like is
+    // a property of the collection being looped, which this block cannot see
+    // from its own declaration.
+    children: {},
   },
   supports: {
     spacing: true,

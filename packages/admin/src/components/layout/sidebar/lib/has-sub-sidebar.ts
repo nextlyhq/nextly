@@ -44,8 +44,19 @@ export function isSubSidebarCategory(
 export function isSubSidebarOpen(
   selectedMain: string,
   visibleMenuItemIds: readonly string[],
-  isFolderTreeVisible: boolean
+  isFolderTreeVisible: boolean,
+  suppressed: ReadonlySet<string> = new Set()
 ): boolean {
+  // An immersive surface may ask for the panel to go while keeping the rail: a
+  // full-bleed editor wants the width back, not the whole of the admin's
+  // navigation. The layout above only drops the sidebar COLUMN when the rail is
+  // surrendered too, so without this the `subSidebar` layer is declared,
+  // resolved by `resolveSuppressedChrome`, and implemented by nothing.
+  //
+  // Defaulted to an empty set so every existing caller keeps its behaviour and
+  // the parameter is opt-in rather than a change to what "open" means.
+  if (suppressed.has("subSidebar")) return false;
+
   return (
     isSubSidebarCategory(selectedMain, isFolderTreeVisible) &&
     visibleMenuItemIds.includes(selectedMain)

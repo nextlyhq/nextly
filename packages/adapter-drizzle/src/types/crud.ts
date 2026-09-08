@@ -15,6 +15,31 @@ import type { WhereClause, OrderBySpec, JoinSpec } from "./query";
  *
  * @public
  */
+/**
+ * What a COUNT asks for.
+ *
+ * 🔴 `distinctOn` is a column LIST rather than a boolean, and the difference is
+ * the whole reason this option exists: counting rows and counting the things
+ * those rows are about are different questions whenever a thing can own more
+ * than one row. A document holding a pending edit in three languages is one
+ * document and three version rows.
+ */
+export interface CountOptions {
+  /** Filter conditions, the same vocabulary `select` takes. */
+  where?: WhereClause;
+  /**
+   * Count DISTINCT combinations of these columns instead of rows.
+   *
+   * Compiled as `COUNT(*)` over a `SELECT DISTINCT` subquery rather than as
+   * `COUNT(DISTINCT a, b)`, because the latter is not portable: MySQL accepts
+   * it, PostgreSQL requires a row constructor, and SQLite rejects it outright
+   * with "wrong number of arguments to function count()". The subquery is the
+   * one form all three engines agree on, and it is what this compiles to on
+   * every dialect so the number cannot differ by engine.
+   */
+  distinctOn?: string[];
+}
+
 export interface SelectOptions {
   /** Specific columns to select (default: all columns) */
   columns?: string[];

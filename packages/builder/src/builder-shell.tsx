@@ -16,7 +16,9 @@ import {
 } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
 import {
+  ArrowLeft,
   Blocks,
+  Braces,
   FileText,
   Layers,
   Palette,
@@ -26,14 +28,25 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
-import { devWarnOnce } from "./dev-warn";
 import {
+  BuilderNoticeRegion,
+  NoticeSinkProvider,
+  useNoticeQueue,
+} from "./builder-notices";
+import type { CanvasZoom } from "./canvas-zoom";
+import { CanvasZoomControl } from "./canvas-zoom-control";
+import { devWarnOnce } from "./dev-warn";
+import { ShellActiveContext, useShellIsActive } from "./shell-active";
+import {
+  BUILDER_CHROME_CLASS,
+  BUILDER_TOKENS_CLASS,
   DEFAULT_PREFERENCES,
   EMPTY_ELEMENTS_ATTRIBUTE,
   browserStore,
   fitsFullShell,
+  CANVAS_GUTTER,
   LEFT_PANELS,
-  MIN_CANVAS_WIDTH,
+  MIN_CANVAS_PANEL_WIDTH,
   MIN_SHELL_WIDTH,
   PANEL_BOUNDS,
   panelAfterRailClick,
@@ -77,6 +90,7 @@ const PANEL_CHROME: Record<
   layers: { label: "Layers", Icon: Layers },
   components: { label: "Components", Icon: Blocks },
   tokens: { label: "Tokens", Icon: Palette },
+  classes: { label: "Classes", Icon: Braces },
   fonts: { label: "Fonts", Icon: Type },
   pages: { label: "Pages", Icon: FileText },
   settings: { label: "Settings", Icon: Settings },
@@ -98,9 +112,9 @@ export interface BuilderShellProps {
   /**
    * Which panels the host can actually fill.
    *
-   * The rail always shows all seven, because the set is the editor's shape and
-   * hiding the unbuilt ones would make the chrome change under an author as
-   * features land. What it must not do is OPEN one nothing renders into: that
+   * The rail always shows every panel, because the set is the editor's shape
+   * and hiding the unbuilt ones would make the chrome change under an author
+   * as features land. What it must not do is OPEN one nothing renders into: that
    * reserves a panel and shrinks the canvas to display nothing, which reads as a
    * broken control rather than an absent feature.
    *
@@ -113,6 +127,72 @@ export interface BuilderShellProps {
    * the panel body.
    */
   availablePanels?: readonly LeftPanel[];
+  /**
+   * Opens a panel from OUTSIDE the shell, once per distinct count.
+   *
+   * The rail is normally the only way to change which panel is open, and its
+   * own click handler is a TOGGLE — pressing an already-open panel's item
+   * closes it. A control drawn on the canvas itself (the empty-container
+   * appender) needs the opposite contract: pressing it must show the insert
+   * panel whether or not it is already open, and pressing it again for a
+   * DIFFERENT empty container must show it again even if the author closed it
+   * by hand in between.
+   *
+   * A plain boolean or a bare panel name cannot express "again" — the second
+   * press would carry the same value as the first, and an effect keyed on it
+   * would never re-run. A counter the caller bumps on every press is the same
+   * shape {@link PreferencesLoad.count} below has: not the state itself, but a
+   * count of how many times the thing behind it happened.
+   *
+   * The panel travels WITH the count rather than in a second prop. One caller
+   * asking for insert and another for tokens are the same request with a
+   * different subject, and two props would be two answers to one question —
+   * free to disagree about which panel a given count refers to.
+   *
+   * Left `undefined` this does nothing, which is what every host that has no
+   * such control gets by default.
+   */
+  openPanelRequest?: { readonly panel: LeftPanel; readonly count: number };
+  /**
+   * Reports `showEmptyElements` to a host that needs to know whether the
+   * canvas's empty-container chrome should be showing right now.
+   *
+   * The preference lives entirely inside this shell — see `store` below —
+   * and a caller drawing a SEPARATE overlay over the same canvas (the
+   * empty-container appender, mounted through `Canvas`'s own `overlay` prop
+   * rather than through this component's internals) has no way to reach it.
+   * This is the read half of that gap; `openPanelRequest` above is the
+   * write half of a different one.
+   *
+   * Called for every value the preference takes, including the very first
+   * one: a host that waited for a change would have no answer at all until
+   * the author touched the control, and would have to guess the default in
+   * the meantime — a guess that silently goes stale the day the default
+   * changes here and not at every call site that duplicated it.
+   */
+  onShowEmptyElementsChange?: (showEmptyElements: boolean) => void;
+  /**
+   * Reports the canvas zoom, and takes the change back.
+   *
+   * The shell owns it because the shell owns preferences, and a host owns what
+   * to DO with it — the canvas is the host's to render, so only it can apply a
+   * scale. Reported the same way `showEmptyElements` is, including on the first
+   * value, so a host never has to assume the default.
+   */
+  onZoomChange?: (zoom: CanvasZoom) => void;
+  /**
+   * The scale the canvas is actually painting at, for the zoom control.
+   *
+   * Travels UP because only the canvas can know it — while fitting it is
+   * derived from a region the canvas measures — and the canvas is the host's to
+   * render. The zoom itself travels DOWN, because this shell owns preferences
+   * and therefore owns the choice.
+   *
+   * One direction each is the whole design. Holding the zoom on both sides and
+   * syncing them is what produced an oscillating write of `fit, 2, fit, 2` on
+   * every open: two owners, each correcting the other.
+   */
+  appliedScale?: number;
   /** The canvas. The shell never looks inside it. */
   children?: React.ReactNode;
   /** The inspector's contents. */
@@ -254,28 +334,46 @@ function useFitsFullShell(): [(node: HTMLElement | null) => void, boolean] {
 }
 
 /**
- * Whether the shell around this subtree is currently interactive.
+ * Re-exported from the leaf that declares it, so the shell stays the name callers reach for.
  *
- * Defaults to `true`, which covers both callers outside a shell entirely and the server render,
- * where the width is unknowable — the same assumption {@link useFitsFullShell} makes and for the
- * same reason.
+ * The declaration moved out because `builder-notices` consumes it and the shell imports
+ * `builder-notices`, which would make the two import each other.
  */
-const ShellActiveContext = React.createContext(true);
+export { useShellIsActive };
 
 /**
- * Whether the surrounding shell is interactive, for content that has to answer for itself.
+ * What the newest completed read of a preference store left behind.
  *
- * The shell hides its slots behind `hidden` and `inert` below {@link MIN_SHELL_WIDTH}, which is
- * enough for anything rendering in place. It is NOT enough for anything that portals to the
- * document body — a dialog escapes the wrapper and would sit over the narrow-screen notice, fully
- * interactive. Such a component reads this instead of re-deriving the width, so one media query
- * decides both and they cannot disagree.
+ * TWO fields because there are two different questions downstream, and one
+ * value cannot answer both:
  *
- * @experimental
+ * - `count` answers "has a NEW record arrived", which is what a remount is
+ *   keyed on. Any read qualifies: the panel group has to re-register against
+ *   whatever layout landed, whoever it belongs to.
+ * - `store` answers "whose record is `preferences` holding right now", which is
+ *   what any guard protecting a WRITE needs. The count cannot answer it — it is
+ *   monotonic, so it is already nonzero for the previous store the moment a host
+ *   swaps in a new one, and a write let through in that window spreads the old
+ *   store's record and persists it into the new store, replacing the layout and
+ *   the `showEmptyElements` of whichever user or workspace the new store belongs
+ *   to.
+ *
+ * `store` is the store OBJECT rather than a name or an index, for the reason
+ * the identity is already the read's dependency: it is the thing itself, and no
+ * two live stores can compare equal without being the same store.
+ *
+ * `null` is the state before any read has completed, and it is deliberately not
+ * a fourth thing to test for: every caller compares this against the store it
+ * is about to act on, and `null` is not any store, so "no read yet" and "a
+ * different store's read" answer alike without either being spelled out.
  */
-export function useShellIsActive(): boolean {
-  return React.useContext(ShellActiveContext);
+interface PreferencesLoad {
+  readonly count: number;
+  readonly store: PreferenceStore | null;
 }
+
+/** Before any read has reached state. */
+const NO_LOAD: PreferencesLoad = { count: 0, store: null };
 
 /**
  * Preferences, restored AFTER mount and written back whenever they change.
@@ -295,29 +393,7 @@ export function useShellIsActive(): boolean {
 function usePreferences(store: PreferenceStore) {
   const [preferences, setPreferences] =
     React.useState<ShellPreferences>(DEFAULT_PREFERENCES);
-  /**
-   * How many times a store has been READ into this hook.
-   *
-   * Downstream, restoring a layout is a once-per-load act, and "once" has to be
-   * counted against something. Counted against the component's lifetime it is
-   * wrong as soon as the host swaps stores — signing into a second workspace
-   * loads that user's preferences, and a guard that already fired leaves the
-   * previous user's widths on screen.
-   *
-   * A counter rather than the store's identity because it is what the guard
-   * downstream compares against, and it says WHICH load was applied rather than
-   * merely that one was.
-   *
-   * It does NOT detect a host mutating the data behind a store it keeps
-   * handing us: the read below is keyed on the store's identity, so an
-   * unchanged object means no read happens at all and this never advances.
-   * That is the documented contract on `store` — a new backing user or
-   * workspace is a new store object — rather than a gap. Detecting it instead
-   * would mean a subscription or a revision token on the port, which is a
-   * third method every host implementing it would have to get right, for a
-   * case a caller can satisfy by passing a new object.
-   */
-  const [loadCount, setLoadCount] = React.useState(0);
+  const [load, setLoad] = React.useState<PreferencesLoad>(NO_LOAD);
 
   React.useEffect(() => {
     const restored = readPreferences(store);
@@ -326,7 +402,11 @@ function usePreferences(store: PreferenceStore) {
     setPreferences(current =>
       shallowEqualPreferences(current, restored) ? current : restored
     );
-    setLoadCount(count => count + 1);
+    // Set in the SAME effect as the preferences it describes, which is what
+    // makes `store` below an honest account of whose record `preferences`
+    // holds: React applies both updates in one commit, so no render can see
+    // one without the other.
+    setLoad(current => ({ count: current.count + 1, store }));
   }, [store]);
 
   // The newest preferences, reachable from a callback that must not go stale.
@@ -357,7 +437,15 @@ function usePreferences(store: PreferenceStore) {
     [store]
   );
 
-  return [preferences, update, loadCount] as const;
+  /*
+   * The store-specific answer is derived HERE rather than handed out for a
+   * caller to work out, because the comparison is only sound against the same
+   * store the read was keyed on — and that is this argument. Returning
+   * `load.store` instead would leave every caller re-deriving it, and a caller
+   * holding a different store variable (the shell resolves a fallback of its
+   * own) would compare the wrong pair while looking correct.
+   */
+  return [preferences, update, load.count, load.store === store] as const;
 }
 
 /**
@@ -374,6 +462,12 @@ function usePreferences(store: PreferenceStore) {
  * builds a fresh object every call, so identity is always false and the restore
  * effect would set state on every mount even when nothing changed.
  */
+/** Whether two zooms mean the same thing, which is not object identity. */
+function sameZoom(a: CanvasZoom, b: CanvasZoom): boolean {
+  if (a.kind !== b.kind) return false;
+  return a.kind === "fixed" && b.kind === "fixed" ? a.scale === b.scale : true;
+}
+
 function shallowEqualPreferences(
   a: ShellPreferences,
   b: ShellPreferences
@@ -381,7 +475,8 @@ function shallowEqualPreferences(
   if (
     a.leftPanel !== b.leftPanel ||
     a.leftPinned !== b.leftPinned ||
-    a.showEmptyElements !== b.showEmptyElements
+    a.showEmptyElements !== b.showEmptyElements ||
+    !sameZoom(a.zoom, b.zoom)
   ) {
     return false;
   }
@@ -653,6 +748,8 @@ function useSeparatorRegionEscape(
 }
 
 function ShellRegions({
+  appliedScale = 1,
+  onZoomPick,
   renderPanel,
   availablePanels,
   children,
@@ -667,6 +764,8 @@ function ShellRegions({
   active,
   loadCount,
 }: Omit<BuilderShellProps, "store"> & {
+  /** The zoom picker, or absent where the host wired none. */
+  onZoomPick: ((next: CanvasZoom) => void) | undefined;
   preferences: ShellPreferences;
   update: (change: (current: ShellPreferences) => ShellPreferences) => void;
   /**
@@ -683,6 +782,13 @@ function ShellRegions({
    * Restoring a layout happens once per load, and this is what "once" is
    * counted against: the group is remounted per load so the library
    * re-reads the restored layout at panel registration.
+   *
+   * ANY load, deliberately — unlike the write guard on the token effect, which
+   * has to know WHOSE record arrived. A remount is a response to a new layout
+   * being on screen, and the panels have to re-register against it whichever
+   * store produced it: the swap that makes a count useless for deciding a write
+   * is exactly a case that must remount. So the count and the identity are two
+   * separate answers rather than one this could share.
    */
   loadCount: number;
 }) {
@@ -746,7 +852,8 @@ function ShellRegions({
       ref={chromeRef}
       onKeyDownCapture={onKeyDownCapture}
       className={cn(
-        "nx-builder-chrome flex h-full w-full flex-col overflow-hidden",
+        BUILDER_CHROME_CLASS,
+        "flex h-full w-full flex-col overflow-hidden",
         className
       )}
       // Absent when empty containers are shown, which is the default. A state
@@ -772,9 +879,24 @@ function ShellRegions({
             type="button"
             onClick={onExit}
             data-builder-animates
-            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
+            /*
+             * The NAME stays "Exit editor" while the label becomes a glyph.
+             * This is the only route back to the document — `ChromeSuppression`
+             * withholds the navigation rail from a surface that cannot be left,
+             * on the grounds that an author with unsaved work and no way out is
+             * the worst state the editor can reach — so it keeps a real
+             * accessible name and a tooltip rather than relying on the arrow
+             * being self-evident.
+             *
+             * An arrow rather than a cross: this returns to the document that
+             * opened the editor, and a cross reads as discarding rather than
+             * as going back.
+             */
+            aria-label="Exit editor"
+            title="Exit editor"
+            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border p-1.5 focus-visible:ring-2 focus-visible:outline-none"
           >
-            Exit editor
+            <ArrowLeft className="size-4" aria-hidden="true" />
           </button>
         ) : null}
         <div className="flex min-w-0 flex-1 items-center gap-2">{topBar}</div>
@@ -789,19 +911,68 @@ function ShellRegions({
          * VISIBILITY affordance, and one an author cannot read at a glance
          * would repeat the exact failure this feature exists to fix.
          */}
-        <Label
-          htmlFor={emptyElementsToggleId}
-          className="text-[color:var(--nx-builder-text-muted)] shrink-0"
-        >
-          Show empty containers
-          <Switch
-            id={emptyElementsToggleId}
-            checked={preferences.showEmptyElements}
-            onCheckedChange={checked =>
-              update(current => ({ ...current, showEmptyElements: checked }))
-            }
-          />
-        </Label>
+        <Tooltip>
+          <Label
+            htmlFor={emptyElementsToggleId}
+            className="text-[color:var(--nx-builder-text-muted)] shrink-0"
+          >
+            Show empty containers
+            {/*
+             * The SWITCH is the trigger, not the label around it.
+             *
+             * A label is not focusable, so a tooltip anchored to it is a
+             * pointer-only affordance — and this control is reached by keyboard
+             * like any other. Anchored here, hovering and focusing both reveal
+             * it, and Radix points the control's `aria-describedby` at the
+             * content while it is open.
+             */}
+            <TooltipTrigger asChild>
+              <Switch
+                id={emptyElementsToggleId}
+                checked={preferences.showEmptyElements}
+                onCheckedChange={checked =>
+                  update(current => ({
+                    ...current,
+                    showEmptyElements: checked,
+                  }))
+                }
+              />
+            </TooltipTrigger>
+          </Label>
+          {/*
+           * What the label cannot say in the width a toolbar has.
+           *
+           * "Show empty containers" names the action and not the subject: a
+           * container an author has just added holds nothing, so it renders at
+           * zero height and is invisible on the canvas — which reads as the
+           * block never having been added. The word for that state is what the
+           * control is missing, so the description gives the CONSEQUENCE of
+           * each position rather than restating the label.
+           */}
+          <TooltipContent side="bottom">
+            A container holding no blocks has no height of its own, so it cannot
+            be seen or selected on the canvas. Showing them draws a placeholder
+            in its place.
+          </TooltipContent>
+        </Tooltip>
+        {/*
+          Rendered by the shell, not handed to the host as a slot, because the
+          shell owns preferences and this control edits one. A host drawing its
+          own would hold the value in a second place, and the two would correct
+          each other on every open.
+
+          Only where the host has WIRED it, though. The canvas belongs to the
+          host, so without `onZoomChange` there is nothing to apply a choice to:
+          the control would store a preference, report a percentage the canvas
+          does not honour, and read 100% whatever was picked. A shell that
+          predates this — the README example and the playground harness among
+          them — should gain no control rather than a dead one.
+        */}
+        <CanvasZoomControl
+          zoom={preferences.zoom}
+          appliedScale={appliedScale}
+          onChange={onZoomPick}
+        />
       </header>
 
       <div className="flex min-h-0 flex-1">
@@ -927,11 +1098,17 @@ function ShellRegions({
                   </React.Fragment>
                 </section>
               </ResizablePanel>
-              <ResizableHandle withGrip />
+              {/* Named for what it DIVIDES rather than for itself. A keyboard
+                  user lands here between two regions and hears its position;
+                  "Panel and canvas" is what makes the position mean something.
+                  The panel side is named by its role rather than by which
+                  panel is open, because the name would otherwise change under
+                  a user who is standing on it. */}
+              <ResizableHandle withGrip aria-label="Panel and canvas" />
             </>
           ) : null}
 
-          <ResizablePanel id="canvas" minSize={MIN_CANVAS_WIDTH}>
+          <ResizablePanel id="canvas" minSize={MIN_CANVAS_PANEL_WIDTH}>
             {/*
              * A named `section`, never `<main>`.
              *
@@ -964,6 +1141,26 @@ function ShellRegions({
                  */
                 tabIndex={0}
                 aria-label="Canvas"
+                /*
+                 * Padded, so the page floats inside the region rather than
+                 * meeting its edges. The frame is then visible on every side at
+                 * every width — without it the page fills the region whenever
+                 * it is not scaled down, and the edge this gap exists to show
+                 * has nowhere to appear.
+                 *
+                 * Safe against the fit: `canvasScale` observes this element's
+                 * CONTENT box, so padding narrows the width the page is fitted
+                 * into and the scale follows it. A padding the measurement
+                 * could not see would size the page to the region and paint it
+                 * over the gap.
+                 *
+                 * Taken from the constant the panel's own minimum is derived
+                 * from, rather than written as a utility class. The gap is
+                 * spent out of this panel, so a class here and a number there
+                 * would let the two drift and put the floor back inside the
+                 * editing surface.
+                 */
+                style={{ padding: CANVAS_GUTTER }}
                 className="h-full overflow-auto"
               >
                 {children}
@@ -979,7 +1176,7 @@ function ShellRegions({
             </div>
           </ResizablePanel>
 
-          <ResizableHandle withGrip />
+          <ResizableHandle withGrip aria-label="Canvas and inspector" />
 
           <ResizablePanel
             id="inspector"
@@ -1025,7 +1222,14 @@ function ShellRegions({
  *
  * @experimental
  */
-export function BuilderShell({ store, ...props }: BuilderShellProps) {
+export function BuilderShell({
+  store,
+  openPanelRequest,
+  onShowEmptyElementsChange,
+  onZoomChange,
+  appliedScale = 1,
+  ...props
+}: BuilderShellProps) {
   // The browser store is built once: rebuilt each render it would change
   // `usePreferences`' callback identity every render, and the write effect with
   // it. Only the FALLBACK needs that treatment though. Capturing the caller's
@@ -1035,8 +1239,144 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
   const fallbackStore = React.useRef<PreferenceStore | null>(null);
   fallbackStore.current ??= browserStore(STORAGE_KEY);
   const resolvedStore = store ?? fallbackStore.current;
-  const [preferences, update, loadCount] = usePreferences(resolvedStore);
+  const [preferences, update, loadCount, loadedFromCurrentStore] =
+    usePreferences(resolvedStore);
   const [measureShell, shellFits] = useFitsFullShell();
+
+  /*
+   * Applies an `openPanelRequest` change AT MOST ONCE — a ref rather than
+   * state, because recording that a token was handled is not itself something a
+   * re-render should follow from.
+   *
+   * The ref deliberately survives a store swap. A token already applied belongs
+   * to the session the author pressed the control in, so re-applying it to the
+   * store that replaced it would open a panel nobody asked this store for.
+   *
+   * FORCES `leftPanel` to `"insert"` rather than routing through
+   * `panelAfterRailClick`: that helper TOGGLES, and toggling is exactly wrong
+   * for a control whose contract is "show the panel this fills" — never
+   * "close it if it happens to already be open", which is what a second rail
+   * click on the same item means.
+   *
+   * No availability check against `availablePanels` here: `ShellRegions`
+   * below already normalises `preferences.leftPanel` against it when deriving
+   * the panel it actually renders, so a request naming a panel the host
+   * cannot fill is absorbed there rather than needing a second check here.
+   */
+  const handledPanelRequest = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    if (openPanelRequest === undefined) return;
+    /*
+     * Nothing is applied until THIS store's read has landed, and that ordering
+     * is the whole of this guard.
+     *
+     * `update` takes the newest preferences this hook has seen and writes the
+     * result straight back through the store it currently holds. Reading a
+     * store is itself an effect, so in the commit a store first arrives in it
+     * has only SCHEDULED that store's record — what `update` would spread here
+     * is still whatever `preferences` held before. Both ways that happens end
+     * in a write of the wrong record:
+     *
+     * - at MOUNT, `preferences` is `DEFAULT_PREFERENCES`, so a token defined on
+     *   the first render persists the defaults over the author's own panel
+     *   widths and `showEmptyElements`.
+     * - after a store SWAP — signing into a second workspace, promoting a
+     *   memory store to a persisted one — `preferences` is the PREVIOUS store's
+     *   record, so a token arriving in the same render writes one user's or
+     *   workspace's saved layout into another's.
+     *
+     * Either way the panel the token asked for opens and looks entirely
+     * correct, which is what makes the write invisible until the next load.
+     *
+     * So the arrival this waits on is store-specific rather than "some read has
+     * happened": a COUNT of reads is already nonzero for the outgoing store at
+     * the moment of a swap, which is precisely the window the second case sits
+     * in. Once it is true, it stays true for as long as the store does — a read
+     * cannot fail (`readPreferences` answers with the defaults for unreadable
+     * or malformed storage) and one that remembers nothing still answers — so
+     * this delays a token by a single render and can never hold one
+     * indefinitely. A token arriving any later than that render applies in the
+     * same flush it arrived in.
+     */
+    if (!loadedFromCurrentStore) return;
+    if (handledPanelRequest.current === openPanelRequest.count) return;
+    handledPanelRequest.current = openPanelRequest.count;
+    const panel = openPanelRequest.panel;
+    update(current => ({ ...current, leftPanel: panel }));
+  }, [openPanelRequest, update, loadedFromCurrentStore]);
+
+  /*
+   * The read half of the same gap: told on every value `showEmptyElements`
+   * takes, including the first, so a host answers "should my own overlay be
+   * showing" honestly from the start rather than assuming the default and
+   * drifting from it the day that default changes here.
+   *
+   * No once-per-value guard here, unlike the token above. Reporting the same
+   * value twice is calling the host back with information it already has —
+   * inert, not incorrect — where applying the SAME token twice would have
+   * been a second unwanted forced-open.
+   */
+  // Held in a ref rather than read straight from the prop. A host passing the
+  // conventional inline callback — `value => setState(c => ({ ...c, value }))`
+  // — hands this a NEW function identity on every one of its own renders, and
+  // that identity was a dependency here: the effect re-ran even though
+  // `showEmptyElements` had not changed, called the callback again, and a host
+  // whose state update itself triggers a re-render — an ordinary spread
+  // creates a new object every time, whether or not any field actually
+  // differs — closes that into a render loop. The ref always holds the latest
+  // callback without needing to be a dependency, so the effect below runs only
+  // when the PREFERENCE changes.
+  const onShowEmptyElementsChangeRef = React.useRef(onShowEmptyElementsChange);
+  React.useEffect(() => {
+    onShowEmptyElementsChangeRef.current = onShowEmptyElementsChange;
+  });
+  React.useEffect(() => {
+    onShowEmptyElementsChangeRef.current?.(preferences.showEmptyElements);
+  }, [preferences.showEmptyElements]);
+  /*
+   * A zoom chosen outside this shell, stored here.
+   *
+   * Compared by VALUE rather than by object identity: a host rebuilding the
+   * object each render — which the conventional inline handler does — would
+   * write preferences on every render, and every write reports back out, which
+   * is a loop rather than a preference.
+   */
+  /*
+   * The zoom picker, resolved here rather than where it is drawn.
+   *
+   * `undefined` when the host has wired nothing, which is what makes the
+   * control render nothing — see its own documentation for why a dead one is
+   * worse than none. Deciding it at the render site put the branch inside a
+   * region that is already the largest function in this file.
+   */
+  const onZoomPick = React.useMemo(
+    () =>
+      onZoomChange === undefined
+        ? undefined
+        : (next: CanvasZoom) => update(current => ({ ...current, zoom: next })),
+    [onZoomChange, update]
+  );
+
+  /*
+   * The zoom, held and reported the same way and for the same reasons, plus
+   * one the value above does not have: whether a listener EXISTS is itself a
+   * dependency.
+   *
+   * A host can resolve `onZoomChange` from its own state, so the prop moves
+   * from `undefined` to a callback after the first render. Keyed on the value
+   * alone, the effect would not re-run at that moment and the host would carry
+   * the default zoom until the author happened to pick another — its canvas
+   * drawn at a scale the control does not claim.
+   */
+  const onZoomChangeRef = React.useRef(onZoomChange);
+  React.useEffect(() => {
+    onZoomChangeRef.current = onZoomChange;
+  });
+  const reportingZoom = onZoomChange !== undefined;
+  React.useEffect(() => {
+    onZoomChangeRef.current?.(preferences.zoom);
+  }, [reportingZoom, preferences.zoom]);
+
   /*
    * Where overlays inside this shell portal to. State rather than a ref,
    * because `PortalProvider` has to RE-RENDER once the node exists; a ref
@@ -1045,6 +1385,12 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
   const [overlayHost, setOverlayHost] = React.useState<HTMLDivElement | null>(
     null
   );
+  /*
+   * Reports from controls that could not make one themselves. Owned at this
+   * level because it must survive everything below it being unmounted, which
+   * is exactly what the inspector's per-node keys do on every selection change.
+   */
+  const notices = useNoticeQueue();
 
   return (
     <ShortcutProvider>
@@ -1073,13 +1419,53 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
           ref={measureShell}
           className={cn("h-full w-full", props.className)}
         >
+          {/*
+           * The notice surface, mounted OUTSIDE the wrapper the shell makes
+           * `hidden` and `inert`, and mounted unconditionally.
+           *
+           * Both properties are load-bearing and they fix different failures.
+           *
+           * Outside, because inert content is excluded from the accessibility
+           * tree and `hidden` takes it out of paint — so a region inside the
+           * wrapper is unreachable by eye AND by screen reader exactly when the
+           * narrow-width notice is up. A refusal that arrives while an author
+           * is narrowing the window has to land somewhere they can still read.
+           *
+           * Unconditionally, rather than switched between the two branches
+           * below, because a live region has to EXIST before the text is put
+           * into it: a region inserted and populated together is routinely
+           * missed, and one that remounts every time the width crosses the
+           * threshold is inserted at the worst possible moment. A single
+           * permanent mount also keeps there being exactly one — two live
+           * regions interfere and some messages are announced by neither.
+           *
+           * The token scope is what the old placement inside the chrome was
+           * for: `--nx-builder-*` inherit down and never across, so a surface
+           * outside the chrome needs them declared on an ancestor of its own.
+           * It takes the TOKEN class rather than the chrome class, because the
+           * chrome class also identifies the editor's root — a second element
+           * carrying it would be matched by every selector and query that means
+           * "the editor", the empty-slot selector among them.
+           *
+           * `display: contents` declares the tokens while generating no box, so
+           * nothing is added to the layout the branches below measure — and the
+           * region is `position: fixed` regardless, since nothing here creates
+           * a containing block.
+           */}
+          <div className={cn(BUILDER_TOKENS_CLASS, "contents")}>
+            <BuilderNoticeRegion
+              notices={notices.notices}
+              onDismiss={notices.dismiss}
+            />
+          </div>
           {!shellFits ? (
             <div
               // No caller `className` here: the wrapper above owns the host's
               // positioning now, and repeating it would apply a grid area or a
               // border twice.
               className={cn(
-                "nx-builder-chrome flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center"
+                BUILDER_CHROME_CLASS,
+                "flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center"
               )}
             >
               {/*
@@ -1195,20 +1581,28 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
                * rather than a crash, and no overlay can be open that early.
                */}
               <PortalProvider container={overlayHost}>
-                <ShellRegions
-                  {...props}
-                  preferences={preferences}
-                  update={update}
-                  active={shellFits}
-                  loadCount={loadCount}
-                  /*
-                   * The caller's `className` stops here: the measuring wrapper
-                   * above carries it. Passing it on would apply the host's grid
-                   * area, height or border a second time, on a box nested inside
-                   * the one already carrying it.
-                   */
-                  className={undefined}
-                />
+                {/* Wraps the regions rather than sitting beside them: the
+                    inspector and the panels are `ReactNode` props, so they
+                    become descendants of this provider by being RENDERED here,
+                    wherever the host created them. */}
+                <NoticeSinkProvider raise={notices.raise}>
+                  <ShellRegions
+                    appliedScale={appliedScale}
+                    onZoomPick={onZoomPick}
+                    {...props}
+                    preferences={preferences}
+                    update={update}
+                    active={shellFits}
+                    loadCount={loadCount}
+                    /*
+                     * The caller's `className` stops here: the measuring wrapper
+                     * above carries it. Passing it on would apply the host's grid
+                     * area, height or border a second time, on a box nested inside
+                     * the one already carrying it.
+                     */
+                    className={undefined}
+                  />
+                </NoticeSinkProvider>
               </PortalProvider>
             </ShellActiveContext.Provider>
           </div>

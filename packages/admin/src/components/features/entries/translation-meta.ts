@@ -26,6 +26,19 @@ export interface LocaleTranslationMeta {
    * rather than false when there is nothing pending, matching the wire shape.
    */
   pendingChange?: boolean;
+  /**
+   * Whether the SOURCE language was written after this one was (i18n B2).
+   *
+   * A THIRD independent fact, alongside `status` and `pendingChange`, and kept apart from both
+   * for the reason `pendingChange` already gives: a stale translation is still translated, and
+   * still published if it was published. Rendering it as a state of its own would take a live
+   * language out of "Published" on every screen that shows one, understating what the site
+   * serves.
+   *
+   * Absent rather than false when nothing is known — a translation written before the timestamp
+   * existed is UNKNOWN, which is not the same as up to date.
+   */
+  stale?: boolean;
 }
 
 export interface TranslationCounts {
@@ -140,10 +153,19 @@ export function languageState(
  */
 export function languageStateLabel(
   state: LanguageState,
-  pendingChange?: boolean
+  qualifiers: { pendingChange?: boolean; stale?: boolean } = {}
 ): string {
-  const base = LANGUAGE_STATE_LABEL[state];
-  return pendingChange ? `${base} · unpublished changes` : base;
+  // An OBJECT rather than a second positional flag, now that there are two of these and more are
+  // plausible. Positional booleans read identically at the call site whichever one you meant, so
+  // the second one to arrive is the one that gets passed in the first one's place -- and the
+  // result is a label that is wrong in a way nothing type-checks.
+  //
+  // Appended in a fixed order and never substituted: each qualifier is a separate fact about the
+  // same language, and the state itself remains what the language IS.
+  const parts = [LANGUAGE_STATE_LABEL[state]];
+  if (qualifiers.stale) parts.push("source changed since");
+  if (qualifiers.pendingChange) parts.push("unpublished changes");
+  return parts.join(" · ");
 }
 
 export const LANGUAGE_STATE_LABEL: Record<LanguageState, string> = {

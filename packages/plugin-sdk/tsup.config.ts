@@ -8,6 +8,7 @@ export default defineConfig({
     "src/admin.ts",
     "src/blocks.ts",
     "src/routing.ts",
+    "src/widgets.ts",
   ],
   format: ["esm"],
   dts: true,

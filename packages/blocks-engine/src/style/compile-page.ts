@@ -20,6 +20,7 @@
 import type {
   BlockDocument,
   BlockNode,
+  BlockPart,
   BreakpointDef,
   BreakpointSet,
   NodeStyles,
@@ -32,6 +33,7 @@ import {
   MAX_NAMED_CLASSES,
   STYLE_STATES,
   isBlockType,
+  isPartName,
 } from "../document";
 import { describeValue, pointer } from "../issue-text";
 import { DEFAULT_LIMITS } from "../limits";
@@ -58,8 +60,10 @@ import {
   NAMED_CLASS_SLUG_RE,
 } from "./named-class";
 import {
+  blockPartClassName,
   blockTypeClassName,
   nodeClassNames,
+  PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
 import { serializeRules } from "./serialize";
@@ -88,6 +92,25 @@ export interface StyleCompileContext {
    * did not change. See {@link BreakpointContextOptions.previewContainer}.
    */
   previewContainer?: string;
+  /**
+   * Emit each interaction state so a previewing surface can FORCE one on an
+   * element, by putting {@link previewStateClass} on it.
+   *
+   * For an editor, and off by default. A published page has no reason to carry
+   * a class nothing will ever set, and a visitor's browser decides its own
+   * `:hover`.
+   *
+   * SEPARATE from `previewContainer` although both describe a preview, because
+   * that one is only set when the site defines breakpoints — a site with none
+   * would silently get no state preview if this rode on it. Two surfaces can
+   * want one without the other.
+   *
+   * Costs nothing in weight: the marker joins the pseudo-class INSIDE the
+   * existing `:where()`, which contributes nothing whatever it holds. That is
+   * what lets the preview cascade match the published one exactly, which the
+   * style panel's provenance depends on — it explains what a VISITOR gets.
+   */
+  previewStates?: boolean;
   /**
    * Which hosts this site will fetch from.
    *
@@ -124,6 +147,43 @@ export interface StyleCompileContext {
    * improving a block's default look reaches pages that already exist.
    */
   blockBases?: Readonly<Record<string, NodeStyles>>;
+  /**
+   * Base styles for the elements a block renders inside its root, keyed by
+   * block name and then by part name.
+   *
+   * A sibling of {@link blockBases} rather than a richer value inside it,
+   * matching how {@link elementBases} and the named-class tier already sit
+   * beside it. The two answer different questions — one styles the element the
+   * block-type class is ON, the other styles elements it is not — and a block
+   * declaring neither, one, or both are all ordinary.
+   *
+   * The selector travels with the styles because this package holds no
+   * registry: it cannot look a part's element up from its name, so the caller
+   * that does hold the definitions resolves both together, the same way
+   * `drawsNothing` answers from a registry this compiler cannot see.
+   */
+  blockParts?: Readonly<Record<string, Readonly<Record<string, BlockPart>>>>;
+
+  /**
+   * Typographic defaults per HTML element, keyed by tag name.
+   *
+   * A tier below {@link PageStyleContext.blockBases}, and it exists because a
+   * block type cannot express one. A heading's LEVEL is a prop, so every
+   * `core/heading` shares one block-type class and one default with it — which
+   * would give `h1` and `h3` the same size, the defect rather than the fix.
+   * The element is the only thing that distinguishes them.
+   *
+   * Emitted at zero specificity like block defaults, and BEFORE them, so at
+   * equal weight a block's own default wins on source order. Both lose to a
+   * named class and to a node's own value.
+   *
+   * A provisional layer, not a design system. Gutenberg — the closest peer that
+   * both ships blocks and renders pages — keeps metric defaults out of block
+   * CSS and defers to a theme; Nextly has no populated typography scale yet, so
+   * this bridges the gap until the fonts manager fills it, and is shaped so
+   * that manager can supply the same record later.
+   */
+  elementBases?: Readonly<Partial<Record<TypographicElement, NodeStyles>>>;
 
   /**
    * Whether a node's block declares that these props draw nothing.
@@ -311,12 +371,138 @@ export interface CompiledPageCss {
  * users who never asked for one, which is why authors historically removed focus
  * styling altogether and broke keyboard navigation.
  */
-const STATE_SELECTORS: Readonly<Record<StyleState, string>> = {
-  base: "",
-  hover: ":where(:hover)",
-  focus: ":where(:focus-visible)",
-  active: ":where(:active)",
+/**
+ * The elements a typographic default may be written for.
+ *
+ * Closed and ordered: closed because a tag is interpolated into a selector and
+ * a caller-supplied one would be an injection surface of exactly the kind the
+ * block-type check below refuses; ordered because two defaults at equal
+ * specificity are separated by source order, so the order they are emitted in
+ * is part of the contract rather than an artifact of iteration.
+ */
+export const TYPOGRAPHIC_ELEMENTS = [
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "p",
+] as const;
+
+/**
+ * An element a typographic default may be written for.
+ *
+ * The type is the allow-list rather than a widening of it, so a tag the
+ * compiler does not emit — a typo, or `blockquote` before anyone decides it
+ * belongs — is refused where it is written instead of silently contributing
+ * nothing. A caller reading `Record<string, …>` has no way to learn which keys
+ * are honoured except by trying one.
+ */
+export type TypographicElement = (typeof TYPOGRAPHIC_ELEMENTS)[number];
+
+/**
+ * What each interaction state MEANS, in one place.
+ *
+ * Both facts about a state live here together, because both are read by
+ * surfaces outside this file and either one written down twice can drift from
+ * the other. The pseudo-class is what the compiler emits; whether the state
+ * PROPAGATES is what a previewing surface needs in order to decide which
+ * elements to force it on.
+ *
+ * Propagation is measured behaviour rather than a convention. In a browser, an
+ * ancestor of the target matches `:hover` and `:active` and does NOT match
+ * `:focus-visible` — the selector that would propagate there is
+ * `:focus-within`, which this compiler does not emit. A surface that assumed
+ * one rule for all three would light up an enclosing block for an appearance no
+ * visitor ever sees.
+ *
+ * `base` is not a state: it is what applies when no state does, so it has no
+ * pseudo-class and nothing to propagate.
+ */
+const STATE_FACTS: Readonly<
+  Record<StyleState, { readonly pseudo: string; readonly propagates: boolean }>
+> = {
+  base: { pseudo: "", propagates: false },
+  hover: { pseudo: ":hover", propagates: true },
+  focus: { pseudo: ":focus-visible", propagates: false },
+  active: { pseudo: ":active", propagates: true },
 };
+
+/**
+ * Whether forcing this state on an element should also force it on that
+ * element's ancestors.
+ *
+ * Published because the decision belongs beside the selector it follows from: a
+ * previewing surface marks elements, and a surface deciding for itself which
+ * states propagate holds a second opinion that can disagree with the CSS this
+ * compiler emits. Changing `focus` to `:focus-within` would then move the
+ * published rules and leave the canvas marking the wrong chain.
+ */
+export function statePropagatesToAncestors(state: StyleState): boolean {
+  return STATE_FACTS[state].propagates;
+}
+
+/**
+ * One rendering of each state's pseudo-class, built by `render`.
+ *
+ * A helper rather than two object literals, so neither map can gain a state the
+ * other lacks or spell one differently.
+ */
+function stateSelectors(
+  render: (pseudo: string, state: StyleState) => string
+): Readonly<Record<StyleState, string>> {
+  const selectors = {} as Record<StyleState, string>;
+  for (const state of STYLE_STATES) {
+    const pseudo = STATE_FACTS[state].pseudo;
+    selectors[state] = pseudo === "" ? "" : render(pseudo, state);
+  }
+  return selectors;
+}
+
+const STATE_SELECTORS = stateSelectors(pseudo => `:where(${pseudo})`);
+
+/**
+ * The class a previewing surface puts on ONE element to force an interaction
+ * state on it.
+ *
+ * A page cannot force a pseudo-class on itself. There is no CSS or DOM way to
+ * make an element match `:hover` without a pointer — `Emulation.forcePseudoState`
+ * is a devtools protocol, not something a page can reach. So an editor that
+ * lets an author edit a hover appearance has to be given something it CAN
+ * toggle, and this is it.
+ *
+ * Named by the engine rather than by the editor because it is a contract
+ * between the two: the compiler writes it into a selector and the surface puts
+ * it on an element, and a name spelled in two places can be spelled
+ * differently. The same reason `NODE_ID_ATTRIBUTE` is published.
+ */
+export function previewStateClass(state: StyleState): string {
+  return `nx-pb-state-${state}`;
+}
+
+/**
+ * The state selectors a PREVIEW sheet uses, with the marker joined to the
+ * pseudo-class inside the existing wrapper.
+ *
+ * INSIDE `:where()`, which is the whole reason this is safe. `:where()`
+ * contributes nothing whatever it holds, so a previewed rule weighs exactly
+ * what the published one weighs and the preview cascade cannot differ from the
+ * cascade a visitor gets. Measured in a browser against the alternative: with
+ * the marker inside, a later equal-weight rule still won; moved outside, the
+ * earlier rule won because the class had added weight of its own.
+ *
+ * That equality is a requirement rather than a nicety. The style panel's
+ * provenance explains what the PUBLISHED page does, so a preview that ranked
+ * its rules differently would describe an order no visitor ever sees — in the
+ * one state the author opened the panel to inspect.
+ *
+ * `base` has no marker: it is not a state anything forces, it is what applies
+ * when nothing else does.
+ */
+const PREVIEW_STATE_SELECTORS = stateSelectors(
+  (pseudo, state) => `:where(${pseudo}, .${previewStateClass(state)})`
+);
 
 /** One breakpoint to emit under, with the at-rule it needs. */
 export interface BreakpointContext {
@@ -1035,6 +1221,45 @@ interface EnvelopeContext {
   trace?: StyleTraceEntry[];
   /** Which hosts this site will fetch from; unasked when absent. */
   mayFetchUrl?: MayFetchUrl;
+  /**
+   * The selector part kept OUTSIDE `:where()` when this envelope's rules are
+   * written as defaults, with everything else wrapped.
+   *
+   * Set for the two DEFAULT tiers — a block type's and the typographic baseline
+   * keyed by element — and for nothing else. The page-root prefix
+   * is doubled so an AUTHOR's values beat ordinary host CSS, and defaults
+   * inherited that contract without it ever being argued for them — but a
+   * default nobody can override is not a default. Builder.io shipped
+   * compound-class component defaults and answered the resulting complaints
+   * with a global opt-out; every low-friction precedent that ships
+   * rendered-block typography keeps it at the floor instead, Webflow on bare
+   * tags and Tailwind Typography inside `:where()`.
+   *
+   * It also orders the three tiers by CONSTRUCTION rather than by emission
+   * order: a type's default loses to a named class and to a node's own value
+   * because it weighs nothing, not because it happens to be written first.
+   *
+   * **It is an anchor rather than a flag because zero is the wrong weight.**
+   * Wrapping the WHOLE selector gives `0-0-0`, and an ordinary unlayered reset
+   * — `h1, h2, … { font-size: inherit; margin: 0 }`, which is the shape
+   * Tailwind's preflight ships — is `0-0-1` and beats it. A default written
+   * that way loses to the very reset it exists to answer. Measured in a
+   * browser: with the reset present, the fully wrapped rule left an `h1` at
+   * 16px and the anchored one at its declared 36px.
+   *
+   * One class outside and the rest inside gives `0-1-0`, which is what
+   * Tailwind Typography emits and what the two ends of the contract need: it
+   * beats a bare element reset, and it still loses to a host's own
+   * `.content h1` at `0-1-1`. The anchor is the SINGLE page-root class rather
+   * than the doubled one, because doubling is how an author's values are made
+   * to outrank host CSS and a default must not borrow that.
+   *
+   * `:where()` changes what a match WEIGHS and never what it selects, so the
+   * same elements are styled either way.
+   */
+  weightlessAnchor?: string;
+  /** Emit the forceable form of each interaction state. See the context field. */
+  previewStates?: boolean;
 }
 
 /** Compile one styles envelope into rules under one selector. */
@@ -1058,7 +1283,12 @@ function envelopeRules(
    */
   about: EnvelopeContext
 ): CssRule[] {
-  const { origin, trace, mayFetchUrl } = about;
+  const { origin, trace, mayFetchUrl, weightlessAnchor, previewStates } = about;
+  // Chosen ONCE per envelope rather than per rule: it is a property of the
+  // compile, and re-deciding it inside the loop invites the two forms to
+  // disagree between a node's base rule and its hover one.
+  const stateSelectors =
+    previewStates === true ? PREVIEW_STATE_SELECTORS : STATE_SELECTORS;
   if (styles === undefined) return [];
   // A stored envelope that is not an object — `[]`, a string, `null` — styles
   // nothing, and this compiler reads persisted data whether or not a caller
@@ -1143,7 +1373,15 @@ function envelopeRules(
       for (const rule of groupByDescendant(compiled.declarations)) {
         rules.push({
           ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
-          selector: `${selector}${STATE_SELECTORS[state]}${rule.descendant}`,
+          // Everything after the anchor is wrapped, state and descendant
+          // included: `${anchor} :where(x) a` leaves the `a` outside carrying
+          // weight of its own, so a default that styles something inside
+          // itself would outrank a host rule of the same shape. The anchor is
+          // the only part that weighs.
+          selector:
+            weightlessAnchor === undefined
+              ? `${selector}${stateSelectors[state]}${rule.descendant}`
+              : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`,
           declarations: rule.declarations,
         });
         // Recorded here, from the same declarations that were just emitted, in the same loop.
@@ -1506,12 +1744,32 @@ export function compilePageCss(
   const tokenPrefix = ctx.tokenPrefix ?? DEFAULT_TOKEN_PREFIX;
   const mayFetchUrl = ctx.mayFetchUrl;
   const scope = scopeSelector(ctx.scope, warnings);
+  // Read ONCE for the whole compile and handed to every tier. Every rule that
+  // can match the previewed element has to honour the forced state — a node's
+  // own hover, a class's, a block type's, the page's — so a tier that missed it
+  // would show half the appearance the author is editing.
+  const previewStates = ctx.previewStates === true;
   // What was WRITTEN, which is not always what was asked for: a scope this
   // compiler refuses is dropped and the sheet compiled global, and a caller that
   // recorded the request would store an artifact claiming an isolation its own
   // selectors do not carry.
   const effectiveScope = scope === "" ? undefined : ctx.scope;
   const pageRoot = `${PAGE_ROOT_SELECTOR}${scope}`;
+  // The SINGLE page-root class, for the tiers that must not borrow the
+  // doubling. `PAGE_ROOT_SELECTOR` repeats the class so an author's values
+  // outrank host CSS; a default anchored to one class weighs `0-1-0`, which
+  // clears a bare element reset and still yields to a host's own class rule.
+  //
+  // A scope CONSTRAINS this anchor without adding to it. Appended plainly the
+  // pair weighs `0-2-0`, and a default that outranks a host's `.content h1`
+  // (`0-1-1`) is no longer something the site can override — so a scoped
+  // document would keep defaults precisely where an unscoped one yields, which
+  // is the opposite of what scoping means. Inside `:where()` the class still
+  // has to match and contributes nothing, so both documents weigh the same.
+  const defaultsAnchor =
+    scope === ""
+      ? `.${PAGE_ROOT_CLASS}`
+      : `.${PAGE_ROOT_CLASS}:where(${scope})`;
 
   const nodes = documentNodes(
     doc,
@@ -1565,9 +1823,39 @@ export function compilePageCss(
       warnings,
       budget,
       warningAllowance,
-      { origin: { kind: "page" }, trace, mayFetchUrl }
+      { origin: { kind: "page" }, trace, mayFetchUrl, previewStates }
     )
   );
+
+  // Element defaults, below block defaults and above nothing. A tag reaches a
+  // SELECTOR exactly as a block type does, so it is held to a closed list
+  // rather than escaped: these are the elements the block library renders text
+  // as, and a caller naming anything else is not describing this document's
+  // typography. An allow-list rather than a grammar, because the set is small,
+  // known, and has no reason to grow without someone deciding it should.
+  const elements = ctx.elementBases ?? {};
+  for (const tag of TYPOGRAPHIC_ELEMENTS) {
+    if (!Object.hasOwn(elements, tag)) continue;
+    rules.push(
+      ...envelopeRules(
+        elements[tag],
+        tag,
+        pointer("/elementBases", tag),
+        contexts,
+        tokenPrefix,
+        warnings,
+        budget,
+        warningAllowance,
+        {
+          origin: { kind: "element", tag },
+          previewStates,
+          trace,
+          mayFetchUrl,
+          weightlessAnchor: defaultsAnchor,
+        }
+      )
+    );
+  }
 
   // One rule per block type present, not per node using it.
   const usedTypes = new Set<string>();
@@ -1575,8 +1863,15 @@ export function compilePageCss(
     if (typeof node.type === "string") usedTypes.add(node.type);
   }
   const bases = ctx.blockBases ?? {};
+  const partsByType = ctx.blockParts ?? {};
   for (const type of [...usedTypes].sort()) {
-    if (!Object.hasOwn(bases, type)) continue;
+    // Own properties only, and for the same reason the caller narrowing these
+    // records checks the same thing: a record reached through a polluted
+    // prototype answers this lookup with an inherited value, which would emit a
+    // rule against a selector built from a node type nobody declared.
+    const hasBase = Object.hasOwn(bases, type);
+    const hasParts = Object.hasOwn(partsByType, type);
+    if (!hasBase && !hasParts) continue;
     // A node type reaches a SELECTOR, and this compiler reads persisted data
     // whether or not a caller validated it. Unchecked, `"evil/x, body"` emits
     // `.nx-pb-page .nx-bt-evil--x, body { … }` — a second selector of the
@@ -1597,23 +1892,95 @@ export function compilePageCss(
       });
       continue;
     }
-    rules.push(
-      ...envelopeRules(
-        bases[type],
-        // Escaped as well as refused above. The check is what makes this safe;
-        // escaping is what keeps it safe if the check is ever loosened, and it
-        // changes nothing for a type that passed, whose characters are all
-        // legal in a class already.
-        `${pageRoot} .${escapeIdentifier(blockTypeClassName(type))}`,
-        pointer("/blockBases", type),
-        contexts,
-        tokenPrefix,
-        warnings,
-        budget,
-        warningAllowance,
-        { origin: { kind: "blockType", type }, trace, mayFetchUrl }
-      )
-    );
+    // Escaped as well as refused above. The check is what makes this safe;
+    // escaping is what keeps it safe if the check is ever loosened, and it
+    // changes nothing for a type that passed, whose characters are all legal in
+    // a class already. Built once because both tiers below anchor to it.
+    const typeClass = `.${escapeIdentifier(blockTypeClassName(type))}`;
+    if (hasBase)
+      rules.push(
+        ...envelopeRules(
+          bases[type],
+          typeClass,
+          pointer("/blockBases", type),
+          contexts,
+          tokenPrefix,
+          warnings,
+          budget,
+          warningAllowance,
+          {
+            origin: { kind: "blockType", type },
+            previewStates,
+            trace,
+            mayFetchUrl,
+            weightlessAnchor: defaultsAnchor,
+          }
+        )
+      );
+    if (!hasParts) continue;
+    const parts = partsByType[type];
+    // Registration refuses a malformed record, and registration is NOT the only
+    // door: `createBlockResolver` stores definitions directly, so a JavaScript
+    // caller reaches this with whatever it was given. Enumerating a `null` here
+    // throws before a single block renders and takes the whole page with it —
+    // so this answers for the value it is HANDED rather than for the value the
+    // type promised, exactly as the node-type check above does.
+    if (!isPlainRecord(parts)) {
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer("/blockParts", type),
+        code: "invalid-block-part",
+        severity: "warning",
+        message: `"${describeValue(parts)}" is not a set of parts, so no part of "${type}" was styled.`,
+        suggestion: "Use a plain object keyed by part name.",
+      });
+      continue;
+    }
+    // Sorted so one document always serializes the same way, exactly as the
+    // type loop above and `groupByDescendant` below both do.
+    for (const name of Object.keys(parts).sort()) {
+      // A part name is compiled INTO a class, so it reaches a selector, and a
+      // block definition is code a plugin supplies. Refused rather than escaped
+      // for the reason the block type above is: escaping produces a class no
+      // renderer will ever write, which is a style silently missing rather than
+      // a value reported.
+      if (!isPartName(name)) {
+        pushBoundedWarning(warningAllowance, warnings, {
+          path: pointer(pointer("/blockParts", type), name),
+          code: "invalid-block-part",
+          severity: "warning",
+          message: `"${describeValue(name)}" is not a part name, so that part of "${type}" was not styled.`,
+          suggestion: 'Use a lowercase slug such as "caption".',
+        });
+        continue;
+      }
+      rules.push(
+        ...envelopeRules(
+          parts[name]?.baseStyles,
+          // The block type is encoded in the class rather than left as an
+          // ancestor. `.nx-bt-core--form label` would also match labels a CHILD
+          // block renders into one of the form's slots, so a container's
+          // defaults would reach markup it does not own; a single class matches
+          // only what the block itself marked.
+          `.${escapeIdentifier(blockPartClassName(type, name))}`,
+          pointer(pointer("/blockParts", type), name),
+          contexts,
+          tokenPrefix,
+          warnings,
+          budget,
+          warningAllowance,
+          {
+            // The part travels with the origin so a provenance reader can say
+            // WHICH element a declaration landed on. Without it two rules from
+            // one block report the same source and differ only by property.
+            origin: { kind: "blockType", type, part: name },
+            previewStates,
+            trace,
+            mayFetchUrl,
+            weightlessAnchor: defaultsAnchor,
+          }
+        )
+      );
+    }
   }
 
   // The named classes, in library order — the tier between a block's defaults and a node's own
@@ -1757,6 +2124,7 @@ export function compilePageCss(
         warningAllowance,
         {
           origin: { kind: "class", id: cls.id, slug: cls.slug },
+          previewStates,
           trace,
           mayFetchUrl,
         }
@@ -1797,7 +2165,12 @@ export function compilePageCss(
         warnings,
         budget,
         warningAllowance,
-        { origin: { kind: "node", id: node.id }, trace, mayFetchUrl }
+        {
+          origin: { kind: "node", id: node.id },
+          trace,
+          mayFetchUrl,
+          previewStates,
+        }
       ),
       ...visibilityRules(
         node,

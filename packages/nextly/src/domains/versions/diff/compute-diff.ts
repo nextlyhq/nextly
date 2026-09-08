@@ -23,6 +23,10 @@ import { dequal } from "dequal";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { normalizeStoredValue } from "../../../shared/lib/normalize-stored-value";
+import {
+  extractFieldGroupReferences,
+  isFieldGroupType,
+} from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 
 import { maskSecret } from "./mask-secret";
@@ -103,7 +107,10 @@ function inlineFields(field: FieldConfig): FieldConfig[] | undefined {
   return (field as { fields?: FieldConfig[] }).fields;
 }
 function componentSlugs(field: FieldConfig): string[] | undefined {
-  return (field as { components?: string[] }).components;
+  // Through the shared extractor: a migrated definition carries its zone
+  // whitelist under `fieldGroups`, and reading only `components` would treat
+  // that zone as a single-schema field and skip its nested diff entirely.
+  return extractFieldGroupReferences(field).many;
 }
 function isRepeatable(field: FieldConfig): boolean {
   return (field as { repeatable?: boolean }).repeatable === true;
@@ -248,7 +255,7 @@ function targetKey(target: RelationTarget): string {
 // ---- classification ---------------------------------------------------------
 
 function isComponentField(field: FieldConfig): boolean {
-  return field.type === "component";
+  return isFieldGroupType(field.type);
 }
 /** Cardinality is decided by `repeatable`; a non-repeatable field holds one value. */
 function isComponentList(field: FieldConfig): boolean {

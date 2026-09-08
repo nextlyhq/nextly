@@ -55,3 +55,29 @@ describe("fieldGroupToManifestEntity", () => {
     expect(e.fields).toEqual([{ name: "title", type: "text" }]);
   });
 });
+
+describe("a description survives a field-group save", () => {
+  it("reaches the manifest entity", () => {
+    // 🔴 The migration replays where the Builder's local row does not exist,
+    // so a manifest omitting the description deploys a field group without one.
+    // The field-group projections pass their settings inline, so the mapper
+    // carrying it is only half the fix; the call sites have to send it.
+    const entity = fieldGroupToManifestEntity({
+      slug: "seo",
+      settings: { singularName: "SEO", description: "Search metadata" },
+      fields: [],
+    });
+    expect(entity.description).toBe("Search metadata");
+  });
+
+  it("leaves the key absent when there is none", () => {
+    // The control against a mapper that always sets it, which would serialise a
+    // present-but-empty key into the manifest.
+    const entity = fieldGroupToManifestEntity({
+      slug: "seo",
+      settings: { singularName: "SEO" },
+      fields: [],
+    });
+    expect("description" in entity).toBe(false);
+  });
+});

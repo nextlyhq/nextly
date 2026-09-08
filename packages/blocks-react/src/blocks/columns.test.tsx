@@ -8,13 +8,16 @@
  * identity the template gives each column, so those are what is asserted.
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { PageRenderer } from "../page-renderer";
 import type { BlockResolver } from "../resolver";
+import { createBlockResolver } from "../resolver";
 import { resolvePageStyles } from "../styles";
 
 import { column, COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
-import { columns, INITIAL_COLUMNS } from "./columns";
+import { columns } from "./columns";
 import { box } from "./box";
 import { coreBlocks } from "./index";
 import { section } from "./section";
@@ -43,27 +46,24 @@ describe("the columns pair", () => {
     });
   });
 
-  describe("the template", () => {
-    it("is EMPTY, because nothing can mint per-instance ids yet", () => {
-      // A seeded template needs its ids minted per INSTANCE: two rows expanded
-      // from one literal template carry the same node ids, and the engine
-      // reports `duplicate-node-id` on the second. Nothing reads
-      // `SlotSpec.template`, so no expansion path exists to do that minting.
-      //
-      // Naming the ids "placeholders" was the first attempt and changed no
-      // behaviour — the collision is a property of the nodes, not of what they
-      // are called. Empty makes it unreachable.
-      //
-      // A RATCHET: whoever adds an expander fails this test and has to seed
-      // the row deliberately, with per-instance ids, rather than inheriting
-      // literal ones that were only ever safe because nothing read them.
-      expect(columns.slots?.children.template).toEqual([]);
+  describe("what a fresh row starts with", () => {
+    it("declares two columns, by TYPE rather than as stored nodes", () => {
+      // The declaration names a type and carries no id, which is what makes it
+      // safe to expand more than once: `expandSlotDefaults` mints a fresh id
+      // per child per instance, so two rows on a page cannot repeat each
+      // other's ids. A stored node list would carry literal ids and collide on
+      // `duplicate-node-id` the second time it was used.
+      expect(columns.slots?.children.defaultBlock).toEqual([
+        { type: COLUMN_BLOCK },
+        { type: COLUMN_BLOCK },
+      ]);
     });
 
-    it("still records how many columns a fresh row wants", () => {
-      // The default did not stop being true; it moved to the layer that can
-      // implement it. Losing the number would make the expander re-derive it.
-      expect(INITIAL_COLUMNS).toBe(2);
+    it("starts with two, because a row of one is a box", () => {
+      // The count lives in the declaration above and nowhere else — it was
+      // previously also spelled as an `INITIAL_COLUMNS` constant, which was a
+      // second answer to one question. Read it from the list.
+      expect(columns.slots?.children.defaultBlock).toHaveLength(2);
     });
   });
 
@@ -74,24 +74,26 @@ describe("the columns pair", () => {
     // to nothing while the object assertion stays green — which is exactly
     // how an unsupported `flex` shipped here and had to be withdrawn. These
     // assert the emitted CSS.
-    function compiledCss(): string {
-      const doc: BlockDocument = {
-        formatVersion: 1,
-        kind: "page",
-        nodes: [
-          {
-            id: "row",
-            type: COLUMNS_BLOCK,
-            version: 1,
-            props: {},
-            slots: {
-              children: [
-                { id: "c1", type: COLUMN_BLOCK, version: 1, props: {} },
-              ],
-            },
+    // ONE document for both the compile-tier and the whole-page assertions, so
+    // the two cannot drift into describing different trees.
+    const DOC: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "row",
+          type: COLUMNS_BLOCK,
+          version: 1,
+          props: {},
+          slots: {
+            children: [{ id: "c1", type: COLUMN_BLOCK, version: 1, props: {} }],
           },
-        ],
-      };
+        },
+      ],
+    };
+
+    function compiledCss(): string {
+      const doc = DOC;
       const resolver: BlockResolver = {
         get: (name: string) =>
           coreBlocks.find(block => block.name === name) as never,
@@ -126,6 +128,71 @@ describe("the columns pair", () => {
       // `display:grid` passes on a grid with one implicit column, which looks
       // identical to the stacked <div>s this block exists to replace.
       expect(css).toContain("minmax(min(240px, 100%), 1fr)");
+    });
+
+    it("emits a GAP, so the columns do not touch", () => {
+      /*
+       * `gap` on a grid defaults to `normal`, which computes to zero — so the
+       * one block whose whole purpose is side-by-side content rendered its
+       * columns flush against each other. Measured on a published page before
+       * this: three tracks of 427px with nothing between them.
+       *
+       * Asserted on the compiled CSS rather than on the declaration, because a
+       * declaration the catalog does not carry is dropped silently and would
+       * leave a property that reads correct in the source and never reaches a
+       * page.
+       */
+      const css = compiledCss();
+
+      // The REFERENCE reaching the compiled sheet. That it resolves to a real
+      // length is the next case, which reads a rendered page — a compiled `var()`
+      // proves the property survived the catalog, not that anything defines it.
+      expect(css).toContain("gap: var(--site-space-4)");
+      // Must-differ: the row is still a grid, so this is about the gutter and
+      // not about the layout having been replaced by something simpler.
+      expect(css).toContain("display: grid");
+    });
+
+    it("RESOLVES the gutter on a STORED stylesheet handed back with no context", () => {
+      /*
+       * The path a consumer with no write path takes: compile once, store the
+       * artifact, hand it back as `styles`. It is the path a token gutter did
+       * not survive — nothing declared `--site-*` there, so the reference was a
+       * `var()` with nothing behind it, invalid at computed-value time, and
+       * `gap` fell back to `normal`: zero for a grid, and the exact defect this
+       * block was fixed for.
+       *
+       * Both halves are asserted on ONE rendered page, because either alone is
+       * satisfied by the broken state. The reference without the declaration is
+       * precisely the defect; the declaration without the reference says only
+       * that a sheet was emitted, which is true of a page whose gutter went
+       * missing entirely.
+       */
+      const resolver = createBlockResolver([...coreBlocks]);
+      const stored = resolvePageStyles(
+        DOC,
+        undefined,
+        {
+          breakpoints: {
+            viewport: [{ id: "base", label: "Desktop" }],
+            container: [],
+          },
+        },
+        resolver
+      );
+      const markup = renderToStaticMarkup(
+        <PageRenderer document={DOC} blocks={resolver} styles={stored} />
+      );
+
+      // The reference the page CSS carries.
+      expect(markup).toContain("gap: var(--site-space-4)");
+      // And the declaration it resolves against, on the same page. Without this
+      // the assertion above passes on exactly the broken state.
+      expect(markup).toContain("--site-space-4:");
+      // The VALUE, so the migration is behaviour-preserving rather than merely
+      // resolvable: matched up to `;` or `}`, since the token block runs
+      // straight into the theme block after it.
+      expect(markup).toMatch(/--site-space-4:\s*1rem\s*[;}]/);
     });
 
     it("emits the column's min-width so a long child cannot force overflow", () => {

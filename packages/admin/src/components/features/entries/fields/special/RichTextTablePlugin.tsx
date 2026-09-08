@@ -13,13 +13,11 @@
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { INSERT_TABLE_COMMAND } from "@lexical/table";
 import {
-  Button,
   Checkbox,
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
   DialogDescription,
   Input,
   Label,
@@ -31,7 +29,12 @@ import {
 } from "lexical";
 import { useState, useCallback, useEffect } from "react";
 
-import { Table, AlertCircle } from "@admin/components/icons";
+import { Table } from "@admin/components/icons";
+
+import {
+  useInsertDialogState,
+  InsertDialogFooter,
+} from "./RichTextInsertDialog";
 
 // ============================================================
 // Commands
@@ -53,7 +56,6 @@ export function RichTextTablePlugin({
   disabled = false,
 }: RichTextTablePluginProps) {
   const [editor] = useLexicalComposerContext();
-  const [isOpen, setIsOpen] = useState(false);
   const [rows, setRows] = useState("3");
   const [columns, setColumns] = useState("3");
   const [includeHeaders, setIncludeHeaders] = useState(true);
@@ -66,11 +68,14 @@ export function RichTextTablePlugin({
     setError(null);
   }, []);
 
-  const openDialog = useCallback(() => {
-    if (disabled) return;
-    resetState();
-    setIsOpen(true);
-  }, [disabled, resetState]);
+  // Shared dialog shell: open/close lifecycle with reset-on-close and
+  // Enter-to-submit, so this dialog cannot drift from the other three.
+  const { isOpen, setIsOpen, openDialog, handleOpenChange, handleKeyDown } =
+    useInsertDialogState({
+      resetState,
+      onSubmit: () => insertTable(),
+      disabled,
+    });
 
   const insertTable = useCallback(() => {
     const rowCount = parseInt(rows, 10);
@@ -94,27 +99,7 @@ export function RichTextTablePlugin({
 
     setIsOpen(false);
     resetState();
-  }, [editor, rows, columns, includeHeaders, resetState]);
-
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      if (!open) {
-        resetState();
-      }
-      setIsOpen(open);
-    },
-    [resetState]
-  );
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        insertTable();
-      }
-    },
-    [insertTable]
-  );
+  }, [editor, rows, columns, includeHeaders, setIsOpen, resetState]);
 
   // Register command
   useEffect(() => {
@@ -220,28 +205,16 @@ export function RichTextTablePlugin({
               </table>
             </div>
           </div>
-
-          {/* Error */}
-          {error && (
-            <div className="flex items-center gap-2 text-destructive text-sm">
-              <AlertCircle className="h-4 w-4" />
-              {error}
-            </div>
-          )}
         </div>
 
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => handleOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button type="button" onClick={insertTable}>
-            Insert Table
-          </Button>
-        </DialogFooter>
+        {/* Shared footer: the error banner and Cancel/Confirm row every
+            insert dialog renders, so their behavior and styling stay one. */}
+        <InsertDialogFooter
+          error={error}
+          onCancel={() => handleOpenChange(false)}
+          onConfirm={insertTable}
+          confirmLabel="Insert Table"
+        />
       </DialogContent>
     </Dialog>
   );

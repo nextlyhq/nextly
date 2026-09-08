@@ -261,3 +261,298 @@ describe("codeTokenClass", () => {
     }
   });
 });
+
+describe("richTextToPlainText around a block-like leaf", () => {
+  it("separates a node that carries its own text but is drawn as a block", () => {
+    /*
+     * NESTED, which is the shape the editor actually produces: Lexical's
+     * decorator nodes are inline unless one overrides `isInline()`, and none of
+     * this editor's do, so inserting a button with the caret in a paragraph
+     * makes it a CHILD of that paragraph between two text runs.
+     *
+     * A fixture that put the button between two ROOT paragraphs would pass
+     * against a walk that separates it from what follows and welds it to what
+     * came before, because the preceding paragraph's own boundary supplies the
+     * missing space. This one cannot: both sides are inside one paragraph.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Before" },
+              { type: "button-link", url: "/buy", text: "Buy now" },
+              { type: "text", text: "After" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Before Buy now After");
+  });
+
+  it("reads the labels a button group keeps in a list of its own", () => {
+    /*
+     * `button-group` stores each label under `buttons[].text`, and the renderer
+     * draws every one. A walk reading only `text` and `children` sees neither,
+     * so the words on the page are missing from the description of it.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Choose" },
+              {
+                type: "button-group",
+                // The REAL serialized shape: a button group's items are not
+                // nodes and carry no `type`. A fixture that invents one gets
+                // past a node-shaped guard and proves nothing about storage.
+                buttons: [
+                  {
+                    url: "/basic",
+                    text: "Basic",
+                    variant: "filled",
+                    size: "md",
+                  },
+                  { url: "/pro", text: "Pro", variant: "outline", size: "md" },
+                ],
+              },
+              { type: "text", text: "today" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Choose Basic Pro today");
+  });
+
+  it("omits a label the renderer would not draw", () => {
+    /*
+     * A reader draws nothing for a button whose URL this format cannot express
+     * — a missing one, or a scheme outside the allowed set — so reporting its
+     * label would describe the page by a word that never appears on it. That is
+     * the mirror of the defect that made these labels worth reading at all.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Only" },
+              {
+                type: "button-group",
+                buttons: [
+                  { url: "javascript:alert(1)", text: "Danger" },
+                  { text: "No link at all" },
+                  { url: "/real", text: "Real" },
+                ],
+              },
+              { type: "text", text: "this" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Only Real this");
+  });
+
+  it("reports a numeric label the renderer draws as text", () => {
+    /*
+     * The renderer treats a finite NUMBER as authored text, so a stored
+     * `text: 0` — a legacy row, an import, a migration — draws the character
+     * "0" on the page. A string-only check here described that page by a label
+     * it does carry, which is the same disagreement between two readers of one
+     * document that the URL check above exists to prevent.
+     *
+     * `0` specifically, because it is the value a truthiness test also drops:
+     * a fix written as `text ? text : null` passes for `2024` and fails here.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Pick" },
+              {
+                type: "button-group",
+                buttons: [
+                  { url: "/zero", text: 0 },
+                  { url: "/year", text: 2024 },
+                ],
+              },
+              { type: "text", text: "one" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Pick 0 2024 one");
+  });
+
+  it("reports a STANDALONE button's numeric label too", () => {
+    /*
+     * The same defect one layer up. A lone `button-link` is drawn by the same
+     * row the group items are drawn by, so its label obeys the same rule — but
+     * the walk read `node.text` directly for it and saw only strings.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          { type: "paragraph", children: [{ type: "text", text: "Before" }] },
+          { type: "button-link", url: "/zero", text: 0 },
+          { type: "paragraph", children: [{ type: "text", text: "After" }] },
+        ] as unknown as RichTextValue["root"]["children"])
+      )
+    ).toBe("Before 0 After");
+  });
+
+  it("omits a STANDALONE button the renderer would not draw", () => {
+    /*
+     * The other half of routing it through `labelOf`, and the one a numeric
+     * fixture alone would not catch: the row filters an item whose URL this
+     * format cannot express, so reporting its label describes the page by a
+     * word that never appears on it.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          { type: "paragraph", children: [{ type: "text", text: "Before" }] },
+          { type: "button-link", url: "javascript:alert(1)", text: "Danger" },
+          { type: "paragraph", children: [{ type: "text", text: "After" }] },
+        ])
+      )
+    ).toBe("Before After");
+  });
+
+  it("still omits a stored value no reader would draw as text", () => {
+    /*
+     * The control on the other side. Accepting every non-string would report
+     * `true` and `[object Object]` — artefacts of the conversion rather than
+     * anything an author wrote — so a rule of "stringify whatever is there"
+     * passes the test above and describes the page by words nobody typed.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Only" },
+              {
+                type: "button-group",
+                buttons: [
+                  { url: "/a", text: true },
+                  { url: "/b", text: { label: "nested" } },
+                  { url: "/c", text: ["x"] },
+                  { url: "/d", text: Number.NaN },
+                  { url: "/e", text: "Real" },
+                ],
+              },
+              { type: "text", text: "this" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Only Real this");
+  });
+
+  it("skips a button group carrying no labels rather than inventing a gap", () => {
+    // The control: a group with nothing readable must not contribute, and must
+    // not throw on shapes storage can hold.
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Only" },
+              { type: "button-group", buttons: [] },
+              { type: "button-group", buttons: [{ url: "/x", text: "" }] },
+              { type: "text", text: "this" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Only this");
+  });
+
+  it("separates one between root paragraphs too", () => {
+    // The shape a stored document can also hold, kept because the two travel
+    // different paths through the walk.
+    expect(
+      richTextToPlainText(
+        value([
+          { type: "paragraph", children: [{ type: "text", text: "Before" }] },
+          { type: "button-link", url: "/buy", text: "Buy now" },
+          { type: "paragraph", children: [{ type: "text", text: "After" }] },
+        ])
+      )
+    ).toBe("Before Buy now After");
+  });
+
+  it("does not put a space between syntax tokens in a code block", () => {
+    /*
+     * `code-highlight` carries its own text, one node per token, and a code
+     * block's tokens are usually not separated by anything. Treating "carries
+     * text" as "ends a line" therefore rewrites the code: `foo(bar)` becomes
+     * `foo ( bar )`. Measured before this was written — that is what it did.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "code",
+            children: [
+              { type: "code-highlight", text: "foo" },
+              { type: "code-highlight", text: "(" },
+              { type: "code-highlight", text: "bar" },
+              { type: "code-highlight", text: ")" },
+            ],
+          },
+        ])
+      )
+    ).toBe("foo(bar)");
+  });
+
+  it("still joins text leaves split only by formatting", () => {
+    /*
+     * The control, and the property the case above must not buy at its
+     * expense. Lexical splits a run at every change of format, so `prefix`
+     * with a bold second half is two adjacent leaves — a boundary between them
+     * would read as `pre fix`.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "pre" },
+              { type: "text", text: "fix", format: 1 },
+            ],
+          },
+        ])
+      )
+    ).toBe("prefix");
+  });
+
+  it("still keeps an inline link inside its line", () => {
+    // The other half of the control: a link is a container AND inline, so it
+    // must not earn a boundary either.
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "see " },
+              { type: "link", children: [{ type: "text", text: "here" }] },
+              { type: "text", text: " now" },
+            ],
+          },
+        ])
+      )
+    ).toBe("see here now");
+  });
+});

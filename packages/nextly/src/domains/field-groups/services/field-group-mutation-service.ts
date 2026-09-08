@@ -38,6 +38,10 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import {
+  isFieldGroupType,
+  withResolvedFieldGroupReferences,
+} from "../storage/field-group-field-type";
+import {
   currentFieldGroupTypeKey,
   readFieldGroupType,
 } from "../storage/field-group-type-key";
@@ -98,7 +102,7 @@ export interface DeleteComponentDataParams {
 }
 
 function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
-  return field.type === STORAGE_FORMAT.fieldType;
+  return isFieldGroupType(field.type);
 }
 
 /**
@@ -337,64 +341,85 @@ export class FieldGroupMutationService extends BaseService {
   }
 
   /**
+   * Walk a payload's field-group fields with their references resolved.
+   *
+   * Both save paths — pooled and in-transaction — iterate the same fields the
+   * same way: resolve the references at the boundary (a migrated definition
+   * carries them under `fieldGroup` / `fieldGroups`, which the readers below
+   * do not open), skip an absent value, clear on null, and hand a present
+   * value to the path's own write. One iteration is what keeps the two paths
+   * from drifting about what a payload holds.
+   */
+  private async eachFieldGroupWrite(
+    fields: FieldConfig[],
+    data: Record<string, unknown>,
+    handlers: {
+      clear: (field: FieldGroupFieldConfig) => Promise<void>;
+      save: (field: FieldGroupFieldConfig, fieldData: unknown) => Promise<void>;
+    }
+  ): Promise<void> {
+    for (const field of fields) {
+      if (!isFieldGroupField(field)) continue;
+
+      const f = withResolvedFieldGroupReferences(field);
+      const fieldData = data[f.name];
+
+      if (fieldData === undefined) continue;
+      // On update, null means "clear this field" — delete existing instances
+      if (fieldData === null) {
+        await handlers.clear(f);
+        continue;
+      }
+      await handlers.save(f, fieldData);
+    }
+  }
+
+  /**
    * Save component data for all component fields of a parent entry.
    */
   async saveComponentData(params: SaveComponentDataParams): Promise<void> {
     const { parentId, parentTable, fields, data, locale, req } = params;
 
-    for (const field of fields) {
-      if (!isFieldGroupField(field)) continue;
-
-      const fieldName = field.name;
-      const fieldData = data[fieldName];
-
-      if (fieldData === undefined || fieldData === null) {
-        // On update, null means "clear this field" — delete existing instances
-        if (fieldData === null) {
-          await this.deleteFieldComponentData(
+    await this.eachFieldGroupWrite(fields, data, {
+      clear: async f => {
+        await this.deleteFieldComponentData(parentId, parentTable, f.name, f);
+      },
+      save: async (f, fieldData) => {
+        if (f.components && f.components.length > 0) {
+          await this.saveMultiComponents({
             parentId,
             parentTable,
-            fieldName,
-            field
-          );
-        }
-        continue;
-      }
-
-      if (field.components && field.components.length > 0) {
-        await this.saveMultiComponents({
-          parentId,
-          parentTable,
-          fieldName,
-          field,
-          data: fieldData,
-          locale,
-          req,
-        });
-      } else if (field.component) {
-        if (field.repeatable) {
-          await this.saveRepeatableComponents({
-            parentId,
-            parentTable,
-            fieldName,
-            componentSlug: field.component,
+            fieldName: f.name,
+            field: f,
             data: fieldData,
             locale,
             req,
           });
-        } else {
-          await this.saveSingleComponent({
-            parentId,
-            parentTable,
-            fieldName,
-            componentSlug: field.component,
-            data: fieldData as ComponentInstanceData,
-            locale,
-            req,
-          });
+        } else if (f.component) {
+          if (f.repeatable) {
+            await this.saveRepeatableComponents({
+              parentId,
+              parentTable,
+              fieldName: f.name,
+              componentSlug: f.component,
+              data: fieldData,
+              locale,
+              req,
+            });
+          } else {
+            await this.saveSingleComponent({
+              parentId,
+              parentTable,
+              fieldName: f.name,
+              componentSlug: f.component,
+              data: fieldData as ComponentInstanceData,
+              locale,
+              req,
+            });
+          }
         }
-      }
-    }
+      },
+    });
   }
 
   /**
@@ -422,6 +447,10 @@ export class FieldGroupMutationService extends BaseService {
     for (const field of params.fields) {
       if (!isFieldGroupField(field)) continue;
 
+      // Same boundary resolution the write performs, so the references this
+      // check warms and judges are the ones the write will read.
+      const f = withResolvedFieldGroupReferences(field);
+
       // Warming comes FIRST, before the payload is consulted at all. A snapshot reads every
       // component the entity holds, not the ones this save happens to mention, and it reads them
       // through the caller's transaction where readiness can only be read and never resolved. A
@@ -432,7 +461,7 @@ export class FieldGroupMutationService extends BaseService {
       // Warming is not refusing. The refusal below still walks only what the payload writes,
       // because a permitted type whose companion is missing must not fail a save that never
       // mentions it.
-      for (const permitted of field.components ?? [field.component]) {
+      for (const permitted of f.components ?? [f.component]) {
         if (typeof permitted !== "string") continue;
         await this.resolveComponentReadiness(permitted);
       }
@@ -449,19 +478,19 @@ export class FieldGroupMutationService extends BaseService {
       // good save whenever some other permitted type happened to be missing its
       // companion. Deduplicated, because a zone commonly repeats one type.
       const slugs = new Set<string>();
-      if (field.components && field.components.length > 0) {
+      if (f.components && f.components.length > 0) {
         for (const instance of resolveZoneInstances(field, value)) {
           // Asked through the same reader the WRITE uses. This preflight exists to raise a
           // conflict before the transaction opens, so it has to judge exactly the instances the
           // write will accept — an instance the write recognises but this does not skips the
           // check entirely and fails later, inside the transaction or at the driver.
           const type = readFieldGroupType(instance);
-          if (type !== undefined && field.components.includes(type)) {
+          if (type !== undefined && f.components.includes(type)) {
             slugs.add(type);
           }
         }
-      } else if (field.component) {
-        slugs.add(field.component);
+      } else if (f.component) {
+        slugs.add(f.component);
       }
       for (const slug of slugs) {
         if (resolved.has(slug)) continue;
@@ -509,59 +538,52 @@ export class FieldGroupMutationService extends BaseService {
   ): Promise<void> {
     const { parentId, parentTable, fields, data, locale, req } = params;
 
-    for (const field of fields) {
-      if (!isFieldGroupField(field)) continue;
-
-      const fieldName = field.name;
-      const fieldData = data[fieldName];
-
-      if (fieldData === undefined || fieldData === null) {
-        if (fieldData === null) {
-          await this.deleteFieldComponentDataInTx(
-            tx,
-            parentId,
-            parentTable,
-            fieldName,
-            field
-          );
-        }
-        continue;
-      }
-
-      if (field.components && field.components.length > 0) {
-        await this.saveMultiComponentsInTx(tx, {
+    await this.eachFieldGroupWrite(fields, data, {
+      clear: async f => {
+        await this.deleteFieldComponentDataInTx(
+          tx,
           parentId,
           parentTable,
-          fieldName,
-          field,
-          data: fieldData,
-          locale,
-          req,
-        });
-      } else if (field.component) {
-        if (field.repeatable) {
-          await this.saveRepeatableComponentsInTx(tx, {
+          f.name,
+          f
+        );
+      },
+      save: async (f, fieldData) => {
+        if (f.components && f.components.length > 0) {
+          await this.saveMultiComponentsInTx(tx, {
             parentId,
             parentTable,
-            fieldName,
-            componentSlug: field.component,
+            fieldName: f.name,
+            field: f,
             data: fieldData,
             locale,
             req,
           });
-        } else {
-          await this.saveSingleComponentInTx(tx, {
-            parentId,
-            parentTable,
-            fieldName,
-            componentSlug: field.component,
-            data: fieldData as ComponentInstanceData,
-            locale,
-            req,
-          });
+        } else if (f.component) {
+          if (f.repeatable) {
+            await this.saveRepeatableComponentsInTx(tx, {
+              parentId,
+              parentTable,
+              fieldName: f.name,
+              componentSlug: f.component,
+              data: fieldData,
+              locale,
+              req,
+            });
+          } else {
+            await this.saveSingleComponentInTx(tx, {
+              parentId,
+              parentTable,
+              fieldName: f.name,
+              componentSlug: f.component,
+              data: fieldData as ComponentInstanceData,
+              locale,
+              req,
+            });
+          }
         }
-      }
-    }
+      },
+    });
   }
 
   /**
@@ -573,12 +595,13 @@ export class FieldGroupMutationService extends BaseService {
     for (const field of fields) {
       if (!isFieldGroupField(field)) continue;
 
-      await this.deleteFieldComponentData(
-        parentId,
-        parentTable,
-        field.name,
-        field
-      );
+      // Same boundary resolution as the save paths: the row cleanup finds the
+      // tables through the field's slugs, which a migrated definition carries
+      // under fieldGroup / fieldGroups — unresolved, every nested row the
+      // entry owns would be orphaned here.
+      const f = withResolvedFieldGroupReferences(field);
+
+      await this.deleteFieldComponentData(parentId, parentTable, f.name, f);
     }
   }
 
@@ -591,12 +614,15 @@ export class FieldGroupMutationService extends BaseService {
     for (const field of fields) {
       if (!isFieldGroupField(field)) continue;
 
+      // Same boundary resolution as the pooled delete path above.
+      const f = withResolvedFieldGroupReferences(field);
+
       await this.deleteFieldComponentDataInTx(
         tx,
         parentId,
         parentTable,
-        field.name,
-        field
+        f.name,
+        f
       );
     }
   }

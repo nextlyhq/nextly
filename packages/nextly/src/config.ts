@@ -170,9 +170,152 @@ export {
 } from "./plugins/plugin-categories";
 export { pluginAdminSlug } from "./plugins/plugin-slug";
 
+// The admin CONTRIBUTION shapes, published so the admin panel can DERIVE its
+// `/admin-meta` types from the declaration the server serializes rather than
+// restating them. `buildPluginAdminMeta` copies a contributed widget verbatim
+// into that payload, so the two were one shape declared twice -- and they
+// drifted, twice: `component` was optional on one side and required on the
+// other, and the whole declarative half (`title`, `archetype`, `defaultSize`,
+// `query`, `link`, ...) was added here and never on the admin's copy, so admin
+// code reading a property that was present on the wire got a type error.
+//
+// This subpath rather than the root, and that is the load-bearing part. The
+// admin's tsconfig maps the bare `nextly` specifier to `../nextly/src`, so
+// importing from `"nextly"` shadows the package exports and pulls core's whole
+// source tree in behind internal `@nextly/*` aliases that project does not
+// declare. `nextly/config` is not covered by that mapping, so it resolves
+// through the export map to the built declaration bundle the way any consumer's
+// would -- which is what makes the derivation reachable at all.
+//
+// Types only: `export type` carries no runtime binding, so nothing here adds a
+// byte to the config entry point's bundle.
+export type {
+  ComponentPath,
+  DeclarativeWidgetArchetype,
+  HeaderButtonId,
+  PluginAdminCustomWidget,
+  PluginAdminDataWidget,
+  PluginAdminDeclarativeWidget,
+  PluginAdminQuerylessWidget,
+  PluginAdminWidget,
+} from "./plugins/admin-contributions";
+//
+// Taken from the leaf modules rather than from `domains/widgets/index.ts`: that
+// barrel also carries `executeWidgetQuery`, and through it the Direct API, which
+// is exactly the weight this entry point exists to keep out of a
+// `nextly.config.ts`.
+//
+// `WidgetDefinition` is here for the same derivation reason as the contribution
+// shapes above: `/api/admin-meta/workspace` serializes the registry verbatim, so
+// the admin reads exactly this shape off the wire and restating it there would
+// be one contract declared twice.
+export type {
+  WidgetArchetype,
+  DataWidgetArchetype,
+  QuerylessWidgetArchetype,
+  CellWidgetArchetype,
+  WidgetDefinition,
+  WidgetSetting,
+  WidgetAction,
+  WidgetStatCell,
+  WidgetHeight,
+  WidgetSize,
+  WidgetChrome,
+} from "./domains/widgets/definition";
+export type { WidgetQuery } from "./domains/widgets/query";
+// A VALUE, and for the same reason as the batch limit below: the admin resolves
+// a contributed widget's deprecated `size` alias into the enum, and so does the
+// server when it reduces the same declaration to a canonical summary. Two
+// copies of that mapping is two answers to one question, and the copies had
+// already drifted -- only one of them existed.
+export { legacySizeToWidgetSize } from "./domains/widgets/definition";
+/*
+ * The admin applies a reader's stored settings to the query it composes, so the
+ * rule that decides which setting drives which knob is exported rather than
+ * restated there — one implementation of a question two layers ask.
+ */
+export {
+  applyWidgetSettings,
+  resolveWidgetSettings,
+} from "./domains/widgets/settings";
+// Which field NAMES an entry. The admin draws a column with it, the activity
+// feed labels a row with it, and the dashboard's generated list widgets pick a
+// row label with it -- so it is one answer here rather than one per consumer.
+// `readableTitleText` is the VALUE half of the same question and travels with
+// it: which field names an entry and whether that field's value can name one
+// are decided together, and answering the second per consumer is how three
+// spellings of it came to disagree about whitespace, numbers and bigints.
+export {
+  COMMON_TITLE_FIELDS,
+  entryTitleField,
+  readableTitleText,
+} from "./domains/collections/entry-title";
+// A VALUE, and the only one in this block. The admin batches a dashboard's
+// widgets into requests `POST /api/dashboard/query` will accept, so it needs the
+// number that endpoint refuses above -- and a second copy of it on the client
+// would send a batch the server rejects the day the two diverged. Its module has
+// no imports, so taking it here costs a `nextly.config.ts` nothing.
+export { MAX_QUERIES_PER_REQUEST } from "./domains/widgets/batch-limit";
+// Also a VALUE, and for the same reason. The layout endpoint refuses a
+// submission carrying more placements than this, so the editor has to know the
+// number to stop a reader building an arrangement that can never be saved --
+// and a second copy of it on the client is a second answer that drifts.
+export {
+  COLUMN_COUNTS,
+  DEFAULT_COLUMN_COUNT,
+  MAX_PLACEMENTS,
+  type ColumnCount,
+} from "./domains/widgets/layout";
+// The VALUE as well as the type. A widget result names each column's kind, and
+// the admin has to decide which kinds it can present -- deriving that from this
+// tuple is what stops the browser silently erasing a kind core has started to
+// emit. `sources.ts` reaches only `NextlyError` and an import-free helper, so
+// publishing it on this client-safe surface pulls no server code after it.
+export { WIDGET_SOURCE_FIELD_TYPES } from "./domains/widgets/sources";
+export type {
+  WidgetOp,
+  WidgetSourceField,
+  WidgetSourceFieldType,
+  WidgetSourceKind,
+} from "./domains/widgets/sources";
+
 // A code-first `preview.url` built from a `{field}` path. Exported because a
 // package that ships a collection in code — the page builder's `pages`, say —
 // can only express its preview as a function, while the path is what its host
 // naturally configures. Sharing the one substitution rule keeps a template and
 // a function from drifting into two different addresses for the same entry.
 export { previewUrlFromTemplate } from "./domains/collections/services/preview-url-resolver";
+
+// The web font formats, for the same reason MAX_QUERIES_PER_REQUEST is here: a
+// second copy on the client is a copy that drifts. The admin dropzone decides
+// in the BROWSER what a person may drag, before any request exists, so a format
+// this server accepts and that map omits is one nobody can upload — and one the
+// map admits and the server refuses is a rejection an author only sees after
+// the upload. Its module has no imports, so taking it here costs a
+// `nextly.config.ts` nothing.
+export {
+  WEB_FONT_FORMATS,
+  WEB_FONT_MIME_TYPES,
+  webFontMimeFromFilename,
+} from "./services/upload-validation/web-fonts";
+// The formats an upload may carry, with the suffixes they wear on disk. The
+// admin's dropzone decides in the BROWSER what may be dragged, and a list of
+// its own drifts from this one — which is how a picker comes to advertise a
+// format the server refuses and refuse one the server accepts.
+export {
+  DEFAULT_ACCEPTED_FORMATS,
+  DEFAULT_ALLOWED_MIME_TYPES,
+} from "./services/upload-validation/mime";
+export type { AcceptedFormat } from "./services/upload-validation/mime";
+export type { WebFontFormat } from "./services/upload-validation/web-fonts";
+
+// The API-key authorization policy. Exported here so the admin's route guards
+// and controls derive from the same declaration the endpoints enforce, rather
+// than restating the action-or-update umbrella a second time.
+export {
+  API_KEY_RESOURCE,
+  API_KEY_ACTION_POLICY,
+  apiKeyPermissionsFor,
+  apiKeyPermissionSlugsFor,
+  type ApiKeyOperation,
+} from "./domains/auth/api-key-policy";

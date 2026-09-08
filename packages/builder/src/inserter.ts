@@ -25,20 +25,24 @@
  */
 
 import {
-  canBeRoot,
-  canNest,
-  canNestInSlot,
+  allBlocks,
+  expandSlotDefaults,
   findNode,
+  patternRefusal,
   getBlock,
   locateNode,
   makeNode,
+  placementVerdict,
   type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
   type NestingSource,
   type NestingVerdict,
+  type PlacementTarget,
+  type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
+import { emptySlotOf } from "./empty-slot";
 import { positionOf, type OpPosition } from "./ops";
 
 /**
@@ -52,16 +56,26 @@ import { positionOf, type OpPosition } from "./ops";
 export const UNCATEGORISED = "other";
 
 /**
- * One offerable thing: a block, or a block under one of its named variations.
+ * One offerable BLOCK: a block, or a block under one of its named variations.
  *
  * Two tiers in one list rather than a nested structure, because the panel
  * filters and keyboard-navigates across both and a nested shape would make
- * every consumer flatten it first. Gutenberg's third tier — patterns — has no
- * mechanism in this engine and is therefore ABSENT rather than stubbed: an
- * empty "Patterns" section would promise a feature that does not exist and
- * would have to be un-promised when one arrives with a different shape.
+ * every consumer flatten it first. The third tier — patterns — is
+ * {@link PatternInsertEntry}, a separate member of {@link InsertEntry} rather
+ * than a block wearing extra fields: a pattern has no block name, no version
+ * and no props, so folding it in here would make four fields optional on the
+ * common case and leave every reader handling an absence blocks never produce.
  */
-export interface InsertEntry {
+export interface BlockInsertEntry {
+  /**
+   * Which tier this is.
+   *
+   * Carried on the entry rather than inferred from which fields are present.
+   * A shape test — "does it have a `blockName`" — is a second statement of the
+   * same fact, and it answers wrongly the first time a tier gains a field the
+   * test happens to name.
+   */
+  readonly kind: "block";
   /**
    * Stable identity, for React keys and for naming a selection across a
    * re-filter.
@@ -99,6 +113,110 @@ export interface InsertEntry {
    */
   readonly props: Readonly<Record<string, unknown>>;
 }
+
+/**
+ * A stored pattern, as the palette needs to read it.
+ *
+ * The fields a pattern is STORED with that no palette reads — its slug, its
+ * status, its granularity — are deliberately absent. A granularity decides
+ * whether a pattern is offered as something to insert or as a way to start a
+ * page, and that vocabulary belongs to the collection that declares it; a copy
+ * of the four words here would be a second enumeration nothing keeps in step,
+ * so the caller splits its own list and hands this the rows it means to offer.
+ *
+ * `keywords` arrives as ONE string because that is how it is stored — matched,
+ * never enumerated — and {@link patternEntriesFrom} is where it becomes the
+ * word list the palette searches.
+ */
+export interface SavedPattern {
+  /** The stored row's id, which the insert plans against. */
+  readonly id: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly category?: string;
+  /**
+   * The author's own search terms, however they separated them.
+   *
+   * `null` as well as absent, because that is what a stored row holds: the
+   * field is not required, and Nextly writes an unset non-required field as SQL
+   * `NULL` and reads it back with the KEY PRESENT. A pattern saved without
+   * keywords — the ordinary case — arrives here as `null`, so an
+   * undefined-only check would reach `null.split` and take catalog
+   * construction down with it.
+   */
+  readonly keywords?: string | null;
+  /**
+   * The pattern's document, carried whole — or absent, as a stored row's is.
+   *
+   * The collection does not mark its blocks field required and the field layer
+   * persists an omitted document as SQL `NULL`, so a published row with a
+   * title, a slug and a granularity but no content is a legal row. There is
+   * nothing to offer for one, so it is skipped exactly as an empty pattern is;
+   * reading `kind` off it took catalogue construction down.
+   *
+   * Held BY REFERENCE, and treated as immutable, which is how a stored row is
+   * treated everywhere else it travels. Cloning each one instead would copy
+   * every pattern's whole forest on each build of the catalogue, and the
+   * catalogue is rebuilt whenever the palette opens — against a library the
+   * design sizes at three thousand entries.
+   *
+   * What that costs is bounded, because the planner judges the forest AGAIN
+   * before it plans: a row mutated between being offered and being clicked can
+   * make the insert refuse, and cannot make it place something the nesting
+   * rules forbid. And the value it would then place is the row as it stands
+   * now, which for a live library is the better of the two answers.
+   */
+  readonly document?: BlockDocument | null;
+}
+
+/**
+ * One offerable PATTERN: a saved document inserted as a copy that keeps no
+ * link back.
+ *
+ * **The document travels with the entry.** The palette judges what it offers
+ * from these roots and the insert plans from the same value, so the two cannot
+ * read different versions of one pattern — which is the palette-and-drop
+ * disagreement {@link entryAllowedAt} already exists to prevent, one tier up.
+ *
+ * The root types are NOT carried beside it. They are a narrower view of the
+ * document, derived where they are needed; storing both would be two statements
+ * of one fact, and the stored one goes stale the first time an entry is built
+ * from a document that has moved on.
+ */
+export interface PatternInsertEntry {
+  readonly kind: "pattern";
+  /**
+   * Stable identity across the whole catalog, which is why it is not the
+   * pattern's own id.
+   *
+   * Blocks are keyed by their namespaced name, and nothing stops a stored
+   * pattern being saved under `core/heading`. Two entries sharing a key make
+   * React reuse one row's state for the other and make a selection ambiguous,
+   * so the tier is part of the key.
+   */
+  readonly id: string;
+  /** The stored row's id, as {@link SavedPattern.id}. */
+  readonly patternId: string;
+  readonly label: string;
+  readonly description: string;
+  readonly category: string;
+  readonly keywords: readonly string[];
+  readonly icon?: string;
+  readonly document: BlockDocument;
+}
+
+/**
+ * Anything the palette can offer.
+ *
+ * A discriminated union rather than one widened shape: the two tiers share
+ * what the panel DRAWS — a label, a description, a category, search words —
+ * and share nothing about what inserting them does. One block becomes one node
+ * from a name and a version; one pattern becomes a whole forest, re-identified,
+ * planned against the destination document. A single shape would have to make
+ * both halves optional and every consumer would branch on which half was
+ * filled in — the branch this union makes the compiler check.
+ */
+export type InsertEntry = BlockInsertEntry | PatternInsertEntry;
 
 /**
  * How a caller answers for a block's declared child regions.
@@ -154,12 +272,12 @@ export interface InsertionPoint {
  */
 export function catalogFrom(
   definitions: readonly AnyBlockDefinition[]
-): InsertEntry[] {
+): BlockInsertEntry[] {
   const byLabel = [...definitions].sort((a, b) =>
     labelOf(a).localeCompare(labelOf(b))
   );
 
-  const entries: InsertEntry[] = [];
+  const entries: BlockInsertEntry[] = [];
   for (const definition of byLabel) {
     const editor = definition.editor;
     const category = editor?.category ?? UNCATEGORISED;
@@ -188,6 +306,7 @@ export function catalogFrom(
     };
 
     entries.push({
+      kind: "block",
       id: definition.name,
       blockName: definition.name,
       label: labelOf(definition),
@@ -201,6 +320,7 @@ export function catalogFrom(
 
     for (const variation of editor?.variations ?? []) {
       entries.push({
+        kind: "block",
         id: `${definition.name}#${variation.name}`,
         blockName: definition.name,
         variationName: variation.name,
@@ -225,6 +345,95 @@ export function catalogFrom(
     }
   }
   return entries;
+}
+
+/**
+ * Build the offerable pattern list from stored rows.
+ *
+ * **A pattern with no roots produces no entry.** Inserting it would add
+ * nothing, so offering it is a row that reads as an action and is not one —
+ * and it is the shape a pattern saved from a cleared selection actually takes,
+ * rather than a hypothetical. Skipped rather than refused: an empty pattern is
+ * a row someone can still finish, not an error to report from a palette.
+ *
+ * Order is the caller's. Blocks are sorted here because their order comes from
+ * whichever plugin registered first, which is an implementation detail; stored
+ * rows arrive from a query that already said what order it wanted, and sorting
+ * them again would overrule it.
+ */
+export function patternEntriesFrom(
+  patterns: readonly SavedPattern[],
+  nesting: NestingSource
+): PatternInsertEntry[] {
+  const entries: PatternInsertEntry[] = [];
+  for (const pattern of patterns) {
+    const document = pattern.document;
+    if (document === undefined || document === null) continue;
+    // The planner refuses a document that is not a pattern outright, as
+    // `not-a-pattern`, and the type admits one: `SavedPattern.document` is a
+    // `BlockDocument`, so a page or a component row handed to this by mistake
+    // is a legal value. Offering it produces a tile that accepts a click and
+    // cannot succeed, which is the disagreement between the palette and the
+    // insert that this module exists to prevent.
+    // The planner's own preflight, asked whole rather than reproduced in part.
+    // The ways a stored row can be unusable are not a short list: the wrong
+    // kind, no nodes, an envelope the apply cannot read, a node whose shape it
+    // cannot apply, two nodes rendering one DOM id, an internal placement the
+    // rules no longer allow. `planInsertPattern` refuses every one of them
+    // wherever the pattern is put, so a tile for one accepts a click that
+    // cannot succeed — and a palette keeping its own subset of that list drifts
+    // the first time the planner learns a new way to say no.
+    //
+    // Asked ONCE per row rather than inside `entryAllowedAt`, because none of
+    // it depends on the destination: per target it would re-walk every
+    // pattern's forest on each keystroke of a filter, against a library the
+    // design sizes at three thousand entries.
+    if (patternRefusal(document, nesting) !== undefined) continue;
+    entries.push({
+      kind: "pattern",
+      id: `${PATTERN_ENTRY_PREFIX}${pattern.id}`,
+      patternId: pattern.id,
+      label: pattern.title,
+      // Empty rather than absent, matching a block's, so the panel draws one
+      // description slot for both tiers instead of two.
+      description: pattern.description ?? "",
+      category: pattern.category ?? UNCATEGORISED,
+      keywords: keywordsOf(pattern.keywords),
+      document,
+    });
+  }
+  return entries;
+}
+
+/**
+ * The prefix that keeps a pattern's catalog id out of the block namespace.
+ *
+ * Blocks are keyed by their namespaced name and a stored pattern can be saved
+ * under any string, `core/heading` included, so the tier has to be part of the
+ * key. A colon rather than a separator a block name can contain: `#` already
+ * separates a block from its variation, and reusing it would make
+ * `core/heading#hero` and a pattern named `hero` compete for one id.
+ */
+export const PATTERN_ENTRY_PREFIX = "pattern:";
+
+/**
+ * The author's stored search terms, as the list the palette matches.
+ *
+ * Stored as ONE string because the field is matched and never enumerated, and
+ * the collection's own note says authors separate them however they like — so
+ * commas, semicolons and whitespace all split, and empty runs between two
+ * separators produce nothing rather than an empty term that matches every
+ * query.
+ */
+function keywordsOf(stored: string | null | undefined): readonly string[] {
+  // Both absences, and they arrive by different roads: `undefined` from a
+  // caller that omitted the field, `null` from a stored row whose author never
+  // filled it in.
+  if (stored === undefined || stored === null) return [];
+  return stored
+    .split(/[\s,;]+/u)
+    .map(word => word.trim())
+    .filter(word => word !== "");
 }
 
 /**
@@ -298,7 +507,42 @@ export function entryAllowedAt(
   target: InsertTarget,
   source: NestingSource
 ): NestingVerdict {
+  if (entry.kind === "pattern") {
+    return patternAllowedAt(entry.document, target, source);
+  }
   return blockAllowedAt(entry.blockName, target, source);
+}
+
+/**
+ * Whether every root of a pattern may sit at a target.
+ *
+ * A pattern arrives as a FOREST and is inserted as one atomic group, so it goes
+ * where all of its roots go: offering one whose second root the destination
+ * refuses would accept the click and then have the planner reject the whole
+ * insert, which is the palette-and-drop disagreement this module exists to
+ * prevent. `planInsertPattern` asks exactly this before it plans, root by root,
+ * against the same rule.
+ *
+ * The FIRST refusal is returned rather than a collected list, and the reason is
+ * the point: a verdict names one restriction and the set that produced it, so
+ * an author is told where the thing they picked can go. A refusal summarising
+ * three roots would name none of them.
+ *
+ * Only the roots. A pattern's INTERNAL nesting is a property of the pattern
+ * rather than of the destination — it is the same wherever it is offered — so
+ * it belongs to whatever judges the pattern itself, not to a question about
+ * this target.
+ */
+function patternAllowedAt(
+  document: BlockDocument,
+  target: InsertTarget,
+  source: NestingSource
+): NestingVerdict {
+  return placementVerdict(
+    document.nodes.map(root => root.type),
+    placedAt(target),
+    source
+  );
 }
 
 /**
@@ -324,10 +568,24 @@ export function blockAllowedAt(
   target: InsertTarget,
   source: NestingSource
 ): NestingVerdict {
-  if (target.at === "root") return canBeRoot(blockName, source);
-  const child = canNest(blockName, target.parentType, source);
-  if (!child.allowed) return child;
-  return canNestInSlot(blockName, target.parentType, target.slot, source);
+  return placementVerdict([blockName], placedAt(target), source);
+}
+
+/**
+ * This module's target, in the vocabulary the rule is written in.
+ *
+ * Two names for one idea, and the translation is here so it happens ONCE.
+ * `InsertTarget` is published by this package and spells the discriminant
+ * `at`; the engine's `PlacementTarget` spells it `kind`. Converging them is a
+ * change to a published type across every drag, drop and refusal surface that
+ * reads one, so the rule is shared first and the spelling after — a second
+ * implementation of the RULE is what produces a palette that offers what the
+ * insert refuses, where two spellings of the target produce a rename.
+ */
+function placedAt(target: InsertTarget): PlacementTarget {
+  return target.at === "root"
+    ? { kind: "root" }
+    : { kind: "slot", parentType: target.parentType, slot: target.slot };
 }
 
 /**
@@ -340,11 +598,11 @@ export function blockAllowedAt(
  * {@link entryAllowedAt} for surfaces where the author has already committed to
  * a placement — a refused DROP has to say why, because the author aimed there.
  */
-export function allowedEntries(
-  entries: readonly InsertEntry[],
+export function allowedEntries<TEntry extends InsertEntry>(
+  entries: readonly TEntry[],
   target: InsertTarget,
   source: NestingSource
-): InsertEntry[] {
+): TEntry[] {
   return entries.filter(entry => entryAllowedAt(entry, target, source).allowed);
 }
 
@@ -360,23 +618,34 @@ export function allowedEntries(
  * nothing: the panel opens with no query, and a filter that treated that as
  * "match nothing" would show an empty palette on open.
  */
-export function filterEntries(
-  entries: readonly InsertEntry[],
+export function filterEntries<TEntry extends InsertEntry>(
+  entries: readonly TEntry[],
   query: string
-): InsertEntry[] {
+): TEntry[] {
   const needle = query.trim().toLowerCase();
   if (needle === "") return [...entries];
   return entries.filter(entry =>
-    [entry.label, entry.blockName, entry.description, ...entry.keywords].some(
-      field => field.toLowerCase().includes(needle)
-    )
+    searchableWords(entry).some(field => field.toLowerCase().includes(needle))
   );
 }
 
+/**
+ * The words one entry is matched on.
+ *
+ * A block additionally carries its namespaced name because that is what appears
+ * in documentation and in an agent's output. A pattern has no such identity to
+ * offer — its stored id is a row key nobody types — so the tier decides the
+ * list rather than every field being read off whichever entry arrives.
+ */
+function searchableWords(entry: InsertEntry): readonly string[] {
+  const shared = [entry.label, entry.description, ...entry.keywords];
+  return entry.kind === "block" ? [entry.blockName, ...shared] : shared;
+}
+
 /** A category heading and the entries under it, in the order the panel draws them. */
-export interface InsertGroup {
+export interface InsertGroup<TEntry extends InsertEntry = InsertEntry> {
   readonly category: string;
-  readonly entries: readonly InsertEntry[];
+  readonly entries: readonly TEntry[];
 }
 
 /**
@@ -393,11 +662,11 @@ export interface InsertGroup {
  * behind a list it was never named in — dropping it would make a block
  * unreachable through the very panel that exists to reach it.
  */
-export function groupByCategory(
-  entries: readonly InsertEntry[],
+export function groupByCategory<TEntry extends InsertEntry>(
+  entries: readonly TEntry[],
   preferred: readonly string[] = []
-): InsertGroup[] {
-  const groups = new Map<string, InsertEntry[]>();
+): InsertGroup<TEntry>[] {
+  const groups = new Map<string, TEntry[]>();
   for (const entry of entries) {
     const bucket = groups.get(entry.category);
     if (bucket === undefined) groups.set(entry.category, [entry]);
@@ -464,18 +733,13 @@ export function insertionPointFor(
   // to it is done by selecting the second and inserting after that — so both
   // placements stay available without a second affordance to discover.
   const selected = findNode(document.nodes, selectedId);
-  const declared =
-    selected === undefined ? undefined : slots?.slotsOf(selected.type);
-  const firstSlot = declared?.[0];
-  if (
-    selected !== undefined &&
-    firstSlot !== undefined &&
-    (selected.slots?.[firstSlot]?.length ?? 0) === 0
-  ) {
+  const emptySlot =
+    selected === undefined ? null : emptySlotOf(selected, slots);
+  if (selected !== undefined && emptySlot !== null) {
     return {
       kind: "inside-selection",
-      at: { parentId: selected.id, slot: firstSlot, index: 0 },
-      target: { at: "slot", parentType: selected.type, slot: firstSlot },
+      at: { parentId: selected.id, slot: emptySlot, index: 0 },
+      target: { at: "slot", parentType: selected.type, slot: emptySlot },
     };
   }
 
@@ -509,24 +773,98 @@ export function insertionPointFor(
 }
 
 /**
- * The node an entry inserts.
+ * The node a BLOCK entry inserts, carrying whatever children its block declares
+ * it starts with.
+ *
+ * Blocks only, and the parameter says so rather than the body branching. One
+ * pattern is a forest, re-identified against the ids the destination already
+ * holds and planned as one atomic group — `planInsertPattern` in the engine —
+ * so there is no single node to hand back, and a function returning one for a
+ * pattern would have to invent an answer or throw.
  *
  * Props are deep-copied. The entry outlives every insert made from it, so
  * handing out its own object would let an edit to one inserted block reach the
  * catalog — and through it every block inserted from that entry afterwards.
  * A shallow copy is not enough, because a default value may be an array or a
  * nested object and those would still be shared.
+ *
+ * The children come from `expandSlotDefaults` rather than from anything written
+ * here, so "what does this slot start with" is answered in one place: the block
+ * declares it, the engine expands it with ids minted per instance, and a
+ * container that declares nothing still arrives with no `slots` key at all.
+ * Building the children here instead would put a second answer beside the
+ * declaration, and the two would agree only until one of them changed.
  */
-export function nodeForEntry(entry: InsertEntry): BlockNode {
-  return makeNode(entry.blockName, entry.version, structuredClone(entry.props));
+export function nodeForEntry(
+  entry: BlockInsertEntry,
+  definitions: SlotDefaultSource,
+  nesting?: NestingSource
+): BlockNode {
+  return makeNode(
+    entry.blockName,
+    entry.version,
+    structuredClone(entry.props),
+    // The nesting source travels with the definitions rather than being
+    // rederived inside the engine. A caller that supplies its own rules uses
+    // them to decide what may be OFFERED, and a seeded child that skipped them
+    // would be a placement the caller's own rules forbid, arriving by being
+    // declared rather than chosen.
+    expandSlotDefaults(entry.blockName, definitions, nesting)
+  );
+}
+
+/**
+ * The registry as a block-definition source.
+ *
+ * Reads the DEFINITION rather than the node, because a container inserted from
+ * the palette has no `slots` key until something is put in it — which is
+ * precisely the container that needs filling.
+ */
+export function registryBlockSource(): SlotDefaultSource {
+  return { get: type => getBlock(type) };
+}
+
+/**
+ * The definitions an insert expands declared starting children from, given the
+ * palette's own catalog.
+ *
+ * Supplied definitions are consulted FIRST and the registry second, which is
+ * what keeps the offer and the insert reading one declaration. A caller may
+ * hand the palette a definition the registry does not hold — a host block, a
+ * fixture — and the catalog then offers it; resolving only against the registry
+ * would find no declaration for that block and insert it stripped of the
+ * children it declares, silently, because an absent declaration and a declared
+ * emptiness are the same answer.
+ *
+ * The fallback is the other half and not a leftover: an entry names child TYPES
+ * the supplied list has no reason to contain, so those still resolve against
+ * everything registered. Consulting the supplied list first changes which
+ * declaration wins for a name in both, and that is the intended order — the
+ * palette offered THAT definition, so the insert must build THAT block.
+ */
+export function blockSourceFor(
+  definitions: readonly AnyBlockDefinition[] | undefined
+): SlotDefaultSource {
+  // Both readings are taken ONCE, here, rather than on each lookup. A source
+  // that consulted the live registry per call would answer from a different
+  // set of definitions than the catalog its caller built alongside it, so a
+  // row offered from one reading could be inserted with children from another.
+  const byName = new Map<string, AnyBlockDefinition>();
+  for (const definition of allBlocks()) byName.set(definition.name, definition);
+  // Supplied definitions are written second, so they WIN for a name in both:
+  // the palette offered that definition, so the insert must build that block.
+  for (const definition of definitions ?? []) {
+    byName.set(definition.name, definition);
+  }
+  return { get: type => byName.get(type) };
 }
 
 /**
  * The registry as a slot source.
  *
- * Reads the DEFINITION's declared slots rather than the node's, because a
- * container inserted from the palette has no `slots` key until something is put
- * in it — which is precisely the container that needs filling.
+ * DERIVED from `registryBlockSource` rather than reading the registry again:
+ * the names of a block's slots are a narrower view of its declaration, and two
+ * readings of one registry would agree until one of them learned to filter.
  *
  * Here rather than beside either caller. The palette asks it where an insert
  * would land and the canvas asks it which regions a drag can aim at, and those
@@ -534,9 +872,10 @@ export function nodeForEntry(entry: InsertEntry): BlockNode {
  * is a block that behaves differently depending on how an author reached it.
  */
 export function registrySlotSource(): SlotSource {
+  const definitions = registryBlockSource();
   return {
     slotsOf: type => {
-      const declared = getBlock(type)?.slots;
+      const declared = definitions.get(type)?.slots;
       return declared === undefined ? undefined : Object.keys(declared);
     },
   };

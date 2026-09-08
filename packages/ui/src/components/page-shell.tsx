@@ -97,12 +97,25 @@ function hasDisplayContentsChild(shell: HTMLElement): boolean {
 }
 
 /**
+ * What each named width resolves to, owned here because this is what applies it.
+ *
  * Declared as a lookup rather than branched at the call site so the three arms
  * are one list. A `switch` here would let a fourth width be added to the type
  * and forgotten in the mapping, which the checker cannot see through a
  * `default` arm.
+ *
+ * Exported because a caller whose CONTENT carries the measure needs the same
+ * value as a length, and the alternative is a second table naming the same
+ * tokens — which drifts silently, since both look correct beside their own
+ * neighbours. Reading it here means there is one answer rather than two that
+ * agree today.
+ *
+ * @experimental
  */
-const MEASURE: Record<NonNullable<PageShellProps["width"]>, string> = {
+export const SHELL_MEASURE: Record<
+  NonNullable<PageShellProps["width"]>,
+  string
+> = {
   form: "var(--nx-measure-form)",
   wide: "var(--nx-measure-wide)",
   full: "100%",
@@ -222,7 +235,7 @@ export const PageShell = forwardRef<HTMLDivElement, PageShellProps>(
     // `width` is the supported way to choose it.
     const shellStyle: ShellStyle = {
       ...style,
-      "--nx-shell-measure": MEASURE[width],
+      "--nx-shell-measure": SHELL_MEASURE[width],
     };
 
     return (

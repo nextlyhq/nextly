@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { NextlyError } from "../../../errors";
 import { UploadValidator } from "../../../services/upload-validation";
+import { JPEG_1X1 } from "../../../services/upload-validation/__tests__/format-fixtures";
 import { MediaService } from "../services/media-service";
 import type { UploadMediaInput } from "../services/media-service";
 
@@ -259,13 +260,16 @@ describe("MediaService — Edge Cases", () => {
 
       const inputs: UploadMediaInput[] = [
         {
-          buffer: Buffer.from("fail"),
+          // Real JPEG bytes on both: this case is about which items the bulk
+          // path reports as failed, so validation must not be what refuses
+          // them.
+          buffer: JPEG_1X1,
           filename: "fail.jpg",
           mimeType: "image/jpeg",
           size: 1024,
         },
         {
-          buffer: Buffer.from("ok"),
+          buffer: JPEG_1X1,
           filename: "ok.jpg",
           mimeType: "image/jpeg",
           size: 1024,

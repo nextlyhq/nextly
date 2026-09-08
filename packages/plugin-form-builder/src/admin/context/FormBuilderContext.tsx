@@ -131,7 +131,28 @@ export interface FormBuilderProviderProps {
   };
   /** Child components */
   children: ReactNode;
+  /**
+   * The document belongs to someone else right now, so nothing here may change
+   * it.
+   *
+   * Held here rather than at each control because the builder has dozens of
+   * them across four tabs, and a rule spelled at every one is a rule one new
+   * control forgets. Reading is untouched: the editor still browses fields,
+   * switches tabs and opens settings, which is exactly what the strip above
+   * offers them.
+   */
+  readOnly?: boolean;
 }
+
+/**
+ * The actions that survive a read-only document.
+ *
+ * Everything else on the context changes the form, and every one of those marks
+ * it dirty - the same question asked twice, so this is the complement of it
+ * rather than a second list of what to block. `markAsSaved` is the save's own
+ * bookkeeping and cannot run while the save is withheld anyway.
+ */
+const READS_ONLY = new Set(["selectField", "setActiveTab", "markAsSaved"]);
 
 /** Default form settings (the canonical defaults from the settings reader) */
 export const DEFAULT_SETTINGS: FormSettings = DEFAULT_FORM_SETTINGS;
@@ -300,6 +321,7 @@ export function createFieldFromType(
 export function FormBuilderProvider({
   initialData,
   children,
+  readOnly = false,
 }: FormBuilderProviderProps) {
   // State
   const [fields, setFieldsState] = useState<AnyFormField[]>(
@@ -546,8 +568,30 @@ export function FormBuilderProvider({
     ]
   );
 
+  /**
+   * The same value with every document-changing action withheld.
+   *
+   * 🔴 Fail-closed, and deliberately so: it withholds every function EXCEPT the
+   * ones named, rather than naming the ones to withhold. An action added here
+   * later is inert under a colleague's claim without anyone remembering this
+   * exists, which is the opposite of how a list of things-to-disable ages.
+   *
+   * What stays is navigation and the save's own bookkeeping. Neither changes
+   * the document, and both are what "you can read it" has to mean.
+   */
+  const guarded = useMemo<FormBuilderContextValue>(() => {
+    if (!readOnly) return value;
+    return Object.fromEntries(
+      Object.entries(value).map(([name, member]) =>
+        typeof member === "function" && !READS_ONLY.has(name)
+          ? [name, () => undefined]
+          : [name, member]
+      )
+    ) as FormBuilderContextValue;
+  }, [value, readOnly]);
+
   return (
-    <FormBuilderContext.Provider value={value}>
+    <FormBuilderContext.Provider value={guarded}>
       {children}
     </FormBuilderContext.Provider>
   );

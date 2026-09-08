@@ -477,34 +477,70 @@ describe("MediaService — Folder Operations", () => {
   // ── Move Media to Folder ──────────────────────────────────────────
 
   describe("moveToFolder", () => {
+    // A move is no longer a bare folder write. It is routed through
+    // `updateMedia` so the folder change is recorded as a `media.updated`
+    // outbox event -- the previous path wrote the column and recorded nothing,
+    // so subscribers never learned a file had moved. These tests assert the
+    // update path, because asserting `moveMediaToFolder` would pass against an
+    // implementation that emits no event, which is the defect that was fixed.
     it("should move media to a folder", async () => {
-      mockLegacyFolder.moveMediaToFolder.mockResolvedValue(successResult(null));
+      mockLegacyFolder.getFolderById.mockResolvedValue(
+        successResult(createMockFolder())
+      );
+      mockLegacyMedia.updateMedia.mockResolvedValue(successResult(null));
 
       await expect(
         service.moveToFolder("media-001", "folder-001", context)
       ).resolves.toBeUndefined();
 
-      expect(mockLegacyFolder.moveMediaToFolder).toHaveBeenCalledWith(
+      // The actor is asserted, not waved through: it is what attributes the
+      // outbox event, and `actorForWrite` falls back to the request user when
+      // no transport actor is threaded.
+      expect(mockLegacyMedia.updateMedia).toHaveBeenCalledWith(
         "media-001",
-        "folder-001"
+        { folderId: "folder-001" },
+        { type: "user", id: "user-001" }
       );
     });
 
     it("should move media to root (null folder)", async () => {
-      mockLegacyFolder.moveMediaToFolder.mockResolvedValue(successResult(null));
+      mockLegacyMedia.updateMedia.mockResolvedValue(successResult(null));
 
       await expect(
         service.moveToFolder("media-001", null, context)
       ).resolves.toBeUndefined();
 
-      expect(mockLegacyFolder.moveMediaToFolder).toHaveBeenCalledWith(
+      expect(mockLegacyMedia.updateMedia).toHaveBeenCalledWith(
         "media-001",
-        null
+        { folderId: null },
+        { type: "user", id: "user-001" }
       );
+      // Root is not a folder, so there is nothing to validate. Asserted because
+      // a lookup here would 404 every move to root.
+      expect(mockLegacyFolder.getFolderById).not.toHaveBeenCalled();
     });
 
-    it("should throw NOT_FOUND if media or folder does not exist", async () => {
-      mockLegacyFolder.moveMediaToFolder.mockResolvedValue(
+    it("should throw NOT_FOUND when the target folder does not exist, before writing", async () => {
+      mockLegacyFolder.getFolderById.mockResolvedValue(
+        errorResult(404, "Not found")
+      );
+      mockLegacyMedia.updateMedia.mockResolvedValue(successResult(null));
+
+      await expect(
+        service.moveToFolder("media-001", "missing-folder", context)
+      ).rejects.toThrow(NextlyError);
+
+      // "Before the write" is the documented point of validating up front, and
+      // it is the half a rejects-toThrow assertion cannot see: without this the
+      // test passes just as well against a service that writes and then throws.
+      expect(mockLegacyMedia.updateMedia).not.toHaveBeenCalled();
+    });
+
+    it("should throw NOT_FOUND when the media does not exist", async () => {
+      mockLegacyFolder.getFolderById.mockResolvedValue(
+        successResult(createMockFolder())
+      );
+      mockLegacyMedia.updateMedia.mockResolvedValue(
         errorResult(404, "Not found")
       );
 

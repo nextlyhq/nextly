@@ -40,15 +40,14 @@
  * `minmax(180px, 1fr)` makes a single track wider than its parent and the
  * pictures overflow. `min(180px, 100%)` lets the last one fit.
  *
- * **The gap is a plain length, and no aspect ratio.** `defaultSiteTokens()`
- * NAMES `space.4` but guarantees nothing: `compileSiteSheet` — the only thing
- * that turns a token set into CSS — has zero consumers outside `blocks-engine`,
- * and `--site-` appears in no source file outside the engine (positive control:
- * `--nx-` appears in 103). This block shipped with `{ $token: "space.4" }` and
- * its tiles rendered touching, because an unresolved `var()` makes the
- * declaration invalid at computed-value time and `gap` falls back to `normal`,
- * which is zero for a grid. `1rem` is what `space.4` itself declares, so the
- * value survives the change back once tokens are emitted. A default `aspect-ratio` was considered and refused: it
+ * **The gap is the site's spacing token, and there is no aspect ratio.** This
+ * block shipped with `{ $token: "space.4" }`, rendered its tiles touching, and
+ * spent a while as a plain length because of it: the renderer withheld the
+ * token tier from a consumer handing back a stored artifact, so the reference
+ * arrived as a `var()` with nothing behind it — invalid at computed-value time,
+ * and `gap` falls back to `normal`, zero for a grid. The declaration now reaches
+ * that path and resolves to `1rem`, which is the value the literal stood in for,
+ * so the gutter follows a site that redefines `space.4`. A default `aspect-ratio` was considered and refused: it
  * would crop every picture in the library to one shape, and the crop is
  * invisible in the editor's own preview because the same rule applies there.
  * Uniform tiles are a real want, so `aspectRatio` stays available on the image
@@ -85,11 +84,13 @@ export const GALLERY_BASE_STYLES = {
     base: {
       display: "grid",
       gridTemplateColumns: "repeat(auto-fit, minmax(min(180px, 100%), 1fr))",
-      // A LENGTH, not a token: nothing emits token CSS yet, so a `{ $token }`
-      // reference compiles to a `var()` with nothing behind it and the gap
-      // silently falls back to `normal`, which for a grid is zero. `1rem` is
-      // what `space.4` itself declares, so the value survives the change back.
-      gap: "1rem",
+      // The site's spacing token. This was a length while nothing declared
+      // `--site-*` on every path a reference reaches: the value compiled to a
+      // `var()` with nothing behind it and `gap` fell back to `normal`, zero for
+      // a grid. Measured on the path that used to fail — a stored artifact
+      // handed back with no context — the property is now declared and resolves
+      // to `1rem`, the value the literal stood in for.
+      gap: { $token: "space.4" },
     },
   },
 } as const;
@@ -123,10 +124,17 @@ export const gallery = defineBlock<ContainerProps, PageContext>({
   slots: {
     children: {
       allow: [GALLERY_ITEM_BLOCK],
-      // Empty, as everywhere in this library: a literal template carries
-      // literal ids, and two galleries expanded from one collide on
-      // `duplicate-node-id`. Nothing reads `SlotSpec.template` yet.
-      template: [],
+      // No `defaultBlock`, and the asymmetry noted above is why. A row and an
+      // accordion declare one because their allowed child names them back as
+      // its only parent, so the container is unusable until it holds one. A
+      // gallery's child is `core/image`, which deliberately declares no parent
+      // and is placeable anywhere — so nothing about a gallery makes an image
+      // hard to reach.
+      //
+      // A default would also have to guess a count that nothing here knows: a
+      // gallery holds as many images as the author has. And an image with no
+      // source is a placeholder awaiting an upload, so seeding two would put
+      // two things on the page that must be replaced rather than filled.
     },
   },
   baseStyles: GALLERY_BASE_STYLES,

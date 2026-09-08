@@ -60,6 +60,17 @@ describe("applyFieldDefaults", () => {
     expect(data).toEqual({});
   });
 
+  it("skips a field-group field under the migrated spelling too", () => {
+    // The storage migration renames the type token inside stored definitions,
+    // so the skipped default must follow both spellings or it would target a
+    // column that does not exist.
+    const data: Record<string, unknown> = {};
+    applyFieldDefaults(data, [
+      field({ name: "hero", type: "fieldGroup", defaultValue: { a: 1 } }),
+    ]);
+    expect(data).toEqual({});
+  });
+
   it("does not mistake an inherited property for a supplied value", () => {
     // A field named after something on Object.prototype would otherwise
     // resolve through the prototype chain, so an empty body would look as

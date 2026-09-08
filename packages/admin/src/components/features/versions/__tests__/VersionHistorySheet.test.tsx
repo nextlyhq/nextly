@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 import type { FieldConfig } from "nextly/config";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { answerMediaQueries } from "@admin/__tests__/helpers/media-query";
 import { render, screen, waitFor, within } from "@admin/__tests__/utils";
 
 const {
@@ -404,6 +405,18 @@ describe("VersionHistorySheet", () => {
   });
 
   it("leaves the document reachable while its history is open", () => {
+    /*
+     * A window wide enough to hold the panel BESIDE the document, which is the
+     * condition this behaviour is now attached to. The panel is only non-modal
+     * where the layout has made room for it; over a window too narrow for both
+     * it covers the document, and modal is the honest state there — see
+     * `VersionHistorySheet.reservation.test`.
+     *
+     * Stated rather than inherited: the global stub answers "no match" to every
+     * query, so a test about the window's size that does not set one up is
+     * asserting against the stub.
+     */
+    answerMediaQueries(true);
     useVersionsMock.mockReturnValue(
       listState({
         data: { pages: [{ items: [version(1)], meta: { hasNext: false } }] },

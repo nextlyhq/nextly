@@ -161,6 +161,11 @@ export const config = [
       "**/tsup.*.config.{js,ts,mjs,cjs}",
       "**/next.config.{js,ts,mjs,cjs}",
       "**/vitest.config.{js,ts,mjs,cjs}",
+      // The same for a variant config, matching the `tsup.*.config` line above:
+      // a package that splits its unit and integration runs adds
+      // `vitest.integration.config.ts`, which sits outside every tsconfig
+      // project exactly as the config beside it does.
+      "**/vitest.*.config.{js,ts,mjs,cjs}",
       // A global-setup file is loaded by vitest the same way its config is, so
       // it lives outside every package's tsconfig project for the same reason.
       "**/vitest.global-setup.{js,ts,mjs,cjs}",

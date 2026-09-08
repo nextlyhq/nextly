@@ -1,16 +1,21 @@
-// SlugInput is a controlled text input for an entity's slug, read-only once the
-// entity exists.
+// SlugInput is a controlled text input for an entity's slug, and it stops
+// accepting edits once the entity exists.
 //
-// It previously had read and edit modes — a bold value, a pencil button, a
-// "Done" — and four tests locked that UX. `7cdc8d8ee` ("stop offering an
-// entity's slug for editing after creation") replaced the whole arrangement
-// with a single `Input`, so those tests described a component that no longer
-// exists and asserted against markup nothing rendered. They are replaced here
-// rather than deleted: the component still has a contract, and leaving it
-// uncovered would trade four failing tests for none at all.
+// That read-only-after-creation rule is the contract worth locking: a slug is
+// an address. Renaming one after anything points at it breaks those links
+// silently, so the component refuses rather than warning, and these cases
+// assert the refusal is a property of the rendered input rather than of a
+// wrapper that happens not to pass a handler.
 //
-// SlugInput is controlled, so these use a stateful wrapper — the same shape any
-// real consumer (BasicsTab with react-hook-form) provides.
+// It is fully controlled — it always renders `value={value}` — so every case
+// drives it through a stateful wrapper, which is the shape its real consumer
+// has: `BuilderSettingsModal` holds the values in `useState` and passes the
+// setter down through `BasicsTab`.
+//
+// The wrapper is not ceremony. Render it with a `value` and an inert handler
+// and the input silently refuses every keystroke, because React re-renders it
+// back to the prop — so a case that typed into it would be asserting against
+// the wrapper's own inertness rather than against anything the component did.
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";

@@ -33,12 +33,17 @@ export interface ClassUsageDirectApi {
     limit?: number;
     page?: number;
     sort?: string;
+    locale?: string;
+    fallbackLocale?: false | string;
+    status?: "published" | "draft" | "all";
+    depth?: number;
     overrideAccess?: boolean;
   }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
   findByID(args: {
     collection: string;
     id: string;
     locale?: string;
+    fallbackLocale?: false | string;
     draft?: boolean;
     depth?: number;
     disableErrors?: boolean;
@@ -127,12 +132,10 @@ export function classUsageIndexStore(
  * The three mappings here are the whole reason this file exists, and each is a
  * place the index can be filed against the wrong document:
  *
- * `draft` is derived from the VARIANT and is passed on both branches. The
- * Direct API overlays the pending working draft only when asked, so omitting it
- * for a draft subject reads the published row and files its classes as the
- * draft's — and passing it for a published subject does the reverse wherever a
- * draft exists. The two subjects are separate rows precisely because those two
- * documents can differ.
+ * The VARIANT decides only whether the read opts into the working draft.
+ * Neither read carries a lifecycle filter, because an explicit `status`
+ * constrains the main row and the localized companion TOGETHER and drops
+ * documents that are legitimately in neither state — see `readPublished`.
  *
  * `locale` is the subject's, except that the SHARED sentinel is sent as
  * `undefined` rather than as `""`. A shared field stores one value that every
@@ -142,49 +145,188 @@ export function classUsageIndexStore(
  * `depth: 0` because the rows are derived from the stored blocks JSON. Populating
  * relationships would replace ids with documents, which changes the shape the
  * derivation walks while adding reads a save does not need.
- *
- * `disableErrors` turns a missing document into `null`, which the caller treats
- * as "leave this subject alone" rather than as a failure. That is the right
- * reading for an untranslated locale or a document with no pending draft, both
- * ordinary states.
  */
 export function classUsageDocumentReader(
   nextly: ClassUsageDirectApi
 ): ClassUsageDocumentReader {
   return async (subject: ClassUsageSubject) => {
-    const row = await nextly.findByID({
-      collection: subject.entity,
-      id: subject.entityKey,
-      ...(subject.locale === "" ? {} : { locale: subject.locale }),
-      draft: subject.variant === "draft",
-      depth: 0,
-      disableErrors: true,
-      ...AS_THE_SYSTEM,
-    });
+    const row =
+      subject.variant === "draft"
+        ? await readDraft(nextly, subject)
+        : await readPublished(nextly, subject);
     return documentIn(row, subject);
   };
 }
 
 /**
- * The block document a row carries for one subject, or undefined.
+ * The document a DRAFT subject names.
+ *
+ * A document published and edited since keeps its main row published and its
+ * pending edits in a SIDECAR, and only the by-id read overlays that sidecar.
+ * The marker is set exactly when one was surfaced
+ * (`collection-query-service.ts:3378`), so it identifies the overlay and
+ * nothing else — this call falls back to the live row when there is no
+ * sidecar, and answering that would file published classes under a draft that
+ * does not exist.
+ *
+ * Nothing is lost by refusing it, because the published subject below reads
+ * the main row WITHOUT a lifecycle filter. A document whose only row is a
+ * draft is therefore recorded under that subject rather than nowhere, which is
+ * where the never-published case is answered.
+ */
+async function readDraft(
+  nextly: ClassUsageDirectApi,
+  subject: ClassUsageSubject
+): Promise<unknown> {
+  const record = await readById(nextly, subject, { draft: true });
+  if (record === undefined) return undefined;
+  return record._isWorkingDraft === true ? record : undefined;
+}
+
+/**
+ * The document a PUBLISHED subject names, read WITHOUT a lifecycle filter.
+ *
+ * The obvious shape here is `find({ status: "published" })`, and it is wrong in
+ * three ways that all lose rows. `listEntries` pushes
+ * `eq(schema.status, statusFilter.value)` for the MAIN row and then hands the
+ * same value to the localized context for the companion's `_status`
+ * (`collection-query-service.ts:1143-1159`), so an explicit status is a
+ * CONJUNCTION over both:
+ *
+ * - a translation unpublished while the default stays published has a draft
+ *   companion under a published main row, and matches neither `published` nor
+ *   `draft`;
+ * - the inverse state matches neither, symmetrically;
+ * - a collection with `status: true` whose draft split is INELIGIBLE (drafts
+ *   off, or a reachable password field) enumerates only this subject, so
+ *   filtering it to `published` excludes its sole row whenever the entry is
+ *   currently a draft — indexing that document nowhere at all.
+ *
+ * The by-id read applies no lifecycle filter for a trusted caller:
+ * `resolveStatusFilter` returns null when `overrideAccess` is set and no status
+ * is named (`lib/status-filter.ts`), and this asks as the system. So it answers
+ * the row that exists, whatever state it is in.
+ *
+ * The cost is an over-count and it is the direction to fail in: a document
+ * whose only row is a draft has its classes recorded under this subject, which
+ * warns about a delete that was safe. Filtering it away permits deleting a
+ * class a live document still renders, and only one of those is recoverable.
+ */
+async function readPublished(
+  nextly: ClassUsageDirectApi,
+  subject: ClassUsageSubject
+): Promise<unknown> {
+  return readById(nextly, subject, {});
+}
+
+/**
+ * One by-id read of this subject's document, as the system.
+ *
+ * Shared so the locale, the depth, the error policy and the identity check are
+ * stated once. The variants differ only in whether they opt into the working
+ * draft.
+ */
+async function readById(
+  nextly: ClassUsageDirectApi,
+  subject: ClassUsageSubject,
+  options: { draft?: boolean }
+): Promise<Record<string, unknown> | undefined> {
+  const row = await nextly.findByID({
+    collection: subject.entity,
+    id: subject.entityKey,
+    ...options,
+    ...localeOptions(subject),
+    depth: 0,
+    // No error suppression. `disableErrors` converts EVERY unsuccessful result
+    // to null, not only a missing row — so a failing `afterRead` hook or a
+    // broken overlay query would read as "this document is not there", and the
+    // subject would be left alone with the caller told nothing. A raised
+    // failure is reported instead, which is what tells a caller the index is
+    // stale.
+    ...AS_THE_SYSTEM,
+  });
+  return recordOf(row, subject);
+}
+
+/**
+ * The record a read answered, once it identifies itself as the subject's.
+ *
+ * NEITHER end of this call can be trusted on its own, which is what decides the
+ * rule:
+ *
+ * - the REQUEST can be retargeted. A `beforeOperation` read hook may rewrite
+ *   the id, and the service builds its predicate from the rewritten one —
+ *   `resolveReadEntryId` does `beforeOpArgs?.id ?? params.entryId`
+ *   (`collection-query-service.ts:757`). So asking for a document is not the
+ *   same as being answered about it.
+ * - the RESPONSE can be reshaped. `afterRead` REPLACES the document, so a
+ *   collection may rewrite or drop `id` for reasons that have nothing to do
+ *   with which row was read.
+ *
+ * Those two make each other undecidable: a returned id that differs from the
+ * subject is either a legitimate reshape or another document entirely, and
+ * nothing available to a plugin tells them apart. There is no read this module
+ * can issue that a hook cannot redirect, and no field of the answer that a hook
+ * cannot rewrite.
+ *
+ * So the rule is the ruled asymmetry rather than a guess about which hook is
+ * more likely. Reconciling an unconfirmed document files ITS classes under this
+ * subject and removes the rows the real document earned — the class it still
+ * renders then reads as unused and becomes deletable, which is the data loss
+ * this index exists to prevent. Refusing costs a maintenance pass: the rows are
+ * left alone, the index over-counts, a delete is refused, the caller is told,
+ * and the next rebuild corrects it. Only one of those is recoverable.
+ *
+ * The cost is real and worth naming: a collection whose `afterRead` rewrites or
+ * strips `id` cannot have its class usage maintained, and every save on it will
+ * report a maintenance failure. That is a loud, diagnosable refusal rather than
+ * a silent corruption, and it is the direction to fail in.
+ */
+function recordOf(
+  row: unknown,
+  subject: ClassUsageSubject
+): Record<string, unknown> | undefined {
+  if (typeof row !== "object" || row === null) return undefined;
+  const record = row as Record<string, unknown>;
+  if (record.id === subject.entityKey) return record;
+  throw new Error(
+    `Class-usage read for ${subject.entity}:${subject.entityKey} was answered ` +
+      `by a document identifying as "${String(record.id)}". A read hook can ` +
+      `retarget the query and another can rewrite the answer, so this cannot ` +
+      `be confirmed as the subject's document; its rows are left untouched.`
+  );
+}
+
+/**
+ * How a subject's locale is asked for.
+ *
+ * The SHARED sentinel asks with no locale at all: a shared field stores one
+ * value every language reads, and that value is what a read with no locale
+ * resolves to. Asking for the `""` locale asks for a language nobody
+ * configured.
+ *
+ * A real locale asks with FALLBACK OFF. Fallback is on by default, so a locale
+ * with no translation resolves the field from its fallback chain — and filing
+ * that document's classes under `subject.locale` gives a translation that does
+ * not exist rows of its own.
+ */
+function localeOptions(subject: ClassUsageSubject): {
+  locale?: string;
+  fallbackLocale?: false;
+} {
+  if (subject.locale === "") return {};
+  return { locale: subject.locale, fallbackLocale: false };
+}
+
+/**
+ * The block document a row carries for one subject.
  *
  * The row is the whole record; the document this subject is keyed by lives at
  * `record[field]`, which is where the rebuild reads it. Returning the record
  * instead derives NO rows at all — the derivation walks a top-level `nodes`
- * array and a record has none — so every class the document applies reads as
- * unused, which is the state that licences deleting one a page still renders.
- *
- * A DRAFT subject additionally requires the working-draft marker. Asking for
- * the draft overlay on a document that has no pending draft answers the live
- * published row rather than nothing, so without this check the published
- * classes are filed under a draft that does not exist — phantom references that
- * no rebuild can reconcile and that block deleting a class nothing uses.
+ * array and a record has none.
  */
 function documentIn(row: unknown, subject: ClassUsageSubject): unknown {
   if (typeof row !== "object" || row === null) return undefined;
-  const record = row as Record<string, unknown>;
-  if (subject.variant === "draft" && record._isWorkingDraft !== true) {
-    return undefined;
-  }
-  return record[subject.field];
+  return (row as Record<string, unknown>)[subject.field];
 }

@@ -480,6 +480,103 @@ export function missingReviewers(
   return (required ?? []).filter(login => !seen.has(login));
 }
 
+/** GitHub's `__typename` for a GitHub App's account, as opposed to a user. */
+const BOT_TYPENAME = "Bot";
+
+/** The suffix REST appends to a GitHub App's login, and GraphQL omits. */
+const BOT_SUFFIX = "[bot]";
+
+/**
+ * Whether an actor's login can be read at all.
+ *
+ * A deleted account arrives as `author: null`, and a partial response can carry
+ * the key with nothing in it. Neither is a login, and both must stay
+ * distinguishable from one — every caller here counts what it cannot identify.
+ */
+const isReadableLogin = value => typeof value === "string" && value !== "";
+
+/** Idempotent, so a login already in REST shape is returned unchanged. */
+const withBotSuffix = login =>
+  login.endsWith(BOT_SUFFIX) ? login : `${login}${BOT_SUFFIX}`;
+
+/**
+ * The REST-shaped login for an actor GraphQL described.
+ *
+ * GitHub spells one identity two ways. REST returns a GitHub App's account as
+ * `<app-slug>[bot]`; GraphQL returns the bare slug and puts the account KIND in
+ * `__typename`. Measured on this repository, one pull request, one minute:
+ *
+ * ```text
+ * REST    pulls/1286/comments  .user.login  coderabbitai[bot]
+ * GraphQL reviewThreads author .login       coderabbitai
+ * GraphQL same node            .__typename  Bot
+ * ```
+ *
+ * Reviewer configuration is written in the REST spelling — it is the one a
+ * person reads off the pull request — so REST is the canonical form and the
+ * GraphQL edge is reconciled to it. Reconciled ONCE, here, rather than at each
+ * comparison: a normalisation every call site has to remember is one a call
+ * site will eventually forget, and the failure is silent in both directions.
+ *
+ * **`__typename` is what makes appending the suffix safe, and it is doing a
+ * different job from the login.** It answers *is this account a bot*, which no
+ * account can present about itself, so a USER that registers the name
+ * `coderabbitai` keeps its bare login and cannot borrow the app's identity. The
+ * login answers *which* bot — the question the advisory policy actually asks.
+ * Neither field can do the other's job: every reviewer here is a `Bot`, so
+ * keying the policy on `__typename` alone would exempt the blocking reviewer
+ * this gate exists to enforce.
+ */
+export function canonicalActorLogin(author) {
+  const login = author?.login;
+  if (!isReadableLogin(login)) return undefined;
+  return author.__typename === BOT_TYPENAME ? withBotSuffix(login) : login;
+}
+
+/**
+ * The author fields a review thread is read through.
+ *
+ * `verify-merge.mjs` builds its own query from this same fragment, so the two
+ * gates cannot ask GitHub for different fields. The count they share delegates
+ * to {@link canonicalActorLogin}, so a selection restated in either file leaves
+ * that file asking for less and reaching a different verdict on the same pull
+ * request.
+ *
+ * The fields here and {@link canonicalActorLogin} are one decision in two
+ * places: the canonicaliser reads `login` and `__typename`, and a hand-built
+ * fixture supplies whatever field a test writes into it, so a selection missing
+ * `__typename` is invisible to every unit test. The request returns `undefined`
+ * for the absent field, no thread canonicalises to a bot, nothing is ever
+ * exempt, and every advisory thread blocks. Exported so a test asserts on the
+ * string the request SENDS rather than on a copy of it.
+ */
+export const REVIEW_THREAD_NODE_FIELDS =
+  "isResolved comments(first:1){ nodes { author { login __typename } } }";
+
+/** The paged review-thread query, built from the shared selection. */
+export const REVIEW_THREADS_QUERY =
+  "query($pr:Int!,$owner:String!,$name:String!,$cursor:String){" +
+  " repository(owner:$owner,name:$name){ pullRequest(number:$pr){" +
+  " reviewThreads(first:100, after:$cursor){" +
+  ` nodes { ${REVIEW_THREAD_NODE_FIELDS} }` +
+  " pageInfo { hasNextPage endCursor } } } } }";
+
+/**
+ * The reviewers whose threads may be exempted, once blocking has won.
+ *
+ * A login named in both lists is required for coverage AND excluded from
+ * blocking, so it would be exempt from holding the merge while still being
+ * asked to review it. Blocking wins, and the rule is exported so every gate
+ * applies the same one: a second gate filtering differently clears a pull
+ * request the first refuses.
+ */
+export function advisoryExemptions(blocking, advisory) {
+  const blockingList = Array.isArray(blocking) ? blocking : [];
+  return (Array.isArray(advisory) ? advisory : []).filter(
+    login => !blockingList.includes(login)
+  );
+}
+
 /**
  * Review threads still open.
  *
@@ -501,7 +598,7 @@ export function unresolvedThreads(threads, advisory = []) {
   // ignore".
   return threads.filter(thread => {
     if (thread?.isResolved === true) return false;
-    const author = thread?.comments?.nodes?.[0]?.author?.login;
+    const author = canonicalActorLogin(thread?.comments?.nodes?.[0]?.author);
     return !(typeof author === "string" && advisory.includes(author));
   }).length;
 }
@@ -647,9 +744,7 @@ export function report({
   // than at each use: a login left in both would be exempted from thread
   // blocking by the advisory list while being required for coverage.
   const blockingList = blocking ?? [];
-  const effectiveAdvisory = advisory.filter(
-    login => !blockingList.includes(login)
-  );
+  const effectiveAdvisory = advisoryExemptions(blockingList, advisory);
   const required = [...new Set([...blockingList, ...effectiveAdvisory])];
   // Taken from the revision SET, never from the order map. Ordering is withheld
   // where ancestry is not linear, and reusing it here would make a merge commit
@@ -775,7 +870,18 @@ export const fingerprint = (rv, th, ic) =>
       r?.state,
       r?.submitted_at,
     ]),
-    th.map(t => [t?.isResolved, t?.comments?.nodes?.[0]?.author?.login]),
+    // The CANONICAL login rather than the raw one, because that is what
+    // `unresolvedThreads` reads. `__typename` decides whether a login
+    // canonicalises to a bot, so two snapshots carrying the same login and a
+    // different account kind stand for different verdicts, and a stamp over the
+    // raw login alone holds still while the verdict moves. The derived value
+    // also holds still where the verdict CANNOT move — a kind changing between
+    // two non-bot values leaves the canonical login alone — which a pair of raw
+    // fields would report as evidence moving.
+    th.map(t => [
+      t?.isResolved,
+      canonicalActorLogin(t?.comments?.nodes?.[0]?.author),
+    ]),
     // The parsed revision and the timestamp are read by the coverage decision,
     // so a comment edited in place from an older revision to the current one
     // moves this stamp. Recording only the id would leave two snapshots equal
@@ -1084,11 +1190,7 @@ async function main(argv) {
         `name=${name}`,
         ...(cursor === null ? [] : ["-F", `cursor=${cursor}`]),
         "-f",
-        "query=query($pr:Int!,$owner:String!,$name:String!,$cursor:String){" +
-          " repository(owner:$owner,name:$name){ pullRequest(number:$pr){" +
-          " reviewThreads(first:100, after:$cursor){" +
-          " nodes { isResolved comments(first:1){ nodes { author { login } } } }" +
-          " pageInfo { hasNextPage endCursor } } } } }",
+        `query=${REVIEW_THREADS_QUERY}`,
       ]).data.repository.pullRequest.reviewThreads;
       collected.push(...page.nodes);
       // Pagination metadata is REQUIRED rather than optional. A response

@@ -357,6 +357,44 @@ function splitDeclarations(list: string): string[] {
 }
 
 /**
+ * Whitespace flattened everywhere EXCEPT inside a quoted string.
+ *
+ * A font family may be written `"A  B"`, and those two spaces are part of the
+ * name a browser looks up — collapse them and the page asks for a different
+ * family and silently falls back. The list used to be normalized whole, before
+ * anything knew where its strings were, so the collapse happened first and the
+ * quote-aware splitter never saw the original.
+ *
+ * Outside a string the same flattening is wanted, for the reason it always was:
+ * a stored declaration carries whatever wrote it, and `Font-Size :  16px` is
+ * the same declaration as `font-size:16px`.
+ */
+function normalizeOutsideStrings(value: string): string {
+  let out = "";
+  let run = "";
+  let quote = "";
+  for (const character of value) {
+    const next = quoteAfter(character, quote);
+    const quoted = quote !== "" || next !== "";
+    quote = next;
+    if (quoted) {
+      out += run === "" ? "" : " ";
+      run = "";
+      out += character;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      run += character;
+      continue;
+    }
+    out += run === "" ? "" : " ";
+    run = "";
+    out += character;
+  }
+  return out.trim();
+}
+
+/**
  * One declaration, as the pair it contributes — or nothing, if it contributes.
  *
  * Separated from the walk because the walk is bookkeeping and this is the whole
@@ -373,8 +411,10 @@ function usableDeclaration(
   const colon = text.indexOf(":");
   if (colon === -1) return undefined;
 
-  const property = text.slice(0, colon).trim().toLowerCase();
-  const written = text.slice(colon + 1).trim();
+  const property = normalizeCssValue(text.slice(0, colon)).toLowerCase();
+  // Normalized OUTSIDE its strings: a quoted family name may carry whitespace
+  // that is part of the name. See {@link normalizeOutsideStrings}.
+  const written = normalizeOutsideStrings(text.slice(colon + 1));
   const declared = withoutPriority(written);
   if (declared === "" || !ALLOWED.has(property)) return undefined;
   // See {@link FORMAT_ASSERTS}: only a value that stops asserting what the bit
@@ -414,6 +454,70 @@ function usableDeclaration(
   return { property, value: declared, important: isImportant(written) };
 }
 
+/** The style keywords `text-decoration` can carry. */
+const DECORATION_STYLES: ReadonlySet<string> = new Set([
+  "solid",
+  "double",
+  "dotted",
+  "dashed",
+  "wavy",
+]);
+
+/**
+ * A `text-decoration` value split into the three longhands it assigns.
+ *
+ * `text-decoration` is the ONLY shorthand on {@link INLINE_STYLE_PROPERTIES},
+ * and that is what makes resolving the cascade tractable here at all: modelling
+ * shorthands in general needs a CSS property database, which this package
+ * cannot load, and modelling this one needs three names. All three are on the
+ * allowlist too, so expanding loses nothing — and the fourth longhand the
+ * shorthand resets, `text-decoration-thickness`, is absent from the list, so
+ * nothing on the page sets it and there is nothing for a reset to undo.
+ *
+ * Decidable without a grammar because the components are told apart by their
+ * own vocabularies: a line keyword, a style keyword, and whatever is left being
+ * the colour. A component the shorthand does not MENTION is still assigned —
+ * that is what a shorthand does — so it resets to its initial value rather than
+ * keeping whatever a declaration before it left there.
+ */
+function expandDecoration(value: string): Map<string, string> {
+  const parts = value.split(/\s+/).filter(token => token !== "");
+  const lines = parts.filter(
+    token => DECORATION_LINES.has(token) || token === "none"
+  );
+  const styles = parts.filter(token => DECORATION_STYLES.has(token));
+  const rest = parts.filter(
+    token =>
+      !DECORATION_LINES.has(token) &&
+      token !== "none" &&
+      !DECORATION_STYLES.has(token)
+  );
+  return new Map([
+    ["text-decoration-line", lines.length > 0 ? lines.join(" ") : "none"],
+    ["text-decoration-style", styles[0] ?? "solid"],
+    ["text-decoration-color", rest[0] ?? "currentcolor"],
+  ]);
+}
+
+/**
+ * The declarations of a stored inline style that are safe to put on a page.
+ *
+ * Resolved to LONGHANDS, in declaration order, honouring `!important`.
+ *
+ * Resolving rather than passing the declarations through is what ends a whole
+ * family of defect rather than answering one of them. A shorthand and one of
+ * its own longhands in the same list mean different things depending on which
+ * came last, and reading each property independently gets it wrong in both
+ * directions: `text-decoration: underline; text-decoration-line: line-through`
+ * draws only a strike, while a reader seeing `underline` under its own key
+ * concludes the opposite. Expanded, there is one entry per longhand and the
+ * order question is answered once, where it can be.
+ *
+ * It also removes the interaction from what REACT is handed. A style object
+ * carrying both a shorthand and a longhand is applied property by property, and
+ * assigning the shorthand resets the longhand beside it — so an object that
+ * looks right produces a DOM that is not. Longhands alone cannot do that.
+ */
 export function readInlineStyle(
   value: unknown,
   format?: number
@@ -421,34 +525,42 @@ export function readInlineStyle(
   const kept = new Map<string, string>();
   if (typeof value !== "string" || value === "") return kept;
 
-  const normalized = normalizeCssValue(value);
-  if (normalized === "") return kept;
-
   const important = new Set<string>();
-  for (const declaration of splitDeclarations(normalized)) {
-    const usable = usableDeclaration(declaration.trim(), format);
+  /** Written under the property that OWNS it, so a shorthand can rewrite it. */
+  const write = (
+    property: string,
+    written: string,
+    priority: boolean
+  ): void => {
+    // Priority decides before position does: `color: red !important; color:
+    // blue` renders RED, whatever follows it.
+    if (important.has(property) && !priority) return;
+    if (priority) important.add(property);
+    // Deleted before it is set again, because `Map.set` on an existing key
+    // replaces the value and leaves the key where it first appeared — and
+    // position is meaning in a declaration list.
+    kept.delete(property);
+    kept.set(property, written);
+  };
+
+  for (const declaration of splitDeclarations(value)) {
+    const usable = usableDeclaration(declaration, format);
     if (usable === undefined) continue;
+    if (usable.property !== "text-decoration") {
+      write(usable.property, usable.value, usable.important);
+      continue;
+    }
     /*
-     * PRIORITY decides the winner before position does. `color: red !important;
-     * color: blue` renders RED — the cascade prefers the important declaration
-     * whatever follows it — so resolving on position alone published blue.
-     *
-     * The priority is remembered here and stripped from the VALUE, because the
-     * two are needed at different moments: the cascade needs it now, and the
-     * emitted declaration must not carry it, since React sets a style property
-     * through `CSSStyleDeclaration` and that rejects an embedded priority.
+     * A shorthand assigns EVERY longhand it owns, including the ones it does
+     * not mention. Written one at a time so the priority rule above applies per
+     * longhand, which is what makes `text-decoration-color: red !important`
+     * survive a later plain `text-decoration: underline blue` — the browser
+     * keeps the important colour, and resolving by literal property name did
+     * not, because the two names are different.
      */
-    if (important.has(usable.property) && !usable.important) continue;
-    if (usable.important) important.add(usable.property);
-    // DELETED before it is set again, because `Map.set` on an existing key
-    // replaces the value and leaves the key where it first appeared. The later
-    // declaration would then be emitted in the earlier one's POSITION, and
-    // position is meaning here: a shorthand written after a longhand resets it,
-    // so a winner emitted ahead of that shorthand loses to it. Keeping the
-    // winner's own place is what makes the emitted text cascade the way the
-    // stored text did.
-    kept.delete(usable.property);
-    kept.set(usable.property, usable.value);
+    for (const [longhand, written] of expandDecoration(usable.value)) {
+      write(longhand, written, usable.important);
+    }
   }
   return kept;
 }

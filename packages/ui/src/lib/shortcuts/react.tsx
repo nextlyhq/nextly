@@ -49,6 +49,7 @@
 import * as React from "react";
 
 import { devWarnOnce } from "../dev-warn";
+import { useIsomorphicLayoutEffect } from "../isomorphic-layout-effect";
 
 import {
   createShortcutManager,
@@ -111,18 +112,6 @@ interface TargetOwner {
  * hold across them.
  */
 const ownersByTarget = new WeakMap<object, TargetOwner>();
-
-/**
- * A layout effect in the browser, a plain effect where there is no DOM.
- *
- * These components are client code, but a consumer may still PRERENDER them, and React warns that
- * `useLayoutEffect` does nothing on the server. Layout timing is what the browser needs:
- * registration has to be settled before paint, or a keystroke arriving in the first frame after
- * mount meets an empty stack. Neither effect runs during a server render, so choosing between
- * them by environment loses nothing and silences a warning that reports no real problem.
- */
-const useIsomorphicLayoutEffect =
-  typeof document === "undefined" ? React.useEffect : React.useLayoutEffect;
 
 /**
  * The options that change how a manager behaves, as a comparable string.

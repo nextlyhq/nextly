@@ -59,9 +59,11 @@ import {
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import type { JobDefinition } from "../domains/jobs/job-registry";
 import type { MetaService } from "../domains/meta";
 import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
+import type { ReleasesService } from "../domains/releases/services/releases-service";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import {
   clearFieldTypes,
@@ -136,6 +138,8 @@ import {
   registerPluginService,
 } from "../plugins/services/plugin-services-registry";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
+import { assertAdminWidgets } from "../plugins/validate-admin-widgets";
+import { validatePluginMenus } from "../plugins/validate-menus";
 import { validatePluginSlugs } from "../plugins/validate-slugs";
 import { setBootedConfig } from "../route-handler/auth-handler";
 import type {
@@ -196,13 +200,17 @@ import {
   registerComponentServices,
   registerDashboardServices,
   registerEmailServices,
+  registerJobServices,
+  registerReleaseServices,
   registerMediaServices,
   registerMetaServices,
   registerRevalidationServices,
   registerSingleServices,
   registerUserServices,
+  registerDocumentLockServices,
   registerVersionServices,
   registerWebhookServices,
+  resetWidgetRegistries,
   type RegistrationContext,
 } from "./registrations";
 
@@ -286,6 +294,11 @@ export interface NextlyServiceConfig {
 
   /** @experimental App-declared role bundles, seeded like plugin roles (D67). */
   roles?: PluginRole[];
+  /**
+   * Background job types this application declares itself, alongside any a
+   * plugin contributes. Registered at boot; see `plugins/jobs/collect-jobs`.
+   */
+  jobs?: JobDefinition[];
 
   /** Collection configurations. */
   collections?: CollectionConfig[];
@@ -406,6 +419,8 @@ export interface ServiceMap {
   userFieldDefinitionService: UserFieldDefinitionService;
   permissionSeedService: PermissionSeedService;
   rbacAccessControlService: RBACAccessControlService;
+  /** Content releases: the authorization boundary the Direct API namespace reaches. */
+  releasesService: ReleasesService;
   apiKeyService: ApiKeyService;
   /** Webhook endpoint management, resolved by the webhooks REST handlers. */
   webhookEndpointService: WebhookEndpointService;
@@ -456,6 +471,52 @@ const globalForReg = globalThis as unknown as {
  * @throws Error if database environment configuration is invalid
  * @throws Error if database connection fails
  */
+/**
+ * Every domain registration, in one place a test can execute.
+ *
+ * Extracted so the wiring is checkable by RUNNING it rather than by reading
+ * this file for the characters of a call. A registration that nothing invokes
+ * is how document locking came to ship as three unused tables, and a source
+ * scan cannot tell a live call from one sitting in a dead branch or a comment.
+ *
+ * Order is not strictly required, since every registration is a lazy singleton.
+ * The sequence is kept because each comment inside it records a reason.
+ */
+export function registerDomainServices(ctx: RegistrationContext): void {
+  // Order is not strictly required because every registration is a lazy
+  // singleton; however, we order domains roughly by dependency depth so
+  // that the shape matches the original monolithic implementation.
+  registerComponentServices(ctx);
+  registerUserServices(ctx);
+  registerEmailServices(ctx);
+  registerDashboardServices(ctx);
+  registerAuthServices(ctx);
+  // Before the collection/single services, which resolve the cacheRevalidator
+  // lazily when a write flushes its intents.
+  registerRevalidationServices(ctx);
+  registerCollectionServices(ctx);
+  registerMediaServices(ctx);
+  registerMetaServices(ctx);
+  registerSingleServices(ctx);
+  registerDocumentLockServices(ctx);
+  registerVersionServices(ctx);
+  registerWebhookServices(ctx);
+  // LAST of the domain registrations, because the job registry is where every
+  // domain's job types are constructed and it therefore reads the widest set of
+  // dependencies — content services for the releases drain, the endpoint
+  // registry and retention deps for the webhook drain.
+  //
+  // Singleton factories are lazy, so this would work in any position. Ordering
+  // it anyway keeps the reason a fact about this file rather than a property of
+  // the container that a future refactor could remove without noticing.
+  registerJobServices(ctx);
+  // After the jobs registration, which registers the drain that materialises
+  // what this service schedules. Order is not load-bearing — both resolve their
+  // dependencies from the container — but keeping them adjacent means a reader
+  // meets the two halves of releases together.
+  registerReleaseServices(ctx);
+}
+
 export async function registerServices(
   config: NextlyServiceConfig
 ): Promise<void> {
@@ -492,6 +553,27 @@ export async function registerServices(
   // Boot is where this should fail; without it a transformer-introduced
   // collision would surface on the first admin-meta request instead.
   validatePluginSlugs(setupConfig.plugins ?? []);
+  // And the menu targets on that same transformed list. A transformer may
+  // rename a contributed collection or replace a plugin outright, so an item
+  // that named a collection its plugin owned before the transform can name one
+  // it no longer does.
+  validatePluginMenus(setupConfig.plugins ?? []);
+  // And the widgets on that same transformed list, for the same reason one
+  // level in. `resolvePlugins` checks the list the CALLER passed; a transformer
+  // that adds or replaces a plugin contributes widgets that list never held, and
+  // THIS one is what `setBootedConfig` publishes and `buildPluginAdminMeta`
+  // serializes. A bigint under `query.where` there throws inside the single
+  // `JSON.stringify` that builds `/api/admin-meta/workspace`, so the whole
+  // authenticated workspace response answers 500 for every admin — the failure
+  // the resolver's check exists to prevent, reached through a second door.
+  //
+  // Checked in BOTH places rather than moved here, even though nothing between
+  // the two reads a widget. `resolvePlugins` is shared with the CLI config
+  // loader and with `collectPluginInfo`, and neither applies transformers on
+  // this path, so relocating the check would take it away from them; the
+  // duplication is the same one `validatePluginSlugs` above already carries,
+  // for the same reason.
+  assertAdminWidgets(setupConfig.plugins ?? []);
 
   // ----------------------------------------
   // Layer 0c: Fold declarative plugin schema contributions (D3/D12/D50)
@@ -674,6 +756,22 @@ export async function registerServices(
   // `webhooks: false` collection (e.g. form submissions) would silently record
   // PII-bearing events despite the opt-out.
   publishWebhookRecordingPolicies(transformedConfig);
+
+  // Empty the `globalThis`-pinned widget registries before anything registers
+  // into them, so a dev-server hot reload re-registering the same ids never
+  // collides with itself while a genuine duplicate within one boot still
+  // fails loudly. This is the one place both of Nextly's boot paths funnel
+  // through, so it is the one place the reset needs wiring.
+  //
+  // Deliberately a reset and nothing more. Collection sources are DERIVED from
+  // the collection registry, which is registered in Layer 3 and populated by
+  // Layer 4's sync -- both after this point -- and which keeps changing
+  // afterwards as the Schema Builder creates collections in a running process.
+  // `domains/widgets/collection-sources.ts` reads it where the answer is
+  // needed. Building them from `transformedConfig.collections` here was the
+  // defect: a Builder-authored collection has no config entry at all, so one
+  // of the framework's two schema modes had no queryable source.
+  resetWidgetRegistries(transformedConfig.plugins ?? []);
 
   // Then layer in the registry-stored opt-outs. Builder-authored collections and
   // singles have no code-first config to publish from, so without this read their
@@ -1039,23 +1137,7 @@ export async function registerServices(
     passwordHasher,
   };
 
-  // Order is not strictly required because every registration is a lazy
-  // singleton; however, we order domains roughly by dependency depth so
-  // that the shape matches the original monolithic implementation.
-  registerComponentServices(ctx);
-  registerUserServices(ctx);
-  registerEmailServices(ctx);
-  registerDashboardServices(ctx);
-  registerAuthServices(ctx);
-  // Before the collection/single services, which resolve the cacheRevalidator
-  // lazily when a write flushes its intents.
-  registerRevalidationServices(ctx);
-  registerCollectionServices(ctx);
-  registerMediaServices(ctx);
-  registerMetaServices(ctx);
-  registerSingleServices(ctx);
-  registerVersionServices(ctx);
-  registerWebhookServices(ctx);
+  registerDomainServices(ctx);
 
   // ----------------------------------------
   // Layer 4: Sync Code-First Collections
@@ -1360,112 +1442,50 @@ async function initializeSchemaRegistry(
       );
     }
 
-    // Step 2: Dynamic collections.
+    // Step 2: Dynamic collections. Main table and, for a localized one, its
+    // `_locales` companion — one registration through the shared registrar, so
+    // singles below and the boot-time reload cannot register a different half.
     await loadDynamicTables(
       adapter,
       "dynamic_collections",
       async (tableName, fields, hasStatus, localized, builderOwned) => {
-        const { generateRuntimeSchema } = await import(
-          "../domains/schema/services/runtime-schema-generator"
+        const { registerDynamicEntitySchema } = await import(
+          "../domains/schema/services/register-dynamic-entity"
         );
-        // Localized collections omit their translatable columns from the main
-        // runtime table (they live in the companion) — mirror the migration.
-        const { table } = generateRuntimeSchema(
-          tableName,
-          fields as FieldDefinition[],
+        await registerDynamicEntitySchema({
+          adapter,
+          registry,
           dialect,
-          { status: hasStatus === true, localized }
-        );
-        registry.registerDynamicSchema(tableName, table);
-        // Register the companion `_locales` table so queries can reach it (M4).
-        if (localized) {
-          // i18n: create the companion on boot/db:sync if a migration hasn't already
-          // (idempotent) so code-first localized entities work without a manual migrate.
-          const { ensureCompanionTable } = await import(
-            "../domains/i18n/runtime/companion-io"
-          );
-          await ensureCompanionTable(adapter, {
-            // These registries hold code-first and plugin rows as well as Builder ones, and their
-            // creators size a text column differently, so the row's own ownership decides.
-            builtBy: builtByFor("collection", builderOwned),
-            slug: tableName,
-            tableName,
-            fields: fields as { name: string; type: string }[],
-            dialect,
-            status: hasStatus === true,
-          });
-          const { buildCompanionRuntimeTable } = await import(
-            "../domains/i18n/runtime/companion-registration"
-          );
-          const companion = buildCompanionRuntimeTable({
-            slug: tableName,
-            tableName,
-            fields: fields as { name: string; type: string }[],
-            dialect,
-            localized: true,
-            // Carry `_status` so a Draft/Published localized collection's
-            // DI-registered companion matches loadCompanionSchema.
-            status: hasStatus === true,
-          });
-          if (companion) {
-            registry.registerDynamicSchema(
-              companion.companionTableName,
-              companion.table
-            );
-          }
-        }
+          kind: "collection",
+          tableName,
+          fields: fields as FieldDefinition[],
+          status: hasStatus === true,
+          localized,
+          builderOwned,
+        });
       }
     );
 
-    // Step 3: Dynamic singles. Localized singles omit their translatable columns
-    // from the main runtime table and register the companion `single_<slug>_locales`
-    // table for reads/writes — mirrors collections (Step 2).
+    // Step 3: Dynamic singles — the same registration as collections above,
+    // asked about a different owner.
     await loadDynamicTables(
       adapter,
       "dynamic_singles",
       async (tableName, fields, hasStatus, localized, builderOwned) => {
-        const { generateRuntimeSchema } = await import(
-          "../domains/schema/services/runtime-schema-generator"
+        const { registerDynamicEntitySchema } = await import(
+          "../domains/schema/services/register-dynamic-entity"
         );
-        const { table } = generateRuntimeSchema(
-          tableName,
-          fields as FieldDefinition[],
+        await registerDynamicEntitySchema({
+          adapter,
+          registry,
           dialect,
-          { status: hasStatus === true, localized }
-        );
-        registry.registerDynamicSchema(tableName, table);
-        if (localized) {
-          const { ensureCompanionTable } = await import(
-            "../domains/i18n/runtime/companion-io"
-          );
-          await ensureCompanionTable(adapter, {
-            // A single is built by the same service as a collection, but only when the Builder owns
-            // it — this registry carries code-first singles too, and those came from the pipeline.
-            builtBy: builtByFor("single", builderOwned),
-            slug: tableName,
-            tableName,
-            fields: fields as { name: string; type: string }[],
-            dialect,
-            status: hasStatus === true,
-          });
-          const { buildCompanionRuntimeTable } = await import(
-            "../domains/i18n/runtime/companion-registration"
-          );
-          const companion = buildCompanionRuntimeTable({
-            slug: tableName,
-            tableName,
-            fields: fields as { name: string; type: string }[],
-            dialect,
-            localized: true,
-            status: hasStatus === true,
-          });
-          if (companion) {
-            registry.registerDynamicSchema(
-              companion.companionTableName,
-              companion.table
-            );
-          }
-        }
+          kind: "single",
+          tableName,
+          fields: fields as FieldDefinition[],
+          status: hasStatus === true,
+          localized,
+          builderOwned,
+        });
       }
     );
 

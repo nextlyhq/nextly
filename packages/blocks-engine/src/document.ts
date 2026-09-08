@@ -9,6 +9,7 @@
  * a framework.
  */
 import { isPlainRecord } from "./plain-record";
+import { ownKeys } from "./safe-record";
 
 /**
  * Engine document-format version. Bumped only when the envelope shape itself
@@ -151,6 +152,344 @@ export interface BlockNode {
    * last-good props; a renderer shows a placeholder instead of crashing.
    */
   migrationFailed?: boolean;
+  /**
+   * Where this subtree was copied from, recorded once and never rendered.
+   *
+   * Written when a copy is taken and read by nothing at render time, the way
+   * {@link BlockNode.migrationFailed} is. What it buys is the one question a
+   * copy cannot otherwise answer: "the thing this came from has changed — do
+   * you want the change?" That question is asked by every mature builder's
+   * users and answered by none of them, because an unsynced copy keeps no
+   * record of its source.
+   *
+   * ONE field with a discriminant rather than one field per source. A pattern
+   * copy and a detached component are two provenances today and there will be
+   * more — an imported document, a duplicated page — and each of those as its
+   * own key is a stored format that grows a column per feature. The
+   * discriminant also makes the shapes differ honestly: a pattern copy carries
+   * a digest because the pattern it came from can change underneath it, and a
+   * detached component does not, because detaching is the act of declining
+   * further change.
+   */
+  origin?: BlockOrigin;
+}
+
+/**
+ * Where a copied subtree came from.
+ *
+ * Inert: no renderer reads it, no validator requires it, and a document
+ * without one is complete. It exists to be read LATER, by a surface asking
+ * whether an upstream source has moved on.
+ */
+export type BlockOrigin =
+  | {
+      /** Copied from a pattern, which keeps no link back. */
+      readonly from: "pattern";
+      /** The pattern entry's id. */
+      readonly id: string;
+      /**
+       * A digest of the pattern's content when this copy was taken.
+       *
+       * Content rather than a version number, because the engine is handed a
+       * document and not an entry row — it can hash what it was given and
+       * cannot see what the store calls it. A digest also answers the question
+       * more precisely than a version does: a re-save that changed nothing
+       * bumps a version and leaves a digest alone.
+       */
+      readonly digest: string;
+      /**
+       * The DOM ids this copy had to rename, as the source spells them → as
+       * this copy does.
+       *
+       * An insert renames an id only because the page already held that name,
+       * so the replacement is a fact about the destination rather than anything
+       * the author wrote. Recording it is what lets a copy saved back out of the
+       * page be stored under the names the source uses — without it, the
+       * pattern's own fingerprint moves on a save that changed nothing, every
+       * other copy reports itself stale, and the id grows another suffix on each
+       * insert-save cycle.
+       *
+       * Recorded rather than derived, because the original cannot be recovered
+       * from the current value: a minted id is the authored one plus a suffix
+       * taken from a node id, and content from a script or an import may name
+       * anchors that way on purpose. That was measured — an authored
+       * `hero-12345678` on node `12345678-…` was silently rewritten to `hero`.
+       *
+       * ABSENT means nothing to put back, which is also what a record written
+       * before this field existed says. The two are the same answer for every
+       * reader — restore nothing — so an older document needs no migration and
+       * behaves exactly as it does today.
+       */
+      readonly renamed?: Readonly<Record<string, string>>;
+    }
+  | {
+      /** Detached from a component, severing the link deliberately. */
+      readonly from: "component";
+      /** The component definition's id. */
+      readonly id: string;
+    };
+
+/**
+ * What a stored provenance record turned out to be.
+ *
+ * Four answers because a caller-supplied record can fail in three different
+ * ways, and the validator owes each a different response:
+ *
+ * - `whole` — every field the guard needs, present and well formed.
+ * - `malformed` — read cleanly, and not a record this engine would trust.
+ * - `computed` — a field the guard consults is an accessor rather than stored
+ *   data. The record may be perfectly well formed; what is certain is that the
+ *   document holding it is one `surveyDocument` refuses to measure and already
+ *   reports `document-unreadable`, so a second verdict naming this one field
+ *   would send an author to repair something that may not be broken.
+ * - `unreadable` — REFLECTION itself failed. A Proxy may throw from
+ *   `getOwnPropertyDescriptor`, `ownKeys` or `getPrototypeOf`, and unlike an
+ *   accessor that is not something the survey is guaranteed to have met: it
+ *   walks the keys a record HAS, so a trap that fires only for an absent field
+ *   like `renamed` leaves the survey reporting the document perfectly readable.
+ *   Deferring here then let `{ from: "pattern", id: "" }` through with no issue
+ *   at all. Nothing can establish such a record is whole, so it is not trusted.
+ */
+export type OriginReading = "whole" | "malformed" | "computed" | "unreadable";
+
+/**
+ * Read a stored provenance record, saying which of the four it is.
+ *
+ * The richer question, from which {@link isBlockOrigin} is derived rather than
+ * computed alongside. The validator needs to tell `computed` from `malformed`,
+ * and answering that separately meant naming the guard's fields a second time —
+ * two lists to keep in step, synchronised by a test that can only observe the
+ * fixtures it runs. Here the guard's own reads ARE the definition: a field it
+ * consults is one this notices, and a field it stops consulting stops
+ * mattering, with nothing to keep in step.
+ */
+export function readBlockOrigin(value: unknown): OriginReading {
+  return readOrigin(value).reading;
+}
+
+/** One record's reading, with what a whole pattern record turned out to say. */
+interface OriginRead {
+  readonly reading: OriginReading;
+  /** The rename map of a whole PATTERN record, and nothing for every other. */
+  readonly renamed?: ReadonlyMap<string, string>;
+}
+
+/**
+ * The one reading of a stored provenance record.
+ *
+ * Both published questions come from here rather than asking the record twice.
+ * A reader that validated a record and then went back for its contents ran the
+ * record's own reflection a second time — measured, a `renamed` Proxy that
+ * permits one `ownKeys` and throws on the next crashed a planner AFTER the
+ * guard had passed it — and it also spelled the extraction rules a second time,
+ * beside the validator that already knows them.
+ *
+ * So validating and reading are one pass: what a record is, and what it holds
+ * if it is anything, cannot disagree because there is nowhere for them to.
+ */
+function readOrigin(value: unknown): OriginRead {
+  try {
+    if (!isPlainRecord(value)) return { reading: "malformed" };
+    const reader = storedReader(value);
+    const whole = wholeOrigin(reader.read);
+    if (reader.computed()) return { reading: "computed" };
+    if (whole === undefined) return { reading: "malformed" };
+    return whole.renamed === undefined
+      ? { reading: "whole" }
+      : { reading: "whole", renamed: whole.renamed };
+  } catch {
+    return { reading: "unreadable" };
+  }
+}
+
+/**
+ * What a whole PATTERN record says was renamed, or nothing when it says none.
+ *
+ * Beside the validator, and derived from the same read, because "may I trust
+ * this record" and "what does this record say" are one question asked at two
+ * moments. A caller holding the second half of it independently is the drift
+ * this repository has a rule about: the planner's copy accepted a `renamed`
+ * whose property was non-enumerable — a field `JSON.stringify`, an object
+ * spread and `structuredClone` all drop — and restored an id from metadata the
+ * saved document would not carry.
+ *
+ * Nothing for a component record, which renames nothing, and nothing for a
+ * record this would not trust. A caller that must tell those apart is asking
+ * {@link readBlockOrigin}, which answers in four.
+ */
+export function patternRenames(
+  origin: unknown
+): ReadonlyMap<string, string> | undefined {
+  return readOrigin(origin).renamed;
+}
+
+/**
+ * Whether a stored value is a whole provenance record.
+ *
+ * Derived from {@link readBlockOrigin} rather than asking again: `whole` is
+ * the one reading this admits, and every other — malformed, computed, or a
+ * record reflection could not finish — is the same `false` to a caller that
+ * only needs to know whether it may trust the record.
+ *
+ * Beside the type rather than beside either caller, because a document reaches
+ * storage by more than one road: an op through the edit vocabulary, and a field
+ * write through the document validator. A record that one road admits and the
+ * other refuses is a record that exists in the database and cannot be edited,
+ * so both ask this.
+ *
+ * Whole means every field the arm needs. A pattern origin without a digest
+ * cannot answer whether its source moved, which is the only question it exists
+ * for — storing one would leave a later reader with a record it must special
+ * case rather than trust.
+ */
+export function isBlockOrigin(value: unknown): value is BlockOrigin {
+  return readBlockOrigin(value) === "whole";
+}
+
+/**
+ * A reader of one record's STORED fields, remembering whether any was computed.
+ *
+ * The DESCRIPTOR, never an ordinary read. Every field of a provenance record is
+ * data a caller supplied — an import, a script, an in-process edit — and
+ * reading one runs that caller's code inside the guard deciding whether to
+ * trust it. A throwing getter escaped as a native error rather than the answer
+ * the guard promises, and a side-effecting one executed on the way past.
+ * Measured, all four fields did that.
+ *
+ * `"value" in descriptor` rather than asking whether there is a getter: an
+ * accessor descriptor carries no `value` key at all, and a set-only accessor
+ * has no getter either — so asking about the getter alone calls one stored
+ * value and one computed one the same thing.
+ *
+ * A computed field reads back as ABSENT and sets the flag. Absent is a refusal
+ * on its own for `id`, `from` and `digest`, none of which may be missing;
+ * `renamed` MAY be, and the flag is what keeps those two apart.
+ */
+function storedReader(record: object): {
+  read: (key: string) => unknown;
+  computed: () => boolean;
+} {
+  let computed = false;
+  return {
+    read(key: string): unknown {
+      const descriptor = Object.getOwnPropertyDescriptor(record, key);
+      if (descriptor === undefined) return undefined;
+      if (!("value" in descriptor)) {
+        computed = true;
+        return undefined;
+      }
+      // NON-ENUMERABLE reads as absent, which is what it will be. Every road a
+      // record travels to storage — `JSON.stringify`, an object spread,
+      // `structuredClone` — drops it, so a guard that admits one passes a
+      // record whose persisted form is a different record, and a reader acting
+      // on its contents restores from metadata no later reader can see.
+      //
+      // Not `computed`: nothing was executed and nothing is uncertain. The
+      // field is stored data that will not be stored, which is the same answer
+      // as a field that is not there.
+      if (descriptor.enumerable !== true) return undefined;
+      return descriptor.value;
+    },
+    computed: () => computed,
+  };
+}
+
+/** What a whole record holds, or nothing when it is not one. */
+interface WholeOrigin {
+  /** A pattern record's renames. Absent on a component, which renames none. */
+  readonly renamed?: ReadonlyMap<string, string>;
+}
+
+/**
+ * The fields a provenance record must carry, read once and handed back.
+ *
+ * The map rather than a verdict about it, so the caller that needs the renames
+ * does not re-enumerate a record this already walked entry by entry.
+ */
+function wholeOrigin(read: (key: string) => unknown): WholeOrigin | undefined {
+  const id = read("id");
+  if (typeof id !== "string" || id === "") return undefined;
+  const from = read("from");
+  if (from === "component") return {};
+  if (from !== "pattern") return undefined;
+  const digest = read("digest");
+  if (typeof digest !== "string" || digest === "") return undefined;
+  const renamed = readRenameRecord(read("renamed"));
+  return renamed === undefined ? undefined : { renamed };
+}
+
+/**
+ * A rename record a later reader could act on, or nothing when it is not one.
+ *
+ * The MAP and not a verdict about it, because the reader that restores ids and
+ * the guard that admits the record are asking one question one pass can answer.
+ * Handing back a boolean sent the restore back to enumerate the same record
+ * again — a second run of a stored Proxy's traps, and a second spelling of what
+ * counts as an entry.
+ *
+ * Absent is valid and means nothing was renamed. Present and malformed is not:
+ * a half-record would be read as "these are the originals" and put an id back
+ * that was never there, which is worse than having no record — the same reason
+ * {@link isBlockOrigin} refuses a pattern origin without a digest.
+ *
+ * Own entries only, and every one a non-empty string on both sides. An empty id
+ * is not an id, and an entry mapping to one would erase the id it restores.
+ */
+function readRenameRecord(
+  value: unknown
+): ReadonlyMap<string, string> | undefined {
+  // A FRESH map, not a shared empty one. `patternRenames` hands this to
+  // consumers, and a `ReadonlyMap` is only readonly to TypeScript — `.set` is
+  // still there at runtime. One caller adding an entry to a module-wide
+  // singleton would make every later origin that renamed NOTHING claim that
+  // rename, and silently rewrite ids on a save that had nothing to restore.
+  if (value === undefined) return new Map();
+  if (!isPlainRecord(value)) return undefined;
+  // The CURRENT ids, to reject a map that cannot be inverted. The record reads
+  // source → copy, and restoring reads it the other way — so two sources
+  // claiming one current id give the reverse two answers, and whichever the
+  // reader keeps depends on property order. A record that restores an arbitrary
+  // one of them is worse than none: it puts back an id the author never had
+  // there, silently, and the digest comparison built on it then reports a
+  // change nobody made.
+  const current = new Set<string>();
+  // ONE reader for the whole map, so an entry is read by the same rule the
+  // record's own fields are and nothing allocates per entry.
+  const { read } = storedReader(value);
+  const renamed = new Map<string, string>();
+  for (const name of ownKeys(value)) {
+    const now = renameEntry(read, name, current);
+    if (now === undefined) return undefined;
+    renamed.set(name, now);
+  }
+  return renamed;
+}
+
+/**
+ * One entry of a rename map — stored data, non-empty on both sides, and naming
+ * a current id no other entry claims — or nothing when it is none of those.
+ *
+ * The DESCRIPTOR, before the value. An entry can be an accessor, and reading one
+ * runs the document's own code inside a published guard — where a throwing
+ * getter escapes as a native error rather than the refusal this promises. A
+ * computed entry is not stored data, which is the same answer the document and
+ * node guards give it.
+ *
+ * `current` is threaded rather than gathered afterwards so one pass answers
+ * both questions, and it is mutated here for the same reason: a second walk to
+ * find duplicates would read every entry twice.
+ */
+function renameEntry(
+  read: (key: string) => unknown,
+  name: string,
+  current: Set<string>
+): string | undefined {
+  if (name === "") return undefined;
+  const now = read(name);
+  if (typeof now !== "string" || now === "") return undefined;
+  if (current.has(now)) return undefined;
+  current.add(now);
+  return now;
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +733,12 @@ export type NodeStyles = Partial<
   Record<StyleState, Partial<Record<BreakpointId, StyleValues>>>
 >;
 
+/** One named element a block renders inside its own root. */
+export interface BlockPart {
+  /** Shared default styles for this part on every instance of the block type. */
+  baseStyles?: NodeStyles;
+}
+
 /** True if a style value is a design-token reference. */
 export function isTokenRef(value: unknown): value is TokenRef {
   // A reference must be a plain record, not merely an object carrying the key.
@@ -493,6 +838,48 @@ export function isBlockType(value: unknown): value is string {
 }
 
 /**
+ * The grammar a part NAME is held to.
+ *
+ * A part name is compiled into a class, so it reaches a selector — and a block
+ * definition is code a plugin supplies. The same shape a block type's own
+ * segments use, for the same reason: no dot, no bracket, no space can appear,
+ * so nothing here can close a rule and open another.
+ *
+ * Consecutive dashes are excluded deliberately. The class joins the block type
+ * and the part with a DOUBLED dash, so a name containing one would make the
+ * boundary ambiguous and let two different blocks compile to a single class.
+ */
+const BLOCK_PART_NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/**
+ * Longest part name accepted. A name longer than this is not a name, and the
+ * bound keeps a pathological value out of an issue message.
+ */
+const MAX_BLOCK_PART_LENGTH = 32;
+
+/**
+ * True if a value names a part a block may state styles for.
+ *
+ * The ONE answer, for the same reason {@link isBlockType} is: a caller that
+ * bounds this where another does not emits a class its neighbour refuses.
+ */
+export function isPartName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_BLOCK_PART_LENGTH &&
+    BLOCK_PART_NAME_RE.test(value) &&
+    // A name `Object.prototype` already owns cannot be stored in a record and
+    // read back: the lookup answers with the inherited member instead of
+    // `undefined`, and assigning it sets the prototype rather than creating an
+    // own property. `constructor` passes the grammar above, which is exactly
+    // why this is asked of the prototype rather than matched against a written
+    // list — the list everyone writes is `__proto__` and `constructor` while
+    // `valueof` behaves identically.
+    !Object.prototype.hasOwnProperty.call(Object.prototype, value)
+  );
+}
+
+/**
  * Maximum named classes read from the site library on one compile.
  *
  * The library is site settings, not part of a document, so the document's own byte cap does not
@@ -523,8 +910,18 @@ export const MAX_CLASSES_PER_NODE = 64;
 /**
  * The node type marking a linked component instance. The node's `props` carry
  * the reference; instance-provided slot content lives in `node.slots` like any
- * container. Resolution (definition lookup, variant application, per-instance
- * overrides) happens where components are stored and rendered, not here.
+ * container.
+ *
+ * PURE resolution — inlining a definition, applying a variant then the
+ * instance's overrides, re-identifying the inlined nodes — belongs in this
+ * package. Only the FETCH belongs to the stores, which alone know whether a
+ * caller wants the draft or the published definition.
+ *
+ * Four consumers need that resolution and none of them is the renderer alone:
+ * the canvas renders in the same document as the admin rather than in an
+ * iframe, and the class-usage index and SEO derivation each read a resolved
+ * tree without rendering at all. A resolver living beside any one of them
+ * would be reimplemented by the other three.
  */
 export const COMPONENT_INSTANCE_TYPE = "nextly/component-instance";
 
@@ -534,11 +931,311 @@ export interface ComponentInstanceProps {
   componentId: string;
   /** The selected variant name, when the component defines variants. */
   variant?: string;
+  /**
+   * Per-instance values for the definition's exposed properties, keyed by
+   * {@link ExposedProperty.id}.
+   *
+   * Three states, not two, and the third is the reason this is not simply an
+   * optional value. An id ABSENT from this record inherits whatever the
+   * definition (or the selected variant) provides; an id mapped to
+   * {@link OverrideUnset} renders empty; any other value replaces. Without the
+   * middle state an author could not clear a subtitle the definition fills in
+   * — writing `""` or `null` is a value the definition may itself treat as
+   * meaningful, and omitting the key means "inherit", which is what they are
+   * trying not to do.
+   */
+  overrides?: Record<string, OverrideValue>;
+}
+
+/**
+ * The sentinel that clears an exposed property instead of inheriting it.
+ *
+ * A wrapper object rather than a reserved primitive, because every primitive
+ * an author might otherwise mean — `null`, `""`, `0`, `false` — is a legitimate
+ * value for some exposed property, and a sentinel that collides with a real
+ * value is one that cannot be distinguished from it later.
+ */
+export interface OverrideUnset {
+  $unset: true;
+}
+
+/**
+ * What an instance may store against one exposed property.
+ *
+ * `unknown`, not a union with {@link OverrideUnset}. An override replaces a
+ * node prop and props are unconstrained (`BlockNode.props` is
+ * `Record<string, unknown>`), so writing the union would widen straight back
+ * to `unknown` while reading as though the sentinel were discriminable at
+ * compile time — a type that documents a guarantee it does not provide. The
+ * sentinel is one of the values this may hold and is recognised at runtime by
+ * {@link isUnsetOverride}.
+ */
+export type OverrideValue = unknown;
+
+/**
+ * True if an override clears its property rather than replacing it.
+ *
+ * The EXACT shape, not merely an object carrying the marker. Override values
+ * are unconstrained, so a structured one may legitimately hold a `$unset` key
+ * of its own — a link value of `{ href: "/docs", $unset: true }` is a value to
+ * apply, and matching on the marker alone would clear the property instead of
+ * setting it. Requiring the sentinel to be its own sole key leaves every
+ * richer object a value.
+ */
+export function isUnsetOverride(value: OverrideValue): value is OverrideUnset {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const keys = Object.keys(value);
+  return keys.length === 1 && (value as { $unset?: unknown }).$unset === true;
 }
 
 /** True if a node is a linked component instance. */
 export function isComponentInstance(node: BlockNode): boolean {
   return node.type === COMPONENT_INSTANCE_TYPE;
+}
+
+// ---------------------------------------------------------------------------
+// Component definitions — the envelope a `kind: "component"` document carries
+// ---------------------------------------------------------------------------
+
+/** The value shapes an exposed property may be edited as. */
+export const EXPOSED_PROPERTY_TYPES = [
+  "text",
+  "richText",
+  "image",
+  "link",
+  "visibility",
+  "select",
+] as const;
+
+/**
+ * Derived from the list for the same reason {@link DocumentKind} is: a
+ * hand-written union and a runtime list are two declarations that happen to
+ * agree, and the pair can be half-changed without either side failing.
+ */
+export type ExposedPropertyType = (typeof EXPOSED_PROPERTY_TYPES)[number];
+
+/**
+ * The single HTML `id` a node actually renders, or `undefined` for none.
+ *
+ * A node can SPELL a DOM id two ways — the modelled `cssId` and the
+ * `attributes` escape hatch — and it emits at most ONE. The renderer assigns
+ * the bag first, lowercasing every key, and then overwrites with the modelled
+ * field, so this mirrors that order exactly.
+ *
+ * Only a STRING `cssId` shadows, the empty string included. The renderer reads
+ * it as `typeof node.cssId === "string" ? node.cssId : undefined` and
+ * overwrites only when that is not `undefined` — so `cssId: ""` shadows and
+ * emits `id=""`, while `cssId: null` is normalised away and the bag renders.
+ *
+ * An empty id is not an id: it takes nothing and only stops the bag.
+ *
+ * Published because reading the two fields independently is wrong in both
+ * directions, and every one of those readings was live somewhere:
+ *
+ * - counting them as two ids made a node look like it collided with ITSELF, so
+ *   a run spelling one id through both fields was refused as a duplicate;
+ * - counting a SHADOWED attribute id as taken made a copy rename itself to
+ *   avoid a string the destination never emits;
+ * - reading "any present `cssId`" instead of "a string" hid a bag id that does
+ *   render, and left two elements answering to one id.
+ */
+export function renderedDomId(node: {
+  readonly cssId?: unknown;
+  readonly attributes?: unknown;
+}): string | undefined {
+  const modelled = typeof node.cssId === "string" ? node.cssId : undefined;
+  const rendered = modelled ?? renderedDomIdIn(node.attributes);
+  return rendered === "" ? undefined : rendered;
+}
+
+/**
+ * The `id` an attribute bag alone would render, if any.
+ *
+ * The LAST case variant wins, whatever it holds, empty included. The renderer
+ * lowercases each key and assigns in turn, so a bag of `{ id: "hero", ID: "" }`
+ * leaves the element with `id=""` — and skipping the empty one here keeps
+ * `hero` and reports an id that does not render.
+ *
+ * Separate from {@link renderedDomId} because the narrower question is a real
+ * one: a surface asking whether an empty bag id would SHADOW something has to
+ * ask about the bag alone.
+ *
+ * Shape-checked the way the RENDERER checks, which is looser than this module's
+ * usual `isPlainRecord`: it does `Object.entries(attributes)` on any non-array
+ * object and emits what it finds, so a class instance or an object with a
+ * custom prototype and an own `id` puts that id on the page. Narrowing to a
+ * plain record here reported no id for such a node, and an insert then kept an
+ * incoming id the destination was already rendering.
+ *
+ * The narrow rule is right where it is used — validation asks what SURVIVES
+ * JSON, and a `Date` or a `Map` does not — but this question is "what does the
+ * renderer emit right now", and the answer has to be the renderer's.
+ *
+ * `Object.entries(null)` throws and an array is not a bag, so both are absent.
+ *
+ * UNBOUNDED, deliberately, because the renderer it mirrors is: every key is
+ * assigned. A caller that must not do work proportional to a bag it has not
+ * measured should bound the bag first and hand only a measured one to
+ * {@link renderedDomId} — reading a cap into this would make it answer
+ * differently from the renderer for exactly the documents where the answer
+ * matters.
+ */
+export function renderedDomIdIn(attributes: unknown): string | undefined {
+  if (typeof attributes !== "object" || attributes === null) return undefined;
+  if (Array.isArray(attributes)) return undefined;
+  let found: string | undefined;
+  for (const [name, value] of Object.entries(attributes)) {
+    if (name.toLowerCase() !== "id") continue;
+    if (typeof value === "string") found = value;
+  }
+  return found;
+}
+
+/**
+ * One property of a definition that an instance may override.
+ *
+ * A POINTER into the definition's own tree, not a copy of the value. The value
+ * lives on the node where the author designed it, so the definition renders
+ * correctly on its own, and an instance that overrides nothing is identical to
+ * the definition.
+ */
+export interface ExposedProperty {
+  /**
+   * Stable slug, minted once.
+   *
+   * Never derived from `nodeId` or `label`, and this is the whole reason it
+   * exists as a separate field: instances address their overrides by this id,
+   * so a derived one would silently re-point every override the moment an
+   * author renamed the label or the exposure moved to a different node.
+   */
+  id: string;
+  /** What the inspector calls it. */
+  label: string;
+  /** The node in THIS document's tree carrying the value. Validated to exist. */
+  nodeId: string;
+  /** Dot path into that node's props, in the binding-path grammar. */
+  propPath: string;
+  /** How the inspector edits it. */
+  type: ExposedPropertyType;
+  /**
+   * The choices, for `select` only.
+   *
+   * An option's value may be a named class or a token reference, which is how
+   * a definition offers constrained STYLE choices without exposing the style
+   * system to the instance author.
+   */
+  options?: readonly { value: string; label: string }[];
+}
+
+/**
+ * A region of a definition an instance may fill with its own children.
+ *
+ * Points at a slot on a container node in the definition's tree. Instance
+ * content lives in the instance node's own `slots`, so it travels with the
+ * node through copy, duplication, pattern-save and export.
+ */
+export interface ExposedSlot {
+  /**
+   * No `id` field: the KEY of {@link ComponentDocument.slots} is the id.
+   *
+   * A record keyed by id whose values also carry one states the same identity
+   * twice, and nothing reconciles them — a definition whose key says `body`
+   * and whose field says `header` is well formed under both readings, and
+   * which one an instance's slot content is addressed by depends on which the
+   * next reader happened to use. One spelling makes the disagreement
+   * unrepresentable rather than merely detectable.
+   */
+
+  /** What the layers panel calls it. */
+  label: string;
+  /** The container node in THIS document's tree. Validated to exist. */
+  nodeId: string;
+  /** Which of that node's slots. Validated to exist on the node. */
+  slot: string;
+  /** Block types this slot accepts; unset accepts whatever the container does. */
+  allow?: readonly string[];
+}
+
+/**
+ * A named preset of override values, offered alongside the definition.
+ *
+ * No slot content. A variant that supplied its own children would be handing
+ * the validator a second node forest, and the one place a forest is checked —
+ * for malformed nodes, duplicated ids, depth and node count — is the walk over
+ * `nodes`. Declaring the field without reaching it there would accept an
+ * arbitrary tree at the persistence gate under the name of a validated
+ * document, so it lands with the resolver that inlines it, checked by the same
+ * walk. A document carrying one today is refused rather than quietly stored.
+ */
+export interface Variant {
+  /** What the inspector calls it. */
+  label: string;
+  /** Values keyed by {@link ExposedProperty.id}, applied before the instance's own. */
+  overrides: Record<string, OverrideValue>;
+}
+
+/**
+ * A document that defines a reusable component.
+ *
+ * An extension of {@link BlockDocument} rather than a member of a union with
+ * it, deliberately. Every existing consumer reads a stored document as a
+ * `BlockDocument` and none of them can narrow, so a union would make the whole
+ * package's type surface a breaking change to gain a discrimination only two
+ * call sites need. The narrowing is available where it matters through
+ * {@link isComponentDocument}, and the envelope is validated per kind
+ * regardless of which type the reader used.
+ */
+export interface ComponentDocument extends BlockDocument {
+  kind: "component";
+  /**
+   * Properties an instance may override. Absent exposes none.
+   *
+   * Optional rather than a required empty array, matching every other
+   * "absent means none" field in this contract (`settings`, `BlockNode.slots`,
+   * `variants`). A component that exposes nothing is not a malformed one — it
+   * is a locked, reusable block, which is the whole point of a footer — so
+   * requiring the empty array would refuse a legitimate definition and force a
+   * migration over every stored component to add a field meaning what its
+   * absence already means.
+   */
+  exposed?: ExposedProperty[];
+  /** Regions an instance may fill, keyed by slot id. Absent exposes none. */
+  slots?: Record<string, ExposedSlot>;
+  /** Named override presets, keyed by variant name. */
+  variants?: Record<string, Variant>;
+}
+
+/**
+ * True if a document declares itself a component definition.
+ *
+ * Reads the KIND only. Whether its envelope is well formed is a question for
+ * validation, and answering it here would make a malformed definition read as
+ * "not a component" — which is how a document with a dangling pointer gets
+ * quietly treated as an ordinary page instead of being reported.
+ */
+export function isComponentDocument(
+  doc: BlockDocument
+): doc is ComponentDocument {
+  return doc.kind === "component";
+}
+
+/**
+ * True if a document declares itself a pattern.
+ *
+ * Reads the KIND only, for the reason {@link isComponentDocument} does:
+ * whether the tree inside it is usable is a question for validation, and
+ * answering it here would make a malformed pattern read as "not a pattern"
+ * rather than be reported as one that is broken.
+ *
+ * Published because two roads now ask it and they must agree: the planner
+ * refuses a document that is not a pattern outright, and a palette has to know
+ * not to offer one it would refuse. A second spelling of `kind === "pattern"`
+ * agrees until one of them learns about a kind the other does not.
+ */
+export function isPatternDocument(doc: BlockDocument): boolean {
+  return doc.kind === "pattern";
 }
 
 // ---------------------------------------------------------------------------

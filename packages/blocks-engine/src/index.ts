@@ -15,6 +15,11 @@ export {
   BINDING_FORMAT_TYPES,
   DEFAULT_BINDING_SOURCE,
   COMPONENT_INSTANCE_TYPE,
+  // The component-definition contract, published so the stores and the admin
+  // DERIVE the vocabulary rather than restating it. A schema branch or a
+  // picker that listed these values itself would agree on the day it was
+  // written and accept a type this engine refuses the day one is added.
+  EXPOSED_PROPERTY_TYPES,
   STYLE_STATES,
   MAX_BREAKPOINTS_PER_AXIS,
   // Public for exactly the reason the per-axis cap is. A definition whose id is
@@ -37,11 +42,14 @@ export {
   isBindingSource,
   isBlockType,
   MAX_BLOCK_TYPE_LENGTH,
+  isComponentDocument,
   isComponentInstance,
+  isUnsetOverride,
 } from "./document";
 export type {
   BlockDocument,
   BlockNode,
+  BlockPart,
   Binding,
   BindingSource,
   BindingFormat,
@@ -49,10 +57,18 @@ export type {
   BreakpointDef,
   BreakpointId,
   BreakpointSet,
+  ComponentDocument,
   ComponentInstanceProps,
+  ExposedProperty,
+  ExposedPropertyType,
+  ExposedSlot,
+  OverrideUnset,
+  OverrideValue,
+  Variant,
   Condition,
   DocumentFormatVersion,
   DocumentKind,
+  BlockOrigin,
   DocumentSettings,
   LocaleOverlay,
   LocaleOverlayValue,
@@ -65,8 +81,20 @@ export type {
 } from "./document";
 
 export {
+  // The cap on one collection of a component's envelope — its exposed
+  // properties, its slots, its variants, one variant's overrides. Published
+  // because a store or an admin form validating an envelope before it reaches
+  // the engine has to refuse at the same number: a form that accepted more
+  // than this would offer an author a definition the write path then rejects.
+  MAX_ENVELOPE_ENTRIES,
   MAX_DEPTH,
   MAX_NODES,
+  // The nesting cap the resolver enforces. Public alongside `MAX_DEPTH`
+  // because it bounds a different thing — how many levels of COMPOSITION a
+  // page may reach, not how deep one stored tree nests — and an editor that
+  // refuses to place an instance has to refuse at the same number the render
+  // does, or it offers a placement that then draws a placeholder.
+  MAX_COMPOSED_DEPTH,
   DEFAULT_MAX_DOCUMENT_BYTES,
   LIMIT_WARNING_RATIO,
   DEFAULT_SLOT,
@@ -81,23 +109,146 @@ export type { DocumentSurvey, SurveyLimits } from "./measure-bytes";
 export {
   newId,
   makeNode,
+  expandSlotDefaults,
   walkNodes,
+  // The one forest rewrite. A caller changing a field across a stored tree
+  // needs its three learned behaviours — a cycle entry dropped, a malformed
+  // entry passed through, a malformed slot preserved — and writing a second
+  // traversal inherits none of them.
+  mapForest,
   findNode,
   locateNode,
   insertNode,
   removeNode,
   moveNode,
   reidSubtree,
+  reidSubtreeWithMap,
+  // The forest form, which is the shape a saved selection actually has: a
+  // pattern is a run of siblings, and re-identifying its roots one at a time
+  // leaves a reference that crosses between them pointing at the original.
+  reidForestWithMap,
+  type DomIdPolicy,
+  // The one rule for what a copied DOM id becomes. Public because two copiers
+  // apply it — pattern insert and component composition — and a page may hold
+  // the output of both, so a second spelling would put two ids on one target.
+  mintDomId,
+  // Which nodes the renderer prunes, inherited down the subtree. Published
+  // because "is this id actually on the page" is asked by the planners, the
+  // copier and the editor's attribute panel, and three readings of it is three
+  // ways to disagree.
+  hiddenSubtreeNodes,
+  // And the other half of it: an id that MOVED leaves every reference to it
+  // pointing at nothing, and `aria-labelledby` resolving to nothing is an
+  // element losing its accessible name in silence. Published as data and as a
+  // function, because a surface that copies nodes without going through these
+  // helpers still has to know which attributes carry an id.
+  ID_REFERENCE_ATTRIBUTES,
+  remapIdReferences,
+  // And what such a value IS, once its separators are gone. A consumer that
+  // fingerprints or compares copied content has to tokenise it exactly where
+  // the remapper does, and a `split` of their own agrees only until one moves.
+  idReferenceTokens,
+  // Which of a set of candidate ids a subtree's references actually reach,
+  // answered by running the relink pass rather than by enumerating the carriers
+  // a second time. Published for the same reason the two above are: a surface
+  // recording what a copy renamed has to agree with what the copier rewrote,
+  // and a parallel walk agrees only until one of them gains a carrier.
+  referencedDomIds,
   duplicateNode,
   updateNode,
 } from "./tree";
-export type { NodeLocation, TreePosition } from "./tree";
+export type {
+  NodeLocation,
+  ReidentifiedForest,
+  ReidentifiedSubtree,
+  SlotDefaultSource,
+  TreePosition,
+  // Beside `walkNodes`, because a caller BOUNDING a walk has to hold its
+  // options in a variable to build one — and the option that says the budget
+  // ran out is useless to anyone who cannot name the type carrying it.
+  WalkOptions,
+} from "./tree";
+
+// The one rule for which prop of a copied node holds a link, and what happens
+// to it. Published because the module claims to be the single source for every
+// copying surface, and a rule a consumer cannot import is a rule they will
+// write again — which is exactly how the fragment remap came to exist twice.
+export {
+  FRAGMENT_REFERENCE_PROPS,
+  remapFragmentBindings,
+  remapFragmentProps,
+} from "./fragment-refs";
+
+// Whether a selection is one run of siblings. Published because the editor and
+// every composition planner must agree on it, and they cannot share a
+// builder-side copy: a planner runs inside a plugin's server action, where the
+// builder — which peer-depends on React — has no business being imported.
+export { contiguousRun, siblingRun } from "./sibling-run";
+export type {
+  RunPlace,
+  RunProblem,
+  SiblingRun,
+  SiblingRunResult,
+} from "./sibling-run";
+
+// The composition planners: pure functions from a selection to the row to
+// create and the ops the page needs. Split from the doing so the caller can put
+// both writes in one unit of work and roll the create back — and so the dry run
+// and the real run are the same function rather than two that agree for now.
+export { patternDigest } from "./pattern-digest";
+export {
+  planConvertToComponent,
+  planDetach,
+  planDuplicateComponent,
+  planInsertPattern,
+  internalNestingVerdict,
+  patternRefusal,
+  planSaveAsComponent,
+  planSaveAsPattern,
+  planUpdatePatternFromSelection,
+} from "./composition-planners";
+export type {
+  ComponentExposure,
+  CompositionPlan,
+  InsertTarget,
+  StoredPattern,
+  PlacementTarget,
+  LibraryTarget,
+  OrphanedAnchorWarning,
+  PlanProblem,
+  PlanRefusal,
+  PlanResult,
+  PlanWarning,
+  PlannedCreate,
+  PlannedUpdate,
+  PatternUpdateTarget,
+  RequestedProperty,
+  RequestedSlot,
+} from "./composition-planners";
 
 // The node selection every reader of a stored document shares. Public because
 // the page-builder plugin's class-usage record has to stop exactly where the
 // style compiler stops: a class applied to a node the compiler styled but the
 // counter never reached is absent from the record a safe-delete check reads,
 // and absence there is indistinguishable from "not used".
+// The one answer to whether a stored value is a whole provenance record. A
+// consumer holding `BlockOrigin` and no way to check one has to write the check
+// again, and a second spelling of it admits records this package refuses.
+// The guard, the richer reading it is derived from, and what a trusted record
+// says. Published together because they are one read: a caller that must tell a
+// record it cannot READ from one that is merely wrong — the validator does — or
+// that needs the renames a trusted record carries would otherwise name the
+// guard's fields a second time to find out, and a second reading of a stored
+// record runs its own reflection twice.
+export { isBlockOrigin, patternRenames, readBlockOrigin } from "./document";
+export type { OriginReading } from "./document";
+// The one rule for which DOM id a node actually renders. A node can spell one
+// two ways and emits at most one, so anything asking "what ids are on this
+// page" — a planner steering an insert around collisions, a duplicate check —
+// has to ask this rather than read the two fields independently.
+export { isPatternDocument } from "./document";
+export { renderedDomId, renderedDomIdIn } from "./document";
+
 export { selectNodes } from "./select-nodes";
 export type {
   NodeSelection,
@@ -106,6 +257,31 @@ export type {
 } from "./select-nodes";
 
 export { measureBytes, surveyDocument } from "./measure-bytes";
+// Resolving linked components. Here rather than beside the renderer because
+// four surfaces need a resolved tree and only one of them renders: the
+// same-document canvas, the class-usage index and SEO derivation all read one
+// without drawing anything. `componentIdsIn` is the other half of the seam —
+// what to FETCH, asked before anything can be resolved.
+export {
+  componentIdsIn,
+  resolveComponentInstances,
+  // Why an instance was left standing. Published because the surfaces that
+  // REPORT one are in other packages — the renderer draws a placeholder, the
+  // editor offers a remedy — and each remedy differs by reason. A consumer
+  // restating the list agrees on the day it is written and silently stops
+  // handling whichever reason is added next.
+  COMPONENT_UNRESOLVED_REASONS,
+} from "./resolve-instances";
+export type {
+  ComponentLookup,
+  ComponentUnresolvedReason,
+  DefinitionsById,
+  ResolveComponentOptions,
+  ResolvedBlockNode,
+  ResolvedComposition,
+  ResolvedDocument,
+  UnresolvedInstance,
+} from "./resolve-instances";
 // The nesting rule and the types it answers in. Exported together: a caller
 // that can ask the question must be able to name the verdict it gets back, and
 // a refusal reason it cannot name is one it has to re-derive from the boolean.
@@ -120,6 +296,7 @@ export { measureBytes, surveyDocument } from "./measure-bytes";
 // noticed: a module the entry does not name is absent from `dist` however
 // thoroughly it is tested.
 export { canNest, canBeRoot, canNestInSlot } from "./nesting";
+export { placementVerdict } from "./nesting";
 export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
 // The measurement's return type travels with the function. Without it a
 // consumer naming `measureBytes`'s result has to rebuild the union by hand or
@@ -127,6 +304,7 @@ export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
 // contract that then drifts from the first.
 export type { ByteMeasurement } from "./measure-bytes";
 export {
+  componentEnvelopeIssues,
   validate,
   validateDocument,
   ISSUE_CODES,
@@ -149,6 +327,14 @@ export { isNodeType, isNodeVersion } from "./validation";
  * gets a different answer for exactly the values that survive JSON badly.
  */
 export { isPlainRecord } from "./plain-record";
+/**
+ * Exported because the renderer and every plain-text projection of a document
+ * must agree on what counts as authored text. They did not: a stored number was
+ * drawn as text on the page and skipped in the description derived from it.
+ * A caller writing its own `typeof x === "string"` reintroduces exactly that
+ * split, so the decision is published rather than restated.
+ */
+export { authoredText, isAuthoredText } from "./authored-text";
 export { declaresNoMarkup, isConditionGated } from "./visibility";
 export type { NoMarkupDefinitionSource } from "./visibility";
 export type {
@@ -169,6 +355,7 @@ export type {
   BlockDefinition,
   BlockEditorMeta,
   BlockIcon,
+  BlockIsland,
   BlockExample,
   BlockSeoContribution,
   BlockSeoImage,
@@ -189,6 +376,7 @@ export {
   registerSupport,
   getBlock,
   isBlockName,
+  isUsableSlotName,
   hasBlock,
   allBlocks,
   getBlockSource,
@@ -243,6 +431,7 @@ export {
   // decode it the same way, or `font\2d family` reads as a different property
   // here than it does in a browser.
   decodeIdentifier,
+  referencesCustomProperty,
   // The other direction, public for the same reason. A caller that decoded a
   // name to compare it has to escape it again before writing it back, or a name
   // holding a space or a quote is emitted as tokens the parser reads apart.
@@ -326,6 +515,7 @@ export {
   TOKEN_MODES,
   defaultSiteTokens,
   resolveSiteTokens,
+  cssString,
   emitFontFaces,
   emitTokenBlocks,
   isAuthorableTokenName,
@@ -359,8 +549,18 @@ export {
   dtcgToTokens,
   isKind,
   tokensToDtcg,
+  familyPartKind,
+  readFamilyList,
+  splitFamilyList,
 } from "./style/dtcg";
-export type { DtcgNode } from "./style/dtcg";
+export type {
+  DtcgNode,
+  FamilyListKind,
+  FamilyListReading,
+  FamilyPart,
+  FamilyPartKind,
+  ReadFamilyPart,
+} from "./style/dtcg";
 export {
   checkContrast,
   compositeOver,
@@ -391,6 +591,7 @@ export type {
   StyleCompileContext,
 } from "./style/compile-page";
 export {
+  blockPartClassName,
   blockTypeClassName,
   // The digest itself, for a caller naming something other than a node from an
   // id — a per-document scope class, say. Exported so that caller reaches for
@@ -400,6 +601,12 @@ export {
   nodeClassName,
   nodeClassNames,
   BLOCK_TYPE_CLASS_PREFIX,
+  // The opt-in a container wears to take the site's content width. Public
+  // because two packages meet on it: the renderer puts it on an element and
+  // this engine's site stylesheet writes the rule that matches. A selector in
+  // one and a literal in the other would be one contract with two spellings,
+  // and the half that drifted would simply stop matching rather than fail.
+  CONTENT_WIDTH_CLASS,
   NODE_CLASS_PREFIX,
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
@@ -472,15 +679,30 @@ export type { BreakpointAxis } from "./style/breakpoint-axes";
 // two apart whenever they compile differently, and this is the set that decides
 // how much "enough" is.
 export { EMITTABLE_STRING_BOUNDS } from "./style/emittable-string-bounds";
-export { MAX_SCOPE_LENGTH } from "./style/compile-page";
+// `previewStateClass` is published because it is a CONTRACT between the
+// compiler and a previewing surface: the compiler writes it into a selector
+// and the surface puts it on an element. A name spelled in two places can be
+// spelled differently, which is why `NODE_ID_ATTRIBUTE` is published too.
+export {
+  MAX_SCOPE_LENGTH,
+  previewStateClass,
+  statePropagatesToAncestors,
+} from "./style/compile-page";
 export type { EmittableStringBound } from "./style/emittable-string-bounds";
 export type { StyleOrigin, StyleTraceEntry } from "./style/style-trace";
 export type { StyleQuery, StyleSubject } from "./style/style-origin";
 
 // The stylesheet every page of a site shares, compiled once and addressed by its content.
 export type { SiteSheetArtifact, SiteSheetInput } from "./style/site-sheet";
-export { compileSiteSheet } from "./style/site-sheet";
-export { styleOrigin } from "./style/style-origin";
+export { compileSiteSheet, compileSiteTokenSheet } from "./style/site-sheet";
+// `outranksEntry` is published beside `styleOrigin` because that function
+// cannot answer every form of the question it answers: it is asked once per
+// STATE, so comparing two states' winners falls to the caller. Published, that
+// caller ranks THROUGH the compiler's own weighting instead of keeping a
+// second idea of what beats what — which is how the builder came to rank a
+// block default's `a:hover` above a node's own `a` after the default tiers
+// stopped weighing what the authored ones do.
+export { outranksEntry, styleOrigin } from "./style/style-origin";
 export { BREAKPOINT_AXES } from "./style/breakpoint-axes";
 /*
  * What a stored breakpoint set MEANS, which the type does not say.
@@ -493,11 +715,23 @@ export { BREAKPOINT_AXES } from "./style/breakpoint-axes";
  */
 export { authoredBreakpoints, inCascadeOrder } from "./style/breakpoint-set";
 
-// The remote-host policy: which hosts a compiled page may fetch from. Exported
-// so the React renderer applies the SAME matcher the style compiler does.
+// Two policies about stored URLs, exported for the same reason: every surface
+// that draws or describes a document must reach the same verdict about one
+// stored string.
+//
+// The remote-host policy — `isAllowedRemoteUrl`, `isFetchableUrl`,
+// `isRemoteUrl` — is about which hosts a compiled page may FETCH from, so the
+// React renderer applies the same matcher the style compiler does.
+//
+// `isLinkableUrl` is a separate, format-level question: whether this format can
+// express the destination at all. It governs whether a link is DRAWN, so a
+// consumer restating it as its own scheme check makes a renderer that shows
+// nothing and a projection that still reports the label describe different
+// pages.
 export {
   isAllowedRemoteUrl,
   isFetchableUrl,
+  isLinkableUrl,
   isRemoteUrl,
   normalizeUrl,
   type RemotePattern,
@@ -514,6 +748,41 @@ export {
   type ReservedOperationName,
 } from "./operations";
 
+// The op vocabulary itself: the edits an editor applies, addressed by id, with
+// the inverse derived before the mutation so undo is a fact rather than a
+// reconstruction. Exported from the ENGINE rather than owned by the editor
+// because applying an edit is not an editing-surface concern — a plugin route,
+// a script or an agent has the same right to it, and each would otherwise grow
+// its own vocabulary that agrees with this one only until one of them changed.
+export {
+  applyOp,
+  applyOps,
+  // Published for the planners: an insert whose subtree arrives locked is
+  // refused by the op layer, so a planner has to be able to foresee it rather
+  // than hand back a plan the apply throws on.
+  // And the document-level rule the apply runs before it looks at the op, so a
+  // plan is never built against a destination that cannot be edited at all.
+  documentRefusal,
+  forestRefusal,
+  lockedWithin,
+  // And the shape rule for what an insert will carry, for the same reason.
+  nodeShapeRefusal,
+  OpError,
+  // The apply's own position rule, asked without applying: a planner that
+  // wrote its own copy would agree until one of the two moved.
+  positionRefusal,
+  subtreeRemovalRefusal,
+  positionOf,
+  sameStoredValue,
+  sameStyleValue,
+  type AppliedOp,
+  type AppliedOps,
+  type BuilderOp,
+  type NodePatch,
+  type OpPosition,
+  type SlotAddress,
+} from "./ops";
+
 /**
  * The stored shape of rich text.
  *
@@ -526,6 +795,7 @@ export {
   hasFormat,
   isRichTextNode,
   isRichTextValue,
+  RICH_TEXT_PROP_TYPE,
   richTextToPlainText,
   TEXT_FORMAT,
   type RichTextNode,

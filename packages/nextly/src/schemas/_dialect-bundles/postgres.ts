@@ -31,6 +31,8 @@ export { users, accounts, sessions } from "../users/postgres";
 // `getCoreSchema`, because this bundle is what decides whether the table EXISTS: it is what
 // `reconcileCore` hands drizzle-kit.
 export { nextlyFieldGroupLock } from "../field-group-lock/postgres";
+export { nextlyDocumentLock } from "../document-lock/postgres";
+export { nextlyWidgetLayout } from "../widget-layout/postgres";
 
 // Auth tokens.
 export {
@@ -103,3 +105,8 @@ export {
   nextlyReleasesPg as nextlyReleases,
   nextlyReleaseMembersPg as nextlyReleaseMembers,
 } from "../releases/postgres";
+
+// Background jobs; in the bundle for the reason the releases note above
+// gives — getCoreSchema makes a table diffable, this map is what apply
+// actually pushes.
+export { nextlyJobsPg as nextlyJobs } from "../jobs/postgres";

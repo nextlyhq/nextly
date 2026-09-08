@@ -240,6 +240,45 @@ export interface FontFaceDef {
  */
 export const DARK_MODE_ATTRIBUTE = "data-nx-theme";
 
+/** The selector root-scoped tokens are declared under. */
+const ROOT_TOKEN_SELECTOR = ":root";
+
+/**
+ * The dark block, written for whichever element can actually carry the switch.
+ *
+ * **Root-scoped tokens are declared on the attribute-bearing element itself,
+ * not on the root.** Custom properties inherit, so declaring them wherever the
+ * host put the attribute cascades to everything below — which is the only shape
+ * that works for all three placements a host chooses between. Measured, with
+ * the attribute moved between `<html>`, `<body>` and a wrapper: this form
+ * applies in every one. A form anchored to `:root` applies only when the
+ * attribute is on `<html>`, because `:root` IS that element and cannot be
+ * reached by a rule describing an ancestor.
+ *
+ * Its specificity equals the light block's `:root`, and it is emitted after it,
+ * so order decides and dark wins where both match.
+ *
+ * **A scoped selector keeps the ancestor form**, because a bare attribute
+ * selector would declare these tokens for the whole document and a scoped
+ * sheet exists precisely so it does not. There the host has somewhere above the
+ * element to put the switch, so the ancestor form is both available and
+ * correct.
+ */
+function darkSelectorFor(selector: string, dark: readonly string[]): string {
+  const body = `{${dark.join(";")}}`;
+  if (selector === ROOT_TOKEN_SELECTOR) {
+    return `[${DARK_MODE_ATTRIBUTE}="dark"]${body}`;
+  }
+  // `:is()` around the whole selector, because this one may be a LIST. Appending
+  // the attribute to `.preview-a,.preview-b` yields `.preview-a` bare and only
+  // `.preview-b[...]` qualified, so the first member would take the dark values
+  // unconditionally and a scoped preview would render dark for good. `:is()`
+  // takes the specificity of its most specific argument, so a list of single
+  // classes weighs exactly what one of them did.
+  const scoped = `:is(${selector})`;
+  return `[${DARK_MODE_ATTRIBUTE}="dark"] ${scoped},${scoped}[${DARK_MODE_ATTRIBUTE}="dark"]${body}`;
+}
+
 /** The `format()` hints a face may declare: plain keywords, nothing else. */
 /**
  * The longest font format this engine will write.
@@ -325,7 +364,17 @@ export {
  * Escaped rather than refused, because a backslash or a quote in a family name
  * is legal CSS and the escape is what the spec provides for exactly this.
  */
-function cssString(value: string): string {
+/**
+ * A value as the CONTENT of a CSS string, escaped so it cannot end one.
+ *
+ * Published because a family name reaches CSS from more than one place: the
+ * compiler writes `font-family:"…"` into the site sheet, and a surface drawing
+ * a specimen writes the same name into an inline style. Wrapping author data in
+ * quotes without this produces `"ACME "Pro""` for the perfectly legal family
+ * `ACME "Pro"` — the browser drops the declaration, and the specimen silently
+ * demonstrates the fallback instead of the face it names.
+ */
+export function cssString(value: string): string {
   let out = "";
   for (const char of value) {
     const code = char.codePointAt(0) ?? 0;
@@ -681,16 +730,52 @@ export function defaultSiteTokens(): SiteToken[] {
     /**
      * A hairline: a card outline, a table rule, a divider between sections.
      *
-     * ONE border colour rather than a subtle/strong scale. A scale is far harder
-     * to remove from a guaranteed set than to add to it, and no block has yet
-     * asked for the distinction — the admin has three tiers because its density
-     * demands them, and a content page is not that. A site wanting more defines
-     * its own; `resolveSiteTokens` layers additions by name.
+     * DECORATIVE, and that is now a claim rather than an omission. `#e5e7eb` on
+     * `#ffffff` is 1.24:1 and `#1f2937` on `#0b0f19` is 1.30:1 — far below the
+     * 3:1 WCAG 2.2 requires of a boundary that IDENTIFIES a control (SC 1.4.11,
+     * Non-text Contrast). That is correct for what this names: a divider and a
+     * card outline are decoration the same rule exempts, and a hairline heavy
+     * enough to pass 3:1 would stop being a hairline.
+     *
+     * It is the wrong token for anything a person has to find, which is what
+     * `color.border-strong` is for. This docblock previously argued for ONE
+     * border colour "until a block asks for the distinction"; `core/form` asked,
+     * and the split is the one Material 3 draws between `outline` and
+     * `outline-variant` for the same reason.
      */
     {
       name: "color.border",
       kind: "color",
       values: { light: "#e5e7eb", dark: "#1f2937" },
+    },
+    /**
+     * The boundary of a CONTROL: an input, a select, a textarea.
+     *
+     * Separate from `color.border` because the two answer to different rules. A
+     * divider is decoration; the edge of a text field is the only thing telling
+     * a person where to click, so WCAG 2.2 SC 1.4.11 requires 3:1 against what
+     * sits behind it. `core/form` gives its control the page's own background on
+     * purpose, so this border is its ONLY boundary and a decorative hairline
+     * left the field invisible — the exact defect the control styles exist to
+     * fix, reintroduced one property in.
+     *
+     * Chosen by calculation, not by eye, against both surfaces a control can sit
+     * on — and asserted that way in the tests rather than as a literal, so a
+     * later retune of the palette cannot quietly drop below the floor:
+     *
+     *     light  #6b7280 on #ffffff 4.83:1   on #f9fafb 4.63:1
+     *     dark   #9ca3af on #0b0f19 7.54:1   on #151b2b 6.76:1
+     *
+     * It carries the same values as `color.muted` today, and is a separate token
+     * anyway: they are one value serving two roles, and a site retuning its
+     * caption grey must not thereby move every control boundary it never
+     * mentioned. Material 3 keeps `outline` and `on-surface-variant` apart on
+     * exactly that argument.
+     */
+    {
+      name: "color.border-strong",
+      kind: "color",
+      values: { light: "#6b7280", dark: "#9ca3af" },
     },
     /**
      * Secondary text: a caption, a timestamp, a field hint.
@@ -959,13 +1044,24 @@ function tokenNamingRefusal(token: SiteToken): string | undefined {
 export function emitTokenBlocks(
   set: SiteTokenSet,
   selector: string
-): { css: string; issues: ValidationIssue[] } {
+): { css: string; issues: ValidationIssue[]; emitted: readonly SiteToken[] } {
   const { prefix, issue } = resolveTokenPrefix(set.prefix);
   const issues: ValidationIssue[] = issue ? [issue] : [];
 
   const light: string[] = [];
   const dark: string[] = [];
   const seen = new Map<string, string>();
+  /*
+   * The tokens this call actually WROTE.
+   *
+   * Reported rather than left to be re-derived, because the refusals above are
+   * five separate conditions — a name that is not a token name, no light value,
+   * a value the guard rejects, a value that fetches, and two identities landing
+   * on one custom property — and a caller asking "which tokens does this site
+   * emit" would have to restate all five. A second statement of them agrees
+   * today and drifts the first time one changes.
+   */
+  const emitted: SiteToken[] = [];
 
   for (const token of set.tokens) {
     const naming = tokenNamingRefusal(token);
@@ -1041,6 +1137,7 @@ export function emitTokenBlocks(
       continue;
     }
     seen.set(property, token.name);
+    emitted.push(token);
 
     // Reported, and then written anyway. A value that does not match its kind
     // is dropped by the browser where it is USED, which costs the author the
@@ -1077,9 +1174,11 @@ export function emitTokenBlocks(
         `The selector these tokens would be written under is longer than ${MAX_TOKEN_SELECTOR_LENGTH} characters, so none were written.`
       )
     );
-    return { css: "", issues };
+    // Nothing is written under an unusable selector, so nothing was emitted —
+    // whatever survived the per-token refusals above.
+    return { css: "", issues, emitted: [] };
   }
-  if (light.length === 0) return { css: "", issues };
+  if (light.length === 0) return { css: "", issues, emitted: [] };
 
   let css = `${selector}{${light.join(";")}}`;
   if (dark.length > 0) {
@@ -1087,7 +1186,7 @@ export function emitTokenBlocks(
     css +=
       (set.darkMode ?? "attribute") === "media"
         ? `@media (prefers-color-scheme:dark){${body}}`
-        : `[${DARK_MODE_ATTRIBUTE}="dark"] ${body}`;
+        : darkSelectorFor(selector, dark);
   }
-  return { css, issues };
+  return { css, issues, emitted };
 }

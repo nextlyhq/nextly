@@ -12,6 +12,7 @@
 
 "use client";
 
+import type { DocumentLockGates } from "@nextlyhq/plugin-sdk/admin";
 import {
   Button,
   Card,
@@ -79,6 +80,16 @@ export interface FormBuilderViewProps {
   onSave?: (data: unknown) => void;
   onSuccess?: (entry?: Record<string, unknown>) => void;
   onCancel?: () => void;
+  /**
+   * What a colleague's claim on this form withholds, handed over by the admin
+   * page that renders this view.
+   *
+   * The strip above this builder says in words that unsaved changes cannot be
+   * saved while someone else holds the document. Committing anyway would make
+   * that sentence false and would overwrite the holder's row, so the save reads
+   * it too.
+   */
+  documentLock?: DocumentLockGates;
 }
 
 // ============================================================================
@@ -105,6 +116,7 @@ function FormBuilderViewInner({
   onSave,
   onSuccess,
   onCancel,
+  documentLock,
 }: Pick<
   FormBuilderViewProps,
   | "isCreating"
@@ -113,6 +125,7 @@ function FormBuilderViewInner({
   | "onSave"
   | "onSuccess"
   | "onCancel"
+  | "documentLock"
 >) {
   const {
     fields,
@@ -257,6 +270,16 @@ function FormBuilderViewInner({
 
   // ── Save / Cancel ─────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
+    // The commit is where the refusal lives, following the rule the entry
+    // editor sets: a write passes one gate rather than each control being
+    // disabled separately. The button below reads the same fact, so the
+    // interface does not offer what this would refuse.
+    //
+    // Today that button is this callback's only caller, so the two cannot be
+    // told apart by a test. What the gate is for is the next caller - a
+    // shortcut, a second action bar - arriving without one.
+    if (documentLock?.actionsDisabled === true) return;
+
     // Check if there are fields
     if (fields.length === 0) {
       toast.error("Please add at least one field to the form");
@@ -347,6 +370,10 @@ function FormBuilderViewInner({
     entryId,
     queryClient,
     markAsSaved,
+    // Read inside, so it belongs here. Without it the callback closes over the
+    // claim as it stood when the form mounted, and a colleague taking the
+    // document over mid-session would leave this still committing.
+    documentLock?.actionsDisabled,
   ]);
 
   const handleCancel = useCallback(() => {
@@ -616,7 +643,7 @@ function FormBuilderViewInner({
           onClick={() => {
             void handleSave();
           }}
-          disabled={isSaving}
+          disabled={isSaving || documentLock?.actionsDisabled === true}
           className="flex items-center gap-1.5"
         >
           {isSaving ? (
@@ -696,6 +723,7 @@ export function FormBuilderView({
   onSave,
   onSuccess,
   onCancel,
+  documentLock,
 }: FormBuilderViewProps) {
   const resolvedEntryId = entryId || id || initialData?.id;
   const resolvedCollectionSlug = collectionSlug || collection || "forms";
@@ -705,6 +733,7 @@ export function FormBuilderView({
   return (
     <FormBuilderProvider
       key={providerKey}
+      readOnly={documentLock?.readOnly === true}
       initialData={{
         id: resolvedEntryId,
         name: initialData?.name,
@@ -724,6 +753,7 @@ export function FormBuilderView({
         onSave={onSave}
         onSuccess={onSuccess}
         onCancel={onCancel}
+        documentLock={documentLock}
       />
     </FormBuilderProvider>
   );

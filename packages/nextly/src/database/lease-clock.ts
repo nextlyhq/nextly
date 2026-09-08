@@ -11,6 +11,11 @@
  * judged against another is decided by that skew rather than by who holds the lock. Asking the
  * database for both values puts every comparison in one frame of reference.
  *
+ * The timings a lease is judged over live in `lease-timings` rather than here. They are plain
+ * arithmetic and a browser renewing a claim needs them, whereas everything in THIS module asks the
+ * database a question and therefore imports the ORM at module top level. Keeping them together
+ * would put that ORM in the import graph of every client that needs a number.
+ *
  * @module database/lease-clock
  */
 
@@ -59,52 +64,31 @@ export function futureExpression(
   return sql`clock_timestamp() + make_interval(secs => ${seconds})`;
 }
 
-/** Every timing a lease needs, so a caller cannot hold two of them that disagree. */
-export interface LeaseTimings {
-  /** How long a confirmation grants. */
-  readonly ttlSeconds: number;
-  /** How often the holder confirms. */
-  readonly renewIntervalMs: number;
-  /**
-   * How long the holder may go without a CONFIRMED renewal before it must treat the claim as lost.
-   *
-   * 🔴 Deliberately not "how many renewals failed". A count is only a proxy for the question that
-   * decides safety — how much lease is left — and it goes wrong in both directions: retries can
-   * overlap, so a stale failure is counted against a lease a later success already extended; and
-   * the count reaches its limit at the moment the lease expires rather than before it, so the
-   * holder is told after it has stopped being protected rather than while it still is.
-   */
-  readonly lossAfterMs: number;
-  /**
-   * How much lease a confirmation must actually grant for the holder to rely on it.
-   *
-   * 🔴 "Not yet expired" is not the same as "safe to work on". A holder that accepts a renewal
-   * leaving almost nothing comes back to a claim that passes a liveness test with nothing left.
-   */
-  readonly renewMarginSeconds: number;
-}
-
 /**
- * Derive every lease timing from the TTL, so no two of them can be chosen independently.
+ * How many seconds remain until `column`, as an expression the database evaluates itself.
  *
- * 🔴 The derivation is the point. Two numbers picked side by side agree on the day they are written
- * and drift afterwards, silently, because each looks reasonable alone — and the drift here is a
- * holder that believes it is protected while a contender is already taking the row.
+ * A DURATION rather than the instant itself, and that is the point. An expiry read back as a value
+ * has to be parsed by the driver, and the three drivers disagree: PostgreSQL hands back a `Date`
+ * from a `timestamptz`, MySQL a zoneless `DATETIME` the driver interprets in ITS session zone, and
+ * SQLite a bare integer of unix seconds that is not a date to anything. Normalising those into one
+ * instant is a per-dialect conversion in the read path, which is the same class of bug the
+ * expressions above exist to remove from the write path.
  *
- * `renewDivisor` is how many renewals fit in one TTL, and it is the only free parameter. The loss
- * deadline then leaves TWO renewal intervals of lease still in hand, so a holder is told it is
- * losing the claim while it is still protected rather than after.
+ * A remaining span has no such problem. Both sides of the subtraction happen inside one database,
+ * on one clock, in one statement, and what crosses the boundary is a number of seconds — the same
+ * length in every timebase and on every driver.
+ *
+ * Negative when the instant has passed, which callers are expected to read as expired rather than
+ * clamp: "how long ago" and "not yet" are different answers and only one of them is zero.
  */
-export function deriveLeaseTimings(
-  ttlSeconds: number,
-  renewDivisor: number
-): LeaseTimings {
-  const renewIntervalMs = (ttlSeconds / renewDivisor) * 1000;
-  const lossAfterMs = ttlSeconds * 1000 - 2 * renewIntervalMs;
-  return {
-    ttlSeconds,
-    renewIntervalMs,
-    lossAfterMs,
-    renewMarginSeconds: lossAfterMs / 1000,
-  };
+export function remainingSecondsExpression(
+  dialect: SupportedDialect,
+  column: string
+): SQL {
+  const target = sql.identifier(column);
+  if (dialect === "sqlite") return sql`(${target} - unixepoch())`;
+  if (dialect === "mysql") {
+    return sql`TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), ${target})`;
+  }
+  return sql`EXTRACT(EPOCH FROM (${target} - clock_timestamp()))`;
 }

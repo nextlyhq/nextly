@@ -124,6 +124,60 @@ describe("expandComponentFields", () => {
 describe("stripPasswordsThroughComponents", () => {
   const strip = stripPasswordFieldValues;
 
+  it("terminates when an unnamed container's fields reach itself", () => {
+    // The version-read path calls this after the resolver, so a schema whose
+    // unnamed group holds itself reached here even once the resolver was safe.
+    // This branch recurses on the SAME value with a different field list, which
+    // is the only one that can loop.
+    const group: Record<string, unknown> = { fields: [] };
+    (group.fields as unknown[]).push(
+      group,
+      f({ name: "secret", type: "password" })
+    );
+
+    const entry: Record<string, unknown> = { secret: "hunter2" };
+    stripPasswordsThroughComponents(
+      entry,
+      [group] as unknown as FieldConfig[],
+      new Map(),
+      strip
+    );
+
+    // Terminated AND still did its job: the password beside the cycle is gone.
+    expect(entry.secret).toBeUndefined();
+  });
+
+  it("walks the SAME unnamed container once per row, not once in total", () => {
+    // The control for the guard above, and it has to reach the guarded branch
+    // to mean anything: the container must be UNNAMED, so each row descends
+    // through the very same object. Tracking visited containers globally
+    // rather than per-path walks row one and silently skips the rest, leaving
+    // every later row's password in the snapshot.
+    const layout = { fields: [f({ name: "secret", type: "password" })] };
+    const rows = f({
+      name: "items",
+      type: "repeater",
+      fields: [layout],
+    });
+
+    const entry: Record<string, unknown> = {
+      items: [{ secret: "a" }, { secret: "b" }, { secret: "c" }],
+    };
+    stripPasswordsThroughComponents(
+      entry,
+      [rows] as unknown as FieldConfig[],
+      new Map(),
+      strip
+    );
+
+    const walked = entry.items as Record<string, unknown>[];
+    expect(walked.map(r => r.secret)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+  });
+
   it("reaches a password NESTED through a recursive component", () => {
     // The case a schema-side expansion cannot serve: `tree` contains itself,
     // so any expansion must stop at some depth and everything below the
@@ -171,6 +225,26 @@ describe("stripPasswordsThroughComponents", () => {
     const rows = entry.zone as Record<string, unknown>[];
     expect(rows[0]).not.toMatchObject({ secret: "a" });
     expect(rows[1]).not.toMatchObject({ secret: "b" });
+  });
+
+  it("strips a password inside a migrated fieldGroup reference", () => {
+    // The separating case for the dual-vocabulary reads: a definition whose
+    // type token and reference key are both migrated spellings. A slug walk
+    // reading only the legacy keys finds nothing here, and the plaintext
+    // rides into the version snapshot.
+    const fields = [
+      f({ name: "auth", type: "fieldGroup", fieldGroup: "auth" }),
+    ];
+    const map = new Map<string, FieldConfig[]>([
+      ["auth", [f({ name: "secret", type: "password" })]],
+    ]);
+
+    const entry: Record<string, unknown> = {
+      auth: { secret: "plaintext" },
+    };
+    stripPasswordsThroughComponents(entry, fields, map, strip);
+
+    expect(entry.auth).not.toMatchObject({ secret: "plaintext" });
   });
 
   it("leaves non-password values alone at every depth", () => {

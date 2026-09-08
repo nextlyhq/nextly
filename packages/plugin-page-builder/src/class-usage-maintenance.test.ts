@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 
 import {
+  forgetDeletedDocument,
   maintainClassUsage,
   type ClassUsageIndexStore,
 } from "./class-usage-maintenance";
@@ -339,5 +340,313 @@ describe("a subject whose rows span several pages", () => {
     // have reported `card` as an insert and never seen `stale` at all.
     expect(report).toEqual({ inserted: 0, removed: 1, undetermined: false });
     expect(deletes).toEqual(["r3"]);
+  });
+});
+
+describe("forgetting a document that was deleted", () => {
+  /**
+   * A store holding rows for ONE document spread across the three columns a
+   * delete must ignore, plus a row belonging to a different document.
+   *
+   * The foreign row is what makes the predicate assertions mean anything: a
+   * query that bound nothing at all would also return every row of the
+   * deleted document, and would pass a test that only counted deletions.
+   */
+  function storeWithRows() {
+    const all = [
+      { id: "r1", field: "content", locale: "", variant: "published" },
+      { id: "r2", field: "content", locale: "", variant: "draft" },
+      { id: "r3", field: "content", locale: "de", variant: "published" },
+      { id: "r4", field: "sidebar", locale: "en", variant: "draft" },
+    ].map(r => ({
+      ...r,
+      scope: "collection",
+      entity: "pages",
+      entityKey: "page-1",
+      classId: "hero",
+    }));
+    const foreign = {
+      id: "r9",
+      scope: "collection",
+      entity: "pages",
+      entityKey: "page-2",
+      field: "content",
+      locale: "",
+      variant: "published",
+      classId: "hero",
+    };
+
+    const calls: string[] = [];
+    const store: ClassUsageIndexStore = {
+      find: async args => {
+        calls.push(`find:${Object.keys(args.where).sort().join(",")}`);
+        // Answered as a real store would: only the rows matching every bound
+        // predicate. A fake returning everything would let a query that
+        // dropped `entityKey` pass while deleting another document's rows.
+        const items = [...all, foreign].filter(row =>
+          Object.entries(args.where).every(
+            ([column, predicate]) =>
+              (row as unknown as Record<string, unknown>)[column] ===
+              predicate.equals
+          )
+        );
+        return { items, meta: { hasNext: false } };
+      },
+      create: async () => ({}),
+      delete: async args => {
+        calls.push(`delete:${args.id}`);
+        return {};
+      },
+    };
+    return { store, calls };
+  }
+
+  it("removes every subject's rows, whatever field, locale or variant they name", async () => {
+    // A delete removes the document in every language and both lifecycle states
+    // at once. Binding any of those three columns would leave the rows that did
+    // not match behind, counting towards their classes with no document left to
+    // reconcile them against and no sweep that visits them.
+    const { store, calls } = storeWithRows();
+
+    const result = await forgetDeletedDocument({
+      store,
+      scope: "collection",
+      entity: "pages",
+      entityKey: "page-1",
+    });
+
+    expect(result).toEqual({ removed: 4 });
+    expect(calls).toEqual([
+      // Bound on the DOCUMENT and on nothing else.
+      "find:entity,entityKey,scope",
+      "delete:r1",
+      "delete:r2",
+      "delete:r3",
+      "delete:r4",
+    ]);
+  });
+
+  it("leaves another document's rows alone", async () => {
+    // The same store holds a row for `page-2`. Deleting `page-1` must not
+    // touch it — an over-broad query here removes usage a live page still has.
+    const { store, calls } = storeWithRows();
+
+    await forgetDeletedDocument({
+      store,
+      scope: "collection",
+      entity: "pages",
+      entityKey: "page-1",
+    });
+
+    expect(calls).not.toContain("delete:r9");
+  });
+
+  it("reads every PAGE before deleting any row", async () => {
+    // These are offset queries, so deleting while paging shifts later rows
+    // behind the cursor and a row is skipped — surviving the document it
+    // belonged to and counting towards its class for ever.
+    //
+    // The fixture spans TWO pages deliberately. On a single page, deleting as
+    // each page arrives produces exactly the same call order as reading
+    // everything first, so a one-page fixture cannot tell the two apart.
+    const calls: string[] = [];
+    const rowsByPage: Record<number, string[]> = { 1: ["r1", "r2"], 2: ["r3"] };
+    const store: ClassUsageIndexStore = {
+      find: async args => {
+        calls.push(`find:page=${args.page}`);
+        const ids = rowsByPage[args.page] ?? [];
+        return {
+          items: ids.map(id => ({
+            id,
+            scope: "collection",
+            entity: "pages",
+            entityKey: "page-1",
+            field: "content",
+            locale: "",
+            variant: "published",
+            classId: "hero",
+          })),
+          meta: { hasNext: args.page < 2 },
+        };
+      },
+      create: async () => ({}),
+      delete: async args => {
+        calls.push(`delete:${args.id}`);
+        return {};
+      },
+    };
+
+    const result = await forgetDeletedDocument({
+      store,
+      scope: "collection",
+      entity: "pages",
+      entityKey: "page-1",
+    });
+
+    expect(result).toEqual({ removed: 3 });
+    // Both reads land before the first removal. Interleaving them is the
+    // failure this exists to catch.
+    expect(calls).toEqual([
+      "find:page=1",
+      "find:page=2",
+      "delete:r1",
+      "delete:r2",
+      "delete:r3",
+    ]);
+  });
+
+  it("removes nothing when the document owned no rows", async () => {
+    // A document with no blocks field, or one whose rows were never written.
+    // The absence is not an error and must not be reported as one.
+    const { store, calls } = storeWithRows();
+
+    const result = await forgetDeletedDocument({
+      store,
+      scope: "collection",
+      entity: "pages",
+      entityKey: "never-indexed",
+    });
+
+    expect(result).toEqual({ removed: 0 });
+    expect(calls.filter(c => c.startsWith("delete:"))).toEqual([]);
+  });
+
+  it("removes a LEGACY row whose variant is unreadable", async () => {
+    // A row written before the `variant` column existed, or left NULL by a
+    // restore, is rejected by the reconciler's reader — correctly, because that
+    // walk binds a variant and such a row belongs to no subject it could be
+    // compared against. It is therefore reachable by no reconciliation and by
+    // no sweep, so if the delete spared it too it would outlive its document
+    // and count towards its class for ever with nothing able to remove it.
+    const deleted: string[] = [];
+    const store: ClassUsageIndexStore = {
+      find: async () => ({
+        items: [
+          {
+            id: "legacy",
+            scope: "collection",
+            entity: "pages",
+            entityKey: "page-1",
+            field: "content",
+            // The two columns a legacy row is missing. Neither is bound by this
+            // query, and neither is needed to know the row belongs to a
+            // document that is gone.
+            locale: null,
+            variant: null,
+            classId: "hero",
+          },
+        ],
+        meta: { hasNext: false },
+      }),
+      create: async () => ({}),
+      delete: async args => {
+        deleted.push(args.id);
+        return {};
+      },
+    };
+
+    const result = await forgetDeletedDocument({
+      store,
+      scope: "collection",
+      entity: "pages",
+      entityKey: "page-1",
+    });
+
+    expect(result).toEqual({ removed: 1 });
+    expect(deleted).toEqual(["legacy"]);
+  });
+
+  it("RAISES on this document's row that carries no readable id", async () => {
+    // `afterRead` may reshape a list response and the Direct API applies it
+    // even for a trusted caller, so a host projecting this plugin's own index
+    // collection can drop the column the rows are addressed by. Skipping such a
+    // row reports a clean deletion that did not happen — and because the
+    // document is gone, no reconciliation visits it again and it counts towards
+    // its class for ever.
+    const deleted: string[] = [];
+    const store: ClassUsageIndexStore = {
+      find: async () => ({
+        items: [
+          {
+            // Addressable, and removed.
+            id: "r1",
+            scope: "collection",
+            entity: "pages",
+            entityKey: "page-1",
+            field: "content",
+            locale: "",
+            variant: "published",
+            classId: "hero",
+          },
+          {
+            // This document's row, with the id projected away.
+            scope: "collection",
+            entity: "pages",
+            entityKey: "page-1",
+            field: "content",
+            locale: "",
+            variant: "published",
+            classId: "card",
+          },
+        ],
+        meta: { hasNext: false },
+      }),
+      create: async () => ({}),
+      delete: async args => {
+        deleted.push(args.id);
+        return {};
+      },
+    };
+
+    await expect(
+      forgetDeletedDocument({
+        store,
+        scope: "collection",
+        entity: "pages",
+        entityKey: "page-1",
+      })
+    ).rejects.toThrow(/no readable id/);
+    // Nothing was deleted: the walk reads every page before removing anything,
+    // so the failure is reported before a partial cleanup is begun.
+    expect(deleted).toEqual([]);
+  });
+
+  it("REFUSES to delete a row the query did not ask for", async () => {
+    // If a misbound query returns a foreign row, deleting it removes usage
+    // belonging to a document that still exists. The refusal must raise rather
+    // than skip, or a misbound query would quietly do damage on every call.
+    const calls: string[] = [];
+    const store: ClassUsageIndexStore = {
+      find: async () => ({
+        items: [
+          {
+            id: "r9",
+            scope: "collection",
+            entity: "pages",
+            entityKey: "page-2",
+            field: "content",
+            locale: "",
+            variant: "published",
+            classId: "hero",
+          },
+        ],
+        meta: { hasNext: false },
+      }),
+      create: async () => ({}),
+      delete: async args => {
+        calls.push(`delete:${args.id}`);
+        return {};
+      },
+    };
+
+    await expect(
+      forgetDeletedDocument({
+        store,
+        scope: "collection",
+        entity: "pages",
+        entityKey: "page-1",
+      })
+    ).rejects.toThrow(/entityKey/);
+    expect(calls).toEqual([]);
   });
 });

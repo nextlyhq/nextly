@@ -33,6 +33,22 @@ unset GIT_DIR GIT_WORK_TREE
 
 set -e
 
+# What is uncommitted RIGHT NOW, recorded before anything below can change it.
+#
+# Every gate in this hook runs against the working tree, and Git then pushes
+# HEAD. Those are different trees whenever anything is uncommitted: an unstaged
+# fix over a broken commit produces a green for a commit that is still broken,
+# and the author has no way to tell from the output.
+#
+# Recorded rather than acted on. Stashing would be a hook rewriting the tree
+# under someone mid-task, and testing a detached HEAD means a second checkout
+# and an install to match it — slow, and a new way to fail. The harm here is
+# the false confidence, not the untested state, so the fix is to say so.
+#
+# `|| true` because a status that cannot be read is not a reason to refuse a
+# push, and this runs under `set -e`.
+DIRTY="$(git status --porcelain 2>/dev/null || true)"
+
 # The two repo-wide lints CI gates on that `turbo lint` does not run. Both
 # finish in well under a second, and neither was reachable from any hook, so
 # knowing they existed was something each person carried privately: an `hsl()`
@@ -45,6 +61,33 @@ pnpm lint:workspace
 pnpm turbo lint --continue \
   --filter='./packages/*'
 pnpm run build
+
+# Types AFTER the build, and over every package rather than the changed ones.
+#
+# The order is load-bearing: `check-types` depends on `^check-types` and never
+# builds, so it reads whatever `dist` survived — on an unbuilt tree it fails for
+# a reason that has nothing to do with the diff. `pnpm run build` above is what
+# makes it answerable.
+#
+# Unfiltered because the breakage a shared package inflicts on its dependents
+# is overwhelmingly an API or type break, and this is the task that catches it.
+# It is also the affordable way to do that: `lint` and `build` above already
+# run repo-wide, so types were the one whole-repo question this hook was not
+# asking. A dependent TEST sweep is the expensive one and stays in CI, where
+# nobody is waiting on it.
+#
+# ADVISORY, not blocking. This is the one gate here whose scope is the whole
+# repository, so it can be red for a package the author never touched — and a
+# hook that refuses a push over someone else's broken package is a hook people
+# learn to pass `--no-verify` to, which costs every gate rather than this one.
+#
+# Reported instead, with the packages named, so an author can see at a glance
+# whether the failure is theirs. CI blocks on the same command; this is the
+# early warning, not the enforcement.
+set +e
+pnpm turbo check-types --continue
+TYPES_STATUS=$?
+set -e
 
 # The TESTS of the packages this branch actually changes.
 #
@@ -60,8 +103,44 @@ pnpm run build
 # The scope is DERIVED from the diff rather than listed here, so it cannot go
 # stale as packages are added. Empty means no workspace changed, and the run is
 # skipped rather than becoming a whole-repo test sweep nobody would keep.
+#
+# Three outcomes, not two, and the status says which. A change that redefines
+# the workspace or task graph cannot be narrowed to the packages it happens to
+# sit beside, so it asks for the UNFILTERED run instead. Reporting that as a
+# failure made those files impossible to push: this script runs under `set -e`,
+# so it died before testing anything, and no retry could clear it because
+# running the gates by hand does not change the diff. The only escape was
+# bypassing the hook, which is worse than the narrowing being guarded against.
+#
+# `set +e` around the call only: the status IS the answer here, and letting the
+# shell abort on a non-zero one would discard it.
+set +e
 GATE_FILTERS=$(node scripts/gate-scope.mjs --filters)
-if [ -n "$GATE_FILTERS" ]; then
+GATE_STATUS=$?
+set -e
+
+if [ "$GATE_STATUS" -eq 2 ]; then
+  echo "pre-push: the diff redefines the workspace or task graph — testing every workspace."
+  pnpm turbo test --continue
+elif [ "$GATE_STATUS" -ne 0 ]; then
+  echo "pre-push: gate-scope could not derive a trustworthy scope; refusing." >&2
+  exit "$GATE_STATUS"
+elif [ -n "$GATE_FILTERS" ]; then
   # shellcheck disable=SC2086 -- one flag per line, intentionally word-split
   pnpm turbo test --continue $GATE_FILTERS
+fi
+
+if [ "$TYPES_STATUS" -ne 0 ]; then
+  echo ""
+  echo "pre-push: NOTE — the repo-wide typecheck failed. Check whether the"
+  echo "  failing package is one you changed: this gate covers every package,"
+  echo "  so it can be red for someone else's work. CI blocks on it either way."
+fi
+
+# Last, so it is the line still on screen when the push proceeds.
+if [ -n "$DIRTY" ]; then
+  echo ""
+  echo "pre-push: NOTE — these gates ran against your working tree, which has"
+  echo "  uncommitted changes. Git is pushing HEAD, which is a different tree."
+  echo "  A green here does not describe the commit being pushed."
 fi

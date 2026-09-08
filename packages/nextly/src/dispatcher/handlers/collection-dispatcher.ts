@@ -77,10 +77,7 @@ import {
 import type { ServiceContainer } from "../../services";
 import type { WhereFilter } from "../../services/collections/query-operators";
 import type { CollectionsHandler } from "../../services/collections-handler";
-import {
-  isSuperAdmin,
-  listEffectivePermissions,
-} from "../../services/lib/permissions";
+import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import {
   readAuthenticatedActor,
@@ -167,6 +164,58 @@ function formatToastSummary(summary: {
   if (summary.changed) parts.push(`${summary.changed} changed`);
   if (summary.removed) parts.push(`${summary.removed} removed`);
   return parts.length > 0 ? parts.join(", ") : "no changes";
+}
+
+/**
+ * Both directions of the all-locales lifecycle, as one handler.
+ *
+ * i18n M7 publishes every language of an entry at once; the takedown is its
+ * twin. They differ in exactly two things — the service method and the success
+ * message — and everything else about them is the same identity forwarding and
+ * the same attestation. Written twice, they were a 40-line clone whose halves
+ * could drift in which credentials they passed, and the drift would show up as
+ * a takedown being denied for a user the route had already authorized.
+ *
+ * The parameters are forwarded rather than defaulted for reasons that apply to
+ * both: `userRoles` so role-based access and stored rules evaluate against the
+ * real user; `routeAuthorized` to attest that the route middleware already ran
+ * the RBAC/code-access gate, so the entry service skips only that redundant
+ * re-check while stored rules and field-level write access still run — never
+ * inferred from a userId; and `authenticatedScope` so a scoped API key's own
+ * `publish-`/`unpublish-` grant is judged, since the route authorized this POST
+ * only as an `update`.
+ */
+function allLocalesLifecycle(
+  method: "publishAllLocales" | "unpublishAllLocales",
+  successMessage: string
+): MethodHandler<CollectionsHandlerType> {
+  return {
+    execute: async (svc, p) => {
+      // `requireParam` rather than an inline throw: a missing route parameter is
+      // caller-fixable, and a bare `Error` here would surface it as a 500.
+      const collectionName = requireParam(p, "collectionName");
+      const entryId = requireParam(p, "entryId");
+      const result = await svc[method]({
+        collectionName,
+        entryId,
+        actor: readAuthenticatedActor(p),
+        userId: p._authenticatedUserId
+          ? String(p._authenticatedUserId)
+          : undefined,
+        userName: p._authenticatedUserName
+          ? String(p._authenticatedUserName)
+          : undefined,
+        userEmail: p._authenticatedUserEmail
+          ? String(p._authenticatedUserEmail)
+          : undefined,
+        userRoles: readAuthenticatedRoles(p),
+        routeAuthorized: true,
+        authenticatedScope: readAuthenticatedScope(p),
+      });
+      const entry = unwrapServiceResult(result, { collectionName, entryId });
+      return respondMutation(result.message ?? successMessage, entry);
+    },
+  };
 }
 
 /**
@@ -350,11 +399,26 @@ const COLLECTIONS_METHODS: Record<
   },
   listCollections: {
     // Translates the legacy CollectionServiceResult `{ data, meta }`
-    // envelope to the canonical `{ items, meta }` body. Permission
-    // filtering (non-super-admins only see collections they can read)
-    // runs after unwrap so the meta we ship reflects the FILTERED
-    // counts, not the pre-filter totals.
+    // envelope to the canonical `{ items, meta }` body.
+    //
+    // 🔴 Permission filtering runs BEFORE the query, as a slug allowlist the
+    // registry puts in its WHERE clause. Filtering the returned page instead
+    // made the meta describe a different set from the rows: `total` became the
+    // count of one filtered page, so `totalPages` collapsed to 1 and `hasNext`
+    // was false however many pages the reader could actually see. A client
+    // reading that stops at the first page, and everything past it is
+    // unreachable. The singles dispatcher resolves its allowlist the same way.
     execute: async (svc, p) => {
+      const userId = p._authenticatedUserId
+        ? String(p._authenticatedUserId)
+        : undefined;
+
+      // The SHARED resolver, which the singles listing asks too. `undefined`
+      // means no filter — an unauthenticated caller, gated at the route layer,
+      // or a super admin. An empty list means nothing is visible, which the
+      // registry short-circuits to a zero-row, zero-total answer.
+      const slugAllowlist = await readableSlugAllowlist(userId);
+
       const result = await svc.listCollections({
         page: toNumber(p.page),
         limit: toNumber(p.limit),
@@ -366,6 +430,7 @@ const COLLECTIONS_METHODS: Record<
           | "updatedAt"
           | undefined,
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
+        slugAllowlist,
       });
       // Service returns legacy { success, data, meta }. Unwrap throws on
       // failure (which the dispatcher converts to a NextlyError response).
@@ -393,46 +458,9 @@ const COLLECTIONS_METHODS: Record<
             : 1,
       };
 
-      const userId = p._authenticatedUserId
-        ? String(p._authenticatedUserId)
-        : undefined;
-      if (!userId) {
-        return respondList(items, toPaginationMeta(baseMeta));
-      }
-
-      const superAdmin = await isSuperAdmin(userId);
-      if (superAdmin) {
-        return respondList(items, toPaginationMeta(baseMeta));
-      }
-
-      // Non-super-admin: filter the page to collections this user can
-      // actually read. We rebuild total + totalPages on the filtered
-      // array so the admin's pagination footer matches what the user
-      // actually sees.
-      const permissionPairs = await listEffectivePermissions(userId);
-      const readableResources = new Set(
-        permissionPairs
-          .filter(pair => pair.endsWith(":read"))
-          .map(pair => pair.split(":")[0])
-      );
-
-      type CollectionItem = { slug?: string; name?: string };
-      const filtered = (items as CollectionItem[]).filter(collection => {
-        const slug = collection?.slug ?? collection?.name;
-        return slug ? readableResources.has(String(slug)) : false;
-      });
-
-      const filteredMeta = {
-        total: filtered.length,
-        page: baseMeta.page,
-        limit: baseMeta.limit,
-        totalPages:
-          baseMeta.limit > 0
-            ? Math.max(1, Math.ceil(filtered.length / baseMeta.limit))
-            : 1,
-      };
-
-      return respondList(filtered, toPaginationMeta(filteredMeta));
+      // The rows and the meta now describe one set, because the allowlist was
+      // a condition on the query that produced both.
+      return respondList(items, toPaginationMeta(baseMeta));
     },
   },
   getCollection: {
@@ -1364,47 +1392,14 @@ const COLLECTIONS_METHODS: Record<
       return respondMutation(result.message ?? "Entry updated.", entry);
     },
   },
-  publishAllLocales: {
-    // i18n M7: publish every language of an entry at once (spec §10).
-    execute: async (svc, p) => {
-      if (!p.collectionName || !p.entryId) {
-        throw new Error("collectionName and entryId parameters are required");
-      }
-      const result = await svc.publishAllLocales({
-        collectionName: p.collectionName,
-        entryId: p.entryId,
-        actor: readAuthenticatedActor(p),
-        userId: p._authenticatedUserId
-          ? String(p._authenticatedUserId)
-          : undefined,
-        userName: p._authenticatedUserName
-          ? String(p._authenticatedUserName)
-          : undefined,
-        userEmail: p._authenticatedUserEmail
-          ? String(p._authenticatedUserEmail)
-          : undefined,
-        // Forward the authenticated role set so role-based access and stored
-        // rules evaluate against the real user (parity with the update handler);
-        // without it publish-all could be denied for a user the route authorized.
-        userRoles: readAuthenticatedRoles(p),
-        // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (stored rules +
-        // field-level write access still run). Never inferred from userId.
-        routeAuthorized: true,
-        // The route authorized this POST as `update`; the publish check judges a
-        // scoped API key's own `publish-<slug>` grant.
-        authenticatedScope: readAuthenticatedScope(p),
-      });
-      const entry = unwrapServiceResult(result, {
-        collectionName: p.collectionName,
-        entryId: p.entryId,
-      });
-      return respondMutation(
-        result.message ?? "All languages published.",
-        entry
-      );
-    },
-  },
+  publishAllLocales: allLocalesLifecycle(
+    "publishAllLocales",
+    "All languages published."
+  ),
+  unpublishAllLocales: allLocalesLifecycle(
+    "unpublishAllLocales",
+    "All languages unpublished."
+  ),
   deleteEntry: {
     // The deleted record is the `item`.
     execute: async (svc, p) => {

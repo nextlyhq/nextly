@@ -393,19 +393,33 @@ export async function applyFieldWriteAccess(opts: {
   overrideAccess?: boolean;
   id?: string;
 }): Promise<void> {
-  // Bypass for trusted contexts, matching the collection access service's
-  // `overrideAccess || !user` rule: an explicit override or a system write
-  // with no user context is trusted, so per-field rules don't run and can't
-  // strip fields an internal writer intended to set. Authenticated writes
-  // (user present, no override) are enforced.
-  if (opts.overrideAccess || !opts.user) return;
+  // Bypass for a caller that has SAID it is trusted, and only that. The read
+  // side gates on the same single condition, and the two must agree: a rule
+  // that strips a field from an authenticated writer but not from an
+  // unauthenticated one would make less authentication buy more authority.
+  //
+  // Absence of a user is not trust. `collection-access-service` does read
+  // `overrideAccess || !user`, but only where it resolves a stored OWNER
+  // predicate — with nobody to compare against, that predicate is unanswerable
+  // rather than failing. A field rule is a different question: it asks whether
+  // THIS writer may set this field, and "nobody" is a perfectly good answer.
+  // Its main gate uses `overrideAccess` alone, which is the one this matches.
+  //
+  // An internal writer that needs to set a protected field says so with
+  // `overrideAccess: true`; that is a deliberate line in the caller rather
+  // than a property of having no session.
+  if (opts.overrideAccess) return;
   const fns = getFieldFunctions(opts.kind, opts.slug);
   if (!fns) return;
   await applyWriteAccessRec(opts.data, fns, opts.operation, {
     user: opts.user,
     id: opts.id,
+    // An anonymous writer resolves to NO grants — `grantsResolver(undefined)`
+    // answers `{ permissions: [], roles: [] }` — so a rule written as
+    // `({ permissions }) => permissions.includes(...)` refuses it, which is
+    // the correct answer rather than an accident of the shape.
     grants: grantsResolver(
-      typeof opts.user.id === "string" ? opts.user.id : undefined
+      typeof opts.user?.id === "string" ? opts.user.id : undefined
     ),
   });
 }

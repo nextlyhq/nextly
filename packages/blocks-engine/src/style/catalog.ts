@@ -299,6 +299,12 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
 
   // --- layout
   {
+    property: "boxSizing",
+    group: "layout",
+    shape: keyword("box-sizing", ["content-box", "border-box"]),
+    summary: "Whether a stated width includes padding and border.",
+  },
+  {
     property: "display",
     group: "layout",
     shape: keyword("display", [
@@ -665,6 +671,35 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       ],
     },
     summary: "Upright or slanted text, with an optional oblique angle.",
+  },
+  {
+    property: "listStyleType",
+    // Its OWN group, not typography. Group membership is what decides which
+    // blocks are offered a control, and `typography: true` grants every
+    // property in that group — so a heading and a button would both be offered
+    // a list-marker control that cannot change anything they render.
+    group: "list",
+    // `revert` earns its place beside the concrete markers. A CSS reset that
+    // sets `list-style: none` on every list — Tailwind's Preflight does, and
+    // this library's own scaffold imports it — leaves an author no keyword that
+    // means "whatever this element would have shown", because the right answer
+    // differs between `ul` and `ol`. `revert` rolls back to the user-agent
+    // value per element, so one declaration restores discs to one and numerals
+    // to the other.
+    shape: keyword("list-style-type", [
+      "none",
+      "revert",
+      "disc",
+      "circle",
+      "square",
+      "decimal",
+      "decimal-leading-zero",
+      "lower-alpha",
+      "upper-alpha",
+      "lower-roman",
+      "upper-roman",
+    ]),
+    summary: "The marker drawn beside each list item.",
   },
   {
     property: "textDecoration",

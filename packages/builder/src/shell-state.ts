@@ -14,6 +14,8 @@
  * @module shell-state
  */
 
+import { FIT_ZOOM, readZoom, writeZoom, type CanvasZoom } from "./canvas-zoom";
+
 /**
  * The panels the left rail switches between.
  *
@@ -25,6 +27,7 @@ export const LEFT_PANELS = [
   "layers",
   "components",
   "tokens",
+  "classes",
   "fonts",
   "pages",
   "settings",
@@ -81,8 +84,32 @@ export const RAIL_WIDTH = 48;
  *
  * The canvas is the thing being edited, so it is the region with a floor rather
  * than the one that absorbs whatever is left.
+ *
+ * This is the EDITING SURFACE, not the panel holding it. The panel is wider by
+ * its gutters, and {@link MIN_CANVAS_PANEL_WIDTH} is what a bound is read from.
  */
 export const MIN_CANVAS_WIDTH = 480;
+
+/**
+ * The gap between the canvas region's edge and the page inside it, per side.
+ *
+ * Declared rather than written as a utility class because it is load-bearing
+ * twice: it is the space the page's own edge is painted into, and it is the
+ * difference between the editing surface and the panel that has to contain it.
+ * Spelled in one place so the two cannot drift.
+ */
+export const CANVAS_GUTTER = 16;
+
+/**
+ * The narrowest the canvas PANEL may become, gutters included.
+ *
+ * DERIVED, because the constraint is on the editing surface and the panel is
+ * the thing a resize bound can be expressed on. Bounding the panel at the
+ * surface's own floor spends the gutters out of the surface: at 480px of panel
+ * the page has 448px, so the drag stops only once the canvas is already
+ * narrower than the floor that exists to stop it.
+ */
+export const MIN_CANVAS_PANEL_WIDTH = MIN_CANVAS_WIDTH + CANVAS_GUTTER * 2;
 
 /**
  * The narrowest viewport the full shell is supported at (PB-D17 D10-5).
@@ -123,6 +150,14 @@ export function fitsFullShell(width: number): boolean {
 export interface ShellPreferences {
   leftPanel: LeftPanel | null;
   leftPinned: boolean;
+  /**
+   * How large the canvas draws the page, as the author last left it.
+   *
+   * Chrome rather than document state, like everything else here: it describes
+   * how one person is looking at the editor, not what the page IS, so it must
+   * not travel with the document to another author.
+   */
+  zoom: CanvasZoom;
   /**
    * Layouts, one per PANEL TOPOLOGY.
    *
@@ -168,6 +203,44 @@ export interface ShellPreferences {
 export const EMPTY_ELEMENTS_ATTRIBUTE = "data-nx-empty-elements";
 
 /**
+ * The class marking the editor shell's own root element.
+ *
+ * The scope every piece of editor chrome is drawn inside, and the element
+ * {@link EMPTY_ELEMENTS_ATTRIBUTE} is stamped on. Kept beside that attribute
+ * and away from the component, for the reason its docblock gives: the markers
+ * `builder-chrome.css` has to spell out literally are the ones a rename can
+ * break silently, so each has one exported spelling that the shell writing it,
+ * the code asking about it and the test pinning the stylesheet all take from.
+ */
+export const BUILDER_CHROME_CLASS = "nx-builder-chrome";
+
+/**
+ * A scope that resolves `--nx-builder-*` without claiming to be the chrome root.
+ *
+ * For a surface the shell mounts OUTSIDE {@link BUILDER_CHROME_CLASS} — custom
+ * properties inherit down and never across, so such a surface needs the tokens
+ * declared on an ancestor of its own. Giving it the chrome class instead would
+ * put a second chrome root in the document, and every selector and query
+ * meaning "the editor" would match whichever came first.
+ */
+export const BUILDER_TOKENS_CLASS = "nx-builder-tokens";
+
+/**
+ * The class marking the canvas root, and the boundary the hit-test stops at.
+ *
+ * Here rather than in `canvas.tsx` for the reason above: it is the middle term
+ * of the empty-container affordance's selector, which `empty-slot.ts` composes
+ * — and reaching into the canvas COMPONENT for it would pull a React module
+ * into every consumer of that constant, for one string. `canvas.tsx` re-exports
+ * it, so callers reading it as the canvas's own marker are unaffected.
+ *
+ * The hit-test walk needs an upper bound (see `nodeIdFromEvent`), and that
+ * bound has to be identifiable from a DOM node rather than from React state,
+ * because the walk starts at an event target and climbs.
+ */
+export const CANVAS_ROOT_CLASS = "nx-canvas";
+
+/**
  * The identity of a panel arrangement, from the panels themselves.
  *
  * Sorted and joined rather than taken from `leftPanel`, so it is derived from
@@ -182,6 +255,7 @@ export function topologyKey(panelIds: readonly string[]): string {
 export const DEFAULT_PREFERENCES: ShellPreferences = {
   leftPanel: null,
   leftPinned: true,
+  zoom: FIT_ZOOM,
   layouts: {},
   showEmptyElements: true,
 };
@@ -296,6 +370,11 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
       typeof record.leftPinned === "boolean"
         ? record.leftPinned
         : DEFAULT_PREFERENCES.leftPinned,
+    // Fit when the stored value is not a zoom, which includes every preference
+    // written before there was one. `readZoom` refuses a scale outside the
+    // bounds rather than painting the canvas somewhere the control cannot be
+    // reached to undo it.
+    zoom: readZoom(record.zoom) ?? DEFAULT_PREFERENCES.zoom,
     layouts: readLayouts(record.layouts),
     showEmptyElements:
       typeof record.showEmptyElements === "boolean"
@@ -310,7 +389,12 @@ export function writePreferences(
   preferences: ShellPreferences
 ): void {
   try {
-    store.write(JSON.stringify(preferences));
+    // Narrowed on the way out for the reason it is checked on the way in: what
+    // is stored is a value this can read back, not whatever shape the running
+    // editor happens to hold.
+    store.write(
+      JSON.stringify({ ...preferences, zoom: writeZoom(preferences.zoom) })
+    );
   } catch {
     // A quota error or unavailable storage. Losing a panel width is not worth
     // interrupting an edit over, and there is nothing the author could do.

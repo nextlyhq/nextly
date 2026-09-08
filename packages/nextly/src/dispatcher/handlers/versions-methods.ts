@@ -13,7 +13,7 @@ import type { PaginationMeta } from "../../api/response-shapes";
 import {
   assertDiffVersionPair,
   assertVersionDocumentReadable,
-  assertVersionDocumentUpdatable,
+  assertDocumentUpdatable,
   diffDocumentVersions,
   hydrateVersionSnapshot,
   redactSnapshotForUser,
@@ -115,10 +115,18 @@ export function requireSnapshotBody(body: unknown): Record<string, unknown> {
  */
 function declaresComponentReference(fields: FieldConfig[]): boolean {
   for (const field of fields) {
+    // Either spelling declares a reference: a migrated definition whose keys
+    // went unread would skip the registry-unavailable guard entirely.
     if (typeof (field as { component?: unknown }).component === "string") {
       return true;
     }
+    if (typeof (field as { fieldGroup?: unknown }).fieldGroup === "string") {
+      return true;
+    }
     if (Array.isArray((field as { components?: unknown }).components)) {
+      return true;
+    }
+    if (Array.isArray((field as { fieldGroups?: unknown }).fieldGroups)) {
       return true;
     }
     const children = (field as { fields?: unknown }).fields;
@@ -499,7 +507,7 @@ export async function setVersionLabelForDocument(
   // route earned. Applied even when the request turns out to write nothing:
   // this is a write endpoint, and gating only the writing case would let the
   // no-op be used to discover what the caller is allowed to change.
-  await assertVersionDocumentUpdatable(
+  await assertDocumentUpdatable(
     args.scopeKind,
     args.slug,
     args.entryId,
@@ -662,7 +670,7 @@ export async function discardWorkingDraftForDocument(
     args.user,
     authenticatedScope
   );
-  await assertVersionDocumentUpdatable(
+  await assertDocumentUpdatable(
     args.scopeKind,
     args.slug,
     args.entryId,
@@ -731,7 +739,7 @@ export async function autosaveForDocument(
     args.user,
     authenticatedScope
   );
-  await assertVersionDocumentUpdatable(
+  await assertDocumentUpdatable(
     args.scopeKind,
     args.slug,
     args.entryId,

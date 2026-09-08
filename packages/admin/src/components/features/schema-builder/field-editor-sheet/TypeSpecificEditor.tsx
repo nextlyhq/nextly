@@ -14,6 +14,8 @@
 // Each editor is imported from its own module rather than through the feature's
 // barrel: the barrel re-exports this file's own ancestors, so reaching back
 // through it makes every one of those a cycle.
+import { isFieldGroupFieldType } from "nextly/field-group-type";
+
 import { ComponentFieldEditor } from "../ComponentFieldEditor";
 import { GroupFieldEditor } from "../GroupFieldEditor";
 import { RelationshipEditor } from "../RelationshipEditor";
@@ -233,7 +235,11 @@ export function TypeSpecificEditor({
     );
   }
 
-  if (field.type === "component") {
+  // Either spelling of the stored field type reaches this editor; the
+  // references themselves were resolved onto the props below at load, so a
+  // migrated definition gets the same field-group controls as a legacy one
+  // instead of landing on the General tab with no way to change them.
+  if (isFieldGroupFieldType(field.type)) {
     return (
       <ComponentFieldEditor
         component={field.component}

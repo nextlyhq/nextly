@@ -328,7 +328,7 @@ const KEYS_WITHOUT_COMPONENTS = new Set([
 interface ExposedPaths {
   /** Paths the admin resolves through the registry — each needs an import. */
   registered: string[];
-  /** Widget paths: RESERVED, so deliberately NOT imported. */
+  /** Widget component paths: deliberately NOT imported into the generated map. */
   widgets: string[];
   /** Emitted keys this helper classifies neither way. Must stay empty. */
   unclassified: string[];
@@ -378,7 +378,14 @@ function exposedComponentPaths(meta: PluginAdminMeta): ExposedPaths {
 
   return {
     registered,
-    widgets: (meta.widgets ?? []).map(widget => widget.component),
+    // A widget's component is OPTIONAL now: a declarative widget names an
+    // archetype and a query and ships no UI code, so it exposes no path for
+    // the import map to carry. Dropped rather than collected as `undefined`,
+    // because this list is what the map's coverage is measured against and an
+    // absent path is not an uncovered one.
+    widgets: (meta.widgets ?? []).flatMap(widget =>
+      widget.component === undefined ? [] : [widget.component]
+    ),
     unclassified: Object.keys(meta).filter(
       key =>
         !readsComponents.has(key) &&
@@ -412,7 +419,17 @@ describe("parity with the admin-meta surface", () => {
           header: { slot: "@acme/x/admin#HeaderSlot" },
           schemaBuilderSlot: "@acme/x/admin#SchemaSlot",
           entryFormToolbarSlot: "@acme/x/admin#ToolbarSlot",
-          widgets: [{ id: "stats", component: "@acme/x/admin#StatsWidget" }],
+          widgets: [
+            { id: "stats", component: "@acme/x/admin#StatsWidget" },
+            // A DECLARATIVE widget beside it: an archetype and a query, no UI
+            // code. It must contribute no path at all -- see the assertion at
+            // the end of this test.
+            {
+              id: "posts",
+              archetype: "metric",
+              query: { source: "collection:posts", op: "count" },
+            },
+          ],
           clientConfig: { accent: "#0ea5e9" },
         },
       },
@@ -446,12 +463,26 @@ describe("parity with the admin-meta surface", () => {
       expect(collected.has(path)).toBe(true);
     }
 
-    // Widgets are RESERVED and not rendered, so the map excludes them on
-    // purpose — importing a component nothing mounts would break the
-    // generated module over a feature that does not exist yet. Asserted
-    // rather than left to a fixture that happens to declare none.
+    // Widget components ARE collected now, and this records why the exclusion
+    // ended rather than only that it did.
+    //
+    // Being pre-bundled by this map is what puts a component in the registry
+    // `PluginSlot` reads -- the registry's runtime fallback cannot resolve a
+    // bare package specifier in a bundled browser. So while widgets were
+    // excluded, a `custom` widget drew its card and then nothing inside it
+    // unless the plugin called `registerComponents` itself from its admin
+    // entry, which the documented contract never asked it to do.
     expect(exposed.widgets).toEqual(["@acme/x/admin#StatsWidget"]);
-    expect(collected.has("@acme/x/admin#StatsWidget")).toBe(false);
+
+    // A DECLARATIVE widget still contributes no path whatsoever. The fixture
+    // declares two widgets and only one names a component: the host draws the
+    // other from its archetype and query, so there is nothing for any import
+    // map to carry for it. Without this the assertion above could be read as
+    // "widgets contribute one path each", which stopped being true when
+    // `component` became conditional.
+    expect(meta.widgets).toHaveLength(2);
+    expect(exposed.widgets).toHaveLength(1);
+    expect(collected.has("@acme/x/admin#StatsWidget")).toBe(true);
 
     // `clientConfig` is plugin data. A colour is not a component path, and
     // reading it as one would demand an import for a module named `#0ea5e9`.
