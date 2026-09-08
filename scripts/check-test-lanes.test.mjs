@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   isSingleCommand,
+  namesScript,
   LANES,
   packagesInPlan,
   packagesWithTask,
@@ -56,6 +57,25 @@ describe("unrunPackages", () => {
 
   it("is silent when every declared package is covered", () => {
     expect(unrunPackages(["a", "b"], ["b", "a", "extra"])).toEqual([]);
+  });
+});
+
+describe("namesScript", () => {
+  it("finds the script the workflow calls", () => {
+    expect(namesScript("        run: pnpm lane:test\n", "lane:test")).toBe(true);
+  });
+
+  it("does not let a longer name vouch for a shorter one", () => {
+    // 🔴 These names nest. A plain containment test let `lane:test:playground`
+    // stand in for a `lane:test` step that had been replaced, and the check
+    // then reported every package covered while the suites ran nowhere.
+    expect(
+      namesScript("        run: pnpm lane:test:playground\n", "lane:test")
+    ).toBe(false);
+  });
+
+  it("is false when nothing calls it", () => {
+    expect(namesScript("        run: echo skipped\n", "lane:test")).toBe(false);
   });
 });
 

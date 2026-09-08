@@ -185,6 +185,15 @@ export function planForScript(script, cwd, run = execFileSync) {
  * the operators is a containment test on one JSON string, not a reading of a
  * shell, which is the whole difference from the parser this replaced.
  */
+export function namesScript(source, script) {
+  // 🔴 Anchored at the END of the name, because these names nest:
+  // `lane:test:playground` CONTAINS `lane:test`, so a plain containment test
+  // let the playground step vouch for a Test step that had been replaced. The
+  // mutation that found it passed a check reporting every package covered.
+  const escaped = script.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`pnpm ${escaped}(?![\\w:.-])`).test(source);
+}
+
 export function isSingleCommand(script) {
   return !/[;&|]/.test(script);
 }
@@ -267,7 +276,7 @@ if (invokedDirectly) {
         );
         process.exit(2);
       }
-      if (!source.includes(`pnpm ${script}`)) {
+      if (!namesScript(source, script)) {
         failures.push(
           `${workflow} does not run \`pnpm ${script}\`, so whatever that ` +
             "script selects reaches no job. Call it, or drop it from LANES."
