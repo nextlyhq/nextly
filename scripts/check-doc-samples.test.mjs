@@ -1243,6 +1243,14 @@ describe("the workspace's own exported names", () => {
     expect(readerOwnedName("Skeleton")).toBe(false);
     // Published from a subpath and deliberately kept out of the root barrel.
     expect(readerOwnedName("BuilderShell")).toBe(false);
+    // Six subpath entries in `nextly` and `@nextlyhq/ui` are bundle names with
+    // no same-named source, so they resolve from `dist` and contribute nothing
+    // on an unbuilt tree. These two are what a symbol behind one of them looks
+    // like, and both are reached through an entry that does resolve, so the
+    // answer is the same either way. Pinned because it is the case that would
+    // otherwise silence a real finding.
+    expect(readerOwnedName("FIELD_TYPE_CATALOG")).toBe(false);
+    expect(readerOwnedName("WidgetResult")).toBe(false);
     // The reader's, and the control: a set that answered "exported" to
     // everything would satisfy the three above.
     expect(readerOwnedName("Posts")).toBe(true);
