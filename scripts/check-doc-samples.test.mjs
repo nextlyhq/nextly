@@ -951,6 +951,19 @@ describe("a sample that writes a property the API has deprecated", () => {
         "  contributes?: { collections?: string[] };",
         "  admin?: { order?: number };",
         "}",
+        "export interface Legacy {",
+        '  kind: "legacy";',
+        "  /** @deprecated Prefer nu */",
+        "  old?: string;",
+        "}",
+        "export interface Current {",
+        '  kind: "current";',
+        "  nu?: string;",
+        "}",
+        "export interface StillOffered {",
+        '  kind: "kept";',
+        "  old?: string;",
+        "}",
         "",
       ].join("\n")
     );
@@ -1023,6 +1036,51 @@ describe("a sample that writes a property the API has deprecated", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("reads a quoted key, which names the same member", () => {
+    // `{ "collections": [] }` and `{ collections: [] }` are the same property.
+    // Reading only identifiers let the quoted spelling walk past.
+    expect(
+      namesFlaggedIn(
+        'import type { Plugin } from "./api";\n' +
+          'export const p: Plugin = { "collections": ["a"] };\n'
+      )
+    ).toEqual(["collections"]);
+  });
+
+  it("looks inside a union rather than at the union", () => {
+    // `getProperty` on a union answers for the union: a property present on one
+    // constituent comes back undefined, so a deprecated option in a
+    // union-shaped API passed unread.
+    expect(
+      namesFlaggedIn(
+        'import type { Legacy, Current } from "./api";\n' +
+          'export const u: Legacy | Current = { kind: "legacy", old: "x" };\n'
+      )
+    ).toEqual(["old"]);
+  });
+
+  it("stays quiet when one arm of a union still offers the name", () => {
+    // Which arm this literal is depends on a discriminant, and nothing here
+    // reads discriminants. Charging the page would be claiming the writer meant
+    // the obsolete arm.
+    expect(
+      namesFlaggedIn(
+        'import type { Legacy, StillOffered } from "./api";\n' +
+          'export const u: Legacy | StillOffered = { kind: "kept", old: "x" };\n'
+      )
+    ).toEqual([]);
+  });
+
+  it("says nothing about a computed key it cannot resolve", () => {
+    expect(
+      namesFlaggedIn(
+        'import type { Plugin } from "./api";\n' +
+          'const k = "collections" as const;\n' +
+          "export const p: Plugin = { [k]: ['a'] };\n"
+      )
+    ).toEqual([]);
   });
 
   it("is not something TypeScript already reports", () => {

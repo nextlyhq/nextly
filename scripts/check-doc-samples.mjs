@@ -746,14 +746,12 @@ export function deprecatedPropertiesIn(sourceFile, checker) {
       const contextual = checker.getContextualType(node);
       if (contextual) {
         for (const property of node.properties) {
-          if (!property.name || !ts.isIdentifier(property.name)) continue;
-          const target = contextual.getProperty(property.name.text);
-          const tag = target
-            ?.getJsDocTags(checker)
-            .find(t => t.name === "deprecated");
+          const name = writtenPropertyName(property);
+          if (name === null) continue;
+          const tag = deprecationOf(contextual, name, checker);
           if (!tag) continue;
           found.push({
-            name: property.name.text,
+            name,
             start: property.getStart(sourceFile),
             note: (tag.text ?? []).map(part => part.text).join("").trim(),
           });
@@ -764,6 +762,51 @@ export function deprecatedPropertiesIn(sourceFile, checker) {
   };
   ts.forEachChild(sourceFile, walk);
   return found;
+}
+
+/**
+ * The property name a literal member writes, when it can be known from the text.
+ *
+ * `{ collections: [] }` and `{ "collections": [] }` name the same member, and
+ * reading only identifiers meant the quoted spelling walked past the check. The
+ * test is `.text`, which every static property name carries, rather than a list
+ * of the node kinds that have one.
+ *
+ * Null for a computed name and for a spread, which writes no name here at all:
+ * neither can be resolved against a declared property without evaluating
+ * something, and a guess is worse than the silence.
+ */
+function writtenPropertyName(property) {
+  const name = property.name;
+  if (!name || ts.isComputedPropertyName(name)) return null;
+  return typeof name.text === "string" ? name.text : null;
+}
+
+/**
+ * The `@deprecated` tag on a property, across everything the literal might be.
+ *
+ * A contextual type is often a union, and `getProperty` on one answers for the
+ * union rather than for its parts: a property present on a single constituent
+ * comes back `undefined`, so a deprecated option in a union-shaped API passed
+ * unread. The constituents are asked one at a time instead.
+ *
+ * Reported only when EVERY constituent that declares the property deprecates
+ * it. Where one arm deprecates a name the other still offers, which arm this
+ * literal is depends on a discriminant, and nothing here reads discriminants.
+ * Reporting anyway would charge a page for writing the current spelling of a
+ * name that is merely obsolete elsewhere; requiring agreement gives up the
+ * mixed case and keeps the answer true.
+ */
+function deprecationOf(contextual, name, checker) {
+  const constituents = contextual.isUnion() ? contextual.types : [contextual];
+  const declared = constituents
+    .map(type => type.getProperty(name))
+    .filter(symbol => symbol !== undefined);
+  if (declared.length === 0) return undefined;
+  const tags = declared.map(symbol =>
+    symbol.getJsDocTags(checker).find(tag => tag.name === "deprecated")
+  );
+  return tags.every(tag => tag !== undefined) ? tags[0] : undefined;
 }
 
 /**
