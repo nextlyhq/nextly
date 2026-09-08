@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,13 +5,19 @@ import { describe, expect, it } from "vitest";
 
 import {
   commandCoverage,
+  fileArguments,
   filtersIn,
   joinContinuations,
   laneDrift,
+  locationMatches,
   packagesWithTask,
+  readWorkspace,
+  selectedPackages,
+  shellStatements,
   staticallyDisabled,
   taskInvocations,
   workflowSteps,
+  workspaceManifests,
 } from "./check-test-lanes.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -107,22 +112,96 @@ describe("filtersIn", () => {
   it("reads every spelling the workflows use", () => {
     expect(
       filtersIn("pnpm turbo test --filter=@scope/a --filter b --filter 'c'")
-    ).toEqual(["@scope/a", "b", "c"]);
+    ).toEqual({ names: ["@scope/a", "b", "c"], locations: [] });
   });
 
-  it("drops a pattern it cannot enumerate", () => {
-    // 🔴 A glob selects a set this cannot resolve. Guessing would report
-    // coverage that may not exist, which is the direction that costs most.
-    expect(filtersIn("pnpm exec publint --filter '@nextlyhq/*'")).toEqual([]);
-    expect(filtersIn("pnpm lint --filter='./packages/*'")).toEqual([]);
+  it("keeps a location whole, for the tree to resolve", () => {
+    expect(filtersIn("pnpm turbo test --filter='./packages/*'")).toEqual({
+      names: [],
+      locations: ["./packages/*"],
+    });
+  });
+
+  it("drops a name pattern it cannot enumerate", () => {
+    // 🔴 A NAME glob selects a set this cannot resolve without knowing which
+    // names exist. Guessing would report coverage that may not exist, which is
+    // the direction that costs most.
+    expect(filtersIn("pnpm exec publint --filter '@nextlyhq/*'")).toEqual({
+      names: [],
+      locations: [],
+    });
+  });
+});
+
+describe("locationMatches", () => {
+  it("matches one segment per star", () => {
+    expect(locationMatches("./packages/*", "packages/nextly")).toBe(true);
+    expect(locationMatches("./packages/*", "apps/playground")).toBe(false);
+  });
+
+  it("does not let a star cross a separator", () => {
+    // Otherwise `./packages/*` would claim a nested workspace it never selects.
+    expect(locationMatches("./packages/*", "packages/a/b")).toBe(false);
+  });
+
+  it("matches a literal directory", () => {
+    expect(locationMatches("./e2e", "e2e")).toBe(true);
+    expect(locationMatches("./e2e", "e2e-helpers")).toBe(false);
+  });
+
+  it("matches nothing for a pattern it cannot answer", () => {
+    // 🔴 Fails the LOUD way. An unmatched package is reported as unrun; a
+    // guessed match would credit coverage nobody is getting.
+    expect(locationMatches("./packages/**", "packages/a")).toBe(false);
+  });
+});
+
+describe("fileArguments", () => {
+  it("finds a path argument", () => {
+    expect(fileArguments(" src/a.test.ts")).toEqual(["src/a.test.ts"]);
+  });
+
+  it("finds a file after a boolean option", () => {
+    // 🔴 The mistake this replaced consumed the token after ANY option, so
+    // `--passWithNoTests src/a.test.ts` read as a whole-suite run and a partial
+    // run counted as the package's task — the exact shape this check exists to
+    // refuse.
+    expect(fileArguments(" --passWithNoTests src/a.test.ts")).toEqual([
+      "src/a.test.ts",
+    ]);
+  });
+
+  it("does not mistake an option's value for a file", () => {
+    expect(fileArguments(" --config vitest.config.ts")).toEqual([]);
+    expect(fileArguments(" --reporter=verbose")).toEqual([]);
+  });
+
+  it("finds a test file that names itself without a separator", () => {
+    expect(fileArguments(" smoke.test.ts")).toEqual(["smoke.test.ts"]);
+  });
+});
+
+describe("shellStatements", () => {
+  it("splits a chain into its own commands", () => {
+    expect(shellStatements("a --filter=x && b --filter=y")).toEqual([
+      "a --filter=x",
+      "b --filter=y",
+    ]);
+  });
+
+  it("does not split inside quotes", () => {
+    expect(shellStatements("a --filter='./packages/*'")).toEqual([
+      "a --filter='./packages/*'",
+    ]);
   });
 });
 
 describe("commandCoverage", () => {
   it("counts a turbo run of the task", () => {
-    expect(commandCoverage("pnpm turbo test --filter=nextly", "test")).toEqual([
-      "nextly",
-    ]);
+    expect(commandCoverage("pnpm turbo test --filter=nextly", "test")).toEqual({
+      names: ["nextly"],
+      locations: [],
+    });
   });
 
   it("does not let `test` swallow `test:integration`", () => {
@@ -134,7 +213,20 @@ describe("commandCoverage", () => {
   it("counts a bare vitest run, which runs the whole suite", () => {
     expect(
       commandCoverage("pnpm --filter playground exec vitest run", "test")
-    ).toEqual(["playground"]);
+    ).toEqual({ names: ["playground"], locations: [] });
+  });
+
+  it("does not count a run of named files hidden behind an option", () => {
+    // 🔴 The negative control for the option-arity mistake. A boolean option
+    // before the paths must not turn a partial run into the package's task:
+    // that is the same silent gap as counting twelve of 907 files, reached by
+    // a different route.
+    expect(
+      commandCoverage(
+        "pnpm --filter nextly exec vitest run --passWithNoTests src/a.test.ts",
+        "test"
+      )
+    ).toBeNull();
   });
 
   it("does not count a run of named files", () => {
@@ -220,36 +312,127 @@ describe("taskInvocations", () => {
     ].join("\n");
 
     expect(taskInvocations(workflow, "test")).toEqual([
-      { line: "pnpm turbo test --filter=nextly", filters: ["nextly"] },
+      {
+        line: "pnpm turbo test --filter=nextly",
+        filters: { names: ["nextly"], locations: [] },
+      },
+    ]);
+  });
+
+  it("credits a filter only to the command it was written on", () => {
+    // 🔴 A `--filter` belongs to its own invocation. Reading the whole shell
+    // line would credit `turbo test` with what the `turbo build` beside it
+    // selects, so `@scope/b`'s suites would run nowhere while the lane
+    // reported them covered.
+    const workflow = [
+      "      - name: Test",
+      "        run: |",
+      "          pnpm turbo test --filter=@scope/a && pnpm turbo build --filter=@scope/b",
+    ].join("\n");
+
+    expect(taskInvocations(workflow, "test")).toEqual([
+      {
+        line: "pnpm turbo test --filter=@scope/a",
+        filters: { names: ["@scope/a"], locations: [] },
+      },
     ]);
   });
 });
 
 describe("laneDrift", () => {
+  const selection = (covered, named = covered) => ({ covered, named });
+
   it("reports a package no command runs", () => {
-    expect(laneDrift(["a", "b"], ["a"])).toEqual({ unrun: ["b"], stale: [] });
+    expect(laneDrift(["a", "b"], selection(["a"]))).toEqual({
+      unrun: ["b"],
+      stale: [],
+    });
   });
 
   it("reports a filter for a package that has no such task", () => {
-    expect(laneDrift(["a"], ["a", "gone"])).toEqual({
+    expect(laneDrift(["a"], selection(["a", "gone"]))).toEqual({
       unrun: [],
       stale: ["gone"],
     });
   });
 
+  it("does not call a location stale for reaching a package with no task", () => {
+    // 🔴 `--filter=./packages/*` claims a PLACE, not that everything in it has
+    // suites. turbo skipping a config package there is the pattern working.
+    // Reporting it would be a check that fails on every correct run.
+    expect(laneDrift(["a"], selection(["a", "tsconfig"], []))).toEqual({
+      unrun: [],
+      stale: [],
+    });
+  });
+
   it("is silent when the two agree", () => {
-    expect(laneDrift(["a", "b"], ["b", "a"])).toEqual({ unrun: [], stale: [] });
+    expect(laneDrift(["a", "b"], selection(["b", "a"]))).toEqual({
+      unrun: [],
+      stale: [],
+    });
+  });
+});
+
+describe("readWorkspace", () => {
+  it("carries the manifest's own location, for a location filter to match", () => {
+    expect(
+      readWorkspace(() => manifest("@scope/a"), ["packages/a/package.json"])
+    ).toEqual([
+      {
+        name: "@scope/a",
+        directory: "packages/a",
+        scripts: { build: "tsup" },
+      },
+    ]);
+  });
+});
+
+describe("selectedPackages", () => {
+  const packages = [
+    { name: "@scope/a", directory: "packages/a", scripts: {} },
+    { name: "@scope/b", directory: "packages/b", scripts: {} },
+    { name: "app", directory: "apps/app", scripts: {} },
+  ];
+
+  it("resolves a location against the tree that will run", () => {
+    const invocations = [
+      { line: "", filters: { names: [], locations: ["./packages/*"] } },
+    ];
+
+    expect(selectedPackages(invocations, packages)).toEqual({
+      covered: ["@scope/a", "@scope/b"],
+      // 🔴 A location names nobody, so nothing it reaches can be a stale name.
+      named: [],
+    });
+  });
+
+  it("keeps a written-out name answerable for itself", () => {
+    const invocations = [
+      { line: "", filters: { names: ["app"], locations: [] } },
+    ];
+
+    expect(selectedPackages(invocations, packages)).toEqual({
+      covered: ["app"],
+      named: ["app"],
+    });
   });
 });
 
 describe("this repository", () => {
-  const manifests = execFileSync(
-    "git",
-    ["ls-files", "packages/*/package.json", "apps/*/package.json"],
-    { cwd: root, encoding: "utf8" }
-  )
-    .split("\n")
-    .filter(Boolean);
+  const manifests = workspaceManifests(root);
+
+  it("asks pnpm for the workspace rather than scanning two directories", () => {
+    // 🔴 The positive control for the inventory. `e2e` is a workspace member
+    // that sits under neither `packages/` nor `apps/`, so a scan of those two
+    // would judge a smaller workspace than the one that runs — and a package
+    // outside the scan is the silent gap this whole check reports.
+    expect(manifests).toContain("e2e/package.json");
+    expect(manifests).toContain("packages/nextly/package.json");
+    expect(manifests).toContain("apps/playground/package.json");
+    // The workspace root is a project to pnpm and not a package to this.
+    expect(manifests).not.toContain("package.json");
+  });
 
   for (const [task, workflow] of [
     ["test", ".github/workflows/ci.yml"],
@@ -258,23 +441,24 @@ describe("this repository", () => {
     it(`runs every package that declares \`${task}\``, () => {
       // Against the real tree, not a fixture: a guard proved only on fixtures
       // has not been shown to agree with the thing it guards.
-      const declared = packagesWithTask(
-        path => readFileSync(join(root, path), "utf8"),
-        manifests,
-        task
-      );
+      const readManifest = path => readFileSync(join(root, path), "utf8");
+      const declared = packagesWithTask(readManifest, manifests, task);
       const invocations = taskInvocations(
         readFileSync(join(root, workflow), "utf8"),
         task
       );
-      const selected = [...new Set(invocations.flatMap(i => i.filters))];
+      const selection = selectedPackages(
+        invocations,
+        readWorkspace(readManifest, manifests)
+      );
 
       // The population before the verdict: an empty side agrees with anything.
       expect(manifests.length).toBeGreaterThan(10);
       expect(invocations.length).toBeGreaterThan(0);
       expect(declared.length).toBeGreaterThan(0);
+      expect(selection.covered.length).toBeGreaterThan(0);
 
-      expect(laneDrift(declared, selected)).toEqual({ unrun: [], stale: [] });
+      expect(laneDrift(declared, selection)).toEqual({ unrun: [], stale: [] });
     });
   }
 });
