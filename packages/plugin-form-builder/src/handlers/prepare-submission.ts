@@ -20,6 +20,8 @@
  * stay on the HTTP path.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { AnyFormField } from "../types";
 import {
   generateZodSchema,
@@ -82,6 +84,47 @@ export function sanitizeSubmissionData(
 
     data[field.name] = stripHtmlTags(value);
   }
+}
+
+/**
+ * Whether the plugin's own submit handler is the one writing.
+ *
+ * The write-seam check has to be lenient in exactly one case: a honeypot or
+ * reCAPTCHA hit is stored flagged rather than dropped, so a false positive stays
+ * recoverable, and requiring it to be valid would throw away the thing being
+ * reviewed. Deciding that from the row's own `status` made it caller-controlled:
+ * the submissions collection grants public create, nothing restricts `status`,
+ * so anyone could post `status: "spam"` and switch validation off.
+ *
+ * `AsyncLocalStorage` is the mechanism because the question is about the CALL,
+ * not about the row. The store follows the await chain into the hook and cannot
+ * be reached from a request body, a header or a field. A module-level flag would
+ * be the same idea and wrong: two submissions in flight would read each other's.
+ *
+ * Node's own API, and the same one Next.js and OpenTelemetry use for
+ * request-scoped context, rather than a channel invented here.
+ */
+export interface SubmissionOriginMarks {
+  /**
+   * The handler decided this row is spam and is keeping it as evidence, so the
+   * write seam sanitizes it but does not require it to be valid.
+   */
+  keepAsEvidence: boolean;
+}
+
+const submissionOrigin = new AsyncLocalStorage<SubmissionOriginMarks>();
+
+/** Run `write` marked as the plugin's own, so the write seam can trust it. */
+export function asPluginSubmission<T>(
+  marks: SubmissionOriginMarks,
+  write: () => T
+): T {
+  return submissionOrigin.run(marks, write);
+}
+
+/** What the current write was marked as, or nothing when it is somebody else's. */
+export function currentSubmissionMarks(): SubmissionOriginMarks | undefined {
+  return submissionOrigin.getStore();
 }
 
 /** A submission ready to store, or the reasons it is not. */

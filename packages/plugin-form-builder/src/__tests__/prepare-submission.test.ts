@@ -13,7 +13,10 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { prepareSubmission } from "../handlers/prepare-submission";
+import {
+  asPluginSubmission,
+  prepareSubmission,
+} from "../handlers/prepare-submission";
 import { formBuilder, prepareSubmissionForWrite } from "../plugin";
 import type { AnyFormField } from "../types";
 
@@ -95,8 +98,8 @@ describe("prepareSubmission", () => {
   });
 });
 
-describe("the beforeCreate hook on submissions", () => {
-  const config = { formOverrides: { slug: "forms" } } as never;
+describe("the write-seam hook on submissions", () => {
+  const formsSlug = "forms";
 
   const nextlyWith = (form: unknown) =>
     ({
@@ -119,9 +122,10 @@ describe("the beforeCreate hook on submissions", () => {
         },
         status: "new",
       },
+      operation: "create",
     };
 
-    const out = await prepareSubmissionForWrite(ctx, config, withForm);
+    const out = await prepareSubmissionForWrite(ctx, formsSlug, withForm);
 
     expect(out?.data).toEqual({ name: "xAda", email: "ada@example.com" });
     // The control: this is exactly what `nextly.forms.submit()` used to store,
@@ -136,24 +140,86 @@ describe("the beforeCreate hook on submissions", () => {
   it("refuses a submission the form's own schema rejects", async () => {
     await expect(
       prepareSubmissionForWrite(
-        { data: { form: "form1", data: { name: "Ada" }, status: "new" } },
-        config,
+        {
+          data: { form: "form1", data: { name: "Ada" }, status: "new" },
+          operation: "create",
+        },
+        formsSlug,
         withForm
       )
     ).rejects.toThrow();
   });
 
-  it("keeps a spam row, which is stored as evidence rather than checked", async () => {
+  it("keeps a row the handler marked as evidence", async () => {
+    // Sanitized, not rejected. A honeypot hit is stored flagged so a false
+    // positive stays recoverable, and requiring it to be valid would throw away
+    // the thing being reviewed.
     const ctx = {
       data: {
         form: "form1",
         data: { name: "<b>bot</b>", email: "not-an-email" },
         status: "spam",
       },
+      operation: "create",
     };
-    const out = await prepareSubmissionForWrite(ctx, config, withForm);
+    const out = await asPluginSubmission({ keepAsEvidence: true }, () =>
+      prepareSubmissionForWrite(ctx, formsSlug, withForm)
+    );
     expect((out?.data as Record<string, unknown>).name).toBe("bot");
     expect((out?.data as Record<string, unknown>).email).toBe("not-an-email");
+  });
+
+  it("does not let a caller switch validation off with status", async () => {
+    // The submissions collection grants public create and nothing restricts
+    // `status`, so reading leniency off the row let anyone post
+    // `status: "spam"` and skip every required, type and enum rule on their own
+    // submission. Leniency is a fact about the call now, and this call is not
+    // marked.
+    await expect(
+      prepareSubmissionForWrite(
+        {
+          data: {
+            form: "form1",
+            data: { name: "Ada", email: "not-an-email" },
+            status: "spam",
+          },
+          operation: "create",
+        },
+        formsSlug,
+        withForm
+      )
+    ).rejects.toThrow();
+  });
+
+  it("refuses a payload that is not an object rather than storing none", async () => {
+    // `data` is required on the collection, so an omitted payload is meant to
+    // be refused. Substituting `{}` satisfied that check on the way past, and a
+    // form whose fields are all optional then accepted it.
+    for (const bad of [undefined, null, ["a"]]) {
+      await expect(
+        prepareSubmissionForWrite(
+          {
+            data: { form: "form1", data: bad, status: "new" },
+            operation: "create",
+          },
+          formsSlug,
+          withForm
+        )
+      ).rejects.toThrow();
+    }
+  });
+
+  it("leaves an update alone, because its payload is a partial", async () => {
+    // `beforeChange` runs for updates too. An admin changing a status sends no
+    // payload, and preparing that would store an empty submission over a real
+    // one.
+    const ctx = {
+      data: { form: "form1", status: "read" },
+      operation: "update",
+    };
+    expect(await prepareSubmissionForWrite(ctx, formsSlug, withForm)).toBe(
+      ctx.data
+    );
   });
 
   it("refuses rather than emptying when the form cannot be read", async () => {
@@ -161,8 +227,11 @@ describe("the beforeCreate hook on submissions", () => {
     // and store a row saying the visitor sent nothing.
     await expect(
       prepareSubmissionForWrite(
-        { data: { form: "form1", data: { name: "Ada" }, status: "new" } },
-        config,
+        {
+          data: { form: "form1", data: { name: "Ada" }, status: "new" },
+          operation: "create",
+        },
+        formsSlug,
         nextlyWith(null)
       )
     ).rejects.toThrow();
@@ -171,8 +240,11 @@ describe("the beforeCreate hook on submissions", () => {
   it("refuses a form whose fields are not a list", async () => {
     await expect(
       prepareSubmissionForWrite(
-        { data: { form: "form1", data: { name: "Ada" }, status: "new" } },
-        config,
+        {
+          data: { form: "form1", data: { name: "Ada" }, status: "new" },
+          operation: "create",
+        },
+        formsSlug,
         nextlyWith({ id: "form1", fields: undefined })
       )
     ).rejects.toThrow();
@@ -185,16 +257,20 @@ describe("the beforeCreate hook on submissions", () => {
         data: JSON.stringify({ name: "Ada", email: "ada@example.com" }),
         status: "new",
       },
+      operation: "create",
     };
-    const out = await prepareSubmissionForWrite(ctx, config, withForm);
+    const out = await prepareSubmissionForWrite(ctx, formsSlug, withForm);
     expect(out?.data).toEqual({ name: "Ada", email: "ada@example.com" });
   });
 
   it("refuses a data string that is not JSON, rather than storing nothing", async () => {
     await expect(
       prepareSubmissionForWrite(
-        { data: { form: "form1", data: "not json", status: "new" } },
-        config,
+        {
+          data: { form: "form1", data: "not json", status: "new" },
+          operation: "create",
+        },
+        formsSlug,
         withForm
       )
     ).rejects.toThrow();
@@ -203,8 +279,11 @@ describe("the beforeCreate hook on submissions", () => {
   it("leaves a row that names no form to the collection's own rule", async () => {
     // `form` is required on the collection, so it is refused a step later.
     // Rejecting here would answer a question this hook was not asked.
-    const ctx = { data: { data: { name: "Ada" }, status: "new" } };
-    const out = await prepareSubmissionForWrite(ctx, config, withForm);
+    const ctx = {
+      data: { data: { name: "Ada" }, status: "new" },
+      operation: "create",
+    };
+    const out = await prepareSubmissionForWrite(ctx, formsSlug, withForm);
     expect(out).toBe(ctx.data);
   });
 });

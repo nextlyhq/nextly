@@ -32,7 +32,7 @@ import {
   type RedirectUrlPattern,
 } from "../utils/redirect-target";
 
-import { prepareSubmission } from "./prepare-submission";
+import { asPluginSubmission, prepareSubmission } from "./prepare-submission";
 import { checkSpam } from "./spam-detection";
 
 // ============================================================
@@ -307,12 +307,19 @@ export async function submitForm(
       submittedAt: new Date(),
     };
 
-    const submission = await collections.createEntry(
-      pluginConfig.formSubmissionOverrides.slug,
-      submissionData,
-      // Public form submission — create as system. No ambient user; an
-      // empty context already resolves to system, but be explicit.
-      { as: "system" }
+    // Marked as the plugin's own write for the length of the call, so the
+    // write-seam hook knows a flagged row is evidence this handler chose to
+    // keep rather than a caller asking for validation to be skipped.
+    const submission = await asPluginSubmission(
+      { keepAsEvidence: isContentSpam },
+      () =>
+        collections.createEntry(
+          pluginConfig.formSubmissionOverrides.slug,
+          submissionData,
+          // Public form submission — create as system. No ambient user; an
+          // empty context already resolves to system, but be explicit.
+          { as: "system" }
+        )
     );
 
     logger.info?.("Form submission created successfully", {
