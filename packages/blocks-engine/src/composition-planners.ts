@@ -494,6 +494,30 @@ function plannedSave(
   // host's cap rather than the default.
   limits: DocumentLimits = DEFAULT_LIMITS
 ): PlannedSave | PlanRefusal {
+  // The one thing the SOURCE has to be for the search to happen at all: a list
+  // of roots. `contiguousRun` walks `document.nodes` to locate the selection, so
+  // a document whose `nodes` is absent or is not a list fails there as a native
+  // `TypeError` rather than as the refusal this returns — and that difference
+  // reaches a caller. A route reports it as a server fault instead of a bad
+  // request, and the published preflight throws where it promised a verdict, so
+  // a toolbar asking whether a save is possible crashes instead of disabling a
+  // button.
+  //
+  // Deliberately NOT `documentRefusal`, which is what `planInsertPattern` asks
+  // of the document it EDITS. That one also judges the source's `formatVersion`
+  // and `kind`, and a save reads neither: `kind` is written here, so a page
+  // whose own kind is unreadable still yields a perfectly good pattern —
+  // {@link savedPatternDocument} says so, and refusing it would be asking about
+  // the origin rather than about the thing.
+  //
+  // Not `forestRefusal` either, which walks every entry. An insert applies ops
+  // across the whole forest, so a malformed node the selection never touched
+  // still throws on apply; a save applies nothing to the page, and refusing on
+  // rubbish elsewhere would stop an author rescuing the part of their page that
+  // is still good. Measured: a `null` beside good roots already answers rather
+  // than throwing.
+  if (!Array.isArray(document.nodes)) return { problem: "unusable-document" };
+
   const run = savableRun(document, selectedIds, nesting);
   if (run.problem !== undefined) return run;
 

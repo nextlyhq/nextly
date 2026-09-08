@@ -154,6 +154,43 @@ describe("whether a selection may be saved at all", () => {
     ).toBeUndefined();
   });
 
+  it.each([
+    ["an envelope with no nodes at all", { formatVersion: 1, kind: "page" }],
+    [
+      "nodes that are not a list",
+      { formatVersion: 1, kind: "page", nodes: "x" },
+    ],
+  ])("ANSWERS about %s rather than throwing", (_name, document) => {
+    // The preflight's whole promise is a verdict, and a caller that gets an
+    // exception instead has no verdict to act on: a toolbar asking whether the
+    // selected blocks can be saved would crash where it meant to disable a
+    // button, and a route would report a bad request as a server fault.
+    //
+    // These are not hypothetical shapes. A stored page reaches this unvalidated
+    // and a request body is whatever was posted, so the document arrives from
+    // outside either way.
+    //
+    // The ENVELOPE is what has to be asked about, and only the envelope: a
+    // `null` among otherwise good roots is measured to answer rather than
+    // throw, so refusing on the forest would refuse documents this already
+    // reads correctly.
+    const refusal = saveAsPatternRefusal(
+      document as unknown as BlockDocument,
+      ["a"],
+      anyParent
+    );
+
+    expect(refusal?.problem).toBe("unusable-document");
+  });
+
+  it("still answers about a document it CAN read, so the guard is not a blanket refusal", () => {
+    // The control. A guard that refused everything would satisfy every
+    // assertion above while making the verb permanently unavailable.
+    expect(
+      saveAsPatternRefusal(page([node("a")]), ["a"], anyParent)
+    ).toBeUndefined();
+  });
+
   it("refuses a valid RUN whose stored document could not be saved", () => {
     // The case that decides which preflight this is. `savableRun` alone asks
     // only whether the selection is one contiguous, liftable run — it never

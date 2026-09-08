@@ -163,25 +163,61 @@ export const SAVE_PATTERN_ROUTE_PATH = "/save-as-pattern";
  * The metadata a saved pattern carries, as the surface that saves it states
  * them.
  *
- * These are the `patterns` collection's own fields, and the route does not
- * trust this list at runtime: it takes the field names from the collection
- * itself, so a caller cannot reach a column the collection never declared.
- * What this type is for is the DIALOG — the surface filling the form needs to
- * know what to ask for, and it runs in a browser that cannot load the
- * collection module.
+ * These are the `patterns` collection's own fields, and the route does not trust
+ * this list at runtime: it takes the field names from the collection itself, so
+ * a caller cannot reach a column the collection never declared. What this type
+ * is for is the DIALOG — the surface filling the form needs to know what to ask
+ * for, and it runs in a browser that cannot load the collection module.
  *
  * A type naming a source of truth it cannot track is how a contract goes quietly
- * stale, so `save-pattern-contract.test.ts` compares these keys against the
- * collection's declared fields and fails when they part company.
+ * stale, so {@link SAVE_PATTERN_FIELD_NAMES} carries these keys as a VALUE and
+ * `save-pattern-contract.test.ts` compares that value against the collection's
+ * declared fields.
  */
 export interface SavePatternFields {
   readonly title: string;
-  readonly slug: string;
+  /**
+   * The identifier the library keys this pattern by, when the caller has one.
+   *
+   * OPTIONAL, and the dialog does not ask for it. It is not a URL — nothing
+   * resolves a pattern by slug — so it is an identity rather than an address,
+   * and asking an author to type one is a second field that restates the name
+   * they already gave. The route derives it from the title, which is also the
+   * only place that could ever disambiguate one.
+   */
+  readonly slug?: string;
   readonly granularity: PatternGranularity;
   readonly description?: string;
   readonly category?: string;
   readonly keywords?: string;
 }
+
+/**
+ * The keys of {@link SavePatternFields}, as a value something can compare.
+ *
+ * The `satisfies` is the whole point: it is checked by `tsc`, in a file the
+ * package's type program actually reads, so a property added to or removed from
+ * the interface fails the build here until this list moves with it. The obvious
+ * place for a witness like this is the test that uses it, and in this package
+ * that would not work — `tsconfig.tests.json` deliberately keeps `*.test.ts` out
+ * of the program, so a `Record<keyof …>` written there is transpiled and never
+ * evaluated, and the guard silently checks nothing.
+ *
+ * With both halves in place the drift is caught from either side: this fails to
+ * compile when the interface moves, and the contract test fails when the
+ * collection moves.
+ */
+export const SAVE_PATTERN_FIELD_NAMES = Object.keys({
+  title: true,
+  slug: true,
+  granularity: true,
+  description: true,
+  category: true,
+  keywords: true,
+} satisfies Record<
+  keyof SavePatternFields,
+  true
+>) as readonly (keyof SavePatternFields)[];
 
 /**
  * What the editor sends to store a selection as a pattern.
@@ -211,14 +247,21 @@ export interface SavePatternRequest {
 /**
  * What a completed save answers.
  *
- * The id, because the surface that saved has nothing else to address the new
- * pattern by, and the warnings, because a post-commit hook can fail after the
- * row is durable. Dropping those would report a save as wholly successful when
- * part of it was not — and the row cannot be un-saved, so the only remedy is to
- * say so.
+ * The CANONICAL mutation envelope, which is what every other write in this
+ * codebase answers with — `{ message, item }`, and `warnings` when a hook failed
+ * after the row was already durable. A route inventing its own shape here would
+ * make a plugin's write the one write a shared client cannot read, and the
+ * warnings are the part that goes wrong quietly: a post-commit failure cannot be
+ * undone, so a body that omits it reports a partial success as a whole one.
+ *
+ * Built by `respondMutation` rather than assembled, so it cannot drift from the
+ * envelope and so the warnings come from the request's own scope rather than
+ * from a second path to the same list.
  */
 export interface SavePatternResponse {
-  readonly id: string;
+  readonly message: string;
+  /** The row that was created, as the collection stored it. */
+  readonly item: { readonly id: string } & Record<string, unknown>;
   /** Side effects that failed after the row committed, when any did. */
   readonly warnings?: readonly HookWarning[];
 }

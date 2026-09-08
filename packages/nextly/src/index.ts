@@ -136,6 +136,28 @@ export { nextly } from "./direct-api";
 // were removed in PR 12 (final unified-error-system cleanup).
 export { NextlyError } from "./errors";
 
+// The canonical mutation builder, published so a CONTRIBUTED route can answer
+// in the same envelope every first-party write answers in.
+//
+// A plugin route is the one HTTP surface here that could not reach it, and the
+// consequence is not stylistic: `respondMutation` reads the request's own
+// side-effect warning scope, so a hand-built mutation body silently drops a
+// post-commit hook failure that every other write reports. A route rebuilding
+// the shape by hand also gains whatever the builder gains next only if somebody
+// remembers to copy it — the same defect the plugin error path already had, one
+// level along.
+export { respondMutation } from "./api/response-shapes";
+
+// The slug rule, published because it was already documented as though it were.
+// `prebuilt`'s own auto-slug docblock shows `slugify(context.data.title)` as the
+// way to derive one, and the name does not survive to this entry: two modules in
+// this package export a `slugify`, so the star re-export that would have carried
+// it drops the ambiguous name and the advertised call does not resolve. Named
+// explicitly here, which is also what decides WHICH of the two is the public
+// one — the unicode-normalising rule the hook uses, not the filename helper the
+// migration writer uses.
+export { slugify } from "./hooks/prebuilt";
+
 // Direct API types - type-safe slug resolution (for generated types integration)
 export type {
   GeneratedTypes,

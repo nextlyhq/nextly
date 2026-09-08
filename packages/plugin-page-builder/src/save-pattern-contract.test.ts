@@ -8,32 +8,23 @@
  * stale — a field added to the collection is simply never asked for, and nothing
  * fails.
  *
- * This is the one assertion that notices. It runs in both directions: the record
- * below must gain a key when the interface does, or it will not compile, and its
- * keys are compared against what the collection actually declares.
+ * The drift is caught from both sides, in two places, because neither place can
+ * catch both. `SAVE_PATTERN_FIELD_NAMES` carries a `satisfies Record<keyof …>`
+ * in the contract itself, which `tsc` evaluates, so the interface cannot move
+ * without that list moving. This compares the list against the collection, which
+ * only a running test can do.
+ *
+ * It is deliberately NOT the `Record<keyof …>` witness itself: this package's
+ * `tsconfig.tests.json` keeps `*.test.ts` out of the type program, so a type
+ * constraint written here is transpiled and never evaluated — a guard that
+ * checks nothing while reading as though it checks everything.
  *
  * @module save-pattern-contract.test
  */
 import { describe, expect, it } from "vitest";
 
 import { patternsCollection } from "./collections/patterns";
-import type { SavePatternFields } from "./library-contract";
-
-/**
- * Every field of the request shape, as a value a test can read.
- *
- * `Record<keyof …>` rather than a literal list: adding a property to
- * `SavePatternFields` fails to compile here until it is named, which is what
- * makes this a witness for the interface rather than a second copy of it.
- */
-const REQUEST_FIELDS: Record<keyof SavePatternFields, true> = {
-  title: true,
-  slug: true,
-  granularity: true,
-  description: true,
-  category: true,
-  keywords: true,
-};
+import { SAVE_PATTERN_FIELD_NAMES } from "./library-contract";
 
 /**
  * The field the planner owns.
@@ -56,7 +47,7 @@ describe("the save request and the collection it writes to", () => {
     // not to the request is one an author can never fill; a field added to the
     // request and not to the collection is one the route will drop, so the
     // dialog would offer a control whose value goes nowhere.
-    expect(Object.keys(REQUEST_FIELDS).sort()).toEqual([...declared].sort());
+    expect([...SAVE_PATTERN_FIELD_NAMES].sort()).toEqual([...declared].sort());
   });
 
   it("finds fields at all, so the comparison is not vacuous", () => {

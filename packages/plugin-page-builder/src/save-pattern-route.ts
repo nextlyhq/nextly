@@ -59,11 +59,13 @@
  * @module save-pattern-route
  */
 import {
+  documentRefusal,
   planSaveAsPattern,
   registryNestingSource,
   type BlockDocument,
   type PlanRefusal,
 } from "@nextlyhq/blocks-engine";
+import { respondMutation, slugify } from "nextly";
 import { NextlyError } from "nextly/errors";
 
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
@@ -154,7 +156,7 @@ export interface SavePatternRouteContext {
 export async function savePattern(
   req: Request,
   ctx: SavePatternRouteContext
-): Promise<SavePatternResponse> {
+): Promise<Response> {
   const request = await readRequest(req);
   const slug = ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG;
 
@@ -173,6 +175,7 @@ export async function savePattern(
     plan.create.collection,
     {
       ...plan.create.fields,
+      slug: plan.create.fields.slug ?? derivedSlug(plan.create.fields.title),
       [PATTERN_DOCUMENT_FIELD]: plan.create.document,
       status: SAVED_PATTERN_STATUS,
     },
@@ -182,35 +185,64 @@ export async function savePattern(
     { as: "user" as const, user: ctx.user ?? undefined }
   );
 
-  return { id: writtenId(written.item), ...warningsOf(written.warnings) };
+  // The canonical envelope, BUILT rather than assembled. `respondMutation`
+  // reads the request's own side-effect warning scope — the same scope the
+  // plugin collection facade writes post-commit failures into, because a
+  // failure is recorded against every collector that is open — so forwarding
+  // the facade's own `warnings` beside it would report each of them twice.
+  return respondMutation("Pattern created.", writtenRow(written.item), {
+    status: 201,
+  });
 }
 
 /**
- * The id of the row that was just created.
+ * The identifier a pattern is keyed by when its author gave none.
+ *
+ * Derived from the title through the framework's own `slugify`, so a pattern's
+ * slug is made the way every other slug in the product is made rather than by a
+ * fourth rule that agrees with the others only until one of them moves.
+ *
+ * **A derivation can legitimately produce nothing, and that is not an edge
+ * case.** `slugify` keeps `[a-z0-9]` and replaces everything else, so a title
+ * written in a script it cannot transliterate comes back empty — measured,
+ * `"見出しセクション"`, `"Заголовок"` and `"Πρότυπο"` all yield `""`. On a
+ * Japanese or Russian site that is EVERY pattern, and an empty slug is refused
+ * by a required field, so the feature would simply not work there.
+ *
+ * An empty derivation therefore falls back to a generated identifier. The slug
+ * is an identity rather than an address — nothing resolves a pattern by it — so
+ * a pattern keyed `pattern-3f2a1b2c` is as usable as one keyed `hero-banner`,
+ * and the author is shown neither. The consequence worth knowing: two patterns
+ * whose titles both derive to nothing never collide, where two titled "Hero" do.
+ */
+function derivedSlug(title: unknown): string {
+  const derived = typeof title === "string" ? slugify(title) : "";
+  return derived === ""
+    ? `pattern-${crypto.randomUUID().slice(0, 8)}`
+    : derived;
+}
+
+/**
+ * The row that was just created, once it is one a caller can address.
  *
  * Read defensively for the reason the library read reads its rows defensively:
  * what comes back has been through the collection's `afterChange` hooks, and a
  * hook may return anything. A row with no usable id is a save the caller cannot
- * address afterwards, and answering `{ id: undefined }` would report that as a
+ * address afterwards, and putting it in the envelope would report that as a
  * success — so it is reported as the failure it is, AFTER the row has committed,
  * which is what the message says.
  */
-function writtenId(item: unknown): string {
-  const id = (item as { id?: unknown } | null | undefined)?.id;
-  if (typeof id === "string" && id !== "") return id;
+function writtenRow(item: unknown): { id: string } & Record<string, unknown> {
+  const row = (item ?? {}) as Record<string, unknown>;
+  if (typeof row.id === "string" && row.id !== "") {
+    return row as { id: string } & Record<string, unknown>;
+  }
   throw new NextlyError({
     code: "INTERNAL_ERROR",
     publicMessage: "The pattern was saved but could not be identified.",
     logMessage: "createEntry returned no usable id for a saved pattern",
     logContext: { reason: "save-pattern-no-id" },
   });
-}
-
-/** The post-commit warnings, present only when there are any to report. */
-function warningsOf(
-  warnings: SavePatternResponse["warnings"]
-): Pick<SavePatternResponse, "warnings"> {
-  return warnings === undefined || warnings.length === 0 ? {} : { warnings };
 }
 
 /**
@@ -267,10 +299,28 @@ function refusal(refused: PlanRefusal): NextlyError {
 async function readRequest(req: Request): Promise<SavePatternRequest> {
   const body = objectAt(await readJson(req), "body");
   return {
-    document: objectAt(body.document, "document") as unknown as BlockDocument,
+    document: documentAt(body.document),
     selectedIds: selectionAt(body.selectedIds),
     fields: settableFields(objectAt(body.fields, "fields")),
   };
+}
+
+/**
+ * The document the selection was made in, or the refusal that it is not one.
+ *
+ * Asked HERE as well as inside the planner, and the two are different questions.
+ * The planner asks whether a document can be edited at all, and refuses one that
+ * cannot as a rule the caller broke; this asks whether the REQUEST carried a
+ * document, which is a question about the request and answers 400. Without it a
+ * body of `{"document":{}}` reaches the planner as a well-formed request whose
+ * refusal reads as the author's fault.
+ *
+ * The same published question either way, never a second predicate for it:
+ * `documentRefusal` is the op layer's own rule about what it will edit.
+ */
+function documentAt(value: unknown): BlockDocument {
+  if (documentRefusal(value) !== undefined) throw malformed("document");
+  return value as BlockDocument;
 }
 
 /**
@@ -355,10 +405,14 @@ function malformed(path: string): NextlyError {
 /**
  * The route declaration, thin on purpose.
  *
- * Everything it decides lives in {@link savePattern}. What is left here is the
- * shape of the contribution — the method, the path, the created status it
- * answers with, and the fact that it declares no permission — which is the part
- * a reader of `contributes.routes` needs to see without following a call.
+ * Everything it decides lives in {@link savePattern}, which answers with a
+ * finished `Response` rather than a body to be wrapped: the status a create
+ * carries and the envelope it carries it in are two halves of one answer, and
+ * splitting them puts the status here and the shape there.
+ *
+ * What is left is the shape of the CONTRIBUTION — the method, the path, and the
+ * fact that it declares no permission — which is the part a reader of
+ * `contributes.routes` needs to see without following a call.
  */
 export function savePatternRoute(): {
   method: "POST";
@@ -371,7 +425,6 @@ export function savePatternRoute(): {
     // No `public: true`, which is what makes this authenticated, and no
     // `requiredPermission`, which is what keeps it callable on a site that
     // renamed the collection. See the module docblock.
-    handler: async (req: Request, ctx: SavePatternRouteContext) =>
-      Response.json(await savePattern(req, ctx), { status: 201 }),
+    handler: savePattern,
   };
 }

@@ -36,7 +36,7 @@ const pageDocument = {
 };
 
 /** The metadata the collection requires of every pattern. */
-const fields = { title: "Hero", slug: "hero", granularity: "section" };
+const fields = { title: "Hero", granularity: "section" };
 
 function request(body: unknown): Request {
   return new Request("https://example.test/save-as-pattern", {
@@ -223,6 +223,9 @@ describe("what a saved pattern is made of", () => {
       "status",
       "title",
     ]);
+    // Present because the route derived it, not because the caller sent one —
+    // which is what makes the key set above six rather than five.
+    expect(written(createEntry).slug).toBe("hero");
     expect(written(createEntry).status).toBe("published");
     expect(
       (written(createEntry).content as { nodes: BlockNode[] }).nodes
@@ -264,54 +267,33 @@ describe("what a saved pattern is made of", () => {
 });
 
 describe("what a completed save answers", () => {
-  it("answers the id the collection assigned", async () => {
-    const { ctx } = contextOver({}, { item: { id: "pattern-7" } });
+  it("answers the CANONICAL mutation envelope, not a shape of its own", async () => {
+    // Every other write in this codebase answers `{ message, item }`, and a
+    // plugin's write inventing its own shape is the one write a shared client
+    // cannot read. Asserted as the whole key set rather than by picking `item`
+    // out of it, because a body that carried the row beside some other spelling
+    // would satisfy a narrower check.
+    const { ctx } = contextOver(
+      {},
+      { item: { id: "pattern-7", title: "Hero" } }
+    );
 
-    await expect(
-      savePattern(
-        request({ document: pageDocument, selectedIds: ["a"], fields }),
-        ctx
-      )
-    ).resolves.toEqual({ id: "pattern-7" });
-  });
-
-  it("reports a post-commit failure beside the id, rather than swallowing it", async () => {
-    // The row is durable and the hook is not; the write cannot be undone, so the
-    // only remedy is to say so. Reporting the save as wholly successful is how
-    // a failure nobody can retry becomes a failure nobody knows about.
-    const warnings = [
-      {
-        severity: "failure",
-        phase: "afterChange",
-        key: "patterns",
-        message: "x",
-      },
-    ];
-    const { ctx } = contextOver({}, { item: { id: "p1" }, warnings });
-
-    await expect(
-      savePattern(
-        request({ document: pageDocument, selectedIds: ["a"], fields }),
-        ctx
-      )
-    ).resolves.toEqual({ id: "p1", warnings });
-  });
-
-  it("omits the warnings key when nothing went wrong", async () => {
-    const { ctx } = contextOver({}, { item: { id: "p1" }, warnings: [] });
-
-    const answer = await savePattern(
+    const response = await savePattern(
       request({ document: pageDocument, selectedIds: ["a"], fields }),
       ctx
     );
+    const body = (await response.json()) as Record<string, unknown>;
 
-    expect(answer).not.toHaveProperty("warnings");
+    expect(response.status).toBe(201);
+    expect(Object.keys(body).sort()).toEqual(["item", "message"]);
+    expect(body.item).toEqual({ id: "pattern-7", title: "Hero" });
+    expect(typeof body.message).toBe("string");
   });
 
   it("refuses to report a save it cannot address afterwards", async () => {
     // The row has already committed, so this is not a rollback — it is the
-    // difference between telling the caller the save is unusable and handing
-    // them `{ id: undefined }`, which every surface reads as a success.
+    // difference between telling the caller the save is unusable and putting a
+    // row with no id in the envelope, which every surface reads as a success.
     const { ctx } = contextOver({}, { item: { title: "Hero" } });
 
     const error = await thrownBy(
@@ -322,6 +304,81 @@ describe("what a completed save answers", () => {
     );
 
     expect(error.statusCode).toBe(500);
+  });
+});
+
+describe("the identifier a pattern is keyed by", () => {
+  it("derives the slug from the title, so nobody is asked for one", async () => {
+    const { ctx, createEntry } = contextOver();
+
+    await savePattern(
+      request({
+        document: pageDocument,
+        selectedIds: ["a"],
+        fields: { title: "Hero Banner!", granularity: "section" },
+      }),
+      ctx
+    );
+
+    expect(written(createEntry).slug).toBe("hero-banner");
+  });
+
+  it("keeps a slug the caller stated, because an API caller may own one", async () => {
+    const { ctx, createEntry } = contextOver();
+
+    await savePattern(
+      request({
+        document: pageDocument,
+        selectedIds: ["a"],
+        fields: { title: "Hero", slug: "legacy-hero", granularity: "section" },
+      }),
+      ctx
+    );
+
+    expect(written(createEntry).slug).toBe("legacy-hero");
+  });
+
+  it.each([["見出しセクション"], ["Заголовок"], ["Πρότυπο"], ["!!!"]])(
+    "still produces a usable slug for %s",
+    async title => {
+      // `slugify` keeps `[a-z0-9]`, so every one of these derives to the empty
+      // string — and an empty slug is refused by a required field. Without the
+      // fallback the whole feature is unavailable on any site that does not
+      // write its titles in Latin script.
+      const { ctx, createEntry } = contextOver();
+
+      await savePattern(
+        request({
+          document: pageDocument,
+          selectedIds: ["a"],
+          fields: { title, granularity: "section" },
+        }),
+        ctx
+      );
+
+      expect(written(createEntry).slug).toEqual(expect.stringMatching(/^.+$/));
+    }
+  );
+
+  it("gives two untransliterable titles DIFFERENT slugs", async () => {
+    // The fallback has to be an identifier rather than a constant: one shared
+    // fallback would make the second such pattern collide with the first on a
+    // unique column, so a Japanese site could store exactly one pattern.
+    const slugs = new Set<string>();
+    for (const _ of [0, 1]) {
+      const { ctx, createEntry } = contextOver();
+      await savePattern(
+        request({
+          document: pageDocument,
+          selectedIds: ["a"],
+          fields: { title: "見出し", granularity: "section" },
+        }),
+        ctx
+      );
+      slugs.add(String(written(createEntry).slug));
+    }
+
+    expect(slugs.size).toBe(2);
   });
 });
 
@@ -376,9 +433,26 @@ describe("what the route refuses, and how it says so", () => {
 
   it.each([
     ["document", { selectedIds: ["a"], fields }],
+    ["document", { document: {}, selectedIds: ["a"], fields }],
+    [
+      "document",
+      {
+        document: { formatVersion: 1, kind: "page" },
+        selectedIds: ["a"],
+        fields,
+      },
+    ],
+    [
+      "document",
+      {
+        document: { formatVersion: 1, kind: "page", nodes: "x" },
+        selectedIds: ["a"],
+        fields,
+      },
+    ],
     ["selectedIds", { document: pageDocument, fields }],
     ["fields", { document: pageDocument, selectedIds: ["a"] }],
-  ])("refuses a request with no %s", async (path, body) => {
+  ])("refuses a request whose %s is not one", async (path, body) => {
     const { ctx, createEntry } = contextOver();
 
     const error = await thrownBy(savePattern(request(body), ctx));
