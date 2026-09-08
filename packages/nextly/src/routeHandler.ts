@@ -71,6 +71,7 @@ import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // hand-rolled `{ data: <payload> }` envelope.
 import {
   SKIP_DATE_FORMATTING_HEADER,
+  withSessionCacheHeaders,
   respondData,
   respondMutation,
 } from "./api/response-shapes";
@@ -1643,11 +1644,10 @@ const SESSION_PRIVATE_METHODS = new Set([
   "getSingleAutosave",
 ]);
 
-export function withSessionCacheHeaders(response: Response): Response {
-  response.headers.set("Cache-Control", "private, no-store");
-  response.headers.set("Vary", "Cookie");
-  return response;
-}
+// Re-exported from its neutral home so the dispatchers that import it from
+// here keep working, while the plugin-route dispatch can reach the values
+// without importing this module and closing a cycle.
+export { withSessionCacheHeaders };
 
 /**
  * GET /api/admin-meta

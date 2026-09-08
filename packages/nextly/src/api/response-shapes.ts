@@ -256,3 +256,34 @@ export function respondBulkUpload<T>(
     init
   );
 }
+
+/**
+ * Say that a response belongs to ONE caller's session.
+ *
+ * A session-gated response is otherwise an ordinary cacheable one, so a shared
+ * proxy may retain one caller's payload and serve it to the next request
+ * without the authentication check running again. `Vary: Cookie` states what
+ * the response depends on, for any cache that stores it regardless.
+ *
+ * Applied to the REFUSAL as well as the answer, wherever it is used. A cached
+ * 401 replayed to a request that does carry a session is the same defect
+ * pointing the other way, and it is the direction that looks like a working
+ * gate.
+ *
+ * Over HEADERS rather than over a Response, because the two callers hold
+ * different things: one owns a response it may mutate, and the plugin-route
+ * dispatch is rebuilding headers it does not own — a handler may return a
+ * response whose headers are immutable, and setting one on that throws. Both
+ * go through here so "private" has one definition rather than two that agree
+ * until someone edits one.
+ */
+export function applySessionCacheHeaders(headers: Headers): void {
+  headers.set("Cache-Control", "private, no-store");
+  headers.set("Vary", "Cookie");
+}
+
+/** {@link applySessionCacheHeaders} for a response the caller owns. */
+export function withSessionCacheHeaders(response: Response): Response {
+  applySessionCacheHeaders(response.headers);
+  return response;
+}
