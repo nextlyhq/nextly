@@ -3371,7 +3371,17 @@ function insertOrigin(
  * trust it.
  */
 function ownOrigin(node: BlockNode): BlockOrigin | undefined {
-  const descriptor = Object.getOwnPropertyDescriptor(node, "origin");
+  // Reflection on a Proxy runs a caller-supplied trap, and this walk now
+  // reaches every node in the document rather than the selected roots — so a
+  // hostile `getOwnPropertyDescriptor` on a node nothing selected would take a
+  // valid save out with a native error. A node that will not say what it holds
+  // holds nothing this can act on.
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(node, "origin");
+  } catch {
+    return undefined;
+  }
   if (descriptor === undefined || descriptor.get !== undefined) {
     return undefined;
   }
@@ -3462,9 +3472,20 @@ function restoredDomIds(
   // selection renders a given id — `duplicateDomIdRefusal` refuses a save where
   // two do — so this is a decision about that node and no other.
   const holders = new Map<string, ReadonlyMap<string, string> | undefined>();
-  walkNodes([...selected], node => {
+  // The TOP of each governed region: a node whose parent is under a different
+  // scope. Enough to reach every node the scope governs, and few enough that
+  // asking about references costs one pass per region rather than one per node.
+  const tops = new Map<ReadonlyMap<string, string>, BlockNode[]>();
+  walkNodes([...selected], (node, parent) => {
     const scope = scopes.get(node);
-    if (scope !== undefined) applicable.add(scope);
+    if (scope !== undefined) {
+      applicable.add(scope);
+      if (parent === undefined || scopes.get(parent) !== scope) {
+        const found = tops.get(scope);
+        if (found === undefined) tops.set(scope, [node]);
+        else found.push(node);
+      }
+    }
     const rendered = renderedDomId(node);
     if (rendered !== undefined && !holders.has(rendered)) {
       holders.set(rendered, scope);
@@ -3480,19 +3501,44 @@ function restoredDomIds(
       // owns — the record describes a rename that happened somewhere this node
       // no longer is.
       //
-      // Where NOTHING in the selection renders the id, there is no such node to
-      // ask and the record can only be about a REFERENCE — a link saved without
-      // its target, whose href still has to come back. Those travel with
-      // whoever holds them, so the entry is admitted.
-      //
       // This also settles two records naming one id, by construction rather
       // than by iteration order: only the one governing the holder is admitted,
       // and that is the record that actually renamed it.
-      if (holders.has(now) && holders.get(now) !== renamed) continue;
-      restore.set(now, was);
+      if (holders.has(now)) {
+        if (holders.get(now) !== renamed) continue;
+        restore.set(now, was);
+        continue;
+      }
+      // Nothing in the selection renders it, so the record can only be about a
+      // REFERENCE — a link saved without its target, whose href still has to
+      // come back. That is a real case and it is not a blanket one: a node
+      // MOVED out of the run keeps its reference too, and rewriting it points
+      // it somewhere the saved forest never had. So the reference has to be
+      // held by a node this record governs, which is what the region is for.
+      if (referencedUnder(tops.get(renamed) ?? [], now)) restore.set(now, was);
     }
   }
   return restore;
+}
+
+/**
+ * Whether anything under these roots REFERENCES a DOM id.
+ *
+ * Through `referencedDomIds`, which runs the relink pass with an instrumented
+ * candidate map — so what counts as a reference is whatever the relink itself
+ * would follow, rather than a second list of attributes and props to keep in
+ * step with it.
+ *
+ * The roots are the tops of ONE scope's region, so a reference found here
+ * belongs to a node that record governs. A region can still contain a
+ * differently-scoped descendant — a pattern inserted into it later — and a
+ * reference held by one of those is admitted along with the rest; bounded to
+ * that region, which is the part a single flat restore map can express.
+ */
+function referencedUnder(roots: readonly BlockNode[], domId: string): boolean {
+  if (roots.length === 0) return false;
+  const candidates = new Map([[domId, domId]]);
+  return referencedDomIds([...roots], candidates).some(hits => hits.size > 0);
 }
 
 /**
@@ -3527,18 +3573,26 @@ function renameScopes(
   const scopes = new Map<BlockNode, ReadonlyMap<string, string>>();
   const seen = new Set<BlockNode>();
   walkNodes([...nodes], (node, parent) => {
-    // A node with a pattern record of its OWN is where inheritance stops, and
-    // the test is the RECORD rather than the size of its map. An insert that
+    // A node carrying provenance of its OWN is where inheritance stops, and the
+    // test is the RECORD rather than the size of its map. An insert that
     // renamed nothing writes no `renamed` at all — the ordinary case, since a
     // collision is the exception — so a boundary derived from a non-empty map
     // lets a nested pattern inherit its host's renames and store its own
     // content under the host pattern's spelling.
     //
-    // Set on every visit rather than once: the value is a property of the node
-    // itself, so two occurrences of one node cannot disagree about it.
+    // ANY whole record, not only a pattern's. A component detached inside an
+    // inserted pattern gets a `{ from: "component" }` origin, and that is
+    // independent provenance too: its subtree did not come from the host
+    // pattern, so the host's renames are not about it. Only a pattern record
+    // carries a map, so every other kind stops inheritance with an empty one.
+    //
+    // The map is remembered rather than rebuilt, because the walk compares
+    // scopes by IDENTITY and a fresh map on a second visit of one node object
+    // reads as a disagreement with itself — which downgraded every descendant
+    // of it to no scope at all.
     const own = ownOrigin(node);
-    if (isPatternOrigin(own)) {
-      scopes.set(node, renamedIn(own));
+    if (isBlockOrigin(own)) {
+      scopes.set(node, scopes.get(node) ?? renamedIn(own));
       return;
     }
 

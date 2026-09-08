@@ -3051,6 +3051,143 @@ describe("a saved DESCENDANT of an inserted root", () => {
     expect(marked([...saved.nodes], "target").cssId).toBe("pricing-1");
   });
 
+  it("leaves a REFERENCE held by a node moved out of the run", () => {
+    // Nothing in the selection renders the id, so the record can only be about
+    // a reference — but a node moved out of the run keeps its reference too,
+    // and rewriting that points it somewhere the saved forest never had. The
+    // reference has to be held by a node the record governs.
+    const doc = page([
+      node(
+        "outer",
+        {},
+        {
+          children: [
+            node(
+              "inserted",
+              {
+                origin: {
+                  from: "pattern",
+                  id: "hero-pattern",
+                  digest: "d",
+                  renamed: { pricing: "pricing-1" },
+                },
+              } as Partial<BlockNode>,
+              { children: [node("stayed")] }
+            ),
+            node("moved", {
+              attributes: { "aria-describedby": "pricing-1" },
+              props: { mark: "moved" },
+            }),
+          ],
+        }
+      ),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["outer"], target, anyParent)
+    ).document;
+
+    expect(
+      marked([...saved.nodes], "moved").attributes?.["aria-describedby"]
+    ).toBe("pricing-1");
+  });
+
+  it("stops at a COMPONENT record, not only a pattern's", () => {
+    // A component detached inside an inserted pattern carries independent
+    // provenance: its subtree did not come from the host pattern, so the host's
+    // renames are not about it. Only a pattern record carries a map, so every
+    // other kind stops inheritance with an empty one.
+    const doc = page([
+      node(
+        "inserted",
+        {
+          origin: {
+            from: "pattern",
+            id: "hero-pattern",
+            digest: "d",
+            renamed: { pricing: "pricing-1" },
+          },
+        } as Partial<BlockNode>,
+        {
+          children: [
+            node(
+              "detached",
+              {
+                origin: { from: "component", id: "def-1" },
+              } as Partial<BlockNode>,
+              {
+                children: [
+                  node("t", { cssId: "pricing-1", props: { mark: "target" } }),
+                ],
+              }
+            ),
+          ],
+        }
+      ),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["inserted"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("pricing-1");
+  });
+
+  it("gives one node object the SAME scope on both of its visits", () => {
+    // The walk compares scopes by identity to notice that two occurrences of a
+    // node disagree. A record rebuilt on each visit reads as a disagreement
+    // with itself, and every descendant of it is then downgraded to no scope —
+    // so the id the record exists to put back is stored as the page spells it.
+    const recorded = node(
+      "recorded",
+      {
+        origin: {
+          from: "pattern",
+          id: "hero-pattern",
+          digest: "d",
+          renamed: { pricing: "pricing-1" },
+        },
+      } as Partial<BlockNode>,
+      {
+        children: [
+          node("t", { cssId: "pricing-1", props: { mark: "target" } }),
+        ],
+      }
+    );
+    const doc = page([
+      node("one", {}, { children: [recorded] }),
+      node("two", {}, { children: [recorded] }),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["t"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("pricing");
+  });
+
+  it("saves past a sibling that refuses to say what it holds", () => {
+    // The walk reaches every node now, so reflection on an unselected one runs
+    // its traps. A node that will not answer holds nothing this can act on —
+    // and a planner answers with a plan or a refusal, never a native error.
+    const hostile = new Proxy(node("hostile"), {
+      getOwnPropertyDescriptor(node_, key) {
+        if (key === "origin") throw new Error("the record is not for reading");
+        return Reflect.getOwnPropertyDescriptor(node_, key);
+      },
+    });
+    const doc = page([
+      hostile as BlockNode,
+      node("mine", { cssId: "hero", props: { mark: "target" } }),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["mine"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("hero");
+  });
+
   it("keeps every id when no ancestor was ever inserted from a pattern", () => {
     // The control for all three above: without a record in scope there is
     // nothing to put back, and an authored id is the author's to keep.
