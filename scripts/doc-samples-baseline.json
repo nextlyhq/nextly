@@ -243,12 +243,14 @@
     "docs/plugins/admin-ui.mdx": {
       "#9 error TS2304: Cannot find name 'Skeleton'.": 1,
       "#9 error TS2304: Cannot find name 'Chart'.": 1,
+      "uninstalled #11 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
       "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1
     },
     "docs/plugins/auth.mdx": {
       "#1 error TS2304: Cannot find name 'verifyGoogleToken'.": 1,
       "#2 error TS2304: Cannot find name 'isTotpEnabled'.": 1,
-      "#2 error TS2304: Cannot find name 'verifyTotp'.": 1
+      "#2 error TS2304: Cannot find name 'verifyTotp'.": 1,
+      "uninstalled #0 error TS2307: Cannot find module '@acme/nextly-plugin-google' or its corresponding type declarations.": 1
     },
     "docs/plugins/author-guide.mdx": {
       "#0 error TS2304: Cannot find name 'MyPluginOptions'.": 1,

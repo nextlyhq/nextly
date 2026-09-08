@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   compareToBaseline,
   declaredNamesIn,
+  extensionFor,
   extractFrom,
   identityOf,
+  isModule,
   pageOf,
+  unterminatedFences,
 } from "./check-doc-samples.mjs";
 
 /**
@@ -182,6 +185,7 @@ describe("compareToBaseline", () => {
 
       expect(verdict).toEqual({
         lost: [],
+        gained: [],
         appeared: [],
         gone: [],
         worse: [],
@@ -389,5 +393,155 @@ describe("declaredNamesIn and regex literals", () => {
 
     expect(declaredNamesIn(code).includes("re")).toBe(true);
     expect(declaredNamesIn(code).includes("after")).toBe(true);
+  });
+});
+
+describe("isModule", () => {
+  it("counts a dynamic import, which loads a package like the declaration does", () => {
+    expect(isModule('const nx = await import("nextly");')).toBe(true);
+    // The control: the rule this replaced saw only declarations, exports and
+    // require, so such a fence was extracted and never compiled.
+    const declarationsOnly = c =>
+      /^\s*import\b/m.test(c) || /^\s*export\b/m.test(c) || /(?:^|[^.\w])require\s*\(/m.test(c);
+    expect(declarationsOnly('const nx = await import("nextly");')).toBe(false);
+  });
+
+  it("does not count a property access that happens to be named import", () => {
+    expect(isModule("registry.import(thing);")).toBe(false);
+    expect(isModule("const a = 1;")).toBe(false);
+  });
+});
+
+describe("unterminatedFences", () => {
+  const body = 'import { defineConfig } from "nextly";';
+
+  it("reports a TypeScript fence that never closes", () => {
+    expect(
+      unterminatedFences(["```ts", body, "", "prose that never closes"].join("\n"))
+    ).toEqual(["```ts"]);
+  });
+
+  it("reports nothing for a fence that does close", () => {
+    expect(
+      unterminatedFences(["```ts", body, "```", "", "prose"].join("\n"))
+    ).toEqual([]);
+  });
+
+  it("ignores an unclosed fence that is not TypeScript", () => {
+    // The gate compiles TypeScript. An unclosed shell block is a rendering
+    // problem for somebody else to care about, and refusing on it would make
+    // this check fail for reasons it cannot act on.
+    expect(unterminatedFences(["```bash", "echo hi", "", "prose"].join("\n"))).toEqual([]);
+  });
+
+  it("reports an unclosed tilde fence too", () => {
+    expect(unterminatedFences(["~~~ts", body, "", "prose"].join("\n"))).toEqual(["~~~ts"]);
+  });
+});
+
+describe("extensionFor", () => {
+  const jsx = "const a = <div />;";
+
+  it("lets a stated .ts filename beat an inference from the body", () => {
+    // A fence headed `ts title="nextly.config.ts"` names the file a reader
+    // pastes into. Compiling it as tsx because it holds an angle bracket
+    // checks it under rules that reader never gets.
+    expect(extensionFor({ lang: "ts", meta: ' title="nextly.config.ts"', code: jsx })).toBe("ts");
+    expect(extensionFor({ lang: "ts", meta: ' title="app/page.tsx"', code: jsx })).toBe("tsx");
+  });
+
+  it("infers from the body when no filename is stated", () => {
+    expect(extensionFor({ lang: "ts", meta: "", code: jsx })).toBe("tsx");
+    expect(extensionFor({ lang: "ts", meta: "", code: "const a = 1;" })).toBe("ts");
+  });
+
+  it("ignores a stated filename on a rebuilt sample", () => {
+    // A rebuilt sample carries the original fence's metadata while being a
+    // concatenation that title does not describe. Forcing `.ts` on one whose
+    // pasted prefix holds JSX makes it fail to parse for a reason the page
+    // does not have.
+    expect(
+      extensionFor({ lang: "ts", meta: ' title="nextly.config.ts"', code: jsx, prependedLines: 4 })
+    ).toBe("tsx");
+  });
+});
+
+describe("declaredNamesIn and imports that are not declarations", () => {
+  it("does not bind a name from an import inside a block comment", () => {
+    const code = ["/*", 'import { ghost } from "pkg";', "*/", "const real = 1;"].join("\n");
+
+    expect(declaredNamesIn(code)).toEqual(["real"]);
+    // The control: the pattern this replaced read the raw text and could not
+    // tell a comment from a statement, so a later fence using `ghost` was
+    // excused as a continuation of a page that never bound it.
+    const byPattern = [...code.matchAll(/^\s*import\s+([^;]*?)\s+from\s/gms)].length;
+    expect(byPattern).toBe(1);
+  });
+
+  it("still binds every form a real import declares", () => {
+    // A parser swap can quietly lose a shape, so all four are asserted.
+    const wrapped = ["import {", "  defineConfig,", "  type Foo,", '} from "nextly";'].join("\n");
+    expect(declaredNamesIn(wrapped).sort()).toEqual(["Foo", "defineConfig"]);
+    expect(declaredNamesIn('import D, * as NS from "p";').sort()).toEqual(["D", "NS"]);
+    expect(declaredNamesIn('import { a as b } from "p";')).toEqual(["b"]);
+  });
+});
+
+describe("compareToBaseline and coverage gains", () => {
+  const perPage = { "docs/a.mdx": { samples: 4, compiled: 3 } };
+  const baseline = {
+    coverage: { pages: 1, samples: 4, compiled: 3 },
+    samplesPerPage: perPage,
+    pages: {},
+    findings: {},
+  };
+  const coverageOf = p => ({
+    files: Object.keys(p),
+    samples: Object.values(p).reduce((n, x) => n + x.samples, 0),
+    compiled: Object.values(p).reduce((n, x) => n + x.compiled, 0),
+    perPage: p,
+  });
+
+  it("asks for a rewrite when a page gains a sample", () => {
+    // A gain the baseline is never told about is not protected: the fence can
+    // be deleted again tomorrow, every count returns to what is recorded, and
+    // both changes pass.
+    const grown = { "docs/a.mdx": { samples: 5, compiled: 4 } };
+    const { gained, lost } = compareToBaseline({
+      baseline,
+      coverage: coverageOf(grown),
+      counted: {},
+      fingerprint: {},
+    });
+
+    expect(gained.length).toBeGreaterThan(0);
+    expect(lost).toEqual([]);
+  });
+
+  it("asks for a rewrite when a page the baseline never saw appears", () => {
+    const withNewPage = {
+      "docs/a.mdx": { samples: 4, compiled: 3 },
+      "docs/b.mdx": { samples: 2, compiled: 2 },
+    };
+    const { gained } = compareToBaseline({
+      baseline,
+      coverage: coverageOf(withNewPage),
+      counted: {},
+      fingerprint: {},
+    });
+
+    expect(gained.join("\n")).toContain("docs/b.mdx");
+  });
+
+  it("says nothing when coverage matches what is recorded", () => {
+    const { gained, lost } = compareToBaseline({
+      baseline,
+      coverage: coverageOf(perPage),
+      counted: {},
+      fingerprint: {},
+    });
+
+    expect(gained).toEqual([]);
+    expect(lost).toEqual([]);
   });
 });

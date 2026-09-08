@@ -1340,6 +1340,13 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
     uncheckedSamples,
     readerFiles,
     implicitAny,
+    // Every diagnostic that came in, so a caller can prove it kept them all.
+    // The buckets above are a partition, and the audit's job is to record each
+    // one somewhere the ratchet can see. Four times a bucket was reported to
+    // the console and left out of the baseline, and each fix enumerated the
+    // buckets it knew about, which is why a fifth kept being available. A count
+    // the caller can check does not depend on anybody remembering.
+    total: diagnostics.length,
   };
 }
 
@@ -1697,6 +1704,7 @@ async function auditDocs() {
     uncheckedSamples,
     readerFiles,
     implicitAny,
+    total: classified,
   } = await classifyDocDiagnostics({
     diagnostics: [...firstPass, ...fromContext],
     samples: all,
@@ -1712,6 +1720,12 @@ async function auditDocs() {
     // not see.
     ...implicitAny.map(text => ({ mark: "implicit-any", text })),
     ...fromInheritedBlocks.map(text => ({ mark: "implicit-any", text })),
+    // An import of a package that is published but not installed here. The
+    // reader has it and this checkout does not, so the page is not charged.
+    // TypeScript types everything reached through that import as `any` all the
+    // same, so misspelling a package name removed a fence's checking while
+    // moving no number: the fourth bucket to do exactly that.
+    ...uninstalled.map(text => ({ mark: "uninstalled", text })),
     // An import of a file only the reader has. It is right not to charge the
     // page, since the file legitimately is not here. But the binding becomes
     // `any`, so everything reached through it stops being checked while the
@@ -1719,6 +1733,22 @@ async function auditDocs() {
     // is what stops one quietly joining them.
     ...readerFiles.map(text => ({ mark: "reader-file", text }))
   );
+
+  // Nothing may be dropped on the floor. `real` is charged to a page and
+  // `setAside` is ratcheted by identity; a diagnostic in neither is one the
+  // gate cannot see, which is the shape of every bucket that has escaped so
+  // far. Counted rather than enumerated, because enumerating is what kept
+  // leaving room for the next one. `continued` is excluded: those are
+  // recompiled with their context and come back through this same partition.
+  const accountedFor = real.length + setAside.length + continued.length;
+  if (accountedFor < classified) {
+    throw new Error(
+      `doc samples: ${String(classified - accountedFor)} diagnostic(s) were ` +
+        `classified into neither the findings nor the set-aside list, so the ` +
+        `gate cannot see them. A new bucket has to be recorded, not just ` +
+        `reported.`
+    );
+  }
 
   // The survivors are actionable, and their first-pass copies stop counting as
   // continuations: the same page and the same name, whatever line each landed
@@ -1904,6 +1934,7 @@ export function compareToBaseline({
   const mine = file => only === null || file === only;
 
   const lost = [];
+  const gained = [];
   if (only === null) {
     const seen = {
       pages: coverage.files.length,
@@ -1913,6 +1944,14 @@ export function compareToBaseline({
     for (const [what, was] of Object.entries(baseline.coverage ?? {})) {
       if ((seen[what] ?? 0) < was) {
         lost.push(`${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`);
+      }
+      // A GAIN has to be recorded too, or it is not protected. Accepting one
+      // silently meant a fence added today could be deleted tomorrow, returning
+      // every count to what the baseline holds, and both changes passed: a
+      // ratchet that only resists decreases from a number nobody updates
+      // protects the corpus as it was and nothing since.
+      if ((seen[what] ?? 0) > was) {
+        gained.push(`${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`);
       }
     }
   }
@@ -1925,6 +1964,18 @@ export function compareToBaseline({
           `${file}: ${what} was ${String(was[what])}, now ${String(now[what] ?? 0)}`
         );
       }
+      if ((now[what] ?? 0) > (was[what] ?? 0)) {
+        gained.push(
+          `${file}: ${what} was ${String(was[what])}, now ${String(now[what] ?? 0)}`
+        );
+      }
+    }
+  }
+  // A page the baseline has never seen is a gain as well.
+  for (const file of coverage.files) {
+    if (!mine(file)) continue;
+    if (!(baseline.samplesPerPage ?? {})[file]) {
+      gained.push(`${file}: not in the baseline`);
     }
   }
 
@@ -1962,7 +2013,7 @@ export function compareToBaseline({
       better.push(`${file}: allowed ${String(cap)}, found ${String(count)}`);
   }
 
-  return { lost, appeared, gone, worse, better };
+  return { lost, gained, appeared, gone, worse, better };
 }
 
 /**
@@ -1970,7 +2021,10 @@ export function compareToBaseline({
  * Shared by the repository-wide and single-page paths so the two cannot drift
  * into telling a contributor different things about the same state.
  */
-function reportComparison({ lost, appeared, gone, worse, better }, findings) {
+function reportComparison(
+  { lost, gained, appeared, gone, worse, better },
+  findings
+) {
   if (lost.length > 0) {
     console.error(
       "\ndoc samples: fewer samples are being checked than the baseline records. " +
@@ -1978,6 +2032,16 @@ function reportComparison({ lost, appeared, gone, worse, better }, findings) {
         "was fixed. If the loss is intended, rewrite the baseline and say why.\n"
     );
     for (const line of lost) console.error(`  ${line}`);
+    return true;
+  }
+
+  if ((gained ?? []).length > 0) {
+    console.error(
+      "\ndoc samples: more samples are being checked than the baseline records, " +
+        "which is good news it has not been told. Rewrite it so the gate starts " +
+        "protecting them; until then they can be deleted again for free.\n"
+    );
+    for (const line of gained) console.error(`  ${line}`);
     return true;
   }
 
