@@ -176,6 +176,41 @@ describe("usePluginRoute", () => {
     await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(1));
   });
 
+  it("treats a successful EMPTY answer as success, not as failure", async () => {
+    // A 204, a 205 and a zero-length body all reach the hook as `undefined`
+    // from the fetcher, and TanStack rejects `undefined` query data outright —
+    // it moves the query into the error state. So a route that legitimately
+    // answers with nothing would report a failure to a plugin that had done
+    // nothing wrong, and the documented `data: undefined` success state could
+    // not occur.
+    getSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(
+      () => usePluginRoute({ plugin: "@acme/p", path: "/nothing" }),
+      { wrapper: wrapper() }
+    );
+
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(result.current.error).toBeNull();
+    expect(result.current.data).toBeUndefined();
+  });
+
+  it("keeps a null body distinct from no body at all", async () => {
+    // `null` is a body a route may legitimately return, so the sentinel that
+    // carries "answered with nothing" through the cache must not be `null` —
+    // the two would collapse and a caller could not tell them apart.
+    getSpy.mockResolvedValue(null);
+
+    const { result } = renderHook(
+      () => usePluginRoute<null>({ plugin: "@acme/p", path: "/null" }),
+      { wrapper: wrapper() }
+    );
+
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(result.current.error).toBeNull();
+    expect(result.current.data).toBeNull();
+  });
+
   it("reports an error rather than an empty answer", async () => {
     getSpy.mockRejectedValue(new Error("nope"));
 

@@ -54,15 +54,16 @@ export interface PatternLibraryRead {
 /**
  * Read this site's saved pattern library.
  *
- * `enabled` exists because the panel is one tab of a shell that is often opened
- * on a different one: reading a library nobody is looking at costs a request
- * per editor mount, on every page load, for a tier the author may never open.
+ * Called from a component the shell mounts only while the insert panel is OPEN,
+ * which is what keeps a library nobody is looking at from being fetched on
+ * every editor mount. There is no `enabled` flag for the same reason: mounting
+ * is the signal, and a second way to say it would be a second thing to get
+ * wrong.
  */
-export function usePatternLibrary(enabled = true): PatternLibraryRead {
+export function usePatternLibrary(): PatternLibraryRead {
   const read = usePluginRoute<LibraryResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: LIBRARY_ROUTE_PATH,
-    enabled,
     // Fresh on every mount. Patterns are created and published through the
     // ordinary collection screens, which invalidate their own keys and know
     // nothing about this route — so under the admin's five-minute default an

@@ -30,7 +30,7 @@ An author can insert a saved pattern.
 
 The insert panel has accepted saved patterns since the tier landed, and nothing in the product supplied any — so a pattern could be saved and never seen again. The page builder now serves its library from a route of its own and hands it to the panel.
 
-Published rows only. A draft pattern is one being worked on, and the collection turns drafts on precisely so a pattern can be edited without being offered; putting one in the panel would hand every author on the site a half-built starting point.
+Published rows only — and NOT by saying so. The read runs as the user, and an untrusted caller that states no lifecycle already gets public states only, asked of the collection's own WORKFLOW. A literal `status: "published"` looked like the same thing and was not: it is ANDed with the service's release-aware condition, so it re-hid a draft belonging to a release whose time had come but whose drain had not run, and `"published"` is a state NAME, so a collection whose workflow calls its public state anything else would have matched nothing and come back empty.
 
 The route is authenticated and declares NO permission, which is deliberate. A declared one has to spell the collection slug, and a host may rename that collection — the seeded grant then carries the new name while the route demands the old one, which is a route nobody can call. The read runs as the user instead, so the service enforces whatever permission the collection actually seeded, under whatever name it actually has.
 
@@ -44,4 +44,8 @@ It is bounded three ways, and only one of them is a row count. A ceiling countin
 
 `pluginRouteFullPath` is published from `nextly/config` for that reason, beside `pluginAdminSlug` and for the same one: a slug derived twice produces a dead link, and a route path derived twice produces a request to a path nothing serves. `SavedPattern` is published from `@nextlyhq/builder`, which is the shape a host has to supply for the panel to offer patterns at all — including the two absences that are not interchangeable, `keywords` and `content`, each of which arrives as `null` from a stored row rather than missing.
 
-`usePluginRoute` takes an optional `staleTime`. The admin holds a query fresh for five minutes and does not refetch on focus, which suits lists whose writes invalidate their own keys — and a plugin route is not on that map, since nothing in the admin knows which routes a given write affects. The pattern library asks for `0`, so an author who saves a pattern and then opens a page is not shown a library their own save is missing from.
+The library is read when the insert panel OPENS, not when the editor mounts: the shell renders only the open panel, so the read lives in a component mounted with it. An author who works in Layers, or opens no panel at all, never pays for a library they are not looking at — and opening the panel is exactly when someone expects to see a pattern they just saved.
+
+`usePluginRoute` carries a successful EMPTY answer as success. A 204, a 205 or a zero-length body reaches the hook as `undefined`, and TanStack rejects `undefined` query data outright — so a route that legitimately answered with nothing reported a failure to a plugin that had done nothing wrong. `null` stays distinct from no body at all.
+
+`usePluginRoute` also takes an optional `staleTime`. The admin holds a query fresh for five minutes and does not refetch on focus, which suits lists whose writes invalidate their own keys — and a plugin route is not on that map, since nothing in the admin knows which routes a given write affects. The pattern library asks for `0`, so an author who saves a pattern and then opens a page is not shown a library their own save is missing from.

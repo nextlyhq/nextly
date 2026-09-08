@@ -32,6 +32,17 @@ import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
  */
 let libraryAnswer: { items: unknown[]; meta: unknown } | undefined;
 
+/**
+ * Which panel the shell stub asks for.
+ *
+ * The real shell draws one at a time and calls `renderPanel` only for that one,
+ * so this is how a case says "the author is looking at something else".
+ */
+let shownPanel = "insert";
+
+/** How many times anything asked for a plugin route. */
+let routeReads = 0;
+
 /** Props the recorders captured on the most recent render. */
 const seen: {
   inspector: Record<string, unknown> | undefined;
@@ -121,7 +132,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
          * never mounts and "the panel was given a starter" would be an
          * assertion about a component that was never rendered.
          */}
-        {renderPanel?.("insert")}
+        {renderPanel?.(shownPanel)}
         {children}
       </div>
     ),
@@ -210,6 +221,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // panel is GIVEN is this file's subject, and the tier was unreachable for as
   // long as the answer never reached the prop.
   usePluginRoute: () => ({
+    ...(() => {
+      routeReads += 1;
+      return {};
+    })(),
     data: libraryAnswer,
     pending: false,
     error: null,
@@ -268,6 +283,8 @@ afterEach(() => {
   // A leaked answer would make the next case's palette offer a pattern it was
   // not written for.
   libraryAnswer = undefined;
+  shownPanel = "insert";
+  routeReads = 0;
 });
 
 describe("what makes a palette drag reachable at all", () => {
@@ -387,5 +404,29 @@ describe("what makes the saved pattern tier reachable at all", () => {
 
     expect(first).toEqual([]);
     expect(seen.insertPanel?.patterns).toBe(first);
+  });
+});
+
+describe("what the editor reads before anyone asks for it", () => {
+  it("does not read the library while another panel is open", () => {
+    // Reading in the editor's own body fetched every saved pattern document on
+    // every editor mount — for authors who open Layers, or Tokens, or no panel
+    // at all, and never visit Insert. The library is the panel's data, so the
+    // panel's mount is when it is asked for.
+    shownPanel = "layers";
+
+    openEditor();
+
+    expect(routeReads).toBe(0);
+  });
+
+  it("reads it once the insert panel is the one on screen", () => {
+    // The control. Without it the assertion above is satisfied by a hook that
+    // never reads at all, which is the tier being unreachable again.
+    shownPanel = "insert";
+
+    openEditor();
+
+    expect(routeReads).toBeGreaterThan(0);
   });
 });

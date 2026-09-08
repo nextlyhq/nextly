@@ -1592,6 +1592,34 @@ function useDocumentDirty<TFieldValues extends FieldValues>(
   return editorDirty || Object.keys(dirtyFields).length > 0;
 }
 
+/**
+ * The insert panel, with this site's saved patterns.
+ *
+ * A component of its own so the library is read WHEN THE PANEL OPENS. The shell
+ * calls `renderPanel` only for the panel that is open and keys it by which one,
+ * so this mounts on the way in and unmounts on the way out — where reading in
+ * the editor's own body fetched every saved pattern on every editor mount, for
+ * authors who never visit Insert.
+ *
+ * It also settles the freshness question at the right moment. Patterns are
+ * created and published through the ordinary collection screens, which know
+ * nothing about this route, so there is nothing to invalidate this cache on a
+ * write; opening the panel is exactly when an author expects to see what they
+ * just saved.
+ *
+ * The panel itself stays a pure surface over what it is given. It takes a
+ * registry and a list, and asking for its own data would make every host that
+ * renders it depend on this plugin's route.
+ */
+function InsertPanelWithLibrary(props: {
+  editor: React.ComponentProps<typeof InsertPanel>["editor"];
+  categoryOrder: React.ComponentProps<typeof InsertPanel>["categoryOrder"];
+  beginInsertDrag: React.ComponentProps<typeof InsertPanel>["beginInsertDrag"];
+}): React.JSX.Element {
+  const library = usePatternLibrary();
+  return <InsertPanel {...props} patterns={library.patterns} />;
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   kinds,
@@ -1688,11 +1716,6 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     [shownStyleState]
   );
   const drag = useCanvasDrag({ editor, slots, nesting, canvasRoot });
-  // The saved patterns this site's authors may insert. Read here rather than
-  // inside the panel because the panel is a pure surface over what it is given
-  // — it takes a registry and a list, and asking for its own data would make
-  // every host that renders it depend on this plugin's route.
-  const patternLibrary = usePatternLibrary();
   /*
    * Is a drag happening — of EITHER kind.
    *
@@ -2532,11 +2555,10 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           */
           const panels: Partial<Record<string, () => React.ReactNode>> = {
             insert: () => (
-              <InsertPanel
+              <InsertPanelWithLibrary
                 editor={editor}
                 categoryOrder={CORE_CATEGORIES}
                 beginInsertDrag={drag.beginInsertDrag}
-                patterns={patternLibrary.patterns}
               />
             ),
             /*

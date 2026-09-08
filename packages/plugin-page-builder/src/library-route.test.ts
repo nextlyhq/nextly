@@ -60,16 +60,24 @@ function contextOver(
 }
 
 describe("what the library read asks for", () => {
-  it("asks only for PUBLISHED patterns", async () => {
-    // A draft is a pattern being worked on. Offering one puts a half-built
-    // starting point in front of every author on the site.
+  it("states NO lifecycle, and lets the service bound it", async () => {
+    // Drafts must not be offered, and saying so here is how that goes wrong.
+    // The read runs as the user, and an untrusted caller that states no
+    // lifecycle already gets public states only — asked of the collection's
+    // WORKFLOW, which knows which states are public and which release is due.
+    //
+    // A literal `status: "published"` is ANDed with that, so it re-hides a
+    // draft belonging to a release whose time has come but whose drain has not
+    // run; and it is a state NAME, so a workflow that calls its public state
+    // anything else matches nothing and the library comes back empty.
     const { ctx, listEntries } = contextOver([[row("a")]]);
 
     await readPatternLibrary(ctx);
 
-    expect(listEntries.mock.calls[0]?.[1]).toMatchObject({
-      where: { status: { equals: "published" } },
-    });
+    const options = listEntries.mock.calls[0]?.[1] as
+      | { where?: unknown }
+      | undefined;
+    expect(options?.where).toBeUndefined();
   });
 
   it("reads AS THE USER, not with the instance's identity", async () => {

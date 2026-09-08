@@ -13,11 +13,21 @@
  * surface this package may import from, so a browser-side read of the
  * collection is not merely worse here — it does not exist.
  *
- * ## Published only
+ * ## Published only, and NOT by saying so
  *
- * A draft pattern is one being worked on. Offering it would put a half-built
- * starting point in front of every author on the site, and the collection turns
- * drafts on precisely so a pattern can be edited without being offered.
+ * A draft pattern is one being worked on, and offering it would put a
+ * half-built starting point in front of every author on the site. The read is
+ * bounded to public states — but by the SERVICE, because it runs as the user,
+ * and an untrusted caller that states no lifecycle gets exactly that.
+ *
+ * A literal `where.status = "published"` looked like the same thing and is not,
+ * in two ways. It is ANDed with the service's own release-aware condition,
+ * which deliberately reveals a draft belonging to a release whose time has come
+ * but whose drain has not run — so the literal hides it again, and on an
+ * installation with no scheduler it stays hidden indefinitely. And "published"
+ * is a state NAME: a collection whose workflow calls its public state something
+ * else matches nothing, and the library comes back empty with no error. The
+ * service asks the workflow which states are public; this cannot.
  *
  * ## No declared permission, deliberately
  *
@@ -154,10 +164,8 @@ export async function readPatternLibrary(
   for (let page = 1; ; page += 1) {
     const result = await ctx.services.collections.listEntries(
       slug,
-      {
-        where: { status: { equals: "published" } },
-        pagination: { limit: LIBRARY_PAGE_SIZE, page },
-      },
+      // NO status predicate, deliberately — see the module docblock.
+      { pagination: { limit: LIBRARY_PAGE_SIZE, page } },
       asUser
     );
     for (const row of result.data) {

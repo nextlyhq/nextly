@@ -96,12 +96,24 @@ export function usePluginRoute<T>({
   staleTime,
 }: PluginRouteRequest): PluginRouteRead<T> {
   const route = pluginRouteFullPath(plugin, path);
-  const query = useQuery<T>({
+  const query = useQuery<T | typeof NO_BODY>({
     // Keyed by the resolved path, so two plugins with the same route path do
     // not share an entry — and so a caller cannot make the key disagree with
     // the request by passing one of the two.
     queryKey: ["plugin-route", route],
-    queryFn: () => protectedApi.get<T>(route),
+    // A successful EMPTY answer is not an error, and TanStack rejects
+    // `undefined` outright — it moves such a query into the error state. A 204,
+    // a 205 and a zero-length body all reach here as `undefined` from the
+    // fetcher, so a route that legitimately answers with nothing would report a
+    // failure to a plugin that had done nothing wrong. The sentinel carries
+    // "answered, with nothing" through the cache and is translated back below.
+    queryFn: async () => {
+      const body = await protectedApi.get<T>(route);
+      // `undefined` ALONE, never `??`. `null` is a body a route may
+      // legitimately return, and treating it as absent would hand the caller
+      // `undefined` for a value the route actually sent.
+      return body === undefined ? NO_BODY : body;
+    },
     enabled,
     ...(staleTime === undefined ? {} : { staleTime }),
     // Only where the caller asked for freshness. `always` overrides the cache
@@ -111,7 +123,7 @@ export function usePluginRoute<T>({
     ...(staleTime === 0 ? { refetchOnMount: "always" as const } : {}),
   });
   return {
-    data: query.data,
+    data: bodyOf<T>(query.data),
     // `isPending` is true for a DISABLED query too — it has no data and never
     // asked — so a surface reading it alone would show a spinner forever for a
     // panel that has not been opened. Held together with `isFetching`, which is
@@ -120,4 +132,25 @@ export function usePluginRoute<T>({
     error: query.error,
     refetch: () => void query.refetch(),
   };
+}
+
+/**
+ * What the cache holds for a route that answered with no body.
+ *
+ * A private symbol rather than `null`, because `null` is a body a route may
+ * legitimately return and the two must not collapse. It never leaves this
+ * module: `data` is `undefined` for both, which is what the caller's `pending`
+ * is there to disambiguate.
+ */
+const NO_BODY = Symbol("plugin-route.no-body");
+
+/**
+ * The cached value as a caller sees it: the body, or nothing.
+ *
+ * The narrowing is a function rather than a ternary at the return so the
+ * sentinel is removed from the type as well as from the value. TypeScript
+ * cannot rule `typeof NO_BODY` out of an open `T` by comparison alone.
+ */
+function bodyOf<T>(cached: T | typeof NO_BODY | undefined): T | undefined {
+  return cached === NO_BODY ? undefined : cached;
 }
