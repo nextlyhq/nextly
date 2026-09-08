@@ -12,7 +12,7 @@
  * in a scanned call-site package invalidates the cached result. It is a
  * supplementary call-site guard for text, border, and ring color utilities.
  */
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,21 +58,54 @@ function scanTracked(pattern: string, paths: readonly string[]): string {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-  if (listed.split("\0").filter(Boolean).length === 0) {
+  const files = listed.split("\0").filter(Boolean);
+  if (files.length === 0) {
     throw new Error(`no tracked files under: ${paths.join(", ")}`);
   }
-  try {
-    return execSync(
-      `git ls-files -z -- ${paths.join(" ")} | xargs -0 grep -HoE '${pattern}'`,
-      { cwd: repo, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
-    );
-  } catch (error) {
-    // 1 is grep's "no lines selected"; 123 is xargs reporting that for a chunk.
-    const status = (error as { status?: number }).status;
-    if (status === 1 || status === 123) return "";
-    throw error;
+
+  // Batched and invoked DIRECTLY rather than piped through `xargs`, so each
+  // grep's own status is read.
+  //
+  // 🔴 `xargs` collapses them: it exits 123 when ANY invocation exited 1-125,
+  // so one batch with no match makes the whole pipeline look like a failure
+  // while the others were producing hits. Treating that as "nothing found"
+  // discards every match they made — and an empty scan is exactly what a clean
+  // repository looks like here, so the assertions would pass having examined
+  // nothing. Measured on this tree: five grep invocations for the repo-wide
+  // scan, so a silent batch is ordinary rather than hypothetical.
+  //
+  // Running grep directly also keeps the pattern away from a shell, so a
+  // backslash in it means what the regex means.
+  const found: string[] = [];
+  for (let from = 0; from < files.length; from += FILES_PER_GREP) {
+    const batch = files.slice(from, from + FILES_PER_GREP);
+    try {
+      found.push(
+        execFileSync("grep", ["-HoE", pattern, ...batch], {
+          cwd: repo,
+          encoding: "utf8",
+          maxBuffer: 64 * 1024 * 1024,
+        })
+      );
+    } catch (error) {
+      // 1 is "no lines selected" for THIS batch and says nothing about the
+      // others. Anything else is a real failure and must not read as silence.
+      if ((error as { status?: number }).status === 1) continue;
+      throw error;
+    }
   }
+  return found.join("");
 }
+
+/**
+ * How many paths one `grep` is given.
+ *
+ * Small enough to stay well inside the argument-length limit on every platform
+ * this runs on, large enough that the repository is a handful of invocations
+ * rather than hundreds.
+ */
+const FILES_PER_GREP = 500;
+
 const css = readFileSync(resolve(here, "../../theme.css"), "utf8");
 const { light, dark } = parseThemeTokens(css);
 const scale = parseThemeScale(css);
@@ -324,7 +357,12 @@ describe("alpha-opacity color utilities", () => {
       if (!rendersUi(path)) continue;
       const name = nameOf(line.slice(sep + 1).trim());
       if (!name || !isScannableColor(name)) continue;
-      const pkg = /\/packages\/([^/]+)\/src\//.exec(path)?.[1];
+      // `(?:^|/)` because `git ls-files` reports REPO-RELATIVE paths —
+      // `packages/admin/src/...` with no leading slash. Requiring one matched
+      // nothing, so `used` stayed empty and this assertion could not report the
+      // very thing it exists for: a package using alpha utilities that nobody
+      // added to `SCANNED_DIRS`.
+      const pkg = /(?:^|\/)packages\/([^/]+)\/src\//.exec(path)?.[1];
       if (pkg) used.add(pkg);
     }
     const scanned = new Set(
