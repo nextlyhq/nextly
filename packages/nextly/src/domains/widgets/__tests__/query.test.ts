@@ -759,3 +759,91 @@ describe("a geo filter cannot be counted", () => {
     expect(counting({ location: { equals: "here" } })).not.toThrow();
   });
 });
+
+describe("validateWidgetQuery, group key", () => {
+  beforeEach(() => {
+    registerSource({
+      id: "collection:grouped",
+      label: "Grouped",
+      kind: "collection",
+      supports: ["count", "list", "groupBy"],
+      fields: [
+        { name: "title", type: "string" },
+        { name: "status", type: "string" },
+      ],
+    });
+  });
+
+  it("carries a declared group key through onto the returned query", () => {
+    // Asserts the WHOLE object: a version that validated the key and then
+    // dropped it on the way out would satisfy any assertion that only read
+    // `groupBy` back off the input.
+    expect(
+      validateWidgetQuery({
+        source: "collection:grouped",
+        op: "groupBy",
+        groupBy: "status",
+      })
+    ).toEqual({
+      source: "collection:grouped",
+      op: "groupBy",
+      groupBy: "status",
+      limit: 5,
+    });
+  });
+
+  it("refuses a group key carried by an op that would ignore it", () => {
+    // The case worth refusing rather than dropping: accepted and ignored, a
+    // `count` reads back as a grouped count that was never computed.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:grouped",
+        op: "count",
+        groupBy: "status",
+      })
+    ).toThrow(/groupBy is not valid for op "count"/);
+  });
+
+  it("refuses a groupBy op carrying no key", () => {
+    expect(() =>
+      validateWidgetQuery({ source: "collection:grouped", op: "groupBy" })
+    ).toThrow(/op "groupBy" requires a groupBy field/);
+  });
+
+  it("refuses a group key that is not a string", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:grouped",
+        op: "groupBy",
+        groupBy: ["status"],
+      })
+    ).toThrow(/groupBy must be a string/);
+  });
+
+  it("refuses a group key naming a field the source never declared", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:grouped",
+        op: "groupBy",
+        groupBy: "secretScore",
+      })
+    ).toThrow(/groupBy references undeclared field "secretScore"/);
+  });
+
+  it("reads the group key exactly once, so an accessor cannot swap it past the check", () => {
+    // The invariant the whole module is built on: a property read twice is a
+    // seam where the value that was checked and the value that ships differ.
+    let reads = 0;
+    const q = validateWidgetQuery({
+      source: "collection:grouped",
+      op: "groupBy",
+      get groupBy() {
+        reads += 1;
+        return reads === 1 ? "status" : "secretScore";
+      },
+    });
+
+    expect(reads).toBe(1);
+    expect(q.groupBy).toBe("status");
+  });
+});
