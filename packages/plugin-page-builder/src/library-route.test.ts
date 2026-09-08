@@ -269,6 +269,92 @@ describe("how much of the library travels, by weight", () => {
       })
     );
 
+  /**
+   * What the budget actually bounds, measured without the module's own helper.
+   *
+   * The DOCUMENTS only, because that is what {@link MAX_LIBRARY_BYTES} is
+   * spent on — the title and category are short columns with bounds of their
+   * own. `Buffer.byteLength` rather than a `TextEncoder`, so the oracle is a
+   * different implementation of "UTF-8 bytes" than the one under test and can
+   * disagree with it.
+   */
+  const documentWireBytes = (
+    items: readonly { readonly document?: unknown }[]
+  ) =>
+    items.reduce(
+      (n, p) => n + Buffer.byteLength(JSON.stringify(p.document), "utf8"),
+      0
+    );
+
+  it("never returns MORE than the budget, for one oversized pattern", async () => {
+    // The ceiling was applied AFTER the row was appended, so the row that
+    // crossed it travelled anyway: a single document larger than the whole
+    // budget came back whole, which made MAX_LIBRARY_BYTES a description of the
+    // response rather than a bound on it. A host may raise the per-document
+    // limit, so a document that size is one a site can really hold.
+    //
+    // Left OUT rather than ending the read: a pattern that does not fit in an
+    // empty budget fits in no budget, so the patterns behind it are still worth
+    // reading — the same direction an unreadable row moves in, one pattern
+    // dropped instead of all of them. It is reported, like every other ceiling.
+    const huge = "x".repeat(MAX_LIBRARY_BYTES + 1_000_000);
+    const { ctx } = contextOver([
+      [
+        row("huge", {
+          content: {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "pattern",
+            nodes: [{ id: "n", type: "core/box", version: 1, props: { huge } }],
+          },
+        }),
+        row("small"),
+      ],
+    ]);
+
+    const library = await readPatternLibrary(ctx);
+
+    expect(documentWireBytes(library.items)).toBeLessThanOrEqual(
+      MAX_LIBRARY_BYTES
+    );
+    // And the readable pattern BEHIND the oversized one still arrives.
+    expect(library.items.map(pattern => pattern.id)).toEqual(["small"]);
+    expect(library.meta.truncated).toBe(true);
+  });
+
+  it("measures the budget in WIRE bytes, which non-ASCII text multiplies", async () => {
+    // `String.length` counts UTF-16 code units. A CJK character is one of those
+    // and three bytes encoded, so a ceiling measured that way lets roughly
+    // three times its nominal size onto the wire.
+    //
+    // These rows sit UNDER the budget by UTF-16 length and well over it by
+    // UTF-8 bytes, which is what makes this a test of the measurement rather
+    // than of the ceiling: a reader counting code units never stops here.
+    const cjk = "設計".repeat(150_000);
+    const { ctx } = contextOver([
+      Array.from({ length: 20 }, (_, i) =>
+        row(`c${String(i)}`, {
+          content: {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "pattern",
+            nodes: [{ id: "n", type: "core/box", version: 1, props: { cjk } }],
+          },
+        })
+      ),
+    ]);
+
+    const library = await readPatternLibrary(ctx);
+
+    // The control: by the length that does not count bytes, this library never
+    // reached the ceiling at all.
+    expect(JSON.stringify(library.items).length).toBeLessThan(
+      MAX_LIBRARY_BYTES
+    );
+    expect(documentWireBytes(library.items)).toBeLessThanOrEqual(
+      MAX_LIBRARY_BYTES
+    );
+    expect(library.meta.truncated).toBe(true);
+  });
+
   it("cuts a SINGLE oversized page rather than calling it complete", async () => {
     // The case a between-pages ceiling cannot reach: one page of a hundred
     // two-mebibyte documents is two hundred mebibytes ALREADY assembled, and
@@ -282,8 +368,8 @@ describe("how much of the library travels, by weight", () => {
 
     const library = await readPatternLibrary(ctx);
 
-    expect(JSON.stringify(library.items).length).toBeLessThan(
-      MAX_LIBRARY_BYTES * 2
+    expect(documentWireBytes(library.items)).toBeLessThanOrEqual(
+      MAX_LIBRARY_BYTES
     );
     expect(library.meta.truncated).toBe(true);
   });

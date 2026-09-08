@@ -41,6 +41,8 @@
  *
  * @module library-route
  */
+import { documentBytes } from "@nextlyhq/blocks-engine";
+
 import { PATTERNS_SLUG } from "./collections/patterns";
 import {
   LIBRARY_ROUTE_PATH,
@@ -93,11 +95,15 @@ const MAX_LIBRARY_PAGES = Math.ceil(MAX_LIBRARY_PATTERNS / LIBRARY_PAGE_SIZE);
  * enough to be a payload rather than an outage. Reaching it is REPORTED, like
  * every other ceiling here, so the surface can say the library was cut rather
  * than let an author search for a pattern that was silently left out.
+ *
+ * An upper bound on what comes back, not a line the last row is allowed to
+ * cross: every row is weighed before it is kept, so the documents in a response
+ * never total more than this.
  */
 export const MAX_LIBRARY_BYTES = 16 * 1024 * 1024;
 
 /**
- * Roughly what one pattern will cost on the wire.
+ * What one pattern will cost on the wire.
  *
  * The DOCUMENT only, because that is the part with no bound of its own — the
  * title, category and keywords are short columns. Measured by serialising,
@@ -105,15 +111,21 @@ export const MAX_LIBRARY_BYTES = 16 * 1024 * 1024;
  * a second model of the same thing and would disagree the first time a block
  * gained a large prop.
  *
+ * The ENGINE's measurement, not a second definition of a byte. `String.length`
+ * counts UTF-16 code units, so a CJK character counts one here and travels as
+ * three — a library measured that way passes roughly three times its nominal
+ * ceiling onto the wire. `documentBytes` encodes, and is the same measurement
+ * document validation bounds a stored document by, so the two ceilings a
+ * pattern passes through agree about what it weighs.
+ *
  * A document that cannot be serialised counts as nothing rather than refusing
- * the library: it is one pattern the panel will drop, and the ceiling exists to
- * bound bytes actually sent.
+ * the library, and the ceiling exists to bound bytes actually sent.
  */
 function documentBytesOf(pattern: LibraryPattern): number {
   try {
     const document = pattern.document;
     if (document === undefined || document === null) return 0;
-    return JSON.stringify(document)?.length ?? 0;
+    return documentBytes(document);
   } catch {
     return 0;
   }
@@ -160,6 +172,10 @@ export async function readPatternLibrary(
 
   const items: LibraryPattern[] = [];
   let truncated = false;
+  // Accumulated rather than assigned, unlike `truncated`: an oversized row on
+  // page one is a cut library even when page nine simply ends, and the stop
+  // reason below overwrites what it knows nothing about.
+  let omitted = false;
   let bytes = 0;
   for (let page = 1; ; page += 1) {
     const result = await ctx.services.collections.listEntries(
@@ -181,6 +197,7 @@ export async function readPatternLibrary(
     );
     const page_ = collectPage(result.data, items, bytes);
     bytes = page_.bytes;
+    omitted ||= page_.omitted;
     if (page_.full) {
       truncated = true;
       break;
@@ -195,7 +212,10 @@ export async function readPatternLibrary(
     break;
   }
 
-  return { items, meta: { count: items.length, truncated } };
+  return {
+    items,
+    meta: { count: items.length, truncated: truncated || omitted },
+  };
 }
 
 /** What one page added, and whether the ceilings are now reached. */
@@ -204,6 +224,40 @@ interface Collected {
   readonly bytes: number;
   /** Whether a ceiling stopped the collection part-way. */
   readonly full: boolean;
+  /**
+   * Whether a row was left out for its own size while the read went on.
+   *
+   * Told apart from {@link full} because the two say different things about
+   * what happens next: a spent budget ends the read, while a pattern that fits
+   * in no budget is one row skipped. Both mean the library is incomplete, which
+   * is the one thing the panel has to be told.
+   */
+  readonly omitted: boolean;
+}
+
+/** What the ceilings say about one row, before it is appended to anything. */
+type RowVerdict = "keep" | "omit" | "stop";
+
+/**
+ * Whether this row travels, decided BEFORE it is appended.
+ *
+ * Appending and then checking makes the ceiling a description of the response
+ * rather than a bound on it: the row that crosses the budget has already been
+ * kept, so a single document larger than the whole budget comes back whole.
+ * Measured, that returned 17.8 MB against a 16 MiB ceiling.
+ *
+ * A row that does not fit in an EMPTY budget fits in no budget, so it is
+ * omitted and the read goes on. Ending there would hide every pattern behind
+ * it on account of one the panel could not have offered anyway — the same
+ * direction an unreadable row moves in, one pattern dropped instead of all of
+ * them. A row that would merely overflow what is LEFT means the budget is
+ * spent, and reading further only assembles bytes that cannot be sent.
+ */
+function admits(size: number, spent: number, kept: number): RowVerdict {
+  if (size > MAX_LIBRARY_BYTES) return "omit";
+  if (spent + size > MAX_LIBRARY_BYTES) return "stop";
+  if (kept >= MAX_LIBRARY_PATTERNS) return "stop";
+  return "keep";
 }
 
 /**
@@ -226,16 +280,21 @@ function collectPage(
   from: number
 ): Collected {
   let bytes = from;
+  let omitted = false;
   for (const row of rows) {
     const pattern = readLibraryRow(row);
     if (pattern === undefined) continue;
-    into.push(pattern);
-    bytes += documentBytesOf(pattern);
-    if (bytes >= MAX_LIBRARY_BYTES || into.length >= MAX_LIBRARY_PATTERNS) {
-      return { bytes, full: true };
+    const size = documentBytesOf(pattern);
+    const verdict = admits(size, bytes, into.length);
+    if (verdict === "stop") return { bytes, full: true, omitted };
+    if (verdict === "omit") {
+      omitted = true;
+      continue;
     }
+    into.push(pattern);
+    bytes += size;
   }
-  return { bytes, full: false };
+  return { bytes, full: false, omitted };
 }
 
 /**
