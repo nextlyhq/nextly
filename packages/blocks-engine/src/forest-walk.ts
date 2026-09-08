@@ -160,24 +160,33 @@ function pushSlots(
 }
 
 /**
- * Whether a value is a list, asked of a value that may refuse to answer.
+ * Whether a value is a list — or NOTHING, when reflection will not say.
  *
+ * Three answers because there are three cases, and collapsing the third into
+ * either of the others is wrong in a different direction each time.
  * `Array.isArray` is not a plain type test: on a revoked Proxy it throws
- * `TypeError: Cannot perform 'IsArray'`. A revoked Proxy is an ordinary thing
- * to find in a persisted forest reaching a reader — nothing in the format
- * forbids one, and the walk now runs over whole documents rather than a
- * selection — so an uncontained test takes down a caller on behalf of an entry
- * it was only classifying.
+ * `TypeError: Cannot perform 'IsArray'`, and a revoked Proxy is an ordinary
+ * thing to find in a persisted forest reaching a reader — nothing in the format
+ * forbids one, and the walk runs over whole documents rather than a selection.
  *
- * Not a list is the answer, for the reason every other unreadable value gets
- * one: a value that will not say what it is offers the walk nothing to iterate.
+ * Answering `false` there reads as "an object, then" to anyone asking whether a
+ * value is a NODE, which hands a caller a value it cannot read a single field
+ * off: measured, `findNode` threw `Cannot perform 'Object.prototype.toString'`
+ * on the entry after the walk had contained the same object twice. Answering
+ * `true` would send the walk to iterate it. So the two questions built on this
+ * ask for what they each need, and neither infers it from the other's answer.
  */
-function isList(value: unknown): value is unknown[] {
+function readsAsList(value: unknown): boolean | undefined {
   try {
     return Array.isArray(value);
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+/** Whether a value is a list this walk can iterate. */
+function isList(value: unknown): value is unknown[] {
+  return readsAsList(value) === true;
 }
 
 /**
@@ -192,7 +201,11 @@ function isList(value: unknown): value is unknown[] {
  * `Array.isArray` is checked separately because `typeof [] === "object"`.
  */
 export function isDescendable(node: unknown): node is BlockNode {
-  return typeof node === "object" && node !== null && !isList(node);
+  // Positively `false`, never merely "not true". A value reflection cannot
+  // classify is not a node — everything a caller does with one reads a field.
+  return (
+    typeof node === "object" && node !== null && readsAsList(node) === false
+  );
 }
 
 /** Visit every entry of the forest, letting `onEntry` decide how to proceed. */
