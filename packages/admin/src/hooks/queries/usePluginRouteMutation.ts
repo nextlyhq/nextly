@@ -15,7 +15,12 @@
  * @module hooks/queries/usePluginRouteMutation
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { pluginRouteFullPath, type RouteMethod } from "nextly/config";
+import {
+  pluginRouteFullPath,
+  type JsonValue,
+  type RouteMethod,
+} from "nextly/config";
+import { useCallback, useRef, useState } from "react";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 
@@ -63,7 +68,10 @@ export interface PluginRouteWrite {
 }
 
 /** What a write reports back while and after it runs. */
-export interface PluginRouteWriter<TBody, TResult extends object | null> {
+export interface PluginRouteWriter<
+  TBody extends JsonValue,
+  TResult extends object | null,
+> {
   /**
    * Send the body, and resolve with what the route answered.
    *
@@ -98,7 +106,7 @@ export interface PluginRouteWriter<TBody, TResult extends object | null> {
  * someone else's feature.
  */
 export function usePluginRouteMutation<
-  TBody,
+  TBody extends JsonValue,
   TResult extends object | null = Record<string, unknown>,
 >({
   plugin,
@@ -108,8 +116,28 @@ export function usePluginRouteMutation<
 }: PluginRouteWrite): PluginRouteWriter<TBody, TResult> {
   const client = useQueryClient();
   const route = pluginRouteFullPath(plugin, path);
-  const mutation = useMutation<TResult | undefined, Error, TBody>({
-    mutationFn: (body: TBody) => sendTo<TResult>(method, route, body),
+  const mutation = useMutation<TResult | undefined, Error, PluginWrite<TBody>>({
+    // The TARGET travels with the body rather than being closed over. A write
+    // paused offline has its options updated by TanStack before its retryer
+    // runs, so a closure would send a body submitted against one route to
+    // whichever route the hook was rendered with by the time the connection
+    // returned — a different endpoint, or a different verb, for a body the
+    // author approved for neither.
+    mutationFn: (sent: PluginWrite<TBody>) =>
+      sendTo<TResult>(sent.method, sent.route, sent.body),
+    // 🔴 NEVER retried, and this overrides the admin's own default of two.
+    //
+    // The admin retries mutations because its own are addressed to routes it
+    // owns and knows the shape of. This one is addressed to a route a plugin
+    // wrote, with no idempotency key and no requirement that the route be
+    // idempotent — and the default verb is POST. A create that commits and
+    // then loses its response would be sent again, twice, and the author gets
+    // three rows for one click with nothing reporting it.
+    //
+    // The asymmetry decides it: a write that is not retried costs a failure the
+    // caller is told about and may repeat deliberately, and a write that is
+    // retried wrongly costs duplicate data nothing can identify afterwards.
+    retry: false,
     onSuccess: async () => {
       // The plugin's OWN reads, keyed exactly as `usePluginRoute` keys them.
       await Promise.all(
@@ -121,18 +149,46 @@ export function usePluginRouteMutation<
       );
     },
   });
-  return {
-    write: async (body: TBody) => {
+
+  // Tracked HERE rather than read off the mutation, because TanStack's observer
+  // follows only the most recent call. Two writes in flight — a double submit,
+  // an autosave overlapping a save — and the older one's rejection reaches no
+  // observer at all: `error` never sees it, and `pending` goes false while that
+  // request is still running. A caller watching those would be told the write
+  // succeeded.
+  const [inFlight, setInFlight] = useState(0);
+  const [error, setError] = useState<Error | null>(null);
+  const mutateAsync = mutation.mutateAsync;
+  const inFlightRef = useRef(0);
+
+  const write = useCallback(
+    async (body: TBody) => {
+      inFlightRef.current += 1;
+      setInFlight(inFlightRef.current);
       try {
-        return await mutation.mutateAsync(body);
-      } catch {
-        // Reported on `error`; see `write`'s own note on why this resolves.
+        const answered = await mutateAsync({ body, method, route });
+        return answered;
+      } catch (cause) {
+        // Every failed write is reported, not only the newest.
+        setError(cause instanceof Error ? cause : new Error(String(cause)));
+        // Resolved rather than rethrown; see `write` on the contract.
         return undefined;
+      } finally {
+        inFlightRef.current -= 1;
+        setInFlight(inFlightRef.current);
       }
     },
-    pending: mutation.isPending,
-    error: mutation.error,
-  };
+    [mutateAsync, method, route]
+  );
+
+  return { write, pending: inFlight > 0, error };
+}
+
+/** One write, with the target it was submitted against. */
+interface PluginWrite<TBody extends JsonValue> {
+  readonly body: TBody;
+  readonly method: PluginRouteMethod;
+  readonly route: string;
 }
 
 /**

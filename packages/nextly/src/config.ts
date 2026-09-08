@@ -185,6 +185,14 @@ export { pluginRouteFullPath } from "./plugins/routes/route-path";
 // costs the browser nothing.
 export type { RouteMethod } from "./plugins/routes/route-types";
 
+// And what may travel as one of those routes' bodies. Published here for the
+// same reason: the admin's client serialises with `JSON.stringify`, so a value
+// outside this set is not sent as written — a `Date` becomes a string, a `Map`
+// or `FormData` becomes `{}`, a function is dropped, a bigint throws. Stating
+// the set makes the compiler refuse those where the author can still see what
+// they meant.
+export type { JsonValue } from "./plugins/admin-contributions";
+
 // The admin CONTRIBUTION shapes, published so the admin panel can DERIVE its
 // `/admin-meta` types from the declaration the server serializes rather than
 // restating them. `buildPluginAdminMeta` copies a contributed widget verbatim

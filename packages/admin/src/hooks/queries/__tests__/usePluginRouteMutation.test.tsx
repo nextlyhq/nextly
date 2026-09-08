@@ -34,7 +34,16 @@ import { usePluginRouteMutation } from "../usePluginRouteMutation";
 let client: QueryClient;
 function wrapper() {
   client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { retry: false },
+      // 🔴 MIRRORS the app's own `QueryProvider`, which sets
+      // `mutations.retry: MUTATION_RETRY_COUNT`. TanStack does not retry
+      // mutations by default, so a test client that stayed silent here could
+      // never observe an unwanted retry — the guard against one would read as
+      // covered while nothing exercised it. `retryDelay: 0` so the attempts
+      // happen in milliseconds rather than in backoff seconds.
+      mutations: { retry: 2, retryDelay: 0 },
+    },
   });
   return ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
@@ -124,15 +133,14 @@ describe("usePluginRouteMutation", () => {
       await result.current.write({ title: "Hero" });
     });
 
+    // The COMPLETE list, unfiltered. Filtering to the named path first was the
+    // flaw: an implementation that ALSO invalidated the bare `["plugin-route"]`
+    // prefix — refetching every plugin route in the admin — passed a filtered
+    // count while doing exactly what the test claims to prevent.
     const keys = invalidate.mock.calls.map(
       ([arg]) => (arg as { queryKey: unknown[] }).queryKey
     );
-    const named = keys.filter(k => String(k[1]).includes("/library"));
-    expect(named).toHaveLength(1);
-    // Addressed exactly as the READ hook keys it — a prefix nothing reads
-    // would invalidate nothing while looking correct.
-    expect(String(named[0]?.[1])).toContain("@acme/p");
-    expect(named[0]?.[0]).toBe("plugin-route");
+    expect(keys).toEqual([["plugin-route", "/plugins/@acme/p/library"]]);
     invalidate.mockRestore();
   });
 
@@ -157,6 +165,88 @@ describe("usePluginRouteMutation", () => {
 
     expect(deleteSpy).toHaveBeenCalledTimes(1);
     expect(deleteSpy.mock.calls[0]?.[1]).toBe(0);
+  });
+
+  it("does NOT retry a write the admin would have retried", async () => {
+    // The admin retries its own mutations twice, and this inherits that. A
+    // plugin route has no idempotency key and no requirement to be idempotent,
+    // and the default verb is POST — so a create that commits and then loses
+    // its response would be sent again, twice, and one click becomes three
+    // rows with nothing reporting it.
+    postSpy.mockRejectedValue(new Error("connection lost"));
+    const { result } = renderHook(() => usePluginRouteMutation(write), {
+      wrapper: wrapper(),
+    });
+
+    await act(async () => {
+      await result.current.write({ title: "Hero" });
+    });
+
+    expect(postSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a failure from a write that OVERLAPPED a later one", async () => {
+    // TanStack's observer follows only the most recent call, so an older
+    // rejection reaches no observer: `error` never saw it and `pending` went
+    // false while that request was still running. A caller watching either
+    // would be told the write succeeded.
+    let failFirst: (reason: Error) => void = () => {};
+    postSpy.mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        failFirst = reject;
+      })
+    );
+    postSpy.mockResolvedValueOnce({ id: "second" });
+    const { result } = renderHook(() => usePluginRouteMutation(write), {
+      wrapper: wrapper(),
+    });
+
+    let first: Promise<unknown> | undefined;
+    act(() => {
+      first = result.current.write({ title: "first" });
+    });
+    await act(async () => {
+      await result.current.write({ title: "second" });
+    });
+    await act(async () => {
+      failFirst(new Error("the older write failed"));
+      await first;
+    });
+
+    await waitFor(() =>
+      expect(result.current.error?.message).toBe("the older write failed")
+    );
+  });
+
+  it("sends a paused write to the target it was SUBMITTED against", async () => {
+    // The target travels with the body. Closed over, a write held while the
+    // hook re-rendered with a different route would go to whichever one it was
+    // rendered with by the time it ran — a different endpoint for a body the
+    // author approved for neither.
+    let release: (value: { id: string }) => void = () => {};
+    postSpy.mockReturnValueOnce(
+      new Promise<{ id: string }>(resolve => {
+        release = resolve;
+      })
+    );
+    const { result, rerender } = renderHook(
+      (props: { path: string }) =>
+        usePluginRouteMutation({ plugin: "@acme/p", path: props.path }),
+      { wrapper: wrapper(), initialProps: { path: "/patterns" } }
+    );
+
+    let held: Promise<unknown> | undefined;
+    act(() => {
+      held = result.current.write({ title: "Hero" });
+    });
+    // The hook is now pointed somewhere else while that write is unresolved.
+    rerender({ path: "/somewhere-else" });
+    await act(async () => {
+      release({ id: "p1" });
+      await held;
+    });
+
+    expect(postSpy.mock.calls[0]?.[0]).toBe("/plugins/@acme/p/patterns");
   });
 
   it("uses the verb the caller asked for", async () => {

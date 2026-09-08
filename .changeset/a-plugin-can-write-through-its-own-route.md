@@ -38,6 +38,14 @@ The plugin names ITSELF, as it does for the read, because nothing in a plugin co
 
 Nothing is toasted from the hook. The admin's own mutation hooks raise a toast because they own the surface that follows; a plugin owns its own, and a generic hook that announced every write would put the admin's voice inside someone else's feature.
 
+**A plugin write is never retried automatically**, which overrides the admin's own default of two. The admin retries its own mutations because they address routes it owns and knows the shape of; this addresses a route a plugin wrote, with no idempotency key and no requirement that the route be idempotent, and the default verb is `POST`. A create that commits and then loses its response would be sent again — twice — and an author gets three rows for one click with nothing reporting it. The asymmetry decides it: a write that is not retried costs a failure the caller is told about and may repeat deliberately; a write retried wrongly costs duplicate data nothing can identify afterwards.
+
+**The target travels with the body.** A write paused offline has its options updated before its retryer runs, so a closed-over route would send a body submitted against one endpoint to whichever the hook was rendered with by the time the connection returned.
+
+**Every write is reported, not only the newest.** TanStack's observer follows the most recent call, so with two writes in flight — a double submit, an autosave overlapping a save — the older one's rejection reached no observer: `error` never saw it and `pending` went false while that request was still running.
+
+`TBody` is bounded to `JsonValue`, published from `nextly/config` beside `RouteMethod`. Every sender applies `JSON.stringify`, so a `Date`, a `Map`, `FormData`, a function or a bigint is silently changed, dropped, or throws — the compiler refuses them now, where the author can still see what they meant.
+
 The write verbs are `Exclude<RouteMethod, "GET">` rather than a second list of methods. Spelled out, that was a narrower view of the route contract that would stop covering it the moment a method was added: a plugin could declare the route and this could not call it, and nothing would fail. `RouteMethod` is published from `nextly/config` for that, beside `pluginRouteFullPath` and for the same reason — the admin has to agree with the dispatcher about what a route is.
 
 `protectedApi.delete` now sends a body the caller SUPPLIED rather than one that is truthy. `false`, `0`, `""` and `null` are valid JSON, and a truthiness test dropped all four, so `delete` was the one verb that silently disagreed with what it was passed. Measured before changing it: no caller passes a body at all today, so nothing that exists sends one where it did not before.
