@@ -121,6 +121,49 @@ describe("what a plugin route already said is kept", () => {
     // And the directive that CONTRADICTS no-store does not survive beside it.
     expect(cc).not.toContain("max-age");
   });
+
+  it("keeps a QUOTED directive whole rather than splitting inside it", async () => {
+    // `private="Set-Cookie, X-User"` is ONE field-qualified directive. Splitting
+    // on every comma made it two: the first was discarded as `private` and the
+    // second survived as the fragment `X-User"`, so the header this boundary
+    // emitted was malformed — measured, `private, no-store, X-User"` — and a
+    // strict intermediary may reject it along with the privacy directives it
+    // was carrying.
+    reqAuth.mockResolvedValue(okAuth as never);
+    const quoted = route({
+      handler: () =>
+        Response.json(opaque, {
+          headers: {
+            "Cache-Control": 'private="Set-Cookie, X-User", no-transform',
+          },
+        }),
+    });
+
+    const res = await runPluginRoute(req(), match(quoted));
+
+    const cc = res.headers.get("Cache-Control") ?? "";
+    // No dangling fragment, and no unbalanced quote.
+    expect(cc).not.toContain('X-User"');
+    expect((cc.match(/"/g) ?? []).length % 2).toBe(0);
+    // The directive beside it still survives, so this is not "drop everything".
+    expect(cc).toContain("no-transform");
+    expect(cc).toContain("no-store");
+  });
+
+  it("varies on the API KEY as well as the cookie", async () => {
+    // A non-public plugin route accepts `Authorization: Bearer` — an API key,
+    // carrying its own user, roles and permissions. Naming only the cookie
+    // gives two different keys the same cache key, so an intermediary that
+    // stores despite `no-store` can replay the first key's answer to the
+    // second.
+    reqAuth.mockResolvedValue(okAuth as never);
+
+    const res = await runPluginRoute(req(), match(route({})));
+
+    const vary = (res.headers.get("Vary") ?? "").toLowerCase();
+    expect(vary).toContain("cookie");
+    expect(vary).toContain("authorization");
+  });
 });
 
 describe("an authenticated plugin route answers ONE session", () => {
@@ -133,7 +176,7 @@ describe("an authenticated plugin route answers ONE session", () => {
     const res = await runPluginRoute(req(), match(route({})));
 
     expect(res.headers.get("Cache-Control")).toBe("private, no-store");
-    expect(res.headers.get("Vary")).toBe("Cookie");
+    expect(res.headers.get("Vary")).toContain("Cookie");
   });
 
   it("marks the REFUSAL too, which is the direction that looks like a gate", async () => {
@@ -145,7 +188,7 @@ describe("an authenticated plugin route answers ONE session", () => {
 
     expect(res.status).toBe(401);
     expect(res.headers.get("Cache-Control")).toBe("private, no-store");
-    expect(res.headers.get("Vary")).toBe("Cookie");
+    expect(res.headers.get("Vary")).toContain("Cookie");
   });
 
   it("leaves a PUBLIC route cacheable, because its answer is not one caller's", async () => {

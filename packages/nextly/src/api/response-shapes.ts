@@ -282,7 +282,7 @@ export function applySessionCacheHeaders(headers: Headers): void {
     "Cache-Control",
     privateCacheControl(headers.get("Cache-Control"))
   );
-  headers.set("Vary", varyingOnCookie(headers.get("Vary")));
+  headers.set("Vary", varyingOnCredentials(headers.get("Vary")));
 }
 
 /**
@@ -313,6 +313,45 @@ function directiveName(directive: string): string {
 }
 
 /**
+ * One header's comma-separated members, respecting quoted values.
+ *
+ * A plain `split(",")` is wrong for `Cache-Control`, because a directive may
+ * carry a QUOTED field list: `private="Set-Cookie, X-User"` is one directive
+ * and splitting it produced two — the first discarded as `private`, the second
+ * surviving as the fragment `X-User"`, so this boundary emitted a malformed
+ * header and a strict intermediary could reject the privacy directives along
+ * with it. Measured on that input before the fix: `private, no-store, X-User"`.
+ *
+ * Backslash escapes are honoured inside a quoted string, so a quote written as
+ * part of a value does not end it.
+ */
+function splitOutsideQuotes(value: string): string[] {
+  const members: string[] = [];
+  let current = "";
+  let quoted = false;
+  let escaped = false;
+  for (const char of value) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+    } else if (quoted && char === "\\") {
+      current += char;
+      escaped = true;
+    } else if (char === '"') {
+      quoted = !quoted;
+      current += char;
+    } else if (char === "," && !quoted) {
+      members.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  members.push(current);
+  return members.map(member => member.trim()).filter(member => member !== "");
+}
+
+/**
  * `Cache-Control` that says private, keeping what the handler already said.
  *
  * Merged rather than replaced. A handler that had set `no-transform` lost it,
@@ -320,24 +359,33 @@ function directiveName(directive: string): string {
  * in flight whether or not a cache may keep it.
  */
 function privateCacheControl(existing: string | null): string {
-  const kept = (existing ?? "")
-    .split(",")
-    .map(directive => directive.trim())
-    .filter(directive => directive !== "")
-    .filter(directive => {
-      const name = directiveName(directive);
-      return (
-        !CACHE_DIRECTIVES_REPLACED.has(name) &&
-        name !== "private" &&
-        name !== "no-store"
-      );
-    });
+  const kept = splitOutsideQuotes(existing ?? "").filter(directive => {
+    const name = directiveName(directive);
+    return (
+      !CACHE_DIRECTIVES_REPLACED.has(name) &&
+      name !== "private" &&
+      name !== "no-store"
+    );
+  });
   // The privacy directives lead, so a reader sees the binding rule first.
   return ["private", "no-store", ...kept].join(", ");
 }
 
 /**
- * `Vary` that includes `Cookie`, keeping what the response already varied on.
+ * The credentials a session-gated response can depend on.
+ *
+ * BOTH, because either can identify the caller. A cookie is the browser's way
+ * in; `Authorization: Bearer` is an API key's, and `requireAuthentication`
+ * accepts one — with that key's own user, roles and permissions. Naming only
+ * the cookie gives two different API keys the same cache key, so for any
+ * intermediary that stores despite `no-store` — the fallback this header exists
+ * for — the first key's answer can be replayed to the second.
+ */
+const SESSION_CREDENTIAL_FIELDS = ["Cookie", "Authorization"] as const;
+
+/**
+ * `Vary` naming every credential the answer depends on, keeping what the
+ * response already varied on.
  *
  * Replacing it was the defect: a response varying on `Accept-Language` became
  * one varying only on `Cookie`, so a cache could answer a second language from
@@ -346,16 +394,19 @@ function privateCacheControl(existing: string | null): string {
  * `*` is left alone. It already means "vary on everything", and narrowing it to
  * a list would widen what may be shared.
  */
-function varyingOnCookie(existing: string | null): string {
+function varyingOnCredentials(existing: string | null): string {
   const fields = (existing ?? "")
     .split(",")
     .map(field => field.trim())
     .filter(field => field !== "");
   if (fields.includes("*")) return "*";
   const seen = new Set(fields.map(field => field.toLowerCase()));
-  return seen.has("cookie")
-    ? fields.join(", ")
-    : [...fields, "Cookie"].join(", ");
+  for (const field of SESSION_CREDENTIAL_FIELDS) {
+    if (seen.has(field.toLowerCase())) continue;
+    fields.push(field);
+    seen.add(field.toLowerCase());
+  }
+  return fields.join(", ");
 }
 
 /** {@link applySessionCacheHeaders} for a response the caller owns. */
