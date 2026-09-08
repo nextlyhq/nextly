@@ -10,7 +10,11 @@
 
 import { createRequire } from "node:module";
 
-import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  NextlyError,
+  type PluginDefinition,
+} from "@nextlyhq/plugin-sdk";
 import type { CollectionConfig } from "nextly";
 // Author against the SDK — the stable, experimental plugin boundary.
 
@@ -21,7 +25,9 @@ import {
   asSubmissionDocument,
   asSubmissionDocuments,
 } from "./document-shapes";
+import { prepareSubmission } from "./handlers/prepare-submission";
 import type {
+  AnyFormField,
   BeforeEmailFilterContext,
   FormNotification,
   FormBuilderPluginOptions,
@@ -492,6 +498,24 @@ export function formBuilder(
         );
       }
 
+      // Every submission is brought to the form's own shape here, whatever
+      // created it. Registered directly on the registry, like the two below, so
+      // it runs for every API surface that writes one: the plugin's HTTP
+      // handler, `nextly.forms.submit()`, and an admin creating a row by hand.
+      //
+      // The Direct API did none of this. A submission arriving that way was
+      // stored with whatever keys the caller sent, values that never met the
+      // form's schema, and markup intact, while the same submission over HTTP
+      // was transformed, validated and sanitized. Putting the rule at the write
+      // seam rather than in the second caller is what stops a third one
+      // inheriting the gap.
+      nextly.hooks.on(
+        "beforeCreate",
+        submissionSlug,
+        async (context: unknown) =>
+          prepareSubmissionForWrite(context, resolvedConfig, nextly)
+      );
+
       // Register afterCreate hook for email notifications
       nextly.hooks.on(
         "afterCreate",
@@ -784,6 +808,111 @@ export function buildNotificationEmails(input: {
 /**
  * Send email notifications after a form submission is created.
  */
+/**
+ * Bring an incoming submission to the shape its form declares.
+ *
+ * Runs on `beforeCreate` for the submissions collection, so it sees every write
+ * rather than every caller. The cost is one read of the parent form per
+ * submission: the HTTP handler has already loaded it and cannot hand it over,
+ * because a hook receives the row and not the request. Submissions are written
+ * one visitor at a time and the read is by primary key, which is the cheaper
+ * side of the trade against a rule two callers have to remember.
+ *
+ * Refuses rather than storing when it cannot judge. A form it cannot read, or
+ * one whose `fields` is not a list, leaves nothing to transform against, and
+ * transforming against an empty list would project the submission down to `{}`
+ * and store a row that says the visitor sent nothing. Silently emptying someone's
+ * submission is worse than declining it.
+ *
+ * A row that names no form is passed through untouched. `form` is `required` on
+ * the collection, so it is already refused a step later, and rejecting it here
+ * would answer a question this hook was not asked.
+ */
+export async function prepareSubmissionForWrite(
+  context: unknown,
+  config: ResolvedFormBuilderConfig,
+  nextly: NextlyInstance
+): Promise<Record<string, unknown> | undefined> {
+  const ctx = context as { data?: Record<string, unknown> };
+  const submission = ctx.data;
+  if (!submission || typeof submission !== "object") return ctx.data;
+
+  const rawFormId = submission.form;
+  let formId: string | null = null;
+  if (typeof rawFormId === "string") {
+    formId = rawFormId;
+  } else if (rawFormId && typeof rawFormId === "object") {
+    const maybeId = (rawFormId as { id?: unknown }).id;
+    if (typeof maybeId === "string") formId = maybeId;
+  }
+  if (!formId) return ctx.data;
+
+  // `data` arrives as an object from every caller in this repository. A string
+  // is read as the JSON a dialect stores rather than assumed to be one field's
+  // value, and an unparseable one stops here: `parseJsonColumn` answers `{}` for
+  // it, which would store an empty submission under a form the visitor filled in.
+  const raw = submission.data;
+  let incoming: Record<string, unknown>;
+  if (typeof raw === "string") {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("not an object");
+      }
+      incoming = parsed as Record<string, unknown>;
+    } catch {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "data",
+            code: "INVALID",
+            message: "Submission data must be an object.",
+          },
+        ],
+      });
+    }
+  } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    incoming = raw as Record<string, unknown>;
+  } else {
+    incoming = {};
+  }
+
+  const form = await fetchParentForm(config, formId, nextly);
+  if (!form || !Array.isArray(form.fields)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "form",
+          code: "INVALID",
+          message:
+            "The form this submission belongs to could not be read, so the submission could not be checked against it.",
+        },
+      ],
+    });
+  }
+
+  // Content spam keeps its evidence. The handler stores a honeypot or reCAPTCHA
+  // hit flagged rather than dropping it, so a false positive stays recoverable,
+  // and requiring it to be valid would throw away the thing being reviewed. It
+  // is still transformed and sanitized.
+  const prepared = prepareSubmission({
+    data: incoming,
+    fields: form.fields as AnyFormField[],
+    validate: submission.status !== "spam",
+  });
+
+  if (prepared.validationErrors) {
+    throw NextlyError.validation({
+      errors: Object.entries(prepared.validationErrors).map(
+        ([path, message]) => ({ path, code: "INVALID", message })
+      ),
+    });
+  }
+
+  ctx.data = { ...submission, data: prepared.data };
+  return ctx.data;
+}
+
 async function handleSubmissionCreated(
   context: unknown,
   config: ResolvedFormBuilderConfig,

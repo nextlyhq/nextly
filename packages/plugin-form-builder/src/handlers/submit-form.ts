@@ -16,7 +16,6 @@ import type {
   FormDocument,
   SubmissionDocument,
   ResolvedFormBuilderConfig,
-  AnyFormField,
 } from "../types";
 import { normalizeFormSettings } from "../utils/form-settings";
 import {
@@ -33,6 +32,7 @@ import {
   type RedirectUrlPattern,
 } from "../utils/redirect-target";
 
+import { prepareSubmission } from "./prepare-submission";
 import { checkSpam } from "./spam-detection";
 
 // ============================================================
@@ -266,38 +266,33 @@ export async function submitForm(
     // 4. Transform + validate. Content spam skips validation entirely — it
     // is stored for review exactly as the bot shaped it (declared fields
     // only, sanitized), and requiring validity would drop the evidence.
-    const transformedData = transformFormData(data, form.fields);
-    let storedData: Record<string, unknown>;
-
     if (isContentSpam) {
       logger.info?.("Spam submission detected — storing flagged", {
         formSlug,
         reason: spamResult.reason,
         ipAddress: metadata?.ipAddress,
       });
-      sanitizeSubmissionData(transformedData, form.fields);
-      storedData = transformedData;
-    } else {
-      const schema = generateZodSchema(form.fields);
-      const validationResult = schema.safeParse(transformedData);
-
-      if (!validationResult.success) {
-        const validationErrors = getValidationErrors(validationResult);
-        logger.debug?.("Form validation failed", {
-          formSlug,
-          errors: validationErrors,
-        });
-        return {
-          success: false,
-          error: "Validation failed",
-          validationErrors,
-        };
-      }
-
-      // Sanitize validated submission data (strip HTML from free-text fields)
-      sanitizeSubmissionData(validationResult.data, form.fields);
-      storedData = validationResult.data;
     }
+
+    const prepared = prepareSubmission({
+      data,
+      fields: form.fields,
+      validate: !isContentSpam,
+    });
+
+    if (prepared.validationErrors) {
+      logger.debug?.("Form validation failed", {
+        formSlug,
+        errors: prepared.validationErrors,
+      });
+      return {
+        success: false,
+        error: "Validation failed",
+        validationErrors: prepared.validationErrors,
+      };
+    }
+
+    const storedData = prepared.data;
 
     // 5. Create submission record. Content spam (honeypot/recaptcha) is
     // stored FLAGGED, never silently dropped: a false positive stays
@@ -676,67 +671,6 @@ export async function isFormAcceptingSubmissions(
   }
 
   return form.status === "published";
-}
-
-// ============================================================
-// Submission Data Sanitization
-// ============================================================
-
-/**
- * Form field types that accept free-text string input from end users.
- * These fields can contain HTML injection vectors and must be sanitized.
- *
- * Fields NOT in this set (select, radio, checkbox, number, date, time, file)
- * are constrained by Zod enum/type validation and don't need sanitization.
- */
-const TEXT_FORM_FIELDS = new Set([
-  "text",
-  "email",
-  "textarea",
-  "phone",
-  "url",
-  "hidden",
-]);
-
-/**
- * Remove all HTML tags from a string, collapse whitespace, and trim.
- *
- * Uses a regex that matches both complete tags (`<b>`) and unclosed tags
- * at end-of-string (`<script`) to prevent browsers from interpreting
- * incomplete markup.
- */
-function stripHtmlTags(input: string): string {
-  return input
-    .replace(/<[^>]*(?:>|$)/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/**
- * Sanitize form submission data by stripping HTML tags from free-text fields.
- *
- * Iterates over the form's field definitions and applies `stripHtmlTags()`
- * to values whose field type is in `TEXT_FORM_FIELDS`. Non-string values
- * and constrained fields (select, radio, checkbox, etc.) are left unchanged.
- *
- * Mutates the data object in place for efficiency.
- *
- * @param data - Validated submission data (mutated in place)
- * @param fields - Form field definitions (used for type-aware dispatch)
- */
-function sanitizeSubmissionData(
-  data: Record<string, unknown>,
-  fields: AnyFormField[]
-): void {
-  for (const field of fields) {
-    // Plugin field types are not in TEXT_FORM_FIELDS, so they skip naturally.
-    if (!TEXT_FORM_FIELDS.has(field.type)) continue;
-
-    const value = data[field.name];
-    if (typeof value !== "string") continue;
-
-    data[field.name] = stripHtmlTags(value);
-  }
 }
 
 // ============================================================
