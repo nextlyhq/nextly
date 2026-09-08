@@ -138,6 +138,9 @@ that means the caller's identity:
 ```tsx
 // Per-user list — the caller's id is in the key, so it never leaks.
 declare const user: import("nextly").UserContext;
+// `nx` is the instance the page obtains above, inside its own component. Each
+// fence here stands alone, so it is declared rather than assumed in scope.
+declare const nx: Awaited<ReturnType<typeof import("nextly").getNextly>>;
 
 const mine = await cachedFind(() => nx.find({ collection: "orders", user }), {
   tags: nextlyTags("orders"),

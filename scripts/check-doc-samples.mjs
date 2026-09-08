@@ -750,7 +750,28 @@ export function declaresName(code, name) {
   // in an object literal, or a property assignment. Not something
   // `declaredNamesIn` collects, because it is not a declaration, but a later
   // fence using the name is still continuing the page rather than inventing it.
-  return new RegExp(`\\b${name}\\s*[:=]\\s*(?:async\\s*)?\\(`, "s").test(code);
+  // At the top level only. The pattern used to match anywhere, so a handler
+  // bound INSIDE a function body — `init(ctx) { const handler = (req) => ... }`
+  // — was recorded as though the next fence could see it. The context compile
+  // still reported the name missing, but the fence had no first-pass
+  // diagnostic to contradict, so it was filed as merely unchecked and an
+  // undefined reference escaped the report.
+  //
+  // Depth is counted rather than parsed: a brace inside a string or a comment
+  // would mislead it, and the failure direction of that is to consider a
+  // top-level binding nested and report a name the page really does define,
+  // which the continuation pass then has to explain. Wrong in the loud
+  // direction rather than the quiet one.
+  const binding = new RegExp(`\\b${name}\\s*[:=]\\s*(?:async\\s*)?\\(`, "s");
+  let depth = 0;
+  for (const line of code.split("\n")) {
+    if (depth === 0 && binding.test(line)) return true;
+    for (const ch of line) {
+      if (ch === "{" || ch === "(") depth += 1;
+      else if (ch === "}" || ch === ")") depth = Math.max(0, depth - 1);
+    }
+  }
+  return false;
 }
 
 /**
@@ -761,7 +782,40 @@ export function declaresName(code, name) {
  * excused. Anything this misses shows up as a name still missing after the
  * rebuild, which is reported rather than swallowed.
  */
-export function declaredNamesIn(code) {
+/**
+ * The lines of a fence that are at the top level, with deeper ones blanked.
+ *
+ * The declaration patterns below anchor at a line start, which a declaration
+ * nested inside a function also has. The comment on `declaredNamesIn` said it
+ * was deliberately shallow and the code never enforced it: `init(ctx) { const
+ * handler = ... }` recorded `handler` as though the next fence could see it,
+ * and an undefined reference in that fence was then filed as merely unchecked
+ * rather than reported.
+ *
+ * Depth is counted rather than parsed, so a brace inside a string or a comment
+ * misleads it. That mistake blanks a line that was really top level, which
+ * turns a name the page does define into one it appears not to — loud, and
+ * caught by the continuation pass — rather than excusing one it does not.
+ */
+function topLevelOnly(code) {
+  let depth = 0;
+  return code
+    .split("\n")
+    .map(line => {
+      const here = depth;
+      for (const ch of line) {
+        if (ch === "{" || ch === "(" || ch === "[") depth += 1;
+        else if (ch === "}" || ch === ")" || ch === "]") {
+          depth = Math.max(0, depth - 1);
+        }
+      }
+      return here === 0 ? line : "";
+    })
+    .join("\n");
+}
+
+export function declaredNamesIn(source) {
+  const code = topLevelOnly(source);
   const names = new Set();
   const add = n => {
     if (n) names.add(n);
@@ -797,8 +851,12 @@ export function declaredNamesIn(code) {
       add(renamed ? renamed[1] : piece.match(/^[A-Za-z_$][\w$]*/)?.[0]);
     }
   }
-  // import defaults, namespaces and named bindings, with `as` aliases.
-  for (const m of code.matchAll(/^\s*import\s+([^;]*?)\s+from\s/gms)) {
+  // Imports are read from the ORIGINAL source, not the top-level view. An
+  // import clause spans lines and opens a brace, so blanking by depth erased
+  // the middle of `import {\n  defineConfig,\n} from "nextly"` and a later
+  // fence using the name was reported as undefined. An import binding is
+  // top-level wherever its clause happens to wrap.
+  for (const m of source.matchAll(/^\s*import\s+([^;]*?)\s+from\s/gms)) {
     // `import type { Foo }` and `import type Foo`: the keyword belongs to the
     // whole clause and is not a binding. Stripped here, before the braces
     // become commas, so that what survives inside them is only bindings.
