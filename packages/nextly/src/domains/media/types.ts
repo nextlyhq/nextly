@@ -5,6 +5,8 @@
  * These types represent the public API surface for media operations.
  */
 
+import type { ImageSizeVariant } from "../../types/media";
+
 /**
  * Media file returned from operations
  */
@@ -19,6 +21,19 @@ export interface MediaFile {
   duration?: number | null;
   url: string;
   thumbnailUrl?: string | null;
+  /**
+   * Generated image variants, keyed by the configured size name.
+   *
+   * Optional and nullable because the column is: a non-image, or an image
+   * uploaded before any size was configured, carries none. Every variant URL is
+   * absolutized exactly as `url` is, so a caller reading `sizes.large.url` and
+   * a caller reading `url` get the same kind of value.
+   */
+  sizes?: Record<string, ImageSizeVariant> | null;
+  /** Horizontal focal point, 0 is the left edge and 100 the right. */
+  focalX?: number | null;
+  /** Vertical focal point, 0 is the top edge and 100 the bottom. */
+  focalY?: number | null;
   altText?: string | null;
   caption?: string | null;
   tags?: string[] | null;
