@@ -17,6 +17,15 @@ export default defineConfig({
       "**/dist/**",
       "src/**/*.integration.test.ts",
     ],
+    // The component suites here render React under jsdom, which is heavier than
+    // the node unit tests vitest's 5s default is sized for. This package
+    // carried a 30s budget until the integration suites moved out, and that
+    // budget was covering these too: without it `ConditionalLogicEditor` took
+    // 5399ms on a loaded CI runner and failed on the default, turning `main`
+    // red. Set to the value `@nextlyhq/admin` already uses for the same class
+    // of test rather than a number picked here, and kept apart from the 30s the
+    // integration config carries, which is sized for an instance boot.
+    testTimeout: 10_000,
     // Component suites request jsdom per file (`@vitest-environment jsdom`)
     // rather than switching it on globally. This setup only fills in globals
     // jsdom lacks, so it is inert for the node ones.
