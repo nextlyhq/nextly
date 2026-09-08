@@ -83,7 +83,7 @@ function editorSpy(doc: BlockDocument, selectedId: string | null): EditorSpy {
 function mount(editor: EditorState) {
   render(
     <ShortcutProvider>
-      <BlockKeyboardActions editor={editor} />
+      <BlockKeyboardActions onSaveAsPattern={() => undefined} editor={editor} />
     </ShortcutProvider>
   );
 }
@@ -395,6 +395,7 @@ describe("useBlockKeyboardActions", () => {
     render(
       <ShortcutProvider>
         <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
           editor={editor}
           nesting={{ parentsOf: () => ["acme/box"] }}
         />
@@ -997,7 +998,10 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
     render(
       <ShortcutProvider>
         <HostBindings />
-        <BlockKeyboardActions editor={editor} />
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+        />
       </ShortcutProvider>
     );
     return hostCancel;
@@ -1056,7 +1060,10 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
     }
     render(
       <ShortcutProvider>
-        <BlockKeyboardActions editor={editor} />
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+        />
         <HostBindings />
       </ShortcutProvider>
     );
@@ -1079,7 +1086,10 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
     try {
       render(
         <ShortcutProvider>
-          <BlockKeyboardActions editor={editor} />
+          <BlockKeyboardActions
+            onSaveAsPattern={() => undefined}
+            editor={editor}
+          />
         </ShortcutProvider>
       );
 
@@ -1107,7 +1117,10 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
     const editor = editorSpy(pair(), "a");
     render(
       <ShortcutProvider>
-        <BlockKeyboardActions editor={editor} />
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+        />
       </ShortcutProvider>
     );
 
@@ -1136,7 +1149,10 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
     render(
       <ShortcutProvider>
         <HostBindings />
-        <BlockKeyboardActions editor={editor} />
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+        />
       </ShortcutProvider>
     );
 

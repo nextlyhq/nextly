@@ -73,6 +73,7 @@ export type { SingleDocument } from "./hooks/queries";
 // answers the second, each by CHECKING rather than asserting — which matters
 // because a transport failure rejects with a native error that is neither.
 export {
+  apiErrorMessage,
   isApiError,
   validationIssues,
   type ApiError,

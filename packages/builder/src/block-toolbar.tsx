@@ -47,6 +47,7 @@ import {
   ArrowUp,
   Copy,
   CornerLeftUp,
+  LayoutTemplate,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
@@ -72,6 +73,9 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "move-up": ArrowUp,
   "move-down": ArrowDown,
   duplicate: Copy,
+  // A page outline rather than a bookmark or a star: what is stored is a piece
+  // of layout, and the same glyph names the Patterns tier in the insert panel.
+  "save-as-pattern": LayoutTemplate,
   delete: Trash2,
 };
 

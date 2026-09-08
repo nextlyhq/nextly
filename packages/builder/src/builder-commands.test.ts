@@ -13,7 +13,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 
-import { builderCommands, type CommandVerbs } from "./builder-commands";
+import {
+  blockActionRunners,
+  builderCommands,
+  type CommandVerbs,
+} from "./builder-commands";
+import { toolbarActions } from "./toolbar-actions";
 
 function node(id: string, extra: Partial<BlockNode> = {}): BlockNode {
   return {
@@ -35,6 +40,7 @@ function verbs(): CommandVerbs & Record<string, ReturnType<typeof vi.fn>> {
     delete: vi.fn(),
     duplicate: vi.fn(),
     selectParent: vi.fn(),
+    saveAsPattern: vi.fn(),
   } as unknown as CommandVerbs & Record<string, ReturnType<typeof vi.fn>>;
 }
 
@@ -128,5 +134,64 @@ describe("builderCommands", () => {
 
     expect(duplicate?.label).toBe("Duplicate block");
     expect(duplicate?.keywords).toContain("duplicate");
+  });
+});
+
+describe("every verb the bar offers can actually be run", () => {
+  it("binds a runner for each id `toolbarActions` emits", () => {
+    // The invariant the totalised map exists for, asserted against what the bar
+    // ACTUALLY emits rather than against the union it is typed by. The union is
+    // checked by the compiler; what it cannot check is that the two stay the
+    // same set — a verb emitted with no runner reaches an author as a control
+    // that accepts a click and does nothing.
+    const runners = blockActionRunners(verbs());
+    const document = documentOf([node("a"), node("b"), node("c")]);
+    const emitted = [
+      ...toolbarActions(document, "a"),
+      ...toolbarActions(document, "a", ["a", "b"]),
+      ...toolbarActions(document, "a", ["a", "c"]),
+    ].map(action => action.id);
+
+    // The control: an empty emission would make the loop below assert nothing.
+    expect(new Set(emitted).size).toBeGreaterThan(1);
+    for (const id of new Set(emitted)) {
+      expect(typeof runners[id]).toBe("function");
+    }
+  });
+
+  it("runs a DIFFERENT verb for every id", () => {
+    // Derived from the map rather than from a list of names, so the next verb
+    // is covered by this the day it is added.
+    //
+    // The signature is what the runner actually did — which verb, with which
+    // argument — rather than how many verbs fired. Counting was the first
+    // version and it proved nothing: binding `save-as-pattern` to `verbs.delete`
+    // still fires exactly one call per id, so two ids doing the same thing
+    // passed. `move-up` and `move-down` share a verb and differ by argument,
+    // which is why the argument is part of the signature rather than the verb
+    // alone.
+    const spies = verbs();
+    const runners = blockActionRunners(spies);
+
+    const signatures = new Map<string, string>();
+    for (const [id, run] of Object.entries(runners)) {
+      const before = new Map(
+        Object.entries(spies).map(([name, spy]) => [
+          name,
+          spy.mock.calls.length,
+        ])
+      );
+      run();
+      const fired = Object.entries(spies)
+        .filter(
+          ([name, spy]) => spy.mock.calls.length > (before.get(name) ?? 0)
+        )
+        .map(([name, spy]) => `${name}(${JSON.stringify(spy.mock.lastCall)})`);
+      expect({ id, fired: fired.length }).toEqual({ id, fired: 1 });
+      signatures.set(id, fired[0] as string);
+    }
+
+    // Every id did something no other id did.
+    expect(new Set(signatures.values()).size).toBe(signatures.size);
   });
 });

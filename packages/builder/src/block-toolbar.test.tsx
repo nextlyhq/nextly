@@ -35,6 +35,7 @@ import { BlockToolbar } from "./block-toolbar";
 import { Canvas } from "./canvas";
 import type { EditorState } from "./editor-state";
 import { BlockKeyboardActions } from "./keyboard-actions";
+import { toolbarActions } from "./toolbar-actions";
 
 afterEach(() => {
   cleanup();
@@ -117,7 +118,7 @@ function editorSpy(
 function tree(editor: EditorState, props: { hidden?: boolean }) {
   return (
     <ShortcutProvider>
-      <BlockKeyboardActions editor={editor}>
+      <BlockKeyboardActions onSaveAsPattern={() => undefined} editor={editor}>
         <Canvas
           document={editor.document}
           siteStyles={{ css: "", classes: {} } as never}
@@ -157,13 +158,26 @@ describe("BlockToolbar", () => {
     expect(screen.queryByRole("toolbar")).toBeNull();
   });
 
-  it("offers the five verbs, named", () => {
+  it("names every verb the model offers, in its order", () => {
+    // Derived from `toolbarActions` rather than listed, so a verb added to the
+    // model is asserted here the day it arrives. A literal list passes forever
+    // while the bar grows a button nobody checks — and this component's whole
+    // job is to draw what that function decided.
     register();
-    mount(editorSpy(pair(), "a"));
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
 
+    const expected = toolbarActions(
+      editor.document,
+      editor.selectedId,
+      editor.selection.ids
+    ).map(action => action.label);
+
+    // The control: an empty model would make the comparison vacuous.
+    expect(expected.length).toBeGreaterThan(1);
     expect(
       screen.getAllByRole("button").map(b => b.getAttribute("aria-label"))
-    ).toEqual(["Select parent", "Move up", "Move down", "Duplicate", "Delete"]);
+    ).toEqual(expected);
   });
 
   it("presses the SAME verb the keystroke presses", () => {
@@ -295,21 +309,23 @@ describe("BlockToolbar", () => {
     mount(editorSpy(pair(), "a"));
 
     const buttons = screen.getAllByRole("button");
+    // One stop, and every other button out of the tab order — stated as a shape
+    // rather than a fixed-length list, so it still describes the rule when the
+    // bar gains a verb.
+    expect(buttons.length).toBeGreaterThan(1);
     expect(buttons.map(b => b.getAttribute("tabindex"))).toEqual([
       "0",
-      "-1",
-      "-1",
-      "-1",
-      "-1",
+      ...buttons.slice(1).map(() => "-1"),
     ]);
 
     fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowRight" });
     expect(document.activeElement).toBe(buttons[1]);
 
-    // Wrapping, so Delete is one press from Select parent rather than four.
+    // Wrapping, so the last verb is one press from the first rather than a walk
+    // back along the bar.
     fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowLeft" });
     fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowLeft" });
-    expect(document.activeElement).toBe(buttons[4]);
+    expect(document.activeElement).toBe(buttons.at(-1));
   });
 
   it("keeps the roving stop where FOCUS is when the selection moves", () => {
@@ -329,8 +345,9 @@ describe("BlockToolbar", () => {
 
     fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowRight" });
 
-    // Delete, the button after the focused one — not Move up, which is where a
-    // stop reset to 0 would have sent it.
+    // The button AFTER the focused one — not the second button, which is where
+    // a stop reset to 0 would have sent it. Named by position rather than by
+    // verb, because which verb sits there is the bar's business.
     expect(document.activeElement).toBe(buttons[4]);
   });
 

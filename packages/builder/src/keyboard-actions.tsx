@@ -157,6 +157,21 @@ export interface BlockActions {
   readonly duplicate: () => void;
   /** Select the container holding the selection. */
   readonly selectParent: () => void;
+  /**
+   * Begin storing the selection in the pattern library.
+   *
+   * Unlike the four above it this runs NO op: it hands the gesture back to the
+   * host, which owns the library, the form that names what is saved and the
+   * write that stores it. It travels with the others because every surface over
+   * these verbs — toolbar, context menu, palette — must reach it the same way,
+   * and a second channel for one verb is how one surface comes to offer what
+   * another cannot run.
+   *
+   * No keystroke is bound to it here. The others are direct manipulations of a
+   * selection an author is looking at; this opens a form, and a shortcut that
+   * opens a modal belongs to the host's own key map rather than to the canvas.
+   */
+  readonly saveAsPattern: () => void;
 }
 
 /**
@@ -206,6 +221,15 @@ export interface BlockKeyboardActionsOptions {
    */
   nesting?: NestingSource;
   /**
+   * Begin storing the selection in the library, when the author asks to.
+   *
+   * Supplied by the host because everything the gesture needs is the host's:
+   * which collection a pattern goes in, what it is called, and the route that
+   * writes it. Nothing here can do any of that, and a builder that guessed would
+   * be guessing about somebody else's schema.
+   */
+  onSaveAsPattern: () => void;
+  /**
    * Whether the bindings are live. Defaults to true.
    *
    * A host that mounts the canvas inside something modal turns them off rather
@@ -254,6 +278,7 @@ export function useBlockKeyboardActions({
   enabled = true,
   onEditText,
   nesting,
+  onSaveAsPattern,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   /*
    * The same rule source the pointer route asks, defaulted the way the insert
@@ -708,8 +733,19 @@ export function useBlockKeyboardActions({
       delete: deleteSelected,
       duplicate: duplicateSelected,
       selectParent,
+      // Passed straight through, unwrapped. Every other verb here computes a
+      // plan, applies it and announces the result; this one only says the author
+      // asked. Announcing here as well would put the builder's voice on a form
+      // it does not draw, and would say "saved" before anything was.
+      saveAsPattern: onSaveAsPattern,
     }),
-    [moveSelected, deleteSelected, duplicateSelected, selectParent]
+    [
+      moveSelected,
+      deleteSelected,
+      duplicateSelected,
+      selectParent,
+      onSaveAsPattern,
+    ]
   );
 
   return { announcement, actions };
@@ -736,6 +772,7 @@ export function BlockKeyboardActions({
   enabled,
   onEditText,
   nesting,
+  onSaveAsPattern,
   children,
 }: BlockKeyboardActionsOptions & {
   readonly children?: React.ReactNode;
@@ -743,6 +780,7 @@ export function BlockKeyboardActions({
   const { announcement, actions } = useBlockKeyboardActions({
     editor,
     enabled,
+    onSaveAsPattern,
     ...(onEditText === undefined ? {} : { onEditText }),
     ...(nesting === undefined ? {} : { nesting }),
   });

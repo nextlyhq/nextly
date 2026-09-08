@@ -36,6 +36,22 @@ export interface CommandVerbs {
   readonly delete: () => void;
   readonly duplicate: () => void;
   readonly selectParent: () => void;
+  /**
+   * Begin storing the selection in the pattern library.
+   *
+   * REQUIRED, like the four above it, and that is a decision rather than an
+   * oversight. Nothing else here is a capability a host may lack, and making
+   * this one optional produces the shape the totalised runner map exists to
+   * prevent: a verb the bar offers with nothing bound to it, which reaches an
+   * author as a button that does nothing. Required, the compiler names every
+   * host that has to wire it.
+   *
+   * A host with no library to save into is a real case and not one there is a
+   * second example of yet. Designing an availability model against a guess is
+   * how a surface ends up with a control that is dimmed for a reason nobody can
+   * phrase; when there is a second host it can be designed against that.
+   */
+  readonly saveAsPattern: () => void;
 }
 
 /** Everything the command list is built from. */
@@ -79,6 +95,13 @@ const BLOCK_COMMAND_COPY: Record<
     label: "Duplicate block",
     keywords: ["duplicate", "copy", "clone", "repeat"],
   },
+  "save-as-pattern": {
+    label: "Save block as pattern",
+    // "reuse" and "template" are what an author who has used another builder
+    // searches with; the taxonomy calls it a pattern and they need not know
+    // that before they can find it.
+    keywords: ["save", "pattern", "library", "reuse", "template", "snippet"],
+  },
   delete: {
     label: "Delete block",
     keywords: ["delete", "remove", "destroy", "clear"],
@@ -113,6 +136,7 @@ export function blockActionRunners(
     "move-up": () => verbs.move("up"),
     "move-down": () => verbs.move("down"),
     duplicate: verbs.duplicate,
+    "save-as-pattern": verbs.saveAsPattern,
     delete: verbs.delete,
   };
 }

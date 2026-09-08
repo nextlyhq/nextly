@@ -155,6 +155,7 @@ import { DocumentStatusPill } from "./DocumentStatusPill";
 import { pageRenderInputs, readDocumentLimits } from "./page-render-inputs";
 import { PageBuilderCard } from "./PageBuilderCard";
 import { usePatternLibrary } from "./pattern-library-client";
+import { SavePatternPrompt } from "./SavePatternPrompt";
 /* The save state, which the status pill cannot carry: it renders nothing on a
    collection with no publish lifecycle, and took the only reading of unsaved
    work down with it. */
@@ -1765,6 +1766,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   }, []);
   const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
 
+  // Whether the save-as-pattern form is up. A boolean here rather than the form
+  // itself, because the verb that raises it belongs to the shared chain — the
+  // toolbar, the context menu and the palette all reach it — while everything
+  // the form needs is mounted only while it is up. See `SavePatternPrompt`.
+  const [savingPattern, setSavingPattern] = useState(false);
+  const openSavePattern = useCallback(() => setSavingPattern(true), []);
+
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
    *
@@ -2654,7 +2662,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           It draws the live region and publishes the structural verbs to what it
           wraps, which is how the toolbar presses exactly what the keys press.
         */}
-        <BlockKeyboardActions editor={editor} onEditText={inline.begin}>
+        <BlockKeyboardActions
+          editor={editor}
+          onEditText={inline.begin}
+          onSaveAsPattern={openSavePattern}
+        >
           {/*
             Inside the verbs provider, which is what lets the palette run
             exactly what the keystrokes and the toolbar run.
@@ -2800,6 +2812,20 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
               />
             </BlockContextMenu>
           )}
+          {/*
+            Rendered inside the verbs provider so the form and the button that
+            opens it are one feature rather than two that have to be kept in
+            step. The dialog is CONTROLLED from here because the verb that opens
+            it belongs to the same chain as every other block verb — a form that
+            owned its own trigger would be reachable from one surface and not
+            from the palette, the context menu or a keystroke.
+          */}
+          {savingPattern ? (
+            <SavePatternPrompt
+              editor={editor}
+              onClose={() => setSavingPattern(false)}
+            />
+          ) : null}
         </BlockKeyboardActions>
       </BuilderShell>
     </div>
