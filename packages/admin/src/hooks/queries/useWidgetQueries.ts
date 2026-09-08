@@ -88,6 +88,16 @@ export interface UseWidgetQueriesResult {
    * says so — which is what `aria-busy` is for.
    */
   isFetching: boolean;
+  /**
+   * The placements whose OWN request is still in flight.
+   *
+   * `isFetching` above answers "is anything still loading", which is what the
+   * grid's own busy affordance needs. A CARD needs its own answer: on a
+   * dashboard split across partitions the two differ, and a card reading the
+   * batch-wide flag stays dimmed while an unrelated partition loads. A card
+   * that asked nothing is never in a partition, so it is never in this set.
+   */
+  fetchingPlacementIds: ReadonlySet<string>;
   error: Error | null;
   refetch: () => Promise<unknown>;
   /**
@@ -492,13 +502,45 @@ export function useWidgetQueries(
     }
   });
 
+  /*
+   * 🔴 Per PARTITION, not per batch. A dashboard above `MAX_QUERIES_PER_REQUEST`
+   * is split into independently settling requests, and the failure branch above
+   * already treats them independently -- "only this partition's widgets are
+   * affected, which is the point of splitting them". Reducing the fetch state
+   * with `some` threw that away for the one signal a card renders: a widget
+   * whose own partition answered went on reporting itself busy, dimming settled
+   * numbers, until every OTHER partition had answered too. The published
+   * `WidgetComponentProps` says `isFetching` is this card's query, so this is
+   * what makes that true rather than nearly true.
+   */
+  const fetchingPlacementIds = new Set<string>();
+  partitions.forEach((partition, index) => {
+    if (results[index]?.isFetching !== true) return;
+    partition.forEach(entry => fetchingPlacementIds.add(entry.placementId));
+  });
+
   const settledAt = results.map(answer => answer.dataUpdatedAt);
 
   return {
     slots,
     cellSlots,
     isLoading: results.some(answer => answer.isLoading),
-    isFetching: results.some(answer => answer.isFetching),
+    /*
+     * 🔴 DERIVED from the set, not reduced a second time from the same results.
+     * The two answer one question -- "is anything still loading" -- and
+     * computing it twice is how they come to disagree: a later change to which
+     * partitions count as in flight would have to be made in both places, and
+     * the grid-wide affordance and the per-card one would drift apart silently.
+     *
+     * Equivalent by construction, not by coincidence: `partitionRequests`
+     * advances while `start < queries.length`, so every partition it emits
+     * holds at least one request, and an empty input produces no partitions at
+     * all. A fetching partition therefore always contributes at least one
+     * placement, and the set is non-empty exactly when some partition is
+     * fetching.
+     */
+    isFetching: fetchingPlacementIds.size > 0,
+    fetchingPlacementIds,
     // The FIRST failure, which is enough for the grid: what a reader needs per
     // widget is already in that widget's slot, and this says only that
     // something in the batch did not answer.

@@ -30,7 +30,8 @@ export interface ArrangedColumnsProps {
   cellSlots: CellSlots;
   requested: ReadonlySet<string>;
   updatedAt: Date | null;
-  isFetching: boolean;
+  /** The placements whose OWN request is still in flight. */
+  fetchingPlacementIds: ReadonlySet<string>;
   announcement: string;
   /** Move one card one step within the column it is drawn in. */
   onMove: (placementId: string, neighbourId: string, side: DropSide) => void;
@@ -73,7 +74,7 @@ export function ArrangedColumns({
   cellSlots,
   requested,
   updatedAt,
-  isFetching,
+  fetchingPlacementIds,
   announcement,
   onMove,
   onMoveColumn,
@@ -133,7 +134,13 @@ export function ArrangedColumns({
                 // batch, and neither did one whose archetype nothing can draw,
                 // so a refetch says nothing about either.
                 updatedAt: requested.has(row.placementId) ? updatedAt : null,
-                isFetching: requested.has(row.placementId) ? isFetching : false,
+                // 🔴 This card's own request, not the batch's. A dashboard
+                // above the per-request cap is split into partitions that
+                // settle independently, so the batch-wide flag left a card
+                // that had already answered reporting itself busy until every
+                // other partition answered too -- dimming settled numbers for
+                // no reason a reader could see.
+                isFetching: fetchingPlacementIds.has(row.placementId),
               }}
               on={{
                 // 🔴 Resolved against THIS column, not the whole arrangement.

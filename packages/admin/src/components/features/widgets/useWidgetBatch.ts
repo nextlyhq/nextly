@@ -44,6 +44,8 @@ export interface WidgetBatch {
   /** A `stats` card's answers, by placement id then cell key. */
   cellSlots: CellSlots;
   isFetching: boolean;
+  /** The placements whose own request is still in flight. */
+  fetchingPlacementIds: ReadonlySet<string>;
   updatedAt: Date | null;
   /** Which PLACEMENTS took part in the batch at all. */
   requested: ReadonlySet<string>;
@@ -148,7 +150,7 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
     [cards]
   );
 
-  const { slots, cellSlots, isFetching, updatedAt } =
+  const { slots, cellSlots, isFetching, fetchingPlacementIds, updatedAt } =
     useWidgetQueries(requests);
 
   // Which cards are actually IN the batch, taken from the requests that were
@@ -195,6 +197,7 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
     slots,
     cellSlots,
     isFetching,
+    fetchingPlacementIds,
     updatedAt,
     requested,
     counted: outcomes.length,
