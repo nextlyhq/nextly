@@ -844,6 +844,57 @@ export function buildNotificationEmails(input: {
  * the collection, so it is already refused a step later, and rejecting it here
  * would answer a question this hook was not asked.
  */
+/**
+ * The parent form's id, however the row spells the relationship.
+ *
+ * A relationship arrives as an id string from a write and as a populated object
+ * from a read, and both hooks on this collection have to cope with either.
+ * Stated once so they cannot come to disagree about what counts as a reference.
+ */
+function parentFormId(submission: Record<string, unknown>): string | null {
+  const raw = submission.form;
+  if (typeof raw === "string") return raw;
+  if (raw && typeof raw === "object") {
+    const maybeId = (raw as { id?: unknown }).id;
+    if (typeof maybeId === "string") return maybeId;
+  }
+  return null;
+}
+
+/**
+ * The submitted payload, as an object, or a refusal.
+ *
+ * `data` arrives as an object from every caller in this repository. A string is
+ * read as the JSON a dialect stores rather than assumed to be one field's
+ * value, and anything else is refused: that column is `required`, so an omitted
+ * payload is meant to be refused, and substituting `{}` satisfied the check on
+ * the way past. A form whose fields are all optional then accepted the empty
+ * object and the row was stored.
+ */
+function submittedPayload(raw: unknown): Record<string, unknown> {
+  if (typeof raw === "string") {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Falls through to the refusal below.
+    }
+  } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "data",
+        code: "INVALID",
+        message: "Submission data must be an object.",
+      },
+    ],
+  });
+}
+
 export async function prepareSubmissionForWrite(
   context: unknown,
   formsSlug: string,
@@ -861,58 +912,10 @@ export async function prepareSubmissionForWrite(
   // and preparing that would store an empty submission over a real one.
   if (ctx.operation !== "create") return ctx.data;
 
-  const rawFormId = submission.form;
-  let formId: string | null = null;
-  if (typeof rawFormId === "string") {
-    formId = rawFormId;
-  } else if (rawFormId && typeof rawFormId === "object") {
-    const maybeId = (rawFormId as { id?: unknown }).id;
-    if (typeof maybeId === "string") formId = maybeId;
-  }
+  const formId = parentFormId(submission);
   if (!formId) return ctx.data;
 
-  // `data` arrives as an object from every caller in this repository. A string
-  // is read as the JSON a dialect stores rather than assumed to be one field's
-  // value, and an unparseable one stops here: `parseJsonColumn` answers `{}` for
-  // it, which would store an empty submission under a form the visitor filled in.
-  const raw = submission.data;
-  let incoming: Record<string, unknown>;
-  if (typeof raw === "string") {
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("not an object");
-      }
-      incoming = parsed as Record<string, unknown>;
-    } catch {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "data",
-            code: "INVALID",
-            message: "Submission data must be an object.",
-          },
-        ],
-      });
-    }
-  } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    incoming = raw as Record<string, unknown>;
-  } else {
-    // Absent, null, or an array. Substituting `{}` was worse than it looked:
-    // `data` is `required` on the collection, so an omitted payload is meant to
-    // be refused, and filling one in satisfied that check on the way past. A
-    // form whose fields are all optional then accepted the empty object and the
-    // row was stored. The string branch above already refuses the equivalent.
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "data",
-          code: "INVALID",
-          message: "Submission data must be an object.",
-        },
-      ],
-    });
-  }
+  const incoming = submittedPayload(submission.data);
 
   const form = await fetchParentForm(formsSlug, formId, nextly, ctx.executor);
   if (!form || !Array.isArray(form.fields)) {
@@ -970,14 +973,7 @@ async function handleSubmissionCreated(
   // every bot hit would trigger the form's notification rules.
   if (submission.status === "spam") return;
 
-  const rawFormId = submission.form;
-  let formId: string | null = null;
-  if (typeof rawFormId === "string") {
-    formId = rawFormId;
-  } else if (rawFormId && typeof rawFormId === "object") {
-    const maybeId = (rawFormId as { id?: unknown }).id;
-    if (typeof maybeId === "string") formId = maybeId;
-  }
+  const formId = parentFormId(submission);
   if (!formId) return;
 
   // Fetch the parent form
