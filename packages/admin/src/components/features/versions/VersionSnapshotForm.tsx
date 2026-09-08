@@ -26,34 +26,33 @@
  */
 
 import type { FieldConfig } from "nextly/config";
-import { useId, useMemo } from "react";
+import { useId } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import { FieldIdScopeContext } from "@admin/components/features/entries/fields/field-id-scope";
 
-import { snapshotToFormValues } from "./snapshot-to-form-values";
-
 export interface VersionSnapshotFormProps {
-  /** The document's current schema, which decides what is shown. */
+  /**
+   * The document's current schema, which decides what is SHOWN. Deliberately
+   * allowed to be a subset of what `values` holds: a takeover-filtered layout
+   * omits condition controllers, and the form still needs their values for
+   * the conditional fields it does render.
+   */
   fields: FieldConfig[];
-  /** The stored values for this version. */
-  snapshot: unknown;
+  /**
+   * The version's values, ALREADY read into runtime shapes and covering every
+   * field the document declared. Normalization is the caller's because the
+   * caller derives this map for the layout too — a second normalization here
+   * over the filtered `fields` would silently drop the controllers.
+   */
+  values: Record<string, unknown>;
 }
 
 export function VersionSnapshotForm({
   fields,
-  snapshot,
+  values,
 }: VersionSnapshotFormProps) {
-  // Read into runtime shapes before the inputs see them. A snapshot comes from
-  // the persisted row, so a JSON-backed field arrives as text on SQLite and as
-  // an object elsewhere; handing the raw value to a control renders a
-  // structured field empty instead of showing what it held.
-  const values = useMemo(
-    () => snapshotToFormValues(fields, snapshot),
-    [fields, snapshot]
-  );
-
   // `values`, not `defaultValues`. `defaultValues` is read once per mounted
   // form, so selecting a second version while this stays mounted would leave
   // the previous version's fields under the new version's heading. `values`

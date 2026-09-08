@@ -313,6 +313,28 @@ describe("SingleForm — a published version replaces the document", () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
   });
 
+  it("refuses the native submit path while a save is already in flight", async () => {
+    // The single's update mutations run in parallel, so a second write racing
+    // a first one would let completion order decide which contents survive.
+    const onSubmit = vi.fn();
+    render(
+      <SingleForm
+        schema={schema}
+        document={document}
+        onSubmit={onSubmit}
+        isSubmitting
+      />
+    );
+
+    const form = document_.querySelector("form");
+    expect(form, "the editor renders a form to submit").not.toBeNull();
+    fireEvent.submit(form as HTMLFormElement);
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    });
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("withholds the recovery offer while a version is on screen", () => {
     // The recovery offer restores work into the LIVE form. Doing that while
     // the author is looking at a past version changes values nobody can see,

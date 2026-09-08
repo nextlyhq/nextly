@@ -40,7 +40,6 @@ import {
 } from "@admin/components/features/entries/EntryForm/EntryFormContext";
 import { EntryFormProvider } from "@admin/components/features/entries/EntryForm/EntryFormProvider";
 import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/EntryFormSidebar";
-import { EntryFormToolbarSlots } from "@admin/components/features/entries/EntryForm/EntryFormToolbarSlots";
 import { EntryMetaStrip } from "@admin/components/features/entries/EntryForm/EntryMetaStrip";
 import { EntrySystemHeader } from "@admin/components/features/entries/EntryForm/EntrySystemHeader";
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
@@ -70,6 +69,7 @@ import {
   writeActionsHeld,
   ViewedVersionBanner,
   ViewedVersionBody,
+  versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
@@ -270,17 +270,22 @@ function SingleFormLanguagePanel({
  */
 function SingleFormFieldsPanel({
   historicalFields,
+  historicalValues,
   isSubmitting,
   mainFields,
   readOnly,
 }: {
   historicalFields: FieldConfig[] | null;
+  historicalValues: Record<string, unknown> | null;
   isSubmitting: boolean;
   mainFields: FieldConfig[];
   readOnly: boolean;
 }) {
   return (
-    <ViewedVersionBody fields={historicalFields ?? mainFields}>
+    <ViewedVersionBody
+      fields={historicalFields ?? mainFields}
+      values={historicalValues ?? undefined}
+    >
       {mainFields.length > 0 && (
         <div className="@4xl/content:p-8 pt-6">
           <EntryFormContent
@@ -523,8 +528,13 @@ export function SingleForm({
   // header for singles too, so the document side has to answer it the same
   // way — without this, a click in the panel publishes a version nothing
   // draws.
-  const { viewingVersion, documentHistory, historicalFields } =
-    useViewedVersion(allFields, takeoverTypes);
+  const viewedVersionHost = useViewedVersion(allFields, takeoverTypes);
+  const {
+    viewingVersion,
+    documentHistory,
+    historicalFields,
+    historicalValues,
+  } = viewedVersionHost;
   // One answer for every surface offering a write — the header reads the same
   // through the document-actions model, and the rail, the language panel and
   // the submission handlers below take it from here. Derived from the HOST's
@@ -543,8 +553,10 @@ export function SingleForm({
       // path gets added without. The affordances ARE disabled, so nothing offers
       // what it cannot do - this is the guard that does not depend on anyone
       // remembering. Reading a past version is part of the same claim: this
-      // handler acts on the live document, which is not what is on screen.
-      if (writesHeld) return;
+      // handler acts on the live document, which is not what is on screen. And
+      // so is a submit already in flight — parallel writes would let completion
+      // order decide which contents survive.
+      if (writesHeld || isSubmitting) return;
 
       await form.handleSubmit(async rawData => {
         // Why: shared intent→payload helper mirrors the EntryForm
@@ -565,7 +577,7 @@ export function SingleForm({
         }
       })(e);
     },
-    [form, onSubmit, blankPasswordFields, writesHeld]
+    [form, onSubmit, blankPasswordFields, isSubmitting, writesHeld]
   );
 
   const handleCancel = useCallback(() => {
@@ -896,15 +908,12 @@ export function SingleForm({
                            button. */
                               {...previewPane.toggle}
                               contributedActions={documentActions}
-                              toolbarSlot={
-                                <>
-                                  <EntryFormToolbarSlots
-                                    context="single"
-                                    controllerField={controllerNames[0]}
-                                    writesHeld={writesHeld}
-                                  />
-                                </>
-                              }
+                              toolbarSlot={versionAwareToolbarSlots(
+                                viewedVersionHost,
+                                lock.actionsDisabled,
+                                "single",
+                                controllerNames[0]
+                              )}
                               onSaveDraft={() => {
                                 void handleSubmit(undefined, "save-draft");
                               }}
@@ -1011,6 +1020,7 @@ export function SingleForm({
                               than opening beside it — see the fields panel. */}
                             <SingleFormFieldsPanel
                               historicalFields={historicalFields}
+                              historicalValues={historicalValues}
                               isSubmitting={isSubmitting}
                               mainFields={mainFields}
                               readOnly={lock.readOnly}

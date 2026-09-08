@@ -492,6 +492,15 @@ export function useEntryForm({
   // Singular label for UI
   const singularLabel = getSingularLabel(collection);
 
+  // The mutations run in parallel, so nothing downstream serialises a second
+  // write against a first one still in flight — the guard has to live HERE,
+  // at the one gate every submission passes through, not in the controls the
+  // handler must not depend on.
+  const isSubmitting =
+    createMutation.isPending ||
+    updateMutation.isPending ||
+    discardMutation.isPending;
+
   // Submit handler. The intent arg names the user's button click and
   // determines payload shape (see EntryFormIntent). Without an intent,
   // submission keeps the existing status and just persists dirty fields
@@ -499,6 +508,7 @@ export function useEntryForm({
   const handleSubmit = useCallback(
     async (e?: React.BaseSyntheticEvent, intent?: EntryFormIntent) => {
       e?.preventDefault();
+      if (isSubmitting) return;
 
       await form.handleSubmit(async rawData => {
         // Why: intent → payload mapping is the core PR-3 bug fix —
@@ -540,9 +550,14 @@ export function useEntryForm({
     [
       form,
       mode,
+
       entry?.id,
+
       createMutation,
+
       updateMutation,
+      isSubmitting,
+
       onSuccess,
       onError,
       blankPasswordFields,
@@ -601,10 +616,7 @@ export function useEntryForm({
     // await the discard and keep its loading state visible until it settles.
     handleDiscardWorkingDraft: () => handleDiscardWorkingDraft(),
     handleCancel,
-    isSubmitting:
-      createMutation.isPending ||
-      updateMutation.isPending ||
-      discardMutation.isPending,
+    isSubmitting,
     isDeleting: deleteMutation.isPending,
     isDirty: form.formState.isDirty,
     mode,

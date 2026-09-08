@@ -18,7 +18,10 @@ import { render } from "@admin/__tests__/utils";
 const { slotProps, useBranding } = vi.hoisted(() => ({
   slotProps: {
     current: null as {
-      props: { onChange?: (next: unknown) => void };
+      props: {
+        onChange?: (next: unknown) => void;
+        value?: unknown;
+      };
     } | null,
   },
   useBranding: vi.fn(() => ({
@@ -98,5 +101,22 @@ describe("EntryFormToolbarSlots — the plugin write seam", () => {
     expect(() => onChange?.("read")).not.toThrow();
 
     expect(formRef.current?.getValues("mode")).toBe("write");
+  });
+
+  it("displays the override value instead of the hidden live form's", () => {
+    // While a past version is on screen the editors pass the version's own
+    // controller value; the watched live value would label the historical
+    // body with today's mode.
+    render(
+      <WithForm formRef={formRef}>
+        <EntryFormToolbarSlots
+          context="single"
+          controllerField="mode"
+          value="read"
+        />
+      </WithForm>
+    );
+
+    expect(slotProps.current?.props.value).toBe("read");
   });
 });

@@ -25,6 +25,7 @@ import {
   writeActionsHeld,
   ViewedVersionBanner,
   ViewedVersionBody,
+  versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { toast } from "@admin/components/ui";
@@ -71,7 +72,6 @@ import {
 } from "./EntryFormContext";
 import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
-import { EntryFormToolbarSlots } from "./EntryFormToolbarSlots";
 import { EntryMetaStrip } from "./EntryMetaStrip";
 import { EntrySystemHeader } from "./EntrySystemHeader";
 import { FormErrorSummary } from "./FormErrorSummary";
@@ -445,8 +445,13 @@ export function EntryForm({
   // Which past version the document area is showing, the context value that
   // publishes it to the panel, and the version's own body layout — held by the
   // shared host so the Single editor answers the panel identically.
-  const { viewingVersion, documentHistory, historicalFields } =
-    useViewedVersion(allFields, takeoverTypes);
+  const viewedVersionHost = useViewedVersion(allFields, takeoverTypes);
+  const {
+    viewingVersion,
+    documentHistory,
+    historicalFields,
+    historicalValues,
+  } = viewedVersionHost;
 
   // Whether this collection has Draft/Published status enabled at the meta
   // level. When true, the system header splits into Save Draft + Publish/Update
@@ -938,15 +943,12 @@ export function EntryForm({
                                   })}
                               isCopyingLink={previewLink.isPending}
                               contributedActions={documentActions}
-                              toolbarSlot={
-                                <>
-                                  <EntryFormToolbarSlots
-                                    context="collection"
-                                    controllerField={controllerNames[0]}
-                                    writesHeld={writesHeld}
-                                  />
-                                </>
-                              }
+                              toolbarSlot={versionAwareToolbarSlots(
+                                viewedVersionHost,
+                                lock.actionsDisabled,
+                                "collection",
+                                controllerNames[0]
+                              )}
                               onSaveDraft={() => {
                                 void handleSubmit(undefined, "save-draft");
                               }}
@@ -1076,6 +1078,7 @@ export function EntryForm({
                       answers a published version through the same surface. */}
                             <ViewedVersionBody
                               fields={historicalFields ?? mainFields}
+                              values={historicalValues ?? undefined}
                             >
                               {mainFields.length > 0 && (
                                 <div className="@4xl/content:p-8 pt-6">

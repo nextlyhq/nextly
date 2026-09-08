@@ -19,11 +19,13 @@
 import type { FieldConfig } from "nextly/config";
 import { useMemo, useState, type ReactNode } from "react";
 
+import { EntryFormToolbarSlots } from "@admin/components/features/entries/EntryForm/EntryFormToolbarSlots";
 import {
   EntryLocaleProvider,
   useEntryLocale,
   type EntryLocaleContextValue,
 } from "@admin/components/features/entries/EntryLocaleContext";
+import { TranslationFieldProvider } from "@admin/components/features/entries/TranslationMode/TranslationFieldContext";
 import { Alert, AlertDescription, Skeleton } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import {
@@ -135,6 +137,17 @@ export interface ViewedVersionHost {
    * nothing is being read.
    */
   historicalFields: FieldConfig[] | null;
+  /**
+   * The version's OWN values as the form reads them, over every field the
+   * document declares — including condition controllers that
+   * `historicalFields` filters out of the RENDERED set. A form built from the
+   * filtered list alone would leave those controllers undefined and judge the
+   * version's own conditional fields against values it never had. Also what a
+   * held toolbar slot displays, so a mode-switch plugin labels the historical
+   * body with the version's mode, not today's. Null while nothing is being
+   * read.
+   */
+  historicalValues: Record<string, unknown> | null;
 }
 
 /**
@@ -170,15 +183,110 @@ export function useViewedVersion(
     [viewingVersion, restoreAffordance]
   );
 
-  const historicalFields = useMemo(() => {
+  // One normalization of the version's snapshot, over EVERY declared field.
+  // The layout below renders a filtered subset of it; the form and the held
+  // toolbar read the whole map, so condition controllers the layout omits
+  // still hold the values the version stored.
+  const historicalValues = useMemo(() => {
     if (!viewingVersion) return null;
+    return snapshotToFormValues(fields, viewingVersion.snapshot);
+  }, [viewingVersion, fields]);
+
+  const historicalFields = useMemo(() => {
+    if (!viewingVersion || !historicalValues) return null;
     return computeMainFields(fields, {
       takeoverTypes,
-      values: snapshotToFormValues(fields, viewingVersion.snapshot),
+      values: historicalValues,
     });
-  }, [viewingVersion, fields, takeoverTypes]);
+  }, [viewingVersion, historicalValues, fields, takeoverTypes]);
 
-  return { viewingVersion, documentHistory, historicalFields };
+  return {
+    viewingVersion,
+    documentHistory,
+    historicalFields,
+    historicalValues,
+  };
+}
+
+/**
+ * The controller value a takeover toolbar slot should DISPLAY while a past
+ * version is on screen: the version's own value, because the hidden live
+ * form's value would label the historical body with today's mode — the one
+ * thing on screen that disagrees with the version below it. Undefined while
+ * the live document is on screen, so the slot falls back to the live form.
+ */
+export function historicalToolbarValue(
+  historicalValues: Record<string, unknown> | null,
+  viewingVersion: ViewedVersion | null,
+  controllerField: string
+): unknown {
+  return viewingVersion !== null
+    ? historicalValues?.[controllerField]
+    : undefined;
+}
+
+/**
+ * The takeover mode switch, wired for both document editors at once.
+ *
+ * The plugin slot displays and writes the controller field, so while a past
+ * version is on screen it needs the history-aware pair: the version's own
+ * value to display, and a write callback that declines. Assembling that pair
+ * here is what keeps the two editors from drifting back into hand-rolled
+ * copies of it.
+ */
+function VersionAwareToolbarSlots({
+  context,
+  controllerField,
+  writesHeld,
+  viewingVersion,
+  historicalValues,
+}: {
+  context: "collection" | "single";
+  controllerField?: string;
+  writesHeld: boolean;
+  viewingVersion: ViewedVersion | null;
+  historicalValues: Record<string, unknown> | null;
+}) {
+  return (
+    <>
+      <EntryFormToolbarSlots
+        context={context}
+        controllerField={controllerField}
+        writesHeld={writesHeld}
+        value={
+          controllerField !== undefined
+            ? historicalToolbarValue(
+                historicalValues,
+                viewingVersion,
+                controllerField
+              )
+            : undefined
+        }
+      />
+    </>
+  );
+}
+
+/**
+ * The toolbar slot element for one editor, with the history-aware wiring
+ * applied. A factory rather than a component so the editor can embed it in
+ * its header's `toolbarSlot` without remounting the plugin subtree.
+ */
+export function versionAwareToolbarSlots(
+  host: ViewedVersionHost,
+  baseDisabled: boolean,
+  context: "collection" | "single",
+  controllerField?: string
+): ReactNode {
+  return (
+    <VersionAwareToolbarSlots
+      context={context}
+      controllerField={controllerField}
+      writesHeld={writeActionsHeld(host.viewingVersion, baseDisabled)}
+      viewingVersion={host.viewingVersion}
+      historicalValues={host.historicalValues}
+    />
+  );
 }
 
 /**
@@ -230,16 +338,21 @@ export function ViewedVersionBanner({
  * while rich-field components (a text editor's undo history, its selection)
  * survive the round trip back to the live document.
  *
- * @param fields - the layout for the version, from the host's
- *   `historicalFields`
+ * @param fields - the RENDERED layout for the version, from the host's
+ *   `historicalFields` — a subset of what the version stored
+ * @param values - the version's full value map, from the host's
+ *   `historicalValues`; the form is built from this so condition controllers
+ *   the rendered layout omits still hold the values the version stored
  * @param children - the live document's body, hidden while a version is being
  *   read and rendered normally otherwise
  */
 export function ViewedVersionBody({
   fields,
+  values,
   children,
 }: {
   fields: FieldConfig[];
+  values?: Record<string, unknown>;
   children?: ReactNode;
 }) {
   const { viewing } = useDocumentHistory();
@@ -292,7 +405,18 @@ export function ViewedVersionBody({
           </div>
         ) : (
           <EntryLocaleProvider value={snapshotLocale}>
-            <VersionSnapshotForm fields={fields} snapshot={viewing.snapshot} />
+            {/* No translation-field context: history is opened from inside
+                translation mode without the mode exiting, and an inherited
+                source would put a "use source" affordance on every historical
+                field — writing into the version this area claims is frozen.
+                Empty is the context's own answer for "offers nothing". */}
+            <TranslationFieldProvider value={{}}>
+              {/* Unreachable with an empty map: the body only renders the
+                  snapshot while a version is published, and the host's map is
+                  then guaranteed — the fallback exists for the live branch's
+                  types alone. */}
+              <VersionSnapshotForm fields={fields} values={values ?? {}} />
+            </TranslationFieldProvider>
           </EntryLocaleProvider>
         )}
       </div>

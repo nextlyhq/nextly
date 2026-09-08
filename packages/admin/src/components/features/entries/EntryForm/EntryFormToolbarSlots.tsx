@@ -32,10 +32,20 @@ export function EntryFormToolbarSlots({
   context,
   controllerField,
   writesHeld = false,
+  value: valueOverride,
 }: {
   context: "collection" | "single";
   controllerField?: string;
   writesHeld?: boolean;
+  /**
+   * An explicit value for the controller field, overriding the form's own.
+   *
+   * While a past version is on screen the editors pass the version's own
+   * controller value here: the live form is hidden but still mounted, so the
+   * watched value would label the historical body with today's mode — the one
+   * thing on screen that disagrees with the version below it.
+   */
+  value?: unknown;
 }) {
   const branding = useBranding();
   const form = useFormContext();
@@ -49,7 +59,12 @@ export function EntryFormToolbarSlots({
   const slots = (branding.plugins ?? []).filter(p => p.entryFormToolbarSlot);
   if (slots.length === 0) return null;
 
-  const value = controllerField ? watched : undefined;
+  const value =
+    valueOverride !== undefined
+      ? valueOverride
+      : controllerField
+        ? watched
+        : undefined;
   const onChange = (next: unknown) => {
     if (controllerField && form && !writesHeld) {
       form.setValue(controllerField, next, { shouldDirty: true });
