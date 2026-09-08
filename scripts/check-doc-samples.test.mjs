@@ -16,6 +16,7 @@ import {
   identityOf,
   isModule,
   pageOf,
+  readerOwnedName,
   parseSample,
   rebaseContextDiagnostics,
   unaccountedFor,
@@ -621,6 +622,7 @@ describe("unaccountedFor", () => {
     real: 4,
     continued: 2,
     readerFiles: 2,
+    readerNames: 0,
     uninstalled: 1,
     implicitAny: 1,
   };
@@ -1180,5 +1182,46 @@ describe("a sample that writes a property the API has deprecated", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+describe("a missing name the reader owns", () => {
+  it("sets aside a type the reader's own project declares", () => {
+    // `nextly generate:types` writes these into a reader's project, and a
+    // component is theirs to write. Nothing in this workspace can define one,
+    // so a page mentioning it is not broken.
+    for (const name of ["Posts", "Users", "Page", "MyCollection", "Chart"]) {
+      expect(readerOwnedName(name)).toBe(true);
+    }
+  });
+
+  it("keeps a name this workspace actually exports", () => {
+    // The case that decides the rule. `Media` and `Skeleton` look exactly like
+    // the names above and are the opposite: both ARE exported, from `nextly`
+    // and `@nextlyhq/ui`, so a sample using one without importing it is a
+    // defect a reader meets. A rule keyed on the shape alone would have
+    // silenced five findings in the current corpus.
+    for (const name of ["Media", "Skeleton", "Nextly", "NextlyError"]) {
+      expect(readerOwnedName(name)).toBe(false);
+    }
+  });
+
+  it("leaves a value alone, whatever it is called", () => {
+    // The shape narrows the question to names a reader DECLARES. An undefined
+    // `orderData` or a bare `a` is an example that was left unfinished, which
+    // is a finding.
+    for (const name of ["orderData", "where", "a", "getPostBySlug"]) {
+      expect(readerOwnedName(name)).toBe(false);
+    }
+  });
+
+  it("differs from the shape rule it replaces", () => {
+    // The control. Both halves are load-bearing and this shows which half each
+    // name needs: the shape rule alone accepts `Media`, and the export rule
+    // alone accepts `orderData`.
+    const looksOwned = name => /^[A-Z][A-Za-z0-9]*$/.test(name);
+    expect(looksOwned("Media")).toBe(true);
+    expect(readerOwnedName("Media")).toBe(false);
+    expect(looksOwned("orderData")).toBe(false);
+    expect(readerOwnedName("orderData")).toBe(false);
   });
 });

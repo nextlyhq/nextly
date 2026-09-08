@@ -1531,6 +1531,90 @@ function workspaceManifest(pkg) {
  * was once a pattern match asserting something nobody had checked, and each of
  * those hid real defects.
  */
+/**
+ * Every name the workspace publishes, from its built type entries.
+ *
+ * The question a missing PascalCase name raises is not what it looks like but
+ * whether the reader could have imported it. `Posts`, `Users` and `Page` are
+ * the reader's own: types `nextly generate:types` writes into their project,
+ * and components they author. Nothing here can define them and a page that
+ * mentions one is not broken. `Media` and `Skeleton` look exactly the same and
+ * are the opposite case: both ARE exported, from `nextly` and `@nextlyhq/ui`,
+ * so a sample using one without importing it is a defect a reader meets.
+ *
+ * Measured rather than assumed, which is the whole point of asking the exports:
+ * a rule keyed on the shape alone would have silenced those two.
+ *
+ * Read from the built `.d.ts` entries in ONE program, because the same question
+ * asked twenty times costs twenty type-checker startups. An unbuilt tree is
+ * refused before any of this runs.
+ */
+const exportedNames = new Set();
+function workspaceExports() {
+  if (exportedNames.size > 0) return exportedNames;
+  const entries = [];
+  for (const dirent of readdirSync(join(ROOT, "packages"), {
+    withFileTypes: true,
+  })) {
+    if (!dirent.isDirectory()) continue;
+    const manifestPath = join(ROOT, "packages", dirent.name, "package.json");
+    if (!existsSync(manifestPath)) continue;
+    let manifest;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    } catch {
+      continue;
+    }
+    if (!manifest.name || manifest.private) continue;
+    const declared =
+      manifest.types ??
+      manifest.typings ??
+      manifest.exports?.["."]?.types ??
+      manifest.exports?.["."]?.import?.types ??
+      "dist/index.d.ts";
+    const full = join(ROOT, "packages", dirent.name, declared);
+    if (existsSync(full)) entries.push(full);
+  }
+  if (entries.length === 0) return exportedNames;
+  const program = ts.createProgram(entries, {
+    noEmit: true,
+    skipLibCheck: true,
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+  });
+  const checker = program.getTypeChecker();
+  for (const entry of entries) {
+    const sourceFile = program.getSourceFile(entry);
+    if (!sourceFile) continue;
+    const symbol = checker.getSymbolAtLocation(sourceFile);
+    if (!symbol) continue;
+    for (const exported of checker.getExportsOfModule(symbol)) {
+      exportedNames.add(exported.getName());
+    }
+  }
+  return exportedNames;
+}
+
+/**
+ * A missing name that belongs to the reader rather than to this documentation.
+ *
+ * Two conditions, both load-bearing. The shape narrows the question to names a
+ * reader declares: a generated collection type or a component of their own,
+ * which is what PascalCase means in these pages, and it is why `orderData` and
+ * a bare `a` stay findings. The exports answer it: a name the workspace
+ * publishes is one the sample should have imported, and setting that aside
+ * would silence a defect rather than a false alarm.
+ *
+ * Set aside, not excused. These stay ratcheted by identity, so a page cannot
+ * quietly start mentioning a new one. What stops is charging a page for them,
+ * which is what made completing an example read as a regression: a routing
+ * example fetched an entry and rendered nothing, giving a reader a blank page,
+ * and adding the render RAISED the count.
+ */
+export const readerOwnedName = name =>
+  /^[A-Z][A-Za-z0-9]*$/.test(name) && !workspaceExports().has(name);
+
 export async function classifyDocDiagnostics({ diagnostics, samples }) {
   const uninstalled = [];
   const continued = [];
@@ -1542,6 +1626,8 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
   // Implicit `any` on a parameter: a reader's generated types may or may not
   // answer it, and nothing in the diagnostic says which.
   const implicitAny = [];
+  // Names the reader declares in their own project, which nothing here can.
+  const readerNames = [];
   // A sample whose import did not resolve was not really checked: TypeScript
   // types the unresolved bindings as `any`, so a wrong call through them
   // produces no diagnostic at all. Counting such a sample as clean overstates
@@ -1601,6 +1687,7 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
       const [file, idx] = line.split("  ")[0].split("#");
       const index = Number.parseInt(idx, 10);
       if (declaredEarlier(name[1], file, index, samples)) continued.push(line);
+      else if (readerOwnedName(name[1])) readerNames.push(line);
       else real.push(line);
       continue;
     }
@@ -1616,6 +1703,7 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
     unchecked,
     uncheckedSamples,
     readerFiles,
+    readerNames,
     implicitAny,
     // Every diagnostic that came in, so a caller can prove it kept them all.
     // The buckets above are a partition, and the audit's job is to record each
@@ -1866,10 +1954,14 @@ export function unaccountedFor({
   real,
   continued,
   readerFiles,
+  readerNames,
   uninstalled,
   implicitAny,
 }) {
-  return total - (real + continued + readerFiles + uninstalled + implicitAny);
+  return (
+    total -
+    (real + continued + readerFiles + readerNames + uninstalled + implicitAny)
+  );
 }
 
 async function auditDocs() {
@@ -2122,6 +2214,7 @@ async function auditDocs() {
     unchecked,
     uncheckedSamples,
     readerFiles,
+    readerNames,
     implicitAny,
     total: classified,
   } = await classifyDocDiagnostics({
@@ -2150,7 +2243,11 @@ async function auditDocs() {
     // `any`, so everything reached through it stops being checked while the
     // fence still counts as compiled; recording which fences are in that state
     // is what stops one quietly joining them.
-    ...readerFiles.map(text => ({ mark: "reader-file", text }))
+    ...readerFiles.map(text => ({ mark: "reader-file", text })),
+    // Names the reader declares in their own project. Recorded by identity like
+    // every other set-aside bucket, so a page cannot start mentioning a new one
+    // unnoticed; what it no longer does is charge the page a finding.
+    ...readerNames.map(text => ({ mark: "reader-name", text }))
   );
 
   // Nothing may be dropped on the floor. `real` is charged to a page, the
@@ -2171,6 +2268,7 @@ async function auditDocs() {
     real: real.length,
     continued: continued.length,
     readerFiles: readerFiles.length,
+    readerNames: readerNames.length,
     uninstalled: uninstalled.length,
     implicitAny: implicitAny.length,
   });
@@ -2227,6 +2325,11 @@ async function auditDocs() {
         ? `\n  ${String(implicitAny.length + fromInheritedBlocks.length)} leave a parameter implicitly ` +
           `\`any\`, which a reader's generated types answer for a document ` +
           `field and do not answer for a plain function.`
+        : "") +
+      (readerNames.length > 0
+        ? `\n  ${String(readerNames.length)} name a type or component the reader ` +
+          `declares, such as a generated Posts or their own Page, which no ` +
+          `package here exports.`
         : "") +
       (readerFiles.length > 0
         ? `\n  ${String(readerFiles.length)} import a file the reader writes, ` +
