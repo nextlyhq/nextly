@@ -50,7 +50,7 @@ export const myPlugin = (opts: MyPluginOptions = {}) =>
   definePlugin({
     name: "@acme/nextly-plugin-greetings",
     version: "0.1.0",
-    nextly: "^1.0.0", // core-compatibility range, boot-checked (may span majors)
+    nextly: ">=0.0.2-alpha.63", // core-compatibility range, boot-checked
     dependsOn: {}, // required plugin deps → version range
     enabled: true, // false skips behavior but keeps schema (D49)
     contributes: {
