@@ -561,12 +561,23 @@ jobs:
       # Measured on `e6797c5d1`: nextly 907 files / 11562 tests and admin 407 /
       # 4061, both passing, neither gating. Twelve nextly files ran here by name
       # in the two steps above, which is 1.3% of its suite; admin ran nowhere.
-      # They cost about 135s together. `nextly` caps itself to three forks for
-      # the contention this step creates, which is why it can join it.
+      # They cost about 135s together.
+      #
+      # `--concurrency` is what makes room for them. turbo defaults to 10 tasks
+      # at once and a runner here has 4 vCPUs, and each task's vitest spawns
+      # cores-1 workers of its own, so the step was asking for about 30
+      # processes on 4 cores. Wall-clock timeouts measure per-test CPU, so
+      # oversubscription that deep is what pushed jsdom component suites in
+      # `admin` and `plugin-form-builder` past their budgets the first time
+      # these four were added. A percentage rather than a count: it follows the
+      # runner rather than being a number that is right on one machine size.
+      # Capping WORKERS instead would not have helped, since cores-1 on a 4-vCPU
+      # runner is already 3.
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: >-
           pnpm turbo test
+          --concurrency=50%
           --filter=@nextlyhq/blocks-engine
           --filter=@nextlyhq/blocks-react
           --filter=@nextlyhq/builder
