@@ -110,9 +110,37 @@ function takeNext(
   return undefined;
 }
 
+/**
+ * A node's slot lists, or none when it will not say.
+ *
+ * Both steps are guarded and both are the same fact about untrusted stored
+ * input: a node reaching this walk may be a Proxy whose `slots` getter throws,
+ * and the record it hands back may be a Proxy whose ENUMERATION throws. Reading
+ * the property and listing its values are two traps, and containing only the
+ * first leaves the second to take down whatever asked for the walk.
+ *
+ * A node that will not answer has nowhere for the walk to go, which is the same
+ * answer as having no slots at all — the tolerance the caller already applies
+ * to a slot holding something other than a list, one step earlier.
+ */
+function slotListsOf(block: BlockNode): unknown[] {
+  try {
+    const slots = block.slots;
+    // Falsy rather than `undefined`: a stored `slots` can be `null`.
+    if (!slots) return [];
+    return Object.values(slots);
+  } catch {
+    return [];
+  }
+}
+
 /** Queue a node's slot children so they are read before the next sibling. */
-function pushSlots(stack: Frame[], block: BlockNode, depth: number): void {
-  const lists = Object.values(block.slots ?? {});
+function pushSlots(
+  stack: Frame[],
+  block: BlockNode,
+  lists: readonly unknown[],
+  depth: number
+): void {
   // Reversed so the first slot is read first: this is a pre-order walk, and a
   // caller reading a document in document order would otherwise see it mirrored
   // slot by slot.
@@ -120,7 +148,7 @@ function pushSlots(stack: Frame[], block: BlockNode, depth: number): void {
     const children = lists[i];
     // A slot whose value is not an array is skipped rather than read. Persisted
     // documents arrive unvalidated and iterating a non-array throws.
-    if (!Array.isArray(children)) continue;
+    if (!isList(children)) continue;
     stack.push({
       kind: "list",
       nodes: children,
@@ -131,10 +159,53 @@ function pushSlots(stack: Frame[], block: BlockNode, depth: number): void {
   }
 }
 
-/** Whether an entry is a value this walk can descend into. */
-function isDescendable(node: unknown): node is BlockNode {
-  // `Array.isArray` is checked separately because `typeof [] === "object"`.
-  return typeof node === "object" && node !== null && !Array.isArray(node);
+/**
+ * Whether a value is a list — or NOTHING, when reflection will not say.
+ *
+ * Three answers because there are three cases, and collapsing the third into
+ * either of the others is wrong in a different direction each time.
+ * `Array.isArray` is not a plain type test: on a revoked Proxy it throws
+ * `TypeError: Cannot perform 'IsArray'`, and a revoked Proxy is an ordinary
+ * thing to find in a persisted forest reaching a reader — nothing in the format
+ * forbids one, and the walk runs over whole documents rather than a selection.
+ *
+ * Answering `false` there reads as "an object, then" to anyone asking whether a
+ * value is a NODE, which hands a caller a value it cannot read a single field
+ * off: measured, `findNode` threw `Cannot perform 'Object.prototype.toString'`
+ * on the entry after the walk had contained the same object twice. Answering
+ * `true` would send the walk to iterate it. So the two questions built on this
+ * ask for what they each need, and neither infers it from the other's answer.
+ */
+function readsAsList(value: unknown): boolean | undefined {
+  try {
+    return Array.isArray(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a value is a list this walk can iterate. */
+function isList(value: unknown): value is unknown[] {
+  return readsAsList(value) === true;
+}
+
+/**
+ * Whether an entry is a value this walk can descend into.
+ *
+ * Published because the walk's callers ask the same question of the entries it
+ * hands them, and a second spelling of it drifts: `tree.ts` held a character-
+ * for-character copy, so containing the revoked-Proxy throw in one of them
+ * moved the same `TypeError` to the line after. One classification, one place
+ * it can be wrong.
+ *
+ * `Array.isArray` is checked separately because `typeof [] === "object"`.
+ */
+export function isDescendable(node: unknown): node is BlockNode {
+  // Positively `false`, never merely "not true". A value reflection cannot
+  // classify is not a node — everything a caller does with one reads a field.
+  return (
+    typeof node === "object" && node !== null && readsAsList(node) === false
+  );
 }
 
 /** Visit every entry of the forest, letting `onEntry` decide how to proceed. */
@@ -142,7 +213,7 @@ export function walkForest(
   nodes: readonly unknown[],
   onEntry: (entry: ForestEntry) => ForestStep
 ): void {
-  if (!Array.isArray(nodes)) return;
+  if (!isList(nodes)) return;
   const onPath = new Set<unknown>();
   const stack: Frame[] = [
     { kind: "list", nodes, index: 0, parent: undefined, depth: 1 },
@@ -160,10 +231,17 @@ export function walkForest(
 
     // Asking to descend into something with no slots is not an error; it simply
     // has nowhere to go. Checked here so no caller has to.
-    if (!isDescendable(node) || cycle || !node.slots) continue;
+    //
+    // Read ONCE, and defensively. A persisted forest arrives unvalidated and a
+    // node can be a Proxy whose `slots` getter throws — the same untrusted
+    // input the non-array check below is about, one step earlier. Reading it
+    // twice would also run such a getter twice and could see two answers.
+    if (!isDescendable(node) || cycle) continue;
+    const lists = slotListsOf(node);
+    if (lists.length === 0) continue;
 
     onPath.add(node);
     stack.push({ kind: "leave", node });
-    pushSlots(stack, node, depth);
+    pushSlots(stack, node, lists, depth);
   }
 }
