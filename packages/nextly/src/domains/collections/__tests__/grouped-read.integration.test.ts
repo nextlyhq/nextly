@@ -14,7 +14,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, password, text } from "../../../config";
+import { defineCollection, group, json, password, text } from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
@@ -69,6 +69,18 @@ async function boot(
           // Its guarantee comes from its TYPE, not from an access rule, so the
           // field-rule guard never sees it.
           password({ name: "vaultKey" }),
+          // A structure, not a value: two rows carrying the same content with
+          // their keys ordered differently are one bucket under jsonb and two
+          // under SQLite.
+          json({ name: "payload" }),
+          // A readable top-level column that SHARES a name with a password
+          // nested inside a group. The nested name is scoped to its container,
+          // so this one must stay groupable.
+          text({ name: "code" }),
+          group({
+            name: "vault",
+            fields: [password({ name: "code" })],
+          }),
         ],
       }),
     ],
@@ -313,5 +325,54 @@ describe("bucket labels", () => {
 
     expect(res.success).toBe(true);
     expect(res.data?.buckets).toHaveLength(2);
+  });
+});
+
+describe("a group key that is not a scalar column of this table", () => {
+  it("refuses a structured field rather than labelling it", async () => {
+    // Refused rather than serialised: the grouping already happened in the
+    // database, where PostgreSQL's jsonb normalises key order and SQLite
+    // compares the stored text -- so the same content answers a different
+    // count per adapter and no label chosen here can reconcile them.
+    const h = await boot([{ region: "emea", secret: "a" }]);
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "payload",
+    });
+
+    expect(res.success).toBe(false);
+    expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
+  });
+
+  it("refuses an inherited name instead of failing in the query builder", async () => {
+    // `schema` is an ordinary object, so `toString` resolves to a prototype
+    // method rather than `undefined`. Read as a column it reached Drizzle and
+    // answered a 500 where the contract promises a named refusal.
+    const h = await boot([{ region: "emea", secret: "a" }]);
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "toString",
+    });
+
+    expect(res.success).toBe(false);
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
+  });
+
+  it("still groups a readable field that a NESTED password happens to share a name with", async () => {
+    // The false positive: descending into containers marked the top-level
+    // `code` column as a password because an unrelated `vault.code` is one.
+    // A nested name is scoped to its container and has no column here.
+    const h = await boot([{ region: "emea", secret: "a" }]);
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "code",
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.data?.buckets).toHaveLength(1);
   });
 });

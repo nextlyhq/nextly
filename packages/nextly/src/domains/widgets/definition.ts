@@ -14,6 +14,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { requiredPermissionSlugs } from "./gate";
 import type { WidgetQuery, WidgetQuerySpec } from "./query";
 import { validateWidgetSettings, type WidgetSetting } from "./settings";
+import type { WidgetOp } from "./sources";
 
 /*
  * Re-exported from the contract's home so a caller reading a definition finds
@@ -124,6 +125,26 @@ export type DataWidgetArchetype = (typeof DATA_ARCHETYPES)[number];
 const DATA_ARCHETYPE_SET: ReadonlySet<WidgetArchetype> = new Set(
   DATA_ARCHETYPES
 );
+
+/**
+ * The result each data archetype knows how to draw.
+ *
+ * Declared rather than left to the renderer, because the renderer discovers a
+ * mismatch too late to say anything useful: a `metric` handed buckets returns
+ * an "expected a count" body, so the card is drawn as an error on every load
+ * while the declaration that caused it looks fine. Registration is where an
+ * author can still be told which archetype takes which result.
+ *
+ * `custom` is deliberately absent. Its component receives the result whole and
+ * decides what to draw, so constraining it here would be this file guessing at
+ * a plugin's intent -- and the flexibility to draw something new from a new op
+ * is the reason that archetype exists.
+ */
+const ARCHETYPE_RESULTS: Record<DataWidgetArchetype, ReadonlySet<WidgetOp>> = {
+  metric: new Set<WidgetOp>(["count"]),
+  table: new Set<WidgetOp>(["list"]),
+  list: new Set<WidgetOp>(["list"]),
+};
 
 /**
  * How many numbers one `stats` card may declare.
@@ -1094,6 +1115,13 @@ function validateQuery(d: Partial<WidgetDefinition>): void {
   if (CELL_ARCHETYPE_SET.has(archetype) && d.query !== undefined) {
     fail(
       `${d.id}: archetype "${d.archetype}" draws from cells, so it takes no top-level query`
+    );
+  }
+  const drawable = ARCHETYPE_RESULTS[archetype as DataWidgetArchetype];
+  if (drawable && d.query?.op && !drawable.has(d.query.op)) {
+    fail(
+      `${d.id}: archetype "${d.archetype}" draws a ${[...drawable].join(" or ")} result, ` +
+        `so it cannot use op "${d.query.op}"`
     );
   }
   const problem = querylessQueryProblem(archetype, d.query);

@@ -26,7 +26,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
-import { toSnakeCase } from "../../../lib/case-conversion";
+import { toCamelCase, toSnakeCase } from "../../../lib/case-conversion";
 import { statusCondition } from "../../../lib/status-condition";
 import {
   expansionStatusScope,
@@ -411,10 +411,45 @@ interface FilteredReadParams {
   groupBy?: string;
 }
 
+/**
+ * Field types whose column holds a STRUCTURE rather than a value.
+ *
+ * Not groupable, and refused rather than serialised. Two rows carrying the
+ * same content with their keys in a different order are one bucket under
+ * PostgreSQL's `jsonb`, which normalises, and two under SQLite, which groups
+ * the stored text — so the same data answers a different count per adapter
+ * while every answer looks ordinary. A label chosen here cannot fix that: the
+ * grouping already happened in the database.
+ */
+const STRUCTURED_FIELD_TYPES: ReadonlySet<string> = new Set([
+  "json",
+  "repeater",
+  "group",
+  "blocks",
+  "chips",
+]);
+
+/** Whether a declared field's column holds a structure rather than a value. */
+function holdsStructure(field: {
+  type: string;
+  hasMany?: boolean;
+  relationTo?: unknown;
+}): boolean {
+  if (STRUCTURED_FIELD_TYPES.has(field.type)) return true;
+  // A relationship or upload is a plain foreign key unless it points at many,
+  // in which case it is stored as a JSON array of ids.
+  if (field.type === "relationship" || field.type === "upload") {
+    return Boolean(field.hasMany) || Array.isArray(field.relationTo);
+  }
+  return false;
+}
+
 /** The declared fields of a collection, wherever this record happens to carry them. */
 function declaredFieldsOf(collection: unknown): Array<{
   name: string;
   type: string;
+  hasMany?: boolean;
+  relationTo?: unknown;
   component?: string;
   components?: string[];
 }> {
@@ -447,7 +482,12 @@ function declaredFieldsOf(collection: unknown): Array<{
 function assertGroupKeyUsable(
   groupBy: string,
   column: unknown,
-  declaredFields: Array<{ name: string; type: string }>
+  declaredFields: Array<{
+    name: string;
+    type: string;
+    hasMany?: boolean;
+    relationTo?: unknown;
+  }>
 ): void {
   const snake = toSnakeCase(groupBy);
   const isOwner =
@@ -483,6 +523,24 @@ function assertGroupKeyUsable(
   // stored hash out through a path with nothing on it to clear the value.
   // `assertGroupableField` does not reach this: it judges fields carrying an
   // `access.read` rule, and a password field's guarantee comes from its type.
+  const spelled = new Set([
+    groupBy,
+    toSnakeCase(groupBy),
+    toCamelCase(groupBy),
+  ]);
+  const declared = declaredFields.find(field => spelled.has(field.name));
+  if (declared && holdsStructure(declared)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `groupBy.${groupBy}`,
+          code: "FIELD_NOT_GROUPABLE",
+          message: `"${groupBy}" holds a structure rather than a value, so its buckets would depend on how the database compares stored JSON. Group by a scalar field instead.`,
+        },
+      ],
+    });
+  }
+
   if (isPasswordFieldName(declaredFields, groupBy)) {
     throw NextlyError.validation({
       errors: [
@@ -2987,8 +3045,18 @@ export class CollectionQueryService extends BaseService {
       if (!plan.allowed) return plan.denied;
       const { schema, whereConditions } = plan;
 
-      const column =
-        schema[params.groupBy] ?? schema[toSnakeCase(params.groupBy)];
+      // OWN properties only. `schema` is an ordinary object, so a key like
+      // `toString` resolves to a prototype method rather than `undefined`,
+      // which read as a column and reached the query builder -- answering a
+      // 500 where the contract promises a named `FIELD_NOT_GROUPABLE`.
+      const owns = (name: string): boolean =>
+        Object.prototype.hasOwnProperty.call(schema, name);
+      const snakeKey = toSnakeCase(params.groupBy);
+      const column = owns(params.groupBy)
+        ? schema[params.groupBy]
+        : owns(snakeKey)
+          ? schema[snakeKey]
+          : undefined;
       assertGroupKeyUsable(
         params.groupBy,
         column,

@@ -184,13 +184,19 @@ export function isPasswordFieldName(
   fields: NamedField[],
   name: string
 ): boolean {
+  // TOP LEVEL only, unlike `hasPasswordField` beside it. A nested name is
+  // scoped to its container -- a password called `code` inside a group says
+  // nothing about a readable top-level column also called `code` -- and the
+  // caller asks this about a name it resolved against the PARENT table, where
+  // only top-level fields have columns. Descending would refuse a valid read
+  // because an unrelated child shares its name.
   const wanted = new Set([name, toCamelCase(name), toSnakeCase(name)]);
-  return fields.some(field => {
-    if (field.type === "password" && field.name && wanted.has(field.name)) {
-      return true;
-    }
-    return Boolean(field.fields) && isPasswordFieldName(field.fields!, name);
-  });
+  return fields.some(
+    field =>
+      field.type === "password" &&
+      Boolean(field.name) &&
+      wanted.has(field.name!)
+  );
 }
 
 /**
