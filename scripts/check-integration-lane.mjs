@@ -36,43 +36,83 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKFLOW = ".github/workflows/integration.yml";
 
 /**
- * Every shell command the workflow actually RUNS, in order.
+ * Whether a step's `if:` disables it no matter what the run decides.
+ *
+ * Only a LITERAL false, because that is the whole set this can answer. A matrix
+ * condition is the workflow selecting a leg rather than disabling one, and
+ * whether it holds depends on a run that has not happened - so treating an
+ * expression as disabled would report a lane uncovered while it runs perfectly,
+ * which for this check is the more expensive direction.
+ */
+export function staticallyDisabled(condition) {
+  if (typeof condition !== "string") return false;
+  const bare = condition.trim().replace(/^\$\{\{(.*)\}\}$/s, "$1").trim();
+  return bare === "false";
+}
+
+/**
+ * Each step in the workflow, with the condition on it and the commands it runs.
  *
  * 🔴 Reading `run:` rather than scanning every line is the load-bearing part.
  * The workflow's prose explains what each leg does, so a paragraph naming a
- * command reads identically to the command — and a line scan counts an
- * invocation that was commented out while the lane it described has stopped
- * running. That is this check reporting a covered lane it never had.
+ * command reads identically to the command - and a line scan counts an
+ * invocation that was commented out, or one belonging to a step that is turned
+ * off, while the lane it described has stopped running. That is this check
+ * reporting a covered lane it never had.
  *
- * Both YAML forms the file uses: a block scalar (`run: |`), whose body is every
- * following line indented past the key, and the one-line form. A block's body is
- * a shell script, so a line opening with `#` there is a comment for the same
- * reason a YAML one is, and neither executes.
+ * Steps are block-sequence items (`- name:` / `- uses:` / `- run:`), and their
+ * keys sit one level in. Both `run:` forms the file uses are read: a block
+ * scalar, whose body is every following line indented past the key, and the
+ * one-line form. A block's body is a shell script, so a line opening with `#`
+ * there is a comment for the same reason a YAML one is, and neither executes.
  *
- * The boundary, stated rather than covered badly: this reads indentation, not
- * YAML. A quoted `#`, a folded scalar carrying a continuation, or a command
- * assembled across lines would need a parser, and none is a form this workflow
- * uses. What it will not do is mistake prose or a disabled line for a command.
+ * ⚠️ The boundary, stated rather than covered badly. This reads indentation,
+ * not YAML, so what it CANNOT see is: a condition on the JOB rather than the
+ * step, a step disabled by an expression only the run can evaluate, a `#`
+ * inside quotes, and a command assembled across lines. Each would need a
+ * parser, and none is a form this workflow uses. The check names that limit in
+ * its own output rather than leaving it implicit, which is the call
+ * `check-comment-convention.mjs` already made for its own YAML reader.
  */
-export function runCommands(workflow) {
-  const commands = [];
+export function workflowSteps(workflow) {
   const lines = workflow.split(/\r?\n/);
+  const steps = [];
+  let step;
   for (let index = 0; index < lines.length; index++) {
-    const block = /^(\s*)(?:-\s+)?run:[ \t]*[|>][-+]?[ \t]*$/.exec(lines[index]);
-    if (block) {
-      const keyIndent = block[1].length;
+    const line = lines[index];
+    const item = /^(\s*)-\s+\S/.exec(line);
+    if (item) {
+      step = { indent: item[1].length, condition: undefined, commands: [] };
+      steps.push(step);
+    }
+    if (step === undefined) continue;
+    // A key of THIS step sits one level in from its dash. Deeper belongs to
+    // another mapping, and shallower has ended the step.
+    const keyIndent = step.indent + 2;
+    // Either spelling of the same position: the first key sits ON the dash
+    // line (`- run: ...`), and the rest are indented to where that key began.
+    const own = new RegExp(
+      `^(?:\\s{${step.indent}}-\\s+|\\s{${keyIndent}})(\\w[\\w-]*):(.*)$`
+    ).exec(line);
+    if (own === null) continue;
+    const [, key, rest] = own;
+    if (key === "if") {
+      step.condition = rest.trim();
+      continue;
+    }
+    if (key !== "run") continue;
+    if (/^[ \t]*[|>][-+]?[ \t]*$/.test(rest)) {
       for (let body = index + 1; body < lines.length; body++) {
-        const line = lines[body];
-        if (line.trim() === "") continue;
-        if (line.length - line.trimStart().length <= keyIndent) break;
-        commands.push(line.trim());
+        const bodyLine = lines[body];
+        if (bodyLine.trim() === "") continue;
+        if (bodyLine.length - bodyLine.trimStart().length <= keyIndent) break;
+        step.commands.push(bodyLine.trim());
       }
       continue;
     }
-    const inline = /^\s*(?:-\s+)?run:[ \t]+([^|>\s].*)$/.exec(lines[index]);
-    if (inline) commands.push(inline[1].trim());
+    if (rest.trim() !== "") step.commands.push(rest.trim());
   }
-  return commands;
+  return steps;
 }
 
 /**
@@ -83,16 +123,22 @@ export function runCommands(workflow) {
  */
 export function integrationInvocations(workflow) {
   const invocations = [];
-  for (const command of runCommands(workflow)) {
-    // A disabled command is not an invocation, however completely it describes
-    // one. Anchored at the start, so a `#` cannot precede what it disables.
-    if (command.startsWith("#")) continue;
-    // A trailing comment is not part of the command either, and one naming a
-    // package would otherwise be read as coverage.
-    const executable = command.split(/\s+#\s/)[0];
-    if (!/\bturbo\s+test:integration\b/.test(executable)) continue;
-    const filters = [...executable.matchAll(/--filter=(\S+)/g)].map(m => m[1]);
-    invocations.push({ line: executable.trim(), filters });
+  for (const step of workflowSteps(workflow)) {
+    // A step that cannot run covers nothing, however completely its command
+    // describes the lane.
+    if (staticallyDisabled(step.condition)) continue;
+    for (const command of step.commands) {
+      // A disabled command is not an invocation either. Anchored at the start,
+      // so a `#` cannot precede what it disables.
+      if (command.startsWith("#")) continue;
+      // Everything from an unquoted `#` is a comment to the shell, with or
+      // without a space after it: `cmd #--filter=x` runs `cmd`. Splitting on
+      // `#` alone is what keeps a commented flag from reading as coverage.
+      const executable = command.split(/\s+#/)[0];
+      if (!/\bturbo\s+test:integration\b/.test(executable)) continue;
+      const filters = [...executable.matchAll(/--filter=(\S+)/g)].map(m => m[1]);
+      invocations.push({ line: executable.trim(), filters });
+    }
   }
   return invocations;
 }
@@ -221,5 +267,11 @@ if (invokedDirectly) {
     `check-integration-lane: ok — ${declared.length} package(s) declare ` +
       `\`test:integration\` and every one is selected by a leg, across ` +
       `${invocations.length} invocation(s).`
+  );
+  // Said on the way past rather than only in the source, so a reader taking
+  // this as proof of coverage knows which shapes it did not judge.
+  console.log(
+    "  reads step `run:` by indentation, not YAML: a job-level condition, a " +
+      "step disabled by an expression, or a `#` inside quotes are not seen."
   );
 }

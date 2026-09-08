@@ -8,7 +8,8 @@ import {
   integrationInvocations,
   laneDrift,
   packagesWithIntegrationTask,
-  runCommands,
+  staticallyDisabled,
+  workflowSteps,
 } from "./check-integration-lane.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -16,7 +17,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = (name, extra = {}) =>
   JSON.stringify({ name, scripts: { test: "vitest run", ...extra } });
 
-describe("runCommands", () => {
+describe("workflowSteps", () => {
   it("reads a block scalar's body and stops at the next key", () => {
     const workflow = [
       "      - name: Run integration tests",
@@ -27,16 +28,32 @@ describe("runCommands", () => {
       "          TURBO_CACHE_DIR: .turbo",
     ].join("\n");
 
-    expect(runCommands(workflow)).toEqual([
-      "pnpm turbo build --filter=nextly",
-      "pnpm turbo test:integration --filter=nextly",
+    expect(workflowSteps(workflow)).toEqual([
+      {
+        indent: 6,
+        condition: undefined,
+        commands: [
+          "pnpm turbo build --filter=nextly",
+          "pnpm turbo test:integration --filter=nextly",
+        ],
+      },
     ]);
   });
 
   it("reads the one-line form too", () => {
-    expect(runCommands("        run: pnpm install --frozen-lockfile")).toEqual([
-      "pnpm install --frozen-lockfile",
+    expect(workflowSteps("      - run: pnpm install --frozen-lockfile")).toEqual([
+      { indent: 6, condition: undefined, commands: ["pnpm install --frozen-lockfile"] },
     ]);
+  });
+
+  it("keeps the condition with the step it guards", () => {
+    const workflow = [
+      "      - name: Run integration tests (mysql)",
+      "        if: matrix.dialect == 'mysql'",
+      "        run: pnpm turbo test:integration --filter=nextly",
+    ].join("\n");
+
+    expect(workflowSteps(workflow)[0].condition).toBe("matrix.dialect == 'mysql'");
   });
 
   it("does not read the prose that explains the workflow", () => {
@@ -49,9 +66,25 @@ describe("runCommands", () => {
       "        run: pnpm turbo test:integration --filter=nextly",
     ].join("\n");
 
-    expect(runCommands(workflow)).toEqual([
+    expect(workflowSteps(workflow).flatMap(s => s.commands)).toEqual([
       "pnpm turbo test:integration --filter=nextly",
     ]);
+  });
+});
+
+describe("staticallyDisabled", () => {
+  it("is true only for a literal false", () => {
+    expect(staticallyDisabled("false")).toBe(true);
+    expect(staticallyDisabled("${{ false }}")).toBe(true);
+  });
+
+  it("leaves a condition the run decides alone", () => {
+    // 🔴 The control that keeps this from over-reporting: a matrix condition is
+    // the workflow SELECTING a leg, not disabling one. Reading it as disabled
+    // would report the postgres and mysql legs as covering nothing.
+    expect(staticallyDisabled("matrix.dialect == 'mysql'")).toBe(false);
+    expect(staticallyDisabled("success()")).toBe(false);
+    expect(staticallyDisabled(undefined)).toBe(false);
   });
 });
 
@@ -61,6 +94,7 @@ describe("integrationInvocations", () => {
     // by a `#` still describes its filters perfectly. Counting them reports a
     // covered lane while nothing runs, which is the one answer worse than none.
     const workflow = [
+      "      - name: Run integration tests",
       "        run: |",
       "          # pnpm turbo test:integration --filter=nextly --filter=@scope/a",
     ].join("\n");
@@ -68,8 +102,46 @@ describe("integrationInvocations", () => {
     expect(integrationInvocations(workflow)).toEqual([]);
   });
 
+  it("does not count a step that cannot run", () => {
+    // 🔴 A step turned off still describes its filters perfectly, so counting
+    // them reports a lane covered by something that never executes.
+    const workflow = [
+      "      - name: Run integration tests",
+      "        if: ${{ false }}",
+      "        run: pnpm turbo test:integration --filter=nextly",
+    ].join("\n");
+
+    expect(integrationInvocations(workflow)).toEqual([]);
+  });
+
+  it("still counts a step whose condition the run decides", () => {
+    // The control for the case above.
+    const workflow = [
+      "      - name: Run integration tests (mysql)",
+      "        if: matrix.dialect == 'mysql'",
+      "        run: pnpm turbo test:integration --filter=nextly",
+    ].join("\n");
+
+    expect(integrationInvocations(workflow)).toHaveLength(1);
+  });
+
+  it("treats a comment with no space after the hash as a comment", () => {
+    // `cmd #--filter=x` runs `cmd`; the shell needs no space after the hash.
+    // Splitting on `# ` alone read the commented flag as coverage.
+    const workflow = [
+      "      - name: Run integration tests",
+      "        run: |",
+      "          pnpm turbo test:integration --filter=nextly #--filter=@scope/a",
+    ].join("\n");
+
+    expect(integrationInvocations(workflow)).toEqual([
+      { line: "pnpm turbo test:integration --filter=nextly", filters: ["nextly"] },
+    ]);
+  });
+
   it("stops at a trailing comment rather than reading its filters", () => {
     const workflow = [
+      "      - name: Run integration tests",
       "        run: |",
       "          pnpm turbo test:integration --filter=nextly # later --filter=@scope/a",
     ].join("\n");
