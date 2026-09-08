@@ -12,7 +12,7 @@
  * in a scanned call-site package invalidates the cached result. It is a
  * supplementary call-site guard for text, border, and ring color utilities.
  */
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,98 @@ import { applyOpacity, resolveColor, type ResolveContext } from "../resolve";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../../../../../..");
+
+/**
+ * Every match of `pattern` in TRACKED files under `paths`.
+ *
+ * These assertions read the WHOLE REPOSITORY rather than this package, so
+ * anything that happens to exist under a package's `src` while they run is part
+ * of what they judge: a fixture another suite writes and deletes, a generated
+ * file, a build artifact landing in a source tree. Each becomes a contrast
+ * violation reported against a developer who never wrote the utility, in a diff
+ * that does not contain it — the same shape as the recorded case where a local
+ * end-to-end run's output reddened this very suite.
+ *
+ * Tracked files are the set these rules are about: what a component renders is
+ * what somebody committed. Asking git for them excludes everything transient by
+ * construction rather than by a list of things to skip.
+ *
+ * 🔴 The FILE LIST comes from git and the matching does not. `git grep` has its
+ * own engine and does not accept `\b`, so switching to it silently matched
+ * NOTHING — measured, 0 hits against 466 for the same pattern — and an empty
+ * scan is what a clean repository looks like here. The same `grep -E` runs, on
+ * a narrower set, so every pattern in this file keeps the meaning it was
+ * written with; verified equal on a clean tree, 61 hits either way.
+ *
+ * An EMPTY file list throws rather than returning nothing. A pathspec that
+ * matches no tracked file and a repository with no violations produce the same
+ * empty string, and every assertion here reads emptiness as "no violations".
+ */
+function scanTracked(pattern: string, paths: readonly string[]): string {
+  const listed = execSync(`git ls-files -z -- ${paths.join(" ")}`, {
+    cwd: repo,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const tracked = listed.split("\0").filter(Boolean);
+  if (tracked.length === 0) {
+    throw new Error(`no tracked files under: ${paths.join(", ")}`);
+  }
+  // Tracked and STILL THERE. `git ls-files` lists the index, so a file deleted
+  // from the working tree is still named until that deletion is staged — and
+  // handing grep a path that is not there exits 2, which this treats as a real
+  // failure and rethrows. Deleting a file and running the suite before staging
+  // is an ordinary thing to do mid-change, and it made this scanner fail with
+  // "No such file or directory" rather than scanning what remained.
+  //
+  // Skipped rather than refused: a file that is gone renders nothing, so it has
+  // no bearing on what these rules measure. The empty-list guard above still
+  // catches a pathspec that names nothing at all.
+  const files = tracked.filter(file => existsSync(resolve(repo, file)));
+
+  // Batched and invoked DIRECTLY rather than piped through `xargs`, so each
+  // grep's own status is read.
+  //
+  // 🔴 `xargs` collapses them: it exits 123 when ANY invocation exited 1-125,
+  // so one batch with no match makes the whole pipeline look like a failure
+  // while the others were producing hits. Treating that as "nothing found"
+  // discards every match they made — and an empty scan is exactly what a clean
+  // repository looks like here, so the assertions would pass having examined
+  // nothing. Measured on this tree: five grep invocations for the repo-wide
+  // scan, so a silent batch is ordinary rather than hypothetical.
+  //
+  // Running grep directly also keeps the pattern away from a shell, so a
+  // backslash in it means what the regex means.
+  const found: string[] = [];
+  for (let from = 0; from < files.length; from += FILES_PER_GREP) {
+    const batch = files.slice(from, from + FILES_PER_GREP);
+    try {
+      found.push(
+        execFileSync("grep", ["-HoE", pattern, ...batch], {
+          cwd: repo,
+          encoding: "utf8",
+          maxBuffer: 64 * 1024 * 1024,
+        })
+      );
+    } catch (error) {
+      // 1 is "no lines selected" for THIS batch and says nothing about the
+      // others. Anything else is a real failure and must not read as silence.
+      if ((error as { status?: number }).status === 1) continue;
+      throw error;
+    }
+  }
+  return found.join("");
+}
+
+/**
+ * How many paths one `grep` is given.
+ *
+ * Small enough to stay well inside the argument-length limit on every platform
+ * this runs on, large enough that the repository is a handful of invocations
+ * rather than hundreds.
+ */
+const FILES_PER_GREP = 500;
+
 const css = readFileSync(resolve(here, "../../theme.css"), "utf8");
 const { light, dark } = parseThemeTokens(css);
 const scale = parseThemeScale(css);
@@ -183,13 +275,7 @@ function scanCombos(): Map<string, number> {
   // failed by this scan for containing the string it was written to describe.
   // The sibling assertion in this file already excluded tests for the same
   // reason; this one had not, which is the inconsistency rather than the rule.
-  const out = execSync(
-    `grep -rHoE '${UTILITY_PATTERN}' ${dirs.join(" ")} || true`,
-    {
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-    }
-  );
+  const out = scanTracked(UTILITY_PATTERN, SCANNED_DIRS);
   const combos = new Map<string, number>();
   for (const line of out.split("\n")) {
     const separator = line.indexOf(":");
@@ -269,10 +355,7 @@ describe("alpha-opacity color utilities", () => {
     // fail if one is not covered by SCANNED_DIRS, so a new admin-UI package
     // cannot be silently unscanned. Matches are filtered to real theme colors,
     // matching the scan, so a package using only non-color opacities is ignored.
-    const hits = execSync(
-      `grep -rHoE '${UTILITY_PATTERN}' ${repo}/packages/*/src 2>/dev/null || true`,
-      { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
-    );
+    const hits = scanTracked(UTILITY_PATTERN, ["packages/*/src"]);
     const used = new Set<string>();
     for (const line of hits.split("\n")) {
       const sep = line.indexOf(":");
@@ -285,7 +368,12 @@ describe("alpha-opacity color utilities", () => {
       if (!rendersUi(path)) continue;
       const name = nameOf(line.slice(sep + 1).trim());
       if (!name || !isScannableColor(name)) continue;
-      const pkg = /\/packages\/([^/]+)\/src\//.exec(path)?.[1];
+      // `(?:^|/)` because `git ls-files` reports REPO-RELATIVE paths —
+      // `packages/admin/src/...` with no leading slash. Requiring one matched
+      // nothing, so `used` stayed empty and this assertion could not report the
+      // very thing it exists for: a package using alpha utilities that nobody
+      // added to `SCANNED_DIRS`.
+      const pkg = /(?:^|\/)packages\/([^/]+)\/src\//.exec(path)?.[1];
       if (pkg) used.add(pkg);
     }
     const scanned = new Set(
@@ -340,10 +428,9 @@ describe("alpha-opacity color utilities", () => {
     // and because this assertion's own comment names the offending utility --
     // a scan that reads its own prose reports a hit that no user can see, which
     // is the same mistake in the opposite direction.
-    const hits = execSync(
-      `grep -rHoE '\\b[a-z-]+-control-border/[0-9[]' ${repo}/packages/*/src 2>/dev/null || true`,
-      { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
-    )
+    const hits = scanTracked("\\b[a-z-]+-control-border/[0-9[]", [
+      "packages/*/src",
+    ])
       .split("\n")
       .map(line => line.trim())
       .filter(Boolean)
