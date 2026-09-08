@@ -111,18 +111,26 @@ function takeNext(
 }
 
 /**
- * A node's slot record, or nothing when it will not say.
+ * A node's slot lists, or none when it will not say.
  *
- * A node reaching this walk may be a Proxy, and a `slots` getter that throws is
- * as much a fact about untrusted stored input as a slot holding a string is. A
- * node that will not answer has nowhere for the walk to go, which is the same
- * answer as having no slots at all.
+ * Both steps are guarded and both are the same fact about untrusted stored
+ * input: a node reaching this walk may be a Proxy whose `slots` getter throws,
+ * and the record it hands back may be a Proxy whose ENUMERATION throws. Reading
+ * the property and listing its values are two traps, and containing only the
+ * first leaves the second to take down whatever asked for the walk.
+ *
+ * A node that will not answer has nowhere for the walk to go, which is the same
+ * answer as having no slots at all — the tolerance the caller already applies
+ * to a slot holding something other than a list, one step earlier.
  */
-function slotsOf(block: BlockNode): BlockNode["slots"] {
+function slotListsOf(block: BlockNode): unknown[] {
   try {
-    return block.slots;
+    const slots = block.slots;
+    // Falsy rather than `undefined`: a stored `slots` can be `null`.
+    if (!slots) return [];
+    return Object.values(slots);
   } catch {
-    return undefined;
+    return [];
   }
 }
 
@@ -130,10 +138,9 @@ function slotsOf(block: BlockNode): BlockNode["slots"] {
 function pushSlots(
   stack: Frame[],
   block: BlockNode,
-  slots: NonNullable<BlockNode["slots"]>,
+  lists: readonly unknown[],
   depth: number
 ): void {
-  const lists = Object.values(slots);
   // Reversed so the first slot is read first: this is a pre-order walk, and a
   // caller reading a document in document order would otherwise see it mirrored
   // slot by slot.
@@ -187,13 +194,11 @@ export function walkForest(
     // input the non-array check below is about, one step earlier. Reading it
     // twice would also run such a getter twice and could see two answers.
     if (!isDescendable(node) || cycle) continue;
-    // Falsy rather than `undefined`: a stored `slots` can be `null`, and the
-    // original read tested the value itself for exactly that reason.
-    const slots = slotsOf(node);
-    if (!slots) continue;
+    const lists = slotListsOf(node);
+    if (lists.length === 0) continue;
 
     onPath.add(node);
     stack.push({ kind: "leave", node });
-    pushSlots(stack, node, slots, depth);
+    pushSlots(stack, node, lists, depth);
   }
 }

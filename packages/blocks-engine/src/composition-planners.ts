@@ -3407,6 +3407,17 @@ function ownOrigin(node: BlockNode): BlockOrigin | undefined {
   if (descriptor === undefined || descriptor.get !== undefined) {
     return undefined;
   }
+  // NON-ENUMERABLE is treated as absent, for the reason an inherited value is:
+  // it is not what would be stored. `JSON.stringify`, an object spread and
+  // `structuredClone` all drop it, so acting on its contents restores an id
+  // from metadata the saved document will not carry — a rename put back on the
+  // strength of something no reader downstream can see.
+  //
+  // The node still COUNTS as claiming provenance, which is a different question
+  // and answered by `claimsOrigin`: a record that cannot be stored is still a
+  // node saying it came from somewhere, and the conservative thing is to stop
+  // inheritance there rather than fold it into its ancestor's run.
+  if (descriptor.enumerable !== true) return undefined;
   return descriptor.value as BlockOrigin | undefined;
 }
 
@@ -3630,10 +3641,28 @@ function governs(
   renamed: ReadonlyMap<string, string>,
   now: string,
   holders: ReadonlyMap<string, ReadonlyMap<string, string> | undefined>,
-  referencing: ReadonlyMap<string, Set<ReadonlyMap<string, string>>>
+  referencing: ReadonlyMap<string, Set<string | undefined>>
 ): boolean {
   if (holders.has(now)) return holders.get(now) === renamed;
-  return referencing.get(now)?.has(renamed) === true;
+  // EVERY node referencing it has to give the SAME answer, and it has to be
+  // this record's. The restore carries a single map for the whole forest, so an
+  // id another node also names comes back rewritten there too — one legitimate
+  // hit is not licence to rewrite an unrelated author's reference, and a holder
+  // under no record at all answers `undefined`, which is a disagreement.
+  const said = referencing.get(now);
+  if (said === undefined) return false;
+  return said.size === 1 && said.has(sourceOf(renamed, now));
+}
+
+/** What one record says a current id used to be, or nothing. */
+function sourceOf(
+  renamed: ReadonlyMap<string, string>,
+  now: string
+): string | undefined {
+  for (const [was, minted] of renamed) {
+    if (minted === now) return was;
+  }
+  return undefined;
 }
 
 /**
@@ -3658,8 +3687,29 @@ function referencesByScope(
   nodes: readonly BlockNode[],
   scopes: ReadonlyMap<BlockNode, ReadonlyMap<string, string>>,
   candidates: ReadonlyMap<string, string>
-): Map<string, Set<ReadonlyMap<string, string>>> {
-  const found = new Map<string, Set<ReadonlyMap<string, string>>>();
+): Map<string, Set<string | undefined>> {
+  const found = new Map<string, Set<string | undefined>>();
+  // What each scope says a current id USED to be, which is the inverse of the
+  // direction a record is written in. Built once per distinct record rather
+  // than searched per hit.
+  const sources = new Map<
+    ReadonlyMap<string, string>,
+    ReadonlyMap<string, string>
+  >();
+  const sourceIn = (
+    scope: ReadonlyMap<string, string> | undefined,
+    now: string
+  ): string | undefined => {
+    if (scope === undefined) return undefined;
+    let inverse = sources.get(scope);
+    if (inverse === undefined) {
+      const built = new Map<string, string>();
+      for (const [was, minted] of scope) built.set(minted, was);
+      sources.set(scope, built);
+      inverse = built;
+    }
+    return inverse.get(now);
+  };
   if (candidates.size === 0 || nodes.length === 0) return found;
 
   // Childless copies, so each root the probe walks IS one node. `slots` is
@@ -3672,12 +3722,22 @@ function referencesByScope(
 
   referencedDomIds(alone, new Map(candidates)).forEach((hits, index) => {
     const held = nodes[index];
-    const scope = held === undefined ? undefined : scopes.get(held);
-    if (scope === undefined) return;
+    if (held === undefined) return;
+    // A node under NO record is recorded too, as `undefined`. It is a holder
+    // whose reference no record governs, and the entry below has to know it is
+    // there: a restore is one map for the forest, so admitting an id this node
+    // also names rewrites its reference on the strength of somebody else's
+    // record.
+    const scope = scopes.get(held);
     for (const domId of hits.keys()) {
+      // The ANSWER its scope gives, not the scope object. Two roots stamped
+      // with one record hold two equal maps rather than one — the record is
+      // copied onto each — so identity would read agreement as conflict. What
+      // decides is whether the holders say the same thing.
+      const said = sourceIn(scope, domId);
       const holders = found.get(domId);
-      if (holders === undefined) found.set(domId, new Set([scope]));
-      else holders.add(scope);
+      if (holders === undefined) found.set(domId, new Set([said]));
+      else holders.add(said);
     }
   });
   return found;

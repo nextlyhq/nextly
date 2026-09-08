@@ -3510,6 +3510,122 @@ describe("a saved DESCENDANT of an inserted root", () => {
     expect(marked([...saved.nodes], "target").cssId).toBe("hero");
   });
 
+  it("leaves an id an unrelated subtree also references", () => {
+    // One record governs a reference to it, and a subtree with provenance of
+    // its own authored a reference to the same id. The restore carries a single
+    // map for the whole forest, so putting the governed one back rewrites the
+    // unrelated author's reference too — one legitimate hit is not licence for
+    // that, so neither moves.
+    const doc = page([
+      node(
+        "outer",
+        {},
+        {
+          children: [
+            node("governed", {
+              origin: {
+                from: "pattern",
+                id: "hero-pattern",
+                digest: "d",
+                renamed: { pricing: "pricing-1" },
+              },
+              attributes: { "aria-describedby": "pricing-1" },
+              props: { mark: "governed" },
+            } as Partial<BlockNode>),
+            node(
+              "unrelated",
+              {
+                origin: { from: "component", id: "def-1" },
+              } as Partial<BlockNode>,
+              {
+                children: [
+                  node("theirs", {
+                    attributes: { "aria-describedby": "pricing-1" },
+                    props: { mark: "theirs" },
+                  }),
+                ],
+              }
+            ),
+          ],
+        }
+      ),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["outer"], target, anyParent)
+    ).document;
+
+    expect(
+      marked([...saved.nodes], "theirs").attributes?.["aria-describedby"]
+    ).toBe("pricing-1");
+    expect(
+      marked([...saved.nodes], "governed").attributes?.["aria-describedby"]
+    ).toBe("pricing-1");
+  });
+
+  it("ignores a record storage would not keep", () => {
+    // A non-enumerable `origin` survives in memory and nowhere else: JSON, an
+    // object spread and `structuredClone` all drop it. Restoring an id from one
+    // puts a name back on the strength of metadata the saved document will not
+    // carry.
+    const ancestor = node(
+      "ancestor",
+      {},
+      {
+        children: [
+          node("t", { cssId: "pricing-1", props: { mark: "target" } }),
+        ],
+      }
+    );
+    Object.defineProperty(ancestor, "origin", {
+      value: {
+        from: "pattern",
+        id: "hero-pattern",
+        digest: "d",
+        renamed: { pricing: "pricing-1" },
+      },
+      enumerable: false,
+      configurable: true,
+    });
+
+    const saved = created(
+      planSaveAsPattern(page([ancestor]), ["t"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("pricing-1");
+  });
+
+  it("saves past a slot record that refuses to be enumerated", () => {
+    // The property read is one trap and listing the record's values is another.
+    // Containing only the first leaves the second to take down whatever asked
+    // for the walk.
+    const slots = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("the slots are not for listing");
+        },
+      }
+    );
+    const hostile = {
+      id: "hostile",
+      type: "core/box",
+      version: 1,
+      props: {},
+      slots,
+    } as unknown as BlockNode;
+    const doc = page([
+      hostile,
+      node("mine", { cssId: "hero", props: { mark: "target" } }),
+    ]);
+
+    const saved = created(
+      planSaveAsPattern(doc, ["mine"], target, anyParent)
+    ).document;
+
+    expect(marked([...saved.nodes], "target").cssId).toBe("hero");
+  });
+
   it("keeps every id when no ancestor was ever inserted from a pattern", () => {
     // The control for all three above: without a record in scope there is
     // nothing to put back, and an authored id is the author's to keep.
