@@ -35,6 +35,25 @@ import type { DynamicCollectionService } from "../../dynamic-collections";
 
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 
+/**
+ * What a read rule that could not be EVALUATED resolves to: nothing.
+ *
+ * 🔴 `getAccessQueryConstraint` answers `null` for "allowed, nothing to narrow",
+ * and both callers fold that in as the absence of a predicate -- so answering it
+ * for a THROW returns every row, which is the opposite of what the rule asked
+ * for. `checkCollectionAccess` reads the same stored rules and already denies on
+ * an unexpected error "for safety"; this is what makes the two agree.
+ *
+ * A missing collection keeps its passthrough, the same escape that gate makes,
+ * because the read paths report it as a 404 rather than as an authorization
+ * decision.
+ */
+function constraintFailure(error: unknown): null {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("not found")) return null;
+  throw error;
+}
+
 export class CollectionAccessService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -515,8 +534,8 @@ export class CollectionAccessService extends BaseService {
 
       // Return query constraint if present
       return (result.query as Record<string, unknown>) ?? null;
-    } catch {
-      return null;
+    } catch (error: unknown) {
+      return constraintFailure(error);
     }
   }
 
