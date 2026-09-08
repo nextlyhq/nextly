@@ -748,7 +748,7 @@ export function deprecatedPropertiesIn(sourceFile, checker) {
         for (const property of node.properties) {
           const name = writtenPropertyName(property);
           if (name === null) continue;
-          const tag = deprecationOf(contextual, name, checker);
+          const tag = deprecationOf(contextual, name, checker, node);
           if (!tag) continue;
           found.push({
             name,
@@ -778,8 +778,64 @@ export function deprecatedPropertiesIn(sourceFile, checker) {
  */
 function writtenPropertyName(property) {
   const name = property.name;
-  if (!name || ts.isComputedPropertyName(name)) return null;
+  if (!name) return null;
+  // `{ ["collections"]: [] }` names the same member as the other two
+  // spellings, and TypeScript resolves it the same way. Only the expression
+  // inside decides: a literal is read, anything that has to be evaluated is
+  // not.
+  if (ts.isComputedPropertyName(name)) {
+    const inner = name.expression;
+    return ts.isStringLiteralLike(inner) || ts.isNumericLiteral(inner)
+      ? inner.text
+      : null;
+  }
   return typeof name.text === "string" ? name.text : null;
+}
+
+/**
+ * The union constituents a literal could still be, after its own discriminants.
+ *
+ * `{ kind: "legacy", old: "x" }` against `Legacy | Current` is not ambiguous:
+ * the literal says which arm it is. Asking every arm and requiring them to
+ * agree gave that up, so a key deprecated on the arm actually being written
+ * passed whenever the other arm still offered it.
+ *
+ * A constituent is dropped when the literal writes a literal value for a
+ * property that constituent declares as a different literal type. Nothing else
+ * narrows: a property whose value is computed, or whose declared type is not a
+ * literal, says nothing about which arm this is and is left alone.
+ */
+function applicableConstituents(constituents, literal, checker) {
+  const discriminants = [];
+  for (const property of literal.properties) {
+    if (!ts.isPropertyAssignment(property)) continue;
+    const name = writtenPropertyName(property);
+    if (name === null) continue;
+    const written = checker.getTypeAtLocation(property.initializer);
+    if (!written.isLiteral() && !(written.flags & ts.TypeFlags.BooleanLiteral)) {
+      continue;
+    }
+    discriminants.push({ name, written });
+  }
+  if (discriminants.length === 0) return constituents;
+
+  const applicable = constituents.filter(constituent =>
+    discriminants.every(({ name, written }) => {
+      const declared = constituent.getProperty(name);
+      if (!declared) return true;
+      const type = checker.getTypeOfSymbolAtLocation(
+        declared,
+        declared.valueDeclaration ?? literal
+      );
+      if (!type.isLiteral() && !(type.flags & ts.TypeFlags.BooleanLiteral)) {
+        return true;
+      }
+      return checker.typeToString(type) === checker.typeToString(written);
+    })
+  );
+  // Every arm ruled out means the discriminants describe none of them, which is
+  // the compiler's complaint to make rather than this one's.
+  return applicable.length === 0 ? constituents : applicable;
 }
 
 /**
@@ -790,15 +846,19 @@ function writtenPropertyName(property) {
  * comes back `undefined`, so a deprecated option in a union-shaped API passed
  * unread. The constituents are asked one at a time instead.
  *
- * Reported only when EVERY constituent that declares the property deprecates
- * it. Where one arm deprecates a name the other still offers, which arm this
- * literal is depends on a discriminant, and nothing here reads discriminants.
- * Reporting anyway would charge a page for writing the current spelling of a
- * name that is merely obsolete elsewhere; requiring agreement gives up the
- * mixed case and keeps the answer true.
+ * The constituents are narrowed by the literal's own discriminants first, so a
+ * literal that says which arm it is gets answered by that arm. Where the
+ * discriminants leave more than one arm standing, it reports only when every
+ * remaining arm that declares the property deprecates it: charging a page for
+ * writing the current spelling of a name that is merely obsolete on some other
+ * arm would be claiming to know something this does not.
  */
-function deprecationOf(contextual, name, checker) {
-  const constituents = contextual.isUnion() ? contextual.types : [contextual];
+function deprecationOf(contextual, name, checker, literal) {
+  const constituents = applicableConstituents(
+    contextual.isUnion() ? contextual.types : [contextual],
+    literal,
+    checker
+  );
   const declared = constituents
     .map(type => type.getProperty(name))
     .filter(symbol => symbol !== undefined);

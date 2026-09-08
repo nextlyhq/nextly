@@ -964,6 +964,10 @@ describe("a sample that writes a property the API has deprecated", () => {
         '  kind: "kept";',
         "  old?: string;",
         "}",
+        "export interface Current2 {",
+        '  kind: "current";',
+        "  old?: string;",
+        "}",
         "",
       ].join("\n")
     );
@@ -1059,6 +1063,37 @@ describe("a sample that writes a property the API has deprecated", () => {
           'export const u: Legacy | Current = { kind: "legacy", old: "x" };\n'
       )
     ).toEqual(["old"]);
+  });
+
+  it("answers from the arm the literal says it is", () => {
+    // `{ kind: "legacy", old: "x" }` is not ambiguous: the discriminant names
+    // the arm. Asking every arm and requiring agreement gave that up, so a key
+    // deprecated on the arm actually being written passed whenever another arm
+    // still offered it.
+    expect(
+      namesFlaggedIn(
+        'import type { Legacy, Current2 } from "./api";\n' +
+          'export const u: Legacy | Current2 = { kind: "legacy", old: "x" };\n'
+      )
+    ).toEqual(["old"]);
+    // The other arm of the same union, which does not deprecate it.
+    expect(
+      namesFlaggedIn(
+        'import type { Legacy, Current2 } from "./api";\n' +
+          'export const u: Legacy | Current2 = { kind: "current", old: "x" };\n'
+      )
+    ).toEqual([]);
+  });
+
+  it("reads a computed key whose expression is a literal", () => {
+    // `{ ["collections"]: [] }` names the same member and TypeScript resolves
+    // it the same way. Only an expression that has to be evaluated is skipped.
+    expect(
+      namesFlaggedIn(
+        'import type { Plugin } from "./api";\n' +
+          'export const p: Plugin = { ["collections"]: ["a"] };\n'
+      )
+    ).toEqual(["collections"]);
   });
 
   it("stays quiet when one arm of a union still offers the name", () => {
