@@ -23,18 +23,12 @@ import { useMemo } from "react";
 // The CONTRACT, not the route. The route reaches the collection through
 // `nextly/config`, which is server-only and says so at load time; importing it
 // here for one path constant takes the whole admin bundle down.
-import { LIBRARY_ROUTE_PATH, type LibraryResponse } from "../library-contract";
-
-/**
- * The name this plugin registers under, which is also how its routes are
- * addressed.
- *
- * A plugin names ITSELF when reading its own route — there is no ambient plugin
- * identity in the admin — so the literal has to be somewhere. Here rather than
- * at the call site, because the same string is the plugin's `name` and a second
- * spelling of it addresses a namespace the dispatcher does not serve.
- */
-export const PAGE_BUILDER_PLUGIN_NAME = "@nextlyhq/plugin-page-builder";
+import {
+  LIBRARY_ROUTE_PATH,
+  PAGE_BUILDER_PLUGIN_NAME,
+  type LibraryPattern,
+  type LibraryResponse,
+} from "../library-contract";
 
 /**
  * What the panel needs to know about the library.
@@ -69,18 +63,45 @@ export function usePatternLibrary(enabled = true): PatternLibraryRead {
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: LIBRARY_ROUTE_PATH,
     enabled,
+    // Fresh on every mount. Patterns are created and published through the
+    // ordinary collection screens, which invalidate their own keys and know
+    // nothing about this route — so under the admin's five-minute default an
+    // author who saved a pattern and then opened a page would be shown a
+    // library their own save is missing from.
+    staleTime: 0,
   });
-  const patterns = useMemo(
+  const patterns = useMemo(() => {
     // A stable EMPTY array while the read is in flight. A fresh `[]` on each
     // render is a new prop identity, and the panel builds its catalogue from
     // this — running the planner's preflight over every pattern in the library
     // — in a memo keyed on it. A new array each time would rebuild the whole
     // catalogue on every keystroke of the panel's own filter.
-    () => read.data?.items ?? NO_PATTERNS,
-    [read.data]
-  );
+    const all = read.data?.items;
+    if (all === undefined) return NO_PATTERNS;
+    const insertable = all.filter(isInsertable);
+    // The same stability when the filter removes nothing, which is the ordinary
+    // library: `filter` allocates whether or not it dropped anything.
+    return insertable.length === all.length ? all : insertable;
+  }, [read.data]);
   return { patterns };
 }
 
 /** One empty list for every read that has nothing yet; see `usePatternLibrary`. */
 const NO_PATTERNS: readonly SavedPattern[] = [];
+
+/**
+ * Whether a saved pattern belongs in the INSERT list.
+ *
+ * A full-page pattern is a way to START a page, not something to place after
+ * the block an author has selected. `SavedPattern` carries no granularity —
+ * the panel judges placement from the pattern's own roots — so nothing
+ * downstream can tell one apart, and a page-sized starting point would be
+ * offered for insertion inside the page it is meant to be.
+ *
+ * Dropped here rather than at the route, because the route serves the LIBRARY
+ * and this is one surface's view of it: the "start from a pattern" surface the
+ * design calls for wants exactly the rows this leaves out.
+ */
+function isInsertable(pattern: LibraryPattern): boolean {
+  return pattern.granularity !== "page";
+}

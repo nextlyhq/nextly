@@ -7,6 +7,10 @@
  * declared. Getting either wrong offers every pattern to everyone, or none to
  * anyone, and the panel looks the same in both cases.
  */
+import {
+  DOCUMENT_FORMAT_VERSION,
+  patternRefusal,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -38,8 +42,14 @@ function contextOver(
   pages: unknown[][],
   self: Record<string, string | undefined> = {}
 ) {
+  // `hasMore` comes from the SERVICE, so the stub answers it the way the
+  // service does: whether another page exists, which a shortened page cannot be
+  // asked about by looking at its length.
   const listEntries = vi.fn((_slug: string, _options: unknown, _ctx: unknown) =>
-    Promise.resolve({ data: pages.shift() ?? [] })
+    Promise.resolve({
+      data: pages.shift() ?? [],
+      pagination: { hasMore: pages.length > 0 },
+    })
   );
   const ctx: LibraryRouteContext = {
     self: { collections: self },
@@ -101,7 +111,7 @@ describe("what the library read asks for", () => {
 });
 
 describe("what one row becomes", () => {
-  it("carries the document whole, unread", async () => {
+  it("carries the document whole, under the name the PANEL reads", async () => {
     // What a pattern document must BE is the planner's question, asked before
     // the panel offers it. A second reading here would be a narrower one that
     // disagrees the first time the format gains a field.
@@ -114,7 +124,8 @@ describe("what one row becomes", () => {
 
     const library = await readPatternLibrary(ctx);
 
-    expect(library.items[0]?.content).toEqual(document);
+    expect(library.items[0]?.document).toEqual(document);
+    expect(library.items[0]).not.toHaveProperty("content");
   });
 
   it("carries a null keywords through rather than dropping it", async () => {
@@ -153,15 +164,14 @@ describe("how much of the library travels", () => {
 
     expect(listEntries).toHaveBeenCalledTimes(2);
     expect(library.items).toHaveLength(LIBRARY_PAGE_SIZE + 1);
+    expect(library.meta.truncated).toBe(false);
   });
 
-  it("pages on the COLLECTION's count, not the readable subset", async () => {
+  it("pages on what the SERVICE says, not on how many rows it could read", async () => {
     // A full page every row of which was dropped still means there may be more.
     // Reading the second page on the kept count would stop at the first page a
     // library of unreadable rows produced, and report the rest as absent.
-    const unreadable = Array.from({ length: LIBRARY_PAGE_SIZE }, () => ({
-      title: "no id",
-    }));
+    const unreadable = Array.from({ length: 3 }, () => ({ title: "no id" }));
     const { ctx, listEntries } = contextOver([unreadable, [row("real")]]);
 
     const library = await readPatternLibrary(ctx);
@@ -213,5 +223,83 @@ describe("how much of the library travels", () => {
     const library = await readPatternLibrary(ctx);
 
     expect(library.meta).toEqual({ count: 1, truncated: false });
+  });
+});
+
+describe("how much of the library travels, by weight", () => {
+  it("stops on BYTES, which a row count cannot bound", async () => {
+    // One valid blocks document may be two mebibytes by default and a host may
+    // raise that, so three thousand of them is gigabytes assembled on the
+    // server and then sent to a browser — from a request an author makes by
+    // opening the editor. The row ceiling cannot see that.
+    const heavy = () =>
+      Array.from({ length: LIBRARY_PAGE_SIZE }, (_, i) =>
+        row(`h${String(i)}`, {
+          content: {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "pattern",
+            nodes: [
+              {
+                id: "n",
+                type: "core/box",
+                version: 1,
+                props: {
+                  filler: "x".repeat(200_000),
+                },
+              },
+            ],
+          },
+        })
+      );
+    const { ctx } = contextOver(Array.from({ length: 30 }, heavy));
+
+    const library = await readPatternLibrary(ctx);
+
+    // Well under the row ceiling, so only the byte budget can have stopped it.
+    expect(library.items.length).toBeLessThan(MAX_LIBRARY_PATTERNS);
+    expect(library.meta.truncated).toBe(true);
+  });
+});
+
+describe("what the route answers is what the palette can offer", () => {
+  it("answers with a pattern the planner would actually place", () => {
+    // THE SEAM, and the gap that let a broken tier look finished. Every other
+    // test here asserts the route's own shape, and the wiring test asserts the
+    // array reaches the panel — so a payload whose field names the panel does
+    // not read satisfies both while offering nothing.
+    //
+    // `patternRefusal` is the gate `patternEntriesFrom` puts every row through
+    // before offering it, published by the engine, so this asks the real
+    // question rather than a restatement of it. A pattern whose `document` is
+    // absent — which is what carrying the stored `content` name produced — is
+    // refused here exactly as the palette silently skips it.
+    const document = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "pattern" as const,
+      nodes: [{ id: "n1", type: "core/box", version: 1, props: {} }],
+    };
+
+    expect(
+      patternRefusal(document, { parentsOf: () => undefined })
+    ).toBeUndefined();
+  });
+
+  it("carries that document through the read, under the name the panel reads", async () => {
+    const document = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "pattern",
+      nodes: [{ id: "n1", type: "core/box", version: 1, props: {} }],
+    };
+    const { ctx } = contextOver([[row("hero", { content: document })]]);
+
+    const library = await readPatternLibrary(ctx);
+
+    // Through the SAME gate, on what the route actually returned. Absent, this
+    // refuses; and absent is what the panel skips on.
+    expect(
+      patternRefusal(library.items[0]?.document, {
+        parentsOf: () => undefined,
+      })
+    ).toBeUndefined();
   });
 });

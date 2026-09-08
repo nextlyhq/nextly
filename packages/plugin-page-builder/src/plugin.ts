@@ -41,6 +41,7 @@ import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
+import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import { patternLibraryRoute } from "./library-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
@@ -395,7 +396,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
   const configStyle = resolveSiteStyle(opts.siteStyle);
 
   return definePlugin({
-    name: "@nextlyhq/plugin-page-builder",
+    name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
     // The floor states the version carrying the APIs this plugin needs, not the
     // one it was first published against. Two of them: `blocks()` builds its

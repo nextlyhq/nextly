@@ -121,6 +121,61 @@ describe("usePluginRoute", () => {
     ]);
   });
 
+  it("re-reads on mount when the caller asked for freshness", async () => {
+    // The admin holds a query fresh for five minutes and does not refetch on
+    // focus, which suits lists whose writes invalidate their own keys. A plugin
+    // route is not on that map, so a route serving something edited elsewhere
+    // would show a stale list for five minutes — including the author's own
+    // save. `staleTime: 0` is how a caller says its subject changes underneath
+    // it.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 5 * 60_000 } },
+    });
+    const shared = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const read = () =>
+      renderHook(
+        () =>
+          usePluginRoute({
+            plugin: "@acme/p",
+            path: "/library",
+            staleTime: 0,
+          }),
+        { wrapper: shared }
+      );
+
+    const first = read();
+    await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(1));
+    first.unmount();
+    read();
+
+    await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(2));
+  });
+
+  it("takes the admin's caching when the caller does not ask", async () => {
+    // The control. Without it the assertion above is satisfied by a hook that
+    // always refetches, which would make every plugin route uncacheable.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 5 * 60_000 } },
+    });
+    const shared = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const read = () =>
+      renderHook(
+        () => usePluginRoute({ plugin: "@acme/p", path: "/library" }),
+        { wrapper: shared }
+      );
+
+    const first = read();
+    await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(1));
+    first.unmount();
+    read();
+
+    await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(1));
+  });
+
   it("reports an error rather than an empty answer", async () => {
     getSpy.mockRejectedValue(new Error("nope"));
 

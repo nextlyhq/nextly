@@ -64,6 +64,21 @@ export interface PluginRouteRequest {
    * has not been opened yet, say.
    */
   enabled?: boolean;
+  /**
+   * How long an answer stays fresh, in milliseconds.
+   *
+   * Worth naming because the admin's default is FIVE MINUTES with no refetch on
+   * focus, which suits a list this admin also writes: those writes invalidate
+   * their own collection keys. A plugin route is not on that map — nothing in
+   * the admin knows which routes a given write affects — so a route serving
+   * something the admin edits elsewhere is stale for five minutes and shows an
+   * author a list their own save is missing from.
+   *
+   * `0` with the mount refetch below is the honest setting for such a route:
+   * every mount asks again. A route serving something that does not change
+   * under it should leave this alone and take the default.
+   */
+  staleTime?: number;
 }
 
 /**
@@ -78,6 +93,7 @@ export function usePluginRoute<T>({
   plugin,
   path,
   enabled = true,
+  staleTime,
 }: PluginRouteRequest): PluginRouteRead<T> {
   const route = pluginRouteFullPath(plugin, path);
   const query = useQuery<T>({
@@ -87,6 +103,12 @@ export function usePluginRoute<T>({
     queryKey: ["plugin-route", route],
     queryFn: () => protectedApi.get<T>(route),
     enabled,
+    ...(staleTime === undefined ? {} : { staleTime }),
+    // Only where the caller asked for freshness. `always` overrides the cache
+    // for this query alone, so a route whose subject the admin edits elsewhere
+    // is re-read when a surface that needs it mounts — and one that takes the
+    // default keeps the admin's ordinary caching.
+    ...(staleTime === 0 ? { refetchOnMount: "always" as const } : {}),
   });
   return {
     data: query.data,

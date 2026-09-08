@@ -347,6 +347,34 @@ describe("what makes the saved pattern tier reachable at all", () => {
     expect(seen.insertPanel?.patterns).toBe(items);
   });
 
+  it("does not offer a PAGE pattern for insertion", () => {
+    // A full-page pattern is a way to start a page, not something to place
+    // after the selected block. `SavedPattern` carries no granularity, so the
+    // panel cannot tell one apart — it would be offered for insertion inside
+    // the page it is meant to be.
+    const section = {
+      id: "hero",
+      title: "Hero",
+      granularity: "section",
+      content: { formatVersion: 1, kind: "pattern", nodes: [] },
+    };
+    const whole = {
+      id: "landing",
+      title: "Landing",
+      granularity: "page",
+      content: { formatVersion: 1, kind: "pattern", nodes: [] },
+    };
+    libraryAnswer = {
+      items: [section, whole],
+      meta: { count: 2, truncated: false },
+    };
+
+    openEditor();
+
+    const offered = seen.insertPanel?.patterns as { id: string }[] | undefined;
+    expect(offered?.map(p => p.id)).toEqual(["hero"]);
+  });
+
   it("gives it an empty list, not undefined, before the read answers", () => {
     // The panel builds its catalogue in a memo keyed on this prop, running the
     // planner's preflight over every pattern in the library. A fresh `[]` each

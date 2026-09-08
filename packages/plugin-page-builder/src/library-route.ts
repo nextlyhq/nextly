@@ -71,6 +71,44 @@ export const MAX_LIBRARY_PATTERNS = 3000;
  */
 const MAX_LIBRARY_PAGES = Math.ceil(MAX_LIBRARY_PATTERNS / LIBRARY_PAGE_SIZE);
 
+/**
+ * The most bytes of pattern documents one library read will carry.
+ *
+ * A count cannot bound this. One valid blocks document may be two mebibytes by
+ * default and a host may raise that cap, so three thousand of them is gigabytes
+ * held in memory on the server and then sent to a browser — from a request an
+ * author makes by opening the editor.
+ *
+ * Sixteen mebibytes: large enough that an ordinary library arrives whole, small
+ * enough to be a payload rather than an outage. Reaching it is REPORTED, like
+ * every other ceiling here, so the surface can say the library was cut rather
+ * than let an author search for a pattern that was silently left out.
+ */
+const MAX_LIBRARY_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Roughly what one pattern will cost on the wire.
+ *
+ * The DOCUMENT only, because that is the part with no bound of its own — the
+ * title, category and keywords are short columns. Measured by serialising,
+ * which is what the response does anyway; an estimate from node count would be
+ * a second model of the same thing and would disagree the first time a block
+ * gained a large prop.
+ *
+ * A document that cannot be serialised counts as nothing rather than refusing
+ * the library: it is one pattern the panel will drop, and the ceiling exists to
+ * bound bytes actually sent.
+ */
+function documentBytesOf(pattern: LibraryPattern): number {
+  try {
+    const document = pattern.document;
+    if (document === undefined || document === null) return 0;
+    return JSON.stringify(document)?.length ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 /** The capabilities this route uses, named rather than imported whole. */
 export interface LibraryRouteContext {
   self: { collections: Record<string, string | undefined> };
@@ -81,7 +119,15 @@ export interface LibraryRouteContext {
         collection: string,
         options: unknown,
         context: unknown
-      ): Promise<{ data: unknown[] }>;
+      ): Promise<{
+        data: unknown[];
+        // The SERVICE's answer to whether more rows exist. A page can come back
+        // shorter than asked for without the collection ending — an `afterRead`
+        // hook may drop rows — so a length check stops early and every pattern
+        // on later pages disappears. It also cannot tell a library that ends
+        // exactly at the ceiling from one that does not.
+        pagination?: { hasMore?: boolean };
+      }>;
     };
   };
 }
@@ -104,6 +150,7 @@ export async function readPatternLibrary(
 
   const items: LibraryPattern[] = [];
   let truncated = false;
+  let bytes = 0;
   for (let page = 1; ; page += 1) {
     const result = await ctx.services.collections.listEntries(
       slug,
@@ -113,32 +160,65 @@ export async function readPatternLibrary(
       },
       asUser
     );
-    const rows = result.data;
-    for (const row of rows) {
+    for (const row of result.data) {
       const pattern = readLibraryRow(row);
       // An unreadable ROW is dropped rather than refusing the whole library,
       // which moves in the same direction the remote-pattern reader moves in:
       // one pattern stops being offered instead of all of them. A row with no
       // id or no title is one the panel could neither key nor label.
-      if (pattern !== undefined) items.push(pattern);
+      if (pattern === undefined) continue;
+      items.push(pattern);
+      bytes += documentBytesOf(pattern);
     }
-    // The COLLECTION's page, not the readable subset: a full page every row of
-    // which was dropped still means there may be more.
-    if (rows.length < LIBRARY_PAGE_SIZE) break;
-    if (items.length >= MAX_LIBRARY_PATTERNS) {
+
+    const stop = whyStop({
+      hasMore: result.pagination?.hasMore === true,
+      kept: items.length,
+      bytes,
+      page,
+    });
+    if (stop === undefined) continue;
+    if (stop === "cut") {
       truncated = true;
-      items.length = MAX_LIBRARY_PATTERNS;
-      break;
+      // Only the pattern ceiling can overshoot, and only by part of a page.
+      if (items.length > MAX_LIBRARY_PATTERNS)
+        items.length = MAX_LIBRARY_PATTERNS;
     }
-    // And a bound on the READS, which the one above cannot supply: it counts
-    // patterns kept, and a page whose every row was dropped keeps none.
-    if (page >= MAX_LIBRARY_PAGES) {
-      truncated = true;
-      break;
-    }
+    break;
   }
 
   return { items, meta: { count: items.length, truncated } };
+}
+
+/**
+ * Whether to ask for another page, and if not, why.
+ *
+ * Its own function because the loop above has one job — read and keep — and
+ * this has four independent reasons to stop, each bounding something the others
+ * cannot see. Told apart as `"ended"` and `"cut"` because only one of them is
+ * something to report: a library that finished is complete, and a library that
+ * was cut is one an author would otherwise search in vain.
+ */
+function whyStop(at: {
+  hasMore: boolean;
+  kept: number;
+  bytes: number;
+  page: number;
+}): "ended" | "cut" | undefined {
+  // The SERVICE's own answer, not a length this recomputes. A page shorter than
+  // asked for does not mean the collection ended: an `afterRead` hook may drop
+  // rows, and stopping there loses every pattern behind them.
+  if (!at.hasMore) return "ended";
+  if (at.kept >= MAX_LIBRARY_PATTERNS) return "cut";
+  // BYTES, which the count cannot bound. One valid document may be two
+  // mebibytes and a host may raise that, so three thousand of them is gigabytes
+  // assembled in memory and then sent to a browser. The editor needs a library
+  // it can hold, not the whole of a large one.
+  if (at.bytes >= MAX_LIBRARY_BYTES) return "cut";
+  // And a bound on the READS, which neither of those supplies: they count what
+  // was KEPT, and a page whose every row was dropped keeps none.
+  if (at.page >= MAX_LIBRARY_PAGES) return "cut";
+  return undefined;
 }
 
 /**
@@ -176,11 +256,17 @@ function describedBy(record: Record<string, unknown>): Partial<LibraryPattern> {
     ...optionalText(record.category, "category"),
     ...optionalText(record.granularity, "granularity"),
     ...storedKeywords(record.keywords),
-    // Carried whole and unread. What a pattern document must be is the
+    // The collection stores the tree under `content`; the panel reads
+    // `document`. Named here, once, because this is the only place that knows
+    // both — and because getting it wrong drops every pattern in silence.
+    //
+    // Carried whole and unread. What a pattern document must BE is the
     // planner's question, and it asks it before offering the pattern; a second
     // reading here would be a narrower one that disagrees the first time the
     // format gains a field.
-    ...(record.content === undefined ? {} : { content: record.content }),
+    ...(record.content === undefined
+      ? {}
+      : { document: record.content as LibraryPattern["document"] }),
   };
 }
 
