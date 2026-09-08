@@ -378,6 +378,26 @@ function asBuckets(
   return buckets;
 }
 
+/**
+ * A grouped result, or `undefined` when the payload does not carry one.
+ *
+ * `truncated` is carried through rather than dropped, for the reason `atLeast`
+ * is on a count: it says the bucket set is PARTIAL, and a chart that loses it
+ * presents the categories it happens to hold as the whole picture.
+ */
+function asGrouped(
+  buckets: unknown,
+  truncated: unknown
+): WidgetResult | undefined {
+  const read = asBuckets(buckets);
+  if (!read) return undefined;
+  return {
+    op: "groupBy",
+    buckets: read,
+    ...(truncated === true ? { truncated: true } : {}),
+  };
+}
+
 function asResult(value: unknown): WidgetResult | undefined {
   if (!isObject(value)) return undefined;
 
@@ -405,16 +425,7 @@ function asResult(value: unknown): WidgetResult | undefined {
   }
 
   if (result.op === "groupBy") {
-    const buckets = asBuckets(result.buckets);
-    if (!buckets) return undefined;
-    // `truncated` is carried through rather than dropped, for the reason
-    // `atLeast` is: it says the bucket set is PARTIAL, and a chart that loses
-    // it presents the categories it happens to hold as the whole picture.
-    return {
-      op: "groupBy",
-      buckets,
-      ...(result.truncated === true ? { truncated: true } : {}),
-    };
+    return asGrouped(result.buckets, result.truncated);
   }
 
   return undefined;

@@ -3049,14 +3049,15 @@ export class CollectionQueryService extends BaseService {
       // `toString` resolves to a prototype method rather than `undefined`,
       // which read as a column and reached the query builder -- answering a
       // 500 where the contract promises a named `FIELD_NOT_GROUPABLE`.
-      const owns = (name: string): boolean =>
-        Object.prototype.hasOwnProperty.call(schema, name);
-      const snakeKey = toSnakeCase(params.groupBy);
-      const column = owns(params.groupBy)
-        ? schema[params.groupBy]
-        : owns(snakeKey)
-          ? schema[snakeKey]
-          : undefined;
+      // The spelling this schema actually carries, chosen before the lookup so
+      // the column is read once. OWN properties only: `schema` is an ordinary
+      // object, so a key like `toString` resolves to a prototype method rather
+      // than `undefined`, which read as a column and failed inside the query
+      // builder as a 500 where the contract promises a named refusal.
+      const key = [params.groupBy, toSnakeCase(params.groupBy)].find(name =>
+        Object.prototype.hasOwnProperty.call(schema, name)
+      );
+      const column = key === undefined ? undefined : schema[key];
       assertGroupKeyUsable(
         params.groupBy,
         column,

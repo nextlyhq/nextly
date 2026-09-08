@@ -1104,6 +1104,24 @@ function validateCells(d: Partial<WidgetDefinition>): void {
   if (problem !== undefined) fail(`${d.id}: ${problem}`);
 }
 
+/**
+ * Why an archetype cannot draw the result its query would return, if it cannot.
+ *
+ * Answers a reason rather than throwing, like {@link querylessQueryProblem}
+ * beside it, so the caller attaches the widget id once for every rule.
+ */
+function archetypeResultProblem(
+  archetype: WidgetArchetype,
+  query: WidgetQuerySpec | undefined
+): string | undefined {
+  const drawable = ARCHETYPE_RESULTS[archetype as DataWidgetArchetype];
+  if (!drawable || !query?.op || drawable.has(query.op)) return undefined;
+  return (
+    `archetype "${archetype}" draws a ${[...drawable].join(" or ")} result, ` +
+    `so it cannot use op "${query.op}"`
+  );
+}
+
 function validateQuery(d: Partial<WidgetDefinition>): void {
   const archetype = d.archetype as WidgetArchetype;
   if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
@@ -1117,13 +1135,8 @@ function validateQuery(d: Partial<WidgetDefinition>): void {
       `${d.id}: archetype "${d.archetype}" draws from cells, so it takes no top-level query`
     );
   }
-  const drawable = ARCHETYPE_RESULTS[archetype as DataWidgetArchetype];
-  if (drawable && d.query?.op && !drawable.has(d.query.op)) {
-    fail(
-      `${d.id}: archetype "${d.archetype}" draws a ${[...drawable].join(" or ")} result, ` +
-        `so it cannot use op "${d.query.op}"`
-    );
-  }
+  const mismatch = archetypeResultProblem(archetype, d.query);
+  if (mismatch !== undefined) fail(`${d.id}: ${mismatch}`);
   const problem = querylessQueryProblem(archetype, d.query);
   if (problem !== undefined) fail(`${d.id}: ${problem}`);
 }
