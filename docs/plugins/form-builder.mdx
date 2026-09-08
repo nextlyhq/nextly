@@ -596,39 +596,72 @@ const contactForm = createFormConfig('contact', [
 
 **3. Handle submissions in an API route:**
 
-Nextly plugins expose HTTP endpoints via [`contributes.routes`](/docs/plugins/routes), and a contributed route receives the plugin's `ctx`, which is what `submitForm` takes as `pluginContext`.
+`submitForm` takes two context values: `pluginContext`, which is a plugin's `ctx`, and
+`pluginConfig`, which is the resolved form-builder config. Both are reachable from your
+own config file. A route contributed through [`contributes.routes`](/docs/plugins/routes)
+is handed the `ctx` as its second argument, and `formBuilder()` returns its resolved
+config as `fb.config`, which is why step 1 keeps the return value rather than inlining it.
 
-`pluginConfig` is the harder half, and worth saying plainly before you copy anything: the form-builder resolves its config during its own `init` and stores it on the Nextly instance, and no exported accessor reaches it from another plugin's context. So the snippet below is the **shape** `submitForm` expects, not a route you can paste and run — the two context values are declared rather than obtained, because today there is no supported way to obtain them outside the plugin itself.
+So the endpoint is a small plugin of your own, declared beside the form-builder in
+`nextly.config.ts`:
 
 ```ts
-import type { PluginContext } from "@nextlyhq/plugin-sdk";
-import { submitForm } from "@nextlyhq/plugin-form-builder";
-import type { ResolvedFormBuilderConfig } from "@nextlyhq/plugin-form-builder";
+// nextly.config.ts
+import { defineConfig } from "nextly";
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { formBuilder, submitForm } from "@nextlyhq/plugin-form-builder";
 
-// Declared, not obtained: see the note above. `declare` types these for the
-// example and produces nothing at runtime, so this file will not run as
-// written.
-declare const pluginContext: PluginContext;
-declare const pluginConfig: ResolvedFormBuilderConfig;
+const fb = formBuilder({
+  notifications: { defaultFrom: "noreply@mysite.com" },
+  spamProtection: {
+    honeypot: true,
+    rateLimit: { maxSubmissions: 5, windowMs: 60_000 },
+  },
+});
 
-export async function POST(request: Request) {
-  const data = await request.json();
+const contactEndpoint = definePlugin({
+  name: "@acme/contact-endpoint",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.63",
+  contributes: {
+    routes: [
+      {
+        method: "POST",
+        path: "/contact",
+        // A visitor has no session, so the route opts out of auth. What stops
+        // abuse is `submitForm` itself: the honeypot and rate limit configured
+        // above run on every call, and a route that skipped it would skip them.
+        public: true,
+        handler: async (request, ctx) => {
+          const data = await request.json();
 
-  const result = await submitForm(
-    {
-      formSlug: "contact",
-      data,
-      metadata: {
-        ipAddress: request.headers.get("x-forwarded-for") || undefined,
-        userAgent: request.headers.get("user-agent") || undefined,
+          const result = await submitForm(
+            {
+              formSlug: "contact",
+              data,
+              metadata: {
+                ipAddress: request.headers.get("x-forwarded-for") ?? undefined,
+                userAgent: request.headers.get("user-agent") ?? undefined,
+              },
+            },
+            { pluginContext: ctx, pluginConfig: fb.config }
+          );
+
+          return Response.json(result);
+        },
       },
-    },
-    { pluginContext, pluginConfig }
-  );
+    ],
+  },
+});
 
-  return Response.json(result);
-}
+export default defineConfig({
+  plugins: [fb.plugin, contactEndpoint],
+  // collections: [...] as in step 1
+});
 ```
+
+The route is mounted under the contributing plugin's namespace, so the form posts to
+`/api/plugins/@acme/contact-endpoint/contact`.
 
 
 

@@ -398,20 +398,35 @@ The media API response includes every generated variant under `sizes`:
 With `next/image`:
 
 ```tsx
+// app/(site)/photo/page.tsx
 import Image from "next/image";
-import { getNextly } from "nextly/runtime";
+import { getNextly } from "nextly";
 
-const nextly = getNextly();
-const media = await nextly.media.findByID({ id: "abc-123" });
-const large = media?.sizes?.large;
+import config from "../../../nextly.config";
 
-<Image
-  src={large?.url ?? media!.url}
-  width={large?.width ?? media!.width}
-  height={large?.height ?? media!.height}
-  alt={media?.altText ?? ""}
-/>
+export default async function Photo() {
+  const nextly = await getNextly({ config });
+  const media = await nextly.media.findByID({ id: "abc-123" });
+  if (!media) return null;
+
+  const large = media.sizes?.large;
+
+  return (
+    <Image
+      src={large?.url ?? media.url}
+      width={large?.width ?? media.width}
+      height={large?.height ?? media.height}
+      alt={media.altText ?? ""}
+    />
+  );
+}
 ```
+
+`getNextly({ config })` initialises the runtime if nothing has yet, so this page works
+wherever it renders. The synchronous proxy from `nextly/runtime` assumes an already
+initialised process and throws `Nextly services not initialized` when it is the first
+Nextly code a worker runs, which a blank scaffold makes likely because it ships no
+`instrumentation.ts`.
 
 ## Crop point (focal point)
 
@@ -420,11 +435,37 @@ Each media record can carry a focal point that controls how `"cover"` crops beha
 Use them with CSS `object-position` for responsive cropping:
 
 ```tsx
-<img
-  src={media.url}
-  style={{ objectFit: "cover", objectPosition: `${media.focalX}% ${media.focalY}%` }}
-/>
+// app/(site)/cover.tsx
+import Image from "next/image";
+
+export function Cover({
+  url,
+  focalX,
+  focalY,
+  alt,
+}: {
+  url: string;
+  focalX: number;
+  focalY: number;
+  alt: string;
+}) {
+  return (
+    <Image
+      src={url}
+      alt={alt}
+      fill
+      style={{
+        objectFit: "cover",
+        objectPosition: `${focalX}% ${focalY}%`,
+      }}
+    />
+  );
+}
 ```
+
+The component takes the two values rather than a whole media record, because
+`media.findByID()` does not return them today: `MediaFile` has no `focalX` or `focalY`,
+so read the crop point from the media row until it does.
 
 ## Environment variables
 

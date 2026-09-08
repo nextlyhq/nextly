@@ -218,60 +218,69 @@
   },
   "findings": {
     "docs/getting-started/quick-start.mdx": {
-      "error TS2769: No overload matches this call. Overload 1 of 4, '(value: string | number | Date): Date', gave the following error. Argument of type 'unknown' is not assignable to parameter of type 'string | number | Date'. Overload 2 of 4, '(value: string | number): Date', gave the following error. Argument of type 'unknown' is not assignable to parameter of type 'string | number'.": 1
+      "#1 error TS2769: No overload matches this call. Overload 1 of 4, '(value: string | number | Date): Date', gave the following error. Argument of type 'unknown' is not assignable to parameter of type 'string | number | Date'. Overload 2 of 4, '(value: string | number): Date', gave the following error. Argument of type 'unknown' is not assignable to parameter of type 'string | number'.": 1
     },
     "docs/guides/media-storage.mdx": {
-      "error TS2353: Object literal may only specify known properties, and 'media' does not exist in type 'NextlyConfig'.": 1,
-      "error TS2551: Property 'sizes' does not exist on type 'MediaFile'. Did you mean 'size'?": 1
+      "#10 error TS2353: Object literal may only specify known properties, and 'media' does not exist in type 'NextlyConfig'.": 1,
+      "#11 error TS2551: Property 'sizes' does not exist on type 'MediaFile'. Did you mean 'size'?": 1
     },
     "docs/guides/routing-and-seo.mdx": {
-      "error TS2304: Cannot find name 'Post'.": 2,
-      "error TS2304: Cannot find name 'Page'.": 3,
-      "error TS2304: Cannot find name 'getPostBySlug'.": 1,
-      "error TS2304: Cannot find name 'services'.": 1,
-      "error TS18004: No value exists in scope for the shorthand property 'baseUrl'. Either declare one or provide an initializer.": 1
+      "#0 error TS2304: Cannot find name 'Post'.": 1,
+      "#3 error TS2304: Cannot find name 'Page'.": 1,
+      "#4 error TS2304: Cannot find name 'Page'.": 1,
+      "#5 error TS2304: Cannot find name 'Post'.": 1,
+      "#6 error TS2304: Cannot find name 'Page'.": 1,
+      "#7 error TS2304: Cannot find name 'getPostBySlug'.": 1,
+      "#8 error TS2304: Cannot find name 'services'.": 1,
+      "#8 error TS18004: No value exists in scope for the shorthand property 'baseUrl'. Either declare one or provide an initializer.": 1
     },
     "docs/plugins/admin-ui.mdx": {
-      "error TS2304: Cannot find name 'Skeleton'.": 1,
-      "error TS2304: Cannot find name 'Chart'.": 1
+      "#9 error TS2304: Cannot find name 'Skeleton'.": 1,
+      "#9 error TS2304: Cannot find name 'Chart'.": 1
     },
     "docs/plugins/auth.mdx": {
-      "error TS2304: Cannot find name 'verifyGoogleToken'.": 1,
-      "error TS2304: Cannot find name 'isTotpEnabled'.": 1,
-      "error TS2304: Cannot find name 'verifyTotp'.": 1
+      "#1 error TS2304: Cannot find name 'verifyGoogleToken'.": 1,
+      "#2 error TS2304: Cannot find name 'isTotpEnabled'.": 1,
+      "#2 error TS2304: Cannot find name 'verifyTotp'.": 1
     },
     "docs/plugins/author-guide.mdx": {
-      "error TS2304: Cannot find name 'MyPluginOptions'.": 1,
-      "error TS2593: Cannot find name 'describe'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.": 1,
-      "error TS2593: Cannot find name 'it'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.": 1
+      "#0 error TS2304: Cannot find name 'MyPluginOptions'.": 1,
+      "#4 error TS2593: Cannot find name 'describe'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.": 1,
+      "#4 error TS2593: Cannot find name 'it'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.": 1
     },
     "docs/plugins/distribution.mdx": {
-      "error TS2304: Cannot find name 'myPlugin'.": 1
+      "#0 error TS2304: Cannot find name 'myPlugin'.": 1
     },
     "docs/plugins/form-builder.mdx": {
-      "error TS2304: Cannot find name 'Posts'.": 2,
-      "error TS2304: Cannot find name 'Users'.": 2,
-      "error TS2304: Cannot find name 'Media'.": 2,
-      "error TS2304: Cannot find name 'secret'.": 1,
-      "error TS2304: Cannot find name 'req'.": 2
+      "#0 error TS2304: Cannot find name 'Posts'.": 1,
+      "#0 error TS2304: Cannot find name 'Users'.": 1,
+      "#0 error TS2304: Cannot find name 'Media'.": 1,
+      "#15 error TS2304: Cannot find name 'secret'.": 1,
+      "#15 error TS2304: Cannot find name 'req'.": 2,
+      "#19 error TS2304: Cannot find name 'Posts'.": 1,
+      "#19 error TS2304: Cannot find name 'Users'.": 1,
+      "#19 error TS2304: Cannot find name 'Media'.": 1
     },
     "docs/plugins/index.mdx": {
-      "error TS2304: Cannot find name 'Posts'.": 2,
-      "error TS2304: Cannot find name 'Users'.": 2,
-      "error TS2304: Cannot find name 'Media'.": 2,
-      "error TS2304: Cannot find name 'MyCollection'.": 1
+      "#0 error TS2304: Cannot find name 'Posts'.": 1,
+      "#0 error TS2304: Cannot find name 'Users'.": 1,
+      "#0 error TS2304: Cannot find name 'Media'.": 1,
+      "#1 error TS2304: Cannot find name 'Posts'.": 1,
+      "#1 error TS2304: Cannot find name 'Users'.": 1,
+      "#1 error TS2304: Cannot find name 'Media'.": 1,
+      "#2 error TS2304: Cannot find name 'MyCollection'.": 1
     },
     "docs/plugins/lifecycle.mdx": {
-      "error TS2304: Cannot find name 'a'.": 1,
-      "error TS2304: Cannot find name 'b'.": 1
+      "#1 error TS2304: Cannot find name 'a'.": 1,
+      "#1 error TS2304: Cannot find name 'b'.": 1
     },
     "docs/database/mysql.mdx": {
-      "error TS2304: Cannot find name 'orderData'.": 1,
-      "error TS2304: Cannot find name 'stockUpdate'.": 1,
-      "error TS2304: Cannot find name 'where'.": 1
+      "#6 error TS2304: Cannot find name 'orderData'.": 1,
+      "#6 error TS2304: Cannot find name 'stockUpdate'.": 1,
+      "#6 error TS2304: Cannot find name 'where'.": 1
     },
     "docs/guides/isr-caching.mdx": {
-      "error TS18004: No value exists in scope for the shorthand property 'data'. Either declare one or provide an initializer.": 1
+      "#4 error TS18004: No value exists in scope for the shorthand property 'data'. Either declare one or provide an initializer.": 1
     }
   }
 }

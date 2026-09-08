@@ -1600,6 +1600,185 @@ const readBaseline = () => {
   }
 };
 
+/**
+ * What a finding IS, for the baseline to hold: the fence it landed on and the
+ * message, with neither the line number nor any absolute path.
+ *
+ * The FENCE is kept and the line number dropped. A line moves whenever anything
+ * above it on the page is edited, so keying on it makes the baseline churn on
+ * every edit and stop being read. The message ALONE is one step short of an
+ * identity, though: two fences on one page can carry the same message, so
+ * fixing it in one while introducing it in the other leaves that page's count
+ * for that message unchanged and the newly broken fence is accepted. A fence
+ * ordinal moves only when a TypeScript fence is added, removed or reordered,
+ * which is exactly when its diagnostics deserve another look.
+ *
+ * Absolute paths are stripped because they differ between a laptop and CI.
+ */
+export function identityOf(line, root = ROOT) {
+  const cut = line.indexOf("  ");
+  const where = cut === -1 ? "" : line.slice(0, cut);
+  const message = (cut === -1 ? line : line.slice(cut + 2))
+    .split(root)
+    .join("<root>/")
+    .replace(/\s+/g, " ")
+    .trim();
+  // `docs/x.mdx#3:12` becomes `#3`. A diagnostic the compiler could not
+  // attribute to a fence carries an absolute path or `?` instead, and gets no
+  // prefix rather than an invented one.
+  const hash = where.indexOf("#");
+  if (hash === -1) return message;
+  const colon = where.indexOf(":", hash);
+  const fence = colon === -1 ? where.slice(hash) : where.slice(hash, colon);
+  return `${fence} ${message}`;
+}
+
+/**
+ * The one comparison between a held baseline and a fresh audit, in three parts:
+ * coverage that may not shrink, diagnostic identities that may not change, and
+ * per-page counts.
+ *
+ * Every caller narrows THIS comparison rather than restating a cheaper one.
+ * `--only` used to compare a page's total finding count and return, so the
+ * local verification path this tool advertises accepted a page that had swapped
+ * one diagnostic for another or lost a compiled fence — a weaker check than the
+ * one CI runs, reached by the contributors most likely to trust it.
+ *
+ * `only` narrows every part to a single page. The repository-wide totals are
+ * skipped in that mode because they are not one page's to answer for.
+ */
+export function compareToBaseline({
+  baseline,
+  coverage,
+  counted,
+  fingerprint,
+  only = null,
+}) {
+  const mine = file => only === null || file === only;
+
+  const lost = [];
+  if (only === null) {
+    const seen = {
+      pages: coverage.files.length,
+      samples: coverage.samples,
+      compiled: coverage.compiled,
+    };
+    for (const [what, was] of Object.entries(baseline.coverage ?? {})) {
+      if ((seen[what] ?? 0) < was) {
+        lost.push(`${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`);
+      }
+    }
+  }
+  for (const [file, was] of Object.entries(baseline.samplesPerPage ?? {})) {
+    if (!mine(file)) continue;
+    const now = coverage.perPage[file] ?? { samples: 0, compiled: 0 };
+    for (const what of ["samples", "compiled"]) {
+      if ((now[what] ?? 0) < (was[what] ?? 0)) {
+        lost.push(
+          `${file}: ${what} was ${String(was[what])}, now ${String(now[what] ?? 0)}`
+        );
+      }
+    }
+  }
+
+  const held = baseline.findings ?? {};
+  const appeared = [];
+  const gone = [];
+  for (const [file, counts] of Object.entries(fingerprint)) {
+    if (!mine(file)) continue;
+    for (const [message, n] of Object.entries(counts)) {
+      const was = (held[file] ?? {})[message] ?? 0;
+      if (n > was) appeared.push(`${file}: ${message}`);
+    }
+  }
+  for (const [file, counts] of Object.entries(held)) {
+    if (!mine(file)) continue;
+    for (const [message, was] of Object.entries(counts)) {
+      const now = (fingerprint[file] ?? {})[message] ?? 0;
+      if (now < was) gone.push(`${file}: ${message}`);
+    }
+  }
+
+  const allowed = baseline.pages ?? {};
+  const worse = [];
+  const better = [];
+  for (const [file, count] of Object.entries(counted)) {
+    if (!mine(file)) continue;
+    const cap = allowed[file] ?? 0;
+    if (count > cap)
+      worse.push(`${file}: allowed ${String(cap)}, found ${String(count)}`);
+  }
+  for (const [file, cap] of Object.entries(allowed)) {
+    if (!mine(file)) continue;
+    const count = counted[file] ?? 0;
+    if (count < cap)
+      better.push(`${file}: allowed ${String(cap)}, found ${String(count)}`);
+  }
+
+  return { lost, appeared, gone, worse, better };
+}
+
+/**
+ * Prints whichever part of a comparison failed, and answers whether any did.
+ * Shared by the repository-wide and single-page paths so the two cannot drift
+ * into telling a contributor different things about the same state.
+ */
+function reportComparison({ lost, appeared, gone, worse, better }, findings) {
+  if (lost.length > 0) {
+    console.error(
+      "\ndoc samples: fewer samples are being checked than the baseline records. " +
+        "A page or fence has left the set, which reads the same as a page that " +
+        "was fixed. If the loss is intended, rewrite the baseline and say why.\n"
+    );
+    for (const line of lost) console.error(`  ${line}`);
+    return true;
+  }
+
+  // Identity comparison runs before the counts, because it says WHAT changed
+  // where a count only says how much.
+  if (appeared.length > 0) {
+    console.error(
+      "\ndoc samples: these diagnostics are new. A sample a reader copies has " +
+        "to run, so fix the finding rather than recording it.\n"
+    );
+    for (const line of appeared) console.error(`  ${line}`);
+    return true;
+  }
+  if (gone.length > 0) {
+    console.error(
+      "\ndoc samples: these diagnostics are gone, which is good news the " +
+        "baseline has not been told. Rewrite it so the gate starts protecting " +
+        "what you fixed.\n"
+    );
+    for (const line of gone) console.error(`  ${line}`);
+    return true;
+  }
+
+  if (worse.length > 0) {
+    console.error(
+      "\ndoc samples: these pages got worse. A sample a reader copies has to " +
+        "run, so fix the finding rather than raising the number.\n"
+    );
+    for (const line of worse) console.error(`  ${line}`);
+    for (const line of findings) {
+      if (worse.some(w => line.startsWith(w.split(":")[0]))) {
+        console.error(`    ${line}`);
+      }
+    }
+    return true;
+  }
+  if (better.length > 0) {
+    console.error(
+      "\ndoc samples: these pages are better than the baseline says. Lower the " +
+        "number in scripts/doc-samples-baseline.json, or remove the entry at " +
+        "zero, so the gate starts protecting them.\n"
+    );
+    for (const line of better) console.error(`  ${line}`);
+    return true;
+  }
+  return false;
+}
+
 async function main() {
   // The audit's own classification, not a second cruder pass: a fence that
   // continues an earlier one, or imports a package a reader would have and this
@@ -1632,23 +1811,11 @@ async function main() {
   // invariant: a change that removes one finding and introduces a different one
   // leaves it equal, so neither the worse nor the better branch fires and a
   // newly broken sample is accepted. Identities close that.
-  //
-  // The message alone, without the fence and line it landed on, because those
-  // move whenever a page is edited and a baseline that churns on every edit
-  // stops being read. Absolute paths are stripped for the same reason: they
-  // differ between a laptop and CI.
-  const identity = line =>
-    line
-      .slice(line.indexOf("  ") + 2)
-      .split(ROOT)
-      .join("<root>/")
-      .replace(/\s+/g, " ")
-      .trim();
   const fingerprint = Object.fromEntries(
     [...byFile].map(([file, lines]) => {
       const counts = {};
       for (const line of lines) {
-        const key = identity(line);
+        const key = identityOf(line);
         counts[key] = (counts[key] ?? 0) + 1;
       }
       return [file, counts];
@@ -1708,6 +1875,40 @@ async function main() {
       process.exit(1);
     }
 
+    // ...and refuses to record a diagnostic the baseline does not already hold,
+    // for the same reason. The comparison path tells a contributor to fix a new
+    // finding rather than record it; this path recorded it silently, so the two
+    // disagreed about the same state and the quieter one won. Committing that
+    // generated file then made every later run agree, which is a regression
+    // blessed permanently by the tool built to catch it.
+    const { appeared: newFindings } = compareToBaseline({
+      baseline: heldBaseline,
+      coverage,
+      counted,
+      fingerprint,
+    });
+    if (
+      newFindings.length > 0 &&
+      !process.argv.includes("--allow-new-findings")
+    ) {
+      console.error(
+        "doc samples: this would record diagnostics the baseline does not hold. " +
+          "Fix the sample rather than recording it; pass --allow-new-findings " +
+          "if recording it is deliberate.\n"
+      );
+      for (const line of newFindings) console.error(`  ${line}`);
+      process.exit(1);
+    }
+    // The escape hatch says what it is blessing. A flag that silently widens
+    // what the gate accepts is the same hole one argument further away.
+    if (newFindings.length > 0) {
+      console.warn(
+        `doc samples: recording ${String(newFindings.length)} new diagnostic(s) ` +
+          "because --allow-new-findings was passed:"
+      );
+      for (const line of newFindings) console.warn(`  ${line}`);
+    }
+
     writeFileSync(
       BASELINE,
       `${JSON.stringify(
@@ -1750,134 +1951,38 @@ async function main() {
       );
       process.exit(1);
     }
+    const recordedForPage = readBaseline();
     const found = counted[only] ?? 0;
-    const cap = (readBaseline().pages ?? {})[only] ?? 0;
+    const cap = (recordedForPage.pages ?? {})[only] ?? 0;
     const lines = byFile.get(only) ?? [];
     console.log(`\n${only}: allowed ${String(cap)}, found ${String(found)}`);
     for (const line of lines) console.log(`  ${line}`);
-    if (found > cap) {
-      console.error("\nthis page got worse");
-      process.exit(1);
-    }
-    if (found < cap) {
-      // Exits 1, as the whole-repository path does for the same state. Printing
-      // a suggestion and succeeding let a contributor pass both before and
-      // after fixing something, so nothing ever made them lower the ratchet.
-      console.error(
-        `\n${String(cap - found)} fewer than the baseline: lower it to ${String(found)} ` +
-          "in scripts/doc-samples-baseline.json (or remove the entry at zero)."
-      );
-      process.exit(1);
-    }
+    // The same three comparisons CI runs, narrowed to this page rather than
+    // reduced to its total. Exits 1 on an improvement too, as the whole-
+    // repository path does: printing a suggestion and succeeding let a
+    // contributor pass both before and after fixing something, so nothing ever
+    // made them lower the ratchet.
+    const verdict = compareToBaseline({
+      baseline: recordedForPage,
+      coverage,
+      counted,
+      fingerprint,
+      only,
+    });
+    if (reportComparison(verdict, lines)) process.exit(1);
     return;
   }
 
   // Coverage ratchets too. Findings alone cannot tell a page that was fixed
   // from a page the extractor stopped seeing: both report nothing.
   const recorded = readBaseline();
-  const lost = [];
-  const seen = {
-    pages: coverage.files.length,
-    samples: coverage.samples,
-    compiled: coverage.compiled,
-  };
-  for (const [what, was] of Object.entries(recorded.coverage ?? {})) {
-    if ((seen[what] ?? 0) < was) {
-      lost.push(`${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`);
-    }
-  }
-  for (const [file, was] of Object.entries(recorded.samplesPerPage ?? {})) {
-    const now = coverage.perPage[file] ?? { samples: 0, compiled: 0 };
-    for (const what of ["samples", "compiled"]) {
-      if ((now[what] ?? 0) < (was[what] ?? 0)) {
-        lost.push(
-          `${file}: ${what} was ${String(was[what])}, now ${String(now[what] ?? 0)}`
-        );
-      }
-    }
-  }
-  if (lost.length > 0) {
-    console.error(
-      "\ndoc samples: fewer samples are being checked than the baseline records. " +
-        "A page or fence has left the set, which reads the same as a page that " +
-        "was fixed. If the loss is intended, rewrite the baseline and say why.\n"
-    );
-    for (const line of lost) console.error(`  ${line}`);
-    process.exit(1);
-  }
-
-  // Identity comparison runs first, because it says WHAT changed where a count
-  // only says how much.
-  const held = recorded.findings ?? {};
-  const appeared = [];
-  const gone = [];
-  for (const [file, counts] of Object.entries(fingerprint)) {
-    for (const [message, n] of Object.entries(counts)) {
-      const was = (held[file] ?? {})[message] ?? 0;
-      if (n > was) appeared.push(`${file}: ${message}`);
-    }
-  }
-  for (const [file, counts] of Object.entries(held)) {
-    for (const [message, was] of Object.entries(counts)) {
-      const now = (fingerprint[file] ?? {})[message] ?? 0;
-      if (now < was) gone.push(`${file}: ${message}`);
-    }
-  }
-  if (appeared.length > 0) {
-    console.error(
-      "\ndoc samples: these diagnostics are new. A sample a reader copies has " +
-        "to run, so fix the finding rather than recording it.\n"
-    );
-    for (const line of appeared) console.error(`  ${line}`);
-    process.exit(1);
-  }
-  if (gone.length > 0) {
-    console.error(
-      "\ndoc samples: these diagnostics are gone, which is good news the " +
-        "baseline has not been told. Rewrite it so the gate starts protecting " +
-        "what you fixed.\n"
-    );
-    for (const line of gone) console.error(`  ${line}`);
-    process.exit(1);
-  }
-
-  const allowed = recorded.pages ?? {};
-  const worse = [];
-  const better = [];
-  for (const [file, count] of Object.entries(counted)) {
-    const cap = allowed[file] ?? 0;
-    if (count > cap)
-      worse.push(`${file}: allowed ${String(cap)}, found ${String(count)}`);
-  }
-  for (const [file, cap] of Object.entries(allowed)) {
-    const count = counted[file] ?? 0;
-    if (count < cap)
-      better.push(`${file}: allowed ${String(cap)}, found ${String(count)}`);
-  }
-
-  if (worse.length > 0) {
-    console.error(
-      "\ndoc samples: these pages got worse. A sample a reader copies has to " +
-        "run, so fix the finding rather than raising the number.\n"
-    );
-    for (const line of worse) console.error(`  ${line}`);
-    for (const line of findings) {
-      if (worse.some(w => line.startsWith(w.split(":")[0]))) {
-        console.error(`    ${line}`);
-      }
-    }
-    process.exit(1);
-  }
-
-  if (better.length > 0) {
-    console.error(
-      "\ndoc samples: these pages are better than the baseline says. Lower the " +
-        "number in scripts/doc-samples-baseline.json, or remove the entry at " +
-        "zero, so the gate starts protecting them.\n"
-    );
-    for (const line of better) console.error(`  ${line}`);
-    process.exit(1);
-  }
+  const verdict = compareToBaseline({
+    baseline: recorded,
+    coverage,
+    counted,
+    fingerprint,
+  });
+  if (reportComparison(verdict, findings)) process.exit(1);
 
   if (process.argv.includes("--list")) {
     for (const line of findings) console.log(`  ${line}`);
