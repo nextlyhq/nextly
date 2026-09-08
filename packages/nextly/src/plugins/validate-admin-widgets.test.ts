@@ -681,3 +681,75 @@ describe("the serializer cannot publish what boot refused", () => {
     expect(() => JSON.stringify(meta)).not.toThrow();
   });
 });
+
+describe("a contributed widget draws the result its archetype can draw", () => {
+  it("refuses a metric contributed with a grouped query", () => {
+    // The registry already refused this pairing; contributions reach the admin
+    // through `validatedAdminWidgets` instead, so the guarantee had to be
+    // applied to BOTH doors or plugin authors would get neither the compile
+    // error nor the boot one -- and the card would register, execute, and be
+    // replaced by the body's "expected a count" message on every load.
+    let thrown: unknown;
+    try {
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/by-status",
+          archetype: "metric",
+          query: {
+            source: "collection:posts",
+            op: "groupBy",
+            groupBy: "status",
+          },
+        }),
+      ]);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(NextlyError.is(thrown)).toBe(true);
+    expect((thrown as NextlyError).logMessage).toContain("acme/by-status");
+    expect((thrown as NextlyError).logMessage).toContain("groupBy");
+  });
+
+  it("accepts an inherited property name as an archetype instead of crashing on it", () => {
+    // An unknown archetype is admitted on purpose -- it is how a plugin built
+    // against a NEWER core keeps working -- so the right outcome here is a
+    // clean pass, not a refusal.
+    //
+    // The defect was the route to it. A contribution's archetype is caller
+    // text, and indexed into an OBJECT LITERAL `"toString"` answers with a
+    // prototype method rather than `undefined`: the lookup found a truthy
+    // "result set", called `.has()` on a function, and threw a TypeError that
+    // aborted plugin resolution. A `Map` cannot be reached that way, so the
+    // unknown archetype takes the path meant for it.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/proto",
+          archetype: "toString",
+          component: "@acme/p/admin#Proto",
+          query: { source: "collection:posts", op: "count" },
+        }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("admits a custom widget carrying the same query", () => {
+    // The control, and the point: a component receives the result whole and
+    // decides what to draw, so constraining its op would be core guessing at a
+    // plugin's intent.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/chart",
+          component: "@acme/p/admin#Chart",
+          query: {
+            source: "collection:posts",
+            op: "groupBy",
+            groupBy: "status",
+          },
+        }),
+      ])
+    ).not.toThrow();
+  });
+});

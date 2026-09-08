@@ -830,6 +830,28 @@ describe("validateWidgetQuery, group key", () => {
     ).toThrow(/groupBy references undeclared field "secretScore"/);
   });
 
+  it("refuses a select beside a grouped query, which returns no rows to select from", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:grouped",
+        op: "groupBy",
+        groupBy: "status",
+        select: ["title"],
+      })
+    ).toThrow(/select is not valid for op "groupBy"/);
+  });
+
+  it("refuses a sort beside a grouped query, which is ordered by bucket size", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:grouped",
+        op: "groupBy",
+        groupBy: "status",
+        sort: "-title",
+      })
+    ).toThrow(/sort is not valid for op "groupBy"/);
+  });
+
   it("reads the group key exactly once, so an accessor cannot swap it past the check", () => {
     // The invariant the whole module is built on: a property read twice is a
     // seam where the value that was checked and the value that ships differ.

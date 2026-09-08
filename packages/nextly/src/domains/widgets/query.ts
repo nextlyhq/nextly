@@ -50,6 +50,36 @@ export interface WidgetQuery {
 }
 
 /**
+ * A query as an AUTHOR declares it, with the op/key dependency enforced.
+ *
+ * `WidgetQuery` stays flat, and this narrows it at the position a person
+ * writes one. Written as an intersection per member rather than by turning
+ * `WidgetQuery` itself into a union: `keyof` over a union keeps only the keys
+ * every member shares, so `groupBy` would drop out of `keyof WidgetQuery` and
+ * silently shrink the exhaustive `Record<keyof WidgetQuery, ...>` tables that
+ * make each fixed-question source state a position on every field. Those
+ * tables failing to compile is how a new field gets considered at all, and a
+ * union would have removed that without any error.
+ *
+ * `groupBy?: never` on the other ops is what makes the wrong pairing a compile
+ * error rather than a value the validator refuses at request time. Runtime
+ * validation stays regardless: a request body is untyped, and this reaches
+ * only the authors who write TypeScript.
+ */
+export type WidgetQuerySpec =
+  | (WidgetQuery & { op: Exclude<WidgetOp, "groupBy">; groupBy?: never })
+  | (WidgetQuery & {
+      op: "groupBy";
+      groupBy: string;
+      // `select` and `sort` describe ROWS, and this op returns buckets. The
+      // validator refuses them, so admitting them here would compile a
+      // declaration whose every request fails -- an author learning at runtime
+      // what the type could have told them.
+      select?: never;
+      sort?: never;
+    });
+
+/**
  * Product code in `packages/nextly/**` throws `NextlyError`, never a bare
  * `Error` (repo lint rule). `.message` is set verbatim from this string, so
  * the tests' regex assertions match unchanged.
@@ -330,11 +360,25 @@ function assertGeoOperatorCountable(
   field: string,
   operator: string
 ): void {
-  if (op !== "count" || !GEO_OPERATORS.has(operator)) return;
+  // Keyed on the op that FETCHES rows rather than on a list of ops that do
+  // not, for the same reason this is keyed on `GEO_OPERATORS`: an aggregate
+  // added to the vocabulary returns no rows either, and naming the aggregates
+  // here would mean remembering to add it a second time. `groupBy` reached
+  // execution and was refused there while this only knew about `count` —
+  // accepted by the validator and failed in a batch slot, which is precisely
+  // what this guard exists to prevent.
+  if (op === "list" || !GEO_OPERATORS.has(operator)) return;
+  if (op === "count") {
+    fail(
+      `where operator "${operator}" on field "${field}" cannot be counted. ` +
+        `Geo predicates are evaluated over fetched rows, so they apply to a ` +
+        `list but not to a count`
+    );
+  }
   fail(
-    `where operator "${operator}" on field "${field}" cannot be counted. ` +
+    `where operator "${operator}" on field "${field}" cannot be aggregated. ` +
       `Geo predicates are evaluated over fetched rows, so they apply to a ` +
-      `list but not to a count`
+      `list but not to an aggregate`
   );
 }
 
@@ -576,13 +620,27 @@ function assertGroupByAgreesWithOp(
   source: WidgetSource,
   groupBy: unknown,
   declared: ReadonlySet<string>,
-  op: WidgetOp
+  op: WidgetOp,
+  select: unknown,
+  sort: unknown
 ): string | undefined {
   if (op !== "groupBy") {
     if (groupBy !== undefined) fail(`groupBy is not valid for op "${op}"`);
     return undefined;
   }
   if (groupBy === undefined) fail('op "groupBy" requires a groupBy field');
+  // `select` and `sort` describe ROWS, and a grouped read returns buckets. The
+  // executor ignores both, so accepting them answers a different question than
+  // the one asked and says nothing about it — the same accepted-and-dropped
+  // shape this guard refuses a group key beside `count` for.
+  if (select !== undefined) {
+    fail(
+      'select is not valid for op "groupBy", which returns buckets and not rows'
+    );
+  }
+  if (sort !== undefined) {
+    fail('sort is not valid for op "groupBy"; buckets are ordered by size');
+  }
   if (typeof groupBy !== "string") fail("groupBy must be a string");
   if (!declared.has(groupBy)) {
     fail(`groupBy references undeclared field "${groupBy}" on "${source.id}"`);
@@ -677,7 +735,14 @@ export function validateReadWidgetQuery(
   assertSelectFieldsDeclared(source, select, declared);
   const sort = assertSortFieldDeclared(source, raw.sort, declared);
   const status = assertValidStatus(raw.status);
-  const groupBy = assertGroupByAgreesWithOp(source, raw.groupBy, declared, op);
+  const groupBy = assertGroupByAgreesWithOp(
+    source,
+    raw.groupBy,
+    declared,
+    op,
+    select,
+    sort
+  );
 
   return {
     source: source.id,

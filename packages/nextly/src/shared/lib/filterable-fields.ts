@@ -15,7 +15,7 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 
-import { toCamelCase } from "./case-conversion";
+import { toCamelCase, toSnakeCase } from "./case-conversion";
 import { getFieldFunctions, type FieldFunctions } from "./field-level-registry";
 
 type EntityKind = "collection" | "single";
@@ -90,8 +90,42 @@ function carriesReadRule(fn: FieldFunctions | undefined): boolean {
  * through. Judging both closes the alias without needing the schema here.
  */
 function spellings(name: string): string[] {
-  const camel = toCamelCase(name);
-  return camel === name ? [name] : [name, camel];
+  // BOTH directions. Converting only to camel closed the snake-spelled probe
+  // against a camel-declared field and left its mirror open: a field declared
+  // `secret_answer` is missed by `groupBy=secretAnswer`, because the camel form
+  // of an already-camel string is itself and the registry key is the snake one.
+  // The resolvers downstream try both spellings when they look up a column, so
+  // a guard that tries one is a guard with an alias around it.
+  return [...new Set([name, toCamelCase(name), toSnakeCase(name)])];
+}
+
+/**
+ * Whether a read hands back something other than what the column stores.
+ *
+ * `afterRead` runs per ROW on the way out, so at query time there is no row to
+ * judge and "does this hook mask the value" is not yet answerable -- the same
+ * position `carriesReadRule` is in, and it gets the same conservative answer.
+ * A hook that merely formats is refused alongside one that masks, because the
+ * two are indistinguishable from here and guessing wrong on the second
+ * publishes the value the hook exists to withhold.
+ */
+function transformsOnRead(fn: FieldFunctions | undefined): boolean {
+  if (!fn) return false;
+  if ((fn.hooks?.afterRead?.length ?? 0) > 0) return true;
+  return Object.values(fn.fields ?? {}).some(transformsOnRead);
+}
+
+/** Field names whose stored value is not the value a read returns. */
+function transformedFields(
+  kind: EntityKind,
+  slug: string,
+  names: Iterable<string>
+): string[] {
+  const fns = getFieldFunctions(kind, slug);
+  if (!fns) return [];
+  return [...names]
+    .filter(name => spellings(name).some(n => transformsOnRead(fns[n])))
+    .sort();
 }
 
 /** Field names the caller may not use to select or order rows. */
@@ -244,9 +278,29 @@ export function assertGroupableField(
   groupBy: string | undefined,
   opts: { overrideAccess?: boolean; frameworkFilter?: boolean } = {}
 ): void {
-  if (opts.overrideAccess || opts.frameworkFilter || !groupBy) return;
+  if (!groupBy) return;
   // Nested paths address the field that OWNS the rule, as `where` does.
   const name = groupBy.split(".")[0];
+
+  // BEFORE the trust check, and independently of it. A read rule asks who may
+  // see a value, so a caller reading with `overrideAccess` has already been
+  // answered. A transform asks what the value IS, and that answer does not
+  // change with the caller: a trusted grouped read would still publish stored
+  // values as labels while a list of the same rows shows the transformed ones,
+  // and the two describing the same rows differently is the defect whatever
+  // the caller's trust.
+  const transformed = transformedFields(kind, slug, [name]);
+  if (transformed.length > 0) {
+    throw NextlyError.validation({
+      errors: transformed.map(field => ({
+        path: `groupBy.${field}`,
+        code: "FIELD_NOT_GROUPABLE",
+        message: `The field "${field}" is transformed when it is read, so its stored value is not the one a read returns. Grouping would publish the stored value as a bucket label, past the hook that changes it.`,
+      })),
+    });
+  }
+
+  if (opts.overrideAccess || opts.frameworkFilter) return;
   const denied = protectedFields(kind, slug, [name]);
   if (denied.length > 0) refuse(denied, "groupBy");
 }

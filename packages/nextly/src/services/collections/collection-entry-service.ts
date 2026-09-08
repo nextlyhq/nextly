@@ -6,7 +6,7 @@
  *
  * - {@link CollectionAccessService} — Access control evaluation (RBAC + collection rules)
  * - {@link CollectionHookService} — Hook context building and stored hook management
- * - {@link CollectionQueryService} — Read operations (list, count, get)
+ * - {@link CollectionQueryService} — Read operations (list, count, group, get)
  * - {@link CollectionMutationService} — Write operations (create, update, delete)
  * - {@link CollectionBulkService} — Bulk and batch operations
  *
@@ -238,6 +238,19 @@ export class CollectionEntryService extends BaseService {
     status?: "published" | "draft" | "all";
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return this.queryService.countEntries(params);
+  }
+
+  /**
+   * How many rows carry each distinct value of one field.
+   *
+   * Forwarded whole rather than rebuilt: the query service answers this over
+   * the same resolved row set it counts, and a parameter dropped here would
+   * make the buckets describe a wider set than the count beside them.
+   */
+  async groupEntries(
+    params: Parameters<CollectionQueryService["groupEntries"]>[0]
+  ): ReturnType<CollectionQueryService["groupEntries"]> {
+    return this.queryService.groupEntries(params);
   }
 
   async getEntry(params: {

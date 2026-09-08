@@ -18,8 +18,10 @@
  */
 
 import type { CanonicalWidget } from "../domains/widgets/canonical";
+import type { WidgetArchetype } from "../domains/widgets/definition";
 import {
   actionProblem,
+  archetypeResultProblem,
   chromeProblem,
   DATA_ARCHETYPES,
   defaultOrderProblem,
@@ -31,6 +33,7 @@ import {
   widgetValueProblem,
   WIDGET_ARCHETYPES,
 } from "../domains/widgets/definition";
+import type { WidgetQuerySpec } from "../domains/widgets/query";
 import { widgetSettingsProblem } from "../domains/widgets/settings";
 import { getNextlyLogger } from "../observability/logger";
 
@@ -360,6 +363,22 @@ const FIELD_RULES: ReadonlyArray<
     QUERYLESS_ARCHETYPE_SET.has(widget.archetype)
       ? querylessProblem(widget)
       : undefined,
+
+  // Through the SAME table the registry applies, for the reason the queryless
+  // rule above reuses `querylessQueryProblem`: a contribution that pairs an
+  // archetype with a result core cannot draw from is the same mistake wherever
+  // it is declared, and restating the pairing here would let the two drift.
+  //
+  // A card declared this way registers, executes, and is then replaced by the
+  // body's own "wrong result" message on every load -- so boot is the last
+  // point the author can be told.
+  widget => {
+    const problem = archetypeResultProblem(
+      widget.archetype as WidgetArchetype,
+      widget.query as WidgetQuerySpec | undefined
+    );
+    return problem === undefined ? undefined : problem;
+  },
 ];
 
 function undrawableReason(widget: Record<string, unknown>): string | undefined {
