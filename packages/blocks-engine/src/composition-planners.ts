@@ -802,10 +802,16 @@ function restampOps(
 ): RestampOps | PlanRefusal {
   // Decided WITHOUT reading the document, so a plan that turns out to edit
   // nothing never has to be right about a page it will not touch.
-  const stale = selected.filter(root => {
-    const origin = ownOrigin(root);
-    if (origin === undefined || origin.from !== "pattern") return false;
-    return origin.id === patternId && origin.digest !== digest;
+  // The record is CARRIED out of the filter, not read again in the map below.
+  // A stored node can be a Proxy, and two reads of one descriptor can answer
+  // differently — so re-reading would let the record that decided a root was
+  // stale and the record whose rename map gets restamped onto it be two
+  // different records.
+  const stale = selected.flatMap(root => {
+    const origin = nodeOrigin(root).origin;
+    if (origin === undefined || origin.from !== "pattern") return [];
+    if (origin.id !== patternId || origin.digest === digest) return [];
+    return [{ root, origin }];
   });
   // A group with NO ops is not applied: `applyOps` runs no preflight for it,
   // neither the envelope nor the forest. So the destination has to be editable
@@ -827,11 +833,14 @@ function restampOps(
 
   // Of the roots actually addressed, which for this planner is the stale ones:
   // a duplicate elsewhere in the page is not something these ops would meet.
-  const ambiguous = ambiguousRootRefusal(document, stale);
+  const ambiguous = ambiguousRootRefusal(
+    document,
+    stale.map(({ root }) => root)
+  );
   if (ambiguous !== undefined) return ambiguous;
 
   return {
-    ops: stale.map(root => ({
+    ops: stale.map(({ root, origin }) => ({
       kind: "update",
       id: root.id,
       // The rename map is CARRIED, not dropped. This op rewrites the whole
@@ -842,7 +851,7 @@ function restampOps(
       // resumed growing it. The round trip held once and failed on the second
       // pass, which is why a test that never applied these ops could not see it.
       patch: {
-        origin: insertOrigin(patternId, digest, renamedIn(ownOrigin(root))),
+        origin: insertOrigin(patternId, digest, renamedIn(origin)),
       },
     })),
   };
@@ -3345,91 +3354,94 @@ function insertOrigin(
 }
 
 /**
+ * What a node's own `origin` property says, from ONE read of it.
+ *
+ * Two questions and one reading, because they were two readings and a stored
+ * node can be a Proxy: a `getOwnPropertyDescriptor` trap answering the boundary
+ * question with one record and the contents question with another had the scope
+ * established by an origin that renamed nothing and the ids rewritten by one
+ * that renamed `pricing`. Nothing detects that afterwards — both readings are
+ * individually valid.
+ *
+ * The read runs no user code. A `get` accessor is a record present and not
+ * readable, which is exactly the case that must still bound the scope.
+ */
+interface NodeOrigin {
+  /**
+   * Whether the node CLAIMS provenance of its own, readable or not.
+   *
+   * The boundary question, and deliberately not the same as whether the record
+   * is usable. A node carrying a malformed or unreadable origin is a node
+   * saying it came from somewhere — and an ancestor's rename map is about the
+   * run the ancestor was copied as, which this node is announcing it is not
+   * part of. Applying it anyway rewrites an id on the strength of uncertainty.
+   */
+  readonly claims: boolean;
+  /**
+   * The record itself, when it is stored data a reader may act on.
+   *
+   * An ordinary read walks the prototype chain, so a polluted
+   * `Object.prototype.origin` makes every node on a page look copied from
+   * somewhere. Measured: a selection of one ordinary node came back stale
+   * against a pattern it had never seen, and the plan emitted an update
+   * stamping that false provenance onto it. The document validator answers this
+   * about OWN properties only, and the two have to agree — a record one road
+   * sees and the other does not is exactly the asymmetry these planners exist
+   * to close.
+   *
+   * Absent for an accessor, for the reason the validator treats one as absent:
+   * reading it runs the document's own code inside the decision about whether
+   * to trust it. Absent too for a NON-ENUMERABLE record, which `JSON.stringify`,
+   * an object spread and `structuredClone` all drop — acting on its contents
+   * restores an id from metadata the saved document will not carry. Such a
+   * record still CLAIMS, which is the other field's question: a record that
+   * cannot be stored is still a node saying it came from somewhere.
+   *
+   * REQUIRED and possibly `undefined`, never optional. An optional field is
+   * absent from the object, so reading it walks the prototype chain — and with
+   * `Object.prototype.origin` polluted, "this node holds no record" answered
+   * with the ghost record, in the one type built to keep that answer honest.
+   * Spelling it out makes every value of this type carry its own answer.
+   */
+  readonly origin: BlockOrigin | undefined;
+}
+
+/** A node claiming nothing, and one whose claim is all that can be read. */
+const CLAIMS_NOTHING: NodeOrigin = { claims: false, origin: undefined };
+const CLAIMS_UNREADABLY: NodeOrigin = { claims: true, origin: undefined };
+
+function nodeOrigin(node: BlockNode): NodeOrigin {
+  // Reflection on a Proxy runs a caller-supplied trap, and this walk reaches
+  // every node in the document rather than the selected roots — so a hostile
+  // `getOwnPropertyDescriptor` on a node nothing selected would take a valid
+  // save out with a native error. A node that will not say what it holds is
+  // still a node that would not answer, so it bounds the scope.
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(node, "origin");
+  } catch {
+    return CLAIMS_UNREADABLY;
+  }
+  if (descriptor === undefined) return CLAIMS_NOTHING;
+  if (!("value" in descriptor)) return CLAIMS_UNREADABLY;
+  const value = descriptor.value as BlockOrigin | undefined;
+  // `origin: undefined` is NOT a claim. The field is optional and JSON omits
+  // it, so an own property holding `undefined` is how "no origin" is spelled in
+  // memory — the validator reads it that way, and treating it as a boundary
+  // would stop an ancestor's rename reaching a node that never announced
+  // anything.
+  if (value === undefined) return CLAIMS_NOTHING;
+  if (descriptor.enumerable !== true) return CLAIMS_UNREADABLY;
+  return { claims: true, origin: value };
+}
+
+/**
  * The rename map a root already carries, as the record spells it.
  *
  * Read back out of the provenance rather than recomputed, because only the
  * insert that did the renaming knows it — recovering it from the values is the
  * inference this feature exists instead of.
  */
-/**
- * Whether a node CLAIMS provenance of its own, readable or not.
- *
- * The boundary question, and deliberately not the same as whether the record is
- * usable. A node carrying a malformed or unreadable origin is a node saying it
- * came from somewhere — and an ancestor's rename map is about the run the
- * ancestor was copied as, which this node is announcing it is not part of.
- * Applying it anyway rewrites an id on the strength of uncertainty.
- *
- * The presence test runs no user code: a `get` accessor is a record present but
- * not readable, which is exactly the case that must still bound the scope.
- */
-function claimsOrigin(node: BlockNode): boolean {
-  try {
-    const descriptor = Object.getOwnPropertyDescriptor(node, "origin");
-    if (descriptor === undefined) return false;
-    // An accessor is a claim that cannot be read, which still bounds the scope.
-    if (!("value" in descriptor)) return true;
-    // `origin: undefined` is NOT a claim. The field is optional and JSON omits
-    // it, so an own property holding `undefined` is how "no origin" is spelled
-    // in memory — the validator reads it that way, and treating it as a
-    // boundary would stop an ancestor's rename reaching a node that never
-    // announced anything.
-    return descriptor.value !== undefined;
-  } catch {
-    // A node that will not answer whether it has a record is one nothing can
-    // say is part of the ancestor's run either.
-    return true;
-  }
-}
-
-/**
- * A node's provenance record, when the NODE itself holds one.
- *
- * An ordinary read walks the prototype chain, so a polluted
- * `Object.prototype.origin` makes every node on a page look copied from
- * somewhere. Measured: a selection of one ordinary node came back stale against
- * a pattern it had never seen, and the plan emitted an update stamping that
- * false provenance onto it.
- *
- * The document validator answers this question about OWN properties only, and
- * the two have to agree — a record one road sees and the other does not is
- * exactly the asymmetry these planners exist to close. `structuredClone` and
- * object spreads copy own properties too, so an inherited value is not what
- * would be stored either way.
- *
- * An accessor is treated as absent for the reason the validator treats it so:
- * reading it runs the document's own code inside the decision about whether to
- * trust it.
- */
-function ownOrigin(node: BlockNode): BlockOrigin | undefined {
-  // Reflection on a Proxy runs a caller-supplied trap, and this walk now
-  // reaches every node in the document rather than the selected roots — so a
-  // hostile `getOwnPropertyDescriptor` on a node nothing selected would take a
-  // valid save out with a native error. A node that will not say what it holds
-  // holds nothing this can act on.
-  let descriptor: PropertyDescriptor | undefined;
-  try {
-    descriptor = Object.getOwnPropertyDescriptor(node, "origin");
-  } catch {
-    return undefined;
-  }
-  if (descriptor === undefined || descriptor.get !== undefined) {
-    return undefined;
-  }
-  // NON-ENUMERABLE is treated as absent, for the reason an inherited value is:
-  // it is not what would be stored. `JSON.stringify`, an object spread and
-  // `structuredClone` all drop it, so acting on its contents restores an id
-  // from metadata the saved document will not carry — a rename put back on the
-  // strength of something no reader downstream can see.
-  //
-  // The node still COUNTS as claiming provenance, which is a different question
-  // and answered by `claimsOrigin`: a record that cannot be stored is still a
-  // node saying it came from somewhere, and the conservative thing is to stop
-  // inheritance there rather than fold it into its ancestor's run.
-  if (descriptor.enumerable !== true) return undefined;
-  return descriptor.value as BlockOrigin | undefined;
-}
-
 function renamedIn(
   origin: BlockOrigin | undefined
 ): ReadonlyMap<string, string> {
@@ -3766,8 +3778,9 @@ function renameScopes(
     // scopes by IDENTITY and a fresh map on a second visit of one node object
     // reads as a disagreement with itself — which downgraded every descendant
     // of it to no scope at all.
-    if (claimsOrigin(node)) {
-      scopes.set(node, scopes.get(node) ?? renamedIn(ownOrigin(node)));
+    const own = nodeOrigin(node);
+    if (own.claims) {
+      scopes.set(node, scopes.get(node) ?? renamedIn(own.origin));
       return;
     }
 

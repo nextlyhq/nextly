@@ -3842,6 +3842,49 @@ describe("provenance is read once, and only where storage would keep it", () => 
     expect(listings).toBe(1);
   });
 
+  it("reads a node's origin descriptor once, not once per question", () => {
+    // Whether a node BOUNDS the scope and what its record SAYS were two reads
+    // of one descriptor. A node reaching a planner can be a Proxy, and two
+    // reads can answer differently — so the origin that established the scope
+    // and the origin whose map rewrote the ids could be two different records,
+    // each individually valid, with nothing downstream able to tell.
+    let reads = 0;
+    const child = node("kid", {
+      cssId: "pricing-1",
+      props: { mark: "target" },
+    });
+    const bare = node("root", {}, { children: [child] });
+    // The FIRST answer renames nothing, which is what an insert that met no
+    // collision writes. The second renames `pricing` — so a second read is
+    // visible as `pricing-1` coming back as `pricing`.
+    const answers = [
+      { from: "pattern", id: "hero-pattern", digest: "d" },
+      {
+        from: "pattern",
+        id: "hero-pattern",
+        digest: "d",
+        renamed: { pricing: "pricing-1" },
+      },
+    ];
+    const root = new Proxy(bare, {
+      getOwnPropertyDescriptor(held, key) {
+        if (key !== "origin") {
+          return Reflect.getOwnPropertyDescriptor(held, key);
+        }
+        const value = answers[Math.min(reads, answers.length - 1)];
+        reads += 1;
+        return { value, enumerable: true, configurable: true, writable: true };
+      },
+    }) as BlockNode;
+
+    const saved = created(
+      planSaveAsPattern(page([root]), ["kid"], target, anyParent)
+    ).document;
+
+    expect(reads).toBe(1);
+    expect(marked([...saved.nodes], "target").cssId).toBe("pricing-1");
+  });
+
   it("saves past a revoked proxy nothing selected", () => {
     // `Array.isArray` THROWS on a revoked proxy, so classifying the entry took
     // the walk out before either guarded slots read could contain it — and the
