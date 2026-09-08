@@ -41,7 +41,13 @@ export const protectedApi = {
       {
         ...options,
         method: "DELETE",
-        ...(body ? { body: JSON.stringify(body) } : {}),
+        // Whether a body was SUPPLIED, not whether it is truthy. `false`, `0`,
+        // `""` and `null` are all valid JSON a caller may mean to send, and a
+        // truthiness test dropped every one of them — so `delete` was the one
+        // verb that silently disagreed with what the caller passed it. Measured
+        // when this changed: no caller passes a body at all, so nothing that
+        // exists today sends one where it did not before.
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       },
       true
     ),

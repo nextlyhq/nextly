@@ -177,6 +177,22 @@ export { pluginAdminSlug } from "./plugins/plugin-slug";
 // dispatcher is the only thing that knows where that is.
 export { pluginRouteFullPath } from "./plugins/routes/route-path";
 
+// The VERBS those routes may declare, published beside the path helper and for
+// the same reason: the admin's client for calling a plugin route has to know
+// which methods exist, and a second list of them is a narrower view that stops
+// covering the wider one the moment a method is added — the plugin declares a
+// route the admin cannot call, and nothing fails. A pure string union, so this
+// costs the browser nothing.
+export type { RouteMethod } from "./plugins/routes/route-types";
+
+// And what may travel as one of those routes' bodies. Published here for the
+// same reason: the admin's client serialises with `JSON.stringify`, so a value
+// outside this set is not sent as written — a `Date` becomes a string, a `Map`
+// or `FormData` becomes `{}`, a function is dropped, a bigint throws. Stating
+// the set makes the compiler refuse those where the author can still see what
+// they meant.
+export type { JsonValue } from "./plugins/admin-contributions";
+
 // The admin CONTRIBUTION shapes, published so the admin panel can DERIVE its
 // `/admin-meta` types from the declaration the server serializes rather than
 // restating them. `buildPluginAdminMeta` copies a contributed widget verbatim

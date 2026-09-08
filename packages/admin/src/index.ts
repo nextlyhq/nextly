@@ -271,6 +271,15 @@ export type {
   PluginRouteRead,
   PluginRouteRequest,
 } from "@admin/hooks/queries/usePluginRoute";
+// The WRITE half of the same seam. A plugin could read its own route and not
+// write to it, so a feature that saves something had to hand-roll the session
+// and the error envelope after all.
+export { usePluginRouteMutation } from "@admin/hooks/queries/usePluginRouteMutation";
+export type {
+  PluginRouteMethod,
+  PluginRouteWrite,
+  PluginRouteWriter,
+} from "@admin/hooks/queries/usePluginRouteMutation";
 
 // Field-UI kit — controlled, form-library-agnostic field-building components
 // (type picker, options editor, default-value input, condition row) rendered
