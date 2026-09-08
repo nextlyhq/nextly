@@ -79,6 +79,50 @@ describe("a plugin route's body is opaque to the framework", () => {
   });
 });
 
+describe("what a plugin route already said is kept", () => {
+  it("adds Cookie to what the response already varies on", async () => {
+    // Replacing it was the defect: a response varying on `Accept-Language`
+    // became one varying only on `Cookie`, so a cache could answer a second
+    // language out of the first one's stored copy — same session, wrong
+    // representation.
+    reqAuth.mockResolvedValue(okAuth as never);
+    const varied = route({
+      handler: () =>
+        Response.json(opaque, {
+          headers: { Vary: "Accept-Language", "Cache-Control": "no-transform" },
+        }),
+    });
+
+    const res = await runPluginRoute(req(), match(varied));
+
+    const vary = (res.headers.get("Vary") ?? "").toLowerCase();
+    expect(vary).toContain("accept-language");
+    expect(vary).toContain("cookie");
+  });
+
+  it("keeps a directive that is orthogonal to privacy", async () => {
+    // `no-transform` forbids a proxy rewriting the body, which remains true
+    // whether or not a cache may store the response. A handler that asked for
+    // it had a reason this boundary does not know.
+    reqAuth.mockResolvedValue(okAuth as never);
+    const varied = route({
+      handler: () =>
+        Response.json(opaque, {
+          headers: { "Cache-Control": "no-transform, max-age=60" },
+        }),
+    });
+
+    const res = await runPluginRoute(req(), match(varied));
+
+    const cc = (res.headers.get("Cache-Control") ?? "").toLowerCase();
+    expect(cc).toContain("private");
+    expect(cc).toContain("no-store");
+    expect(cc).toContain("no-transform");
+    // And the directive that CONTRADICTS no-store does not survive beside it.
+    expect(cc).not.toContain("max-age");
+  });
+});
+
 describe("an authenticated plugin route answers ONE session", () => {
   it("marks the answer private, so a shared cache cannot replay it", async () => {
     // The rows depend on the caller's own access, so a shared proxy holding

@@ -278,8 +278,84 @@ export function respondBulkUpload<T>(
  * until someone edits one.
  */
 export function applySessionCacheHeaders(headers: Headers): void {
-  headers.set("Cache-Control", "private, no-store");
-  headers.set("Vary", "Cookie");
+  headers.set(
+    "Cache-Control",
+    privateCacheControl(headers.get("Cache-Control"))
+  );
+  headers.set("Vary", varyingOnCookie(headers.get("Vary")));
+}
+
+/**
+ * Directives that cannot stand beside `private, no-store`.
+ *
+ * `public` is its opposite. The freshness family describes how long a stored
+ * response stays usable, which is a statement about a response that may be
+ * stored — so leaving them beside `no-store` publishes two rules that
+ * contradict each other and lets a cache follow whichever it prefers.
+ *
+ * Everything NOT listed survives, which is the point of listing rather than
+ * replacing: `no-transform` forbids a proxy rewriting the body and remains
+ * meaningful, and so does `must-revalidate`. A handler that asked for one had a
+ * reason this boundary does not know.
+ */
+const CACHE_DIRECTIVES_REPLACED = new Set([
+  "public",
+  "max-age",
+  "s-maxage",
+  "immutable",
+  "stale-while-revalidate",
+  "stale-if-error",
+]);
+
+/** The directive's name, without whatever value it carries. */
+function directiveName(directive: string): string {
+  return (directive.split("=", 1)[0] ?? "").trim().toLowerCase();
+}
+
+/**
+ * `Cache-Control` that says private, keeping what the handler already said.
+ *
+ * Merged rather than replaced. A handler that had set `no-transform` lost it,
+ * and it is orthogonal to privacy — the response is still not to be rewritten
+ * in flight whether or not a cache may keep it.
+ */
+function privateCacheControl(existing: string | null): string {
+  const kept = (existing ?? "")
+    .split(",")
+    .map(directive => directive.trim())
+    .filter(directive => directive !== "")
+    .filter(directive => {
+      const name = directiveName(directive);
+      return (
+        !CACHE_DIRECTIVES_REPLACED.has(name) &&
+        name !== "private" &&
+        name !== "no-store"
+      );
+    });
+  // The privacy directives lead, so a reader sees the binding rule first.
+  return ["private", "no-store", ...kept].join(", ");
+}
+
+/**
+ * `Vary` that includes `Cookie`, keeping what the response already varied on.
+ *
+ * Replacing it was the defect: a response varying on `Accept-Language` became
+ * one varying only on `Cookie`, so a cache could answer a second language from
+ * the first one's stored copy — the same session, the wrong representation.
+ *
+ * `*` is left alone. It already means "vary on everything", and narrowing it to
+ * a list would widen what may be shared.
+ */
+function varyingOnCookie(existing: string | null): string {
+  const fields = (existing ?? "")
+    .split(",")
+    .map(field => field.trim())
+    .filter(field => field !== "");
+  if (fields.includes("*")) return "*";
+  const seen = new Set(fields.map(field => field.toLowerCase()));
+  return seen.has("cookie")
+    ? fields.join(", ")
+    : [...fields, "Cookie"].join(", ");
 }
 
 /** {@link applySessionCacheHeaders} for a response the caller owns. */

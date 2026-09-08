@@ -118,7 +118,10 @@ import {
   logFlattenedErrors,
   withSideEffectWarnings,
 } from "./hooks/side-effect-warnings";
-import { withTimezoneFormatting } from "./lib/date-formatting";
+import {
+  SKIP_TIMEZONE_FORMAT_HEADER,
+  withTimezoneFormatting,
+} from "./lib/date-formatting";
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
@@ -199,38 +202,70 @@ function getSchemaVersionHeader(): number {
  * same segment and should keep its ordinary formatting.
  */
 
+/**
+ * The response without the control headers a handler used to talk to this
+ * boundary.
+ *
+ * Both markers, unconditionally, and a new response only when one is present so
+ * an ordinary reply is not rebuilt for nothing.
+ *
+ * 🔴 The DECISION they carry has to be read before this runs. Stripping first
+ * and asking afterwards silently turns every opt-out back on, which is the
+ * failure this helper most invites.
+ */
+function withoutInternalMarkers(response: Response): Response {
+  const marked =
+    response.headers.has(SKIP_DATE_FORMATTING_HEADER) ||
+    response.headers.has(SKIP_TIMEZONE_FORMAT_HEADER);
+  if (!marked) return response;
+  const headers = new Headers(response.headers);
+  headers.delete(SKIP_DATE_FORMATTING_HEADER);
+  headers.delete(SKIP_TIMEZONE_FORMAT_HEADER);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 async function applyGlobalDateFormatting(
   response: Response,
   req?: Request
 ): Promise<Response> {
+  // READ the markers, then remove them, then act on what they said.
+  //
+  // Removed before the content-type check rather than after, because that check
+  // returns early and `withTimezoneFormatting` — the only other place either
+  // marker comes off — is downstream of it. A plugin answering with CSV or XML,
+  // which an export or a sitemap route does, therefore carried an internal
+  // control header all the way to the client.
+  //
+  // Marked by the handler rather than matched by path: a plugin may mount its
+  // own route ending in the same segment, and it should keep the formatting
+  // every other plugin response gets.
+  const optedOut =
+    response.headers.has(SKIP_DATE_FORMATTING_HEADER) ||
+    response.headers.get(SKIP_TIMEZONE_FORMAT_HEADER) === "1";
+  const clean = withoutInternalMarkers(response);
+
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.toLowerCase().includes("application/json")) {
-    return response;
+    return clean;
   }
 
-  // A response that opted out. Marked by the handler rather than matched by
-  // path: a plugin may mount its own route ending in the same segment, and it
-  // should keep the formatting every other plugin response gets. The header is
-  // internal, so it is removed on the way out.
-  if (response.headers.has(SKIP_DATE_FORMATTING_HEADER)) {
-    const headers = new Headers(response.headers);
-    headers.delete(SKIP_DATE_FORMATTING_HEADER);
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    });
+  if (optedOut) {
+    return clean;
   }
 
   // Skip formatting for auth endpoints to avoid interfering with auth flow
   if (req) {
     const url = new URL(req.url);
     if (url.pathname.includes("/auth/")) {
-      return response;
+      return clean;
     }
   }
 
-  return withTimezoneFormatting(response);
+  return withTimezoneFormatting(clean);
 }
 
 // ============================================================================
@@ -783,6 +818,15 @@ function needsResolvedRoles(
 }
 
 export const _needsResolvedRolesForTest = needsResolvedRoles;
+
+/**
+ * The response boundary, reachable without booting a route.
+ *
+ * What it decides — which markers come off, and whether the body is rewritten —
+ * is worth holding still, and the only other way to observe it is a full
+ * request through the dynamic handlers.
+ */
+export const _applyGlobalDateFormattingForTest = applyGlobalDateFormatting;
 
 /**
  * Centralized permission resolver for all API service endpoints.
