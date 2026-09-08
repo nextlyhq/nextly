@@ -56,11 +56,19 @@ function versionOnScreen(viewing: ViewedVersion): boolean {
  * Whether the editor's write affordances are withheld: they act on the LIVE
  * document, which is not what is on screen while a version is being read, and
  * a colleague's claim refuses them the rest of the time. One answer for every
- * surface that offers a write — the header's actions, the rail, the language
- * panel — so none of them disagrees about when a write is offered.
+ * surface that offers a write — the header's actions, the submission path,
+ * the rail, the language panel — so none of them disagrees about when a write
+ * is offered.
+ *
+ * Takes the published version rather than reading the context: the editors
+ * call this in their own body, ABOVE the provider they render, where a
+ * context read would return the default and report no version on screen even
+ * while one is.
  */
-export function useWriteActionsHeld(baseDisabled: boolean): boolean {
-  const { viewing } = useDocumentHistory();
+export function writeActionsHeld(
+  viewing: ViewedVersion | null,
+  baseDisabled: boolean
+): boolean {
   return viewing !== null || baseDisabled;
 }
 

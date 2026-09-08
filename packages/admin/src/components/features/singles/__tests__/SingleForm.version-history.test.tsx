@@ -16,15 +16,27 @@
 import { useEffect } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { render, screen, waitFor } from "@admin/__tests__/utils";
+import userEvent from "@testing-library/user-event";
+
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@admin/__tests__/utils";
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
 
-const { viewed, useDocumentLock, useDocumentAutosave } = vi.hoisted(() => ({
-  viewed: { current: null as ViewedVersion | null },
-  useDocumentLock: vi.fn(),
-  useDocumentAutosave: vi.fn(() => ({ status: "idle", lastSavedAt: null })),
-}));
+const { viewed, sidebarProps, useDocumentLock, useDocumentAutosave } =
+  vi.hoisted(() => ({
+    viewed: { current: null as ViewedVersion | null },
+    sidebarProps: {
+      current: null as { actionsDisabled?: boolean } | null,
+    },
+    useDocumentLock: vi.fn(),
+    useDocumentAutosave: vi.fn(() => ({ status: "idle", lastSavedAt: null })),
+  }));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
 vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
@@ -33,6 +45,19 @@ vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
   >()),
   useDocumentAutosave,
 }));
+
+// The rail is where the withheld-write decision has to LAND: a prop passed to
+// the wrong component type-checks perfectly, so the stand-in records what the
+// editor actually handed it rather than what the code looks like it hands it.
+vi.mock(
+  "@admin/components/features/entries/EntryForm/EntryFormSidebar",
+  () => ({
+    EntryFormSidebar: (props: { actionsDisabled?: boolean }) => {
+      sidebarProps.current = props;
+      return null;
+    },
+  })
+);
 
 // The header is where the history panel normally mounts and publishes both the
 // chosen version and the restore affordance. Standing in for it lets a test
@@ -93,11 +118,15 @@ const document = {
   heroTitle: "",
 } as unknown as SingleDocumentData;
 
+/** The real DOM document, since `document` here is the single being edited. */
+const document_ = globalThis.document;
+
 beforeEach(() => {
   vi.clearAllMocks();
   // The module-level holder outlives a test; a version published by the
   // previous test would leak into this one's first render.
   viewed.current = null;
+  sidebarProps.current = null;
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
     takeOver: vi.fn(),
@@ -191,5 +220,70 @@ describe("SingleForm — a published version replaces the document", () => {
     expect(useDocumentAutosave).toHaveBeenLastCalledWith(
       expect.objectContaining({ enabled: false })
     );
+  });
+
+  it("withholds the rail's document actions while a version is on screen", () => {
+    // The rail's actions act on the LIVE document, which is not what is on
+    // screen. Asserted on the props the editor HANDS the rail, not on what
+    // the code looks like it hands it — the wiring was once connected to a
+    // context read that sat above the provider and always read the default.
+    renderViewing({
+      versionNo: 7,
+      snapshot: { heroTitle: "as it was" },
+      locale: null,
+      isLoading: false,
+      error: null,
+    });
+    expect(sidebarProps.current?.actionsDisabled).toBe(true);
+  });
+
+  it("leaves the rail's document actions alone while the live document is on screen", () => {
+    // The other direction, so the gate cannot be satisfied by refusing always.
+    render(
+      <SingleForm schema={schema} document={document} onSubmit={vi.fn()} />
+    );
+    expect(sidebarProps.current?.actionsDisabled).toBe(false);
+  });
+
+  it("refuses the native submit path while a version is on screen", async () => {
+    // 🔴 Settled, not polled: the submit is asynchronous, so it is given time
+    // to happen and then found not to have. The shortcut and the disabled
+    // header buttons are not the only writers — a native form submit reaches
+    // the handler with no control standing in front of it.
+    const onSubmit = vi.fn();
+    viewed.current = {
+      versionNo: 7,
+      snapshot: { heroTitle: "as it was" },
+      locale: null,
+      isLoading: false,
+      error: null,
+    };
+    render(
+      <SingleForm schema={schema} document={document} onSubmit={onSubmit} />
+    );
+
+    const form = document_.querySelector("form");
+    expect(form, "the editor renders a form to submit").not.toBeNull();
+    fireEvent.submit(form as HTMLFormElement);
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    });
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("keeps the submit path working while the live document is on screen", async () => {
+    // The other direction, so the gate cannot be satisfied by refusing always.
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SingleForm schema={schema} document={document} onSubmit={onSubmit} />
+    );
+
+    await user.type(screen.getByLabelText("Hero Title"), "work");
+    const form = document_.querySelector("form");
+    expect(form, "the editor renders a form to submit").not.toBeNull();
+    fireEvent.submit(form as HTMLFormElement);
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
   });
 });

@@ -22,7 +22,7 @@ import { historyEnabledFrom } from "@admin/components/features/versions/history-
 import {
   mayRecordRecovery,
   useViewedVersion,
-  useWriteActionsHeld,
+  writeActionsHeld,
   ViewedVersionBanner,
   ViewedVersionBody,
 } from "@admin/components/features/versions/viewed-version-host";
@@ -583,8 +583,11 @@ export function EntryForm({
     enabled: mode === "edit",
   });
   // One answer for every surface offering a write: the header reads the same
-  // through the document-actions model, the rail and language panel from here.
-  const writesHeld = useWriteActionsHeld(lock.actionsDisabled);
+  // through the document-actions model, the rail, the language panel and the
+  // submission handlers from here. Derived from the HOST's state, not the
+  // context — this body renders ABOVE the provider this component creates, so
+  // a context read here would report no version on screen even while one is.
+  const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
 
   /*
    * The one gate every write passes through.
@@ -595,15 +598,17 @@ export function EntryForm({
    * a list that the next write path gets added without, and the failure is
    * silent: the banner says the document is somebody else's while the editor
    * overwrites them. The affordances ARE disabled, so nothing offers what it
-   * cannot do — this is the guard that does not depend on remembering.
+   * cannot do — this is the guard that does not depend on remembering. Reading
+   * a past version is part of the same claim: the handlers below act on the
+   * live document, which is not what is on screen.
    */
   const handleSubmit: typeof submitEntry = (event, intent) =>
-    lock.actionsDisabled ? Promise.resolve() : submitEntry(event, intent);
+    writesHeld ? Promise.resolve() : submitEntry(event, intent);
   const handleDelete = () => {
-    if (!lock.actionsDisabled) deleteEntry();
+    if (!writesHeld) deleteEntry();
   };
   const handleDiscardWorkingDraft = () =>
-    lock.actionsDisabled ? Promise.resolve() : discardWorkingDraft();
+    writesHeld ? Promise.resolve() : discardWorkingDraft();
 
   const autosaveScope = useMemo(
     () => autosaveScopeFor("collection", collection.name, savedEntryId),
@@ -983,8 +988,10 @@ export function EntryForm({
                                 onDismiss={recovery.dismiss}
                               />
                             ) : null}
-                            {/* Above the fields and below the header: the reader sees
-                      the document it refers to without the offer covering it. */}
+                            {/* The banner over the version being read: above the
+                      fields it describes, below the header that offered the
+                      panel. Renders nothing while the live document is on
+                      screen. */}
                             <ViewedVersionBanner
                               actionsDisabled={lock.actionsDisabled}
                             />

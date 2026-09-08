@@ -67,7 +67,7 @@ import { historyEnabledFrom } from "@admin/components/features/versions/history-
 import {
   mayRecordRecovery,
   useViewedVersion,
-  useWriteActionsHeld,
+  writeActionsHeld,
   ViewedVersionBanner,
   ViewedVersionBody,
 } from "@admin/components/features/versions/viewed-version-host";
@@ -503,6 +503,36 @@ export function SingleForm({
     entryId: document.id,
   });
 
+  // System fields: title (system header) and slug (meta strip). Per the
+  // special-casing. Any user-defined field with admin.position: "sidebar"
+  // now renders inline like every other Builder field.
+  const allFields = schema.fields;
+  const titleField = allFields.find(f => "name" in f && f.name === "title");
+  const slugField = allFields.find(f => "name" in f && f.name === "slug");
+  // Takeover layout: a field flagged `layout: "takeover"` (when active) collapses the
+  // body to itself + its condition controller. Generic — driven by field-type metadata.
+  // Asked of the shared hook so the entry editor cannot answer it differently.
+  const { mainFields, controllerNames, takeoverTypes } = useTakeoverLayout(
+    allFields,
+    form
+  );
+
+  // Which past version the document area is showing, the context value that
+  // publishes it to the history panel, and the version's own body layout. The
+  // same host the entry editor uses: the panel is mounted from the system
+  // header for singles too, so the document side has to answer it the same
+  // way — without this, a click in the panel publishes a version nothing
+  // draws.
+  const { viewingVersion, documentHistory, historicalFields } =
+    useViewedVersion(allFields, takeoverTypes);
+  // One answer for every surface offering a write — the header reads the same
+  // through the document-actions model, and the rail, the language panel and
+  // the submission handlers below take it from here. Derived from the HOST's
+  // state, not the context: this body renders ABOVE the provider this
+  // component creates, so a context read here would report no version on
+  // screen even while one is.
+  const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
+
   const handleSubmit = useCallback(
     async (e?: React.BaseSyntheticEvent, intent?: EntryFormIntent) => {
       e?.preventDefault();
@@ -512,8 +542,9 @@ export function SingleForm({
       // disabling the affordances one at a time is a list that the next write
       // path gets added without. The affordances ARE disabled, so nothing offers
       // what it cannot do - this is the guard that does not depend on anyone
-      // remembering.
-      if (lock.actionsDisabled) return;
+      // remembering. Reading a past version is part of the same claim: this
+      // handler acts on the live document, which is not what is on screen.
+      if (writesHeld) return;
 
       await form.handleSubmit(async rawData => {
         // Why: shared intent→payload helper mirrors the EntryForm
@@ -534,7 +565,7 @@ export function SingleForm({
         }
       })(e);
     },
-    [form, onSubmit, blankPasswordFields, lock.actionsDisabled]
+    [form, onSubmit, blankPasswordFields, writesHeld]
   );
 
   const handleCancel = useCallback(() => {
@@ -569,33 +600,6 @@ export function SingleForm({
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
-
-  // System fields: title (system header) and slug (meta strip). Per the
-  // special-casing. Any user-defined field with admin.position: "sidebar"
-  // now renders inline like every other Builder field.
-  const allFields = schema.fields;
-  const titleField = allFields.find(f => "name" in f && f.name === "title");
-  const slugField = allFields.find(f => "name" in f && f.name === "slug");
-  // Takeover layout: a field flagged `layout: "takeover"` (when active) collapses the
-  // body to itself + its condition controller. Generic — driven by field-type metadata.
-  // Asked of the shared hook so the entry editor cannot answer it differently.
-  const { mainFields, controllerNames, takeoverTypes } = useTakeoverLayout(
-    allFields,
-    form
-  );
-
-  // Which past version the document area is showing, the context value that
-  // publishes it to the history panel, and the version's own body layout. The
-  // same host the entry editor uses: the panel is mounted from the system
-  // header for singles too, so the document side has to answer it the same
-  // way — without this, a click in the panel publishes a version nothing
-  // draws.
-  const { viewingVersion, documentHistory, historicalFields } =
-    useViewedVersion(allFields, takeoverTypes);
-  // One answer for every surface offering a write — the header reads the same
-  // through the document-actions model, the rail and language panel take it
-  // from here.
-  const writesHeld = useWriteActionsHeld(lock.actionsDisabled);
 
   // Status flag — singles can opt into Draft/Published via schema.status.
   // When true, EntrySystemHeader shows Save Draft / Update split, and
@@ -928,7 +932,7 @@ export function SingleForm({
                               onDiscardWorkingDraft={async () => {
                                 // Through the same gate: this reaches the row
                                 // directly and never passed `handleSubmit`.
-                                if (lock.actionsDisabled) return;
+                                if (writesHeld) return;
                                 await discardMutation.mutateAsync();
                               }}
                               onCancel={handleCancel}
