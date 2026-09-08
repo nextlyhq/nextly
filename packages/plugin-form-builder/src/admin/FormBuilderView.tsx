@@ -12,6 +12,7 @@
 
 "use client";
 
+import type { DocumentLockGates } from "@nextlyhq/plugin-sdk/admin";
 import {
   Button,
   Card,
@@ -88,7 +89,7 @@ export interface FormBuilderViewProps {
    * that sentence false and would overwrite the holder's row, so the save reads
    * it too.
    */
-  documentLock?: { readOnly: boolean; actionsDisabled: boolean };
+  documentLock?: DocumentLockGates;
 }
 
 // ============================================================================

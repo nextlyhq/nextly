@@ -26,6 +26,7 @@ import {
   resolveWidgetSource,
   validateReadWidgetQuery,
 } from "../domains/widgets/query";
+import type { WidgetSlot } from "../domains/widgets/result";
 import {
   failUnavailableSourceOrOp,
   sourceTarget,
@@ -46,11 +47,18 @@ const PRIVATE_NO_STORE_HEADERS = {
   Vary: "Cookie",
 } as const;
 
-interface QuerySlot {
-  ok: boolean;
-  result?: unknown;
-  error?: string;
-}
+/*
+ * 🔴 The wire type the DOMAIN declares, not a second one shaped here. The
+ * loose local interface this replaces said `ok: boolean` with an optional
+ * `result?: unknown` and an optional `error?: string`, so nothing stopped a
+ * slot claiming success while carrying nothing, and nothing recorded that a
+ * successful slot's `result` is a `WidgetResult` -- which the admin's own copy
+ * of this type had always promised its readers. Both construction sites below
+ * already produced the strict shape; naming it is what makes the compiler keep
+ * them that way, and what lets one definition be published to the consumers
+ * that were each declaring their own.
+ */
+type QuerySlot = WidgetSlot;
 
 /**
  * Parses and validates the request body's shape, without looking at any one

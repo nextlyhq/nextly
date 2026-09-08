@@ -100,6 +100,15 @@ const clientEntries = [
   // reports nothing anywhere. Reaching it through `nextly/config` instead would
   // make a bundler traverse the whole config surface for two pure functions.
   "src/domains/widgets/gate.ts",
+  // What a widget query ANSWERS with, as its own entry: the result shapes, the
+  // per-widget slot and the batch body. The server produces them, the admin
+  // draws them and a plugin's widget component receives them, and until this
+  // entry existed each of those three declared its own copy -- the admin's
+  // being STRICTER than the server's, so it promised readers a guarantee the
+  // producer had never made. Reached through `nextly/config` instead, a
+  // consumer would pull the widget barrel and with it `executeWidgetQuery` and
+  // the Direct API graph, which is what that entry point is shaped to keep out.
+  "src/domains/widgets/result.ts",
   // The lease timings and wire types a client needs to HOLD a lock, as their
   // own entry. The admin maps `nextly` to this package's source, so reaching
   // these through the root entry pulls the DI container and the auth

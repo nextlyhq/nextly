@@ -32,6 +32,23 @@ export interface DocumentLockAffordances {
   readonly notice: DocumentLockNotice | null;
 }
 
+/**
+ * The two decisions a surface OUTSIDE this form needs from a claim.
+ *
+ * A custom edit view replaces the form and not the page, so the page keeps
+ * rendering the notice and hands over only what the view has to act on.
+ *
+ * 🔴 Derived with `Pick` rather than written out again. This crosses a package
+ * boundary — the admin declares it, the plugin SDK republishes it, a plugin
+ * reads it — and a restated pair would go on compiling on both sides while an
+ * affordance renamed here quietly stopped reaching the view that gates its
+ * writes on it. Renaming one now breaks the consumers instead.
+ */
+export type DocumentLockGates = Pick<
+  DocumentLockAffordances,
+  "readOnly" | "actionsDisabled"
+>;
+
 const UNLOCKED: DocumentLockAffordances = {
   readOnly: false,
   actionsDisabled: false,

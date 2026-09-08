@@ -26,8 +26,6 @@
 "@nextlyhq/ui": patch
 ---
 
-The build writes esbuild's module graph beside the bundles, so the format entry point's boundary can be checked against every edge rather than the ones initialisation happens to follow.
+A dashboard card stops showing itself as loading once its own data has arrived, instead of waiting for every other card on the page.
 
-A graph observed by importing an entry point contains only what loading it resolved. A dynamic import behind a function is a real edge to a real dependency, and nothing asks the resolver for it until it is called — so the entry could reach a runtime dependency and every check still report a clean boundary. The metafile records every edge with its kind, deferred ones included, from the tool that emitted the code.
-
-It is written to `dist` and excluded from the published package: it describes a build rather than shipping with one.
+A dashboard asking for more than thirty widgets' data is split into several requests that finish independently, but every card was reading one page-wide "still loading" flag. A card whose own request had already answered went on dimming numbers it had, until the last unrelated request finished — most visible on the largest dashboards, where the split happens. Each card now reads the state of the request that carries it, which is also what the published `WidgetComponentProps.isFetching` describes and what a plugin author is told to use to tell a first load from a widget that asks for nothing.

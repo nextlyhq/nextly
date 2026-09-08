@@ -226,7 +226,9 @@ export {
   registerComponents,
   registerKnownPlugin,
   type ComponentPath,
+  type CustomEditViewProps,
 } from "./lib/plugins/component-registry";
+export type { DocumentLockGates } from "./components/features/entries/EntryForm/document-lock-affordances";
 
 // Unified DataTable + plugin registries — author surface re-exported by
 // `@nextlyhq/plugin-sdk/admin`. Plugins can render the shared table and add cell
