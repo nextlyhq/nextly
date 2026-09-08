@@ -265,27 +265,45 @@ function refusal(refused: PlanRefusal): NextlyError {
  * both copies passing is indistinguishable from one of them being right.
  */
 async function readRequest(req: Request): Promise<SavePatternRequest> {
-  const body = await readJson(req);
-  if (typeof body !== "object" || body === null) throw malformed("body");
-  const { document, selectedIds, fields } = body as Record<string, unknown>;
+  const body = objectAt(await readJson(req), "body");
+  return {
+    document: objectAt(body.document, "document") as unknown as BlockDocument,
+    selectedIds: selectionAt(body.selectedIds),
+    fields: settableFields(objectAt(body.fields, "fields")),
+  };
+}
 
-  if (typeof document !== "object" || document === null) {
-    throw malformed("document");
-  }
-  if (
-    !Array.isArray(selectedIds) ||
-    selectedIds.length === 0 ||
-    !selectedIds.every(id => typeof id === "string" && id !== "")
-  ) {
+/**
+ * One part of the request that has to be an object, or the refusal that it is
+ * not.
+ *
+ * Three parts ask the same question, and asking it in one place is what keeps
+ * them answering it identically: written out three times, the check that `null`
+ * is an object too is three chances to forget it, and forgetting it hands the
+ * planner a `null` document that fails as a server fault rather than as the bad
+ * request it is.
+ */
+function objectAt(value: unknown, path: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) throw malformed(path);
+  return value as Record<string, unknown>;
+}
+
+/**
+ * The selected ids, or the refusal that they are not a selection.
+ *
+ * An empty list is refused HERE rather than left to the planner. The planner
+ * would call it `empty` and this would answer 422 — a rule the caller broke
+ * rather than a request that could not be read — and a caller who selected
+ * nothing has not broken a rule about patterns. Which side answers decides
+ * which status the caller gets, and only one of them is true.
+ */
+function selectionAt(value: unknown): readonly string[] {
+  const ids = Array.isArray(value) ? (value as unknown[]) : undefined;
+  if (ids === undefined || ids.length === 0) throw malformed("selectedIds");
+  if (!ids.every(id => typeof id === "string" && id !== "")) {
     throw malformed("selectedIds");
   }
-  if (typeof fields !== "object" || fields === null) throw malformed("fields");
-
-  return {
-    document: document as BlockDocument,
-    selectedIds: selectedIds as string[],
-    fields: settableFields(fields as Record<string, unknown>),
-  };
+  return ids as string[];
 }
 
 /**
