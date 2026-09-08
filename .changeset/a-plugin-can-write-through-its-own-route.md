@@ -38,4 +38,8 @@ The plugin names ITSELF, as it does for the read, because nothing in a plugin co
 
 Nothing is toasted from the hook. The admin's own mutation hooks raise a toast because they own the surface that follows; a plugin owns its own, and a generic hook that announced every write would put the admin's voice inside someone else's feature.
 
+The write verbs are `Exclude<RouteMethod, "GET">` rather than a second list of methods. Spelled out, that was a narrower view of the route contract that would stop covering it the moment a method was added: a plugin could declare the route and this could not call it, and nothing would fail. `RouteMethod` is published from `nextly/config` for that, beside `pluginRouteFullPath` and for the same reason — the admin has to agree with the dispatcher about what a route is.
+
+`protectedApi.delete` now sends a body the caller SUPPLIED rather than one that is truthy. `false`, `0`, `""` and `null` are valid JSON, and a truthiness test dropped all four, so `delete` was the one verb that silently disagreed with what it was passed. Measured before changing it: no caller passes a body at all today, so nothing that exists sends one where it did not before.
+
 The result type is bounded to an object or `null`, for the reason the read is: the admin's fetcher returns `undefined` for a bare string or number, so `Response.json("ok")` would arrive as a successful empty answer and a caller typed `<string>` would silently never see it.

@@ -490,7 +490,7 @@ export { usePluginClientConfig } from "@nextlyhq/admin";
 export { usePluginRoute } from "@nextlyhq/admin";
 
 /**
- * Write to a route this plugin contributed.
+ * @experimental Write to a route this plugin contributed.
  *
  * The other half of `usePluginRoute`, and it was the missing half: a plugin
  * could READ its own route and had nothing to write to it with, so any feature

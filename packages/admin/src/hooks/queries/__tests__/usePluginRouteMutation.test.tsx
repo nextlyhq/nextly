@@ -66,8 +66,11 @@ describe("usePluginRouteMutation", () => {
 
     expect(postSpy).toHaveBeenCalledTimes(1);
     const [path, body] = postSpy.mock.calls[0] ?? [];
-    expect(path).toContain("@acme/p");
-    expect(path).toContain("/patterns");
+    // EXACT, not containment. `toContain("@acme/p")` and `toContain("/patterns")`
+    // are both satisfied by `/wrong/@acme/p/patterns`, so a hook that hardcoded
+    // a non-dispatcher prefix stayed green on the one assertion written to stop
+    // exactly that.
+    expect(path).toBe("/plugins/@acme/p/patterns");
     expect(body).toEqual({ title: "Hero" });
   });
 
@@ -131,6 +134,29 @@ describe("usePluginRouteMutation", () => {
     expect(String(named[0]?.[1])).toContain("@acme/p");
     expect(named[0]?.[0]).toBe("plugin-route");
     invalidate.mockRestore();
+  });
+
+  it("sends a FALSY body rather than dropping it", async () => {
+    // `false`, `0`, `""` and `null` are all valid JSON a caller may mean to
+    // send. The DELETE path tested whether the body was truthy, so it was the
+    // one verb that silently disagreed with what `write(body)` promised — the
+    // handler received an empty request while every other verb carried the
+    // value.
+    const { result } = renderHook(
+      () =>
+        usePluginRouteMutation<number, { ok: true }>({
+          ...write,
+          method: "DELETE",
+        }),
+      { wrapper: wrapper() }
+    );
+
+    await act(async () => {
+      await result.current.write(0);
+    });
+
+    expect(deleteSpy).toHaveBeenCalledTimes(1);
+    expect(deleteSpy.mock.calls[0]?.[1]).toBe(0);
   });
 
   it("uses the verb the caller asked for", async () => {

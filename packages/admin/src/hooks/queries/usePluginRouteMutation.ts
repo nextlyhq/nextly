@@ -15,12 +15,22 @@
  * @module hooks/queries/usePluginRouteMutation
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { pluginRouteFullPath } from "nextly/config";
+import { pluginRouteFullPath, type RouteMethod } from "nextly/config";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 
-/** The verbs a contributed route may be written to with. */
-export type PluginRouteMethod = "POST" | "PUT" | "PATCH" | "DELETE";
+/**
+ * The verbs a contributed route may be written to with.
+ *
+ * DERIVED from the route contract rather than listed again. Spelled out, this
+ * was a second statement of which methods exist: a method added to
+ * `RouteMethod` would be declarable by a plugin and uncallable from here, and
+ * nothing would fail — the narrower view would simply stop covering the wider
+ * one. Subtracting the read verb keeps the two in step by construction, and the
+ * exhaustive record below then refuses to compile until the new verb has a
+ * sender.
+ */
+export type PluginRouteMethod = Exclude<RouteMethod, "GET">;
 
 /** What a plugin needs to say to write to one of its routes. */
 export interface PluginRouteWrite {
