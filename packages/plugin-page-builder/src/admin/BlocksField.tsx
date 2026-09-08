@@ -1772,6 +1772,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   // the form needs is mounted only while it is up. See `SavePatternPrompt`.
   const [savingPattern, setSavingPattern] = useState(false);
   const openSavePattern = useCallback(() => setSavingPattern(true), []);
+  const closeSavePattern = useCallback(() => setSavingPattern(false), []);
 
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
@@ -2820,12 +2821,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             owned its own trigger would be reachable from one surface and not
             from the palette, the context menu or a keystroke.
           */}
-          {savingPattern ? (
-            <SavePatternPrompt
-              editor={editor}
-              onClose={() => setSavingPattern(false)}
-            />
-          ) : null}
+          <SavePatternPrompt
+            open={savingPattern}
+            editor={editor}
+            onClose={closeSavePattern}
+          />
         </BlockKeyboardActions>
       </BuilderShell>
     </div>

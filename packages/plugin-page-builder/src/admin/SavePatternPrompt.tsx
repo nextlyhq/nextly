@@ -37,10 +37,34 @@ type EditorState = React.ComponentProps<typeof BlockToolbar>["editor"];
 
 /** Props for {@link SavePatternPrompt}. */
 export interface SavePatternPromptProps {
+  /** Whether the author has asked to save. */
+  open: boolean;
   /** The editor whose selection is being saved. */
   editor: EditorState;
   /** Called when the prompt is finished with, saved or not. */
   onClose: () => void;
+}
+
+/**
+ * The form, mounted only while it is up.
+ *
+ * The gate is HERE rather than at the call site, and that is a decision about
+ * where a branch costs least: the editor this hangs off is already the most
+ * complex function in the package, and one more conditional in its body is one
+ * more path through a function nothing can hold in its head. Here it is the
+ * whole of a five-line component.
+ *
+ * Mounting is still what starts the library read, which is the behaviour the
+ * gate exists to preserve — a component that rendered `null` from inside would
+ * have run its hooks first.
+ */
+export function SavePatternPrompt({
+  open,
+  editor,
+  onClose,
+}: SavePatternPromptProps): React.JSX.Element | null {
+  if (!open) return null;
+  return <SavePatternForm editor={editor} onClose={onClose} />;
 }
 
 /**
@@ -64,10 +88,10 @@ function subjectOf(editor: EditorState): string {
 }
 
 /** The save-as-pattern form, its write, and the suggestions it offers. */
-export function SavePatternPrompt({
+function SavePatternForm({
   editor,
   onClose,
-}: SavePatternPromptProps): React.JSX.Element {
+}: Omit<SavePatternPromptProps, "open">): React.JSX.Element {
   const writer = useSavePattern();
   const library = usePatternLibrary();
 
