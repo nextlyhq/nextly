@@ -235,6 +235,14 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:docs-claims
 
+      # The integration jobs select packages with a hand-written filter list, so
+      # a package that gains the task and is not added to it runs NOWHERE: the
+      # unit job no longer includes those files and no leg selects them, and
+      # every job stays green because what would have been reported is absent.
+      - name: Integration lane covers every package that declares it
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:integration-lane
+
       # The About line and topic list are repository settings, not files, so every
       # check that reads git's index is blind to them. Reports unverifiable rather
       # than failing when the API cannot be reached.
