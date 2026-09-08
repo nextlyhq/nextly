@@ -68,7 +68,16 @@ export interface WidgetQuery {
  */
 export type WidgetQuerySpec =
   | (WidgetQuery & { op: Exclude<WidgetOp, "groupBy">; groupBy?: never })
-  | (WidgetQuery & { op: "groupBy"; groupBy: string });
+  | (WidgetQuery & {
+      op: "groupBy";
+      groupBy: string;
+      // `select` and `sort` describe ROWS, and this op returns buckets. The
+      // validator refuses them, so admitting them here would compile a
+      // declaration whose every request fails -- an author learning at runtime
+      // what the type could have told them.
+      select?: never;
+      sort?: never;
+    });
 
 /**
  * Product code in `packages/nextly/**` throws `NextlyError`, never a bare

@@ -76,6 +76,10 @@ async function boot(
           // their keys ordered differently are one bucket under jsonb and two
           // under SQLite.
           json({ name: "payload" }),
+          // A TEXT column physically, and a serialized JSON document
+          // logically: `classifyFieldKind` says `text` while the read and
+          // write paths run it through `isJsonFieldType`.
+          text({ name: "tags", hasMany: true }),
           // Masked on the way out by a hook. A list applies it per row; an
           // aggregate has no rows to apply it to, so the STORED value would
           // travel as the bucket label past the thing that changes it.
@@ -505,5 +509,23 @@ describe("which buckets survive the cap does not depend on the adapter", () => {
       { value: "bbb", count: 1 },
     ]);
     expect(res.data?.truncated).toBe(true);
+  });
+});
+
+describe("a group key whose column is text but whose value is a document", () => {
+  it("refuses a hasMany field, which is stored as serialized JSON", async () => {
+    // The physical classifier says `text` here; the logical one says JSON, and
+    // the logical one decides what the stored bytes look like. Grouping would
+    // hand back raw serialized JSON as labels and split equal content written
+    // with its keys in a different order.
+    const h = await boot([{ region: "emea", secret: "a" }]);
+
+    const res = await h.groupEntries({
+      collectionName: ORDERS,
+      groupBy: "tags",
+    });
+
+    expect(res.success).toBe(false);
+    expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
   });
 });

@@ -153,6 +153,7 @@ import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 import {
+  isJsonFieldType,
   getTableName,
   getSearchableFields,
   getMinSearchLength,
@@ -438,6 +439,17 @@ interface FilteredReadParams {
  * the database, so no label chosen afterwards reconciles them.
  */
 function ungroupableKind(field: FieldDefinition): string | undefined {
+  // Asked of the LOGICAL storage as well as the physical column, because the
+  // two disagree and only one of them decides what the value looks like.
+  // `classifyFieldKind` answers what column the DDL emits: `richText` gets
+  // `longText`, and a `hasMany` text or select gets a text column. The read
+  // and mutation paths nonetheless serialize those values as JSON through
+  // `isJsonFieldType`, so the stored bytes are a document and grouping them
+  // returns raw serialized JSON as labels -- splitting equal content that was
+  // written with its keys in a different order.
+  if (isJsonFieldType(field.type, field)) {
+    return "is stored as serialized JSON, so its buckets would depend on how that text was written rather than on what it means";
+  }
   const kind = classifyFieldKind(field, "collection");
   if (kind === "skip") {
     return "keeps its values in another table, so this collection has no column for it";

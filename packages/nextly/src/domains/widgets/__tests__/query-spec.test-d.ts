@@ -39,6 +39,23 @@ expectTypeOf<{
   op: "groupBy";
 }>().not.toMatchTypeOf<WidgetQuerySpec>();
 
+// A grouped declaration cannot carry row-shaped options. The validator refuses
+// them, so a type that admitted them would compile a widget whose every
+// request fails.
+expectTypeOf<{
+  source: string;
+  op: "groupBy";
+  groupBy: "status";
+  select: string[];
+}>().not.toMatchTypeOf<WidgetQuerySpec>();
+
+expectTypeOf<{
+  source: string;
+  op: "groupBy";
+  groupBy: "status";
+  sort: string;
+}>().not.toMatchTypeOf<WidgetQuerySpec>();
+
 // `WidgetQuery` itself stays flat. This is the guard: the fixed-question
 // sources key an exhaustive table on these names, so a member disappearing
 // from here removes a compiler demand rather than raising an error.
