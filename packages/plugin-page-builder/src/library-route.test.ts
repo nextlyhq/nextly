@@ -362,6 +362,56 @@ describe("how much of the library travels, by weight", () => {
     expect(library.meta.truncated).toBe(true);
   });
 
+  it("reserves the response FRAMING, not only the rows inside it", async () => {
+    // The rows are what the budget counted, and the rows are not what is sent:
+    // `Response.json` wraps them in `{"items":[…],"meta":{…}}` and separates
+    // them with commas. A library whose rows total exactly the ceiling
+    // therefore leaves the server ABOVE it, so a proxy or platform limit set at
+    // the same 16 MiB rejects a response this route believed it had bounded.
+    //
+    // The big row sits INSIDE the ceiling and outside it once the envelope is
+    // counted, which is the whole boundary: an accounting that totals only rows
+    // admits it and answers above the limit. Reserving the framing refuses it —
+    // it cannot fit beside an envelope — and the small row behind it still
+    // arrives, which is what the liveness assertion below is checking. Filler
+    // rows cannot show this: each is larger than the envelope, so the total
+    // lands further below the ceiling than the framing costs.
+    const shell = {
+      id: "big",
+      title: "Pattern big",
+      granularity: "section",
+      description: "",
+      document: {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "pattern",
+        nodes: [],
+      },
+    };
+    const shellBytes = Buffer.byteLength(JSON.stringify(shell), "utf8");
+    const { ctx } = contextOver([
+      [
+        row("big", {
+          description: "d".repeat(MAX_LIBRARY_BYTES - shellBytes - 40),
+          content: shell.document,
+        }),
+        row("small"),
+      ],
+    ]);
+
+    const library = await readPatternLibrary(ctx);
+
+    // Liveness: without this the test is satisfied by a library that kept
+    // NOTHING, which is the one outcome that would make the assertion below
+    // true for a reason it is not testing. Not an exact count — which rows fit
+    // is the accounting's business, and pinning it would fail the next time a
+    // field is added.
+    expect(library.items.length).toBeGreaterThan(0);
+    // The whole answer, which is what the ceiling is a ceiling on.
+    expect(
+      Buffer.byteLength(JSON.stringify(library), "utf8")
+    ).toBeLessThanOrEqual(MAX_LIBRARY_BYTES);
+  });
+
   it("charges a row for the WHOLE of it, not only its document", async () => {
     // `description` is a `textarea` on the patterns collection with no length
     // of its own, so a library of rows carrying long descriptions and NO

@@ -28,6 +28,7 @@ import {
   PAGE_BUILDER_PLUGIN_NAME,
   type LibraryPattern,
   type LibraryResponse,
+  isInsertableGranularity,
 } from "../library-contract";
 
 /**
@@ -102,7 +103,14 @@ const NO_PATTERNS: readonly SavedPattern[] = [];
  * Dropped here rather than at the route, because the route serves the LIBRARY
  * and this is one surface's view of it: the "start from a pattern" surface the
  * design calls for wants exactly the rows this leaves out.
+ *
+ * Asked as a CLOSED question, which `!== "page"` was not. That comparison
+ * answers true for a granularity it has never heard of, and — the reachable
+ * case — for one that is MISSING: the field is required, so absent means an
+ * `afterRead` hook or a field-level read rule removed it, and a page pattern
+ * whose granularity was stripped was offered for insertion. The rule lives in
+ * the contract, where the vocabulary it closes over does.
  */
 function isInsertable(pattern: LibraryPattern): boolean {
-  return pattern.granularity !== "page";
+  return isInsertableGranularity(pattern.granularity);
 }

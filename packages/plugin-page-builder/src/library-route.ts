@@ -138,6 +138,33 @@ function rowCost(pattern: LibraryPattern): number | undefined {
   return measured.bytes;
 }
 
+/**
+ * What the answer costs before a single pattern is in it.
+ *
+ * The rows are what the budget counted and the rows are not what is sent:
+ * `Response.json` wraps them in `{"items":[…],"meta":{…}}`. A library whose
+ * rows totalled exactly the ceiling therefore left the server ABOVE it —
+ * measured, nine bytes over — so a proxy or platform limit set at the same
+ * figure rejects a response this route believed it had bounded.
+ *
+ * Computed from the envelope rather than written down, so it cannot drift from
+ * the shape actually returned, and at its WORST case: the largest count this
+ * can report, and `false`, which is a byte longer than `true`.
+ */
+const RESPONSE_FRAMING_BYTES = measureBytes(
+  { items: [], meta: { count: MAX_LIBRARY_PATTERNS, truncated: false } },
+  Number.MAX_SAFE_INTEGER
+).bytes;
+
+/**
+ * What one more row costs beyond itself: the comma that separates it.
+ *
+ * Charged to every row including the first, which over-counts by one byte for
+ * a library of one. Conservative in the direction that keeps the ceiling a
+ * ceiling, and a byte is not worth a special case.
+ */
+const ROW_SEPARATOR_BYTES = 1;
+
 /** The capabilities this route uses, named rather than imported whole. */
 export interface LibraryRouteContext {
   self: { collections: Record<string, string | undefined> };
@@ -183,7 +210,9 @@ export async function readPatternLibrary(
   // page one is a cut library even when page nine simply ends, and the stop
   // reason below overwrites what it knows nothing about.
   let omitted = false;
-  let bytes = 0;
+  // Seeded with what the envelope costs, so the ceiling bounds the ANSWER
+  // rather than the rows inside it.
+  let bytes = RESPONSE_FRAMING_BYTES;
   for (let page = 1; ; page += 1) {
     const result = await ctx.services.collections.listEntries(
       slug,
@@ -260,9 +289,11 @@ type RowVerdict = "keep" | "omit" | "stop";
  * them. A row that would merely overflow what is LEFT means the budget is
  * spent, and reading further only assembles bytes that cannot be sent.
  */
-function admits(size: number, spent: number, kept: number): RowVerdict {
-  if (size > MAX_LIBRARY_BYTES) return "omit";
-  if (spent + size > MAX_LIBRARY_BYTES) return "stop";
+function admits(charged: number, spent: number, kept: number): RowVerdict {
+  // Against an EMPTY response rather than against nothing: a row that cannot
+  // fit beside the framing alone cannot fit anywhere.
+  if (RESPONSE_FRAMING_BYTES + charged > MAX_LIBRARY_BYTES) return "omit";
+  if (spent + charged > MAX_LIBRARY_BYTES) return "stop";
   if (kept >= MAX_LIBRARY_PATTERNS) return "stop";
   return "keep";
 }
@@ -299,14 +330,15 @@ function collectPage(
       omitted = true;
       continue;
     }
-    const verdict = admits(size, bytes, into.length);
+    const charged = size + ROW_SEPARATOR_BYTES;
+    const verdict = admits(charged, bytes, into.length);
     if (verdict === "stop") return { bytes, full: true, omitted };
     if (verdict === "omit") {
       omitted = true;
       continue;
     }
     into.push(pattern);
-    bytes += size;
+    bytes += charged;
   }
   return { bytes, full: false, omitted };
 }
