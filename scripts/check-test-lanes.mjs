@@ -1,32 +1,36 @@
 #!/usr/bin/env node
 
 /**
- * Every package with a test task must be run by a workflow, and every filter a
- * workflow names must belong to a package that has one.
+ * Every package that declares a test task is run by a lane.
  *
- * Both lanes select what to run with a hand-written `--filter` list, repeated
- * per step. Nothing connects those lists to the packages that declare the
- * tasks, so the two drift in both directions and each drift is silent:
+ * The lane is ASKED rather than read. Each lane is a script in the root
+ * manifest, and running it with `--dry=json` makes turbo report the plan it
+ * would execute — so the question "which packages' suites does CI run?" is
+ * answered by the tool that will run them, against the command that will run.
  *
- *   - a package declares the task and no command names it. Its suites run
- *     NOWHERE, and every job stays green — the shape a check cannot notice,
- *     because what it would have reported is simply absent. Measured on
- *     `e6797c5d1`: `nextly` (907 files, 11562 tests) and `@nextlyhq/admin`
- *     (407, 4061) had passed for weeks while neither gated a merge.
- *   - a filter keeps naming a package that no longer has the task. Turbo
- *     matches nothing and moves on, so the step reports success while the entry
- *     stands as a record of coverage nobody is getting.
+ * 🔴 The previous answer parsed the workflows: it read `run:` blocks out of the
+ * YAML, split the shell, and worked out which packages each `--filter` selected.
+ * That is an unbounded problem and it behaved like one. Twelve separate ways to
+ * fool it were found, each a shape the parser did not model — a folded block
+ * scalar, a line continuation, a comment, a `&&` chain, a boolean option eating
+ * a path, a `^...` selector that excludes the package it names, turbo's `--`
+ * pass-through, `echo` in front of the command, `continue-on-error`, a `!`
+ * exclusion, `|| true`, and a `--dry-run`. Every fix was correct and the next
+ * shape arrived anyway, because the space of ways to write a command has no
+ * edge. Nothing here parses a command now, so none of those shapes has anything
+ * to fool.
  *
- * Both sides are DERIVED rather than restated. The packages come from reading
- * the manifests git tracks, and the lanes come from parsing the commands the
- * workflows actually run, so neither is a list kept in step by hand.
+ * What this leaves is the drift it was built for. Measured on `e6797c5d1`:
+ * `nextly` (907 files, 11562 tests) and `@nextlyhq/admin` (407, 4061) declared
+ * `test`, passed for weeks, and gated nothing, because the hand-written filter
+ * list in the workflow had never been told about them.
  *
- * 🔴 Running SOME of a package's files is not running its task. Two steps in
- * `ci.yml` invoke `vitest run` against named `nextly` files, ahead of the build,
- * so a schema-pipeline break surfaces early. Twelve files out of 907 is 1.3% of
- * that suite, and counting it as coverage is how the gap above survived: the
- * package looks present in the workflow. A command carrying file arguments
- * therefore covers nothing here.
+ * ⚠️ The boundary, stated rather than covered badly. This proves what a lane
+ * SCRIPT runs; it takes on trust that the workflow still calls that script, and
+ * checks only that the file names it. A workflow that renames its step, guards
+ * it with an expression, or lets it fail with `continue-on-error` is not
+ * something this reads — which is the deliberate trade, because reading that
+ * well is the problem this stopped trying to solve.
  *
  * Usage:
  *   node scripts/check-test-lanes.mjs
@@ -40,400 +44,42 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
- * The task each workflow is responsible for running.
+ * Each lane: the task it runs, the scripts that run it, and where it is called.
  *
- * One entry per lane rather than one check per lane: the question is the same
+ * One entry per task rather than one check per task: the question is the same
  * both times, and asking it twice in two files is how the second copy drifts.
  */
-const LANES = [
-  { task: "test", workflow: ".github/workflows/ci.yml" },
-  { task: "test:integration", workflow: ".github/workflows/integration.yml" },
+export const LANES = [
+  {
+    task: "test",
+    workflow: ".github/workflows/ci.yml",
+    scripts: ["lane:test"],
+    /*
+     * The playground is an APP, and `test` dependsOn `^build`, so filtering
+     * turbo to a leaf that depends on nearly every package would pull the whole
+     * graph into a step that needs only what Build already produced. It runs
+     * vitest directly instead, which turbo has no plan for — so its coverage is
+     * declared here, next to the script that provides it, rather than inferred.
+     */
+    direct: [{ script: "lane:test:playground", package: "playground" }],
+  },
+  {
+    task: "test:integration",
+    workflow: ".github/workflows/integration.yml",
+    /*
+     * Three legs, and the split is a property rather than a preference: an
+     * adapter's integration suites need their own dialect's database, so a leg
+     * runs the adapter it has a server for. The packages that name no dialect
+     * boot in-memory SQLite and sit on that leg.
+     */
+    scripts: [
+      "lane:test:integration:postgres",
+      "lane:test:integration:mysql",
+      "lane:test:integration:sqlite",
+    ],
+    direct: [],
+  },
 ];
-
-/**
- * Whether a step's `if:` disables it no matter what the run decides.
- *
- * Only a LITERAL false, because that is the whole set this can answer. A matrix
- * condition is the workflow selecting a leg rather than disabling one, and
- * whether it holds depends on a run that has not happened - so treating an
- * expression as disabled would report a lane uncovered while it runs perfectly,
- * which for this check is the more expensive direction.
- */
-export function staticallyDisabled(condition) {
-  if (typeof condition !== "string") return false;
-  const bare = condition.trim().replace(/^\$\{\{(.*)\}\}$/s, "$1").trim();
-  return bare === "false";
-}
-
-/**
- * Whether a step's failure is allowed to leave the job green.
- *
- * The opposite stance to `staticallyDisabled`, and deliberately: that one errs
- * towards a lane still running, because reporting a live lane dead is the
- * expensive mistake there. Here the expensive mistake is the other way. This
- * check exists to say that these suites GATE, so an advisory step's coverage
- * is coverage nobody gets — and an expression only the run can settle cannot
- * be shown to gate. Absent, or a literal `false`, is the only gating answer.
- */
-export function failuresIgnored(condition) {
-  if (condition === undefined) return false;
-  const bare = String(condition).trim().replace(/^\$\{\{(.*)\}\}$/s, "$1").trim();
-  return bare !== "false";
-}
-
-/** Shell lines ending in a backslash are one command, so join them. */
-export function joinContinuations(lines) {
-  const commands = [];
-  let pending = "";
-  for (const line of lines) {
-    if (line.endsWith("\\")) {
-      pending += line.slice(0, -1).trimEnd() + " ";
-      continue;
-    }
-    commands.push((pending + line).trim());
-    pending = "";
-  }
-  if (pending.trim() !== "") commands.push(pending.trim());
-  return commands;
-}
-
-/**
- * Each step in the workflow, with the condition on it and the commands it runs.
- *
- * 🔴 Reading `run:` rather than scanning every line is the load-bearing part.
- * The workflow's prose explains what each leg does, so a paragraph naming a
- * command reads identically to the command - and a line scan counts an
- * invocation that was commented out, or one belonging to a step that is turned
- * off, while the lane it described has stopped running. That is this check
- * reporting a covered lane it never had.
- *
- * Steps are block-sequence items (`- name:` / `- uses:` / `- run:`), and their
- * keys sit one level in. Both `run:` forms the file uses are read: a block
- * scalar, whose body is every following line indented past the key, and the
- * one-line form. A block's body is a shell script, so a line opening with `#`
- * there is a comment for the same reason a YAML one is, and neither executes.
- *
- * ⚠️ The boundary, stated rather than covered badly. This reads indentation,
- * not YAML, so what it CANNOT see is: a condition on the JOB rather than the
- * step, a step disabled by an expression only the run can evaluate, a `#`
- * inside quotes, and a command assembled across lines. Each would need a
- * parser, and none is a form this workflow uses. The check names that limit in
- * its own output rather than leaving it implicit, which is the call
- * `check-comment-convention.mjs` already made for its own YAML reader.
- */
-export function workflowSteps(workflow) {
-  const lines = workflow.split(/\r?\n/);
-  const steps = [];
-  let step;
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index];
-    const item = /^(\s*)-\s+\S/.exec(line);
-    if (item) {
-      step = {
-        indent: item[1].length,
-        condition: undefined,
-        advisory: undefined,
-        commands: [],
-      };
-      steps.push(step);
-    }
-    if (step === undefined) continue;
-    // A key of THIS step sits one level in from its dash. Deeper belongs to
-    // another mapping, and shallower has ended the step.
-    const keyIndent = step.indent + 2;
-    // Either spelling of the same position: the first key sits ON the dash
-    // line (`- run: ...`), and the rest are indented to where that key began.
-    const own = new RegExp(
-      `^(?:\\s{${step.indent}}-\\s+|\\s{${keyIndent}})(\\w[\\w-]*):(.*)$`
-    ).exec(line);
-    if (own === null) continue;
-    const [, key, rest] = own;
-    if (key === "if") {
-      step.condition = rest.trim();
-      continue;
-    }
-    if (key === "continue-on-error") {
-      step.advisory = rest.trim();
-      continue;
-    }
-    if (key !== "run") continue;
-    const scalar = /^[ \t]*([|>])[-+]?[ \t]*$/.exec(rest);
-    if (scalar !== null) {
-      const body = [];
-      for (let line = index + 1; line < lines.length; line++) {
-        const text = lines[line];
-        if (text.trim() === "") continue;
-        if (text.length - text.trimStart().length <= keyIndent) break;
-        body.push(text.trim());
-      }
-      // 🔴 The two scalars mean different things and the difference decides
-      // what a command IS. A literal block (`|`) keeps its newlines, so each
-      // line is its own command. A FOLDED block (`>`) joins them with spaces
-      // into one — which is how the unit step spells a `turbo test` and its
-      // twenty filters, and reading those lines separately leaves a `turbo
-      // test` selecting nobody and twenty flags running nothing.
-      if (scalar[1] === ">") {
-        if (body.length > 0) step.commands.push(body.join(" "));
-      } else {
-        // 🔴 A trailing backslash continues the command onto the next line, so
-        // the lines are one command to the shell and must be one here. Reading
-        // them apart is what made `vitest run \\` look like a whole-suite run:
-        // its file arguments were on the lines that followed, and a run of
-        // twelve named files then counted as covering all 907.
-        step.commands.push(...joinContinuations(body));
-      }
-      continue;
-    }
-    if (rest.trim() !== "") step.commands.push(rest.trim());
-  }
-  return steps;
-}
-
-/**
- * The packages a single command runs the given task for.
- *
- * `null` when the command does not run that task at all, which is different
- * from running it for nobody.
- *
- * Two shapes count, and one deliberately does not:
- *   - `turbo test` / `turbo test:integration` runs the package's TASK;
- *     `test` is matched so it cannot also swallow `test:integration`.
- *   - a bare `vitest run` runs the whole suite of whatever it is filtered to,
- *     which is how the playground's tests are run.
- *   - 🔴 `vitest run <files>` does NOT. It runs part of a suite, and counting
- *     it as the task is what let `nextly` look covered by twelve of its 907
- *     files.
- */
-export function fileArguments(rest) {
-  return rest
-    .split(/\s+/)
-    .filter(token => token !== "")
-    // `--name=value` carries its own value, so the whole token goes. A BARE
-    // `--name` takes the flag only: whether the token after it is that flag's
-    // value or a file is not something arity-free reading can know, and
-    // consuming it is what let `vitest run --passWithNoTests src/a.test.ts`
-    // read as a whole-suite run - a partial run counting as a package's task,
-    // which is the one mistake this whole check exists to prevent.
-    .filter(token => !token.startsWith("-"))
-    // What remains is a flag's value or a file, and the two are told apart by
-    // shape rather than by a table of vitest's options that would drift from
-    // vitest. A path has a separator; a test file names itself even without
-    // one. So `--config vitest.config.ts` leaves a value, and
-    // `--passWithNoTests src/a.test.ts` leaves a file.
-    .filter(token => token.includes("/") || /\.(test|spec)\.[cm]?[jt]sx?$/.test(token));
-}
-
-/**
- * The program a shell statement actually runs.
- *
- * A package runner and its own options come first in every invocation here
- * (`pnpm turbo test`, `pnpm --filter playground exec vitest run`), so they are
- * stepped over to reach the executable. Only `--filter` spends the token after
- * it; treating every bare option that way could step over the executable
- * itself.
- *
- * 🔴 Matching `turbo test` anywhere in the line credits `echo pnpm turbo test
- * --filter=nextly`, where the shell runs `echo` and the suite runs nowhere.
- * A command that is printed, stored or commented into a variable is not a
- * command that ran.
- */
-export function executableOf(command) {
-  const tokens = command.trim().split(/\s+/).filter(Boolean);
-  const runners = new Set(["pnpm", "npm", "npx", "yarn", "bun", "exec", "run", "dlx"]);
-  for (let index = 0; index < tokens.length; index++) {
-    const token = tokens[index];
-    if (runners.has(token)) continue;
-    if (token.startsWith("-")) {
-      if ((token === "--filter" || token === "-F") && index + 1 < tokens.length) {
-        index++;
-      }
-      continue;
-    }
-    return token;
-  }
-  return null;
-}
-
-export function commandCoverage(command, task) {
-  const executable = executableOf(command);
-  const runsTask =
-    executable === "turbo" &&
-    (task === "test"
-      ? /\bturbo\s+test(?![:\w])/.test(command)
-      : new RegExp(`\\bturbo\\s+${task.replace(":", ":")}\\b`).test(command));
-  const vitest =
-    executable === "vitest" ? /\bvitest\s+run\b(.*)$/.exec(command) : null;
-  const wholeSuite = task === "test" && vitest !== null && fileArguments(vitest[1]).length === 0;
-  if (!runsTask && !wholeSuite) return null;
-  if (/--dir\b/.test(command)) return null;
-  // 🔴 turbo hands everything after a bare `--` to the task it runs, so
-  // `turbo test --filter=nextly -- src/a.test.ts` runs one file of the
-  // package's suite. That is a partial run wearing the shape of a whole one,
-  // which is the same mistake as counting twelve of 907 files by name.
-  const [, passedThrough] = command.split(/(?:^|\s)--(?=\s|$)/);
-  if (passedThrough !== undefined && fileArguments(` ${passedThrough}`).length > 0) {
-    return null;
-  }
-  return filtersIn(command);
-}
-
-/**
- * What a command's `--filter` flags select, in the two forms turbo accepts.
- *
- * Every spelling the workflows use: `--filter=x`, `--filter x`, and either
- * quoted.
- *
- * turbo selects by NAME or by LOCATION, and the difference matters here. A
- * name is the package itself. A location like `./packages/*` is a directory
- * pattern, and which packages it selects is a fact about the tree rather than
- * about the command — so it is carried out whole and resolved against the
- * workspace by `selectedPackages`, where the manifests are known.
- *
- * A NAME wildcard such as `@nextlyhq/*` is dropped. It selects a set this
- * cannot enumerate without knowing which names exist, and crediting coverage
- * on a guess is the failure this check exists to prevent. Dropping it errs the
- * loud way: the packages go unclaimed and the lane reports them.
- */
-export function filtersIn(command) {
-  const names = [];
-  const locations = [];
-  for (const [, raw] of command.matchAll(/--filter[= ]\s*('[^']*'|"[^"]*"|\S+)/g)) {
-    const filter = raw.replace(/^['"]|['"]$/g, "");
-    if (filter.startsWith("./") || filter.startsWith("../")) {
-      locations.push(filter);
-      continue;
-    }
-    if (filter.includes("*")) continue;
-    // 🔴 `nextly...` and `...nextly` include the package; `nextly^...` and
-    // `...^nextly` are its dependents or dependencies WITHOUT it. Stripping
-    // both alike credited a package whose task turbo never runs, which is the
-    // whole suite vanishing behind a green gate. A caret means this cannot say
-    // what was selected, so it claims nothing.
-    if (filter.includes("^")) continue;
-    names.push(filter.replace(/^\.\.\.|\.\.\.$/g, ""));
-  }
-  return { names, locations };
-}
-
-/**
- * Whether a location pattern selects a package sitting at `directory`.
- *
- * Only the two shapes turbo is given here: a literal directory, and a single
- * `*` standing for one path segment. `**` and the rest of glob are not
- * answered — an unrecognised pattern matches nothing, so a package it would
- * have covered is reported as unrun rather than quietly credited.
- */
-export function locationMatches(pattern, directory) {
-  const bare = pattern.replace(/^\.\//, "").replace(/\/$/, "");
-  if (bare.includes("**") || bare.includes("?") || bare.includes("[")) {
-    return false;
-  }
-  const expression = bare
-    .split("/")
-    .map(segment =>
-      segment === "*"
-        ? "[^/]+"
-        : segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    )
-    .join("/");
-  return new RegExp(`^${expression}$`).test(directory);
-}
-
-/**
- * Every package a lane's invocations select, names and locations together.
- *
- * `packages` is the workspace as `{ name, directory }`, so a location pattern
- * is resolved against the tree that will actually run rather than against a
- * second list of what is expected to be there.
- */
-export function selectedPackages(invocations, packages) {
-  const covered = new Set();
-  const named = new Set();
-  for (const invocation of invocations) {
-    for (const name of invocation.filters.names) {
-      covered.add(name);
-      named.add(name);
-    }
-    for (const pattern of invocation.filters.locations) {
-      for (const { name, directory } of packages) {
-        if (locationMatches(pattern, directory)) covered.add(name);
-      }
-    }
-  }
-  return { covered: [...covered].sort(), named: [...named].sort() };
-}
-
-/**
- * Every command in the workflow that runs the task, with what it selects.
- *
- * Matched on the command rather than on a step name, because the name is prose
- * somebody can reword while the command is what runs.
- */
-export function shellStatements(command) {
-  const statements = [];
-  let current = "";
-  let quote = null;
-  for (let index = 0; index < command.length; index++) {
-    const character = command[index];
-    if (quote !== null) {
-      current += character;
-      if (character === quote) quote = null;
-      continue;
-    }
-    if (character === "'" || character === '"') {
-      quote = character;
-      current += character;
-      continue;
-    }
-    const pair = command.slice(index, index + 2);
-    if (pair === "&&" || pair === "||") {
-      statements.push(current);
-      current = "";
-      index++;
-      continue;
-    }
-    if (character === ";" || character === "|" || character === "&") {
-      statements.push(current);
-      current = "";
-      continue;
-    }
-    current += character;
-  }
-  statements.push(current);
-  return statements.map(statement => statement.trim()).filter(Boolean);
-}
-
-export function taskInvocations(workflow, task) {
-  const invocations = [];
-  for (const step of workflowSteps(workflow)) {
-    // A step that cannot run covers nothing, however completely its command
-    // describes the lane.
-    if (staticallyDisabled(step.condition)) continue;
-    // A step GitHub lets fail is not coverage: the suite runs, reports red, and
-    // the job stays green, which is exactly what this check promises cannot
-    // happen to the packages it names.
-    if (failuresIgnored(step.advisory)) continue;
-    for (const command of step.commands) {
-      // A disabled command is not an invocation either. Anchored at the start,
-      // so a `#` cannot precede what it disables.
-      if (command.startsWith("#")) continue;
-      // Everything from an unquoted `#` is a comment to the shell, with or
-      // without a space after it: `cmd #--filter=x` runs `cmd`.
-      const executable = command.split(/\s+#/)[0];
-      // 🔴 A `--filter` belongs to the command it was written on, and a shell
-      // line can hold several. Reading the line whole credits `turbo test`
-      // with the packages a `turbo build` beside it selects, and those suites
-      // then run nowhere while the lane reports them covered — the same silent
-      // shape this check exists to catch, produced by the check itself.
-      for (const statement of shellStatements(executable)) {
-        const filters = commandCoverage(statement, task);
-        if (filters === null) continue;
-        invocations.push({ line: statement, filters });
-      }
-    }
-  }
-  return invocations;
-}
 
 /** Every readable manifest as the two facts this check asks of a package. */
 export function readWorkspace(readManifest, manifestPaths) {
@@ -446,13 +92,7 @@ export function readWorkspace(readManifest, manifestPaths) {
       continue; // an unreadable manifest is reported by the workspace linter
     }
     if (typeof manifest?.name !== "string") continue;
-    packages.push({
-      name: manifest.name,
-      // What a `--filter=./packages/*` is matched against. The manifest's
-      // own location, so nothing has to agree with it separately.
-      directory: path.replace(/(^|\/)package\.json$/, "") || ".",
-      scripts: manifest.scripts ?? {},
-    });
+    packages.push({ name: manifest.name, scripts: manifest.scripts ?? {} });
   }
   return packages;
 }
@@ -460,9 +100,9 @@ export function readWorkspace(readManifest, manifestPaths) {
 /**
  * Every manifest that declares the task, by package name.
  *
- * Derived from `readWorkspace` rather than reading the manifests a second
- * time: the two answers are about the same packages, and a second reader is
- * one edit away from disagreeing with the first about which files count.
+ * Derived from `readWorkspace` rather than reading the manifests a second time:
+ * the two answers are about the same packages, and a second reader is one edit
+ * away from disagreeing with the first about which files count.
  */
 export function packagesWithTask(readManifest, manifestPaths, task) {
   return readWorkspace(readManifest, manifestPaths)
@@ -476,10 +116,9 @@ export function packagesWithTask(readManifest, manifestPaths, task) {
  *
  * 🔴 The globs are NOT written out here. `pnpm-workspace.yaml` also registers
  * the root-level `e2e`, which sits under neither `packages/` nor `apps/`, so a
- * check scanning those two directories would judge a workspace smaller than
- * the one that runs — and a package outside its scan is precisely the silent
- * gap this exists to report. pnpm resolves its own membership, so there is no
- * second list of what the workspace contains and nothing to keep in step.
+ * check scanning those two directories would judge a workspace smaller than the
+ * one that runs — and a package outside its scan is precisely the silent gap
+ * this exists to report.
  */
 export function workspaceManifests(cwd, run = execFileSync) {
   const projects = JSON.parse(
@@ -492,30 +131,68 @@ export function workspaceManifests(cwd, run = execFileSync) {
   return projects
     .map(project => relative(cwd, project.path ?? ""))
     // The workspace root is a project to pnpm and not a package to this: it
-    // declares no suites of its own and no filter selects it.
+    // declares no suites of its own and no lane selects it.
     .filter(directory => directory !== "" && directory !== ".")
     .map(directory => `${directory}/package.json`)
     .sort();
 }
 
 /**
- * What the two sides disagree about, in both directions.
+ * The packages a plan actually runs the task for.
  *
- * The two directions do not ask about the same set, which is why `selection`
- * carries both. `covered` answers whether a package's suites run at all, and a
- * location pattern counts there. `named` answers whether a written-out filter
- * still refers to a package that has the task — a question only a NAME can
- * fail, because naming a package is a claim about that package. A location
- * selects a PLACE, and turbo skipping something there that declares no such
- * script is the pattern working, not a stale entry.
+ * turbo lists a task for every package a filter SELECTED, including those with
+ * no such script, and marks the latter `<NONEXISTENT>`. Selecting a package is
+ * not running it, and the difference is the whole point here: a location filter
+ * reaches config packages that have no suites, and counting those would be this
+ * check inventing coverage.
  */
-export function laneDrift(declared, selection) {
-  const coveredSet = new Set(selection.covered);
-  const declaredSet = new Set(declared);
-  return {
-    unrun: declared.filter(name => !coveredSet.has(name)),
-    stale: selection.named.filter(name => !declaredSet.has(name)),
-  };
+export function packagesInPlan(plan, task) {
+  return (plan.tasks ?? [])
+    .filter(
+      entry =>
+        entry.task === task &&
+        typeof entry.command === "string" &&
+        entry.command !== "" &&
+        entry.command !== "<NONEXISTENT>"
+    )
+    .map(entry => entry.package);
+}
+
+/**
+ * turbo's plan for one lane script, taken from the script itself.
+ *
+ * `--dry=json` is appended to the real command rather than reconstructed, so
+ * what is measured is what CI runs. pnpm prints its own banner before handing
+ * over, so the plan starts at the first brace.
+ */
+export function planForScript(script, cwd, run = execFileSync) {
+  const output = run("pnpm", ["run", script, "--dry=json"], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const start = output.indexOf("{");
+  if (start === -1) throw new Error(`${script} produced no plan`);
+  return JSON.parse(output.slice(start));
+}
+
+/**
+ * Whether a lane script is a single command whose failure reaches the job.
+ *
+ * 🔴 A shell operator can swallow a failure — `turbo run test ... || true`
+ * plans exactly the same work and reports success however the suites end, so
+ * the plan this check reads would be right while the gate was gone. Refusing
+ * the operators is a containment test on one JSON string, not a reading of a
+ * shell, which is the whole difference from the parser this replaced.
+ */
+export function isSingleCommand(script) {
+  return !/[;&|]/.test(script);
+}
+
+/** Packages that declare the task and no lane runs. */
+export function unrunPackages(declared, covered) {
+  const reached = new Set(covered);
+  return declared.filter(name => !reached.has(name));
 }
 
 const invokedDirectly =
@@ -542,64 +219,101 @@ if (invokedDirectly) {
   }
 
   const readManifest = path => readFileSync(join(root, path), "utf8");
-  const packages = readWorkspace(readManifest, manifestPaths);
+  const rootScripts = JSON.parse(readManifest("package.json")).scripts ?? {};
 
   const failures = [];
   const summary = [];
 
-  for (const { task, workflow } of LANES) {
-    let source;
-    try {
-      source = readFileSync(join(root, workflow), "utf8");
-    } catch {
-      console.error(
-        `check-test-lanes: ${workflow} could not be read, so the \`${task}\` lane ` +
-          "has nothing to be compared against."
-      );
-      process.exit(2);
-    }
-
-    const invocations = taskInvocations(source, task);
+  for (const { task, workflow, scripts, direct } of LANES) {
     const declared = packagesWithTask(readManifest, manifestPaths, task);
-    const selection = selectedPackages(invocations, packages);
 
     // The population, before the verdict. An empty side is satisfied by every
     // comparison below, so each would report a clean lane having examined
     // nothing.
-    if (invocations.length === 0) {
-      console.error(
-        `check-test-lanes: ${workflow} runs no \`${task}\`. Either the steps were ` +
-          "rewritten and this check needs teaching, or the lane has stopped " +
-          "running and every package would read as covered."
-      );
-      process.exit(2);
-    }
     if (declared.length === 0) {
       console.error(
-        `check-test-lanes: no package declares a \`${task}\` script, which would ` +
-          "make every filter in that lane stale rather than the lane clean."
+        `check-test-lanes: no package declares a \`${task}\` script, which ` +
+          "would make every lane vacuously complete rather than correct."
       );
       process.exit(2);
     }
 
-    const { unrun, stale } = laneDrift(declared, selection);
-    for (const name of unrun) {
+    const covered = new Set();
+    for (const script of [...scripts, ...direct.map(entry => entry.script)]) {
+      if (typeof rootScripts[script] !== "string") {
+        console.error(
+          `check-test-lanes: the root manifest declares no \`${script}\`, so ` +
+            `the \`${task}\` lane cannot be asked what it runs.`
+        );
+        process.exit(2);
+      }
+      if (!isSingleCommand(rootScripts[script])) {
+        failures.push(
+          `\`${script}\` chains commands, so a shell operator could report ` +
+            "success however the suites end. A lane script has to be one " +
+            "command whose failure reaches the job."
+        );
+      }
+      // The one thing still taken from the workflow, and it is a containment
+      // test rather than a reading of the command. Named in the output below so
+      // nobody takes this check for more than it proves.
+      let source;
+      try {
+        source = readFileSync(join(root, workflow), "utf8");
+      } catch {
+        console.error(
+          `check-test-lanes: ${workflow} could not be read, so nothing shows ` +
+            `the \`${task}\` lane is still called.`
+        );
+        process.exit(2);
+      }
+      if (!source.includes(`pnpm ${script}`)) {
+        failures.push(
+          `${workflow} does not run \`pnpm ${script}\`, so whatever that ` +
+            "script selects reaches no job. Call it, or drop it from LANES."
+        );
+      }
+    }
+
+    for (const script of scripts) {
+      let plan;
+      try {
+        plan = planForScript(script, root);
+      } catch {
+        // turbo refuses a filter that matches no package, which is how a lane
+        // naming a package that has been renamed or removed surfaces. Reported
+        // rather than swallowed: a lane whose plan cannot be produced is a lane
+        // whose CI step fails too.
+        console.error(
+          `check-test-lanes: \`pnpm ${script}\` produced no plan. turbo refuses ` +
+            "a filter that matches no package, so a lane naming one that is " +
+            "gone fails here and in CI alike."
+        );
+        process.exit(2);
+      }
+      for (const name of packagesInPlan(plan, task)) covered.add(name);
+    }
+    for (const entry of direct) covered.add(entry.package);
+
+    if (covered.size === 0) {
+      console.error(
+        `check-test-lanes: the \`${task}\` lane runs nothing, so every package ` +
+          "would read as uncovered rather than the lane as broken."
+      );
+      process.exit(2);
+    }
+
+    for (const name of unrunPackages(declared, [...covered])) {
       failures.push(
-        `${name} declares \`${task}\` and nothing ${workflow} runs selects it, ` +
-          "so its suites run nowhere. Either it sits outside the locations the " +
-          "lane already selects, or it needs naming in the step that runs " +
-          `\`${task}\`.`
+        `${name} declares \`${task}\` and no lane runs it, so its suites run ` +
+          `nowhere. Add it to a \`lane:${task}\` script, or to that lane's ` +
+          "`direct` list if a turbo selector cannot describe it."
       );
     }
-    for (const name of stale) {
-      failures.push(
-        `${workflow} filters for ${name} in the \`${task}\` lane, and it declares ` +
-          "no such script. Turbo matches no task and the step passes without " +
-          "running it; drop the filter or add the script."
-      );
-    }
+
     summary.push(
-      `  ${task}: ${declared.length} package(s), ${invocations.length} invocation(s) in ${workflow}`
+      `  ${task}: ${declared.length} package(s) declare it, ${covered.size} run by ` +
+        `${scripts.length + direct.length} lane script(s)`
     );
   }
 
@@ -612,9 +326,9 @@ if (invokedDirectly) {
   console.log("check-test-lanes: ok — every package's test task is run by a lane.");
   for (const line of summary) console.log(line);
   // Said on the way past rather than only in the source, so a reader taking
-  // this as proof of coverage knows which shapes it did not judge.
+  // this as proof of coverage knows which shape it did not judge.
   console.log(
-    "  reads step `run:` by indentation, not YAML: a job-level condition, a " +
-      "step disabled by an expression, or a `#` inside quotes are not seen."
+    "  asks turbo what each lane script runs; of the workflow it checks only " +
+      "that the script is named, not how the step is guarded."
   );
 }
