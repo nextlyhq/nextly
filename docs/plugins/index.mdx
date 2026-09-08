@@ -55,7 +55,7 @@ export default defineConfig({
 
 ## How Plugins Work
 
-Every plugin implements the `PluginDefinition` interface from `nextly`. The lifecycle has two phases:
+Every plugin implements the `PluginDefinition` interface from `@nextlyhq/plugin-sdk`, the stable import surface for plugin authors. The lifecycle has two phases:
 
 ### 1. Declarative + setup phase
 
@@ -113,7 +113,7 @@ See the **[Plugin Author Guide](/docs/plugins/author-guide)** for the full workf
 Plugins can control where their collections appear in the admin sidebar and customize their visual appearance.
 
 ```typescript
-import type { PluginDefinition } from 'nextly';
+import type { PluginDefinition } from '@nextlyhq/plugin-sdk';
 import { MyCollection } from './collections/my-collection';
 
 const plugin: PluginDefinition = {

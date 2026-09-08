@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   compareToBaseline,
+  compile,
+  contextOnlyWorthRecording,
   declaredNamesIn,
   extensionFor,
   extractFrom,
@@ -13,6 +15,7 @@ import {
   rebaseContextDiagnostics,
   unaccountedFor,
   unterminatedFences,
+  withEarlierContext,
 } from "./check-doc-samples.mjs";
 
 /**
@@ -739,5 +742,172 @@ describe("rebaseContextDiagnostics accounts for every line", () => {
     // The one past the prepended region is the reader's, rebased onto their
     // own line numbering.
     expect(result.lines[0]).toContain("docs/p.mdx#3:5");
+  });
+});
+
+describe("a declaration fence keeps declaration-file grammar", () => {
+  const declaration = [
+    "export as namespace Nextly;",
+    "",
+    "export interface Thing {",
+    "  a: string;",
+    "}",
+  ].join("\n");
+
+  it("writes a .d.ts fence as one", () => {
+    expect(extensionFor({ meta: 'title="index.d.ts"', lang: "ts", code: "" })).toBe(
+      "d.ts"
+    );
+    // The control: the pattern this replaced stopped at `.ts`, so the file went
+    // to the compiler under the wrong grammar.
+    expect('title="index.d.ts"'.match(/\.(tsx?)\b/)?.[1]).toBe("ts");
+    // And the ordinary cases still answer as they did.
+    expect(
+      extensionFor({ meta: 'title="nextly.config.ts"', lang: "ts", code: "" })
+    ).toBe("ts");
+    expect(
+      extensionFor({ meta: 'title="app/page.tsx"', lang: "tsx", code: "" })
+    ).toBe("tsx");
+  });
+
+  it("compiles a namespace export clean in a declaration file", () => {
+    // Driven through the real compile rather than the predicate, because the
+    // predicate cannot say what TypeScript does with the file afterwards.
+    const asDeclaration = compile(
+      [
+        {
+          file: "docs/example.mdx",
+          index: 0,
+          lang: "ts",
+          meta: 'title="index.d.ts"',
+          code: declaration,
+        },
+      ],
+      "test-declaration"
+    );
+    expect(asDeclaration).toEqual([]);
+  });
+
+  it("still reports a namespace export outside a declaration file", () => {
+    // The control on the control: the syntax is not merely tolerated
+    // everywhere. Without the title the fence is an ordinary `.ts`, and
+    // TypeScript's own error says the syntax belongs to declaration files.
+    const asScript = compile(
+      [
+        {
+          file: "docs/example.mdx",
+          index: 0,
+          lang: "ts",
+          meta: "",
+          code: declaration,
+        },
+      ],
+      "test-not-a-declaration"
+    );
+    expect(asScript.join("\n")).toContain("TS1315");
+  });
+});
+
+describe("withEarlierContext says which fence each pasted line came from", () => {
+  const page = [
+    { file: "docs/p.mdx", index: 0, lang: "ts", code: "const first = 1;\nconst unused = 2;" },
+    { file: "docs/p.mdx", index: 1, lang: "ts", code: "const second = first;" },
+    { file: "docs/p.mdx", index: 2, lang: "ts", code: "console.log(second);" },
+  ];
+
+  it("maps a prepended line back to its block and that block's own numbering", () => {
+    const rebuilt = withEarlierContext(page[2], ["second"], page);
+    // Both earlier blocks are pulled in: the nearest one declares `second`, and
+    // it needs `first` from the one before it.
+    expect(rebuilt.pastedFrom.map(r => r.origin)).toEqual([
+      "docs/p.mdx#0",
+      "docs/p.mdx#1",
+    ]);
+    // Block 0 has two lines, then the join's blank line, so block 1 starts on
+    // line 4 of the prefix.
+    expect(rebuilt.pastedFrom[0]).toMatchObject({ from: 1, to: 2 });
+    expect(rebuilt.pastedFrom[1]).toMatchObject({ from: 4, to: 4 });
+    // The control: the ranges have to describe the prefix that was actually
+    // built, not an assumed one.
+    expect(rebuilt.code.split("\n").slice(0, 4)).toEqual([
+      "const first = 1;",
+      "const unused = 2;",
+      "",
+      "const second = first;",
+    ]);
+  });
+
+  it("reports a diagnostic in the pasted region against the block that made it", () => {
+    const rebuilt = withEarlierContext(page[2], ["second"], page);
+    const result = rebaseContextDiagnostics({
+      lines: ["docs/p.mdx#2:4  error TS2304: Cannot find name 'first'."],
+      prependedByOrigin: new Map([["docs/p.mdx#2", rebuilt.prependedLines]]),
+      pastedFromByOrigin: new Map([["docs/p.mdx#2", rebuilt.pastedFrom]]),
+    });
+    // Line 4 of the rebuilt file is line 1 of block 1.
+    expect(result.contextOnly).toEqual([
+      "docs/p.mdx#1:1  error TS2304: Cannot find name 'first'.",
+    ]);
+    // The control: without the ranges it can only report the fence that
+    // inherited the declaration, which is not the one with the problem.
+    const unattributed = rebaseContextDiagnostics({
+      lines: ["docs/p.mdx#2:4  error TS2304: Cannot find name 'first'."],
+      prependedByOrigin: new Map([["docs/p.mdx#2", rebuilt.prependedLines]]),
+    });
+    expect(unattributed.contextOnly).toEqual([
+      "docs/p.mdx#2:4  error TS2304: Cannot find name 'first'.",
+    ]);
+  });
+});
+
+describe("contextOnlyWorthRecording deduplicates on identity", () => {
+  const missingFoo = (origin, line) =>
+    `${origin}:${String(line)}  error TS2304: Cannot find name 'Foo'.`;
+
+  it("keeps a diagnostic another page happens to share a message with", () => {
+    // The defect this replaced: the first pass was searched by message text
+    // alone, across the whole corpus, so an unrelated page saying the same
+    // thing silently swallowed a real context diagnostic. `Cannot find name`
+    // is the commonest message in this corpus, so the collision is the rule
+    // rather than the exception.
+    const contextOnly = [missingFoo("docs/a.mdx#1", 3)];
+    const firstPass = [missingFoo("docs/elsewhere.mdx#7", 12)];
+
+    expect(contextOnlyWorthRecording({ contextOnly, firstPass })).toEqual(
+      contextOnly
+    );
+    // The control: matched the old way, this one disappears.
+    const messageOf = line => line.split("  ").slice(1).join("  ");
+    expect(new Set(firstPass.map(messageOf)).has(messageOf(contextOnly[0]))).toBe(
+      true
+    );
+  });
+
+  it("drops one the same fence already reported", () => {
+    // A pasted block that was itself a module was compiled and judged on its
+    // own, so the recompile saying it again adds nothing.
+    const contextOnly = [missingFoo("docs/a.mdx#1", 3)];
+    const firstPass = [missingFoo("docs/a.mdx#1", 3)];
+    expect(contextOnlyWorthRecording({ contextOnly, firstPass })).toEqual([]);
+  });
+
+  it("does not confuse the same fence number on two pages", () => {
+    // `identityOf` returns `#1 <message>`, which the baseline scopes by storing
+    // it under a page. Used on its own as a key it makes fence 1 of every page
+    // one diagnostic, so an unrelated page reporting the same thing at the same
+    // ordinal would swallow this one.
+    const contextOnly = [missingFoo("docs/a.mdx#1", 3)];
+    const firstPass = [missingFoo("docs/elsewhere.mdx#1", 9)];
+    expect(contextOnlyWorthRecording({ contextOnly, firstPass })).toEqual(
+      contextOnly
+    );
+    // The control: the two really do share an identity, so only the page
+    // separates them.
+    expect(identityOf(contextOnly[0])).toBe(identityOf(firstPass[0]));
+  });
+
+  it("records a block pasted into several continuations once", () => {
+    const contextOnly = [missingFoo("docs/a.mdx#1", 3), missingFoo("docs/a.mdx#1", 3)];
+    expect(contextOnlyWorthRecording({ contextOnly, firstPass: [] })).toHaveLength(1);
   });
 });

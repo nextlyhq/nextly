@@ -203,9 +203,16 @@ export const extensionFor = sample => {
   // of it is not the file that title names: forcing `.ts` on it when the pasted
   // part contains JSX makes it fail to parse for a reason the page does not
   // have. `prependedLines` is only set on a rebuild.
+  //
+  // `.d.ts` is kept whole rather than reduced to `ts`. A declaration file is a
+  // different grammar: `export as namespace X` is valid in one and reports
+  // TS1315 in the other, so compiling a fence headed `title="index.d.ts"` as a
+  // plain `.ts` invents a finding the reader never meets. Measured against the
+  // compiler: the same body is clean written as `.d.ts` and reports TS1315
+  // written as `.ts`, with or without the appended `export {}`.
   const stated = sample.prependedLines
     ? undefined
-    : sample.meta?.match(/\.(tsx?)\b/)?.[1];
+    : sample.meta?.match(/\.(d\.ts|tsx?)\b/)?.[1];
   if (stated) return stated;
   return sample.lang === "tsx" || looksLikeJsx(sample.code) ? "tsx" : "ts";
 };
@@ -1273,10 +1280,29 @@ export function withEarlierContext(sample, missingNames, samples) {
   const needed = [...chosen.values()].sort((a, b) => a.index - b.index);
   if (needed.length === 0) return null;
   const prefix = needed.map(s => s.code).join("\n\n");
+  // Which fence each prepended line came from, as line ranges over the prefix.
+  // A diagnostic landing up there is about one of these blocks, and without
+  // this the only thing known about it is that it was not the reader's fence,
+  // which is not enough to report it against anything.
+  //
+  // The join puts one blank line between blocks, so each block advances the
+  // cursor by its own line count plus that separator.
+  const pastedFrom = [];
+  let cursor = 1;
+  for (const block of needed) {
+    const lines = block.code.split("\n").length;
+    pastedFrom.push({
+      origin: `${block.file}#${String(block.index)}`,
+      from: cursor,
+      to: cursor + lines - 1,
+    });
+    cursor += lines + 1;
+  }
   return {
     ...sample,
     code: `${prefix}\n\n${sample.code}`,
     prependedLines: prefix.split("\n").length + 1,
+    pastedFrom,
   };
 }
 
@@ -1443,7 +1469,11 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
 export const clashingName = line =>
   line.match(/error TS(?:2300|2451|2528): [^']*'([^']+)'/)?.[1];
 
-export function rebaseContextDiagnostics({ lines, prependedByOrigin }) {
+export function rebaseContextDiagnostics({
+  lines,
+  prependedByOrigin,
+  pastedFromByOrigin = new Map(),
+}) {
   const out = [];
   const unresolvedInContext = new Set();
   // Names that clash because a declaration was PASTED IN. A clash the fence
@@ -1494,7 +1524,19 @@ export function rebaseContextDiagnostics({ lines, prependedByOrigin }) {
         implicitAnyInContext.push(line);
       } else {
         unresolvedInContext.add(origin);
-        contextOnly.push(line);
+        // Reported against the block that produced it, at that block's own line
+        // number, which is the same line it would carry had the block been
+        // compiled alone. Charging it to the fence that merely inherited the
+        // declaration points a reader at code that is not the problem, and
+        // leaves the diagnostic with an identity no other pass can match.
+        const source = (pastedFromByOrigin.get(origin) ?? []).find(
+          range => lineNo >= range.from && lineNo <= range.to
+        );
+        contextOnly.push(
+          source
+            ? `${source.origin}:${String(lineNo - source.from + 1)}  ${rest.join("  ")}`
+            : line
+        );
       }
       continue;
     }
@@ -1546,6 +1588,41 @@ export function rebaseContextDiagnostics({ lines, prependedByOrigin }) {
  * rather than about this checker. So the report states its own basis, and a
  * finding can be weighed against it.
  */
+/**
+ * The context-only diagnostics a recompile is the first pass to see.
+ *
+ * Deduped on the DECLARING fence and the message, which is what an identity is,
+ * rather than on the message alone. These lines carry the origin of the block
+ * that produced them, so a repeat is a repeat about the same fence. Matching on
+ * message text across the whole corpus threw away a real diagnostic whenever any
+ * other page happened to say `Cannot find name 'Foo'`, which is ratcheting on
+ * counts rather than on identities, one level down.
+ *
+ * Still a dedup rather than nothing: a pasted block that was itself a module was
+ * compiled and judged on its own in the first pass, and a block pasted into four
+ * continuations arrives here four times.
+ */
+export function contextOnlyWorthRecording({ contextOnly, firstPass }) {
+  // Page AND identity. `identityOf` returns `#3 <message>`, which is scoped to
+  // a page by the map the baseline stores it in; used on its own as a key it
+  // makes `docs/a.mdx#1` and `docs/elsewhere.mdx#1` the same diagnostic.
+  //
+  // Wrapped rather than passed by name: `identityOf` takes a second parameter,
+  // and `map` hands a callback the index as its second argument, so
+  // `map(identityOf)` splits every message on the string "0".
+  const keyOf = line => `${pageOf(line)}\u0000${identityOf(line)}`;
+  const reportedAlready = new Set(firstPass.map(line => keyOf(line)));
+  const seen = new Set();
+  const worth = [];
+  for (const line of contextOnly) {
+    const key = keyOf(line);
+    if (reportedAlready.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    worth.push(line);
+  }
+  return worth;
+}
+
 export function auditBasis() {
   let pkg = "an unreadable nextly";
   try {
@@ -1749,6 +1826,9 @@ async function auditDocs() {
       prependedByOrigin: new Map(
         rebuilt.map(s => [`${s.file}#${String(s.index)}`, s.prependedLines])
       ),
+      pastedFromByOrigin: new Map(
+        rebuilt.map(s => [`${s.file}#${String(s.index)}`, s.pastedFrom ?? []])
+      ),
     });
     for (const origin of unresolvedInContext) notReallyRebuilt.add(origin);
     // Counted, but only the ones no compiled fence reported already: a
@@ -1768,15 +1848,21 @@ async function auditDocs() {
     // diagnostic in an inherited declaration moved no number the gate compares
     // and a fence could stop being checked while the baseline still passed.
     //
-    // Deduped against the whole first pass by message, not just against its
-    // implicit-anys: a declaration that was itself a module was compiled and
-    // judged on its own, and one pasted into four continuations would otherwise
-    // arrive four more times. What survives is what this pass alone can see.
-    const reportedAlready = new Set(firstPass.map(messageOf));
+    // Deduped on the DECLARING fence and the message, not on the message alone.
+    // These lines now carry the origin of the block that produced them, so a
+    // repeat is a repeat about the same fence. Matching on message text across
+    // the whole corpus would have thrown away a real diagnostic whenever any
+    // other page happened to say `Cannot find name 'Foo'`, which is the same
+    // mistake as ratcheting on counts rather than identities.
+    //
+    // Still a dedup rather than nothing: a pasted block that was itself a
+    // module was compiled and judged on its own in the first pass, and a block
+    // pasted into four continuations arrives four times here.
     setAside.push(
-      ...contextOnly
-        .filter(line => !reportedAlready.has(messageOf(line)))
-        .map(text => ({ mark: "context", text }))
+      ...contextOnlyWorthRecording({ contextOnly, firstPass }).map(text => ({
+        mark: "context",
+        text,
+      }))
     );
     // Deduped against the first pass, because the recompile exists to surface
     // what could not be seen before, not to repeat what could. Except the
