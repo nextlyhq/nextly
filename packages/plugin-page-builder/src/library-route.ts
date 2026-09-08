@@ -94,7 +94,7 @@ const MAX_LIBRARY_PAGES = Math.ceil(MAX_LIBRARY_PATTERNS / LIBRARY_PAGE_SIZE);
  * every other ceiling here, so the surface can say the library was cut rather
  * than let an author search for a pattern that was silently left out.
  */
-const MAX_LIBRARY_BYTES = 16 * 1024 * 1024;
+export const MAX_LIBRARY_BYTES = 16 * 1024 * 1024;
 
 /**
  * Roughly what one pattern will cost on the wire.
@@ -164,67 +164,101 @@ export async function readPatternLibrary(
   for (let page = 1; ; page += 1) {
     const result = await ctx.services.collections.listEntries(
       slug,
-      // NO status predicate, deliberately — see the module docblock.
-      { pagination: { limit: LIBRARY_PAGE_SIZE, page } },
+      {
+        // NO status predicate, deliberately — see the module docblock.
+        //
+        // A DETERMINISTIC order, because these are independent offset queries.
+        // The service adds `ORDER BY` only when a sort is asked for, and an
+        // unordered offset read is free to return rows in a different order per
+        // page — so one pattern can arrive twice and another never at all,
+        // assembled into a library nobody can explain. `id` is the unique key,
+        // which is what makes it a tie-breaker rather than another ambiguity;
+        // the panel decides how to PRESENT them.
+        sort: { field: "id", direction: "asc" as const },
+        pagination: { limit: LIBRARY_PAGE_SIZE, page },
+      },
       asUser
     );
-    for (const row of result.data) {
-      const pattern = readLibraryRow(row);
-      // An unreadable ROW is dropped rather than refusing the whole library,
-      // which moves in the same direction the remote-pattern reader moves in:
-      // one pattern stops being offered instead of all of them. A row with no
-      // id or no title is one the panel could neither key nor label.
-      if (pattern === undefined) continue;
-      items.push(pattern);
-      bytes += documentBytesOf(pattern);
+    const page_ = collectPage(result.data, items, bytes);
+    bytes = page_.bytes;
+    if (page_.full) {
+      truncated = true;
+      break;
     }
 
     const stop = whyStop({
       hasMore: result.pagination?.hasMore === true,
-      kept: items.length,
-      bytes,
       page,
     });
     if (stop === undefined) continue;
-    if (stop === "cut") {
-      truncated = true;
-      // Only the pattern ceiling can overshoot, and only by part of a page.
-      if (items.length > MAX_LIBRARY_PATTERNS)
-        items.length = MAX_LIBRARY_PATTERNS;
-    }
+    truncated = stop === "cut";
     break;
   }
 
   return { items, meta: { count: items.length, truncated } };
 }
 
+/** What one page added, and whether the ceilings are now reached. */
+interface Collected {
+  /** The running byte total, including this page. */
+  readonly bytes: number;
+  /** Whether a ceiling stopped the collection part-way. */
+  readonly full: boolean;
+}
+
+/**
+ * Add this page's readable rows, stopping the moment a ceiling is reached.
+ *
+ * PER ROW, not once the page is finished. A ceiling checked between pages
+ * bounds nothing about the page being read: one page of a hundred two-mebibyte
+ * documents is two hundred mebibytes already assembled, and when the collection
+ * ends there the read reports it COMPLETE. The budget has to stop the
+ * accumulation rather than describe it afterwards.
+ *
+ * An unreadable ROW is dropped rather than refusing the whole library, which
+ * moves in the same direction the remote-pattern reader moves in: one pattern
+ * stops being offered instead of all of them. A row with no id or no title is
+ * one the panel could neither key nor label.
+ */
+function collectPage(
+  rows: readonly unknown[],
+  into: LibraryPattern[],
+  from: number
+): Collected {
+  let bytes = from;
+  for (const row of rows) {
+    const pattern = readLibraryRow(row);
+    if (pattern === undefined) continue;
+    into.push(pattern);
+    bytes += documentBytesOf(pattern);
+    if (bytes >= MAX_LIBRARY_BYTES || into.length >= MAX_LIBRARY_PATTERNS) {
+      return { bytes, full: true };
+    }
+  }
+  return { bytes, full: false };
+}
+
 /**
  * Whether to ask for another page, and if not, why.
  *
- * Its own function because the loop above has one job — read and keep — and
- * this has four independent reasons to stop, each bounding something the others
- * cannot see. Told apart as `"ended"` and `"cut"` because only one of them is
- * something to report: a library that finished is complete, and a library that
- * was cut is one an author would otherwise search in vain.
+ * Only the reasons that are about the READ rather than about what was kept. The
+ * pattern and byte ceilings live in the row loop, because a ceiling checked
+ * between pages bounds nothing about the page being read.
+ *
+ * Told apart as `"ended"` and `"cut"` because only one is something to report:
+ * a library that finished is complete, and one that was cut is a library an
+ * author would otherwise search in vain.
  */
 function whyStop(at: {
   hasMore: boolean;
-  kept: number;
-  bytes: number;
   page: number;
 }): "ended" | "cut" | undefined {
   // The SERVICE's own answer, not a length this recomputes. A page shorter than
   // asked for does not mean the collection ended: an `afterRead` hook may drop
   // rows, and stopping there loses every pattern behind them.
   if (!at.hasMore) return "ended";
-  if (at.kept >= MAX_LIBRARY_PATTERNS) return "cut";
-  // BYTES, which the count cannot bound. One valid document may be two
-  // mebibytes and a host may raise that, so three thousand of them is gigabytes
-  // assembled in memory and then sent to a browser. The editor needs a library
-  // it can hold, not the whole of a large one.
-  if (at.bytes >= MAX_LIBRARY_BYTES) return "cut";
-  // And a bound on the READS, which neither of those supplies: they count what
-  // was KEPT, and a page whose every row was dropped keeps none.
+  // A bound on the READS, which the per-row ceilings cannot supply: they count
+  // what was KEPT, and a page whose every row was dropped keeps none.
   if (at.page >= MAX_LIBRARY_PAGES) return "cut";
   return undefined;
 }

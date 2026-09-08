@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   LIBRARY_PAGE_SIZE,
+  MAX_LIBRARY_BYTES,
   MAX_LIBRARY_PATTERNS,
   readPatternLibrary,
   type LibraryRouteContext,
@@ -78,6 +79,20 @@ describe("what the library read asks for", () => {
       | { where?: unknown }
       | undefined;
     expect(options?.where).toBeUndefined();
+  });
+
+  it("asks for a DETERMINISTIC order, because it pages", async () => {
+    // These are independent offset queries, and the service adds `ORDER BY`
+    // only when a sort is asked for. Unordered, SQL is free to return rows in a
+    // different order for successive pages — so one pattern arrives twice and
+    // another never at all. The key has to be UNIQUE to be a tie-breaker.
+    const { ctx, listEntries } = contextOver([[row("a")]]);
+
+    await readPatternLibrary(ctx);
+
+    expect(listEntries.mock.calls[0]?.[1]).toMatchObject({
+      sort: { field: "id", direction: "asc" },
+    });
   });
 
   it("reads AS THE USER, not with the instance's identity", async () => {
@@ -235,31 +250,50 @@ describe("how much of the library travels", () => {
 });
 
 describe("how much of the library travels, by weight", () => {
+  /** One full page of documents big enough that a few of them blow the budget. */
+  const heavyPage = () =>
+    Array.from({ length: LIBRARY_PAGE_SIZE }, (_, i) =>
+      row(`h${String(i)}`, {
+        content: {
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "pattern",
+          nodes: [
+            {
+              id: "n",
+              type: "core/box",
+              version: 1,
+              props: { filler: "x".repeat(200_000) },
+            },
+          ],
+        },
+      })
+    );
+
+  it("cuts a SINGLE oversized page rather than calling it complete", async () => {
+    // The case a between-pages ceiling cannot reach: one page of a hundred
+    // two-mebibyte documents is two hundred mebibytes ALREADY assembled, and
+    // when the collection ends there the read reports it complete. The budget
+    // has to stop the accumulation rather than describe it afterwards.
+    //
+    // Asserted on the BYTES of what came back, not on the row count — the row
+    // count is well under its ceiling here, which is exactly why counting rows
+    // could not see this.
+    const { ctx } = contextOver([heavyPage()]);
+
+    const library = await readPatternLibrary(ctx);
+
+    expect(JSON.stringify(library.items).length).toBeLessThan(
+      MAX_LIBRARY_BYTES * 2
+    );
+    expect(library.meta.truncated).toBe(true);
+  });
+
   it("stops on BYTES, which a row count cannot bound", async () => {
     // One valid blocks document may be two mebibytes by default and a host may
     // raise that, so three thousand of them is gigabytes assembled on the
     // server and then sent to a browser — from a request an author makes by
     // opening the editor. The row ceiling cannot see that.
-    const heavy = () =>
-      Array.from({ length: LIBRARY_PAGE_SIZE }, (_, i) =>
-        row(`h${String(i)}`, {
-          content: {
-            formatVersion: DOCUMENT_FORMAT_VERSION,
-            kind: "pattern",
-            nodes: [
-              {
-                id: "n",
-                type: "core/box",
-                version: 1,
-                props: {
-                  filler: "x".repeat(200_000),
-                },
-              },
-            ],
-          },
-        })
-      );
-    const { ctx } = contextOver(Array.from({ length: 30 }, heavy));
+    const { ctx } = contextOver(Array.from({ length: 30 }, heavyPage));
 
     const library = await readPatternLibrary(ctx);
 

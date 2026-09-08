@@ -17,6 +17,20 @@
  * registry by string path, and nothing in its React context says which plugin
  * contributed it. Passing the name is what makes the request addressable.
  *
+ * ## A route answers with a JSON object, or with `null`
+ *
+ * Constrained in the TYPE rather than described in prose, because the failure
+ * is silent otherwise. The admin's fetcher returns `undefined` for a bare
+ * string or number — deliberately, and its comment says why: no endpoint in
+ * this admin answers with one, so it declined to invent a meaning for a shape
+ * nothing sends. That reasoning holds for the admin's own endpoints and stops
+ * holding here, because a plugin may serve whatever it likes. A route replying
+ * `Response.json("ready")` would reach a caller as a successful EMPTY answer.
+ *
+ * So `T` is bounded, and `usePluginRoute<string>` does not compile. A route
+ * that wants to answer with a scalar wraps it — `{ status: "ready" }` — which
+ * is what the canonical response envelopes do anyway.
+ *
  * ## Why the path is built here rather than by the caller
  *
  * `pluginRouteFullPath` is the dispatcher's own answer to where a route
@@ -34,7 +48,7 @@ import { pluginRouteFullPath } from "nextly/config";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 
 /** What one plugin-route read reports. */
-export interface PluginRouteRead<T> {
+export interface PluginRouteRead<T extends object | null> {
   /** The parsed body, or `undefined` until one arrives. */
   data: T | undefined;
   /**
@@ -89,7 +103,7 @@ export interface PluginRouteRequest {
  * `protectedApi`, so the session, its refresh and the typed error envelope are
  * the ones the rest of the admin already uses.
  */
-export function usePluginRoute<T>({
+export function usePluginRoute<T extends object | null>({
   plugin,
   path,
   enabled = true,
@@ -125,10 +139,14 @@ export function usePluginRoute<T>({
   return {
     data: bodyOf<T>(query.data),
     // `isPending` is true for a DISABLED query too — it has no data and never
-    // asked — so a surface reading it alone would show a spinner forever for a
-    // panel that has not been opened. Held together with `isFetching`, which is
-    // what "a request is in flight" actually means.
-    pending: enabled && query.isPending && query.isFetching,
+    // asked — so `enabled` is what separates those, and it is enough on its own.
+    //
+    // NOT also `isFetching`, which was the over-correction. A read waiting to
+    // resume — offline before the first request — is `isPending: true` with
+    // `fetchStatus: "paused"`, so `isFetching` is FALSE while nothing has
+    // arrived. Requiring it reported such a read as settled, and a surface then
+    // draws its empty state over a request that has not happened yet.
+    pending: enabled && query.isPending,
     error: query.error,
     refetch: () => void query.refetch(),
   };
@@ -151,6 +169,8 @@ const NO_BODY = Symbol("plugin-route.no-body");
  * sentinel is removed from the type as well as from the value. TypeScript
  * cannot rule `typeof NO_BODY` out of an open `T` by comparison alone.
  */
-function bodyOf<T>(cached: T | typeof NO_BODY | undefined): T | undefined {
+function bodyOf<T extends object | null>(
+  cached: T | typeof NO_BODY | undefined
+): T | undefined {
   return cached === NO_BODY ? undefined : cached;
 }

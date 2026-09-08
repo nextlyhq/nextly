@@ -6,7 +6,11 @@
  * the wrong namespace would look exactly like a plugin whose route returned an
  * empty list, on every site, forever.
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  onlineManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -209,6 +213,32 @@ describe("usePluginRoute", () => {
     await waitFor(() => expect(result.current.pending).toBe(false));
     expect(result.current.error).toBeNull();
     expect(result.current.data).toBeNull();
+  });
+
+  it("reports a read waiting to RESUME as pending, not as settled", async () => {
+    // Offline before the first request, TanStack holds the query at
+    // `isPending: true` with `fetchStatus: "paused"` — so `isFetching` is FALSE
+    // while nothing has arrived. A `pending` that required it reported such a
+    // read as settled with no data and no error, and a surface then draws its
+    // empty state over a request that has not happened yet.
+    //
+    // Genuinely PAUSED, through TanStack's own online manager — a request that
+    // is merely slow is still `isFetching`, so modelling it that way would pass
+    // whether or not `isFetching` were required and prove nothing.
+    onlineManager.setOnline(false);
+    try {
+      const { result } = renderHook(
+        () => usePluginRoute({ plugin: "@acme/p", path: "/offline" }),
+        { wrapper: wrapper() }
+      );
+
+      await waitFor(() => expect(result.current.pending).toBe(true));
+      expect(getSpy).not.toHaveBeenCalled();
+      expect(result.current.data).toBeUndefined();
+      expect(result.current.error).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 
   it("reports an error rather than an empty answer", async () => {
