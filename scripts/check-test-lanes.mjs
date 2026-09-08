@@ -162,18 +162,31 @@ export function packagesInPlan(plan, task) {
  * turbo's plan for one lane script, taken from the script itself.
  *
  * `--dry=json` is appended to the real command rather than reconstructed, so
- * what is measured is what CI runs. pnpm prints its own banner before handing
- * over, so the plan starts at the first brace.
+ * what is measured is what CI runs.
+ *
+ * 🔴 `--silent` is load-bearing. Without it pnpm echoes the package name and
+ * the command before handing over, and finding the plan meant scanning for the
+ * first `{` — which took a brace out of that preamble on a runner whose npm
+ * warnings differ from a laptop's, and the whole check failed on a
+ * `SyntaxError` at position 1. Silencing pnpm removes the preamble instead of
+ * teaching a scanner to skip it, and the JSON then starts at the first byte.
  */
 export function planForScript(script, cwd, run = execFileSync) {
-  const output = run("pnpm", ["run", script, "--dry=json"], {
+  const output = run("pnpm", ["--silent", "run", script, "--dry=json"], {
     cwd,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-  const start = output.indexOf("{");
-  if (start === -1) throw new Error(`${script} produced no plan`);
-  return JSON.parse(output.slice(start));
+  try {
+    return JSON.parse(output.trim());
+  } catch (error) {
+    // Never a bare parse error: what this was reading is the only thing that
+    // explains it, and a `SyntaxError` alone costs a CI round trip to diagnose.
+    throw new Error(
+      `\`pnpm ${script} --dry=json\` did not produce a turbo plan. ` +
+        `${error.message}. It began: ${JSON.stringify(output.slice(0, 200))}`
+    );
+  }
 }
 
 /**
@@ -185,8 +198,28 @@ export function planForScript(script, cwd, run = execFileSync) {
  * the operators is a containment test on one JSON string, not a reading of a
  * shell, which is the whole difference from the parser this replaced.
  */
-export function runsWholeTask(laneScript, packageCommand) {
-  return laneScript.trimEnd().endsWith(packageCommand.trim());
+export function directLaneCommand(packageName, taskCommand) {
+  return `pnpm --filter ${packageName} exec ${taskCommand.trim()}`;
+}
+
+/**
+ * Whether a direct lane script is exactly the package running its own task.
+ *
+ * RECONSTRUCTED and compared, rather than inspected. Asking whether the script
+ * ends with the package's task command answered half the question: a script
+ * reading `pnpm --filter @nextlyhq/admin exec vitest run` ends the same way, so
+ * the lane could have reported the playground covered while running a different
+ * package entirely. Building the command the entry implies and comparing it
+ * settles the runner, the selector and the task in one comparison, with nothing
+ * parsed.
+ *
+ * Deliberately rigid. There is one direct lane, and it exists because an app is
+ * a leaf whose `test` dependsOn `^build` would pull the whole graph. A second
+ * one needing a different shape is a reason to loosen this on purpose, not a
+ * gap to leave open now.
+ */
+export function isDirectLaneFor(laneScript, packageName, taskCommand) {
+  return laneScript.trim() === directLaneCommand(packageName, taskCommand);
 }
 
 export function namesScript(source, script) {
@@ -194,12 +227,21 @@ export function namesScript(source, script) {
   // `lane:test:playground` CONTAINS `lane:test`, so a plain containment test
   // let the playground step vouch for a Test step that had been replaced. The
   // mutation that found it passed a check reporting every package covered.
+  // 🔴 And anchored at the END of the COMMAND, not just the name. `pnpm
+  // lane:test --dry=json` would otherwise satisfy this while the step only
+  // printed a plan — the check would measure the manifest's script and the job
+  // would run something else. Nothing may follow the name but whitespace.
   const escaped = script.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`pnpm ${escaped}(?![\\w:.-])`).test(source);
+  return new RegExp(`pnpm ${escaped}[ \\t]*(?=\\r?\\n|$)`).test(source);
 }
 
 export function isSingleCommand(script) {
-  return !/[;&|]/.test(script);
+  // A NEWLINE separates commands as surely as `;` does, and a lane reading
+  // `turbo run test --dry=json\ntrue` plans the work, runs none of it, and
+  // ends successfully — which is the whole bypass this predicate exists to
+  // refuse. Substitution is refused with them: it can introduce a command the
+  // text does not show.
+  return !/[;&|\n\r`]/.test(script) && !script.includes("$(");
 }
 
 /** Packages that declare the task and no lane runs. */
@@ -329,12 +371,13 @@ if (invokedDirectly) {
         );
         continue;
       }
-      if (!runsWholeTask(rootScripts[entry.script], command)) {
+      if (!isDirectLaneFor(rootScripts[entry.script], entry.package, command)) {
         failures.push(
-          `\`${entry.script}\` does not end with ${entry.package}'s own ` +
-            `\`${task}\` command (\`${command}\`), so it runs some of that ` +
-            "package's suites rather than the task. Part of a suite is not the " +
-            "task, which is the coverage this check refuses to credit."
+          `\`${entry.script}\` is not ${entry.package} running its own ` +
+            `\`${task}\`. It has to read exactly ` +
+            `\`${directLaneCommand(entry.package, command)}\`, so that the ` +
+            "package it selects and the suites it runs are both the ones this " +
+            "lane claims."
         );
         continue;
       }

@@ -10,8 +10,9 @@ import {
   packagesInPlan,
   packagesWithTask,
   planForScript,
+  directLaneCommand,
+  isDirectLaneFor,
   readWorkspace,
-  runsWholeTask,
   unrunPackages,
   workspaceManifests,
 } from "./check-test-lanes.mjs";
@@ -61,34 +62,55 @@ describe("unrunPackages", () => {
   });
 });
 
-describe("runsWholeTask", () => {
-  it("accepts a script that ends with the package's own command", () => {
+describe("isDirectLaneFor", () => {
+  it("accepts the package running its own task command", () => {
     expect(
-      runsWholeTask("pnpm --filter playground exec vitest run", "vitest run")
+      isDirectLaneFor(
+        "pnpm --filter playground exec vitest run",
+        "playground",
+        "vitest run"
+      )
     ).toBe(true);
   });
 
   it("refuses a run narrowed by a selective flag", () => {
-    // 🔴 Derived from the package's own command rather than from a list of the
-    // vitest options that narrow a run: such a list would be a second, ageing
-    // copy of vitest's own, and `--changed` runs only what a diff touched.
+    // 🔴 Reconstructed from the package rather than matched against a list of
+    // the vitest options that narrow a run: such a list would be a second,
+    // ageing copy of vitest's own, and `--changed` runs only what a diff
+    // touched.
+    for (const narrowed of ["--changed", "--shard=1/4", "--project=x"]) {
+      expect(
+        isDirectLaneFor(
+          `pnpm --filter playground exec vitest run ${narrowed}`,
+          "playground",
+          "vitest run"
+        )
+      ).toBe(false);
+    }
+  });
+
+  it("refuses a lane pointed at a different package", () => {
+    // 🔴 The half an `endsWith` could not answer. This ends with `vitest run`
+    // exactly as the real lane does, so the lane would have reported the
+    // playground covered while running someone else's suites.
     expect(
-      runsWholeTask(
-        "pnpm --filter playground exec vitest run --changed",
-        "vitest run"
-      )
-    ).toBe(false);
-    expect(
-      runsWholeTask(
-        "pnpm --filter playground exec vitest run --shard=1/4",
+      isDirectLaneFor(
+        "pnpm --filter @nextlyhq/admin exec vitest run",
+        "playground",
         "vitest run"
       )
     ).toBe(false);
   });
 
   it("refuses a script that runs something else entirely", () => {
-    expect(runsWholeTask("pnpm --filter playground exec jest", "vitest run")).toBe(
-      false
+    expect(
+      isDirectLaneFor("pnpm --filter playground exec jest", "playground", "vitest run")
+    ).toBe(false);
+  });
+
+  it("builds the command an entry implies", () => {
+    expect(directLaneCommand("playground", "vitest run")).toBe(
+      "pnpm --filter playground exec vitest run"
     );
   });
 });
@@ -104,6 +126,15 @@ describe("namesScript", () => {
     // then reported every package covered while the suites ran nowhere.
     expect(
       namesScript("        run: pnpm lane:test:playground\n", "lane:test")
+    ).toBe(false);
+  });
+
+  it("does not let an argument be appended to the call", () => {
+    // 🔴 `pnpm lane:test --dry=json` would otherwise satisfy this while the
+    // step only printed a plan: the check would measure the manifest's script
+    // and the job would run something else.
+    expect(
+      namesScript("        run: pnpm lane:test --dry=json\n", "lane:test")
     ).toBe(false);
   });
 
@@ -123,6 +154,19 @@ describe("isSingleCommand", () => {
     expect(isSingleCommand("turbo run test || true")).toBe(false);
     expect(isSingleCommand("turbo run test && echo ok")).toBe(false);
     expect(isSingleCommand("turbo run test; true")).toBe(false);
+  });
+
+  it("refuses a second command on a new line", () => {
+    // 🔴 A newline separates commands as surely as `;`. This one plans the
+    // work, runs none of it, and ends successfully — the exact bypass the
+    // predicate exists to refuse, and the operators alone did not see it.
+    expect(isSingleCommand("turbo run test --dry=json\ntrue")).toBe(false);
+    expect(isSingleCommand("turbo run test\r\ntrue")).toBe(false);
+  });
+
+  it("refuses substitution, which can introduce a command the text does not show", () => {
+    expect(isSingleCommand("turbo run test $(echo --dry=json)")).toBe(false);
+    expect(isSingleCommand("turbo run test `echo x`")).toBe(false);
   });
 });
 
@@ -188,7 +232,9 @@ describe("this repository", () => {
     for (const entry of direct) {
       const command = packages.find(p => p.name === entry.package)?.scripts?.[entry.task];
       expect(typeof command).toBe("string");
-      expect(runsWholeTask(rootScripts[entry.script], command)).toBe(true);
+      expect(isDirectLaneFor(rootScripts[entry.script], entry.package, command)).toBe(
+        true
+      );
     }
   });
 
@@ -247,7 +293,13 @@ describe("this repository", () => {
         expect(covered.size).toBeGreaterThan(0);
 
         expect(unrunPackages(declared, [...covered])).toEqual([]);
-      });
+      },
+      // Sized for SUBPROCESS LAUNCHES, not for the assertions: this asks turbo
+      // for a plan per lane script, and the integration lane has three. They
+      // run in about 8s on a loaded runner, past the 5s default that is sized
+      // for a unit test doing arithmetic. The value is the one the integration
+      // configs in this repo already carry for the same reason.
+      30_000);
     });
   }
 });
