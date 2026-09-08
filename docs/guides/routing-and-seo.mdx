@@ -24,8 +24,15 @@ entry and returns `null` on a genuine miss (render `notFound()`), rethrowing a
 transient read error so a DB blip never bakes a permanently-cached 404.
 
 ```ts
-import { resolveContent } from "nextly/runtime";
+import { resolveContent, type ContentEntry } from "nextly/runtime";
 import { notFound } from "next/navigation";
+
+// `ContentEntry` is `Record<string, unknown>`: the entry is whatever the
+// collection holds, so read fields off it deliberately rather than assuming a
+// shape. `nextly generate:types` is what turns this into a named type.
+function Post({ entry }: { entry: ContentEntry }) {
+  return <article>{String(entry.title ?? "")}</article>;
+}
 
 export default async function PostPage({
   params,

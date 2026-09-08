@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   compareToBaseline,
   declaredNamesIn,
+  extractFrom,
   identityOf,
   pageOf,
 } from "./check-doc-samples.mjs";
@@ -329,5 +330,64 @@ describe("declaredNamesIn scope tracking", () => {
 
     expect(declaredNamesIn(code).includes("marker")).toBe(true);
     expect(declaredNamesIn(code).includes("shown")).toBe(true);
+  });
+});
+
+describe("extractFrom fence delimiters", () => {
+  const body = 'import { defineConfig } from "nextly";\nexport default defineConfig({});';
+
+  it("reads a tilde-fenced TypeScript block", () => {
+    // CommonMark allows `~~~`. Recognising only backticks made such a block
+    // invisible to extraction, so publishing one that does not compile lowered
+    // no coverage number and passed.
+    const samples = extractFrom("markdown-dir", `~~~ts\n${body}\n~~~\n`, "docs/a.mdx");
+
+    expect(samples).toHaveLength(1);
+    expect(samples[0].code).toContain("defineConfig");
+  });
+
+  it("still reads a backtick-fenced block", () => {
+    const samples = extractFrom(
+      "markdown-dir",
+      ["```ts", body, "```", ""].join("\n"),
+      "docs/a.mdx"
+    );
+
+    expect(samples).toHaveLength(1);
+  });
+
+  it("does not let one delimiter family close the other", () => {
+    // The closing run is a backreference, so this is an unterminated fence and
+    // matches nothing rather than swallowing the rest of the page.
+    expect(
+      extractFrom("markdown-dir", `~~~ts\n${body}\n\`\`\`\n`, "docs/a.mdx")
+    ).toEqual([]);
+  });
+});
+
+describe("declaredNamesIn and regex literals", () => {
+  it("does not promote a nested name when a regex contains a closing brace", () => {
+    const code = "function setup() { const re = /}/; const hidden = {}; }";
+
+    expect(declaredNamesIn(code).includes("setup")).toBe(true);
+    expect(declaredNamesIn(code).includes("hidden")).toBe(false);
+    expect(declaredNamesIn(code).includes("re")).toBe(false);
+  });
+
+  it("still reads division as division", () => {
+    // The rescan is conditional on what precedes the slash. Treating every
+    // slash as a regex would swallow the rest of the line here, and `half`
+    // would disappear along with it.
+    const code = ["const total = 10;", "const half = total / 2;"].join("\n");
+
+    expect(declaredNamesIn(code).includes("total")).toBe(true);
+    expect(declaredNamesIn(code).includes("half")).toBe(true);
+  });
+
+  it("reads a top-level regex without losing what follows it", () => {
+    const code = ["const re = /}/;", "const after = 1;"].join("\n");
+
+    expect(declaredNamesIn(code).includes("re")).toBe(true);
+    expect(declaredNamesIn(code).includes("after")).toBe(true);
   });
 });

@@ -403,14 +403,37 @@ variants under `sizes`, keyed by the name you configured:
 field, so a variant read straight off that result does not exist at runtime and does
 not compile either.
 
-`getMediaVariant` is what to use in both cases. It asks for a variant by name, tries
-your fallback name next, then the thumbnail, then the original, so the same component
-works whether or not variants reached it:
+So a variant can only be selected from a value that carries one. Give that value to
+`getMediaVariant`, which asks for a name, tries your fallback name next, then
+`thumbnailUrl`, then the original:
+
+```tsx
+// app/(site)/media-image.tsx
+import Image from "next/image";
+import { getMediaVariant, type MediaLike } from "nextly";
+
+export function MediaImage({ media, alt }: { media: MediaLike; alt: string }) {
+  return (
+    <Image
+      src={getMediaVariant(media, "large", { fallback: "medium" }) ?? media.url}
+      alt={alt}
+      width={1200}
+      height={800}
+    />
+  );
+}
+```
+
+Hand it the media value off a populated relationship, not a `findByID` result. Called on
+a `MediaFile` the helper still returns a URL, but it can only ever be the thumbnail or the
+original, because the variants are not on that object to choose from.
+
+Reading a media record on its own is still a `findByID`, and it still needs a runtime:
 
 ```tsx
 // app/(site)/photo/page.tsx
 import Image from "next/image";
-import { getMediaVariant, getNextly } from "nextly";
+import { getNextly } from "nextly";
 
 import config from "../../../nextly.config";
 
@@ -421,7 +444,7 @@ export default async function Photo() {
 
   return (
     <Image
-      src={getMediaVariant(media, "large") ?? media.url}
+      src={media.url}
       width={media.width ?? 1200}
       height={media.height ?? 800}
       alt={media.altText ?? ""}

@@ -74,8 +74,13 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 // body. A blockquoted fence is ordinary Markdown, and `plugins/admin-ui.mdx`
 // has two; anchoring on whitespace alone dropped both from the gate and the
 // audit, which the loose pattern this replaced had at least found.
+// Both delimiter families. CommonMark allows `~~~` as well as ```` ``` ````, and
+// recognising only backticks meant a `~~~ts` block was invisible: it entered no
+// count, so publishing one that does not compile lowered no coverage number and
+// passed. The closing run is a backreference, so a fence still has to close with
+// what it opened with.
 const RAW_FENCE =
-  /(?:^|\n)([ \t]*(?:>[ \t]*)*)(```+)(\w*)[^\n]*\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2`*[ \t\r]*(?=\n|$)/g;
+  /(?:^|\n)([ \t]*(?:>[ \t]*)*)(```+|~~~+)(\w*)[^\n]*\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2[`~]*[ \t\r]*(?=\n|$)/g;
 const ESCAPED_FENCE =
   /(?:^|\n)([ \t]*(?:>[ \t]*)*)((?:\\`){3,})(\w*)[^\n]*\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2(?:\\`)*[ \t\r]*(?=\n|$)/g;
 
@@ -809,6 +814,32 @@ const CLOSES = new Set([
 ]);
 
 /**
+ * Tokens after which a `/` is division, so everything else means a regex can
+ * start there. The scanner returns `SlashToken` either way and only rescans
+ * when asked, so without this `const re = /}/` contributes a closing brace and
+ * the rest of the enclosing block reads as top level.
+ */
+const DIVISION_FOLLOWS = new Set([
+  ts.SyntaxKind.Identifier,
+  ts.SyntaxKind.NumericLiteral,
+  ts.SyntaxKind.BigIntLiteral,
+  ts.SyntaxKind.StringLiteral,
+  ts.SyntaxKind.NoSubstitutionTemplateLiteral,
+  ts.SyntaxKind.TemplateTail,
+  ts.SyntaxKind.RegularExpressionLiteral,
+  ts.SyntaxKind.CloseParenToken,
+  ts.SyntaxKind.CloseBracketToken,
+  ts.SyntaxKind.CloseBraceToken,
+  ts.SyntaxKind.ThisKeyword,
+  ts.SyntaxKind.SuperKeyword,
+  ts.SyntaxKind.TrueKeyword,
+  ts.SyntaxKind.FalseKeyword,
+  ts.SyntaxKind.NullKeyword,
+  ts.SyntaxKind.PlusPlusToken,
+  ts.SyntaxKind.MinusMinusToken,
+]);
+
+/**
  * Brackets that are really brackets, from the TypeScript scanner rather than
  * from counting characters.
  *
@@ -851,11 +882,23 @@ function topLevelOnly(code) {
   // closes within one line and the line therefore starts at depth 0.
   let depth = 0;
   let prevEnd = 0;
+  let previous = ts.SyntaxKind.Unknown;
   for (
     let kind = scanner.scan();
     kind !== ts.SyntaxKind.EndOfFileToken;
     kind = scanner.scan()
   ) {
+    // A regex literal is one token or several, depending on whether anybody
+    // asks. Unasked, `/}/ ` scans as slash, brace, slash, and the brace closes a
+    // block it was never in.
+    if (
+      (kind === ts.SyntaxKind.SlashToken ||
+        kind === ts.SyntaxKind.SlashEqualsToken) &&
+      !DIVISION_FOLLOWS.has(previous)
+    ) {
+      kind = scanner.reScanSlashToken();
+    }
+    previous = kind;
     const end = scanner.getTokenEnd();
     // A closing bracket belongs to the depth it returns to, and an opening one
     // to the depth it leaves, so both stay visible while their contents do not.
@@ -1339,14 +1382,6 @@ export const pageOf = line => {
 };
 
 /**
- * Prefix for a suppressed diagnostic's identity in the baseline, so a reader
- * can tell one from a finding at a glance and neither is mistaken for the
- * other. A suppression is something this checker decided not to charge a page
- * for; recording it is how a NEW one gets seen.
- */
-export const SUPPRESSED_MARK = "suppressed ";
-
-/**
  * Report on the documentation without gating on it.
  *
  * Never fails the run. These pages come from the monorepo and are overwritten
@@ -1384,9 +1419,24 @@ async function auditDocs() {
     re => re !== READER_OWNED_FILE && re !== IMPLICIT_ANY_PARAMETER
   );
   const firstPass = compile(samples, "docs", AUDIT_IGNORES);
+  // Every diagnostic this audit decides not to charge a page for, in one place
+  // and marked with the reason it was set aside.
+  //
+  // Three separate buckets escaped the ratchet, one review round each, and each
+  // was the same defect: a class of diagnostic reported to the console and left
+  // out of the fingerprint, so a NEW instance of it moved nothing the gate
+  // reads. Fixing them one at a time would have invited the fourth. Nothing is
+  // set aside now without being recorded, so the escape has to be added
+  // deliberately rather than by forgetting.
+  const setAside = [];
   // Read straight after the compile it belongs to, before any later one
   // overwrites it.
-  const suppressed = [...suppressedByTheReaderRule];
+  setAside.push(
+    ...suppressedByTheReaderRule.map(d => ({
+      mark: "suppressed",
+      text: d.text,
+    }))
+  );
   const { continued: continuations } = await classifyDocDiagnostics({
     diagnostics: firstPass,
     samples: all,
@@ -1453,13 +1503,26 @@ async function auditDocs() {
   // Implicit `any` seen only inside a pasted block, which no other pass reads.
   const fromInheritedBlocks = [];
   if (rebuilt.length > 0) {
+    // Read straight after this compile and before anything else runs one:
+    // `compile` clears the module-level array on entry, so a suppression raised
+    // while reconstructing context is only visible here. Taking the first
+    // pass's copy alone left this whole pass unratcheted, which is where an
+    // import-free continuation could acquire a suppressed diagnostic without
+    // moving anything the gate reads.
+    const contextDiagnostics = compile(rebuilt, "docs-context", AUDIT_IGNORES);
+    setAside.push(
+      ...suppressedByTheReaderRule.map(d => ({
+        mark: "suppressed",
+        text: d.text,
+      }))
+    );
     const {
       lines: rebased,
       unresolvedInContext,
       clashesFromPasting,
       implicitAnyInContext,
     } = rebaseContextDiagnostics({
-      lines: compile(rebuilt, "docs-context", AUDIT_IGNORES),
+      lines: contextDiagnostics,
       prependedByOrigin: new Map(
         rebuilt.map(s => [`${s.file}#${String(s.index)}`, s.prependedLines])
       ),
@@ -1552,6 +1615,24 @@ async function auditDocs() {
     samples: all,
   });
 
+  // The rest of what this audit sets aside, completed here so the report below
+  // and the baseline both read one list. Two lists would drift, and the drift
+  // would be a number in the console disagreeing with what the gate protects.
+  setAside.push(
+    // An implicit `any` on a parameter, from either pass. The strict setup
+    // these samples compile under rejects one, so a sample newly adding
+    // `function parse(value) {}` is a real regression an aggregate count could
+    // not see.
+    ...implicitAny.map(text => ({ mark: "implicit-any", text })),
+    ...fromInheritedBlocks.map(text => ({ mark: "implicit-any", text })),
+    // An import of a file only the reader has. It is right not to charge the
+    // page, since the file legitimately is not here. But the binding becomes
+    // `any`, so everything reached through it stops being checked while the
+    // fence still counts as compiled; recording which fences are in that state
+    // is what stops one quietly joining them.
+    ...readerFiles.map(text => ({ mark: "reader-file", text }))
+  );
+
   // The survivors are actionable, and their first-pass copies stop counting as
   // continuations: the same page and the same name, whatever line each landed
   // on.
@@ -1576,11 +1657,13 @@ async function auditDocs() {
       `earlier one without repeating its imports).\n` +
       `  ${String(real.length)} diagnostic(s) a reader would hit, across ` +
       `${String(byFile.size)} page(s).\n` +
-      (suppressed.length > 0
-        ? `  ${String(suppressed.length)} were suppressed as reader-supplied: ` +
-          `${[...new Set(suppressed.map(d => d.text.match(/error TS\d+/)?.[0] ?? "?"))].sort().join(", ")}. ` +
+      (setAside.length > 0
+        ? `  ${String(setAside.length)} were set aside and are ratcheted by ` +
+          `identity rather than charged to a page: ` +
+          `${[...new Set(setAside.map(d => `${d.mark} ${d.text.match(/error TS\d+/)?.[0] ?? "?"}`))].sort().join(", ")}. ` +
           `Nothing in a diagnostic proves it came from an ungenerated document ` +
-          `field, so this number is the size of that assumption.\n`
+          `field or a reader's own file, so this number is the size of that ` +
+          `assumption.\n`
         : "") +
       `  ${String(uninstalled.length)} import a package that is published but ` +
       `not installed here, which a reader would have.\n` +
@@ -1624,13 +1707,9 @@ async function auditDocs() {
   // report names, so a page cannot read clean here and fail there.
   return {
     byFile,
-    // The suppressions travel with the report so the baseline can hold them
-    // too. They were counted for the console and then dropped, which left the
-    // broadest rules — TS2322 and TS2339, keyed on `unknown` — able to absorb a
-    // newly broken sample without moving any number the gate reads. Held by
-    // identity, they still do not charge a page a finding, and a NEW one now
-    // has to be looked at rather than absorbed.
-    suppressed,
+    // Everything set aside, by identity, each carrying the reason. None of it
+    // charges a page a finding; what it can no longer do is change unnoticed.
+    setAside,
     coverage: {
       files: [...new Set(all.map(sample => sample.file))].sort(),
       samples: all.length,
@@ -1908,14 +1987,14 @@ async function main() {
       return [file, counts];
     })
   );
-  // Suppressed diagnostics ratchet alongside the findings, marked so a reader
-  // can tell the two apart. They are NOT findings: they do not raise a page's
-  // count and the page is not charged for them. What they now cannot do is
-  // change without anybody noticing, which is what let the two broadest rules
-  // absorb a newly broken sample while every number the gate reads stood still.
-  for (const d of audit.suppressed) {
+  // Everything the audit set aside ratchets alongside the findings, each marked
+  // with why. They are NOT findings: they do not raise a page's count and no
+  // page is charged for them. What they now cannot do is change without anybody
+  // noticing, which is what let three separate buckets absorb a newly broken
+  // sample while every number the gate reads stood still.
+  for (const d of audit.setAside) {
     const file = pageOf(d.text);
-    const key = `${SUPPRESSED_MARK}${identityOf(d.text)}`;
+    const key = `${d.mark} ${identityOf(d.text)}`;
     fingerprint[file] = fingerprint[file] ?? {};
     fingerprint[file][key] = (fingerprint[file][key] ?? 0) + 1;
   }

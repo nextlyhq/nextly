@@ -508,7 +508,13 @@ When a `secret` is configured, the request includes an `X-Webhook-Signature` hea
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 export async function POST(request: Request) {
-  const secret = process.env.FORM_WEBHOOK_SECRET ?? "";
+  // Fail closed on a missing secret. Defaulting to "" still produces a valid
+  // HMAC, and it is one anybody can compute, so the endpoint would authenticate
+  // every forged request instead of none.
+  const secret = process.env.FORM_WEBHOOK_SECRET;
+  if (!secret) {
+    return new Response("Webhook secret is not configured", { status: 500 });
+  }
 
   // The RAW body, read once. Signing a re-serialised object instead compares a
   // signature against bytes the sender never sent: `JSON.parse` then
@@ -649,6 +655,14 @@ const contactForm = createFormConfig('contact', [
   hidden({ name: 'source', label: 'Source', defaultValue: 'website' }),
 ]);
 ```
+
+`createFormConfig` builds the definition and stops there. Nothing in the plugin accepts
+a `FormConfig`: `formBuilder()` takes no `forms` option, and `submitForm` resolves a slug
+by querying the **forms collection**, so a form exists at submission time only as a row in
+that collection. Create the `contact` form in the admin under Forms before going further,
+or seed the row yourself; a submission to a slug with no row is answered as a form that
+does not exist, before validation or storage. Closing that gap is tracked as
+`createFormConfig` having no path to a row.
 
 **3. Handle submissions in an API route:**
 

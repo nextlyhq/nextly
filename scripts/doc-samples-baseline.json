@@ -1,8 +1,8 @@
 {
   "coverage": {
     "pages": 49,
-    "samples": 329,
-    "compiled": 198
+    "samples": 330,
+    "compiled": 199
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -110,8 +110,8 @@
       "compiled": 5
     },
     "docs/guides/media-storage.mdx": {
-      "samples": 13,
-      "compiled": 8
+      "samples": 14,
+      "compiled": 9
     },
     "docs/guides/production-migrations.mdx": {
       "samples": 1,
@@ -205,7 +205,7 @@
   "pages": {
     "docs/getting-started/quick-start.mdx": 1,
     "docs/guides/media-storage.mdx": 1,
-    "docs/guides/routing-and-seo.mdx": 8,
+    "docs/guides/routing-and-seo.mdx": 6,
     "docs/plugins/admin-ui.mdx": 2,
     "docs/plugins/auth.mdx": 3,
     "docs/plugins/author-guide.mdx": 3,
@@ -223,24 +223,27 @@
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
       "suppressed #2 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
       "suppressed #2 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
-      "suppressed #4 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 2
+      "suppressed #4 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 2,
+      "suppressed #3 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
+      "suppressed #3 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1
     },
     "docs/guides/media-storage.mdx": {
-      "#10 error TS2353: Object literal may only specify known properties, and 'media' does not exist in type 'NextlyConfig'.": 1
+      "#10 error TS2353: Object literal may only specify known properties, and 'media' does not exist in type 'NextlyConfig'.": 1,
+      "reader-file #12 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/guides/routing-and-seo.mdx": {
-      "#0 error TS2304: Cannot find name 'Post'.": 1,
       "#3 error TS2304: Cannot find name 'Page'.": 1,
       "#4 error TS2304: Cannot find name 'Page'.": 1,
-      "#5 error TS2304: Cannot find name 'Post'.": 1,
       "#6 error TS2304: Cannot find name 'Page'.": 1,
       "#7 error TS2304: Cannot find name 'getPostBySlug'.": 1,
       "#8 error TS2304: Cannot find name 'services'.": 1,
-      "#8 error TS18004: No value exists in scope for the shorthand property 'baseUrl'. Either declare one or provide an initializer.": 1
+      "#8 error TS18004: No value exists in scope for the shorthand property 'baseUrl'. Either declare one or provide an initializer.": 1,
+      "implicit-any #5 error TS7006: Parameter 'entry' implicitly has an 'any' type.": 1
     },
     "docs/plugins/admin-ui.mdx": {
       "#9 error TS2304: Cannot find name 'Skeleton'.": 1,
-      "#9 error TS2304: Cannot find name 'Chart'.": 1
+      "#9 error TS2304: Cannot find name 'Chart'.": 1,
+      "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1
     },
     "docs/plugins/auth.mdx": {
       "#1 error TS2304: Cannot find name 'verifyGoogleToken'.": 1,
@@ -250,7 +253,9 @@
     "docs/plugins/author-guide.mdx": {
       "#0 error TS2304: Cannot find name 'MyPluginOptions'.": 1,
       "#4 error TS2593: Cannot find name 'describe'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.": 1,
-      "#4 error TS2593: Cannot find name 'it'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.": 1
+      "#4 error TS2593: Cannot find name 'it'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.": 1,
+      "reader-file #1 error TS2307: Cannot find module '../package.json' or its corresponding type declarations.": 1,
+      "reader-file #3 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1
     },
     "docs/plugins/distribution.mdx": {
       "#0 error TS2304: Cannot find name 'myPlugin'.": 1
@@ -283,16 +288,64 @@
       "#6 error TS2304: Cannot find name 'where'.": 1
     },
     "docs/guides/isr-caching.mdx": {
-      "#4 error TS18004: No value exists in scope for the shorthand property 'data'. Either declare one or provide an initializer.": 1
+      "#4 error TS18004: No value exists in scope for the shorthand property 'data'. Either declare one or provide an initializer.": 1,
+      "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/api-reference/direct-api.mdx": {
       "suppressed #34 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
       "suppressed #34 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
-      "suppressed #34 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1
+      "suppressed #34 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
+      "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #34 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/getting-started/index.mdx": {
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1
+    },
+    "docs/guides/email.mdx": {
+      "implicit-any #4 error TS7006: Parameter 'data' implicitly has an 'any' type.": 3,
+      "reader-file #5 error TS2307: Cannot find module '@/nextly' or its corresponding type declarations.": 1
+    },
+    "docs/api-reference/rest-api.mdx": {
+      "reader-file #0 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
+    },
+    "docs/configuration/collections.mdx": {
+      "reader-file #1 error TS2307: Cannot find module './src/collections/posts' or its corresponding type declarations.": 1
+    },
+    "docs/configuration/index.mdx": {
+      "reader-file #0 error TS2307: Cannot find module './src/collections/posts' or its corresponding type declarations.": 1,
+      "reader-file #0 error TS2307: Cannot find module './src/collections/media' or its corresponding type declarations.": 1,
+      "reader-file #0 error TS2307: Cannot find module './src/singles/site-settings' or its corresponding type declarations.": 1
+    },
+    "docs/configuration/nextly-config.mdx": {
+      "reader-file #0 error TS2307: Cannot find module './src/collections/posts' or its corresponding type declarations.": 1,
+      "reader-file #0 error TS2307: Cannot find module './src/collections/media' or its corresponding type declarations.": 1,
+      "reader-file #0 error TS2307: Cannot find module './src/singles/site-settings' or its corresponding type declarations.": 1,
+      "reader-file #0 error TS2307: Cannot find module './src/singles/header' or its corresponding type declarations.": 1,
+      "reader-file #0 error TS2307: Cannot find module './src/singles/footer' or its corresponding type declarations.": 1,
+      "reader-file #0 error TS2307: Cannot find module './src/field-groups' or its corresponding type declarations.": 1,
+      "reader-file #2 error TS2307: Cannot find module './src/collections/posts' or its corresponding type declarations.": 1,
+      "reader-file #2 error TS2307: Cannot find module './src/collections/media' or its corresponding type declarations.": 1,
+      "reader-file #4 error TS2307: Cannot find module './src/singles/site-settings' or its corresponding type declarations.": 1,
+      "reader-file #6 error TS2307: Cannot find module './src/field-groups' or its corresponding type declarations.": 1
+    },
+    "docs/configuration/singles.mdx": {
+      "reader-file #1 error TS2307: Cannot find module './src/singles/site-settings' or its corresponding type declarations.": 1,
+      "reader-file #1 error TS2307: Cannot find module './src/singles/header' or its corresponding type declarations.": 1,
+      "reader-file #1 error TS2307: Cannot find module './src/singles/footer' or its corresponding type declarations.": 1
+    },
+    "docs/getting-started/installation.mdx": {
+      "reader-file #3 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #4 error TS2307: Cannot find module '../../../../../nextly.config' or its corresponding type declarations.": 1
+    },
+    "docs/jobs/index.mdx": {
+      "reader-file #1 error TS2307: Cannot find module './jobs/send-digest' or its corresponding type declarations.": 1
+    },
+    "docs/page-builder/index.mdx": {
+      "reader-file #1 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
+    },
+    "docs/plugins/testing.mdx": {
+      "reader-file #0 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1
     }
   }
 }
