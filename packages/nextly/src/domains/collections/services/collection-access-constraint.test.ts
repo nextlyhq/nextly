@@ -22,6 +22,8 @@ import {
   createMockAccessControlService,
 } from "../__tests__/collection-test-helpers";
 
+import { NextlyError } from "../../../errors/nextly-error";
+
 import { CollectionAccessService } from "./collection-access-service";
 
 function buildAccessService() {
@@ -58,9 +60,10 @@ describe("a read rule that cannot be evaluated", () => {
     // The read paths turn this into a 404. Answering it as an authorization
     // decision would report a typo as a permission problem.
     const { service, collectionService } = buildAccessService();
-    collectionService.getCollection.mockRejectedValue(
-      new Error("Collection 'posts' not found")
-    );
+    // The CANONICAL error the registry raises: `NextlyError.notFound()` with
+    // no message override, so its text is "Not found." A hand-written lowercase
+    // Error passed a message check that the real one does not.
+    collectionService.getCollection.mockRejectedValue(NextlyError.notFound());
 
     await expect(
       service.getAccessQueryConstraint("posts", user)

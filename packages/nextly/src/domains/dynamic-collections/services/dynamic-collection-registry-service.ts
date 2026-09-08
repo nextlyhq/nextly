@@ -308,7 +308,19 @@ export class DynamicCollectionRegistryService extends BaseService {
       .limit(1);
 
     if (existing.length === 0) {
-      throw new Error(`Collection "${collectionSlug}" not found`);
+      /*
+       * 🔴 TYPED, and the message is unchanged on purpose. Callers decide
+       * "does this collection exist" from this error; a bare `Error` forced
+       * them to read its prose, and one of them then missed the branded
+       * `NextlyError.notFound()` the OTHER registry raises. Carrying both a
+       * `NOT_FOUND` code and the wording every existing caller already matches
+       * lets a guard ask by type without breaking one that still asks by text.
+       * Product code here throws `NextlyError`, never a bare `Error`.
+       */
+      throw NextlyError.notFound({
+        message: `Collection "${collectionSlug}" not found`,
+        logContext: { collection: collectionSlug },
+      });
     }
 
     const targetSlug = updates.slug ?? existing[0].slug;
@@ -503,7 +515,11 @@ export class DynamicCollectionRegistryService extends BaseService {
       .limit(1);
 
     if (result.length === 0) {
-      throw new Error(`Collection "${slug}" not found`);
+      // Typed for the same reason as above, with the wording preserved.
+      throw NextlyError.notFound({
+        message: `Collection "${slug}" not found`,
+        logContext: { collection: slug },
+      });
     }
 
     const row = result[0] as Record<string, unknown>;
