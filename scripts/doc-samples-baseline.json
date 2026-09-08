@@ -1,14 +1,19 @@
 {
-  "docs/getting-started/quick-start.mdx": 2,
-  "docs/guides/media-storage.mdx": 3,
-  "docs/guides/routing-and-seo.mdx": 8,
-  "docs/plugins/admin-ui.mdx": 1,
-  "docs/plugins/auth.mdx": 4,
-  "docs/plugins/author-guide.mdx": 3,
-  "docs/plugins/distribution.mdx": 1,
-  "docs/plugins/form-builder.mdx": 6,
-  "docs/plugins/index.mdx": 7,
-  "docs/plugins/lifecycle.mdx": 2,
-  "docs/getting-started/installation.mdx": 1,
-  "docs/getting-started/project-structure.mdx": 1
+  "coverage": {
+    "pages": 49,
+    "samples": 326,
+    "compiled": 185
+  },
+  "pages": {
+    "docs/getting-started/quick-start.mdx": 1,
+    "docs/guides/media-storage.mdx": 2,
+    "docs/guides/routing-and-seo.mdx": 8,
+    "docs/plugins/admin-ui.mdx": 1,
+    "docs/plugins/auth.mdx": 4,
+    "docs/plugins/author-guide.mdx": 3,
+    "docs/plugins/distribution.mdx": 1,
+    "docs/plugins/form-builder.mdx": 6,
+    "docs/plugins/index.mdx": 7,
+    "docs/plugins/lifecycle.mdx": 2
+  }
 }

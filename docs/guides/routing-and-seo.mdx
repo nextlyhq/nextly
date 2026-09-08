@@ -35,6 +35,7 @@ export default async function PostPage({
   const { slug } = await params;
   const post = await resolveContent("posts", slug, { depth: 2 });
   if (!post) notFound();
+  return <Post entry={post} />;
 }
 ```
 

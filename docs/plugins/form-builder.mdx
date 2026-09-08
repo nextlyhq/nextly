@@ -598,50 +598,38 @@ const contactForm = createFormConfig('contact', [
 
 Nextly plugins expose HTTP endpoints via [`contributes.routes`](/docs/plugins/routes) -- the route handler receives the plugin's `ctx` for free, which is what `submitForm` needs as `pluginContext`.
 
-```typescript
-import { definePlugin } from 'nextly';
-import { submitForm, getFormBuilderConfig } from '@nextlyhq/plugin-form-builder';
+```ts
+import type { PluginContext } from "nextly";
+import { submitForm } from "@nextlyhq/plugin-form-builder";
+import type { ResolvedFormBuilderConfig } from "@nextlyhq/plugin-form-builder";
 
-export const contactRoutePlugin = definePlugin({
-  name: '@mysite/contact-route',
-  version: '1.0.0',
-  nextly: '^1',
-  contributes: {
-    routes: [
-      {
-        method: 'POST',
-        path: '/submit',
-        public: true, // anonymous visitors submit the contact form
-        handler: async (req, ctx) => {
-          const data = await req.json();
+// Both values belong to the form-builder plugin's own context. There is no
+// supported way to reach them from a plain Next.js route handler: the resolved
+// config is stored on the Nextly instance during the plugin's init, and
+// `getFormBuilderConfig` is not reachable from another plugin's context. Call
+// `submitForm` from inside the form-builder's own seam, or use the route the
+// plugin contributes, rather than rebuilding this by hand.
+declare const pluginContext: PluginContext;
+declare const pluginConfig: ResolvedFormBuilderConfig;
 
-          const pluginConfig = getFormBuilderConfig(ctx);
-          if (!pluginConfig) {
-            return Response.json(
-              { success: false, error: 'Form Builder plugin not installed' },
-              { status: 500 }
-            );
-          }
+export async function POST(request: Request) {
+  const data = await request.json();
 
-          const result = await submitForm(
-            {
-              formSlug: 'contact',
-              data,
-              metadata: {
-                ipAddress: req.headers.get('x-forwarded-for') || undefined,
-                userAgent: req.headers.get('user-agent') || undefined,
-              },
-            },
-            { pluginContext: ctx, pluginConfig }
-          );
-
-          return Response.json(result);
-        },
+  const result = await submitForm(
+    {
+      formSlug: "contact",
+      data,
+      metadata: {
+        ipAddress: request.headers.get("x-forwarded-for") || undefined,
+        userAgent: request.headers.get("user-agent") || undefined,
       },
-    ],
-  },
-});
-```
+    },
+    { pluginContext, pluginConfig }
+  );
+
+  return Response.json(result);
+}
+
 
 Add `contactRoutePlugin` to `plugins` alongside `fb.plugin`, and the form now posts to `/api/plugins/@mysite/contact-route/submit`.
 

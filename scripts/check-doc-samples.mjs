@@ -38,7 +38,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
@@ -332,17 +332,56 @@ function linkResolutionTree(dir) {
   mkdirSync(modules, { recursive: true });
   for (const entry of readdirSync(join(ROOT, "node_modules"))) {
     if (entry === ".bin") continue;
-    symlinkSync(join(ROOT, "node_modules", entry), join(modules, entry), "dir");
+    const source = join(ROOT, "node_modules", entry);
+    // A scope is copied as a directory of links rather than linked whole.
+    // Linking the directory made every later write to `@nextlyhq/<pkg>` follow
+    // it back into the repository's own install: a run left eighteen links
+    // there that pnpm had not declared, and because this check runs before
+    // lint and typecheck, those later steps could then resolve packages this
+    // workspace does not depend on. A checker must not be able to change the
+    // tree it is checking.
+    if (entry.startsWith("@")) {
+      const scope = join(modules, entry);
+      mkdirSync(scope, { recursive: true });
+      for (const scoped of readdirSync(source)) {
+        symlinkSync(join(source, scoped), join(scope, scoped), "dir");
+      }
+      continue;
+    }
+    symlinkSync(source, join(modules, entry), "dir");
   }
-  // pnpm keeps type packages under `.pnpm/`, so the workspace root has no
-  // `@types` at all and `types: ["node"]` resolved to nothing: every run
-  // reported "Cannot find type definition file for 'node'" as though a page
-  // were at fault. Taken from the package that declares the dependency, which
-  // is where a reader's install would also find it.
-  for (const owner of ["nextly", "admin"]) {
-    const types = join(ROOT, "packages", owner, "node_modules", "@types");
-    if (!existsSync(types) || existsSync(join(modules, "@types"))) continue;
-    symlinkSync(types, join(modules, "@types"), "dir");
+  // Everything the workspace packages themselves depend on, which the root
+  // does not have: pnpm installs a package's dependencies beside it, so `next`
+  // lives at packages/nextly/node_modules/next and `@types/node` beside it,
+  // while the workspace root has neither. Without this the checker could not
+  // resolve `next`, `next/navigation` or `next/image` and reported them as
+  // findings against pages that were right — a reader's project has Next.js,
+  // and so does this repository, one directory further down. `types: ["node"]`
+  // resolved to nothing for the same reason and blamed the docs for it.
+  //
+  // First writer wins, so the root's copy of a shared dependency is the one a
+  // sample sees, which is the version the workspace resolves for itself.
+  const linkInto = (source, target) => {
+    if (existsSync(target)) return;
+    symlinkSync(source, target, "dir");
+  };
+  for (const dirent of readdirSync(join(ROOT, "packages"), {
+    withFileTypes: true,
+  })) {
+    const nested = join(ROOT, "packages", dirent.name, "node_modules");
+    if (!dirent.isDirectory() || !existsSync(nested)) continue;
+    for (const entry of readdirSync(nested)) {
+      if (entry === ".bin") continue;
+      if (entry.startsWith("@")) {
+        const scope = join(modules, entry);
+        mkdirSync(scope, { recursive: true });
+        for (const scoped of readdirSync(join(nested, entry))) {
+          linkInto(join(nested, entry, scoped), join(scope, scoped));
+        }
+        continue;
+      }
+      linkInto(join(nested, entry), join(modules, entry));
+    }
   }
   for (const dirent of readdirSync(join(ROOT, "packages"), {
     withFileTypes: true,
@@ -360,7 +399,10 @@ function linkResolutionTree(dir) {
     // A package nobody can install is not a package a sample may import.
     if (manifest.private || !manifest.name) continue;
     const target = join(modules, manifest.name);
-    mkdirSync(join(target, ".."), { recursive: true });
+    // Only ever inside the temporary tree: the scope above it is a real
+    // directory made here, so removing and relinking cannot reach the
+    // repository's install.
+    mkdirSync(dirname(target), { recursive: true });
     rmSync(target, { recursive: true, force: true });
     symlinkSync(source, target, "dir");
   }
@@ -1294,7 +1336,14 @@ async function auditDocs() {
 
   // Returned as well as printed: the gate ratchets on exactly the findings this
   // report names, so a page cannot read clean here and fail there.
-  return byFile;
+  return {
+    byFile,
+    coverage: {
+      files: [...new Set(all.map(sample => sample.file))].sort(),
+      samples: all.length,
+      compiled: samples.length + continuedWithoutImports.size,
+    },
+  };
 }
 
 /**
@@ -1324,7 +1373,7 @@ async function main() {
   // checkout does not, is not something a reader meets, and counting those
   // would fill the baseline with the harness's own artefacts.
   requireBuiltPackages();
-  const byFile = await auditDocs();
+  const { byFile, coverage } = await auditDocs();
   const findings = [...byFile.values()].flat();
   // The build can finish or restart while this runs, so the post-condition is
   // asserted too: a workspace package reported as untyped means the tree moved
@@ -1347,7 +1396,10 @@ async function main() {
   );
 
   if (process.argv.includes("--write-baseline")) {
-    writeFileSync(BASELINE, `${JSON.stringify(counted, null, 2)}\n`);
+    writeFileSync(
+      BASELINE,
+      `${JSON.stringify({ coverage: { pages: coverage.files.length, samples: coverage.samples, compiled: coverage.compiled }, pages: counted }, null, 2)}\n`
+    );
     console.log(
       `doc samples: baseline written for ${String(Object.keys(counted).length)} page(s), ` +
         `${String(findings.length)} finding(s), ${auditBasis()}.`
@@ -1363,8 +1415,18 @@ async function main() {
   const onlyIndex = process.argv.indexOf("--only");
   const only = onlyIndex === -1 ? null : process.argv[onlyIndex + 1];
   if (only) {
+    // A selector matching no page is a typo, not a clean page. Defaulting both
+    // sides to zero reported "allowed 0, found 0" and exited successfully for
+    // `--only docs/does-not-exist.mdx`, which is a check that cannot fail.
+    if (!coverage.files.includes(only)) {
+      console.error(
+        `doc samples: --only ${only} matched no documentation page, so nothing ` +
+          "was checked. Check the path against docs/."
+      );
+      process.exit(1);
+    }
     const found = counted[only] ?? 0;
-    const cap = readBaseline()[only] ?? 0;
+    const cap = (readBaseline().pages ?? {})[only] ?? 0;
     const lines = byFile.get(only) ?? [];
     console.log(`\n${only}: allowed ${String(cap)}, found ${String(found)}`);
     for (const line of lines) console.log(`  ${line}`);
@@ -1373,15 +1435,43 @@ async function main() {
       process.exit(1);
     }
     if (found < cap) {
-      console.log(
+      // Exits 1, as the whole-repository path does for the same state. Printing
+      // a suggestion and succeeding let a contributor pass both before and
+      // after fixing something, so nothing ever made them lower the ratchet.
+      console.error(
         `\n${String(cap - found)} fewer than the baseline: lower it to ${String(found)} ` +
           "in scripts/doc-samples-baseline.json (or remove the entry at zero)."
       );
+      process.exit(1);
     }
     return;
   }
 
-  const allowed = readBaseline();
+  // Coverage ratchets too. Findings alone cannot tell a page that was fixed
+  // from a page the extractor stopped seeing: both report nothing.
+  const recorded = readBaseline();
+  const lost = [];
+  const seen = {
+    pages: coverage.files.length,
+    samples: coverage.samples,
+    compiled: coverage.compiled,
+  };
+  for (const [what, was] of Object.entries(recorded.coverage ?? {})) {
+    if ((seen[what] ?? 0) < was) {
+      lost.push(`${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`);
+    }
+  }
+  if (lost.length > 0) {
+    console.error(
+      "\ndoc samples: fewer samples are being checked than the baseline records. " +
+        "A page or fence has left the set, which reads the same as a page that " +
+        "was fixed. If the loss is intended, rewrite the baseline and say why.\n"
+    );
+    for (const line of lost) console.error(`  ${line}`);
+    process.exit(1);
+  }
+
+  const allowed = recorded.pages ?? {};
   const worse = [];
   const better = [];
   for (const [file, count] of Object.entries(counted)) {
