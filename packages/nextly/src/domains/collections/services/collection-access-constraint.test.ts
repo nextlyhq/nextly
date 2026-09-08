@@ -37,7 +37,7 @@ function buildAccessService() {
       getRegisteredAccess: vi.fn().mockReturnValue(undefined),
     } as never
   );
-  return { service, accessControlService };
+  return { service, accessControlService, collectionService };
 }
 
 const user = { id: "user-1" } as never;
@@ -54,17 +54,53 @@ describe("a read rule that cannot be evaluated", () => {
     ).rejects.toThrow(/failed to load/);
   });
 
-  it("still passes a MISSING COLLECTION through, as the deny gate does", async () => {
+  it("passes a MISSING COLLECTION through, from the METADATA LOOKUP", async () => {
     // The read paths turn this into a 404. Answering it as an authorization
     // decision would report a typo as a permission problem.
-    const { service, accessControlService } = buildAccessService();
-    accessControlService.evaluateAccess.mockRejectedValue(
+    const { service, collectionService } = buildAccessService();
+    collectionService.getCollection.mockRejectedValue(
       new Error("Collection 'posts' not found")
     );
 
     await expect(
       service.getAccessQueryConstraint("posts", user)
     ).resolves.toBeNull();
+  });
+
+  it("REFUSES an evaluator failure that merely says 'not found'", async () => {
+    // 🔴 The control for the case above. Scoping the escape to the whole body
+    // let any failure whose message happened to contain those words -- a policy
+    // dependency, a lookup inside a custom rule -- resolve to "nothing to
+    // narrow", which is the failure this function exists to stop making. Only
+    // the metadata lookup may take that exit.
+    const { service, accessControlService } = buildAccessService();
+    accessControlService.evaluateAccess.mockRejectedValue(
+      new Error("policy dependency not found")
+    );
+
+    await expect(
+      service.getAccessQueryConstraint("posts", user)
+    ).rejects.toThrow(/policy dependency/);
+  });
+
+  it("REFUSES a resolved DENIAL rather than reading it as no constraint", async () => {
+    /*
+     * 🔴 The likeliest failure of all, and it never reaches a catch.
+     * `evaluateCustomAccess` catches a custom rule's import and execution
+     * errors and RESOLVES `{ allowed: false }`. Reading only `result.query`
+     * turned that into `null`, which callers fold in as the absence of a
+     * predicate -- so denied read as permitted, for exactly the rules most
+     * likely to fail.
+     */
+    const { service, accessControlService } = buildAccessService();
+    accessControlService.evaluateAccess.mockResolvedValue({
+      allowed: false,
+      reason: "Access check failed",
+    });
+
+    await expect(
+      service.getAccessQueryConstraint("posts", user)
+    ).rejects.toThrow();
   });
 
   it("CONTROL: a rule that narrows still returns its constraint", async () => {

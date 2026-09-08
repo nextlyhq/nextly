@@ -606,10 +606,22 @@ describe("CollectionEntryService — Access Control Contracts", () => {
       expect(result.message).toContain("access");
     });
 
-    it("should pass through collection-not-found errors", async () => {
+    it("REFUSES an evaluator failure that merely says 'not found'", async () => {
+      /*
+       * 🔴 This asserted `success: true` -- that an evaluator failure whose
+       * message happened to contain "not found" resolved to an UNRESTRICTED
+       * read. That is the failure the constraint resolver was changed to stop
+       * making, so the expectation inverts with it.
+       *
+       * The passthrough it was named for still exists, scoped to the metadata
+       * lookup, and is covered where it can be isolated:
+       * `collection-access-constraint.test.ts`. It cannot be isolated here,
+       * because `listEntries` also reads the collection for status resolution,
+       * so a rejecting `getCollection` fails the read for an unrelated reason.
+       */
       const acs = createMockAccessControlService();
       acs.evaluateAccess.mockRejectedValue(
-        new Error("Collection 'posts' not found")
+        new Error("policy dependency not found")
       );
       const { service, selectData } = buildService({
         accessControlService: acs,
@@ -621,8 +633,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
         user: { id: "user-1" },
       });
 
-      // Collection not found should be handled differently
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
     });
   });
 });

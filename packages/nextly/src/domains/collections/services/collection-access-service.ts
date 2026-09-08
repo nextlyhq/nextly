@@ -20,6 +20,7 @@ import {
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import { NextlyError } from "../../../errors/nextly-error";
 import type {
   AccessControlService,
   CollectionAccessRules,
@@ -34,25 +35,6 @@ import { BaseService } from "../../../shared/base-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 
 import type { CollectionServiceResult, UserContext } from "./collection-types";
-
-/**
- * What a read rule that could not be EVALUATED resolves to: nothing.
- *
- * 🔴 `getAccessQueryConstraint` answers `null` for "allowed, nothing to narrow",
- * and both callers fold that in as the absence of a predicate -- so answering it
- * for a THROW returns every row, which is the opposite of what the rule asked
- * for. `checkCollectionAccess` reads the same stored rules and already denies on
- * an unexpected error "for safety"; this is what makes the two agree.
- *
- * A missing collection keeps its passthrough, the same escape that gate makes,
- * because the read paths report it as a 404 rather than as an authorization
- * decision.
- */
-function constraintFailure(error: unknown): null {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("not found")) return null;
-  throw error;
-}
 
 export class CollectionAccessService extends BaseService {
   constructor(
@@ -514,29 +496,58 @@ export class CollectionAccessService extends BaseService {
       return null;
     }
 
+    /*
+     * 🔴 The not-found escape covers the METADATA LOOKUP only. A collection that
+     * does not exist is a 404 at the read paths, not an authorization answer --
+     * but scoping the escape to the whole body let any failure whose message
+     * happened to say "not found" (a policy dependency, a lookup inside a
+     * custom rule) resolve to "nothing to narrow", which is the failure this
+     * function is being changed to stop making.
+     */
+    let collection: unknown;
     try {
-      const collection =
-        await this.collectionService.getCollection(collectionName);
-      const accessRules = this.getAccessRules(
-        collection as Record<string, unknown>
-      );
-      const requestContext = this.buildRequestContext(user);
-
-      const result = await this.accessControlService.evaluateAccess(
-        accessRules,
-        "read",
-        requestContext,
-        undefined,
-        undefined,
-        // Collection owner-only reads filter on the `created_by` system column.
-        DEFAULT_OWNER_FIELD
-      );
-
-      // Return query constraint if present
-      return (result.query as Record<string, unknown>) ?? null;
+      collection = await this.collectionService.getCollection(collectionName);
     } catch (error: unknown) {
-      return constraintFailure(error);
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("not found")) return null;
+      throw error;
     }
+
+    const accessRules = this.getAccessRules(
+      collection as Record<string, unknown>
+    );
+    const requestContext = this.buildRequestContext(user);
+
+    const result = await this.accessControlService.evaluateAccess(
+      accessRules,
+      "read",
+      requestContext,
+      undefined,
+      undefined,
+      // Collection owner-only reads filter on the `created_by` system column.
+      DEFAULT_OWNER_FIELD
+    );
+
+    /*
+     * 🔴 A DENIAL is not an absent constraint. `evaluateCustomAccess` catches a
+     * custom rule's import and execution failures and RESOLVES
+     * `{ allowed: false }` rather than rejecting, so the most likely way a rule
+     * fails never reaches a catch at all -- and reading only `result.query`
+     * turned that denial into `null`, which every caller folds in as the absence
+     * of a predicate. Denied therefore read as permitted, for exactly the rules
+     * most likely to fail.
+     */
+    if (!result.allowed) {
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "read access denied while resolving the query constraint",
+          collection: collectionName,
+          ...(result.reason === undefined ? {} : { denial: result.reason }),
+        },
+      });
+    }
+
+    return (result.query as Record<string, unknown>) ?? null;
   }
 
   /**
