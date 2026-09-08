@@ -122,3 +122,99 @@ describe("EntrySystemHeader version history", () => {
     );
   });
 });
+
+const { actionBarProps } = vi.hoisted(() => ({
+  actionBarProps: {
+    current: null as { actions: { id: string }[] } | null,
+  },
+}));
+
+// The action bar is where the withheld-write decision LANDS for the page's
+// contributed actions: a prop passed to the wrong component type-checks
+// perfectly, so the stand-in records what the header actually handed it.
+// The module's other exports (the merge the header calls) stay real.
+vi.mock(
+  "@admin/components/features/entries/EntryForm/DocumentActionBar",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("@admin/components/features/entries/EntryForm/DocumentActionBar")
+    >()),
+    DocumentActionBar: (props: { actions: { id: string }[] }) => {
+      actionBarProps.current = props;
+      return null;
+    },
+  })
+);
+
+import {
+  DocumentHistoryContext,
+  type ViewedVersion,
+} from "@admin/components/features/versions/document-history-context";
+import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
+
+const contributed: ContributedAction[] = [
+  {
+    action: {
+      id: "add-to-release",
+      label: "Add to release",
+      placement: "menu",
+    },
+    binding: { onSelect: () => {} },
+  },
+];
+
+describe("EntrySystemHeader — contributed actions while reading history", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    actionBarProps.current = null;
+  });
+
+  function renderWithHistory(viewing: ViewedVersion | null) {
+    return render(
+      <WithForm>
+        <DocumentHistoryContext.Provider
+          value={{
+            viewing,
+            setViewing: () => {},
+            restore: null,
+            setRestore: () => {},
+          }}
+        >
+          <EntrySystemHeader
+            mode="edit"
+            hasStatus={false}
+            collectionSlug="posts"
+            entry={{ id: "e1" } as never}
+            historyFields={fields}
+            contributedActions={contributed}
+          />
+        </DocumentHistoryContext.Provider>
+      </WithForm>
+    );
+  }
+
+  it("offers the page's contributed actions while the live document is on screen", () => {
+    renderWithHistory(null);
+
+    expect(
+      actionBarProps.current?.actions.some(a => a.id === "add-to-release")
+    ).toBe(true);
+  });
+
+  it("withholds the page's contributed actions while a version is being read", () => {
+    // They act on the LIVE document, which is not what is on screen. Unlike
+    // the built-ins, a contribution cannot be expected to know about history —
+    // the header is where that knowledge lives.
+    renderWithHistory({
+      versionNo: 3,
+      snapshot: { title: "as it was" },
+      locale: null,
+      isLoading: false,
+      error: null,
+    });
+
+    expect(
+      actionBarProps.current?.actions.some(a => a.id === "add-to-release")
+    ).toBe(false);
+  });
+});

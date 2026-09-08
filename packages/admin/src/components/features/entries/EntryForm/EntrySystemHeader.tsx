@@ -563,11 +563,16 @@ export function EntrySystemHeader({
    * One merge for both halves. Splitting them would let the bar draw a built-in
    * verb wired to a contribution that lost its collision — Delete, from the
    * model, running somebody else's handler.
+   *
+   * A past version on screen withholds the page's contributions entirely, the
+   * same treatment the model gives the built-in writes: they act on the LIVE
+   * document, which is not what is on screen, and a contributor cannot be
+   * expected to know about history — the header is where that knowledge lives.
    */
   const withContributions = acceptContributions(
     documentVerbs,
     actionBindings,
-    contributedActions
+    isReadingHistory ? [] : contributedActions
   );
 
   const entryLabel =

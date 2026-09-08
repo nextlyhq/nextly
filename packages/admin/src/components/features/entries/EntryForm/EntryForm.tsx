@@ -943,6 +943,7 @@ export function EntryForm({
                                   <EntryFormToolbarSlots
                                     context="collection"
                                     controllerField={controllerNames[0]}
+                                    writesHeld={writesHeld}
                                   />
                                 </>
                               }
@@ -981,7 +982,12 @@ export function EntryForm({
                             />
                             {/* Above the fields and below the header: the reader sees
                       the document it refers to without the offer covering it. */}
-                            {recovery.offer ? (
+                            {/* The recovery offer restores work into the LIVE
+                      form, so it is withheld while a past version is on
+                      screen — restoring values nobody can see is deciding
+                      without seeing, and the offer returns when the live
+                      document does. */}
+                            {viewingVersion === null && recovery.offer ? (
                               <AutosaveRecoveryBanner
                                 savedAt={recovery.offer.savedAt}
                                 onRestore={recovery.restore}
@@ -991,9 +997,13 @@ export function EntryForm({
                             {/* The banner over the version being read: above the
                       fields it describes, below the header that offered the
                       panel. Renders nothing while the live document is on
-                      screen. */}
+                      screen. A submit in flight withholds restore too — a
+                      restore racing the ordinary save would let completion
+                      order decide which contents survive. */}
                             <ViewedVersionBanner
-                              actionsDisabled={lock.actionsDisabled}
+                              actionsDisabled={
+                                lock.actionsDisabled || isSubmitting
+                              }
                             />
                             <EntryMetaStrip
                               slugField={slugField}

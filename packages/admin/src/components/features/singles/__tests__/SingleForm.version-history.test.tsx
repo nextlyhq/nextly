@@ -28,15 +28,31 @@ import {
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
 
-const { viewed, sidebarProps, useDocumentLock, useDocumentAutosave } =
-  vi.hoisted(() => ({
-    viewed: { current: null as ViewedVersion | null },
-    sidebarProps: {
-      current: null as { actionsDisabled?: boolean } | null,
-    },
-    useDocumentLock: vi.fn(),
-    useDocumentAutosave: vi.fn(() => ({ status: "idle", lastSavedAt: null })),
-  }));
+const {
+  viewed,
+  sidebarProps,
+  useDocumentLock,
+  useDocumentAutosave,
+  useAutosaveRecovery,
+} = vi.hoisted(() => ({
+  viewed: { current: null as ViewedVersion | null },
+  sidebarProps: {
+    current: null as { actionsDisabled?: boolean } | null,
+  },
+  useDocumentLock: vi.fn(),
+  useDocumentAutosave: vi.fn(() => ({ status: "idle", lastSavedAt: null })),
+  useAutosaveRecovery: vi.fn<
+    () => {
+      offer: { savedAt: Date } | null;
+      restore: () => void;
+      dismiss: () => void;
+    }
+  >(() => ({
+    offer: null,
+    restore: vi.fn(),
+    dismiss: vi.fn(),
+  })),
+}));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
 vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
@@ -44,6 +60,12 @@ vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
     typeof import("@admin/hooks/useDocumentAutosave")
   >()),
   useDocumentAutosave,
+}));
+vi.mock("@admin/hooks/useAutosaveRecovery", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/hooks/useAutosaveRecovery")
+  >()),
+  useAutosaveRecovery,
 }));
 
 // The rail is where the withheld-write decision has to LAND: a prop passed to
@@ -159,8 +181,12 @@ describe("SingleForm — a published version replaces the document", () => {
     expect(
       screen.getByRole("button", { name: /restore this version/i })
     ).toBeEnabled();
-    // The live editor's own fields are not on screen beside the version.
-    expect(screen.queryByLabelText("Hero Title")).toBeNull();
+    // The live editor's own fields stay mounted behind the version so their
+    // rich state (undo, selection) survives the round trip — but they are
+    // inert: removed from the accessibility tree and from every pointer.
+    const live = screen.getByLabelText("Hero Title");
+    expect(live).toBeInTheDocument();
+    expect(live.closest("[aria-hidden='true']")).not.toBeNull();
   });
 
   it("holds the snapshot back while the read has not returned", () => {
@@ -285,5 +311,59 @@ describe("SingleForm — a published version replaces the document", () => {
     fireEvent.submit(form as HTMLFormElement);
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+  });
+
+  it("withholds the recovery offer while a version is on screen", () => {
+    // The recovery offer restores work into the LIVE form. Doing that while
+    // the author is looking at a past version changes values nobody can see,
+    // under a banner saying the page cannot be edited.
+    useAutosaveRecovery.mockReturnValue({
+      offer: { savedAt: new Date("2026-01-01T00:00:00.000Z") },
+      restore: vi.fn(),
+      dismiss: vi.fn(),
+    });
+    const live = render(
+      <SingleForm schema={schema} document={document} onSubmit={vi.fn()} />
+    );
+    expect(
+      screen.getByRole("button", { name: /restore/i })
+    ).toBeInTheDocument();
+
+    // The live editor is unmounted so the only restore on screen during the
+    // reading is the banner's — the recovery offer must be gone with the
+    // live document it would act on.
+    live.unmount();
+    renderViewing({
+      versionNo: 7,
+      snapshot: { heroTitle: "as it was" },
+      locale: null,
+      isLoading: false,
+      error: null,
+    });
+    expect(screen.getAllByRole("button", { name: /restore/i })).toHaveLength(1);
+  });
+
+  it("withholds restore from the banner while a submit is in flight", () => {
+    // A restore racing the ordinary save would let completion order decide
+    // which contents survive, so the banner offers no restore mid-submit.
+    viewed.current = {
+      versionNo: 7,
+      snapshot: { heroTitle: "as it was" },
+      locale: null,
+      isLoading: false,
+      error: null,
+    };
+    render(
+      <SingleForm
+        schema={schema}
+        document={document}
+        onSubmit={vi.fn()}
+        isSubmitting
+      />
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /restore this version/i })
+    ).not.toBeInTheDocument();
   });
 });

@@ -19,7 +19,13 @@
 import type { FieldConfig } from "nextly/config";
 import { useMemo, useState, type ReactNode } from "react";
 
+import {
+  EntryLocaleProvider,
+  useEntryLocale,
+  type EntryLocaleContextValue,
+} from "@admin/components/features/entries/EntryLocaleContext";
 import { Alert, AlertDescription, Skeleton } from "@admin/components/ui";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import {
   computeMainFields,
   type TakeoverType,
@@ -83,6 +89,37 @@ export function mayRecordRecovery(
   viewing: ViewedVersion | null
 ): boolean {
   return !isSubmitting && viewing === null;
+}
+
+/**
+ * The locale context a snapshot renders under, derived from the editor's own.
+ *
+ * Presentation comes from the VERSION: a snapshot captured in Arabic is read
+ * right-to-left even while the editor is in English — which is what the banner
+ * above it names. Every seam that ACTS on the live editor is withheld: locale
+ * switching, translation mode, the inline source hint, copy-from-language and
+ * publish-every-language, because reading a version must not be able to write
+ * to the document that is temporarily not on screen.
+ */
+function snapshotLocaleContext(
+  outer: EntryLocaleContextValue,
+  locale: string,
+  defaultLocale: string | undefined,
+  getLocale: (code: string | undefined) => { rtl?: boolean } | undefined
+): EntryLocaleContextValue {
+  return {
+    ...outer,
+    locale,
+    rtl: getLocale(locale)?.rtl ?? false,
+    isNonDefaultLocale: !!defaultLocale && locale !== defaultLocale,
+    sourceValues: undefined,
+    onLocaleChange: undefined,
+    seedFromLocale: undefined,
+    onSeedHandled: undefined,
+    onEnterTranslationMode: undefined,
+    fetchSourceValues: undefined,
+    publishAllLanguages: undefined,
+  };
 }
 
 export interface ViewedVersionHost {
@@ -187,14 +224,16 @@ export function ViewedVersionBanner({
  *
  * Reading a past version replaces the document rather than opening beside it:
  * the question an editor is asking is how this page read then, and that is
- * answered by the page. The live form stays mounted underneath — the
- * historical values are rendered against a form of their own, so nothing
- * typed here is disturbed and nothing historical can reach a save.
+ * answered by the page. The live field tree stays mounted BENEATH the version,
+ * hidden and inert — its form is a different one from the snapshot's, so
+ * nothing typed here is disturbed and nothing historical can reach a save,
+ * while rich-field components (a text editor's undo history, its selection)
+ * survive the round trip back to the live document.
  *
  * @param fields - the layout for the version, from the host's
  *   `historicalFields`
- * @param children - the live document's body, rendered only while nothing is
- *   being read
+ * @param children - the live document's body, hidden while a version is being
+ *   read and rendered normally otherwise
  */
 export function ViewedVersionBody({
   fields,
@@ -204,30 +243,59 @@ export function ViewedVersionBody({
   children?: ReactNode;
 }) {
   const { viewing } = useDocumentHistory();
+  const outerLocale = useEntryLocale();
+  const { getLocale, defaultLocale } = useLocalization();
   if (!viewing) return <>{children}</>;
+  // A snapshot captured in another language is presented in that language —
+  // the banner above it names the locale, so the fields must agree — while
+  // every seam that acts on the live editor is withheld from the snapshot.
+  const snapshotLocale =
+    viewing.locale !== null
+      ? snapshotLocaleContext(
+          outerLocale,
+          viewing.locale,
+          defaultLocale,
+          getLocale
+        )
+      : outerLocale;
   return (
-    <div className="@4xl/content:p-8 pt-6">
-      {viewing.error ? (
-        // A failed read must not render as an empty document: that is a
-        // different and wrong claim about the version.
-        <Alert variant="destructive">
-          <AlertDescription>This version could not be loaded.</AlertDescription>
-        </Alert>
-      ) : !versionOnScreen(viewing) ? (
-        <div className="flex flex-col gap-4" aria-busy="true">
-          <span className="sr-only" role="status">
-            Loading version {viewing.versionNo}
-          </span>
-          {[0, 1, 2, 3].map(i => (
-            <div key={i} className="flex flex-col gap-1">
-              <Skeleton className="h-3 w-24" />
-              <Skeleton className="h-9 w-full" />
-            </div>
-          ))}
-        </div>
-      ) : (
-        <VersionSnapshotForm fields={fields} snapshot={viewing.snapshot} />
-      )}
-    </div>
+    <>
+      {/* Hidden, not unmounted: remounting a rich field component destroys
+          state the serialized form values do not carry — an editor's undo
+          history, its selection — so returning to current would land the
+          author in a freshly created composer. Hidden removes the tree from
+          the accessibility tree and from every pointer, so the read-only
+          claim on the banner holds. */}
+      <div aria-hidden="true" className="hidden">
+        {children}
+      </div>
+      <div className="@4xl/content:p-8 pt-6">
+        {viewing.error ? (
+          // A failed read must not render as an empty document: that is a
+          // different and wrong claim about the version.
+          <Alert variant="destructive">
+            <AlertDescription>
+              This version could not be loaded.
+            </AlertDescription>
+          </Alert>
+        ) : !versionOnScreen(viewing) ? (
+          <div className="flex flex-col gap-4" aria-busy="true">
+            <span className="sr-only" role="status">
+              Loading version {viewing.versionNo}
+            </span>
+            {[0, 1, 2, 3].map(i => (
+              <div key={i} className="flex flex-col gap-1">
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-9 w-full" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EntryLocaleProvider value={snapshotLocale}>
+            <VersionSnapshotForm fields={fields} snapshot={viewing.snapshot} />
+          </EntryLocaleProvider>
+        )}
+      </div>
+    </>
   );
 }
