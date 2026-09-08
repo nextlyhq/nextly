@@ -12,7 +12,7 @@ import {
 } from "@tanstack/react-query";
 import { renderHook, waitFor, act } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { postSpy, putSpy, patchSpy, deleteSpy, getSpy } = vi.hoisted(() => ({
   postSpy: vi.fn(),
@@ -55,6 +55,14 @@ function wrapper() {
 }
 
 const write = { plugin: "@acme/p", path: "/patterns" };
+
+// Restored in a LIFECYCLE hook, not inline at the end of a test. An inline
+// restore is skipped when an assertion throws, and a spy left on
+// `QueryClient.prototype` then outlives its test and answers for every later
+// one in the file — a leak whose symptom appears somewhere else entirely.
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 beforeEach(() => {
   for (const spy of [postSpy, putSpy, patchSpy, deleteSpy, getSpy]) {
@@ -145,7 +153,6 @@ describe("usePluginRouteMutation", () => {
       ([arg]) => (arg as { queryKey: unknown[] }).queryKey
     );
     expect(keys).toEqual([["plugin-route", "/plugins/@acme/p/library"]]);
-    invalidate.mockRestore();
   });
 
   it("sends a FALSY body rather than dropping it", async () => {
@@ -294,7 +301,6 @@ describe("usePluginRouteMutation", () => {
         ([arg]) => (arg as { queryKey: unknown[] }).queryKey
       );
       expect(keys).toEqual([["plugin-route", "/plugins/@acme/p/library"]]);
-      invalidate.mockRestore();
     } finally {
       onlineManager.setOnline(true);
     }
@@ -320,6 +326,71 @@ describe("usePluginRouteMutation", () => {
     });
 
     await waitFor(() => expect(result.current.error).toBeNull());
+  });
+
+  it("reports the NEWEST failure when two writes both fail", async () => {
+    // The other half of the ordering, and it needs its own case: keeping
+    // whichever failure arrived first reads as correct until a second one
+    // arrives, and then reports a stale cause for a write the author has since
+    // replaced.
+    postSpy.mockRejectedValueOnce(new Error("older failed"));
+    postSpy.mockRejectedValueOnce(new Error("newer failed"));
+    const { result } = renderHook(() => usePluginRouteMutation(write), {
+      wrapper: wrapper(),
+    });
+
+    await act(async () => {
+      await result.current.write({ title: "older" });
+    });
+    await waitFor(() =>
+      expect(result.current.error?.message).toBe("older failed")
+    );
+
+    await act(async () => {
+      await result.current.write({ title: "newer" });
+    });
+
+    await waitFor(() =>
+      expect(result.current.error?.message).toBe("newer failed")
+    );
+  });
+
+  it("does not let an OLDER success clear a NEWER failure", async () => {
+    // Both directions of overlap matter and they need opposite answers. Here
+    // the later write fails first and the earlier one succeeds afterwards: an
+    // unconditional clear on success erases the failure of the write the author
+    // made most recently, and the surface reports success for a save that did
+    // not happen.
+    let finishFirst: (value: { id: string }) => void = () => {};
+    postSpy.mockReturnValueOnce(
+      new Promise<{ id: string }>(resolve => {
+        finishFirst = resolve;
+      })
+    );
+    postSpy.mockRejectedValueOnce(new Error("the newer write failed"));
+    const { result } = renderHook(() => usePluginRouteMutation(write), {
+      wrapper: wrapper(),
+    });
+
+    let first: Promise<unknown> | undefined;
+    act(() => {
+      first = result.current.write({ title: "older" });
+    });
+    await act(async () => {
+      await result.current.write({ title: "newer" });
+    });
+    await waitFor(() =>
+      expect(result.current.error?.message).toBe("the newer write failed")
+    );
+
+    // The older write now comes back successfully. It must not speak for the
+    // newer one.
+    await act(async () => {
+      finishFirst({ id: "older" });
+      await first;
+    });
+
+    expect(result.current.error?.message).toBe("the newer write failed");
   });
 
   it("sends NO body when the caller has none to send", async () => {

@@ -50,7 +50,7 @@ Nothing is toasted from the hook. The admin's own mutation hooks raise a toast b
 
 **A write refreshes the reads it was SUBMITTED with.** The target was already snapshotted; the invalidation keys were not, so a write held while the hook re-pointed refreshed the new selection's reads and left its own stale.
 
-**A later success clears an earlier failure.** `error` reports the last write, and left set, a plugin showed "could not save" beside a save that had just worked.
+**A later success clears an earlier failure — but only one submitted no later than itself.** `error` reports the last write, and left set, a plugin showed "could not save" beside a save that had just worked. Clearing it unconditionally is the same defect pointing the other way: a slow earlier save completing after a newer one has already failed would erase that failure, and the surface would report success for the write the author cares about most. Failures carry the submission that produced them, so an older success cannot speak for a newer write and a newer failure replaces an older one.
 
 The write verbs are `Exclude<RouteMethod, "GET">` rather than a second list of methods. Spelled out, that was a narrower view of the route contract that would stop covering it the moment a method was added: a plugin could declare the route and this could not call it, and nothing would fail. `RouteMethod` is published from `nextly/config` for that, beside `pluginRouteFullPath` and for the same reason — the admin has to agree with the dispatcher about what a route is.
 

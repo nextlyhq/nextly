@@ -153,12 +153,20 @@ export function usePluginRouteMutation<
   // request is still running. A caller watching those would be told the write
   // succeeded.
   const [inFlight, setInFlight] = useState(0);
-  const [error, setError] = useState<Error | null>(null);
+  // The failure AND which write produced it. Two writes overlap in both
+  // directions, and only the order they were SUBMITTED in can tell an older
+  // success from a newer failure: autosave B rejected while slow save A is
+  // still awaiting its response, then A completes. An unconditional clear on
+  // success erases B's failure and reports no error at all, for the write the
+  // author cares about most — the last one they made.
+  const [failure, setFailure] = useState<Failed | null>(null);
+  const submissionRef = useRef(0);
   const mutateAsync = mutation.mutateAsync;
   const inFlightRef = useRef(0);
 
   const write = useCallback(
     async (body?: TBody) => {
+      const submission = (submissionRef.current += 1);
       inFlightRef.current += 1;
       setInFlight(inFlightRef.current);
       try {
@@ -173,15 +181,23 @@ export function usePluginRouteMutation<
             pluginRouteFullPath(plugin, target),
           ]),
         });
-        // A write that succeeded clears the last failure. Without this, one
-        // failed save left `error` set for the rest of the session — a plugin
-        // showing "could not save" beside a save that had just worked, which
-        // contradicts what this field says it is.
-        setError(null);
+        // A success clears the last failure — but only one from a write
+        // submitted no later than itself. Cleared unconditionally, a slow
+        // earlier save erases the failure of a later one that has already come
+        // back, and the surface reports success for a write that failed.
+        setFailure(held =>
+          held !== null && held.submission > submission ? held : null
+        );
         return answered;
       } catch (cause) {
-        // Every failed write is reported, not only the newest.
-        setError(cause instanceof Error ? cause : new Error(String(cause)));
+        // Every failed write is reported, not only the newest — and the newest
+        // failure wins, for the same ordering reason.
+        const error = cause instanceof Error ? cause : new Error(String(cause));
+        setFailure(held =>
+          held !== null && held.submission > submission
+            ? held
+            : { submission, error }
+        );
         // Resolved rather than rethrown; see `write` on the contract.
         return undefined;
       } finally {
@@ -192,7 +208,13 @@ export function usePluginRouteMutation<
     [mutateAsync, method, route, plugin, invalidates]
   );
 
-  return { write, pending: inFlight > 0, error };
+  return { write, pending: inFlight > 0, error: failure?.error ?? null };
+}
+
+/** A failed write, and which submission it was. */
+interface Failed {
+  readonly submission: number;
+  readonly error: Error;
 }
 
 /** One write, with the target it was submitted against. */
