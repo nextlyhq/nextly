@@ -570,8 +570,9 @@ jobs:
       # wants to know what CI runs has to parse a shell command out of YAML,
       # which was tried and produced twelve ways to be wrong.
       #
-      # The script selects `./packages/*` MINUS `nextly`, which has a runner to
-      # itself below; the same location idiom Build and Lint above
+      # The script selects `./packages/*` MINUS `nextly` and `@nextlyhq/admin`,
+      # which each have a runner to themselves below; the same location idiom
+      # Build and Lint above
       # already use, so a package added there gates on the commit that adds it.
       # It was a written-out list of twenty-two names until `nextly` (907 files,
       # 11562 tests) and `@nextlyhq/admin` (407, 4061) were found passing
@@ -729,6 +730,67 @@ jobs:
       # else. No separate Build step: this job has one question to answer.
       - name: Test
         run: pnpm lane:test:nextly
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Only a job that finished its work publishes what it learned.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # `@nextlyhq/admin`'s unit suite, on a runner of its own, for the reason the
+  # job above gives: it was 598s of the shared step's 1804s, a third of the
+  # work, and second only to `nextly`. With both moved, what stays behind is
+  # 395s across twenty packages.
+  #
+  # A second plain job rather than a matrix over the two, deliberately, and the
+  # trade is stated where it is paid: a matrix would spell this
+  # `pnpm lane:test:${{ matrix.package }}`, and the lane check reads the
+  # workflow only to confirm the script is NAMED in it. Forty duplicated lines
+  # that a check can read beat a template it cannot.
+  unit-tests-admin:
+    name: Unit tests (admin)
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # These suites render React under jsdom, which is why the package carries
+      # a 10s budget rather than vitest's 5s default. Alone on the runner they
+      # get `cores-1` workers to themselves instead of competing with twenty
+      # other packages, which is the contention that made that budget tight.
+      - name: Test
+        run: pnpm lane:test:admin
         env:
           TURBO_CACHE_DIR: .turbo
 

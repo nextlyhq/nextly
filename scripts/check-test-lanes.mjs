@@ -54,20 +54,18 @@ export const LANES = [
     task: "test",
     workflow: ".github/workflows/ci.yml",
     /*
-     * Two scripts, because `nextly` runs on a runner of its own: it is 45% of
-     * the unit work and was the critical path inside one job. They PARTITION
-     * the packages — `lane:test` excludes what `lane:test:nextly` selects — and
-     * turbo answering both is what makes the split safe to state here rather
-     * than to remember: a package dropped from one and not picked up by the
-     * other is reported as unrun, and one claimed by both simply runs twice.
+     * Three scripts, because the two heaviest packages run on runners of their
+     * own. `nextly` was 45% of the unit work and `@nextlyhq/admin` a further
+     * 33%, and inside one job they were the critical path; what stays in
+     * `lane:test` is the remaining 22%, across twenty packages.
      */
-    scripts: ["lane:test", "lane:test:nextly"],
+    scripts: ["lane:test", "lane:test:nextly", "lane:test:admin"],
     /*
-     * The two scripts PARTITION the packages, and saying so here is what makes
-     * it enforceable. `lane:test` excludes what `lane:test:nextly` selects; if
-     * that exclusion is ever dropped, nextly runs twice — 13.5 minutes spent
-     * again on every push, and green either way, which is the shape nothing
-     * notices.
+     * The three scripts PARTITION the packages, and saying so here is what
+     * makes it enforceable. `lane:test` excludes what the other two select; if
+     * an exclusion is ever dropped, that package runs twice — thirteen minutes
+     * spent again on every push in nextly's case, and green either way, which
+     * is the shape nothing notices.
      */
     partitioned: true,
     /*
