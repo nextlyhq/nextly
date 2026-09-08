@@ -903,7 +903,6 @@ export async function prepareSubmissionForWrite(
   const ctx = context as {
     data?: Record<string, unknown>;
     operation?: string;
-    executor?: unknown;
   };
   const submission = ctx.data;
   if (!submission || typeof submission !== "object") return ctx.data;
@@ -917,7 +916,7 @@ export async function prepareSubmissionForWrite(
 
   const incoming = submittedPayload(submission.data);
 
-  const form = await fetchParentForm(formsSlug, formId, nextly, ctx.executor);
+  const form = await fetchParentForm(formsSlug, formId, nextly);
   if (!form || !Array.isArray(form.fields)) {
     throw NextlyError.validation({
       errors: [
@@ -1082,8 +1081,7 @@ async function handleSubmissionCreated(
 export async function fetchParentForm(
   formsSlug: string,
   formId: string,
-  nextly: NextlyInstance,
-  executor?: unknown
+  nextly: NextlyInstance
 ): Promise<Record<string, unknown> | null> {
   try {
     // D35/D56: read the parent form through the secure managed service as
@@ -1095,15 +1093,24 @@ export async function fetchParentForm(
     // registry, so the lookup found nothing on exactly the installs the rename
     // API supports.
     //
-    // On the caller's transaction when there is one. A write inside a
-    // transaction can be preparing a submission for a form created earlier in
-    // that same transaction, which a read on the global service cannot see, and
-    // on a single-connection pool it would wait for a transaction that is
-    // waiting for it.
+    // NOT on the caller's transaction, and it cannot be here. The plugin facade
+    // rebuilds its context from `user` and `overrideAccess` alone, and
+    // `CollectionService.findEntryById` forwards only those two to the entry
+    // service, so an executor has nowhere to go on this path: passing one
+    // looked like transaction awareness and was discarded before the query.
+    //
+    // The cost is written down rather than hidden. A submission created inside
+    // a transaction alongside a form created in that same transaction cannot
+    // see it and is refused, and on a pool whose only connection the
+    // transaction holds, this read waits for it. Both fail safely. The pattern
+    // for fixing it exists in collection-hook-service and
+    // collection-access-service, which forward a context's executor for exactly
+    // this reason; bringing it here means changing the entry service and the
+    // plugin facade with it.
     const form = await nextly.services.collections.findEntryById(
       formsSlug,
       formId,
-      { as: "system", ...(executor ? { executor } : {}) }
+      { as: "system" }
     );
     return form;
   } catch (err) {

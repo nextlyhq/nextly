@@ -26,4 +26,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Form submissions are transformed, validated and sanitized on a `beforeCreate` hook on the submissions collection, so every path that writes one gets the same treatment. `nextly.forms.submit()` and a record created from the admin previously stored whatever the caller sent: undeclared keys, values that never met the form schema, and markup intact, because core skips `json` fields when it sanitizes. Spam protection stays on the HTTP route, where a honeypot and a rate limit are facts about a request rather than about a row.
+Form submissions are transformed, validated and sanitized on a `beforeChange` hook on the submissions collection, the last mutating phase before the insert, so every path that writes one gets the same treatment. `nextly.forms.submit()` and a record created from the admin previously stored whatever the caller sent: undeclared keys, values that never met the form schema, and markup intact, because core skips `json` fields when it sanitizes. Spam protection stays on the HTTP route, where a honeypot and a rate limit are facts about a request rather than about a row.
