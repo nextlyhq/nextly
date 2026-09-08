@@ -410,6 +410,95 @@ interface FilteredReadParams {
   groupBy?: string;
 }
 
+/** The declared fields of a collection, wherever this record happens to carry them. */
+function declaredFieldsOf(collection: unknown): Array<{
+  name: string;
+  type: string;
+  component?: string;
+  components?: string[];
+}> {
+  const record = collection as Record<string, unknown>;
+  const fromDefinition = (
+    record.schemaDefinition as Record<string, unknown> | undefined
+  )?.fields;
+  return (fromDefinition || record.fields || []) as Array<{
+    name: string;
+    type: string;
+    component?: string;
+    components?: string[];
+  }>;
+}
+
+/**
+ * Refuse a group key that would disclose by grouping, or that names nothing.
+ *
+ * The owner column is stripped from responses and excluded from sort, because
+ * ordering by it lets a caller target rows by creator; grouping by it is that
+ * disclosure in one request -- a bucket per author with how much each wrote.
+ * `assertGroupableField` does not reach it: that guard judges fields carrying
+ * a read rule, and this is a system column carrying none.
+ *
+ * An unresolved column is refused rather than skipped, which is the deliberate
+ * difference from the sort path. A dropped ORDER BY returns the right rows in
+ * the wrong order; a dropped GROUP BY collapses every bucket into one row and
+ * answers with a single total that reads exactly like a real one.
+ */
+function assertGroupKeyUsable(groupBy: string, column: unknown): void {
+  const snake = toSnakeCase(groupBy);
+  const isOwner =
+    groupBy === "created_by" ||
+    groupBy === "createdBy" ||
+    snake === "created_by";
+  if (isOwner) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `groupBy.${groupBy}`,
+          code: "FIELD_NOT_GROUPABLE",
+          message:
+            "Rows cannot be grouped by their creator. The buckets would report how many rows each user owns.",
+        },
+      ],
+    });
+  }
+  if (!column) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `groupBy.${groupBy}`,
+          code: "FIELD_NOT_GROUPABLE",
+          message: `"${groupBy}" is not a column on this collection, so there is nothing to group by.`,
+        },
+      ],
+    });
+  }
+}
+
+/**
+ * Bucket rows as the wire carries them.
+ *
+ * Annotated rather than inferred because the group column is resolved from a
+ * dynamic schema, so the select cannot describe its own row shape. A date
+ * travels as ISO rather than through the platform's default rendering, so the
+ * same row groups to the same label on every runtime.
+ */
+function toBuckets(
+  rows: Array<{
+    value: string | number | boolean | Date | null;
+    total: number | string | null;
+  }>
+): Array<{ value: string | null; count: number }> {
+  return rows.map(row => ({
+    value:
+      row.value == null
+        ? null
+        : row.value instanceof Date
+          ? row.value.toISOString()
+          : String(row.value),
+    count: Number(row.total ?? 0),
+  }));
+}
+
 export class CollectionQueryService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -2345,6 +2434,316 @@ export class CollectionQueryService extends BaseService {
    * read is an ordinary envelope its caller returns unchanged, and the caller
    * is what knows the data shape that envelope has to carry.
    */
+  /**
+   * What a `search` narrows the read to, or nothing when it narrows nothing.
+   *
+   * Answers `1 = 0` rather than no condition when every searchable field
+   * carries a read rule. Adding nothing would return and count every
+   * otherwise-visible row -- the opposite of a narrowed search, and a worse
+   * answer than the disclosure the narrowing exists to close. An unsatisfiable
+   * predicate is the honest reading of "matched against nothing".
+   *
+   * Narrowed rather than refused, because the caller named no column: dropping
+   * the ones they may not read answers what they asked. Leaving them in lets
+   * `search=<guess>` probe a hidden value through which rows come back.
+   */
+  private async searchNarrowing(
+    params: FilteredReadParams,
+    schema: Record<string, unknown>,
+    localizedCtx: ReturnType<
+      CollectionQueryService["buildLocalizedQueryContext"]
+    >
+  ): Promise<unknown> {
+    if (!params.search) return undefined;
+
+    const collectionMeta = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    if (params.search.trim().length < getMinSearchLength(collectionMeta)) {
+      return undefined;
+    }
+
+    const searchableFields = this.searchableFieldsFor(
+      params.collectionName,
+      collectionMeta,
+      fieldTrustOf(params)
+    );
+    if (searchableFields.length === 0) return sql`1 = 0`;
+
+    // `localizedCtx` routes localized searchable fields to a companion EXISTS
+    // instead of dropping them.
+    return this.buildSearchCondition(
+      schema,
+      searchableFields,
+      params.search,
+      this.adapter?.dialect || "postgresql",
+      localizedCtx
+    );
+  }
+
+  /**
+   * What the caller's own `where` narrows the read to.
+   *
+   * Two conditions rather than one, because a filter naming a component field
+   * (`seo.metaTitle`) becomes an EXISTS against that component's own table
+   * while the rest compiles against this one. They travel together so a caller
+   * applies both or neither -- applying only the second would widen the read
+   * to every row the component filter was meant to exclude.
+   *
+   * The `_translated` key is stripped before the component extractor, which
+   * drops object keys it does not recognise; the language filter it carries
+   * gets its own condition.
+   */
+  private async callerWhereConditions(
+    params: FilteredReadParams,
+    countWhere: WhereFilter | undefined,
+    schema: Record<string, unknown> & { id: unknown },
+    localizedCtx: ReturnType<
+      CollectionQueryService["buildLocalizedQueryContext"]
+    >
+  ): Promise<unknown[]> {
+    if (!countWhere) return [];
+
+    const dialect = this.adapter?.dialect || "postgresql";
+    const collectionForFilters = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    const fieldsForFilters = declaredFieldsOf(collectionForFilters);
+
+    const { cleanedWhere: whereWithoutTranslation } =
+      this.extractTranslationStatusFilter(countWhere);
+    const { componentFilters, cleanedWhere } = extractComponentFieldConditions(
+      whereWithoutTranslation,
+      fieldsForFilters
+    );
+
+    const componentTables =
+      params.resolvedComponentTables ??
+      (await this.resolveComponentTableNames(componentFilters));
+    const componentCondition = this.buildComponentFieldConditions(
+      componentFilters,
+      getTableName(params.collectionName),
+      schema.id,
+      dialect,
+      componentTables,
+      params.resolvedComponentTypeColumns ??
+        (await this.resolveComponentTypeColumns(
+          componentFilters,
+          componentTables.values()
+        ))
+    );
+
+    const remaining = cleanedWhere
+      ? this.buildDrizzleCondition(
+          buildWhereClause(cleanedWhere),
+          schema,
+          dialect,
+          localizedCtx
+        )
+      : undefined;
+
+    return [componentCondition, remaining].filter(
+      condition => condition !== undefined && condition !== null
+    );
+  }
+
+  /**
+   * What a stored read rule narrows the read to, refusing rather than
+   * approximating when it cannot be expressed.
+   *
+   * Translated through the same path the caller's own `where` takes, because
+   * it is a full filter predicate: an owner-only read emits one field, but a
+   * custom rule can return any supported operator across several fields, and
+   * reading a single `equals` off the first key silently returns rows the rule
+   * excludes.
+   *
+   * Refuses BEFORE translating when any member is untranslatable, because a
+   * partially translatable constraint yields a non-empty condition binding
+   * less than the rule requires -- a narrower-LOOKING read that is actually
+   * wider. Members that cannot narrow anything are stripped first, so the
+   * "translated to nothing" refusal judges only what was meant to restrict; a
+   * constraint made entirely of them restricts nothing, and the rule has
+   * already admitted the caller.
+   */
+  private accessConstraintCondition(
+    params: FilteredReadParams,
+    accessConstraint: Record<string, unknown> | null,
+    schema: Record<string, unknown>,
+    localizedCtx: ReturnType<
+      CollectionQueryService["buildLocalizedQueryContext"]
+    >
+  ): unknown {
+    if (!accessConstraint) return undefined;
+
+    const untranslatable = describeUntranslatableConstraint(
+      accessConstraint,
+      name => Object.prototype.hasOwnProperty.call(schema, name),
+      name => Boolean(localizedCtx?.localizedFields.some(f => f.name === name))
+    );
+    // Explicitly against null: a reason can be any string, and an empty one
+    // would read as success.
+    if (untranslatable !== null) {
+      // Logged here rather than left on the error: the caller's catch flattens
+      // this into a result envelope, so the reason would otherwise never reach
+      // operator logs and every refusal would look alike.
+      this.logger.warn("Refused an untranslatable access constraint", {
+        collection: params.collectionName,
+        reason: untranslatable,
+      });
+      throw NextlyError.forbidden({
+        logContext: {
+          collection: params.collectionName,
+          reason: "untranslatable-access-constraint",
+          reason_detail: untranslatable,
+        },
+      });
+    }
+
+    const restricting = stripNoOpConstraintMembers(accessConstraint);
+    if (Object.keys(restricting).length === 0) return undefined;
+
+    const condition = this.buildDrizzleCondition(
+      buildWhereClause(restricting as WhereFilter),
+      schema,
+      this.adapter?.dialect || "postgresql",
+      localizedCtx
+    );
+    if (!condition) {
+      // A constraint that translates to nothing would widen the read to every
+      // row. Fail closed instead: the rule asked to narrow.
+      throw NextlyError.forbidden({
+        logContext: {
+          collection: params.collectionName,
+          reason: "untranslatable-access-constraint",
+        },
+      });
+    }
+    return condition;
+  }
+
+  /**
+   * Refuse a geo predicate on a read that returns no rows to test it against.
+   *
+   * `listEntries` evaluates geo operators in memory over the rows it fetched.
+   * An aggregate has no rows, and `buildWhereClause` emits no SQL for them, so
+   * leaving one in place would answer over every candidate the geo filter was
+   * meant to exclude -- a number that looks ordinary and counts the wrong set.
+   */
+  private refuseGeoInAggregate(
+    collectionName: string,
+    where: WhereFilter | undefined
+  ): void {
+    const { geoFilters } = extractGeoFilters(where);
+    if (geoFilters.length === 0) return;
+    throw NextlyError.invalidInput({
+      message:
+        "A geo filter cannot be counted. Geo predicates are evaluated over fetched rows, so they apply to a list but not to a count; remove the geo operator or take the total from the list instead.",
+      logContext: {
+        collection: collectionName,
+        operators: geoFilters.map(f => f.operator),
+      },
+    });
+  }
+
+  /**
+   * The draft/published scope this read is confined to, and the status values
+   * a localized EXISTS has to agree with.
+   *
+   * Both come back together because they are one decision read twice: the
+   * condition constrains the rows, and the same values constrain any companion
+   * lookup, so a published read does not match a draft translation.
+   *
+   * ONE instant serves the whole read. Each release lookup taking its own
+   * `new Date()` let a release fall due between two conditions of the same
+   * request, so a single response could carry pre-release rows beside a
+   * post-release total.
+   */
+  private async releaseScope(
+    params: FilteredReadParams,
+    // Taken from the caller rather than read off a loosely typed schema, so
+    // both columns keep the types `statusCondition` declares for them.
+    columns: Pick<
+      Parameters<typeof statusCondition>[0],
+      "statusColumn" | "idColumn"
+    >
+  ): Promise<{
+    condition: ReturnType<typeof statusCondition>;
+    statusValues: ReturnType<typeof resolveStatusFilter> extends infer F
+      ? F extends { values: infer V }
+        ? V | undefined
+        : undefined
+      : undefined;
+  }> {
+    const collectionForStatus = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    const statusFilter = resolveStatusFilter({
+      collectionHasStatus:
+        (collectionForStatus as { status?: boolean }).status === true,
+      overrideAccess: params.overrideAccess === true,
+      explicit: params.status,
+    });
+    const condition = statusCondition({
+      filter: statusFilter,
+      statusColumn: columns.statusColumn,
+      idColumn: columns.idColumn,
+      decisions: await this.releaseDecisions(
+        params.collectionName,
+        statusFilter,
+        // The enclosing read's instant when this is its continuation, and its
+        // own clock when it was called directly.
+        params.releaseNow ?? new Date()
+      ),
+    });
+    return { condition, statusValues: statusFilter?.values };
+  }
+
+  /**
+   * What the `_translated` language filter narrows the read to.
+   *
+   * Applied whether or not the caller sent a `where`: when the language filter
+   * is the ONLY filter, `listEntries` strips the key and forwards the filter
+   * separately, so a version that looked inside `where` alone would drop it
+   * and make a total describe more rows than the page it belongs to.
+   */
+  private async languageFilterCondition(
+    params: FilteredReadParams,
+    countWhere: WhereFilter | undefined,
+    idColumn: Parameters<
+      CollectionQueryService["buildTranslationStatusFilterCondition"]
+    >[2]
+  ): Promise<unknown> {
+    const filter =
+      params.translationFilter ??
+      this.extractTranslationStatusFilter(countWhere).filter;
+    if (!filter) return undefined;
+    return this.buildTranslationStatusFilterCondition(
+      params.collectionName,
+      filter,
+      idColumn
+    );
+  }
+
+  /**
+   * The filter a read actually runs, after the read hooks have had it.
+   *
+   * A standalone read runs them for the reason it mirrors every other
+   * `listEntries` filter: its answer has to describe the rows a list would
+   * return. Skipped when `listEntries` already ran them and forwarded what
+   * they settled on, so one request never runs them twice.
+   */
+  private async hookSettledWhere(
+    params: FilteredReadParams
+  ): Promise<WhereFilter | undefined> {
+    if (params.readHooksAlreadyRan) return params.where;
+    return this.resolveReadWhere({
+      collectionName: params.collectionName,
+      where: params.where,
+      user: params.user,
+      sharedContext: { ...params.context },
+    });
+  }
+
   private async resolveReadPlan<TData>(params: FilteredReadParams) {
     const accessUser = params.overrideAccess ? undefined : params.user;
 
@@ -2374,35 +2773,9 @@ export class CollectionQueryService extends BaseService {
       params.collectionName
     );
 
-    // A standalone count runs the read hooks for the same reason it mirrors
-    // every other listEntries filter: the total has to describe the rows a
-    // list would return. Skipped when listEntries already ran them and
-    // forwarded what they settled on.
-    const countWhere = params.readHooksAlreadyRan
-      ? params.where
-      : await this.resolveReadWhere({
-          collectionName: params.collectionName,
-          where: params.where,
-          user: params.user,
-          sharedContext: { ...params.context },
-        });
+    const countWhere = await this.hookSettledWhere(params);
 
-    // A count cannot apply geo predicates: `listEntries` evaluates them in
-    // memory over the rows it fetched, and there are no rows here.
-    // `buildWhereClause` emits no SQL for them, so leaving one in place would
-    // return a total describing every candidate the geo filter was meant to
-    // exclude. Refusing says so instead of answering wrongly.
-    const { geoFilters: countGeoFilters } = extractGeoFilters(countWhere);
-    if (countGeoFilters.length > 0) {
-      throw NextlyError.invalidInput({
-        message:
-          "A geo filter cannot be counted. Geo predicates are evaluated over fetched rows, so they apply to a list but not to a count; remove the geo operator or take the total from the list instead.",
-        logContext: {
-          collection: params.collectionName,
-          operators: countGeoFilters.map(f => f.operator),
-        },
-      });
-    }
+    this.refuseGeoInAggregate(params.collectionName, countWhere);
 
     // i18n M4c: mirror listEntries' localized-query context so a locale-scoped search/where
     // counts the SAME rows the page returns (count==list parity).
@@ -2435,38 +2808,11 @@ export class CollectionQueryService extends BaseService {
     // single equality, and reducing it here would narrow less than the rule
     // asks for.
 
-    // Apply Draft/Published auto-filter. The helper returns null when the
-    // collection has no status column, the caller is trusted with no
-    // explicit choice, or explicit was 'all'. Otherwise it returns the
-    // value to filter by ('published' for public callers by default).
-    // Guarding on schema.status avoids referencing a column that may not
-    // exist when the collection has status disabled.
-    const collectionForStatus = await this.collectionService.getCollection(
-      params.collectionName
-    );
-    const statusFilter = resolveStatusFilter({
-      collectionHasStatus:
-        (collectionForStatus as { status?: boolean }).status === true,
-      overrideAccess: params.overrideAccess === true,
-      explicit: params.status,
-    });
-    // ONE instant for this read. Each release lookup taking its own
-    // `new Date()` let a release become due between the row query and a
-    // sibling condition, so one response could carry pre-release rows beside
-    // a post-release count.
-    // The enclosing read's instant when this count is its continuation,
-    // and this count's own clock when it was called directly.
-    const readNow = params.releaseNow ?? new Date();
-    const releaseCondition = statusCondition({
-      filter: statusFilter,
-      statusColumn: schema.status,
-      idColumn: schema.id,
-      decisions: await this.releaseDecisions(
-        params.collectionName,
-        statusFilter,
-        readNow
-      ),
-    });
+    const { condition: releaseCondition, statusValues } =
+      await this.releaseScope(params, {
+        statusColumn: schema.status,
+        idColumn: schema.id,
+      });
     if (releaseCondition) whereConditions.push(releaseCondition);
     // Build the localized-query context AFTER the status filter is resolved so
     // localized where/search EXISTS checks constrain by the per-locale status too
@@ -2475,211 +2821,35 @@ export class CollectionQueryService extends BaseService {
       companion,
       localeChain,
       schema,
-      statusFilter?.values
+      statusValues
     );
 
-    // Apply search filter if provided
-    if (params.search) {
-      // Get collection metadata for search configuration
-      const collectionMeta = await this.collectionService.getCollection(
-        params.collectionName
-      );
+    const searched = await this.searchNarrowing(params, schema, localizedCtx);
+    if (searched) whereConditions.push(searched);
 
-      // Check minimum search length
-      const minLength = getMinSearchLength(collectionMeta);
-      if (params.search.trim().length >= minLength) {
-        // Get searchable fields
-        // Narrowed, not refused: the caller never named a column, so
-        // dropping the ones they may not read answers what they asked.
-        // Leaving them in lets `search=<guess>` probe a hidden value
-        // through which rows come back.
-        const searchableFields = this.searchableFieldsFor(
-          params.collectionName,
-          collectionMeta,
-          fieldTrustOf(params)
-        );
+    const languageCondition = await this.languageFilterCondition(
+      params,
+      countWhere,
+      schema.id
+    );
+    if (languageCondition) whereConditions.push(languageCondition);
 
-        if (searchableFields.length === 0) {
-          // Every searchable field carries a read rule, so this caller has
-          // nothing to be matched against. Adding NO condition would return
-          // and count every otherwise-visible row -- the exact opposite of a
-          // narrowed search, and a worse answer than the leak this narrowing
-          // exists to close. An unsatisfiable predicate is the honest reading
-          // of "matched against nothing".
-          whereConditions.push(sql`1 = 0`);
-        } else {
-          // Determine database dialect for ILIKE vs LIKE
-          const dialect = this.adapter?.dialect || "postgresql";
+    whereConditions.push(
+      ...(await this.callerWhereConditions(
+        params,
+        countWhere,
+        schema,
+        localizedCtx
+      ))
+    );
 
-          // Build search condition (localizedCtx routes localized searchable fields to
-          // a companion EXISTS instead of dropping them).
-          const searchCondition = this.buildSearchCondition(
-            schema,
-            searchableFields,
-            params.search,
-            dialect,
-            localizedCtx
-          );
-
-          if (searchCondition) {
-            whereConditions.push(searchCondition);
-          }
-        }
-      }
-    }
-
-    // apply the `_translated` language filter regardless of `countWhere` — when it
-    // is the ONLY filter, listEntries forwards `where: undefined` (the key having been stripped)
-    // and passes the filter via `translationFilter`. Applying it here (not inside the
-    // `if (countWhere)` block below) keeps count == list so pagination totals stay correct.
-    const countTranslationFilter =
-      params.translationFilter ??
-      this.extractTranslationStatusFilter(countWhere).filter;
-    if (countTranslationFilter) {
-      const translationCondition =
-        await this.buildTranslationStatusFilterCondition(
-          params.collectionName,
-          countTranslationFilter,
-          schema.id
-        );
-      if (translationCondition) whereConditions.push(translationCondition);
-    }
-
-    // Apply where clause if provided
-    if (countWhere) {
-      // Determine database dialect for ILIKE vs LIKE
-      const dialect = this.adapter?.dialect || "postgresql";
-
-      // Get collection metadata for component field detection
-      const collectionForFilters = await this.collectionService.getCollection(
-        params.collectionName
-      );
-      const fieldsForFilters = ((
-        (collectionForFilters as Record<string, unknown>).schemaDefinition as
-          | Record<string, unknown>
-          | undefined
-      )?.fields ||
-        (collectionForFilters as Record<string, unknown>).fields ||
-        []) as Array<{
-        name: string;
-        type: string;
-        component?: string;
-        components?: string[];
-      }>;
-
-      // Strip the `_translated` key before the component extractor (which drops unrecognized
-      // object keys). The filter itself was already applied above.
-      const { cleanedWhere: whereWithoutTranslation } =
-        this.extractTranslationStatusFilter(countWhere);
-
-      // Extract component field conditions (e.g., 'seo.metaTitle')
-      const { componentFilters, cleanedWhere } =
-        extractComponentFieldConditions(
-          whereWithoutTranslation,
-          fieldsForFilters
-        );
-
-      // Get the table name for component subqueries
-      const tableName = getTableName(params.collectionName);
-
-      // Build component field EXISTS conditions
-      const componentTables =
-        params.resolvedComponentTables ??
-        (await this.resolveComponentTableNames(componentFilters));
-      const componentCondition = this.buildComponentFieldConditions(
-        componentFilters,
-        tableName,
-        schema.id,
-        dialect,
-        componentTables,
-        params.resolvedComponentTypeColumns ??
-          (await this.resolveComponentTypeColumns(
-            componentFilters,
-            componentTables.values()
-          ))
-      );
-
-      if (componentCondition) {
-        whereConditions.push(componentCondition);
-      }
-
-      // Convert remaining WhereFilter to internal WhereClause format
-      if (cleanedWhere) {
-        const internalWhere = buildWhereClause(cleanedWhere);
-
-        // Build Drizzle condition from the WhereClause
-        const whereCondition = this.buildDrizzleCondition(
-          internalWhere,
-          schema,
-          dialect,
-          localizedCtx
-        );
-
-        if (whereCondition) {
-          whereConditions.push(whereCondition);
-        }
-      }
-    }
-
-    // Apply the stored read rule's query constraint through the same
-    // translation the caller's `where` uses. It is a full filter predicate:
-    // an owner-only read emits one field, but a custom rule can return any
-    // supported operator across several fields, and reading a single `equals`
-    // off the first key silently returns rows the rule excludes.
-    if (accessConstraint) {
-      // Refuse before translating: a partially translatable constraint yields a
-      // non-empty condition that binds less than the rule requires.
-      const untranslatable = describeUntranslatableConstraint(
-        accessConstraint,
-        name => Object.prototype.hasOwnProperty.call(schema, name),
-        name =>
-          Boolean(localizedCtx?.localizedFields.some(f => f.name === name))
-      );
-      // Explicitly against null: a reason can be any string, and an empty one
-      // would read as success.
-      if (untranslatable !== null) {
-        // Logged here rather than left on the error: the surrounding catch
-        // flattens this into a result envelope, so the reason would otherwise
-        // never reach operator logs and every refusal would look alike.
-        this.logger.warn("Refused an untranslatable access constraint", {
-          collection: params.collectionName,
-          reason: untranslatable,
-        });
-        throw NextlyError.forbidden({
-          logContext: {
-            collection: params.collectionName,
-            reason: "untranslatable-access-constraint",
-            reason_detail: untranslatable,
-          },
-        });
-      }
-      // Members that cannot narrow anything are removed before translation,
-      // so the "translated to nothing" check below judges only what was meant
-      // to restrict. A constraint made up entirely of them restricts nothing,
-      // and the rule already allowed the caller.
-      const restricting = stripNoOpConstraintMembers(accessConstraint);
-      const accessCondition =
-        Object.keys(restricting).length === 0
-          ? undefined
-          : this.buildDrizzleCondition(
-              buildWhereClause(restricting as WhereFilter),
-              schema,
-              this.adapter?.dialect || "postgresql",
-              localizedCtx
-            );
-      if (accessCondition) {
-        whereConditions.push(accessCondition);
-      } else if (Object.keys(restricting).length > 0) {
-        // A constraint that translates to nothing would widen the read to
-        // every row. Fail closed instead: the rule asked to narrow.
-        throw NextlyError.forbidden({
-          logContext: {
-            collection: params.collectionName,
-            reason: "untranslatable-access-constraint",
-          },
-        });
-      }
-    }
+    const restriction = this.accessConstraintCondition(
+      params,
+      accessConstraint,
+      schema,
+      localizedCtx
+    );
+    if (restriction) whereConditions.push(restriction);
 
     return { allowed: true as const, schema, whereConditions };
   }
@@ -2764,49 +2934,9 @@ export class CollectionQueryService extends BaseService {
       if (!plan.allowed) return plan.denied;
       const { schema, whereConditions } = plan;
 
-      const requested = params.groupBy;
-      const snake = toSnakeCase(requested);
-
-      // Stripped from responses and excluded from sort, because ordering by it
-      // lets a caller target rows by creator. Grouping by it is that
-      // disclosure in a single request: one bucket per author, with how much
-      // each of them wrote. `assertGroupableField` does not reach it -- that
-      // guard judges fields carrying a read rule, and this is a system column
-      // that carries none.
-      if (
-        requested === "created_by" ||
-        requested === "createdBy" ||
-        snake === "created_by"
-      ) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: `groupBy.${requested}`,
-              code: "FIELD_NOT_GROUPABLE",
-              message:
-                "Rows cannot be grouped by their creator. The buckets would report how many rows each user owns.",
-            },
-          ],
-        });
-      }
-
-      // Refused rather than skipped, which is the deliberate difference from
-      // the sort path. An unresolved sort column drops the ORDER BY and
-      // returns the right rows in the wrong order; an unresolved group column
-      // would drop the GROUP BY, collapse every bucket into one row, and
-      // answer with a single total that reads exactly like a real one.
-      const column = schema[requested] ?? schema[snake];
-      if (!column) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: `groupBy.${requested}`,
-              code: "FIELD_NOT_GROUPABLE",
-              message: `"${requested}" is not a column on this collection, so there is nothing to group by.`,
-            },
-          ],
-        });
-      }
+      const column =
+        schema[params.groupBy] ?? schema[toSnakeCase(params.groupBy)];
+      assertGroupKeyUsable(params.groupBy, column);
 
       const cap = Math.min(
         Math.max(1, Math.trunc(params.bucketLimit ?? MAX_GROUP_BUCKETS)),
@@ -2837,27 +2967,7 @@ export class CollectionQueryService extends BaseService {
         statusCode: 200,
         message: "Buckets retrieved successfully",
         data: {
-          // Annotated because the group column is resolved from a dynamic
-          // schema, so the row shape cannot be inferred from the select.
-          buckets: rows
-            .slice(0, cap)
-            .map(
-              (row: {
-                value: string | number | boolean | Date | null;
-                total: number | string | null;
-              }) => ({
-                // A date bucket travels as ISO rather than through the
-                // platform's default rendering, so the same row groups to the
-                // same label on every runtime.
-                value:
-                  row.value == null
-                    ? null
-                    : row.value instanceof Date
-                      ? row.value.toISOString()
-                      : String(row.value),
-                count: Number(row.total ?? 0),
-              })
-            ),
+          buckets: toBuckets(rows.slice(0, cap)),
           truncated: rows.length > cap,
         },
       };
