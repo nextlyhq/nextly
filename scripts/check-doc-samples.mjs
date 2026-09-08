@@ -80,9 +80,9 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 // passed. The closing run is a backreference, so a fence still has to close with
 // what it opened with.
 const RAW_FENCE =
-  /(?:^|\n)([ \t]*(?:>[ \t]*)*)(```+|~~~+)(\w*)[^\n]*\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2[`~]*[ \t\r]*(?=\n|$)/g;
+  /(?:^|\n)([ \t]*(?:>[ \t]*)*)(```+|~~~+)(\w*)([^\n]*)\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2[`~]*[ \t\r]*(?=\n|$)/g;
 const ESCAPED_FENCE =
-  /(?:^|\n)([ \t]*(?:>[ \t]*)*)((?:\\`){3,})(\w*)[^\n]*\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2(?:\\`)*[ \t\r]*(?=\n|$)/g;
+  /(?:^|\n)([ \t]*(?:>[ \t]*)*)((?:\\`){3,})(\w*)([^\n]*)\n([\s\S]*?)\r?\n[ \t]*(?:>[ \t]*)*\2(?:\\`)*[ \t\r]*(?=\n|$)/g;
 
 /**
  * Take the blockquote markers off a body, and only when it had them.
@@ -108,11 +108,40 @@ const isTypeScript = lang =>
 /** JSX needs a .tsx extension or the parser reads `<` as a type argument. */
 const looksLikeJsx = code => /<\/[A-Za-z]|\/>/.test(code);
 
+/**
+ * A TypeScript fence that opens and never closes.
+ *
+ * `matchAll` yields nothing for one, so the sample is not extracted, not
+ * counted and not compiled. On an existing page the coverage ratchet catches
+ * the loss; on a NEW page, or one that had no TypeScript before, there is no
+ * held count to fall below, so a malformed block changes no protected value and
+ * passes while the rest of the page renders as code. Breaking a fence and then
+ * rewriting the baseline over the broken tree is how this gate was defeated
+ * once already, from the inside.
+ *
+ * Returns the opening lines, one per unterminated fence, so the report can say
+ * where to look.
+ */
+export function unterminatedFences(text) {
+  const opener = /^[ \t]*(?:>[ \t]*)*(```+|~~~+)(\w*)/;
+  const open = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(opener);
+    if (!m) continue;
+    const last = open[open.length - 1];
+    // A closer is the same delimiter run with no language after it. Anything
+    // else opens a nested block, which Markdown allows only with a longer run.
+    if (last && m[1].startsWith(last.delimiter) && !m[2]) open.pop();
+    else if (!last) open.push({ delimiter: m[1], lang: m[2], line });
+  }
+  return open.filter(f => isTypeScript(f.lang)).map(f => f.line.trim());
+}
+
 export function extractFrom(kind, text, file) {
   const out = [];
-  const push = (code, index, lang) => {
+  const push = (code, index, lang, meta = "") => {
     const trimmed = code.trim();
-    if (trimmed) out.push({ file, index, code: trimmed, lang });
+    if (trimmed) out.push({ file, index, code: trimmed, lang, meta });
   };
   if (kind === "fenced-in-template-literal" || kind === "markdown-dir") {
     // A Markdown FILE is not a template literal, so its backslashes are already
@@ -123,10 +152,10 @@ export function extractFrom(kind, text, file) {
     const literal = kind === "fenced-in-template-literal";
     for (const m of text.matchAll(literal ? ESCAPED_FENCE : RAW_FENCE)) {
       // 1 is the container prefix, 2 the delimiter, 3 the language token,
-      // 4 the body.
+      // 4 the rest of the info string, 5 the body.
       if (!isTypeScript(m[3])) continue;
-      const body = stripContainer(m[4], m[1]);
-      push(literal ? unescapeTemplate(body) : body, out.length, m[3]);
+      const body = stripContainer(m[5], m[1]);
+      push(literal ? unescapeTemplate(body) : body, out.length, m[3], m[4]);
     }
   } else if (kind === "template-literal-consts") {
     // Exported const NAME = `...`; where the body is TypeScript, not Markdown.
@@ -156,8 +185,24 @@ export function extractFrom(kind, text, file) {
  * sample advertised as tsx would have been checked under rules a reader
  * pasting it never gets.
  */
-export const extensionFor = sample =>
-  sample.lang === "tsx" || looksLikeJsx(sample.code) ? "tsx" : "ts";
+export const extensionFor = sample => {
+  // A stated filename wins over anything inferred from the body. A fence
+  // headed `ts title="nextly.config.ts"` advertises the file a reader is meant
+  // to paste it into, and compiling it as TSX because it happens to contain
+  // angle brackets checks it under rules that reader never gets. 46 fences in
+  // these pages name a file, and the names carry real extensions.
+  //
+  // Not for a file this harness built, though. A rebuilt sample carries the
+  // original fence's metadata, and the concatenation of earlier fences in front
+  // of it is not the file that title names: forcing `.ts` on it when the pasted
+  // part contains JSX makes it fail to parse for a reason the page does not
+  // have. `prependedLines` is only set on a rebuild.
+  const stated = sample.prependedLines
+    ? undefined
+    : sample.meta?.match(/\.(tsx?)\b/)?.[1];
+  if (stated) return stated;
+  return sample.lang === "tsx" || looksLikeJsx(sample.code) ? "tsx" : "ts";
+};
 
 /**
  * A file the sample quotes and the reader writes: ./collections/Posts, or the
@@ -227,7 +272,13 @@ export const isModule = code =>
   // program a reader runs, and requiring ESM syntax filed it as a fragment so
   // nothing compiled it: the webhook-verification example on the form-builder
   // page is exactly that shape, and its undefined names were never read.
-  /(?:^|[^.\w])require\s*\(/m.test(code);
+  /(?:^|[^.\w])require\s*\(/m.test(code) ||
+  // So does a dynamic one. `const nx = await import("nextly")` loads a package
+  // exactly as the declaration form does, and reading only declarations left
+  // such a fence extracted, never compiled, and free to call methods that do
+  // not exist. `.import(` is excluded for the same reason `require` is: a
+  // property access of that name is not a module load.
+  /(?:^|[^.\w])import\s*\(/m.test(code);
 
 /**
  * The documentation this repository owns and publishes.
@@ -252,12 +303,30 @@ export function collectDocSamples() {
           ? [join(dir, e.name)]
           : []
     );
-  return walk(root).flatMap(full =>
-    extractFrom(
-      "markdown-dir",
-      readFileSync(full, "utf-8"),
-      relative(ROOT, full)
-    )
+  const pages = walk(root).map(full => ({
+    file: relative(ROOT, full),
+    text: readFileSync(full, "utf-8"),
+  }));
+  // A fence that never closes is checked here rather than inferred from a
+  // count, because on a page with no held count there is nothing for a count to
+  // fall below.
+  const broken = pages.flatMap(page =>
+    unterminatedFences(page.text).map(line => `${page.file}: ${line}`)
+  );
+  if (broken.length > 0) {
+    const detail = broken.map(line => `  ${line}`).join("\n");
+    const err = new Error(
+      `these TypeScript fences open and never close, so the samples in them ` +
+        `are not extracted and the rest of each page renders as code:\n${detail}`
+    );
+    // Marked, because the caller treats a failure to read the tree as a reason
+    // to stop quietly. This is the opposite: a page IS readable and is wrong,
+    // and stopping quietly is how a broken fence gets recorded as normal.
+    err.brokenFences = broken;
+    throw err;
+  }
+  return pages.flatMap(page =>
+    extractFrom("markdown-dir", page.text, page.file)
   );
 }
 
@@ -910,6 +979,25 @@ function topLevelOnly(code) {
   return chars.join("");
 }
 
+/**
+ * The import declarations a source actually has.
+ *
+ * Parsed as TSX, because these samples are, and a parse never throws here: on
+ * malformed input TypeScript produces a tree with diagnostics rather than an
+ * exception, and a statement list that is short of a broken import is the right
+ * answer anyway.
+ */
+function importsIn(source) {
+  const parsed = ts.createSourceFile(
+    "sample.tsx",
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.TSX
+  );
+  return parsed.statements.filter(ts.isImportDeclaration);
+}
+
 export function declaredNamesIn(source) {
   const code = topLevelOnly(source);
   const names = new Set();
@@ -947,27 +1035,23 @@ export function declaredNamesIn(source) {
       add(renamed ? renamed[1] : piece.match(/^[A-Za-z_$][\w$]*/)?.[0]);
     }
   }
-  // Imports are read from the ORIGINAL source, not the top-level view. An
-  // import clause spans lines and opens a brace, so blanking by depth erased
-  // the middle of `import {\n  defineConfig,\n} from "nextly"` and a later
-  // fence using the name was reported as undefined. An import binding is
-  // top-level wherever its clause happens to wrap.
-  for (const m of source.matchAll(/^\s*import\s+([^;]*?)\s+from\s/gms)) {
-    // `import type { Foo }` and `import type Foo`: the keyword belongs to the
-    // whole clause and is not a binding. Stripped here, before the braces
-    // become commas, so that what survives inside them is only bindings.
-    const clause = m[1].replace(/^type\s+/, "");
-    for (const part of clause.replace(/[{}]/g, ",").split(",")) {
-      // `import { type Foo }` binds Foo. Taking the first identifier recorded
-      // `type` and lost the name, so a later fence using it was reported as a
-      // missing name rather than rebuilt with its context: a false finding on a
-      // common syntax. The keyword is dropped only when an identifier follows
-      // it, because `import { type }` legally binds something called `type`.
-      const piece = part.trim().replace(/^type\s+(?=[A-Za-z_$])/, "");
-      if (!piece) continue;
-      const alias = piece.match(/\bas\s+([A-Za-z_$][\w$]*)$/);
-      add(alias ? alias[1] : piece.match(/^[A-Za-z_$][\w$]*/)?.[0]);
-    }
+  // Imports come from the PARSE, not from a pattern over the text. They cannot
+  // be read from the top-level view either: an import clause opens a brace, so
+  // masking by depth erases the middle of `import {\n  defineConfig,\n} from
+  // "nextly"` and a later fence using the name reads as undefined. Reading the
+  // raw text instead recorded an `import { ghost } from "pkg"` written inside a
+  // block comment or a template literal as a real binding, which then excused a
+  // fence that used `ghost` as a continuation of a page that never bound it. A
+  // parser has neither problem: a comment produces no statement, and a wrapped
+  // clause is one statement however it is laid out.
+  for (const statement of importsIn(source)) {
+    const clause = statement.importClause;
+    if (!clause) continue;
+    if (clause.name) add(clause.name.text);
+    const bindings = clause.namedBindings;
+    if (!bindings) continue;
+    if (ts.isNamespaceImport(bindings)) add(bindings.name.text);
+    else for (const element of bindings.elements) add(element.name.text);
   }
   return [...names];
 }
@@ -1393,6 +1477,9 @@ async function auditDocs() {
   try {
     all = collectDocSamples();
   } catch (err) {
+    // A malformed page is a finding, not a reason to stop looking. Only an
+    // unreadable tree is the latter.
+    if (err.brokenFences) throw err;
     console.log(
       `docs: the tree is present but incomplete, so nothing was audited.\n  ${String(err.message ?? err)}`
     );
