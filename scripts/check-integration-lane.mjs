@@ -36,21 +36,63 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKFLOW = ".github/workflows/integration.yml";
 
 /**
+ * Every shell command the workflow actually RUNS, in order.
+ *
+ * 🔴 Reading `run:` rather than scanning every line is the load-bearing part.
+ * The workflow's prose explains what each leg does, so a paragraph naming a
+ * command reads identically to the command — and a line scan counts an
+ * invocation that was commented out while the lane it described has stopped
+ * running. That is this check reporting a covered lane it never had.
+ *
+ * Both YAML forms the file uses: a block scalar (`run: |`), whose body is every
+ * following line indented past the key, and the one-line form. A block's body is
+ * a shell script, so a line opening with `#` there is a comment for the same
+ * reason a YAML one is, and neither executes.
+ *
+ * The boundary, stated rather than covered badly: this reads indentation, not
+ * YAML. A quoted `#`, a folded scalar carrying a continuation, or a command
+ * assembled across lines would need a parser, and none is a form this workflow
+ * uses. What it will not do is mistake prose or a disabled line for a command.
+ */
+export function runCommands(workflow) {
+  const commands = [];
+  const lines = workflow.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index++) {
+    const block = /^(\s*)(?:-\s+)?run:[ \t]*[|>][-+]?[ \t]*$/.exec(lines[index]);
+    if (block) {
+      const keyIndent = block[1].length;
+      for (let body = index + 1; body < lines.length; body++) {
+        const line = lines[body];
+        if (line.trim() === "") continue;
+        if (line.length - line.trimStart().length <= keyIndent) break;
+        commands.push(line.trim());
+      }
+      continue;
+    }
+    const inline = /^\s*(?:-\s+)?run:[ \t]+([^|>\s].*)$/.exec(lines[index]);
+    if (inline) commands.push(inline[1].trim());
+  }
+  return commands;
+}
+
+/**
  * A `turbo test:integration` invocation and the packages it selects.
  *
  * Matched on the command rather than on a step name, because the name is prose
- * somebody can reword while the command is what runs. One invocation per line:
- * the workflow writes each as a single command inside a `run:` block, and a
- * filter split across a continuation would be a different shape than any leg
- * currently uses — so this reports what it can see and the population check
- * below refuses when it sees none.
+ * somebody can reword while the command is what runs.
  */
 export function integrationInvocations(workflow) {
   const invocations = [];
-  for (const line of workflow.split(/\r?\n/)) {
-    if (!/\bturbo\s+test:integration\b/.test(line)) continue;
-    const filters = [...line.matchAll(/--filter=(\S+)/g)].map(m => m[1]);
-    invocations.push({ line: line.trim(), filters });
+  for (const command of runCommands(workflow)) {
+    // A disabled command is not an invocation, however completely it describes
+    // one. Anchored at the start, so a `#` cannot precede what it disables.
+    if (command.startsWith("#")) continue;
+    // A trailing comment is not part of the command either, and one naming a
+    // package would otherwise be read as coverage.
+    const executable = command.split(/\s+#\s/)[0];
+    if (!/\bturbo\s+test:integration\b/.test(executable)) continue;
+    const filters = [...executable.matchAll(/--filter=(\S+)/g)].map(m => m[1]);
+    invocations.push({ line: executable.trim(), filters });
   }
   return invocations;
 }

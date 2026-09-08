@@ -8,6 +8,7 @@ import {
   integrationInvocations,
   laneDrift,
   packagesWithIntegrationTask,
+  runCommands,
 } from "./check-integration-lane.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -15,7 +16,69 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = (name, extra = {}) =>
   JSON.stringify({ name, scripts: { test: "vitest run", ...extra } });
 
+describe("runCommands", () => {
+  it("reads a block scalar's body and stops at the next key", () => {
+    const workflow = [
+      "      - name: Run integration tests",
+      "        run: |",
+      "          pnpm turbo build --filter=nextly",
+      "          pnpm turbo test:integration --filter=nextly",
+      "        env:",
+      "          TURBO_CACHE_DIR: .turbo",
+    ].join("\n");
+
+    expect(runCommands(workflow)).toEqual([
+      "pnpm turbo build --filter=nextly",
+      "pnpm turbo test:integration --filter=nextly",
+    ]);
+  });
+
+  it("reads the one-line form too", () => {
+    expect(runCommands("        run: pnpm install --frozen-lockfile")).toEqual([
+      "pnpm install --frozen-lockfile",
+    ]);
+  });
+
+  it("does not read the prose that explains the workflow", () => {
+    // 🔴 The comments here describe what each leg runs, so a paragraph naming a
+    // command is written exactly like the command. Only `run:` executes.
+    const workflow = [
+      "      # `plugin-seo` runs on THIS leg only. The others would run",
+      "      # pnpm turbo test:integration --filter=@nextlyhq/plugin-seo twice.",
+      "      - name: Something",
+      "        run: pnpm turbo test:integration --filter=nextly",
+    ].join("\n");
+
+    expect(runCommands(workflow)).toEqual([
+      "pnpm turbo test:integration --filter=nextly",
+    ]);
+  });
+});
+
 describe("integrationInvocations", () => {
+  it("does not count an invocation that was commented out", () => {
+    // 🔴 The defect this exists to prevent, in the check itself: a leg disabled
+    // by a `#` still describes its filters perfectly. Counting them reports a
+    // covered lane while nothing runs, which is the one answer worse than none.
+    const workflow = [
+      "        run: |",
+      "          # pnpm turbo test:integration --filter=nextly --filter=@scope/a",
+    ].join("\n");
+
+    expect(integrationInvocations(workflow)).toEqual([]);
+  });
+
+  it("stops at a trailing comment rather than reading its filters", () => {
+    const workflow = [
+      "        run: |",
+      "          pnpm turbo test:integration --filter=nextly # later --filter=@scope/a",
+    ].join("\n");
+
+    expect(integrationInvocations(workflow)).toEqual([
+      { line: "pnpm turbo test:integration --filter=nextly", filters: ["nextly"] },
+    ]);
+  });
+
   it("reads the filters off the command, not off the step name", () => {
     // The name is prose somebody can reword; the command is what runs.
     const workflow = [
