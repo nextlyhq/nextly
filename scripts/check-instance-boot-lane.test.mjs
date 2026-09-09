@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   BOOT_BUDGET_MS,
+  SCAN_ROOTS,
   BOOT_BINDING,
   isTemplate,
   statesBootBudget,
@@ -300,13 +301,36 @@ describe("the population it judges", () => {
       "packages/a/README.md",
     ].join("\0");
 
-    expect(testFiles(".", () => listed)).toEqual([
+    expect(testFiles(".", () => listed, "packages")).toEqual([
       "packages/a/src/x.test.ts",
       "packages/a/src/y.test.tsx",
       "packages/a/src/s.spec.ts",
       "packages/a/src/s2.spec.tsx",
       `packages/a/src/z${INTEGRATION_SUFFIX}`,
     ]);
+  });
+
+  it("asks git for the root it was given, which is what a control can check", () => {
+    // The pathspec was previously baked in and never asserted, so a misspelled
+    // root returned nothing, the package files kept the run non-empty, and the
+    // check reported success on a root it had not read.
+    const calls = [];
+    const runner = (_cmd, args) => {
+      calls.push(args);
+      return "";
+    };
+
+    testFiles(".", runner, "templates");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("templates");
+    expect(calls[0][calls[0].length - 1]).toBe("templates");
+  });
+
+  it("scans the package root and the template root, each on its own", () => {
+    // Listed separately so an empty one is its own answer. Combined, a missing
+    // root hides behind the other root's files.
+    expect(SCAN_ROOTS).toEqual(["packages", "templates"]);
   });
 
   it("collects the suffixes the unit configs name", () => {
@@ -394,6 +418,33 @@ export default defineConfig({ test: { include: ["src/**/*.test.ts"] } });`,
     expect(statesBootBudget(budget(30_000, 30_000))).toBe(true);
     expect(statesBootBudget(budget(30_000, 5_000))).toBe(false);
     expect(statesBootBudget(budget(1_000, 30_000))).toBe(false);
+  });
+
+  it("does not accept budgets from an object vitest is never handed", () => {
+    // The decoy that passed before the exported config was traced: the numbers
+    // are in the file, in an object nobody passes anywhere, while the config
+    // actually exported omits them and the suite runs on the defaults.
+    expect(
+      statesBootBudget(`import { defineConfig } from "vitest/config";
+const NOTES = { testTimeout: 30000, hookTimeout: 30000 };
+export default defineConfig({ test: { include: ["src/**/*.test.ts"] } });`)
+    ).toBe(false);
+  });
+
+  it("reads a config exported without the defineConfig wrapper", () => {
+    // The positive control for the decoy case: it would pass on a predicate
+    // that had simply stopped finding budgets anywhere.
+    expect(
+      statesBootBudget(
+        `export default { test: { testTimeout: 30000, hookTimeout: 30000 } };`
+      )
+    ).toBe(true);
+  });
+
+  it("does not accept a file with no default export at all", () => {
+    expect(
+      statesBootBudget(`export const config = { test: { testTimeout: 30000, hookTimeout: 30000 } };`)
+    ).toBe(false);
   });
 
   it("does not accept a budget that only appears in a comment", () => {

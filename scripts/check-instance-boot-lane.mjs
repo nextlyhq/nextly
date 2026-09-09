@@ -84,8 +84,8 @@ export const UNIT_LANE_SUFFIXES = [
  * `git ls-files` answers with what is committed, so a build artifact or an
  * ignored scratch file cannot enter the population and be judged.
  */
-export function testFiles(cwd, run = execFileSync) {
-  const listed = run("git", ["ls-files", "-z", "--", "packages", "templates"], {
+export function testFiles(cwd, run = execFileSync, root) {
+  const listed = run("git", ["ls-files", "-z", "--", root], {
     cwd,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
@@ -95,6 +95,20 @@ export function testFiles(cwd, run = execFileSync) {
     .filter(Boolean)
     .filter(path => UNIT_LANE_SUFFIXES.some(suffix => path.endsWith(suffix)));
 }
+
+/**
+ * The roots this scans, listed SEPARATELY so each carries its own control.
+ *
+ * 🔴 One combined listing cannot report a root that went missing. With both
+ * roots in one pathspec, misspelling `templates` still returned two thousand
+ * package files, so `covered` stayed large, the run reported success, and the
+ * only trace was a count nobody compares between runs: 225 of 2073 rather than
+ * 226 of 2074. The shipped template would have stopped being scanned while the
+ * output went on claiming every booting suite was checked.
+ *
+ * Asking per root makes each one's emptiness its own answer.
+ */
+export const SCAN_ROOTS = ["packages", "templates"];
 
 /**
  * Whether a source file IMPORTS the boot helper.
@@ -209,23 +223,50 @@ export function statesBootBudget(source) {
     false,
     ts.ScriptKind.TS
   );
-  const found = new Map();
-  const walk = node => {
+
+  /*
+   * 🔴 Only the object vitest is actually handed counts. A walk over the whole
+   * file records a `testTimeout` wherever it appears, including in a constant
+   * nobody passes anywhere, so a config could name the budgets in a decoy and
+   * export one that omits them: the check goes green and the suite runs on the
+   * defaults. What is traced instead is the default export, through
+   * `defineConfig(...)` if it is wrapped, down to its `test` property.
+   */
+  const exported = parsed.statements.find(ts.isExportAssignment);
+  if (!exported) return false;
+
+  let config = exported.expression;
+  // `defineConfig({...})` is a passthrough; an object literal may be exported
+  // directly, and vitest accepts both.
+  if (ts.isCallExpression(config)) {
+    if (config.arguments.length === 0) return false;
+    config = config.arguments[0];
+  }
+  if (!ts.isObjectLiteralExpression(config)) return false;
+
+  const test = config.properties.find(
+    property =>
+      ts.isPropertyAssignment(property) &&
+      ts.isIdentifier(property.name) &&
+      property.name.text === "test" &&
+      ts.isObjectLiteralExpression(property.initializer)
+  );
+  if (!test) return false;
+
+  const budgets = new Map();
+  for (const property of test.initializer.properties) {
     if (
-      ts.isPropertyAssignment(node) &&
-      ts.isIdentifier(node.name) &&
-      (node.name.text === "testTimeout" || node.name.text === "hookTimeout") &&
-      ts.isNumericLiteral(node.initializer)
+      ts.isPropertyAssignment(property) &&
+      ts.isIdentifier(property.name) &&
+      ts.isNumericLiteral(property.initializer)
     ) {
-      found.set(node.name.text, Number(node.initializer.text));
+      budgets.set(property.name.text, Number(property.initializer.text));
     }
-    ts.forEachChild(node, walk);
-  };
-  ts.forEachChild(parsed, walk);
+  }
 
   return (
-    (found.get("testTimeout") ?? 0) >= BOOT_BUDGET_MS &&
-    (found.get("hookTimeout") ?? 0) >= BOOT_BUDGET_MS
+    (budgets.get("testTimeout") ?? 0) >= BOOT_BUDGET_MS &&
+    (budgets.get("hookTimeout") ?? 0) >= BOOT_BUDGET_MS
   );
 }
 
@@ -340,14 +381,18 @@ const invokedDirectly =
   process.argv[1] && process.argv[1].endsWith("check-instance-boot-lane.mjs");
 
 if (invokedDirectly) {
-  const files = testFiles(root);
-
-  if (files.length === 0) {
-    console.error(
-      "check-instance-boot-lane: git listed no test files under packages/, so " +
-        "no file could have been judged."
-    );
-    process.exit(2);
+  const files = [];
+  for (const scanRoot of SCAN_ROOTS) {
+    const found = testFiles(root, execFileSync, scanRoot);
+    if (found.length === 0) {
+      console.error(
+        `check-instance-boot-lane: git listed no test files under ${scanRoot}/, ` +
+          "so nothing there could have been judged and a clean run would be " +
+          "reporting on a root it never read."
+      );
+      process.exit(2);
+    }
+    files.push(...found);
   }
 
   const readSource = path => readFileSync(join(root, path), "utf8");
