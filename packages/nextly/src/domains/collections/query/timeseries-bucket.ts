@@ -48,13 +48,29 @@ export function timeseriesBucketExpression(
   }
 
   if (dialect === "mysql") {
+    // Read back as UTC before anything is formatted. A date field is a MySQL
+    // `TIMESTAMP`, and MySQL converts a `TIMESTAMP` into the SESSION time zone
+    // on read -- a zone that follows `@@global.time_zone`, which is `SYSTEM` by
+    // default and therefore the host's. Formatting the column directly would
+    // bucket in whatever zone the server happens to run in while the window
+    // this is matched against is generated in UTC, so a row near a boundary
+    // lands under an adjacent point whose label claims to be UTC. Measured: one
+    // row stored at 2026-03-04T23:30:00Z buckets to 2026-03-04 with the session
+    // at +00:00 and to 2026-03-05 at +05:30.
+    //
+    // `unix_timestamp` answers the absolute instant whatever the session zone
+    // is, and adding it to a literal epoch produces the UTC wall clock without
+    // consulting a zone at all. `convert_tz` is not used: it needs a named
+    // source zone, and `@@session.time_zone` is frequently the literal
+    // `SYSTEM`, which `convert_tz` cannot resolve.
+    const utc = sql`date_add('1970-01-01 00:00:00', interval unix_timestamp(${column}) second)`;
     // `WEEKDAY` counts Monday as 0, so subtracting it lands on the Monday of
     // the row's own week. `WEEK()` is not used: where its week starts depends
     // on a mode argument whose default is a server setting.
     const source =
       interval === "week"
-        ? sql`date_sub(${column}, interval weekday(${column}) day)`
-        : sql`${column}`;
+        ? sql`date_sub(${utc}, interval weekday(${utc}) day)`
+        : utc;
     return sql`date_format(${source}, ${format})`;
   }
 

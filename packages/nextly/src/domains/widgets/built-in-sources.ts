@@ -8,7 +8,9 @@
  * @module domains/widgets/built-in-sources
  */
 
+import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { entryTitleField } from "../collections/entry-title";
+import { classifyFieldKind } from "../schema/services/field-column-descriptor";
 
 import {
   replaceSourcesOfKind,
@@ -114,9 +116,24 @@ const PRINTABLE_FIELD_TYPES: ReadonlySet<string> = new Set([
   "radio",
 ]);
 
-/** Map a Nextly field type onto the coarse type a query validator needs. */
-function toSourceType(fieldType: string): WidgetSourceField["type"] {
-  switch (fieldType) {
+/**
+ * Map a Nextly field onto the coarse type a query validator needs.
+ *
+ * The built-in names are answered directly, because the mapping is a statement
+ * about what those fields MEAN rather than about the column they emit.
+ *
+ * Anything unrecognised is a PLUGIN field type, and those are asked of the
+ * canonical field-to-column classifier instead of falling through to "string".
+ * A plugin field declaring `storage: "timestamp"` gets a timestamp column and
+ * is bucketable by the read, so advertising it as a string made a timeseries
+ * over it refusable at validation -- the source describing the field as
+ * something the storage says it is not.
+ */
+function toSourceType(field: {
+  type: string;
+  [key: string]: unknown;
+}): WidgetSourceField["type"] {
+  switch (field.type) {
     case "number":
     case "float":
     case "integer":
@@ -128,8 +145,25 @@ function toSourceType(fieldType: string): WidgetSourceField["type"] {
     case "datetime":
       return "date";
     default:
-      return "string";
+      return pluginSourceType(field);
   }
+}
+
+/** What a plugin field's declared STORAGE makes it, in the source vocabulary. */
+function pluginSourceType(field: {
+  type: string;
+  [key: string]: unknown;
+}): WidgetSourceField["type"] {
+  // `classifyFieldKind` is the one place that knows what column a field emits,
+  // for built-in and plugin types alike. Anything it cannot place stays a
+  // string, which is what an unknown field was always described as.
+  const kind = classifyFieldKind(field as FieldDefinition, "collection");
+  if (kind === "timestamp") return "date";
+  if (kind === "boolean") return "boolean";
+  if (kind === "integer" || kind === "double" || kind === "decimal") {
+    return "number";
+  }
+  return "string";
 }
 
 /**
@@ -188,7 +222,7 @@ function exposedFields(
   // missing between the collection registry and the source in the first place.
   return retainedDeclarations(fields).map(field => ({
     name: field.name,
-    type: toSourceType(field.type),
+    type: toSourceType(field),
     ...(field.label !== undefined && { label: field.label }),
   }));
 }

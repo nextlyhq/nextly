@@ -568,6 +568,32 @@ function ungroupableKind(field: FieldDefinition): string | undefined {
  * the wrong order; a dropped GROUP BY collapses every bucket into one row and
  * answers with a single total that reads exactly like a real one.
  */
+/**
+ * Why a DECLARED field cannot be a group key, if it cannot.
+ *
+ * The reasons that depend on the declaration are answered together and before
+ * the missing-column refusal, because a declared field can legitimately have no
+ * column on this table and the reason matters more than the absence.
+ */
+function declaredFieldProblem(
+  declared: FieldDefinition | undefined,
+  groupBy: string
+): string | undefined {
+  if (declared === undefined) return undefined;
+  // A localized field's values live in the `_locales` companion rather than in
+  // this table, so the column lookup finds nothing. Refusing it as "not a
+  // column on this collection" reads as a typo for a field that is declared and
+  // spelled correctly, which sends the reader looking in the wrong place.
+  if (declared.localized === true) {
+    return `"${groupBy}" is a localized field, so its values are stored per locale rather than on this collection. Grouping over a localized field is not supported yet.`;
+  }
+  const ungroupable = ungroupableKind(declared);
+  if (ungroupable !== undefined) {
+    return `"${groupBy}" ${ungroupable}. Group by a scalar field instead.`;
+  }
+  return undefined;
+}
+
 function assertGroupKeyUsable(
   groupBy: string,
   column: unknown,
@@ -590,6 +616,29 @@ function assertGroupKeyUsable(
       ],
     });
   }
+  // Resolved BEFORE the missing-column refusal below, because a declared field
+  // can legitimately have no column on this table and the reason matters more
+  // than the absence.
+  const spelled = new Set([
+    groupBy,
+    toSnakeCase(groupBy),
+    toCamelCase(groupBy),
+  ]);
+  const declared = declaredFields.find(field => spelled.has(field.name));
+
+  const declaredProblem = declaredFieldProblem(declared, groupBy);
+  if (declaredProblem !== undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `groupBy.${groupBy}`,
+          code: "FIELD_NOT_GROUPABLE",
+          message: declaredProblem,
+        },
+      ],
+    });
+  }
+
   if (!column) {
     throw NextlyError.validation({
       errors: [
@@ -607,25 +656,6 @@ function assertGroupKeyUsable(
   // stored hash out through a path with nothing on it to clear the value.
   // `assertGroupableField` does not reach this: it judges fields carrying an
   // `access.read` rule, and a password field's guarantee comes from its type.
-  const spelled = new Set([
-    groupBy,
-    toSnakeCase(groupBy),
-    toCamelCase(groupBy),
-  ]);
-  const declared = declaredFields.find(field => spelled.has(field.name));
-  const ungroupable = declared ? ungroupableKind(declared) : undefined;
-  if (ungroupable !== undefined) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: `groupBy.${groupBy}`,
-          code: "FIELD_NOT_GROUPABLE",
-          message: `"${groupBy}" ${ungroupable}. Group by a scalar field instead.`,
-        },
-      ],
-    });
-  }
-
   if (isPasswordFieldName(declaredFields, groupBy)) {
     throw NextlyError.validation({
       errors: [

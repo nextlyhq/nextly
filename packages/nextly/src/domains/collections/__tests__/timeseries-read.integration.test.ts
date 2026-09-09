@@ -77,6 +77,9 @@ async function boot(
           // A date nobody may read. Grouping publishes the distinct value set,
           // so a timeline over it is the same disclosure spread over a chart.
           date({ name: "closedAt", access: { read: () => false } }),
+          // Its values live in the `_locales` companion rather than on this
+          // table, so the column lookup finds nothing.
+          date({ name: "translatedAt", localized: true }),
         ],
       }),
     ],
@@ -495,6 +498,48 @@ describe.each(getConfiguredTestDialects())(
       // However each adapter chose to STORE these, no two buckets may share a
       // label: the counts behind them are different rows.
       expect(new Set(labels).size).toBe(labels.length);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a localized date key on %s",
+  dialect => {
+    it("is refused for being localized, not for being missing", async () => {
+      // Its column lives in the `_locales` companion, so the lookup finds
+      // nothing on this table. Saying "is not a column on this collection"
+      // reads as a typo for a field that is declared and spelled correctly,
+      // and sends the reader looking in the wrong place.
+      const h = await boot(dialect, [{ occurredAt: daysAgo(0) }]);
+
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        dateField: "translatedAt",
+        interval: "day",
+      });
+
+      expect(res.success).toBe(false);
+      expect(res.statusCode).toBe(400);
+      const body = JSON.stringify(res);
+      expect(body).toContain("localized field");
+      expect(body).not.toContain("is not a column on this collection");
+    });
+
+    it("still says 'not a column' for a key that names nothing", async () => {
+      // The control. Without it, a refusal that called EVERY missing key
+      // localized would satisfy the assertion above.
+      const h = await boot(dialect, [{ occurredAt: daysAgo(0) }]);
+
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        dateField: "noSuchField",
+        interval: "day",
+      });
+
+      expect(res.success).toBe(false);
+      expect(JSON.stringify(res)).toContain(
+        "is not a column on this collection"
+      );
     });
   }
 );
