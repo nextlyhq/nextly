@@ -1134,7 +1134,29 @@ export function planConvertToComponent<TFields>(
   // unresolved, so a conversion whose dry run succeeded replaces visible
   // content with a broken placeholder. Asked through the resolver's own
   // published index, not a walk of this module's own.
-  if (componentIdsIn(definition.document.nodes).includes(componentId)) {
+  //
+  // `limits.maxNodes` is passed, and passing it is the whole guard. The index
+  // walks depth-first under a node budget and STOPS silently, returning a
+  // prefix that is indistinguishable from a definition referencing nothing —
+  // and "references nothing" is the answer that approves the conversion. Left
+  // to its default the walk ran under 5,000 however the host had configured
+  // the caller, so on a site that raised the cap a self-reference sitting past
+  // node 5,000 in walk order approved a conversion the resolver then leaves
+  // unresolved. Measured: at a budget equal to the definition's own node count
+  // the walk reads all of it, and one below that it answers `[]`.
+  //
+  // Threading the caller's cap is sufficient, rather than merely better. The
+  // definition reaching this line is one `plannedSave` accepted under the SAME
+  // `limits`, and that ceiling is `maxNodes` nodes exactly — measured at the
+  // boundary: a selection of `maxNodes` is accepted and walks whole, and
+  // `maxNodes + 1` is refused as `"exceeds-limits"` before this line is
+  // reached. So there is no definition here that this walk can truncate, which
+  // is why the prefix is not tested for and no refusal for one exists.
+  if (
+    componentIdsIn(definition.document.nodes, limits.maxNodes).includes(
+      componentId
+    )
+  ) {
     return { problem: "self-reference" };
   }
 
