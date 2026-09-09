@@ -1,5 +1,941 @@
 # @nextlyhq/plugin-page-builder
 
+## 0.0.2-alpha.64
+
+### Patch Changes
+
+- [#1644](https://github.com/nextlyhq/nextly/pull/1644) [`b6984c1`](https://github.com/nextlyhq/nextly/commit/b6984c1a4f4857bbb7202b6839fb23547cbabfd1) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Converting a selection into a component threw a `RangeError` when the caps
+  object passed to it kept its values on a prototype or as non-enumerable
+  properties, rather than as plain own properties — a shape that worked before
+  the previous release. It also ran any unrelated getter such an object carried,
+  so a throwing one took the conversion down with it.
+
+  The three caps are now read by name, so how a caller chooses to store them no
+  longer matters.
+
+- [#1606](https://github.com/nextlyhq/nextly/pull/1606) [`038bdfb`](https://github.com/nextlyhq/nextly/commit/038bdfbe053e8b5d23fcc0369b9bfdad3727e9df) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A dashboard card stops showing itself as loading once its own data has arrived, instead of waiting for every other card on the page.
+
+  A dashboard asking for more than thirty widgets' data is split into several requests that finish independently, but every card was reading one page-wide "still loading" flag. A card whose own request had already answered went on dimming numbers it had, until the last unrelated request finished — most visible on the largest dashboards, where the split happens. Each card now reads the state of the request that carries it, which is also what the published `WidgetComponentProps.isFetching` describes and what a plugin author is told to use to tell a first load from a widget that asks for nothing.
+
+- [#1643](https://github.com/nextlyhq/nextly/pull/1643) [`ae5ea52`](https://github.com/nextlyhq/nextly/commit/ae5ea52d2aed21e33d0bbdc65646246cb85da3a1) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Converting a selection into a component could be allowed on a site that raised
+  the block document node limit, even when the selection already contained an
+  instance of the component being created. The saved component then referenced
+  itself, and where the content had been the page drew a missing-component
+  placeholder instead.
+
+  The check that refuses a self-referencing conversion reads the selection under
+  whatever node limit the site configured, rather than always under the built-in
+  one. A site that never changed that limit was never affected.
+
+- [#1596](https://github.com/nextlyhq/nextly/pull/1596) [`af9f521`](https://github.com/nextlyhq/nextly/commit/af9f521c7bc5c4ea1039406066dc7313357d3d68) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A dialect nobody stated is now read from the connection URL.
+
+  `DB_DIALECT` carried a Zod default, so it was never absent, so the database
+  factory's URL fallback behind it could not run. Setting only
+  `DATABASE_URL=mysql://...` or `file:./data/nextly.db`, which the adapter
+  READMEs describe as enough, produced a PostgreSQL adapter, PostgreSQL
+  identifier quoting and the PostgreSQL schema tables, because all of those
+  read the same value.
+
+  The URL rules move to the environment schema, ahead of everything that reads
+  the dialect, so there is one answer rather than a second copy behind an
+  unreachable branch. An explicit `DB_DIALECT` still wins, and a URL that
+  implies nothing still defaults to PostgreSQL.
+
+- [#1617](https://github.com/nextlyhq/nextly/pull/1617) [`c4acdf0`](https://github.com/nextlyhq/nextly/commit/c4acdf028aa5c9b9fe9a2543ffd5f843914ac7a6) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A widget query can now carry a group key, and the validator judges it together
+  with the operation rather than separately. `groupBy` means something only to
+  the `groupBy` operation, so a key travelling beside `count` is refused instead
+  of being accepted and then dropped — an accepted-and-ignored key reads back to
+  the caller as a grouped count that was never computed. A `groupBy` operation
+  arriving with no key is refused for the matching reason, at the point that can
+  still say which part is missing.
+
+  The key is read once, with every other property of the query, so an accessor
+  cannot answer one field to the check and another to the query that ships. It is
+  checked against the fields its source declares, the same set `sort` and
+  `select` are checked against.
+
+  Sources that answer one fixed question say so: `keyof WidgetQuery` drives an
+  exhaustive table in each, so a query naming a key they cannot honour is refused
+  by name rather than silently discarded.
+
+- [#1622](https://github.com/nextlyhq/nextly/pull/1622) [`56d7966`](https://github.com/nextlyhq/nextly/commit/56d7966aa9e0e3f93e246d6a328e933183a6c8ce) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A dashboard widget can now ask how many rows carry each distinct value of a
+  field, and the answer describes exactly the rows a count of the same query
+  would have counted.
+
+  Both reads settle that row set through one pipeline. Collection access, the
+  readability guards, the read hooks, release scope, search, translation and
+  component conditions, the caller's own filter and any constraint a stored
+  access rule contributes are resolved once, and each operation only decides
+  what to compute over what is left. An aggregate that assembled its own filters
+  could describe a wider set than the count beside it, and the two would drift
+  the first time a condition was added to one of them.
+
+  A group key is judged where a filter and a sort are judged, because buckets
+  are the stronger disclosure: they publish the column's distinct values as the
+  labels themselves, and redaction never sees them because no row carries the
+  value. Grouping by a field with a read rule is refused by name. So is
+  grouping by the owner column, which would report how much each author wrote,
+  and a key that resolves to no column at all — dropping that would collapse
+  every bucket into one row and answer with a single total that reads exactly
+  like a real one.
+
+  Buckets are ranked and capped in the database once grouping is complete, so
+  the cap chooses among finished buckets and never changes which rows were
+  aggregated. When buckets are left out the result says so, for the reason a
+  bounded count says `atLeast`: a chart drawn from a silently capped set reads
+  as the whole picture.
+
+  The admin reads the grouped answer as its own result kind, so a card receives
+  buckets rather than the malformed-response error every unrecognised payload
+  becomes. A capped bucket set says so on the way through, for the reason a
+  bounded count carries `atLeast`.
+
+  A group key is refused wherever its values would otherwise escape: a field
+  carrying a read rule under any spelling it can be reached by, the owner column,
+  a password field — whose guarantee comes from its type rather than from an
+  access rule, and whose row-level strip an aggregate never passes through — and
+  a key naming no column at all.
+
+  For TypeScript authors, a widget's query now refuses at compile time to pair a
+  group key with an operation that would ignore it, or to declare the grouping
+  operation with no key.
+
+- [#1631](https://github.com/nextlyhq/nextly/pull/1631) [`2a84c21`](https://github.com/nextlyhq/nextly/commit/2a84c2129fb380571a396ade532a7847fc9d5330) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Media: `sizes`, `focalX` and `focalY` are returned by `media.findByID()` and `GET /api/media/:id`, not only by a media file populated as a relationship. Every variant URL is absolutized exactly as `url` is, and the JSON string SQLite stores in the column is parsed, so all three dialects answer with the same shape.
+
+- [#1611](https://github.com/nextlyhq/nextly/pull/1611) [`d6e9f10`](https://github.com/nextlyhq/nextly/commit/d6e9f10e38196ed2d287e84eec562d6918abeb7b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A read against a collection that does not exist answers "not found" again, instead of a server error.
+
+  Both halves of the collection access check decided whether an error meant "this collection does not exist" by looking for the words "not found" in its message. The error the registry actually raises carries the text "Not found.", so neither comparison ever matched the one error it was written for — a genuinely missing collection produced a 500 from the permission gate, and, since a recent change, a rejected read from the constraint resolver. Both now ask the error what it is rather than reading its prose, so the case they were written for is the case they catch, and an unrelated failure whose wording happens to contain those words no longer takes the exit.
+
+  The registry that raises it now says so by type as well as in words. It threw a bare error, so every caller had to read its wording to learn what had happened, and a guard that asked by type instead missed it entirely. It now carries a not-found code alongside the same message, so a caller may ask either way and neither answer changes.
+
+- [#1637](https://github.com/nextlyhq/nextly/pull/1637) [`cdf9de9`](https://github.com/nextlyhq/nextly/commit/cdf9de934b968a92cd8ffa4f5e2b1eb8ae530467) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A toolbar verb added later cannot silently delete a block.
+
+  The bar's dispatch was a chain of `else if` ending in a bare `else verbs.delete()`, so a verb added to `ToolbarActionId` and not wired to a handler did not fail to compile — it fell through to the last arm and removed the block the author had selected.
+
+  Measured, the way it would actually have happened: adding an id makes the icon map fail with `TS2741` and left the dispatch silent, so the compiler pointed at the missing icon, a developer supplied one, and the new button then deleted things. The dispatch is a `Record` over the verb set now, so a new verb fails to compile there too — verified by adding one, which raises two errors where it previously raised one.
+
+- [#1639](https://github.com/nextlyhq/nextly/pull/1639) [`6c0b7ff`](https://github.com/nextlyhq/nextly/commit/6c0b7ff2cabcb87874f450af41cde9677add64ee) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - An author could browse the pattern library and never put anything in it. The
+  planner that turns a selection into a stored pattern had no caller, so the
+  Patterns tier shipped with nothing to show and no way to add to it.
+
+  The page builder now contributes the write that fills it. The editor posts the
+  document and the selection, and the SERVER plans the save — because the planner
+  decides what a pattern is by asking the block registry, and the two registries
+  are not the same: the browser holds the core blocks, while the server also holds
+  every block another plugin declared. A browser that planned its own save would
+  answer nesting questions about blocks it has never heard of, and store a pattern
+  nothing can place.
+
+  The row is created published, because a draft pattern is deliberately kept out
+  of the insert panel — leaving the column's default would answer the author with
+  a pattern their own library does not show. The write runs as the user, so an
+  author without permission to publish one is refused by the collection rather
+  than by the route having been careful. A selection the planner will not save is
+  refused before anything is written, with the planner's own cause travelling
+  verbatim so the caller compares against the vocabulary it already has.
+
+- [#1632](https://github.com/nextlyhq/nextly/pull/1632) [`9b60af4`](https://github.com/nextlyhq/nextly/commit/9b60af41ac62a4c00374121297f13dee3ce81eba) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - **`usePluginRouteMutation` is new on `@nextlyhq/plugin-sdk/admin`.** A plugin could READ its own contributed route and had nothing to write to it with, so any feature that saved something was back to hand-rolling the session, its refresh and the error envelope — the exact problem `usePluginRoute` was added to remove, left standing on the other half of the same seam.
+
+  It goes through the same authenticated client and the same query cache the admin's own writes use. Four things a consumer should know:
+
+  The plugin names ITSELF, as it does for the read, because nothing in a plugin component's React context says which plugin contributed it.
+
+  `invalidates` names the plugin's own read paths, so a write refreshes the list it belongs in. Named rather than inferred: nothing in the admin knows which reads a write affects, and that is the plugin's own knowledge. Each path is resolved through the calling plugin's name, so one plugin cannot invalidate another's cached reads however it spells a path.
+
+  `write` RESOLVES on failure rather than rejecting, answering `undefined`, and reports the cause on `error`. A rejecting promise is the idiomatic TanStack shape and a footgun on a surface handed to plugin authors: a caller who does not wrap the await gets an unhandled rejection for a failure that is already reported. It is the shape the read hook has, so there is one thing to learn rather than two.
+
+  Nothing is toasted from the hook. The admin's own mutation hooks raise a toast because they own the surface that follows; a plugin owns its own, and a generic hook that announced every write would put the admin's voice inside someone else's feature.
+
+  **A plugin write is never retried automatically**, which overrides the admin's own default of two. The admin retries its own mutations because they address routes it owns and knows the shape of; this addresses a route a plugin wrote, with no idempotency key and no requirement that the route be idempotent, and the default verb is `POST`. A create that commits and then loses its response would be sent again — twice — and an author gets three rows for one click with nothing reporting it. The asymmetry decides it: a write that is not retried costs a failure the caller is told about and may repeat deliberately; a write retried wrongly costs duplicate data nothing can identify afterwards.
+
+  **The target travels with the body.** A write paused offline has its options updated before its retryer runs, so a closed-over route would send a body submitted against one endpoint to whichever the hook was rendered with by the time the connection returned.
+
+  **Every write is reported, not only the newest.** TanStack's observer follows the most recent call, so with two writes in flight — a double submit, an autosave overlapping a save — the older one's rejection reached no observer: `error` never saw it and `pending` went false while that request was still running.
+
+  `TBody` DEFAULTS to `JsonValue` rather than being constrained by it. A constraint rejects an ordinary `interface SaveBody { title: string }`, because an interface has no implicit index signature in TypeScript — the error lands on correct code and the only fix is "rewrite your interface as a type alias", which teaches nothing about serialization. That is the reasoning this codebase already recorded for `clientConfig`, and the constraint contradicted it. Every sender applies `JSON.stringify`, and the docblock says so.
+
+  **A write may carry no body at all.** A contributed `DELETE /items/:id` legitimately has none, and inventing one — `null`, `{}` — is a different request that a handler requiring an empty body can reject.
+
+  **A write refreshes the reads it was SUBMITTED with.** The target was already snapshotted; the invalidation keys were not, so a write held while the hook re-pointed refreshed the new selection's reads and left its own stale.
+
+  **A later success clears an earlier failure — but only one submitted no later than itself.** `error` reports the last write, and left set, a plugin showed "could not save" beside a save that had just worked. Clearing it unconditionally is the same defect pointing the other way: a slow earlier save completing after a newer one has already failed would erase that failure, and the surface would report success for the write the author cares about most. Failures carry the submission that produced them, so an older success cannot speak for a newer write and a newer failure replaces an older one.
+
+  The write verbs are `Exclude<RouteMethod, "GET">` rather than a second list of methods. Spelled out, that was a narrower view of the route contract that would stop covering it the moment a method was added: a plugin could declare the route and this could not call it, and nothing would fail. `RouteMethod` is published from `nextly/config` for that, beside `pluginRouteFullPath` and for the same reason — the admin has to agree with the dispatcher about what a route is.
+
+  `protectedApi.delete` now sends a body the caller SUPPLIED rather than one that is truthy. `false`, `0`, `""` and `null` are valid JSON, and a truthiness test dropped all four, so `delete` was the one verb that silently disagreed with what it was passed. Measured before changing it: no caller passes a body at all today, so nothing that exists sends one where it did not before.
+
+  The result type is bounded to an object or `null`, for the reason the read is: the admin's fetcher returns `undefined` for a bare string or number, so `Response.json("ok")` would arrive as a successful empty answer and a caller typed `<string>` would silently never see it.
+
+- [#1627](https://github.com/nextlyhq/nextly/pull/1627) [`3596c69`](https://github.com/nextlyhq/nextly/commit/3596c693c31d9b8355247fee936bfcd5dc62d318) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A plugin route's answer is private, and its body is left alone.
+
+  Two properties every contributed route needs and no plugin author could supply: both headers are internal to `nextly`, so a plugin wanting either would have to hardcode a private string. They are applied where every plugin response already converges.
+
+  **A plugin's JSON is no longer rewritten on its way out.** Every JSON response passes through the framework's timezone normalisation, which walks nested values and rewrites any string matching its ISO pattern BY VALUE, whatever the key is called. A plugin's body is whatever that plugin defined and the framework knows nothing about its shape — so a block prop or a description holding text like `2026-09-08T12:34Z` reached the browser already rewritten, and inserting then saving it persisted content the author never wrote. That is silent corruption of stored content, and it is the same reason a webhook delivery's captured text opts out: opaque text has to survive verbatim. A plugin that wants timestamps normalised can normalise them; a plugin whose text is altered has no way back to what it stored.
+
+  **An authenticated plugin route now says its answer belongs to one session.** Secure-by-default decides the auth; this is that rule reaching the cache. A route that required a session answers from that caller's own access, so a shared proxy could retain one authorized response and serve it to the next request without the authentication check running again. It is applied to the REFUSAL as well as the answer — a cached 401 replayed to a request that does carry a session is the same defect pointing the other way, and it is the direction that looks like a working gate. A `public: true` route is deliberately left cacheable: it serves the same bytes to everyone, and forcing `no-store` would throw away caching it is entitled to.
+
+  The headers are rebuilt rather than set in place, because a handler may return a response whose headers are immutable — one that came from `fetch`, say — and setting a header on that throws, turning a marking step into a 500.
+
+  **The privacy headers are MERGED into what the handler already said, not written over it.** Replacing `Vary` was the sharp edge: a response varying on `Accept-Language` became one varying only on `Cookie`, so a cache could answer a second language out of the first one's stored copy — the same session, the wrong representation. Existing fields are kept and `Cookie` is added, and `Vary: *` is left alone because it already means "vary on everything". `Cache-Control` keeps every directive that is orthogonal to privacy — `no-transform` still forbids a proxy rewriting the body whether or not a cache may store it — while the ones that contradict `no-store` (`public` and the freshness family) are dropped rather than left to be resolved by whichever rule a cache prefers.
+
+  **The internal markers no longer reach a client.** The response boundary returned early for a non-JSON body BEFORE removing them, and the only other place either marker comes off is downstream of that return — so a plugin answering with CSV or XML, which an export or a sitemap route does, carried an internal control header all the way out. They are now read first, removed unconditionally, and acted on afterwards; removing them before reading would silently turn every opt-out back on.
+
+  `withSessionCacheHeaders` moved to `api/response-shapes` and is re-exported from `routeHandler`, so every existing importer keeps its path. The values now have ONE definition that both the response-owning callers and the plugin dispatch read, rather than two that agree until someone edits one.
+
+- [#1614](https://github.com/nextlyhq/nextly/pull/1614) [`8af6e67`](https://github.com/nextlyhq/nextly/commit/8af6e6748a4fee0c730efb7cf1d569798e7048d0) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A field a caller may not read can no longer be used to group results.
+
+  Filtering and sorting by such a field were already refused, because both reveal the hidden value: filtering through which rows come back, sorting through where they land. Grouping reveals it more directly than either — the distinct values become the buckets themselves, so the whole value set can be read off the labels while field redaction strips the column from rows nobody looks at. Selecting the field is not required for that, so guarding the selection would not have closed it. Grouping by a field that carries a read rule is now refused with its own reason, alongside the existing two.
+
+- [#1616](https://github.com/nextlyhq/nextly/pull/1616) [`ffa0e3c`](https://github.com/nextlyhq/nextly/commit/ffa0e3ca9ea727099f2c7ab13d49251674add853) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - An author can insert a saved pattern.
+
+  The insert panel has accepted saved patterns since the tier landed, and nothing in the product supplied any — so a pattern could be saved and never seen again. The page builder now serves its library from a route of its own and hands it to the panel.
+
+  Published rows only — and NOT by saying so. The read runs as the user, and an untrusted caller that states no lifecycle already gets public states only, asked of the collection's own WORKFLOW. A literal `status: "published"` looked like the same thing and was not: it is ANDed with the service's release-aware condition, so it re-hid a draft belonging to a release whose time had come but whose drain had not run, and `"published"` is a state NAME, so a collection whose workflow calls its public state anything else would have matched nothing and come back empty.
+
+  The route is authenticated and declares NO permission, which is deliberate. A declared one has to spell the collection slug, and a host may rename that collection — the seeded grant then carries the new name while the route demands the old one, which is a route nobody can call. The read runs as the user instead, so the service enforces whatever permission the collection actually seeded, under whatever name it actually has.
+
+  The wire shape EXTENDS `SavedPattern`, the type the panel actually reads, rather than describing the same thing again. Described separately they disagreed about one field name — the wire carried `content`, which is what the collection stores the tree under, while the panel reads `document` and SKIPS a pattern that has none — so every pattern on every site was dropped in silence and the tier looked wired and empty. Extending the published type makes that a compile error.
+
+  A full-page pattern is left out of the insert list, and it is asked as a CLOSED question. `granularity !== "page"` answers true for everything it has never heard of, including a value that is MISSING — the field is required on the collection, so absent means an `afterRead` hook or a field-level read rule removed it, and a page pattern whose granularity was stripped was offered for insertion inside the page it is meant to be. The insertable granularities are now named, so anything unrecognised is refused; refusing wrongly leaves one pattern out of a list, while allowing wrongly puts a whole page inside the page an author is editing.
+
+  `PATTERN_GRANULARITIES` moves to the wire contract, which is where both ends can read it: the panel runs in a browser and cannot load the collection module, because that reaches the framework's field helpers. The collection reads its options from the same list, so there is still one vocabulary — and the rule is a `Record` over it, so adding a granularity is a compile error until someone classifies it rather than a value that silently becomes insertable.
+
+  The response ceiling now reserves the ANSWER's framing rather than only the rows inside it. `Response.json` wraps the rows in `{"items":[…],"meta":{…}}` and separates them with commas, so a library whose rows totalled exactly the ceiling left the server above it — measured, nine bytes over — and a proxy limit set at the same figure rejects a response this route believed it had bounded.
+
+  A full-page pattern is left out of the insert list. It is a way to START a page rather than something to place after the selected block, and `SavedPattern` carries no granularity, so nothing downstream could tell one apart.
+
+  It is bounded three ways, and only one of them is a row count. A ceiling counting patterns KEPT is never reached by a page whose every row the reader had to drop, so the READS are bounded too. And BYTES, which no count can bound: one valid document may be two mebibytes and a host may raise that, so three thousand of them is gigabytes assembled on the server and then sent to a browser, from a request an author makes by opening the editor. Whether another page exists is the SERVICE's answer rather than a length this recomputes, because an `afterRead` hook can shorten a page without the collection having ended. The ceilings apply PER ROW, because one checked between pages bounds nothing about the page being read: a single page of a hundred two-mebibyte documents is two hundred mebibytes already assembled, and a library that ends there would have been reported complete. Each row is weighed BEFORE it is kept, so the byte ceiling is an upper bound on the response rather than a line its last row is allowed to cross — measured, appending first and checking after returned 17.8 MB against a 16 MiB ceiling, and a pattern larger than the whole budget came back whole. One that fits in no budget is left out and the read goes on, so the patterns behind it still arrive.
+
+  The WHOLE ROW is charged, not its document. Charging the document meant charging the one field that happened to have no bound of its own, and `description` is a `textarea` with no length either — so a library of long descriptions and absent documents scored exactly zero and no ceiling was ever consulted: measured, sixty such rows serialised to 24.0 MB against a 16 MiB ceiling. The weight comes from the engine's `measureBytes`, the same survey the canonical validator asks its size question through, so this agrees with the ceiling a stored document already passed. It counts UTF-8, which is what a byte means on the wire — `String.length` counts UTF-16 code units, so CJK text weighed one third of what it costs and passed roughly three times the nominal ceiling — and it is bounded, so weighing an oversized row does not itself cost its size.
+
+  A row that cannot be SERIALISED is dropped rather than counted as free. An `afterRead` hook may hand back a document holding a bigint or a cycle; counting that as costing nothing kept it, and serialising the assembled library then threw — so one malformed row answered the author with a failed request instead of a shorter list. Reaching any ceiling is reported rather than silently truncating a library the author would then search in vain.
+
+  The pages are read in a deterministic order. They are independent offset queries and the service adds `ORDER BY` only when a sort is asked for, so an unordered read is free to return rows differently per page — one pattern arriving twice and another never at all.
+
+  **`usePluginRoute` is new on `@nextlyhq/plugin-sdk/admin`.** The two halves of a plugin could not reach each other: a plugin may serve an HTTP route and may render admin components, and there was no client for the second to call the first with — so an author's choice was to hand-roll the session, its refresh and the error envelope, or to read something else instead. It goes through the same authenticated client and query cache the admin's own reads use. Three things a consumer must know: the plugin names ITSELF, because nothing in a plugin component's React context says which plugin contributed it; the path is built through the dispatcher's own `pluginRouteFullPath`, so a caller cannot address a namespace the server does not serve — a mistake that does not raise, since a request to a path nothing serves answers with nothing; and `pending` is a real third state, because `undefined` is both "the route answered nothing" and "the route has not answered".
+
+  `pluginRouteFullPath` is published from `nextly/config` for that reason, beside `pluginAdminSlug` and for the same one: a slug derived twice produces a dead link, and a route path derived twice produces a request to a path nothing serves. `SavedPattern` is published from `@nextlyhq/builder`, which is the shape a host has to supply for the panel to offer patterns at all — including the two absences that are not interchangeable, `keywords` and `content`, each of which arrives as `null` from a stored row rather than missing.
+
+  The library is read when the insert panel OPENS, not when the editor mounts: the shell renders only the open panel, so the read lives in a component mounted with it. An author who works in Layers, or opens no panel at all, never pays for a library they are not looking at — and opening the panel is exactly when someone expects to see a pattern they just saved.
+
+  `usePluginRoute` reports a read waiting to RESUME as pending. Offline before the first request, TanStack holds a query at `isPending` with `fetchStatus: "paused"`, so `isFetching` is false while nothing has arrived — and a surface that read it as settled would draw its empty state over a request that has not happened yet.
+
+  Its body type is bounded to an object or `null`. The admin's fetcher returns `undefined` for a bare string or number, deliberately, because no endpoint in the admin answers with one — reasoning that holds for the admin and stops holding for arbitrary plugin routes, where `Response.json("ready")` would arrive as a successful empty answer. `usePluginRoute<string>` no longer compiles; a route wanting a scalar wraps it, which the canonical envelopes do anyway.
+
+  `usePluginRoute` carries a successful EMPTY answer as success. A 204, a 205 or a zero-length body reaches the hook as `undefined`, and TanStack rejects `undefined` query data outright — so a route that legitimately answered with nothing reported a failure to a plugin that had done nothing wrong. `null` stays distinct from no body at all.
+
+  `usePluginRoute` also takes an optional `staleTime`. The admin holds a query fresh for five minutes and does not refetch on focus, which suits lists whose writes invalidate their own keys — and a plugin route is not on that map, since nothing in the admin knows which routes a given write affects. The pattern library asks for `0`, so an author who saves a pattern and then opens a page is not shown a library their own save is missing from.
+
+- [#1630](https://github.com/nextlyhq/nextly/pull/1630) [`e18ae9d`](https://github.com/nextlyhq/nextly/commit/e18ae9d5315a0bb3a1c4870dbbf71360f94c47a6) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A session-gated response names every credential it depends on, and keeps a quoted cache directive whole.
+
+  **`Vary` names the API key as well as the cookie.** A non-public plugin route accepts `Authorization: Bearer` — `requireAuthentication` resolves an API key to its own user, roles and permissions — so two different keys had the same cache key while their responses legitimately differ. For any intermediary that stores despite `no-store`, which is the fallback this header exists for, the first key's answer could be replayed to the second. Both credentials are named now.
+
+  **A quoted `Cache-Control` directive is no longer split down the middle.** `private="Set-Cookie, X-User"` is one field-qualified directive, and splitting on every comma made it two: the first was discarded as `private` and the second survived as the fragment `X-User"`. Measured on that input, the emitted header was `private, no-store, X-User"` — malformed, with an unbalanced quote, which a strict intermediary may reject along with the privacy directives it was carrying. Members are now separated only on commas outside quoted strings, with backslash escapes honoured, so a quote written inside a value does not end it.
+
+- [#1636](https://github.com/nextlyhq/nextly/pull/1636) [`2b922fe`](https://github.com/nextlyhq/nextly/commit/2b922fe8abb13d0d1fc0e40288b42188a0b7439d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Form submissions are transformed, sanitized and validated on a `beforeChange` hook on the submissions collection, the last collection-level mutating phase before the insert, so every path that writes one gets the same treatment: the built-in `POST /api/forms/:slug/submit`, `nextly.forms.submit()`, a host route calling `submitForm`, the admin, an update that replaces a stored payload, and an update that moves a submission to a different form, whose stored payload has to satisfy the schema it lands on. Those paths previously stored whatever the caller sent, because core skips `json` fields when it sanitizes: undeclared keys, values that never met the form schema, and markup intact.
+
+  Sanitizing now runs before validation, so a rule judges the value that will actually be stored. `<b></b>` no longer satisfies a required field and then reduces to an empty string.
+
+  Stripping markup no longer removes text that only looks like a tag. A `<` opens a tag only when what follows could name one, which is the HTML tokenizer's own rule, so an answer containing `2 < 3` survives intact. Stripping is a single pass that keeps one invariant: a `<` it kept is never followed by a character that would open a tag. Removing a tag can put its neighbours together into another one, and rescanning until the text stopped changing held the same invariant at quadratic cost, which an unauthenticated caller could spend the server's CPU on.
+
+  `validateSubmission` asks the same rule rather than restating it, so a preflight check and the write can no longer disagree about the same submission.
+
+  A submission flagged as spam is stored without being validated so a false positive stays reviewable, and that exception now belongs to a row rather than to a call: it travels as a symbol key on the row itself, which a request body cannot carry and a second write cannot take. Marking a row "Not spam" checks the payload it carries against the form.
+
+  Moving a submission to another form re-projects its answers onto that form's fields, and that change is stamped as an edit, because the visitor's stored answers changed and nothing else records it.
+
+  A parent-form read that fails is no longer reported as a validation error. Only a form that is not there is; a pool timeout or a throwing hook propagates, so a server fault stops arriving as the writer's mistake.
+
+  Spam protection stays on `submitForm`, where a honeypot and a rate limit are facts about a request rather than about a row. The built-in submit route does not reach it, and the guide now says so.
+
+- [#1641](https://github.com/nextlyhq/nextly/pull/1641) [`aa78ddc`](https://github.com/nextlyhq/nextly/commit/aa78ddc9e934f11b5b7aa8948ad4695fad9c18ec) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A dashboard widget can now ask how many rows fall in each interval of a recent
+  window, ready for a trend line. `nextly.timeseries({ collection, dateField,
+interval })` buckets by hour, day, ISO week, month or year, and the `timeseries`
+  widget op reaches it.
+
+  A timeline is a grouped read whose key is a bucketing expression over a date
+  rather than a second aggregation path, so it settles which rows a caller may
+  read through the same pipeline a count and a bucket set use. One expression is
+  built per dialect and used in the SELECT and the GROUP BY alike, which is what
+  MySQL's `only_full_group_by` requires, and all three databases answer the same
+  text for the same instant.
+
+  An interval with no rows comes back as zero rather than being left out: a
+  `GROUP BY` cannot report a bucket it never grouped, and a line drawn through the
+  gap reads as steady activity rather than none. Buckets are computed in UTC, so
+  the same row lands in the same interval whoever is looking, and the window
+  bounds the read itself rather than only the answer.
+
+  Grouping by a decimal field now labels its buckets to the scale the field
+  declares. SQLite reads a numeric column back as a JavaScript number while
+  PostgreSQL and MySQL return text, so the same stored value used to arrive as
+  `1` on one adapter and `1.00` on the others.
+
+  `nextly.group` and `nextly.timeseries` are now documented, including that text
+  buckets follow the database's own collation — grouping and filtering therefore
+  agree with each other on every install.
+
+- [#1600](https://github.com/nextlyhq/nextly/pull/1600) [`334e59b`](https://github.com/nextlyhq/nextly/commit/334e59b1aecb1bc5e350577e12e0eb90868b49f4) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A plugin author can now name the types their dashboard widget receives, and the server, the admin and every plugin share one definition of what a widget query answers.
+
+  `@nextlyhq/plugin-sdk/widgets` publishes `WidgetComponentProps` — the five props a widget component is handed — alongside the wire shapes `WidgetSlot`, `WidgetResult`, `WidgetResultField` and `WidgetQueryBatchResponse`, which `nextly/widget-result` now exports from the module that declares them. Both are leaf entries carrying no runtime, so importing a type pulls no code. Until now those shapes were declared three times — by the endpoint that sends them and again by the admin that draws them, with the admin's copy the stricter of the two: it promised readers that a successful slot carries a result and a failed one carries a reason, while the server's own type required neither. The endpoint now declares that union itself, so the compiler holds it to the guarantee its consumers were already relying on.
+
+- [#1640](https://github.com/nextlyhq/nextly/pull/1640) [`fba5a6c`](https://github.com/nextlyhq/nextly/commit/fba5a6caefa9f019b90025ed03f272eda3bd3c49) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - An author could browse the pattern library and never put anything in it. The
+  verb that stores a selection did not exist on any surface, so the Patterns tier
+  shipped with nothing to show and no way to add to it.
+
+  `Save as pattern` is now one of the block verbs, so it reaches the toolbar, the
+  right-click menu and the command palette the way every other verb does. It is
+  offered for a run of blocks as readily as for one, because a pattern is usually
+  several — a heading, a paragraph and a button — and it is disabled with a reason
+  whenever the planner would refuse the selection, asked of the planner rather
+  than restated, so the button and the save can never disagree.
+
+  The form asks for a name and for how much of a page the pattern covers — an
+  element, a group of blocks, or a whole section — with every option and its
+  meaning visible rather than behind a picker, because the choice is required and
+  has no default. It offers the granularities the insert panel can offer back,
+  which is why a whole-page pattern is not among them yet: that one is a way to
+  START a page, and the surface that would offer it does not exist. Category
+  suggestions come from what the library already uses, so one site does not grow
+  "Hero", "hero" and "Heroes" as three groupings nobody chose. Nobody is asked for
+  a slug.
+
+  A refused save keeps the form open with the draft intact. A name collision is
+  the expected failure and the remedy is to change a field that has to still be on
+  screen.
+
+- [#1582](https://github.com/nextlyhq/nextly/pull/1582) [`6b1fa82`](https://github.com/nextlyhq/nextly/commit/6b1fa82ae7c929fcc233e40c4ed61721f050274c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add `nextly/document-lock`, a client entry carrying the document lease contract
+  and its wire types and nothing else, and the admin-side hook that holds a claim
+  against it.
+
+  The entry is separate from the root one because the admin maps `nextly` to this
+  package's source, so reaching two constants through the root pulls the DI
+  container and the auth middleware into the admin's typecheck, measured at 112
+  errors about code it never touches. The timings are re-exported rather than
+  restated: they are the agreement between a lease and whoever renews it, and a
+  second copy of either number drifts from the first the moment one is tuned.
+
+  `deriveLeaseTimings` moved out of `database/lease-clock` into
+  `database/lease-timings`, which imports nothing. The clock module asks the
+  database what time it is, so it loads the ORM at module top level, and anything
+  reading the timings through it put that ORM into the import graph of every
+  client that needed a number. A test now walks the whole module graph a
+  browser bundle pulls in, starting from every admin `"use client"` module and
+  crossing into workspace packages, and fails on one that can reach a database
+  package. It reads source rather than a build, since a bundler can hide a leak in
+  a conditionally-loaded chunk and a check that reads `dist` passes whenever
+  `dist` is stale.
+
+  `@nextlyhq/module-specifiers` gained `moduleSpecifierRefs`, which reports for
+  each reference whether it survives to runtime, and `importedSpecifiers` is now
+  derived from it rather than walking separately. The boundary above needs that
+  distinction: an `import type` is erased before anything runs and cannot put code
+  in a bundle, and counting one would fail the rule over correct code. Reading the
+  richer answer from the one walk is also what stops the two drifting, which is the
+  defect that reader was written to fix.
+
+  No editor mounts the hook yet, so nothing about using the admin changes in this
+  release. What ships is the mechanism the editor work builds on: the claim is
+  held for one document at a time, every reply is fenced on the claim token that
+  produced it rather than on the effect that sent it, a claim acquired after the
+  editor has gone is released rather than left for the lease to reap, and a run of
+  failed confirmations is treated as a blip until the lease's own loss deadline
+  and as a loss after it.
+
+- [#1593](https://github.com/nextlyhq/nextly/pull/1593) [`c97af6b`](https://github.com/nextlyhq/nextly/commit/c97af6b791e37498328fa75c60495e8d34cef254) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - An editor is now told when a colleague is already in the document they opened,
+  and can read it or take it over.
+
+  A strip above the document names the holder, and the fields below it render
+  uneditable while somebody else has it. Both are needed: rendered read-only the
+  fields are legible but ambiguous, since a tinted uneditable form reads equally as
+  a document this account lacks permission to change.
+
+  The claim is advisory throughout, and what follows from it is derived in one
+  place so the collection editor and the single editor cannot disagree.
+  - **Every write passes one gate.** Save, Publish, Unpublish, Delete, discarding a
+    working draft, the keyboard shortcut, a native form submit and the quick-edit
+    modal all reach the same handlers, so the refusal lives there. The controls are
+    disabled as well, because nothing should offer what it cannot do, but disabling
+    affordances one at a time is a list the next write path gets added without.
+  - **The title and the slug are writes too**, and the same claim withholds them.
+    The title also drives the slug, so leaving it editable contradicted the strip
+    above it.
+  - **Asking does not block editing.** Gating every document open on a round trip
+    would cost every author on every open, to guard against a case that is rare,
+    and a refusal loses nothing since the form is never cleared.
+  - **A failure to re-check a KNOWN claim does not unlock the document.** Every beat
+    re-asks, so a transient rejection arrives long after a holder was reported;
+    treating that as "free" hands the document to a second editor while the last
+    confirmed fact is that a colleague holds an unexpired lease. Only a first check
+    that never succeeded leaves the editor working.
+  - **A displaced editor keeps what they typed.** Their unsaved work stays on
+    screen and stays theirs; what stops is writing.
+  - **Autosave keeps running**, which is the opposite of what it looks like it
+    should do. `useDocumentAutosave` does not write the document: it upserts a
+    recovery row keyed by document AND author that the live-row predicate excludes,
+    so it cannot reach the holder's document or their recovery row. Stopping it
+    would remove the displaced editor's safety net at the exact moment the banner
+    promises their unsaved changes are still theirs, and the engine depends on it
+    running.
+
+  The strip is where the lock is spoken. `DocumentStatusLive` is deliberately not
+  given a second copy: it exists so the header has one live region rather than one
+  per concern, and two in a view interrupt each other.
+
+- [#1610](https://github.com/nextlyhq/nextly/pull/1610) [`e6797c5`](https://github.com/nextlyhq/nextly/commit/e6797c5d12936d937e5f90feb86bbb1d51958597) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A collection read rule that cannot be evaluated now refuses the read instead of resolving to no restriction at all.
+
+  `getAccessQueryConstraint` answers `null` for "allowed, with nothing to narrow", and callers fold that into the query as the absence of a filter — so swallowing a failure into `null` removed the rule's narrowing and returned every row. The gate beside it evaluates the same stored rules and already fails closed on an unexpected error, "for safety" in its own words, so the two disagreed about what a failure means. They now agree. A missing collection keeps its existing passthrough, which the read paths report as a 404 rather than as an authorization decision.
+
+  In practice both read paths run that gate first and it denies before this is reached, so no shipped read is known to have widened. The value is that the guarantee stops depending on a caller remembering to ask the other question first.
+
+- [#1634](https://github.com/nextlyhq/nextly/pull/1634) [`e6c1b48`](https://github.com/nextlyhq/nextly/commit/e6c1b48c8fca9fd326bb40dfd858ecba20c8e034) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - **`saveAsPatternRefusal` is new on `@nextlyhq/blocks-engine`.** The counterpart to `patternRefusal`, published for the same reason and against the opposite mistake: that one stops a palette OFFERING a stored pattern the planner would reject, and this one stops a surface offering to SAVE a selection the planner would reject — a button that accepts a click and then fails.
+
+  Before it, the only way to ask was to call `planSaveAsPattern` with a `target` invented for the purpose — a collection name and a field set that a surface deciding whether to _offer_ the save does not have yet. So the question could only be asked by answering a different one.
+
+  It is a thin view over the planner's own preflight rather than a second walk: the same `plannedSave` both save planners call, so a question answered here and a save attempted afterwards cannot disagree. The ways a selection can be unsavable are not a short list a toolbar should keep its own copy of — not one contiguous run, a block that may not be a document root, a node whose shape the op layer will not carry, a descendant nested where the rules no longer allow, one DOM id on two of the run's own nodes — and a surface enumerating them drifts silently the first time the planner learns a new way to say no: the button stays enabled and the save fails.
+
+  It takes no limits of its own: `planSaveAsPattern` has none either, so a preflight that accepted them would answer a question the planner never asks — a lower cap disables a save the planner then accepts, a higher one the reverse.
+
+  **A save is now refused when the document it would store exceeds the byte, depth or node caps.** The blocks field validates what it is handed, so such a pattern was rejected at the WRITE — after the author had named it, filled the form and pressed save. The same verdict now arrives at plan time, where they can still act on it, and it is what lets the preflight promise that a save it permits will not fail on size. This applies to the save planners as well as the preflight, because both ask one shared question.
+
+  Because it does the work a save does up to building the stored document, it is exact, and it is worth memoising on the selection rather than calling per render.
+
+- [#1647](https://github.com/nextlyhq/nextly/pull/1647) [`92b8005`](https://github.com/nextlyhq/nextly/commit/92b80056c6888639e0a812cc6018ac4afa5c0202) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Plugins and hosts can now ask which components a block document references
+  AND whether the whole document could be read, through `componentUsageIn`.
+
+  The existing `componentIdsIn` answers only the first half: it walks under a
+  node budget and stops silently, so a document too large to read whole returns
+  the same empty list as one referencing nothing. That is the wrong way round
+  for anything deciding whether a component is still in use, because "references
+  nothing" is the answer that allows deleting it. `componentIdsIn` keeps its own
+  signature and result, and is now derived from the richer answer, so the two
+  cannot drift apart.
+
+  `componentIdsIn` and `componentUsageIn` now refuse a `maxNodes` of `NaN`
+  instead of walking without a bound. `NaN` never satisfied the stop test, so
+  the budget was not merely loose, it was absent — a document of any size was
+  read whole. Any other numeric budget behaves as before.
+
+- [#1599](https://github.com/nextlyhq/nextly/pull/1599) [`02efedc`](https://github.com/nextlyhq/nextly/commit/02efedcd139e605e7f82faa037ad4bf0e88ba9dc) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Claim a document only when the caller may actually update that row.
+
+  `/api/document-lock` authorized writes on `update-<slug>`, which is the coarse
+  route permission: it says a caller may update documents of this kind, not that
+  they may update THIS one. A collection carrying an owner-only or role-based
+  stored rule refuses the row while that permission still stands, so a non-owner
+  could take a claim on a document every real update denies them, and the
+  legitimate owner was then shown a false holder and pushed to take over their own
+  row.
+
+  The gate the version routes already run for the same reason now runs here too. It
+  was named `assertVersionDocumentUpdatable` and is renamed to
+  `assertDocumentUpdatable`, since it was never about versions: its own docblock
+  describes the document's update rules, and it now has two callers.
+
+- [#1648](https://github.com/nextlyhq/nextly/pull/1648) [`147c86b`](https://github.com/nextlyhq/nextly/commit/147c86bfa0309969b45af097cdbe46bff33b5e14) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The cold-start guidance on `resolveContent` and `createSingleRoute` names `getNextly({ config })` again. The accessor rename swept those doc comments along with the code, and they had been recommending the one function that cannot do what they describe: `requireNextly` reads the already-registered singleton and throws when nothing has booted, which is exactly the case the guidance is about.
+
+- [#1603](https://github.com/nextlyhq/nextly/pull/1603) [`f229eb3`](https://github.com/nextlyhq/nextly/commit/f229eb338d1b6e6bea0e7baea03a221769bdc400) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Give a custom collection edit view the same document claim the default editor
+  takes.
+
+  A collection registering `admin.components.views.Edit.Component` returns its own
+  view before the entry form mounts, and the form is where the default editor
+  claims. So those views announced nothing to the lock: a colleague opening the
+  same document was told nobody held it, and the editor was shown no holder and
+  offered no takeover, on precisely the documents a project cared enough about to
+  build a bespoke editor for.
+
+  The claim is now taken above the branch, and the lock banner renders beside the
+  scheduled-release banner already there, which the page renders on that branch for
+  the same reason: a custom view replaces the form, not the facts about the
+  document.
+
+  The view is also handed what the claim withholds, through the props every custom
+  edit view already receives rather than an admin-internal hook it cannot import.
+  The banner says in words that unsaved changes cannot be saved while a colleague
+  holds the document, and a view that wrote anyway would make that sentence false
+  and would overwrite the holder's row. The bundled form builder reads it, so its
+  save is withheld and its Save button says so.
+
+  Both halves of the claim, not only the save. The strip says the editor may read
+  this document and not change it, so the builder's state withholds every action
+  that would change it while a colleague holds it, and keeps the ones that only
+  move around: selecting a field, switching tabs. The refusal sits once at the
+  state every control reaches rather than at each of the dozens of controls, and it
+  withholds every action except the ones named, so one added later is covered
+  without anyone remembering.
+
+  The claim is taken only once the document is actually on screen. Taken while the
+  entry is still loading, or after it failed to load, it would heartbeat a document
+  the editor is not looking at, and colleagues would be told this person is editing
+  a page that never appeared for them.
+
+  Only that branch claims. The form still claims for the default editor, and
+  claiming in both places would put two claims on one document under one author.
+  The condition is the resolved component rather than the registered path, because
+  a path that resolves to nothing falls through to the form, which has its own
+  claim.
+
+- [#1607](https://github.com/nextlyhq/nextly/pull/1607) [`c8ddba4`](https://github.com/nextlyhq/nextly/commit/c8ddba40ce51df02fad95814214be8193c9426fa) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Publish the custom edit view contract, and give the form builder the lock type
+  rather than a copy of it.
+
+  A plugin registering an Edit view is handed \`CustomEditViewProps\` and had no way
+  to type against them: the interface was not exported, so the bundled form
+  builder declared its own \`documentLock\` shape beside the one the admin passes.
+  Both compiled, and an affordance renamed in the admin would have gone on
+  compiling on both sides while quietly no longer reaching the write gates that
+  read it.
+
+  The pair the admin hands over is now derived from the affordances the editor
+  itself acts on, and \`@nextlyhq/plugin-sdk/admin\` republishes both it and the
+  contract it belongs to. Renaming an affordance now stops the build instead.
+
+- [#1580](https://github.com/nextlyhq/nextly/pull/1580) [`ca8e0cc`](https://github.com/nextlyhq/nextly/commit/ca8e0cc2cc52da5dad54350f624399a25ffdcc18) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Detach a component instance: inline what it was drawing, and stop tracking it.
+
+  The instance is replaced, where it stands, by the nodes it rendered — the
+  definition's tree with this instance's overrides, variant and slot content
+  already applied. Afterwards the author owns those nodes and an edit to the
+  definition no longer reaches them, which is the point: detach is how a page
+  keeps what a component gave it without staying bound to it.
+
+  The inlined content comes from the renderer's own resolver rather than a second
+  traversal of the definition, so what an author gets is what they were looking
+  at. A planner that re-applied overrides and slots itself would agree with the
+  page until one of the two moved, and the difference would be silent.
+
+  **A component the author dropped INTO the instance stays a component.** That is
+  their content, not the definition's, and detaching its host says nothing about
+  it. It cannot be had from the resolver's depth cap: that bounds nesting inside a
+  DEFINITION, while supplied slot content is composed in the host's own scope
+  where the depth never advances — measured, a nested instance was fully inlined
+  and lost its link. So supplied content never reaches the resolver at all; it is
+  lifted out, stood in for, and put back.
+
+  **Two halves, two rules.** Supplied slot content MOVES: same node ids, same
+  authored DOM ids, because it is the same content in a new parent and the
+  instance holding it goes in the same edit. The definition's contribution is a
+  COPY: fresh node ids, and its authored DOM ids kept except where the page really
+  holds that name.
+
+  Nothing the resolver mints for rendering is stored. It scopes a DOM id per
+  composed node so two instances cannot collide, and `resolveComponentInstances`
+  now reports what each scoped id was derived from — without that, detaching wrote
+  a render-time digest into the database as though an author had typed it, and it
+  went stale the moment the definition renamed its own anchor.
+
+  Provenance goes on the existing `origin` record's `component` arm, which the
+  format already describes as "detached from a component, severing the link
+  deliberately" — no digest, because detaching is the act of declining further
+  change.
+
+  `resolveComponentInstances` also stops letting a supplied definition's own
+  accessors escape. It reads a definition's `kind` to tell a component from a page
+  and its `nodes` to tell a document from anything else, and a field that computes
+  itself and throws took the caller's error out of a function that promises a
+  classification and a closed list of reasons — out of the renderer and the
+  preview as much as out of detaching. Such a definition is now reported
+  `unreadable`, which is what that reason already meant: a value that IS supplied
+  and cannot be read.
+
+  The containment reaches the definition's NODES, not only its envelope. A field
+  that computes itself is read later too — by the clone that builds the inlined
+  tree — and it threw out of the resolver and out of detaching alike. It is now
+  contained at the expansion of ONE instance, the unit the resolver's savepoint
+  already covers, so a definition that fails halfway gives back the ids and budget
+  it had begun to claim, exactly as a refusal for the node budget does.
+
+  A component whose definition nests an instance of ITSELF detaches. The nested
+  one is refused as a cycle and carries the same component id, so reading the
+  component name refused a detach that had already succeeded.
+
+  A gated instance keeps its authored DOM ids. Collisions are decided after the
+  gate is applied, because a condition-gated subtree renders nothing and collides
+  with no one — and a rename made for a conflict that does not exist outlives the
+  gate that excused it.
+
+  `resolveComponentInstances` also refuses a definition written in a format this
+  build cannot read. It checked only that `nodes` was an array and `kind` was
+  `component`, so a definition from a future or corrupt writer was inlined and,
+  for a surface that persists what it inlines, written into a page under rules
+  this build does not implement. `unreadable` already meant "an envelope this
+  build does not understand"; nothing had asked the question.
+
+- [#1590](https://github.com/nextlyhq/nextly/pull/1590) [`1cbf54f`](https://github.com/nextlyhq/nextly/commit/1cbf54f1767c813263d55bdf2bcc373d71731722) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Close five more ways a document claim could report one thing while the server
+  held another, and stop aborting claims.
+
+  **Nothing is aborted any more.** A claim is not idempotent, so cancelling one
+  makes its outcome unknowable: it may still commit, and an aborted fetch can never
+  hand back the token it was given. The editor would then hold a token the server
+  had replaced with one it could never learn. Only the hold on the one-at-a-time
+  slot expires now; the reply still arrives, and a claim whose slot has moved on is
+  released as the duplicate it is. That converges without the server needing to know
+  anything about client retries.
+
+  **Intent survives the wait.** Whatever waits on the slot is remembered as an
+  intent rather than a flag, and a take-over whose request outlives its slot is
+  re-asked as a take-over. Retried as a plain claim it politely declines to displace
+  anyone, and the colleague keeps the document despite the click.
+
+  **A repair is queued, not dropped.** The signal that a late duplicate displaced
+  the live claim is an acquisition like any other, so it meets the same slot. It is
+  kept separately from a queued claim, because a claim is satisfied by winning the
+  document and a repair is not: what a repair reports is that the token just
+  installed may already be dead.
+
+  **A repair names the document it is for.** Two claims on different documents use
+  different lock keys, so a late reply for one cannot have displaced the other, and
+  waking it would start a claim nobody asked for.
+
+  **The confirmation timestamp never moves backwards.** Renewal replies can arrive
+  out of order, and an older one landing after a newer one shortened a lease the
+  newer one had already extended, firing the loss deadline several beats early.
+  **A rejection from a superseded claim is ignored.** A retry can win and the
+  original then fail; reporting that replaced a good claim with `unavailable` and
+  left it there, since renewals only move the confirmation forward. It also
+  requeued a take-over the retry had already satisfied, which later displaced a
+  colleague with no second click.
+
+  **A queued take-over survives a repair.** A win only spends the click if it
+  actually established possession, and a repair says the token just installed may
+  already be the dead one.
+
+  **`module.require` is read through the wrappers around it** — parentheses, a
+  cast, a non-null assertion, `satisfies` — since each reads the same binding and a
+  check on the receiver as written is a bypass anyone can reach by accident. And it
+  claims nothing when the file declares a `module` of its own, because reporting a
+  dependency the file never loads is the direction that makes a rule stop being
+  read.
+
+- [#1578](https://github.com/nextlyhq/nextly/pull/1578) [`d8c7a11`](https://github.com/nextlyhq/nextly/commit/d8c7a11573e229a7d90d3c159d0bbfdb55ef7607) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Document locking shipped as three unused tables. The engine was complete —
+  claim, renew, release and sweep across every dialect, with a heartbeat derived
+  from the lease clock and a claim token so a renew proves it is the same claim —
+  and nothing could reach it, because no service bound the adapter its functions
+  take and no registration constructed one.
+
+  `documentLockService` is registered now. It is advisory and says so: a held
+  document is reported to whoever asks and no write is refused, so a claim left
+  behind by a closed laptop cannot strand content. The claim token means
+  enforcement stays available later without redesigning the shape.
+
+  Locks run on the pool rather than a caller's transaction. A claim taken inside
+  a write that later rolls back would vanish with it, and the point of a claim is
+  that it outlives the request that took it.
+
+- [#1571](https://github.com/nextlyhq/nextly/pull/1571) [`6a32025`](https://github.com/nextlyhq/nextly/commit/6a32025b0f41e07c60a9ea0a50e704dd35e16abc) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `nextly migrate` no longer records an edited collection, single or field group as `applied` on the strength of its table existing. Editing an entity leaves its old table in place, so existence proved nothing about the column, status or localization change the registry row was waiting for. A row is now held back while any migration naming it has not been applied, read from the entity header each migration carries and the applied-file ledger. A row no migration names is promoted exactly as before, and migrations whose scope was never recorded are reported by name at the end of the run.
+
+- [#1592](https://github.com/nextlyhq/nextly/pull/1592) [`d7a405a`](https://github.com/nextlyhq/nextly/commit/d7a405a3bdd301288f2b432b3e0bc9104c9737e5) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A wholly malformed document is refused before the site's settings are read.
+
+  Moving the breakpoint scan ahead of the readability gate put it ahead of the
+  malformed-root refusal too, so a `null`, a primitive or an array — a value that
+  was never going to be validated — still caused the caller's breakpoint settings
+  to be read, and an adversarial set escaped as a native error.
+
+  The coarse root test runs no user code: `typeof`, a null comparison and
+  `Array.isArray` invoke no trap, where asking for a prototype is something a
+  hostile root can refuse. So the coarse question is settled first and the precise
+  one stays where it was, after the survey has had its say.
+
+  `Array.isArray` can still throw even though it runs nothing — a revoked proxy
+  refuses the array brand rather than answering it — so it is wrapped, and a root
+  that cannot answer reaches the survey's readability verdict instead of being
+  refused on a question nothing answered.
+
+  Both readings now live beside each other as `isPlainRecord` and
+  `definitelyNotARecord`, sharing the clause they agree on and reporting one
+  issue. The throw-free reading refuses only what the full one would refuse, so
+  asking it early can never disagree with asking the full one late — a property
+  asserted over a shared table of root shapes rather than left as a convention.
+
+- [#1591](https://github.com/nextlyhq/nextly/pull/1591) [`d130cf2`](https://github.com/nextlyhq/nextly/commit/d130cf266e21b1b1047992baf5c2bcad8413cd58) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A saved dashboard whose stored arrangement holds one placement id twice keeps working, instead of the reader losing every card they arranged.
+
+  The endpoint has always refused a submission that reuses a placement id, but a row that already held a duplicate — written before that guard, or by anything other than that endpoint — was handed to the admin intact, where the id is the React key and the identity the drag-and-drop sort resolves by; the first match wins there, so a duplicate silently drags the wrong card. Such a row is now resolved when it is split by what the reader may see, so what one reader is handed never depends on a card another reader hid, and the id a repeat is given is derived from the id it repeats rather than minted fresh — the same row answers the same ids on every read, so a client that echoes what it was handed keeps each card's column. Refusing a write and resolving a read now come from one shared analysis rather than two copies of the same rule, and a row that keeps arriving malformed is logged with the id, since nothing on the reader's screen will ever say so.
+
+- [#1653](https://github.com/nextlyhq/nextly/pull/1653) [`c3b5e38`](https://github.com/nextlyhq/nextly/commit/c3b5e383b1269fd972bcc2fcbbb543e746581de2) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Builder: a placement destination now has ONE name. `@nextlyhq/builder` re-exports the engine's `PlacementTarget` instead of declaring its own `InsertTarget`, and the function that translated between the two spellings is gone.
+
+  `InsertTarget` remains exported from `@nextlyhq/builder` as a deprecated alias for one release and will be removed after it. Two things to know when migrating:
+  - The discriminant moved with the name. A target is written `{ kind: "root" }` and `{ kind: "slot", parentType, slot }`; the old `at` member is no longer accepted, and a value still spelling `at` is a type error rather than a silent fall-through. `DropRegion.at` and `DropTarget.target` hold these values, so a host narrowing them reads `.kind`.
+  - `@nextlyhq/blocks-engine` exports an unrelated type that is also called `InsertTarget` — where a saved pattern is inserted, `OpPosition | "document"`. That collision is what the deprecation removes: after the alias goes, `InsertTarget` names only the engine's pattern position.
+
+- [#1646](https://github.com/nextlyhq/nextly/pull/1646) [`4807246`](https://github.com/nextlyhq/nextly/commit/4807246106362add6803621ac5b69f1dd29a6667) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The synchronous Direct API accessor is now `requireNextly`, exported from `nextly/runtime`. It was `getNextly`, which is also what `nextly` exports for a different function: one initialises, takes a required config and returns a promise; the other reads the already-registered singleton, takes nothing and throws when the process has not booted. One name, two functions, opposite tolerance for an uninitialised runtime, and nothing at an import site to say which one arrived.
+
+  `getNextly({ config })` from `nextly` is unchanged. It is the one to reach for: it initialises rather than assuming, so it is correct whether or not something else has booted, and it caches, so calling it per request is a lookup after the first. `requireNextly()` is for code that provably runs after initialisation, and its name now says that it will throw otherwise.
+
+  Two pieces of documentation that the shared name had made wrong are corrected with it. The accessor's own example told readers to import it from `nextly`, where that name resolves to the other function, so the snippet could not compile. The convenience proxy's note said the runtime is initialised "via `getNextly()`", which is the other one again.
+
+  A test asserts that no name is published from two entry points with different arities. It found two more of the same shape, `isFieldGroupType` and `createAdapter`, which are recorded so a fourth fails on the day it appears.
+
+- [#1652](https://github.com/nextlyhq/nextly/pull/1652) [`9c27d7e`](https://github.com/nextlyhq/nextly/commit/9c27d7e9613c7a48c7bde428fa46b081a7d3db17) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Nothing changes for a site. The page-builder's usage-index machinery — which
+  records where a document's references live so the library can say what is still
+  in use — now works over any kind of reference rather than named classes alone,
+  with class usage as its first configuration. The behaviour, the stored rows and
+  the published types are unchanged; the whole existing suite passes untouched,
+  which is what the change is checked against.
+
+  This is groundwork for the component usage index, so that deleting a component
+  can tell you which pages still embed it.
+
+- [#1594](https://github.com/nextlyhq/nextly/pull/1594) [`dad15ed`](https://github.com/nextlyhq/nextly/commit/dad15ed16c26d0ce9c94cd65f25f7ffd0e9c53e3) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The inserter can offer a saved pattern, judged by where all of its roots may go.
+
+  Its catalog was blocks only by construction, and the type said so: patterns
+  "have no mechanism in this engine and are therefore ABSENT rather than stubbed".
+  The mechanism landed with the composition planners, so the absence became a gap.
+
+  `InsertEntry` is now a discriminated union of a block entry and a pattern entry,
+  and `patternEntriesFrom` builds the second from stored rows. A pattern is
+  multi-root and is inserted as one atomic group, so it may go only where EVERY
+  one of its roots may go — asked of the same nesting rule a block is asked of,
+  which is what keeps the palette from offering a placement the insert refuses.
+  `InsertPanel` takes the patterns to offer and places a chosen one through `planInsertPattern`, as one edit — so a whole pattern undoes in a single step rather than one root at a time. The rows to offer are supplied rather than fetched, as the block definitions are: where a pattern lives and how a host loads it is the host's question, and `SavedPattern` is published beside the panel so a caller can map its query onto it. The drag gesture stays blocks-only, because a drag carries one node to a drop target and a pattern is a forest.
+
+  A pattern is offered only if the planner could actually place it: the engine publishes the planner's own pattern-only preflight as `patternRefusal`, and the catalogue asks it whole rather than keeping a subset of it. The ways a stored row can be unusable are not a short list — the wrong kind, no nodes, an envelope the apply cannot read, a node whose shape it cannot apply, two nodes rendering one DOM id, an internal placement the rules no longer allow — and a pattern is saved once and inserted for as long as it exists, so the rules can move underneath it.
+
+  The rules those verdicts ask are now published from the engine as `placementVerdict` and `internalNestingVerdict`, and the planner's own refusals derive from them: a palette, a canvas and a planner asking the same question three ways is how one comes to offer a placement another refuses. `isPatternDocument` is published for the same reason.
+
+- [#1575](https://github.com/nextlyhq/nextly/pull/1575) [`62671fd`](https://github.com/nextlyhq/nextly/commit/62671fd268176466d983d30e0870c5e2b6324dea) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A dashboard widget can declare `settings` — what a reader may change about that card — and a reader's stored choices now reach the query the card asks. Settings are declared as field definitions, so the admin draws them with the renderer it already has and a plugin author needs no new vocabulary.
+
+  A setting named `limit` and typed `number` sets how many rows its card asks for. Anything a widget does not declare is ignored, and a stored value the declaration no longer recognises falls back to the declared default rather than breaking the card.
+
+  `WidgetSetting` is exported from `@nextlyhq/plugin-sdk`, and `contributes.admin.widgets` accepts `settings`, so a plugin declaring one can name its type. The same card placed twice keeps its own settings and its own data.
+
+  A card with settings gains a settings control in the dashboard's edit mode, opening a panel drawn by the field renderer the rest of the admin uses. A widget that draws itself receives its resolved settings and its placement id as props, so a `text`, `checkbox` or `select` setting reaches the component that declared it rather than only the row count reaching the query.
+
+- [#1583](https://github.com/nextlyhq/nextly/pull/1583) [`52ad836`](https://github.com/nextlyhq/nextly/commit/52ad83671a7a5a11ed3f7da0c11f32759dccd7cb) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A collection created by a migration is queryable on the boot that registered it, in production as well as development.
+
+  The runtime schema registry is built before boot migrations run, so an entity a migration registered was visible in the admin and on dashboard cards while every query against it failed until the next restart. Both boot paths now refresh the registry through one shared step, and they refresh it whenever migrations ran rather than only when that particular process registered something — so a replica that waited on the migrate lock behind another one is not left serving a stale view.
+
+- [#1574](https://github.com/nextlyhq/nextly/pull/1574) [`4b202ec`](https://github.com/nextlyhq/nextly/commit/4b202ece3192f64d4c2a76d75bdd806c33fcdd5a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A node's provenance record is now checked on both roads into storage.
+
+  A document reaches storage two ways — an op through the edit vocabulary, and a
+  field write through the document validator — and only the op road checked
+  `origin`. So an import or a script could persist `{ from: "pattern", id: "",
+digest: "" }`, and every later provenance reader would take it at face value: a
+  staleness check comparing against a pattern with no id answers confidently and
+  wrongly, and a save-over restoring the DOM ids an insert renamed reads a record
+  it cannot trust.
+
+  Both roads now ask the same published predicate, so a record one admits and the
+  other refuses — one that exists in the database and cannot be edited — is not
+  representable. It is an error in both validation modes: a half-written record is
+  not a value a future build understands, it is a claim about history with a piece
+  missing.
+
+  The check reads nothing the record computes for itself, and reflection failures
+  do not escape. A stored `origin` may be a caller-supplied object with accessors
+  or a Proxy whose own reflection traps throw; `surveyDocument` refuses to invoke
+  an accessor and already reports such a document unreadable, so the check defers
+  to that verdict rather than adding a second one about a record nothing can read.
+
+  It also reads only the fields the guard actually reaches, rather than every key
+  the record carries, so a document already refused by the byte cap cannot be made
+  to do work proportional to content the bounded survey never traversed.
+
+  `readBlockOrigin` is published beside `isBlockOrigin` and the guard is derived
+  from it. A caller that must tell a record it cannot READ from one that is merely
+  wrong — the validator does — would otherwise name the guard's fields a second
+  time, and two lists of the same thing drift silently.
+
+- [#1587](https://github.com/nextlyhq/nextly/pull/1587) [`c08a619`](https://github.com/nextlyhq/nextly/commit/c08a619ba5dc74cdf3054403b305a79c2ecc5f3f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Version the `fast-uri` bump, which reaches published output rather than only
+  this repository's tooling.
+
+  `@nextlyhq/telemetry` bundles every one of its dependencies into its build
+  (`noExternal` matches everything), so `conf` -> `ajv` -> `fast-uri` is inlined
+  into the emitted file rather than resolved by a consumer, and that file is
+  incorporated into the published `nextly` and `create-nextly-app` CLIs. Raising
+  the override floor from `^3.1.5` to `^3.1.6` therefore changed what those
+  artifacts contain: 3.1.7 replaces a 3.1.5 carrying four advisories, the highest
+  being server-side request forgery through malformed IPv6 normalization and host
+  confusion through skipped IDN canonicalization on scheme-relative references.
+
+  The telemetry client validates its own configuration schema and never parses a
+  URI a user supplies, so this closes no reachable hole. It is a patched release of
+  code that genuinely ships, which is why it needs a version rather than only a
+  lockfile entry.
+
+- [#1497](https://github.com/nextlyhq/nextly/pull/1497) [`0c1ce76`](https://github.com/nextlyhq/nextly/commit/0c1ce76bb8f1fb13f15ab82c2a8615753a1e50d9) Thanks [@dependabot](https://github.com/apps/dependabot)! - Raise the mysql2 floor to 3.23.1, closing two advisories that reach published
+  installs.
+
+  `@nextlyhq/adapter-mysql` declares mysql2 as a runtime dependency, so the range
+  it publishes is the one a consumer resolves. 3.15.0 accepts an auth-plugin
+  downgrade to `mysql_clear_password`, which sends the connection password to the
+  server in plaintext, and carries an unbounded zlib inflate in the compressed
+  protocol handler that lets a malicious server answer with a decompression bomb.
+  The first is patched in 3.22.0 and the second in 3.23.1.
+
+  A dependency bump alone would not have reached anyone: the published range only
+  changes for a consumer when the package is released, and nothing here is
+  released without a changeset.
+
+- [#1602](https://github.com/nextlyhq/nextly/pull/1602) [`504bcee`](https://github.com/nextlyhq/nextly/commit/504bcee0dd04f32b37e00128f35ed814cf9c991b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Let a departing editor give up a document claim the stored rules have stopped
+  permitting.
+
+  The per-document update gate ran on every write intent, and releasing a claim
+  routes through the same branch. Those rules read the document, so a holder's own
+  save could flip them mid-claim by changing an owner or a status the rule reads,
+  and from then on the editor's own release was refused. The claim stood until its
+  150-second lease lapsed, showing colleagues a holder who had already left and
+  pushing them to take over a document nobody was editing.
+
+  The intent now names the operation rather than grouping every write together.
+  Claiming and renewing both assert that this editor is editing this document, so
+  both ask the stored rules. Releasing asserts the opposite and stops at the
+  collection's update permission, resting on the claim token that names the one
+  acquisition being given up and fences the delete itself.
+
+- [#1597](https://github.com/nextlyhq/nextly/pull/1597) [`02483d8`](https://github.com/nextlyhq/nextly/commit/02483d8b2a35a45d765c93a282224ee39d253bab) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Saving a descendant of an inserted pattern no longer stores the page-specific id.
+
+  An insert records what it renamed on the roots it placed — deliberately, because a descendant did not arrive from the pattern separately and marking every node would make detaching one child read as a second insertion. But the restore read each selected node's own record, so selecting a DESCENDANT of an inserted root and saving that as a pattern found nothing to put back: the suffixed, page-specific id went into the new library entry, where the next insert would suffix it again.
+
+  The record is now INHERITED rather than stamped more widely. A node uses its own where it carries one — so a pattern inserted inside a pattern still restores against the one it came from — and otherwise its nearest ancestor's, carried down in the shared node walk rather than a traversal of the planner's own.
+
+  The scope is keyed by the node, not by its id: a document reaching a planner is untrusted and may spell one id twice, and an id-keyed scope hands a node under one container the record belonging to a different container of the same name. Where one node OBJECT occurs in two places under records that DISAGREE, nothing can say which occurrence a selection meant, so no record is applied and every id is kept. Occurrences whose records say the same thing are not ambiguous — one insert stamps its map onto every root it placed — and those still restore.
+
+  Every record the selection CONTAINS is applied, not only the selected roots': a run inserted from one pattern can hold a second pattern inserted into it later, and reading only the roots stored that nested copy's page-specific ids. A record applies to the node that HOLDS the id, not to the forest: a node moved out of the run that renamed it is no longer governed by that record, and putting the id back would rewrite one the author now owns. Where nothing in the selection renders the id the record can only be about a reference — a link saved without its target — and that still travels. Two records naming one id are settled the same way, by which of them governs the holder.
+
+  Inheritance stops at any node CLAIMING provenance of its own, whatever the record says and whether or not it can be read — a detached component's as much as a pattern's, because none of them came from the host. A reference is credited to the node that holds it, asked of every node and every id in one pass, so a nested pattern's own authored reference is not rewritten by the pattern it sits inside and a record naming thousands of departed ids costs no more than one naming a single id. An id two records DISAGREE about is left alone — one restore map has room for one answer, and applying either would rewrite the other scope's reference to a name it never had — while two records that agree about it still put it back, which is the ordinary case when one insert stamps its map onto several referencing roots.
+
+  A restore is applied only where EVERY node CARRYING the id — rendering it or referencing it — gives the same answer, so one governed reference cannot rewrite an unrelated author's; and a record storage would not keep — a non-enumerable `origin`, or a non-enumerable field INSIDE one, all of which JSON, an object spread and `structuredClone` drop — is not read for its contents, though it still bounds the scope.
+
+  The shared node walk also stops crashing on a node whose `slots` refuse to be read or whose slot record refuses to be enumerated, which is the same tolerance it already had for a slot holding something other than a list. A reference is restored only where the node holding it is governed by the record naming it: a node moved out of the run keeps its reference, and rewriting that would point it somewhere the saved forest never had.
+
+  Inheritance stops at any node carrying a pattern record, whether or not that record renamed anything — a collision is the exception, so the ordinary insert writes no rename map at all. And a malformed record on a node nothing selected no longer takes the save down: the walk reaches the whole document now, and provenance is read as the untrusted stored data it is, through the same `isBlockOrigin` the document validator uses rather than a weaker reading of its own.
+
+  A node's own `origin` descriptor is read ONCE per node — however many times the walk reaches it — and both questions asked of it, whether the node bounds a rename scope and what its record says, come from that one reading. A stored node that answers reflection differently on a second call can therefore no longer have its scope set by one record and its ids rewritten by another, nor be a scope boundary on one occurrence and not on another. A provenance record is likewise read once. `patternRenames` is published beside the guard that admits a record and derived from the same pass, so what a record must carry to be trusted and what it says once trusted can no longer disagree — and a stored record that is a Proxy no longer has its traps run twice by a reader going back for the contents the guard already walked. Internally, the walk's node classification is now one implementation rather than two character-for-character copies, and it answers in THREE states — a list, not a list, or a value reflection cannot classify at all — because collapsing the third into either of the others is wrong in a different direction each time.
+
+  What a CONSUMER sees of that is `walkNodes`: it no longer hands the callback an entry reflection cannot classify. A revoked `Proxy` in a forest used to take the walk down from `Array.isArray`, and containing that alone would have handed the entry over as a node instead, where reading any field off it throws.
+
+  The scan that discovers those scopes is BOUNDED, and refuses rather than answering from a partial walk. The shared forest walk revisits a node object reached under two parents — deliberately, since counting it once reports half a real element count — so a document whose branches share objects is exponential in its own depth: nineteen objects each holding the next twice walk as 524,287 entries, and a few dozen would not finish. A save whose selection is somewhere else entirely now refuses such a page for its SIZE, which is the one thing wrong with it and the one thing an author can act on. The cap goes through the published `boundedLimit` rule rather than a comparison of the planner's own, because a `NaN` cap fails in the silent direction — `NaN + 1` is `NaN` and every `read >= NaN` is false, so a caller's bad configuration REMOVES the budget rather than exceeding it, and the walk runs in full before anything rejects it. `walkNodes` gained `onBudgetSpent` to make the bound possible — it could already stop on a budget with no way to tell a caller it had, which is a bound that fails in the passing direction — — and `WalkOptions` is now exported beside `walkNodes`, because an option that says the budget ran out is useless to a caller who cannot name the type carrying it.
+
+- [#1615](https://github.com/nextlyhq/nextly/pull/1615) [`e3b10e0`](https://github.com/nextlyhq/nextly/commit/e3b10e00e70b024c4f834bbbb7415a98caa4adef) Thanks [@muzzamil-rx](https://github.com/muzzamil-rx)! - The Single editor ignored its own version history. The history panel is
+  mounted from the system header for collections and singles alike, and it
+  publishes the clicked version through shared document context — but only the
+  collection entry editor provided that context and answered it. In a Single the
+  publication reached the context default, whose setter does nothing, so
+  choosing a version fetched the snapshot and marked the row active while the
+  live document stayed on screen: a control that visibly did nothing.
+
+  The document side of history — the held version, the provider, the banner
+  over the read-only snapshot with restore and return-to-current, the
+  version's own takeover-aware body layout, the loading and failure states,
+  and the holds autosave and language actions observe while a version is on
+  screen — now lives in one host that both editors mount, so the two cannot
+  answer the same panel differently again.
+
+- [#1651](https://github.com/nextlyhq/nextly/pull/1651) [`d17bc8f`](https://github.com/nextlyhq/nextly/commit/d17bc8f5e10bb99258d24608339a00912a4c3bde) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Stripping HTML from a text value no longer deletes ordinary writing. A `<` opens a tag only when what follows it could name one, which is the HTML tokenizer's own rule, so `price < 100` and `2 < 3 and 5 > 4` are stored as written. This runs on every `text`, `string`, `textarea` and `email` field of every collection, and on media alt text, captions and tags, so an author lost the rest of a sentence on save with nothing to say why.
+
+  It is one pass, holding the invariant that a `<` it kept is never followed by a character that would open a tag. Removing a tag can put its neighbours together into a new one, and rescanning until the text stopped changing holds the same invariant at quadratic cost on a path every create and update reaches.
+
+  `stripHtmlTags` is published from `nextly`, beside the other security utilities a plugin already reaches for. A plugin storing text a visitor typed has to strip markup the way core does, and the absence of that export is why a second copy grew in `@nextlyhq/plugin-form-builder`. That copy is gone.
+
+- [#1585](https://github.com/nextlyhq/nextly/pull/1585) [`708273e`](https://github.com/nextlyhq/nextly/commit/708273e8f47477ee3b5cc7a385c61ead475a6423) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Document validation is split into the phases it always had, with no change to
+  what it reports.
+
+  `validateDocument` was one 257-line function holding four separate jobs: judging
+  the document's own envelope, deciding what the size survey permits, assembling
+  the state every node check shares, and walking the forest. The envelope's two
+  early returns sat in the middle of it, which is why the walk was hard to find at
+  all — and why nothing in the file could be repaired, since the complexity gate
+  refuses any edit to a function that far over threshold, however small.
+
+  Each phase is now its own function, named for the question it answers:
+  `documentEnvelope` (is this a document, and is its outer shape sound),
+  `nodeCheckState` (configuration, not traversal), `validateNodeForest` (the
+  bounded breadth-first walk) and `enqueueChildren` (where a slot child sits).
+
+  The order of the checks is the order of the issues, and it is load-bearing —
+  callers assert on the first one — so the phases run in exactly the order they
+  did. Every fixture in the validation corpus produces a byte-identical result,
+  survey included.
+
+- [#1589](https://github.com/nextlyhq/nextly/pull/1589) [`3520c0d`](https://github.com/nextlyhq/nextly/commit/3520c0dac49ed990a994ab6ae41779659cd27183) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A document the size survey could not READ is no longer read anyway.
+
+  `surveyDocument` refuses to invoke an accessor — it reports the document
+  `document-unreadable` rather than run a getter it was handed — and the node walk
+  then reached those same fields by ordinary property access, invoking exactly
+  what the survey had declined to. Ten node fields did it: `id`, `type`,
+  `version`, `props`, `slots`, `attributes`, `cssId`, `styles`, `bindings` and
+  `visibility`, each taking a caller's error out of `validate()` as a native throw
+  instead of the issue list it promises.
+
+  The document's own `formatVersion`, `kind` and `nodes` did it too, which is why
+  the check sits ahead of the envelope rather than after it: the envelope is
+  reached before any node is, and it reads those three to decide whether the value
+  is a document at all.
+
+  **A document that merely exceeds a limit is unaffected.** Only `unreadable`
+  stops the walk. An oversized document was read perfectly well, its nodes are
+  still checked under the cap, and every per-node issue it produced before is
+  still produced.
+
+  **The trade, stated plainly:** an unreadable document now reports one verdict
+  rather than several. A duplicate DOM id inside one is no longer named
+  separately. Those documents come from an import or a script rather than from the
+  editor, and the same duplicate on an ordinary document is reported exactly as
+  before.
+
+- [#1595](https://github.com/nextlyhq/nextly/pull/1595) [`defb511`](https://github.com/nextlyhq/nextly/commit/defb5118eeda50afc634117fa7551505c9787eaf) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A composition plan now carries warnings, and converting a run to a component reports the anchors it will leave behind.
+
+  Converting moves a run's nodes into a definition, and composition scopes every definition-authored DOM id per instance — it has to, because two instances of one definition cannot both answer to one `id`. An author who wrote `id="pricing"` on a section, with `href="#pricing"` in a nav elsewhere on the page, was left with a link that resolved to nothing and no indication of why.
+
+  `CompositionPlan` gains a required `warnings` list. A warning rides alongside a successful plan and never refuses it: nothing here is invalid, no scoping rule makes one id serve many instances, and the author may want the component anyway. The field is always present and empty rather than optional, so a surface has one value to handle instead of two — and it is on the plan rather than in a surface because the plan is the dry run, and the second surface to offer the same action would otherwise have to remember to ask.
+
+  A reference from inside the run is not reported: it moves with the run and the relink pass rewrites it.
+
+- [#1572](https://github.com/nextlyhq/nextly/pull/1572) [`7a8bef4`](https://github.com/nextlyhq/nextly/commit/7a8bef4c24d0f2db6108c2cf81375de74a34e593) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - An inserted pattern now records the DOM ids it had to rename, and saving that
+  copy back stores the ids the source actually uses.
+
+  Inserting a pattern renames a DOM id when the destination page already holds
+  that name. The renamed id is a fact about that page, not something an author
+  wrote — so a copy edited and saved back over its own pattern was stored carrying
+  it. That moved the pattern's fingerprint on a save that changed nothing, told
+  every other copy it was stale, and grew the id by another suffix on each
+  insert-save cycle, without bound.
+
+  The insert records what it changed, alongside the provenance it already writes,
+  and the save puts it back — references included, so a `aria-describedby` or a
+  `#fragment` follows the id it names.
+
+  Recorded rather than derived, because the original cannot be recovered from the
+  current value: a minted id is the authored one plus a suffix taken from a node
+  id, and content from a script or an import may name anchors that way on purpose.
+
+  Nothing to migrate. A record written before this field existed carries no rename
+  map, which says exactly what an empty one says — restore nothing — so an older
+  document behaves as it does today.
+
+  A root that only REFERENCES a renamed id records the rename too. One root can
+  define `#pricing` while a sibling names it through `aria-describedby`, an
+  `href="#pricing"`, or that link's binding fallback — the insert rewrites all
+  four, so a record covering only the ids a root RENDERS left the referencing root
+  carrying a page-specific id with no way back. Saved on its own, it went into the
+  library naming an id that exists on exactly one page and resolves to nothing
+  anywhere it is inserted next. Restoring now also reaches a node an author gated
+  after inserting it, which otherwise gave back the reference and not its target.
+
+  A component whose forest is larger than the node cap is now refused for its
+  SIZE. Exposure pointers are resolved against an index built under `maxNodes`, so
+  a forest past that bound was indexed only as far as the bound reached and every
+  pointer beyond it was reported as pointing at a node the document does not
+  contain — sending an author to repair a sound exposure while the one thing they
+  could act on went unmentioned.
+
+  A component definition can also be duplicated. Its exposed properties and slot
+  regions are pointers INTO its tree, so a copy that re-identifies the nodes
+  without re-aiming them loads, renders, shows its properties in the inspector,
+  and fails its own publish gate with one error per exposure. Exposed ids are kept,
+  because variant presets are keyed by them; DOM ids are kept, because the
+  duplicate is a document of its own.
+
+- [#1575](https://github.com/nextlyhq/nextly/pull/1575) [`62671fd`](https://github.com/nextlyhq/nextly/commit/62671fd268176466d983d30e0870c5e2b6324dea) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A dashboard card can now be configured from the dashboard itself. Editing the arrangement gives every card that declares settings a Settings button, which opens a panel drawn from the widget's own declaration — so a plugin author gets a settings form without writing one.
+
+  Settings belong to the card, not the widget: the same widget placed twice keeps separate settings for each copy. A value left at its declared default is not stored, so a card keeps following the default if the author later changes it.
+
+- Updated dependencies [[`b6984c1`](https://github.com/nextlyhq/nextly/commit/b6984c1a4f4857bbb7202b6839fb23547cbabfd1), [`038bdfb`](https://github.com/nextlyhq/nextly/commit/038bdfbe053e8b5d23fcc0369b9bfdad3727e9df), [`ae5ea52`](https://github.com/nextlyhq/nextly/commit/ae5ea52d2aed21e33d0bbdc65646246cb85da3a1), [`af9f521`](https://github.com/nextlyhq/nextly/commit/af9f521c7bc5c4ea1039406066dc7313357d3d68), [`c4acdf0`](https://github.com/nextlyhq/nextly/commit/c4acdf028aa5c9b9fe9a2543ffd5f843914ac7a6), [`56d7966`](https://github.com/nextlyhq/nextly/commit/56d7966aa9e0e3f93e246d6a328e933183a6c8ce), [`2a84c21`](https://github.com/nextlyhq/nextly/commit/2a84c2129fb380571a396ade532a7847fc9d5330), [`d6e9f10`](https://github.com/nextlyhq/nextly/commit/d6e9f10e38196ed2d287e84eec562d6918abeb7b), [`cdf9de9`](https://github.com/nextlyhq/nextly/commit/cdf9de934b968a92cd8ffa4f5e2b1eb8ae530467), [`6c0b7ff`](https://github.com/nextlyhq/nextly/commit/6c0b7ff2cabcb87874f450af41cde9677add64ee), [`9b60af4`](https://github.com/nextlyhq/nextly/commit/9b60af41ac62a4c00374121297f13dee3ce81eba), [`3596c69`](https://github.com/nextlyhq/nextly/commit/3596c693c31d9b8355247fee936bfcd5dc62d318), [`8af6e67`](https://github.com/nextlyhq/nextly/commit/8af6e6748a4fee0c730efb7cf1d569798e7048d0), [`ffa0e3c`](https://github.com/nextlyhq/nextly/commit/ffa0e3ca9ea727099f2c7ab13d49251674add853), [`e18ae9d`](https://github.com/nextlyhq/nextly/commit/e18ae9d5315a0bb3a1c4870dbbf71360f94c47a6), [`2b922fe`](https://github.com/nextlyhq/nextly/commit/2b922fe8abb13d0d1fc0e40288b42188a0b7439d), [`aa78ddc`](https://github.com/nextlyhq/nextly/commit/aa78ddc9e934f11b5b7aa8948ad4695fad9c18ec), [`334e59b`](https://github.com/nextlyhq/nextly/commit/334e59b1aecb1bc5e350577e12e0eb90868b49f4), [`fba5a6c`](https://github.com/nextlyhq/nextly/commit/fba5a6caefa9f019b90025ed03f272eda3bd3c49), [`6b1fa82`](https://github.com/nextlyhq/nextly/commit/6b1fa82ae7c929fcc233e40c4ed61721f050274c), [`c97af6b`](https://github.com/nextlyhq/nextly/commit/c97af6b791e37498328fa75c60495e8d34cef254), [`e6797c5`](https://github.com/nextlyhq/nextly/commit/e6797c5d12936d937e5f90feb86bbb1d51958597), [`e6c1b48`](https://github.com/nextlyhq/nextly/commit/e6c1b48c8fca9fd326bb40dfd858ecba20c8e034), [`92b8005`](https://github.com/nextlyhq/nextly/commit/92b80056c6888639e0a812cc6018ac4afa5c0202), [`02efedc`](https://github.com/nextlyhq/nextly/commit/02efedcd139e605e7f82faa037ad4bf0e88ba9dc), [`147c86b`](https://github.com/nextlyhq/nextly/commit/147c86bfa0309969b45af097cdbe46bff33b5e14), [`f229eb3`](https://github.com/nextlyhq/nextly/commit/f229eb338d1b6e6bea0e7baea03a221769bdc400), [`c8ddba4`](https://github.com/nextlyhq/nextly/commit/c8ddba40ce51df02fad95814214be8193c9426fa), [`ca8e0cc`](https://github.com/nextlyhq/nextly/commit/ca8e0cc2cc52da5dad54350f624399a25ffdcc18), [`1cbf54f`](https://github.com/nextlyhq/nextly/commit/1cbf54f1767c813263d55bdf2bcc373d71731722), [`d8c7a11`](https://github.com/nextlyhq/nextly/commit/d8c7a11573e229a7d90d3c159d0bbfdb55ef7607), [`6a32025`](https://github.com/nextlyhq/nextly/commit/6a32025b0f41e07c60a9ea0a50e704dd35e16abc), [`d7a405a`](https://github.com/nextlyhq/nextly/commit/d7a405a3bdd301288f2b432b3e0bc9104c9737e5), [`d130cf2`](https://github.com/nextlyhq/nextly/commit/d130cf266e21b1b1047992baf5c2bcad8413cd58), [`c3b5e38`](https://github.com/nextlyhq/nextly/commit/c3b5e383b1269fd972bcc2fcbbb543e746581de2), [`4807246`](https://github.com/nextlyhq/nextly/commit/4807246106362add6803621ac5b69f1dd29a6667), [`9c27d7e`](https://github.com/nextlyhq/nextly/commit/9c27d7e9613c7a48c7bde428fa46b081a7d3db17), [`dad15ed`](https://github.com/nextlyhq/nextly/commit/dad15ed16c26d0ce9c94cd65f25f7ffd0e9c53e3), [`62671fd`](https://github.com/nextlyhq/nextly/commit/62671fd268176466d983d30e0870c5e2b6324dea), [`52ad836`](https://github.com/nextlyhq/nextly/commit/52ad83671a7a5a11ed3f7da0c11f32759dccd7cb), [`4b202ec`](https://github.com/nextlyhq/nextly/commit/4b202ece3192f64d4c2a76d75bdd806c33fcdd5a), [`c08a619`](https://github.com/nextlyhq/nextly/commit/c08a619ba5dc74cdf3054403b305a79c2ecc5f3f), [`0c1ce76`](https://github.com/nextlyhq/nextly/commit/0c1ce76bb8f1fb13f15ab82c2a8615753a1e50d9), [`504bcee`](https://github.com/nextlyhq/nextly/commit/504bcee0dd04f32b37e00128f35ed814cf9c991b), [`02483d8`](https://github.com/nextlyhq/nextly/commit/02483d8b2a35a45d765c93a282224ee39d253bab), [`e3b10e0`](https://github.com/nextlyhq/nextly/commit/e3b10e00e70b024c4f834bbbb7415a98caa4adef), [`d17bc8f`](https://github.com/nextlyhq/nextly/commit/d17bc8f5e10bb99258d24608339a00912a4c3bde), [`708273e`](https://github.com/nextlyhq/nextly/commit/708273e8f47477ee3b5cc7a385c61ead475a6423), [`3520c0d`](https://github.com/nextlyhq/nextly/commit/3520c0dac49ed990a994ab6ae41779659cd27183), [`defb511`](https://github.com/nextlyhq/nextly/commit/defb5118eeda50afc634117fa7551505c9787eaf), [`7a8bef4`](https://github.com/nextlyhq/nextly/commit/7a8bef4c24d0f2db6108c2cf81375de74a34e593), [`62671fd`](https://github.com/nextlyhq/nextly/commit/62671fd268176466d983d30e0870c5e2b6324dea)]:
+  - @nextlyhq/admin@0.0.2-alpha.64
+  - @nextlyhq/blocks-engine@0.0.2-alpha.64
+  - @nextlyhq/blocks-react@0.0.2-alpha.64
+  - @nextlyhq/builder@0.0.2-alpha.64
+  - nextly@0.0.2-alpha.64
+  - @nextlyhq/plugin-sdk@0.0.2-alpha.64
+  - @nextlyhq/ui@0.0.2-alpha.64
+
 ## 0.0.2-alpha.63
 
 ### Patch Changes
