@@ -371,6 +371,15 @@ describe("the selector at each state the catalog supports", () => {
         viewport: [{ id: "base", label: "Desktop" }],
         container: [],
       },
+      /*
+       * The way the EDITOR compiles, which is the sheet a preview has to sit
+       * beside. A canvas showing a state the pointer is not really in marks the
+       * node with `previewStateClass` and relies on the sheet carrying an arm
+       * for it; compiled without that, this oracle would describe a stylesheet
+       * no editing surface emits, and would hold the preview to a selector that
+       * cannot match a forced state.
+       */
+      previewStates: true,
     });
     expect(compiled.warnings).toEqual([]);
     return compiled.css.split("{")[0].trim();
@@ -402,6 +411,21 @@ describe("the selector at each state the catalog supports", () => {
     expect(STYLE_STATES.length).toBeGreaterThan(1);
     for (const state of STYLE_STATES) {
       expect(previewAt(state)).toBe(compiledAt(state));
+    }
+  });
+
+  /*
+   * Both arms, named. Matching the compiler is a comparison of two derivations,
+   * so it would stay true if BOTH lost the forced-state marker — and the case
+   * that needs it is exactly the one no author can see failing, since a preview
+   * matching nothing looks like a drag that does not move.
+   */
+  it("carries the real pseudo-class AND the forced-state marker", () => {
+    const fragments = scrubStateFragments();
+    for (const state of STYLE_STATES.filter(one => one !== "base")) {
+      const fragment = fragments.get(state) ?? "";
+      expect(fragment, state).toContain(`:${state}`);
+      expect(fragment, state).toContain(`.nx-pb-state-${state}`);
     }
   });
 

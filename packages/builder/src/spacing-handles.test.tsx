@@ -241,8 +241,9 @@ function HarnessWithPreviewSpy({
   );
 }
 
+/** One handle, addressed the way assistive technology finds it. */
 function handle(label: string): HTMLElement {
-  return screen.getByLabelText(new RegExp(`^${label},`));
+  return screen.getByRole("spinbutton", { name: label });
 }
 
 /** The node as the editor currently holds it. */
@@ -441,7 +442,7 @@ describe("the logical side a physical edge writes", () => {
       [band("margin", "top", "10")],
       subjectWith({ orientation: undefined })
     );
-    expect(screen.queryAllByRole("slider")).toHaveLength(0);
+    expect(screen.queryAllByRole("spinbutton")).toHaveLength(0);
     expect(screen.getByRole("status")).toBeTruthy();
   });
 });
@@ -1022,7 +1023,7 @@ describe("re-measuring while a preview is applied", () => {
   it("asks for a measurement when the preview changes, and again when it clears", () => {
     const asked: number[] = [];
     render(<HarnessWithPreviewSpy onPreviewChange={() => asked.push(1)} />);
-    const element = screen.getByLabelText(/^top margin,/);
+    const element = screen.getByRole("spinbutton", { name: "top margin" });
     const before = asked.length;
     act(() => {
       fireEvent.pointerDown(element, {
@@ -1109,6 +1110,154 @@ describe("where the handle sits on its band", () => {
   });
 });
 
+describe("a gesture that outlives its own band", () => {
+  /*
+   * `spacingBands` draws nothing for a side reporting `0`. Dragging a padding to
+   * its floor therefore makes the re-measure drop that band and unmount the very
+   * handle the pointer is captured on — the browser releases capture, the later
+   * moves and the release stop arriving, and the gesture is stranded with a live
+   * preview and nothing committed.
+   */
+  it("keeps the handle mounted after its band stops being drawn", () => {
+    const bands = [band("padding", "top", "4")];
+    const { rerender } = render(
+      <Harness
+        bands={bands}
+        subject={subjectWith()}
+        context={BASE}
+        initial={documentWith()}
+      />
+    );
+    act(() => {
+      fireEvent.pointerDown(handle("top padding"), {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    // The measurement that follows a preview finds nothing to draw.
+    rerender(
+      <Harness
+        bands={[]}
+        subject={subjectWith()}
+        context={BASE}
+        initial={documentWith()}
+      />
+    );
+    expect(
+      screen.queryByRole("spinbutton", { name: "top padding" })
+    ).not.toBeNull();
+
+    // And the gesture still finishes.
+    act(() => {
+      fireEvent.pointerMove(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: 20,
+      });
+    });
+    act(() => {
+      fireEvent.pointerUp(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: 20,
+      });
+    });
+    expect(stored("padding", "blockStart")).toBe("24px");
+
+    // Once it is over, an undrawn band takes its handle with it.
+    rerender(
+      <Harness
+        bands={[]}
+        subject={subjectWith()}
+        context={BASE}
+        initial={documentWith()}
+      />
+    );
+    expect(screen.queryAllByRole("spinbutton")).toHaveLength(0);
+  });
+
+  it("ignores a cancellation belonging to another pointer", () => {
+    mount([band("margin", "top", "10")]);
+    act(() => {
+      fireEvent.pointerDown(handle("top margin"), {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    act(() => {
+      fireEvent.pointerMove(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+    // A second finger is cancelled. It says nothing about this gesture.
+    act(() => {
+      fireEvent.pointerCancel(document.body, { pointerId: 2 });
+    });
+    act(() => {
+      fireEvent.pointerUp(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+    expect(stored("margin", "blockStart")).toBe("30px");
+  });
+});
+
+describe("a document that moves while the pointer is down", () => {
+  /*
+   * A style op patches the WHOLE envelope. Built from the snapshot the gesture
+   * began with, releasing would carry every declaration that snapshot held and
+   * silently undo whatever happened in between — the editor's own undo shortcut
+   * during a drag is enough to reach it.
+   */
+  it("folds the gesture into the envelope the node holds at release", () => {
+    mount([band("margin", "top", "10")]);
+    act(() => {
+      fireEvent.pointerDown(handle("top margin"), {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    act(() => {
+      fireEvent.pointerMove(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+    // Another edit lands mid-gesture, on a side this drag never touches.
+    act(() => {
+      live?.apply({
+        kind: "update",
+        id: NODE_ID,
+        patch: {
+          styles: { base: { base: { margin: { inlineEnd: "7px" } } } },
+        },
+      });
+    });
+    act(() => {
+      fireEvent.pointerUp(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+
+    expect(stored("margin", "blockStart")).toBe("30px");
+    // The mid-gesture edit survives rather than being erased by a stale patch.
+    expect(stored("margin", "inlineEnd")).toBe("7px");
+  });
+});
+
 describe("what the block's author allows", () => {
   /*
    * `supports` is the block author's capability declaration, and the Style
@@ -1121,8 +1270,12 @@ describe("what the block's author allows", () => {
       subjectWith(),
       documentWith(undefined, "acme/margin-only")
     );
-    expect(screen.queryByLabelText(/^top margin,/)).not.toBeNull();
-    expect(screen.queryByLabelText(/^left padding,/)).toBeNull();
+    expect(
+      screen.queryByRole("spinbutton", { name: "top margin" })
+    ).not.toBeNull();
+    expect(
+      screen.queryByRole("spinbutton", { name: "left padding" })
+    ).toBeNull();
   });
 
   it("withholds every handle for a block declaring no spacing", () => {
@@ -1131,7 +1284,7 @@ describe("what the block's author allows", () => {
       subjectWith(),
       documentWith(undefined, "acme/plain")
     );
-    expect(screen.queryByLabelText(/pixels$/)).toBeNull();
+    expect(screen.queryAllByRole("spinbutton")).toHaveLength(0);
   });
 });
 
@@ -1204,25 +1357,30 @@ describe("what the handle exposes", () => {
    * control's own bounds. Stating bounds instead would mean inventing two
    * numbers the catalog does not have.
    */
-  it("carries its value in the accessible name", () => {
+  /*
+   * Named AND adjustable. A bare `div` keeps the generic role, for which naming
+   * is prohibited, so `aria-label` on one is not exposed and the control reaches
+   * a keyboard user unnamed.
+   */
+  it("is an adjustable control that names itself and its value", () => {
     mount([band("margin", "top", "10"), band("padding", "left", "4")]);
-    expect(handle("top margin").getAttribute("aria-label")).toBe(
-      "top margin, 10 pixels"
+    expect(handle("top margin").getAttribute("aria-valuetext")).toBe(
+      "10 pixels"
     );
-    expect(handle("left padding").getAttribute("aria-label")).toBe(
-      "left padding, 4 pixels"
-    );
+    expect(handle("left padding").getAttribute("aria-valuenow")).toBe("4");
   });
 
+  /*
+   * A spinbutton's bounds are optional and undefined when absent, which is the
+   * truth here: the catalog admits a negative margin and neither box has a
+   * ceiling. A slider would have defaulted them to 0 and 100 and reported both
+   * ends of the real range as invalid.
+   */
   it("claims no range it cannot honour", () => {
     mount([band("margin", "top", "-12")]);
     const element = handle("top margin");
-    expect(element.getAttribute("role")).toBeNull();
-    for (const attribute of [
-      "aria-valuenow",
-      "aria-valuemin",
-      "aria-valuemax",
-    ]) {
+    expect(element.getAttribute("aria-valuenow")).toBe("-12");
+    for (const attribute of ["aria-valuemin", "aria-valuemax"]) {
       expect(element.getAttribute(attribute), attribute).toBeNull();
     }
   });

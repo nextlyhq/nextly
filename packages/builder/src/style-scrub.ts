@@ -172,6 +172,21 @@ function probeSelector(state: StyleState): string {
   };
   const compiled = compilePageCss(document, {
     breakpoints: { viewport: [{ id: "base", label: "Base" }], container: [] },
+    /*
+     * Compiled the way the EDITOR compiles, which is the only way this fragment
+     * is useful. An editor showing a state the pointer is not really in adds
+     * `previewStateClass` to the node and relies on the sheet carrying an arm
+     * for it — the compiler writes `:where(:hover, .nx-pb-state-hover)` for
+     * both at once. Probed without this the fragment is the bare pseudo-class,
+     * so a preview of a FORCED state matches nothing: the drag shows no
+     * movement and the value jumps into place on release.
+     *
+     * Harmless where no state is forced. `:where()` has zero specificity, so
+     * the selector ranks exactly as it did, and the extra arm matches only an
+     * element carrying a marker class — which a surface that never forces a
+     * state does not have.
+     */
+    previewStates: true,
   });
   return compiled.css.split("{")[0].trim();
 }

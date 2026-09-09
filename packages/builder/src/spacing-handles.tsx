@@ -61,6 +61,7 @@ import {
   nodeClassNames,
   stylePropertiesForSupports,
   walkNodes,
+  type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
@@ -284,7 +285,33 @@ export function SpacingHandles({
   onPreviewChange,
 }: SpacingHandlesProps): React.JSX.Element | null {
   const gesture = React.useRef<Gesture | null>(null);
+  /**
+   * What the current render knows, readable from a listener installed earlier.
+   *
+   * A gesture's document listeners are created once, at the press, and close
+   * over the values of that render. Most of them are properties OF the gesture
+   * and are right to freeze — the scale it is measured in, the values it
+   * started from. The node's styles are not: the document can move while the
+   * pointer is down, and a whole-envelope patch built from a stale snapshot
+   * un-does whatever happened in between. The canvas keeps a `latest` ref for
+   * the same reason.
+   */
+  const latest = React.useRef<{ styles: BlockNode["styles"] }>({
+    styles: undefined,
+  });
   const [preview, setPreview] = React.useState<string | null>(null);
+  /**
+   * The band a gesture is holding, kept alive for the gesture's lifetime.
+   *
+   * `spacingBands` draws nothing for a side reporting `0`, so dragging a
+   * padding down to its floor makes the preview re-measure, drops that band,
+   * and unmounts the very handle the pointer is captured on. The browser then
+   * releases capture and the gesture is stranded: preview live, nothing
+   * committed, no listener able to clean it up. Held in STATE rather than read
+   * off the gesture ref, because keeping an element mounted is a rendering
+   * decision and has to survive the re-render the measurement causes.
+   */
+  const [held, setHeld] = React.useState<SpacingBand | null>(null);
   const [message, setMessage] = React.useState("");
 
   const { document: doc } = editor;
@@ -336,6 +363,10 @@ export function SpacingHandles({
       )
     );
   }, [node?.type]);
+
+  // Refreshed on every render, so a listener from an earlier one reads today's
+  // document rather than the one the gesture began in.
+  latest.current.styles = node?.styles;
 
   const targetFor = React.useCallback(
     (address: StyleAddress): ScrubTarget | undefined =>
@@ -470,7 +501,17 @@ export function SpacingHandles({
       if (target === undefined) return;
       const result = scrubCommitOps(
         target,
-        node?.styles,
+        /*
+         * Read NOW, not closed over at the press.
+         *
+         * A style op patches the whole envelope, and the document can move
+         * while the pointer is down — the editor's own undo shortcut is enough.
+         * Built from the snapshot the gesture began with, the patch would carry
+         * every declaration that snapshot held, so releasing would restore an
+         * undone value or erase an edit made mid-drag. The gesture's own sides
+         * are folded into whatever the node holds at the moment of release.
+         */
+        latest.current.styles,
         writes.map(write => ({ address: write.address, value: write.value }))
       );
       if (!result.ok) {
@@ -484,7 +525,10 @@ export function SpacingHandles({
       if (result.op !== null) editor.apply(result.op);
       setMessage(committedMessage(band, writes));
     },
-    [editor, node?.styles, targetFor, valuesFor]
+    // `node.styles` is deliberately absent: the commit reads the LATEST styles
+    // through a ref, so rebuilding this callback per edit would only replace the
+    // listeners of a gesture already in flight.
+    [editor, targetFor, valuesFor]
   );
 
   /** Draw the gesture's result without touching the document. */
@@ -526,6 +570,7 @@ export function SpacingHandles({
     const live = gesture.current;
     gesture.current = null;
     setPreview(null);
+    setHeld(null);
     if (live === null) return;
     live.detach();
     if (live.active && live.host.hasPointerCapture?.(live.pointerId) === true) {
@@ -692,7 +737,14 @@ export function SpacingHandles({
         endGesture();
       };
 
-      const onCancel = (): void => {
+      const onCancel = (cancelled: PointerEvent): void => {
+        /*
+         * Filtered like `onMove` and `onUp`. A second touch or pen being
+         * cancelled says nothing about the pointer driving this gesture, and
+         * ending on it erases the preview and leaves the real release with
+         * nothing to commit.
+         */
+        if (cancelled.pointerId !== pointerId) return;
         endGesture();
       };
 
@@ -720,6 +772,7 @@ export function SpacingHandles({
         owner.removeEventListener("keydown", onEscape);
       };
 
+      setHeld(band);
       gesture.current = {
         band,
         starts,
@@ -799,6 +852,19 @@ export function SpacingHandles({
     </div>
   );
 
+  /**
+   * The bands that get a handle: the measured ones, plus the one being held.
+   *
+   * A gesture outlives its own band whenever the value it is dragging reaches
+   * zero, and the handle has to outlive it too — see `held`. Matched by box and
+   * side rather than by identity, since every measurement builds fresh objects.
+   */
+  const drawn =
+    held === null ||
+    bands.some(band => band.box === held.box && band.side === held.side)
+      ? bands
+      : [...bands, held];
+
   if (orientation === undefined || nodeClass === undefined) {
     /*
      * No handles at all. Without an orientation a physical edge cannot be
@@ -811,7 +877,7 @@ export function SpacingHandles({
 
   return (
     <>
-      {bands.map(band => {
+      {drawn.map(band => {
         /*
          * No handle where the block's author did not offer the property. The
          * band still draws — it reports what the page renders, which is true
@@ -850,8 +916,27 @@ export function SpacingHandles({
              * accurate name and a spoken result describes this control honestly;
              * a slider with a fabricated range does not.
              */
+            /*
+             * `spinbutton`, not `slider` and not a bare `div`.
+             *
+             * A `div` keeps the generic role, and naming a generic role is
+             * prohibited — so `aria-label` on one is not exposed, and a
+             * keyboard user reaches an unnamed element with nothing to say that
+             * arrows adjust it. `slider` names itself but defaults
+             * `aria-valuemin`/`aria-valuemax` to 0 and 100 when they are
+             * omitted, which would report every negative margin and every value
+             * over a hundred as outside its own range, and there are no honest
+             * bounds to state instead.
+             *
+             * A spinbutton is the adjustable-number role whose bounds are
+             * OPTIONAL: absent, it simply has none, which is the truth here.
+             * Arrow keys are its native interaction, which is what this is.
+             */
+            role="spinbutton"
             tabIndex={0}
-            aria-label={`${handleLabel(band)}, ${band.label} pixels`}
+            aria-label={handleLabel(band)}
+            aria-valuenow={Number(band.label)}
+            aria-valuetext={`${band.label} pixels`}
             /*
              * Only the press is bound here. Everything after it is followed on
              * the document, because a pointer that has travelled far enough to
