@@ -109,10 +109,10 @@ export interface VersionHistorySheetProps {
    */
   liveDirty?: boolean;
   /**
-   * A transient reason the confirm action must refuse: a colleague's claim
-   * arriving while the confirmation is open. The banner trigger removes
-   * itself on the same signal, but an already-open dialog outlives it, so
-   * the refusal has to be carried into the confirmation as well.
+   * A transient reason the confirm action must refuse: the document
+   * becoming read-only while the confirmation is open. The banner trigger
+   * removes itself on the same signal, but an already-open dialog outlives
+   * it, so the refusal has to be carried into the confirmation as well.
    */
   restoreRefused?: boolean;
 }

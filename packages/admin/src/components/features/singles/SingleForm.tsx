@@ -966,7 +966,13 @@ export function SingleForm({
                                 // latch is held for its duration so a save
                                 // started in the same turn cannot run against
                                 // it.
-                                if (writesHeld || busy) return;
+                                if (
+                                  writesHeld ||
+                                  busy ||
+                                  submissionLatch.current
+                                ) {
+                                  return;
+                                }
                                 submissionLatch.current = true;
                                 try {
                                   await discardMutation.mutateAsync();
