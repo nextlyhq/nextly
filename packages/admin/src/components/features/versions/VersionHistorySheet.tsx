@@ -102,6 +102,19 @@ export interface VersionHistorySheetProps {
    * the other. Absent, the panel falls back to inferring it from the rows.
    */
   entityLocalized?: boolean;
+  /**
+   * Whether the live editor holds unsaved changes. Restoring replaces the
+   * live document, and the refresh that follows discards that work — the
+   * confirmation has to say so before the author commits to it.
+   */
+  liveDirty?: boolean;
+  /**
+   * A transient reason the confirm action must refuse: the document
+   * becoming read-only while the confirmation is open. The banner trigger
+   * removes itself on the same signal, but an already-open dialog outlives
+   * it, so the refusal has to be carried into the confirmation as well.
+   */
+  restoreRefused?: boolean;
 }
 
 function ListSkeleton() {
@@ -127,6 +140,8 @@ export function VersionHistorySheet({
   canRestore = false,
   liveStatus = null,
   entityLocalized,
+  liveDirty = false,
+  restoreRefused = false,
 }: VersionHistorySheetProps) {
   const [selected, setSelected] = useState<number | null>(null);
   // The version pair being compared (older -> newer), or null when not
@@ -723,8 +738,15 @@ export function VersionHistorySheet({
           onOpenChange={setConfirmingRestore}
           versionNo={selected}
           isPublished={liveStatus === "published"}
+          unsavedChanges={liveDirty}
+          confirmDisabled={restoreRefused}
           isRestoring={restore.isPending}
-          onConfirm={() => restore.mutate(selected)}
+          // Re-checked at confirm time: the banner trigger can vanish while
+          // the dialog is open (a claim arriving mid-dialog), and an open
+          // dialog must not restore past a refusal that arrived after it.
+          onConfirm={() => {
+            if (canRestore && !restoreRefused) restore.mutate(selected);
+          }}
         />
       ) : null}
 

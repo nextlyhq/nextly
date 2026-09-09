@@ -17,17 +17,18 @@
 
 import { useCallback, useMemo, useState } from "react";
 
-import {
-  DocumentHistoryContext,
-  type RestoreAffordance,
-  type ViewedVersion,
-} from "@admin/components/features/versions/document-history-context";
-import { HistoricalDocumentBanner } from "@admin/components/features/versions/HistoricalDocumentBanner";
+import { DocumentHistoryContext } from "@admin/components/features/versions/document-history-context";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
-import { snapshotToFormValues } from "@admin/components/features/versions/snapshot-to-form-values";
-import { VersionSnapshotForm } from "@admin/components/features/versions/VersionSnapshotForm";
+import {
+  mayRecordRecovery,
+  useViewedVersion,
+  writeActionsHeld,
+  ViewedVersionBanner,
+  ViewedVersionBody,
+  versionAwareToolbarSlots,
+} from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
-import { Alert, AlertDescription, Skeleton, toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
@@ -40,10 +41,7 @@ import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePreviewLink } from "@admin/hooks/usePreviewLink";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
-import {
-  computeMainFields,
-  conditionFieldNames,
-} from "@admin/lib/builder/takeoverLayout";
+import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
 
 import { CopyFromLanguageScope } from "../CopyFromLanguageScope";
@@ -74,7 +72,6 @@ import {
 } from "./EntryFormContext";
 import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
-import { EntryFormToolbarSlots } from "./EntryFormToolbarSlots";
 import { EntryMetaStrip } from "./EntryMetaStrip";
 import { EntrySystemHeader } from "./EntrySystemHeader";
 import { FormErrorSummary } from "./FormErrorSummary";
@@ -445,51 +442,16 @@ export function EntryForm({
   // reads `railCollapsed` to decide whether to render. Persisted in
   // localStorage so the choice survives reloads.
   const { collapsed: railCollapsed, toggle: toggleRail } = useRailCollapsed();
-  // Which past version the document area is showing, or null for the live
-  // document. Held here because this is the component that swaps the document,
-  // and published downward because the panel that chooses it is mounted from
-  // the header, several levels below.
-  const [viewingVersion, setViewingVersion] = useState<ViewedVersion | null>(
-    null
-  );
-  // Published by the history panel while it is mounted, so the banner can
-  // offer restoring without a second copy of the permission or the mutation.
-  const [restoreAffordance, setRestoreAffordance] =
-    useState<RestoreAffordance | null>(null);
-  const documentHistory = useMemo(
-    () => ({
-      viewing: viewingVersion,
-      setViewing: setViewingVersion,
-      restore: restoreAffordance,
-      setRestore: setRestoreAffordance,
-    }),
-    [viewingVersion, restoreAffordance]
-  );
-
-  // One question — is the chosen version actually on screen? — answered once,
-  // because the document body and the restore affordance must never disagree
-  // about it. A read that has not returned leaves `isLoading` false with no
-  // error and no snapshot: the query is disabled whenever the scope is not yet
-  // addressable, and a paused one reports the same. Deciding from `isLoading`
-  // alone would render an empty document as though it were the version, and
-  // offer to restore what nobody has seen.
-  const versionOnScreen =
-    viewingVersion !== null &&
-    viewingVersion.error === null &&
-    !viewingVersion.isLoading &&
-    viewingVersion.snapshot !== undefined;
-
-  // Which fields a version HAD, decided by that version's own values. The
-  // takeover layout is value-driven, so computing it from the live entry would
-  // show today's layout over yesterday's document — omitting fields the version
-  // stored, or offering fields it never had.
-  const historicalFields = useMemo(() => {
-    if (!viewingVersion) return null;
-    return computeMainFields(allFields, {
-      takeoverTypes,
-      values: snapshotToFormValues(allFields, viewingVersion.snapshot),
-    });
-  }, [viewingVersion, allFields, takeoverTypes]);
+  // Which past version the document area is showing, the context value that
+  // publishes it to the panel, and the version's own body layout — held by the
+  // shared host so the Single editor answers the panel identically.
+  const viewedVersionHost = useViewedVersion(allFields, takeoverTypes);
+  const {
+    viewingVersion,
+    documentHistory,
+    historicalFields,
+    historicalValues,
+  } = viewedVersionHost;
 
   // Whether this collection has Draft/Published status enabled at the meta
   // level. When true, the system header splits into Save Draft + Publish/Update
@@ -625,6 +587,12 @@ export function EntryForm({
     entryId: entry?.id,
     enabled: mode === "edit",
   });
+  // One answer for every surface offering a write: the header reads the same
+  // through the document-actions model, the rail, the language panel and the
+  // submission handlers from here. Derived from the HOST's state, not the
+  // context — this body renders ABOVE the provider this component creates, so
+  // a context read here would report no version on screen even while one is.
+  const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
 
   /*
    * The one gate every write passes through.
@@ -635,15 +603,23 @@ export function EntryForm({
    * a list that the next write path gets added without, and the failure is
    * silent: the banner says the document is somebody else's while the editor
    * overwrites them. The affordances ARE disabled, so nothing offers what it
-   * cannot do — this is the guard that does not depend on remembering.
+   * cannot do — this is the guard that does not depend on remembering. Reading
+   * a past version is part of the same claim: the handlers below act on the
+   * live document, which is not what is on screen.
    */
-  const handleSubmit: typeof submitEntry = (event, intent) =>
-    lock.actionsDisabled ? Promise.resolve() : submitEntry(event, intent);
+  const handleSubmit: typeof submitEntry = (event, intent) => {
+    // The native submit is ALWAYS prevented, before any gate: this handler
+    // is the entry form's onSubmit, and returning without preventing the
+    // default lets the browser submit the form natively — reloading the page
+    // and dropping the reader's history state.
+    event?.preventDefault();
+    return writesHeld ? Promise.resolve() : submitEntry(event, intent);
+  };
   const handleDelete = () => {
-    if (!lock.actionsDisabled) deleteEntry();
+    if (!writesHeld) deleteEntry();
   };
   const handleDiscardWorkingDraft = () =>
-    lock.actionsDisabled ? Promise.resolve() : discardWorkingDraft();
+    writesHeld ? Promise.resolve() : discardWorkingDraft();
 
   const autosaveScope = useMemo(
     () => autosaveScopeFor("collection", collection.name, savedEntryId),
@@ -672,22 +648,12 @@ export function EntryForm({
     /*
      * Held off while a real save is in flight: the document is about to change
      * underneath the snapshot, so a recovery point written now would describe a
-     * state that never existed.
-     *
-     * And held off while a PAST VERSION is on screen, which is the sharper
-     * case. Choosing a version replaces the form's values, so the form goes
-     * dirty exactly as it would for typing — and recording that stores an old
-     * version as this author's unsaved work. The offer on the next visit then
-     * reads "you have unsaved changes", and accepting it silently reverts the
-     * document to whatever the reader happened to be looking at. Reading is not
-     * editing, and the write is the only part of that which is recoverable.
+     * state that never existed. And held off while a PAST VERSION is on screen:
+     * the live form is not what the author is looking at, so recording during
+     * the reading describes work against a document nobody is tending. The
+     * shared predicate states the rule once for both editors.
      */
-    /*
-     * And held off while a colleague holds the document. The recovery point is a
-     * write to the same row, so leaving it running is the overwrite the claim
-     * exists to prevent, made quieter by happening on a timer nobody watches.
-     */
-    enabled: !isSubmitting && viewingVersion === null,
+    enabled: mayRecordRecovery(isSubmitting, viewingVersion),
   });
   const linkLocale = previewLinkLocale({
     localized: collection.localized === true,
@@ -942,6 +908,9 @@ export function EntryForm({
                               draftsEnabled={collection.draftsEnabled === true}
                               isSubmitting={isSubmitting}
                               isDirty={isDirty}
+                              // The whole unsaved-work state, so the restore
+                              // confirmation covers builder-held work too.
+                              hasUnsavedWork={hasUnsavedWork}
                               autosaveEnabled={autosaveScope !== null}
                               autosaveStatus={autosave.status}
                               autosaveLastSavedAt={autosave.lastSavedAt}
@@ -983,14 +952,12 @@ export function EntryForm({
                                   })}
                               isCopyingLink={previewLink.isPending}
                               contributedActions={documentActions}
-                              toolbarSlot={
-                                <>
-                                  <EntryFormToolbarSlots
-                                    context="collection"
-                                    controllerField={controllerNames[0]}
-                                  />
-                                </>
-                              }
+                              toolbarSlot={versionAwareToolbarSlots(
+                                viewedVersionHost,
+                                lock.actionsDisabled,
+                                "collection",
+                                controllerNames[0]
+                              )}
                               onSaveDraft={() => {
                                 void handleSubmit(undefined, "save-draft");
                               }}
@@ -1026,37 +993,29 @@ export function EntryForm({
                             />
                             {/* Above the fields and below the header: the reader sees
                       the document it refers to without the offer covering it. */}
-                            {recovery.offer ? (
+                            {/* The recovery offer restores work into the LIVE
+                      form, so it is withheld while a past version is on
+                      screen — restoring values nobody can see is deciding
+                      without seeing, and the offer returns when the live
+                      document does. */}
+                            {viewingVersion === null && recovery.offer ? (
                               <AutosaveRecoveryBanner
                                 savedAt={recovery.offer.savedAt}
                                 onRestore={recovery.restore}
                                 onDismiss={recovery.dismiss}
                               />
                             ) : null}
-                            {viewingVersion ? (
-                              <HistoricalDocumentBanner
-                                versionNo={viewingVersion.versionNo}
-                                locale={viewingVersion.locale}
-                                // Routed through the panel when one is mounted, so its
-                                // selection clears with the shared state. The direct
-                                // fallback keeps the banner working without a panel.
-                                onReturnToCurrent={
-                                  restoreAffordance?.returnToCurrent ??
-                                  (() => setViewingVersion(null))
-                                }
-                                // Offered only when the panel says this caller may write.
-                                onRestore={
-                                  restoreAffordance?.canRestore &&
-                                  !lock.actionsDisabled
-                                    ? restoreAffordance.request
-                                    : undefined
-                                }
-                                // And only once the version is actually on screen:
-                                // restoring from a skeleton, or from a failed read, is a
-                                // decision made without having seen what is being chosen.
-                                restoreDisabled={!versionOnScreen}
-                              />
-                            ) : null}
+                            {/* The banner over the version being read: above the
+                      fields it describes, below the header that offered the
+                      panel. Renders nothing while the live document is on
+                      screen. A submit in flight withholds restore too — a
+                      restore racing the ordinary save would let completion
+                      order decide which contents survive. */}
+                            <ViewedVersionBanner
+                              actionsDisabled={
+                                lock.actionsDisabled || isSubmitting
+                              }
+                            />
                             <EntryMetaStrip
                               slugField={slugField}
                               hasStatus={hasStatus}
@@ -1113,10 +1072,7 @@ export function EntryForm({
                                     ? {}
                                     : { onSelect: onLocaleChange })}
                                   hasStatus={hasStatus}
-                                  actionsDisabled={
-                                    viewingVersion !== null ||
-                                    lock.actionsDisabled
-                                  }
+                                  actionsDisabled={writesHeld}
                                 />
                               </div>
                             )}
@@ -1126,44 +1082,14 @@ export function EntryForm({
                       this page read then, and that is answered by the page. The
                       live form stays mounted underneath — the historical values
                       are rendered against a form of their own, so nothing typed
-                      here is disturbed and nothing historical can reach a save. */}
-                            {viewingVersion ? (
-                              <div className="@4xl/content:p-8 pt-6">
-                                {viewingVersion.error ? (
-                                  // A failed read must not render as an empty document:
-                                  // that is a different and wrong claim about the version.
-                                  <Alert variant="destructive">
-                                    <AlertDescription>
-                                      This version could not be loaded.
-                                    </AlertDescription>
-                                  </Alert>
-                                ) : !versionOnScreen ? (
-                                  <div
-                                    className="flex flex-col gap-4"
-                                    aria-busy="true"
-                                  >
-                                    <span className="sr-only" role="status">
-                                      Loading version {viewingVersion.versionNo}
-                                    </span>
-                                    {[0, 1, 2, 3].map(i => (
-                                      <div
-                                        key={i}
-                                        className="flex flex-col gap-1"
-                                      >
-                                        <Skeleton className="h-3 w-24" />
-                                        <Skeleton className="h-9 w-full" />
-                                      </div>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <VersionSnapshotForm
-                                    fields={historicalFields ?? mainFields}
-                                    snapshot={viewingVersion.snapshot}
-                                  />
-                                )}
-                              </div>
-                            ) : (
-                              mainFields.length > 0 && (
+                      here is disturbed and nothing historical can reach a save.
+                      The swap itself is the shared host's, so the Single editor
+                      answers a published version through the same surface. */}
+                            <ViewedVersionBody
+                              fields={historicalFields ?? mainFields}
+                              values={historicalValues ?? undefined}
+                            >
+                              {mainFields.length > 0 && (
                                 <div className="@4xl/content:p-8 pt-6">
                                   {/* Forward the form mode: in edit mode a blank password
                         field means "keep the current password" rather than a
@@ -1177,8 +1103,8 @@ export function EntryForm({
                                     mode={mode}
                                   />
                                 </div>
-                              )
-                            )}
+                              )}
+                            </ViewedVersionBody>
                           </div>
 
                           {/* Rail (collapsible). Width 320px. Hidden until the content panel
@@ -1201,10 +1127,7 @@ export function EntryForm({
                                   {...(onLocaleChange === undefined
                                     ? {}
                                     : { onLocaleChange })}
-                                  actionsDisabled={
-                                    viewingVersion !== null ||
-                                    lock.actionsDisabled
-                                  }
+                                  actionsDisabled={writesHeld}
                                   isDirty={isDirty}
                                 />
                               </div>

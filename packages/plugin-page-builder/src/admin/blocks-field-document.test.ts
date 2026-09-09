@@ -64,8 +64,8 @@ describe("canEditBlocks", () => {
    * which renders the whole document read-only, still showed an enabled "Edit
    * blocks" button. Opening it mounted a full-screen editor bound to whichever
    * form was nearest, which there is the SNAPSHOT'S: committing wrote into a
-   * past version of the document. `VersionSnapshotForm`'s own docblock states
-   * that as impossible.
+   * past version of the document. `ReadOnlyDocumentForm`'s own docblock
+   * states that as impossible.
    */
   it("allows editing when neither flag is set", () => {
     // The control. Without it, "always false" would satisfy every case below
