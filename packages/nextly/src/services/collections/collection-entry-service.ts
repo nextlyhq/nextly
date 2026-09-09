@@ -733,6 +733,8 @@ export class CollectionEntryService extends BaseService {
       user?: UserContext;
       /** Who performed the delete, recorded on the outbox event. */
       actor?: RequestActor;
+      /** Arbitrary data passed to this operation's hooks via context. */
+      context?: Record<string, unknown>;
     }
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
     return this.mutationService.deleteEntryInTransaction(tx, params);
@@ -905,6 +907,8 @@ export class CollectionEntryService extends BaseService {
       disableRevalidate?: boolean;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Arbitrary data passed to hooks via context */
+      context?: Record<string, unknown>;
       /**
        * Which collections a trusted read may reach as relationships are expanded.
        * Absent means every populated target inherits the caller's trust. Only ever

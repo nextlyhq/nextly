@@ -395,6 +395,8 @@ export interface TransitionAuthorization {
 /** Everything both transaction update entry points accept. */
 /** Everything both transaction delete entry points accept. */
 interface DeleteEntryWriteParams {
+  /** Arbitrary data passed to this operation's hooks via context. */
+  context?: Record<string, unknown>;
   collectionName: string;
   user?: UserContext;
   /**
@@ -419,6 +421,8 @@ interface DeleteEntryWriteOptions {
 }
 
 interface UpdateEntryWriteParams {
+  /** Arbitrary data passed to this operation's hooks via context. */
+  context?: Record<string, unknown>;
   collectionName: string;
   user?: UserContext;
   overrideAccess?: boolean;
@@ -460,6 +464,8 @@ interface UpdateEntryWriteOptions {
 }
 
 interface CreateEntryWriteParams {
+  /** Arbitrary data passed to this operation's hooks via context. */
+  context?: Record<string, unknown>;
   collectionName: string;
   user?: UserContext;
   overrideAccess?: boolean;
@@ -8276,7 +8282,11 @@ export class CollectionMutationService extends BaseService {
         : { ...body };
 
       // Shared context between all hooks in this request
-      const sharedContext: Record<string, unknown> = {};
+      // Seeded from the caller, like the non-transactional pipelines. An
+      // empty literal here meant a hook context reached every write EXCEPT
+      // one made inside a transaction, which is the least obvious place for
+      // a flag such as recursion suppression to stop working.
+      const sharedContext: Record<string, unknown> = { ...params.context };
 
       // Execute hooks (unless skipped)
       if (options.runHooks) {
@@ -8844,7 +8854,11 @@ export class CollectionMutationService extends BaseService {
       let currentData: Record<string, unknown> = { ...body };
 
       // Shared context between all hooks in this request
-      const sharedContext: Record<string, unknown> = {};
+      // Seeded from the caller, like the non-transactional pipelines. An
+      // empty literal here meant a hook context reached every write EXCEPT
+      // one made inside a transaction, which is the least obvious place for
+      // a flag such as recursion suppression to stop working.
+      const sharedContext: Record<string, unknown> = { ...params.context };
 
       // Execute hooks (unless skipped)
       if (options.runHooks) {
@@ -9599,7 +9613,11 @@ export class CollectionMutationService extends BaseService {
       }
 
       // Shared context between all hooks in this request
-      const sharedContext: Record<string, unknown> = {};
+      // Seeded from the caller, like the non-transactional pipelines. An
+      // empty literal here meant a hook context reached every write EXCEPT
+      // one made inside a transaction, which is the least obvious place for
+      // a flag such as recursion suppression to stop working.
+      const sharedContext: Record<string, unknown> = { ...params.context };
 
       // Execute hooks (unless skipped)
       if (options.runHooks) {
