@@ -173,13 +173,14 @@ function layoutIdentityOf(
 }
 
 /**
- * The area this repeater row places `componentId` in, or null when it does not
- * name that component at all.
+ * The area this repeater row places `componentId` in, or null when the row
+ * does not name that component at all.
  *
- * One question rather than two: whether the row matches, and where. Answering
- * them separately at the call site is what put the walk above the complexity
- * gate, and the gate was reading a real thing — the loop had to hold row
- * validation, matching and construction at once.
+ * Matching and locating are ONE question here, because a row that matches
+ * always has an area to report — empty when the stored value is not a string,
+ * which is a row that still names the component and still has to be refused.
+ * Separating them would let a caller act on a match while holding no place to
+ * send the author.
  */
 function areaNaming(row: unknown, componentId: string): string | null {
   if (!isRecord(row)) return null;
