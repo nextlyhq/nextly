@@ -73,6 +73,7 @@ export type {
 // Plugin HTTP routes — `contributes.routes` surface.
 export type {
   PluginRoute,
+  PluginRouteCaller,
   PluginRouteContext,
   PluginRouteHandler,
   Middleware,

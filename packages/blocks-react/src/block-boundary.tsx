@@ -384,15 +384,30 @@ function withNodeAttributes(
    * `cssId` shadows, the bag is read case-insensitively with the last variant
    * winning, and an empty result is no id at all.
    *
-   * That last clause is the one behaviour change. A node with `cssId: ""` used
-   * to emit a literal `id=""`, because this loop tested `!== undefined` and the
-   * empty string passes. It no longer does, and nothing reachable is lost: the
-   * DOM Standard unsets an element's ID when the attribute is set to the empty
-   * string, so `getElementById("")` never matched it, no IDREF could name it,
-   * and `#` is not a valid selector. The HTML Standard separately requires an
-   * id to hold at least one character, so what shipped was invalid markup that
-   * addressed nothing. The empty `cssId` still SHADOWS the bag, which is the
-   * part authors can observe, and the inspector still offers to remove it.
+   * That last clause changes what an empty id does, in two ways.
+   *
+   * A node with `cssId: ""` used to emit a literal `id=""`, because this loop
+   * tested `!== undefined` and the empty string passes. It no longer does, and
+   * nothing reachable is lost: the DOM Standard unsets an element's ID when the
+   * attribute is set to the empty string, so `getElementById("")` never matched
+   * it, no IDREF could name it, and `#` is not a valid selector. The HTML
+   * Standard separately requires an id to hold at least one character, so what
+   * shipped was invalid markup that addressed nothing. The empty `cssId` still
+   * SHADOWS the bag, which is the part authors can observe, and the inspector
+   * still offers to remove it.
+   *
+   * And a node contributing no id now leaves a BLOCK-OWNED root id alone, so
+   * the two ways of contributing none — the field absent, and the field present
+   * but empty — agree. Only the empty one moved: an absent `cssId` always left
+   * a block's own id in place. Assigning the empty string overwrote it and left
+   * the element reachable by nothing, which was collateral of the assignment
+   * rather than a rule anything stated, and it is the harmful direction — an
+   * empty `cssId` arrives by import and never from the editor, and a block
+   * whose root id is the target of its own `aria-labelledby` or `htmlFor` lost
+   * that wiring to a value its author never typed.
+   *
+   * What this rule decides is which of the NODE's two spellings reaches the
+   * page, never whether the block may keep an id of its own.
    */
   const renderedId = renderedDomId(node);
   if (renderedId !== undefined) extra.id = renderedId;

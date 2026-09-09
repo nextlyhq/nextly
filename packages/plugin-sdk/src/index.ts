@@ -272,6 +272,7 @@ export type {
 // reads a comment inside it as an export name.
 export type {
   PluginRoute,
+  PluginRouteCaller,
   PluginRouteContext,
   PluginRouteHandler,
   Middleware,
