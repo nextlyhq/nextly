@@ -19,6 +19,7 @@ import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import { isConditionGated } from "./visibility";
 import {
   componentIdsIn,
+  componentUsageIn,
   resolveComponentInstances,
   type DefinitionsById,
   type ResolvedBlockNode,
@@ -2173,5 +2174,59 @@ describe("componentIdsIn", () => {
 
     expect(componentIdsIn(nodes, 2)).toEqual([]);
     expect(componentIdsIn(nodes, 3)).toEqual(["late"]);
+  });
+});
+
+describe("componentUsageIn", () => {
+  // Three entries exactly, so the budget can be set above, at and below the
+  // size of the forest. The reference is the LAST of them, which is what makes
+  // a prefix distinguishable from the whole answer at all: a truncated walk
+  // returns `[]` here, and `[]` is also what a document referencing nothing
+  // returns — the pair the `complete` flag exists to separate.
+  const nodes = [node("a"), node("b"), instance("i1", "late")];
+
+  it("reports a whole read, with what it found", () => {
+    expect(componentUsageIn(nodes, 10)).toEqual({
+      ids: ["late"],
+      complete: true,
+    });
+  });
+
+  it("reports a truncated read, and the prefix it managed", () => {
+    // Both halves asserted together. `ids: []` alone is the answer a document
+    // holding no instances gives, so an assertion on it cannot tell the two
+    // apart — which is the whole defect this function exists to close.
+    expect(componentUsageIn(nodes, 2)).toEqual({ ids: [], complete: false });
+  });
+
+  it("calls a forest of exactly the budget COMPLETE, not truncated", () => {
+    // The boundary, and the reason `complete` is set on the branch that ends
+    // the walk rather than derived from the budget afterwards. Three entries
+    // under a budget of three spends the last of it on the last entry and
+    // reads the forest WHOLE; a check on the remaining budget would report
+    // this as unreadable, at exactly the size the rest of the engine accepts.
+    expect(componentUsageIn(nodes, 3)).toEqual({
+      ids: ["late"],
+      complete: true,
+    });
+  });
+
+  it("gives an empty forest a complete answer, not an unread one", () => {
+    // "Nothing to read" and "could not be read" are the two states this
+    // separates, and the empty forest is the one a caller meets first.
+    expect(componentUsageIn([], 10)).toEqual({ ids: [], complete: true });
+  });
+
+  it("answers what componentIdsIn answers, truncation included", () => {
+    // `componentIdsIn` is derived from this, and the case where a
+    // reimplementation would diverge is the bounded one: a second walk with
+    // its own budget arithmetic returns a different prefix here while both
+    // agree on every document small enough to be read whole.
+    for (const budget of [1, 2, 3, 10]) {
+      expect({ budget, ids: componentIdsIn(nodes, budget) }).toEqual({
+        budget,
+        ids: componentUsageIn(nodes, budget).ids,
+      });
+    }
   });
 });

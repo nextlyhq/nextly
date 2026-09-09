@@ -266,6 +266,7 @@ export { measureBytes, surveyDocument } from "./measure-bytes";
 // what to FETCH, asked before anything can be resolved.
 export {
   componentIdsIn,
+  componentUsageIn,
   resolveComponentInstances,
   // Why an instance was left standing. Published because the surfaces that
   // REPORT one are in other packages — the renderer draws a placeholder, the
@@ -277,6 +278,7 @@ export {
 export type {
   ComponentLookup,
   ComponentUnresolvedReason,
+  ComponentUsage,
   DefinitionsById,
   ResolveComponentOptions,
   ResolvedBlockNode,

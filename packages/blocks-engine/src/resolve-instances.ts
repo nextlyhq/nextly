@@ -262,16 +262,58 @@ const SCOPED_ID_PREFIX = "cx-";
  */
 const MAX_PROP_PATH_SEGMENTS = 16;
 
-/** The component ids a document references directly, in first-reached order. */
-export function componentIdsIn(
+/**
+ * What a document says about the components it references directly.
+ *
+ * Two values, because an empty list and an unread document are different
+ * answers and a caller must be able to tell them apart. The walk is bounded,
+ * and a bound that ends it early leaves a PREFIX — which, for the question an
+ * index of this asks, is the dangerous direction: "references nothing" is what
+ * permits deleting a component a page still renders.
+ */
+export interface ComponentUsage {
+  /** The component ids the document references, in first-reached order. */
+  ids: string[];
+  /**
+   * Whether the whole forest was read.
+   *
+   * False means `ids` is a prefix of the answer rather than the answer. A
+   * caller must not read a missing id as absent while this is false.
+   */
+  complete: boolean;
+}
+
+/**
+ * The components a document references, and whether it could all be read.
+ *
+ * The richer of the two answers this module gives, with {@link componentIdsIn}
+ * derived from it rather than computed beside it. They are one question, and
+ * two walks over one forest agree on the day they are written: the narrow one
+ * would go on returning a prefix silently after a change to the bound, the
+ * ordering or the descent rule moved only the other.
+ *
+ * ORDER IS FIRST-REACHED, not sorted, because `componentIdsIn` publishes that
+ * and its consumer is cache tagging. A caller comparing two answers for
+ * equality has to sort them itself.
+ */
+export function componentUsageIn(
   nodes: readonly unknown[],
   maxNodes: number = DEFAULT_LIMITS.maxNodes
-): string[] {
+): ComponentUsage {
   const ids: string[] = [];
   const seen = new Set<string>();
   let budget = maxNodes;
+  // Set on the branch that ENDS the walk early, rather than derived afterwards
+  // from `budget === 0`. A forest holding exactly `maxNodes` entries spends the
+  // last of the budget on its last entry and is read WHOLE, so a check on the
+  // remaining budget calls a complete read truncated — and reports a document
+  // as unreadable at exactly the size the rest of the engine still accepts.
+  let truncated = false;
   walkForest(nodes, entry => {
-    if (budget <= 0) return "stop";
+    if (budget <= 0) {
+      truncated = true;
+      return "stop";
+    }
     budget -= 1;
     const id = componentIdOf(entry.node);
     if (id !== undefined && !seen.has(id)) {
@@ -280,7 +322,22 @@ export function componentIdsIn(
     }
     return "descend";
   });
-  return ids;
+  return { ids, complete: !truncated };
+}
+
+/**
+ * The component ids a document references directly, in first-reached order.
+ *
+ * Answers nothing about whether the whole document was read. A caller deciding
+ * whether a component is USED needs {@link componentUsageIn} instead: a walk
+ * this one truncated returns a prefix that is indistinguishable here from a
+ * document referencing nothing.
+ */
+export function componentIdsIn(
+  nodes: readonly unknown[],
+  maxNodes: number = DEFAULT_LIMITS.maxNodes
+): string[] {
+  return componentUsageIn(nodes, maxNodes).ids;
 }
 
 /**
