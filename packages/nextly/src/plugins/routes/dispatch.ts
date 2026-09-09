@@ -6,14 +6,19 @@ import {
   requireAuthentication,
   requirePermission,
 } from "../../auth/middleware";
+import type { AuthContext } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { NextlyError } from "../../errors/nextly-error";
 import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
+import type { PluginContext } from "../plugin-context";
+import type { ScopedCaller } from "../service-opts";
+import { bindCallerToCollections } from "../service-opts";
 
 import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
+import { buildPluginRouteCaller, pluginRouteScope } from "./route-caller";
 import type { RouteMatch } from "./route-registry";
 import type { PluginRoute, PluginRouteContext } from "./route-types";
 
@@ -60,8 +65,8 @@ function toErrorResponse(req: Request, err: unknown): Response {
 async function resolvePluginRouteAuth(
   req: Request,
   route: PluginRoute
-): Promise<{ user: AuthUser | null } | { error: NextlyError }> {
-  if (route.public === true) return { user: null };
+): Promise<{ auth: AuthContext | null } | { error: NextlyError }> {
+  if (route.public === true) return { auth: null };
 
   // requirePermission already enforces authentication, so the permission-gated
   // path needs a single call (avoids verifying the session twice).
@@ -73,12 +78,57 @@ async function resolvePluginRouteAuth(
     return { error: toNextlyAuthError(authResult) };
   }
 
-  const user: AuthUser = {
-    id: authResult.userId as AuthUser["id"],
-    email: authResult.userEmail ?? "",
-    name: authResult.userName ?? null,
+  // The context is returned WHOLE. It was projected to three identity fields
+  // here, and everything an access decision needs was in the four it dropped:
+  // how the caller authenticated, an API key's own stamped grants, the key's
+  // id, and the custom claims a claim-based rule reads. Each is invisible once
+  // gone — the request still succeeds, it simply answers as somebody with more
+  // rights than the caller was granted.
+  return { auth: authResult };
+}
+
+/**
+ * The identity half of the caller, unchanged.
+ *
+ * `email` falls back to the empty string because an API-key context carries no
+ * email: {@link AuthUser} requires one, and the alternative — omitting the
+ * caller entirely for a key — would leave a route unable to name who acted.
+ */
+function toAuthUser(auth: AuthContext): AuthUser {
+  return {
+    id: auth.userId as AuthUser["id"],
+    email: auth.userEmail ?? "",
+    name: auth.userName ?? null,
   };
-  return { user };
+}
+
+/**
+ * The plugin's services, with this request's caller bound to the collection
+ * service.
+ *
+ * A PROXY rather than a spread of `services`. Three of its members —
+ * `versions`, `singles` and `jobs` — are getters that resolve a container
+ * service on access, and each carries a comment saying why: a context built by
+ * a caller that never touches version history must not require the versions
+ * service to have been registered. `{ ...services }` invokes every getter at
+ * once, so copying the object to replace one member would resolve all three on
+ * every plugin route call and throw on any that is unregistered.
+ *
+ * Returns the original object when there is nothing to bind, so a session
+ * request reaches the handler with exactly the context it had before.
+ */
+function bindCallerToServices(
+  services: PluginContext["services"],
+  caller: ScopedCaller
+): PluginContext["services"] {
+  const collections = bindCallerToCollections(services.collections, caller);
+  if (collections === services.collections) return services;
+  return new Proxy(services, {
+    get(target, prop) {
+      if (prop === "collections") return collections;
+      return Reflect.get(target, prop);
+    },
+  });
 }
 
 function permissionArgs(slug: string): [string, string] {
@@ -137,8 +187,8 @@ function markPluginResponse(response: Response, route: PluginRoute): Response {
 /**
  * Run a matched plugin route. Enforces secure-by-default auth,
  * builds the per-request {@link PluginRouteContext} (the plugin's boot context
- * plus `user`/`params`), and invokes the handler, isolating any thrown error
- * into a Response.
+ * plus `user`/`caller`/`params`), and invokes the handler, isolating any thrown
+ * error into a Response.
  */
 export async function runPluginRoute(
   req: Request,
@@ -155,9 +205,31 @@ export async function runPluginRoute(
     );
   }
 
+  const user = auth.auth === null ? null : toAuthUser(auth.auth);
+  const caller = auth.auth === null ? null : buildPluginRouteCaller(auth.auth);
+  // Only an API key has a scope the services path cannot already see, so a
+  // session request is left holding the very object it held before — the
+  // "unchanged for sessions" property is structural here rather than something
+  // the binder happens to arrive at.
+  const scope = auth.auth === null ? undefined : pluginRouteScope(auth.auth);
+
   const ctx: PluginRouteContext = {
     ...matched.baseCtx,
-    user: auth.user,
+    // Bound BEFORE the handler runs, so a route written the ordinary way —
+    // `{ as: 'user', user: ctx.user }` — authorizes against the API key's own
+    // scope with no change on the plugin's side. Requiring the author to opt in
+    // would leave every route written before this one holding the defect, and a
+    // security field nobody passes is the shape that goes missing silently.
+    ...(scope === undefined || auth.auth === null
+      ? {}
+      : {
+          services: bindCallerToServices(matched.baseCtx.services, {
+            scope,
+            user: { id: auth.auth.userId, roles: auth.auth.roles },
+          }),
+        }),
+    user,
+    caller,
     params: matched.params,
   };
 

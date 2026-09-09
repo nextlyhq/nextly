@@ -1,3 +1,6 @@
+import type { AuthenticatedScope } from "../auth/authenticated-scope";
+import { apiKeyWriteAllowed } from "../auth/authenticated-scope";
+import { getRBACService } from "../auth/entity-read-access";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
 import { NextlyError } from "../errors/nextly-error";
@@ -61,6 +64,28 @@ type AccessMethod =
   | "deleteEntry"
   | "count"
   | "createMany";
+
+/**
+ * The access operation each method performs, in permission-slug vocabulary.
+ *
+ * Beside {@link CONTEXT_INDEX} because the two tables are read together and a
+ * method present in one and missing from the other is the failure worth making
+ * visible: an access method with no operation here is an ungated call that
+ * still looks wrapped. `satisfies Record<AccessMethod, ...>` is what makes
+ * adding a method to `AccessMethod` fail here rather than silently skip it.
+ */
+const ACCESS_OPERATION = {
+  createEntry: "create",
+  listEntries: "read",
+  findEntryById: "read",
+  updateEntry: "update",
+  deleteEntry: "delete",
+  count: "read",
+  createMany: "create",
+} as const satisfies Record<
+  AccessMethod,
+  "create" | "read" | "update" | "delete"
+>;
 
 const CONTEXT_INDEX: Record<AccessMethod, number> = {
   createEntry: 2,
@@ -187,4 +212,124 @@ export function wrapCollectionsForPlugin(
       };
     },
   }) as unknown as PluginCollectionService;
+}
+
+/**
+ * The caller a request-scoped collection service judges an API key against.
+ *
+ * `roles` are the KEY's own resolved role slugs, not its owner's — they reach a
+ * code-defined `access` rule, which would otherwise decide on roles the key was
+ * never granted.
+ */
+export interface ScopedCaller {
+  scope: AuthenticatedScope | undefined;
+  user: { id: string; roles?: string[] };
+}
+
+/**
+ * Bind a request's caller to the plugin collection service, so a scoped API key
+ * is judged on its OWN grants.
+ *
+ * ## Why this exists at all
+ *
+ * `resolveServiceOpts` turns `{ as: 'user', user }` into a `RequestContext`
+ * carrying only an id and an email, and the access check downstream then
+ * resolves that id's DATABASE grants. For a session caller that is exactly
+ * right. For an API key it is the key's OWNER — so a deliberately read-only key
+ * could drive any write its owner was allowed to make, through any plugin route
+ * that offered one. Bounded (a key never exceeds its owner) and therefore not a
+ * privilege escalation, but it is precisely the guarantee a scoped key exists to
+ * provide.
+ *
+ * ## Why only the api-key half
+ *
+ * The result is an INTERSECTION, and each half is enforced once. The owner's
+ * grants are already enforced downstream by `checkCollectionAccess`, which runs
+ * the RBAC gate, the super-admin bypass and the stored rules for the resolved
+ * user. What that path cannot see is the key's own scope, because nothing
+ * carries it there. This adds only the missing half: `apiKeyWriteAllowed`
+ * returns `null` for a session caller, so a session request passes through
+ * completely unchanged and pays for no extra permission read. Answering the
+ * session half here as well would be a second implementation of a check that
+ * runs anyway, and a database read per plugin service call to reach the same
+ * verdict.
+ *
+ * ## Why it is a precondition
+ *
+ * It runs BEFORE the call it guards, not behind it: this is authorization, and
+ * a check that rejects after the write has happened is not one.
+ *
+ * `as: 'system'` is untouched, deliberately. System elevation is the plugin
+ * author's own explicit choice to act without a caller, and it bypasses the
+ * access check by design; this changes what `as: 'user'` MEANS, not what
+ * elevation is for.
+ *
+ * ## One function for reads as well as writes
+ *
+ * `apiKeyWriteAllowed` decides the READS here too, and that is not a misuse of
+ * a write helper. Its body is the generic pair — does the key hold
+ * `{operation}-{resource}`, and does the code-defined rule allow it against the
+ * KEY's scope — which for `read` is `canReadEntity`'s api-key branch step for
+ * step. Branching to `canReadEntity` for the three reads would be a second
+ * spelling of an answer that is already the same, and the two would then be
+ * free to drift.
+ */
+export function bindCallerToCollections(
+  collections: PluginCollectionService,
+  caller: ScopedCaller
+): PluginCollectionService {
+  // A session caller has no scope to add, so the whole wrapper is skipped
+  // rather than installed as a proxy that decides nothing on every call.
+  if (caller.scope?.actorType !== "apiKey") return collections;
+
+  return new Proxy(collections, {
+    get(target, prop, receiver) {
+      const orig = Reflect.get(target, prop, receiver) as unknown;
+      if (typeof orig !== "function") return orig;
+      const fn = orig as (...args: unknown[]) => unknown;
+      const operation = (
+        ACCESS_OPERATION as Record<
+          string,
+          "create" | "read" | "update" | "delete" | undefined
+        >
+      )[prop as string];
+      if (operation === undefined) return fn.bind(target);
+      const idx = CONTEXT_INDEX[prop as AccessMethod];
+
+      return async (...args: unknown[]) => {
+        // The SAME rule the wrapper below applies, asked of the same argument,
+        // rather than a second reading of what `as`/`user` mean: a copy that
+        // said "user" where `resolveServiceOpts` says "system" would gate an
+        // elevated call, and one that said the reverse would gate nothing.
+        const opts = (args[idx] as ServiceOpts | undefined) ?? {};
+        const wantsUser = !resolveServiceOpts(opts).overrideAccess;
+        if (wantsUser) {
+          const collection = args[0];
+          const allowed = await apiKeyWriteAllowed(
+            caller.scope,
+            operation,
+            typeof collection === "string" ? collection : "",
+            caller.user,
+            getRBACService()
+          );
+          // `null` cannot occur here — the guard above established an api-key
+          // scope — but it is read as a refusal rather than assumed away: this
+          // is the branch that decides whether a write happens.
+          if (allowed !== true) {
+            throw NextlyError.forbidden({
+              logContext: {
+                reason: "plugin-route-api-key-scope",
+                operation,
+                collection,
+              },
+            });
+          }
+        }
+        return (fn as (...a: unknown[]) => Promise<unknown>).apply(
+          target,
+          args
+        );
+      };
+    },
+  });
 }

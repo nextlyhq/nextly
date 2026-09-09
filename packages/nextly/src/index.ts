@@ -477,6 +477,7 @@ export {
   type PluginFilterRegistry,
   type PluginActionRegistry,
   type PluginRoute,
+  type PluginRouteCaller,
   type PluginRouteContext,
   type PluginRouteHandler,
   type Middleware,

@@ -267,6 +267,7 @@ export type {
  */
 export type {
   PluginRoute,
+  PluginRouteCaller,
   PluginRouteContext,
   PluginRouteHandler,
   Middleware,
