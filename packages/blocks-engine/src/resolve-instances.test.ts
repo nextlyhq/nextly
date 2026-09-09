@@ -2217,6 +2217,43 @@ describe("componentUsageIn", () => {
     expect(componentUsageIn([], 10)).toEqual({ ids: [], complete: true });
   });
 
+  it("refuses a budget that would remove the bound rather than set one", () => {
+    // `NaN` is not a loose bound, it is NO bound: every `budget <= 0` test
+    // against it is false, so the walk never stops and reads a stored document
+    // of any size whole. Asserted through the published helper's own message,
+    // which names both the subject and the field — a bare `toThrow()` would
+    // pass on any error this function might raise for another reason.
+    expect(() => componentUsageIn(nodes, Number.NaN)).toThrow(
+      /componentUsageIn: maxNodes/
+    );
+
+    // The derived function inherits the refusal, which is the point of it
+    // being derived. Its previous behaviour was to walk unbounded in silence.
+    expect(() => componentIdsIn(nodes, Number.NaN)).toThrow(
+      /componentUsageIn: maxNodes/
+    );
+
+    // The control: an ordinary budget is untouched by the guard, so what the
+    // test above measures is the refusal rather than the function being broken.
+    expect(componentUsageIn(nodes, 10).complete).toBe(true);
+  });
+
+  it("keeps the answer truthful under a fractional budget", () => {
+    // A fractional budget is accepted — that is `boundedLimit`'s decision, and
+    // refusing it here alone would make this walk disagree with the helper
+    // that exists to stop walks disagreeing. It costs at most one node beyond
+    // the cap.
+    //
+    // What must hold either way is that `complete` describes what the walk
+    // REACHED rather than what the budget permitted. Both cases are asserted,
+    // because a rule that only ever reports `true` would satisfy the first.
+    expect(componentUsageIn(nodes, 2.5)).toEqual({
+      ids: ["late"],
+      complete: true,
+    });
+    expect(componentUsageIn(nodes, 1.5)).toEqual({ ids: [], complete: false });
+  });
+
   it("answers what componentIdsIn answers, truncation included", () => {
     // `componentIdsIn` is derived from this, and the case where a
     // reimplementation would diverge is the bounded one: a second walk with
