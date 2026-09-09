@@ -21,7 +21,12 @@
  * @module spacing-handles.test
  */
 
-import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  clearBlocks,
+  registerBlocks,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 import {
   act,
   cleanup,
@@ -30,7 +35,7 @@ import {
   screen,
 } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { CANVAS_ROOT_CLASS } from "./canvas";
 import { useEditorState, type EditorState } from "./editor-state";
@@ -56,18 +61,59 @@ beforeAll(() => {
   };
 });
 
+/*
+ * Real registrations, because a handle now asks the registry what the block's
+ * author allows. `getBlock` answering `undefined` withholds every handle — which
+ * is the right answer for an unknown block and would make every case below pass
+ * for the wrong reason.
+ */
+beforeAll(() => {
+  registerBlocks(
+    [
+      {
+        name: "acme/spaced",
+        version: 1,
+        description: "Offers both spacing boxes.",
+        example: { props: {} },
+        supports: { spacing: { margin: true, padding: true } },
+        render: () => React.createElement("div"),
+      },
+      {
+        name: "acme/margin-only",
+        version: 1,
+        description: "Offers margin and withholds padding.",
+        example: { props: {} },
+        supports: { spacing: { margin: true } },
+        render: () => React.createElement("div"),
+      },
+      {
+        name: "acme/plain",
+        version: 1,
+        description: "Declares no spacing capability at all.",
+        example: { props: {} },
+        render: () => React.createElement("div"),
+      },
+    ] as never,
+    { source: "spacing-handles-test" }
+  );
+});
+
 afterEach(cleanup);
+afterAll(clearBlocks);
 
 const NODE_ID = "a";
 
-function documentWith(styles?: BlockNode["styles"]): BlockDocument {
+function documentWith(
+  styles?: BlockNode["styles"],
+  type = "acme/spaced"
+): BlockDocument {
   return {
     formatVersion: 1,
     kind: "page",
     nodes: [
       {
         id: NODE_ID,
-        type: "core/box",
+        type,
         version: 1,
         props: {},
         ...(styles === undefined ? {} : { styles }),
@@ -160,6 +206,41 @@ function mount(
  * put one in: a slider's bounds default to 0 and 100, and this control admits
  * negative margins and values well above a hundred.
  */
+/**
+ * The scrub preview's rules, if any.
+ *
+ * Scoped to the rendered tree and to the node class the compiler emits. The
+ * document at large is not empty of stylesheets — an empty `<style>` from the
+ * environment, and a whole toast library's sheet in `head` — so a bare count of
+ * `style` elements is never zero and an assertion of "no preview" could not
+ * fail. Matching the emitted class is what makes this the preview's own output
+ * rather than anything that happens to be a stylesheet.
+ */
+function previewRules(): string[] {
+  return Array.from(document.body.querySelectorAll("style"))
+    .map(element => element.textContent ?? "")
+    .filter(text => text.includes("nx-pb-"));
+}
+
+/** The harness with a spy on the re-measure request. */
+function HarnessWithPreviewSpy({
+  onPreviewChange,
+}: {
+  onPreviewChange: () => void;
+}): React.JSX.Element {
+  const editor = useEditorState({ initialDocument: documentWith() });
+  live = editor;
+  return (
+    <SpacingHandles
+      editor={editor}
+      bands={[band("margin", "top", "10")]}
+      subject={subjectWith()}
+      context={BASE}
+      onPreviewChange={onPreviewChange}
+    />
+  );
+}
+
 function handle(label: string): HTMLElement {
   return screen.getByLabelText(new RegExp(`^${label},`));
 }
@@ -880,6 +961,221 @@ describe("a canvas painted at a zoom", () => {
     // canvas pixels if the threshold were measured after the conversion.
     drag(handle("top margin"), [{ x: 0, y: -3 }]);
     expect(live?.undoDepth).toBe(0);
+  });
+});
+
+describe("the preview and the commit agree about what is possible", () => {
+  /*
+   * The preview honours the same refusal the commit does. Without it the canvas
+   * shows three sides moving under Shift and takes them all back on release —
+   * an edit that was never available, withdrawn at the moment the author lets
+   * go, with the reason arriving only afterwards.
+   */
+  it("previews nothing when the gesture reaches a side it cannot write", () => {
+    mount(
+      [band("margin", "top", "10")],
+      subjectWith(),
+      documentWith({
+        base: { base: { margin: { inlineStart: { $token: "space-4" } } } },
+      })
+    );
+    const element = handle("top margin");
+    act(() => {
+      fireEvent.pointerDown(element, {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    act(() => {
+      fireEvent.pointerMove(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+        shiftKey: true,
+      });
+    });
+    expect(previewRules()).toHaveLength(0);
+
+    // And still previews the gesture it CAN commit.
+    act(() => {
+      fireEvent.pointerMove(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -24,
+      });
+    });
+    expect(previewRules().length).toBeGreaterThan(0);
+  });
+});
+
+describe("re-measuring while a preview is applied", () => {
+  /*
+   * The overlay's style watcher ignores every mutation inside its own layer, so
+   * that drawing the bands cannot schedule the next measurement. The scrub
+   * preview is a `<style>` in that layer and is invisible to it by the same
+   * rule, and `ResizeObserver` reports size rather than position — so nothing
+   * would re-measure, and a block would slide out from under a band and a value
+   * chip left at the coordinates the gesture began with.
+   */
+  it("asks for a measurement when the preview changes, and again when it clears", () => {
+    const asked: number[] = [];
+    render(<HarnessWithPreviewSpy onPreviewChange={() => asked.push(1)} />);
+    const element = screen.getByLabelText(/^top margin,/);
+    const before = asked.length;
+    act(() => {
+      fireEvent.pointerDown(element, {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    act(() => {
+      fireEvent.pointerMove(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+    const withPreview = asked.length;
+    expect(withPreview).toBeGreaterThan(before);
+
+    act(() => {
+      fireEvent.pointerUp(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+    expect(asked.length).toBeGreaterThan(withPreview);
+  });
+});
+
+describe("where the handle sits on its band", () => {
+  /*
+   * Geometry, but not LAYOUT: these are the inline coordinates the component
+   * writes, which jsdom reports faithfully because they were never measured. The
+   * rendered result is a browser question and is checked there.
+   */
+  function positioned(band: SpacingBand): { top: string; height: string } {
+    mount([band]);
+    const style = handle(`${band.side} ${band.box}`).style;
+    return { top: style.top, height: style.height };
+  }
+
+  const rect = { x: 0, y: 100, width: 50, height: 20 };
+
+  it("puts a positive top margin's handle on the outer edge", () => {
+    // The band spans 100..120 and grows upward, so its moving edge is y=100.
+    const { top, height } = positioned({
+      box: "margin",
+      side: "top",
+      rect,
+      label: "20",
+      negative: false,
+    });
+    expect(height).toBe("9px");
+    expect(top).toBe("95.5px");
+  });
+
+  /*
+   * A negative margin's band is laid INSIDE the border edge, because that is
+   * where the space it removes is — so the edge that moves is the opposite one.
+   * Ignoring `band.negative` puts the control on the one edge of that band which
+   * never moves.
+   */
+  it("puts a negative top margin's handle on the inward edge instead", () => {
+    const { top } = positioned({
+      box: "margin",
+      side: "top",
+      rect,
+      label: "-20",
+      negative: true,
+    });
+    expect(top).toBe("115.5px");
+  });
+
+  it("puts a padding's handle on its inward edge", () => {
+    const { top } = positioned({
+      box: "padding",
+      side: "top",
+      rect,
+      label: "20",
+      negative: false,
+    });
+    expect(top).toBe("115.5px");
+  });
+});
+
+describe("what the block's author allows", () => {
+  /*
+   * `supports` is the block author's capability declaration, and the Style
+   * panel derives its writable properties from it. A handle that ignored it
+   * would offer on the canvas exactly the edit the panel beside it withholds.
+   */
+  it("withholds a handle for a box the block does not offer", () => {
+    mount(
+      [band("margin", "top", "10"), band("padding", "left", "4")],
+      subjectWith(),
+      documentWith(undefined, "acme/margin-only")
+    );
+    expect(screen.queryByLabelText(/^top margin,/)).not.toBeNull();
+    expect(screen.queryByLabelText(/^left padding,/)).toBeNull();
+  });
+
+  it("withholds every handle for a block declaring no spacing", () => {
+    mount(
+      [band("margin", "top", "10"), band("padding", "left", "4")],
+      subjectWith(),
+      documentWith(undefined, "acme/plain")
+    );
+    expect(screen.queryByLabelText(/pixels$/)).toBeNull();
+  });
+});
+
+describe("the modifiers a commit is judged by", () => {
+  /*
+   * Letting go of Shift before letting go of the button is an ordinary way to
+   * end a gesture. Reading the release event's modifiers commits an edit the
+   * canvas never showed — one side after previewing four, or the reverse — and
+   * nothing about the result says which the author meant.
+   */
+  it("commits what the last preview showed, not what the release said", () => {
+    mount([band("margin", "top", "10")]);
+    const element = handle("top margin");
+    act(() => {
+      fireEvent.pointerDown(element, {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    // The last MOVE is the one the author saw: Shift held, four sides.
+    act(() => {
+      fireEvent.pointerMove(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+        shiftKey: true,
+      });
+    });
+    // Shift released a moment before the button, which the release reports.
+    act(() => {
+      fireEvent.pointerUp(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+        shiftKey: false,
+      });
+    });
+
+    expect(stored("margin", "blockStart")).toBe("30px");
+    expect(stored("margin", "inlineStart")).toBe("30px");
+    expect(stored("margin", "inlineEnd")).toBe("30px");
+    expect(stored("margin", "blockEnd")).toBe("30px");
   });
 });
 

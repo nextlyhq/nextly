@@ -45,6 +45,13 @@ function register() {
         version: 1,
         description: "A leaf.",
         example: { props: {} },
+        /*
+         * Declared, because the drag handles derive their availability from
+         * `supports` exactly as the Style panel does. Without it this block
+         * offers no writable spacing and every handle assertion below would
+         * pass by drawing nothing.
+         */
+        supports: { spacing: { margin: true, padding: true } },
         render: () => React.createElement("p", null, "leaf"),
       },
       {
@@ -92,6 +99,15 @@ function styleOf(values: Record<string, string>): CSSStyleDeclaration {
     // Neither is read as a length; both are read by the describability guard,
     // and jsdom supplies no default for a fake style object.
     position: "static",
+    /*
+     * The axes the handles resolve a logical side against. `orientationOfElement`
+     * reports ABSENCE for an element computing neither — deliberately, so an
+     * unread element never passes as left-to-right — and absence draws no
+     * handles at all. A fake style omitting them would therefore make every
+     * handle assertion here pass by drawing nothing.
+     */
+    writingMode: "horizontal-tb",
+    direction: "ltr",
     marginTop: "0px",
     marginRight: "0px",
     marginBottom: "0px",
@@ -396,6 +412,36 @@ describe("accessibility", () => {
     const layer = container.querySelector(".nx-spacing-overlay");
     expect(layer).not.toBeNull();
     expect(layer?.closest("[aria-hidden='true']")).toBeNull();
+  });
+});
+
+describe("who may write from the canvas", () => {
+  /*
+   * `selectedId` is the PRIMARY of a selection, and a handle commits to that
+   * node alone — so with two blocks outlined a drag would restyle one and say
+   * nothing about the other. `StyleInspectorPanel` refuses its writable
+   * controls on exactly that reasoning, and a control on the canvas doing what
+   * the panel beside it declines is the same partial edit by another route.
+   *
+   * The BANDS stay either way: they report, and the primary's spacing is a true
+   * thing to report about a selection containing it.
+   */
+  it("draws no handles while several blocks are selected", () => {
+    stubComputedStyle({ a: { marginTop: "16px" }, b: { marginTop: "40px" } });
+    const { container } = mount(editorOf("a", ["a", "b"]));
+    expect(labels(container)).toEqual(["16"]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle")
+    ).toHaveLength(0);
+  });
+
+  it("draws them again once the selection is a single block", () => {
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"));
+    expect(labels(container)).toEqual(["16"]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle").length
+    ).toBeGreaterThan(0);
   });
 });
 

@@ -502,6 +502,21 @@ export function SpacingOverlay({
   const { document, selectedId } = editor;
 
   /*
+   * Handles are drawn only for a SINGLE selection.
+   *
+   * `selectedId` is the primary of the selection, and a handle commits to that
+   * node alone — so with six blocks outlined a drag would restyle one of them
+   * and say nothing about the other five. `StyleInspectorPanel` refuses its
+   * writable controls on the same reasoning, and a control on the canvas that
+   * did what the panel beside it declines would be the same partial edit
+   * reached by a route nobody thought to close.
+   *
+   * The BANDS stay. They report rather than write, and the primary's spacing is
+   * a true thing to report about a selection that includes it.
+   */
+  const singular = editor.selection.ids.length <= 1;
+
+  /*
    * Measured before the browser paints, so the bands never appear over the
    * position the block held on the previous render.
    *
@@ -724,12 +739,19 @@ export function SpacingOverlay({
           <span className="nx-spacing-overlay__value">{band.label}</span>
         </div>
       ))}
-      {subject === null ? null : (
+      {subject === null || !singular ? null : (
         <SpacingHandles
           editor={editor}
           bands={bands}
           subject={subject}
           context={scrub}
+          /*
+           * The measurement the preview needs, handed over as the callback the
+           * bands are already measured by. See `onPreviewChange`: the layer's
+           * own mutations are deliberately invisible to the style watcher, and
+           * the scrub preview lives in that layer.
+           */
+          onPreviewChange={measure}
         />
       )}
     </div>

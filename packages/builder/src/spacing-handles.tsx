@@ -56,7 +56,12 @@
  * @module spacing-handles
  */
 
-import { nodeClassNames, walkNodes } from "@nextlyhq/blocks-engine";
+import {
+  getBlock,
+  nodeClassNames,
+  stylePropertiesForSupports,
+  walkNodes,
+} from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
@@ -118,6 +123,19 @@ export interface SpacingHandlesProps {
   readonly bands: readonly SpacingBand[];
   readonly subject: SpacingSubject;
   readonly context: SpacingScrubContext;
+  /**
+   * Re-measure the bands, because a preview has changed what they describe.
+   *
+   * Asked for EXPLICITLY rather than left to the overlay's own observers, and
+   * the reason is in `canvas-geometry-watch.ts`: the style mutation watcher
+   * ignores every record inside the overlay's own layer, so that drawing the
+   * bands cannot schedule the next measurement. The scrub preview is a `<style>`
+   * inside that layer, so it is invisible to the watcher by the same rule — and
+   * `ResizeObserver` reports size, never position, so a margin preview that
+   * moves a fixed-size block reports nothing either. Without this the block
+   * slides under a band and a value chip that stay where the gesture started.
+   */
+  readonly onPreviewChange?: () => void;
 }
 
 /** How thick a handle's hit area is, in canvas pixels. */
@@ -137,15 +155,34 @@ interface Gesture {
   readonly host: HTMLElement;
   /** Take the document listeners back off. See `onPointerDown`. */
   readonly detach: () => void;
+  /**
+   * The modifiers the last preview was drawn with.
+   *
+   * The commit reads THIS rather than the release event. Letting go of Shift
+   * before letting go of the button is an ordinary way to end a gesture, and
+   * the two events then disagree: the canvas last showed four sides moving and
+   * the release would write one. Whatever the author last SAW is what they
+   * asked for.
+   */
+  shown: SpacingModifiers;
 }
 
 /** Where a handle's strip sits on its band. */
 function handleRect(band: SpacingBand): Rect {
-  const { rect, side, box } = band;
+  const { rect, side, box, negative } = band;
   const far = side === "bottom" || side === "right";
-  // The edge that moves when the value grows: away from the block for a margin,
-  // toward its middle for a padding. See `spacingDelta` for the same table.
-  const atMax = far === (box === "margin");
+  /*
+   * The edge that moves when the value grows: away from the block for a margin,
+   * toward its middle for a padding. See `spacingDelta` for the same table.
+   *
+   * A NEGATIVE margin inverts it, and `spacingBands` is where that comes from:
+   * such a band is laid INSIDE the border edge, because that is where the space
+   * it removes is, so growing the value extends it further in rather than
+   * further out. Ignoring the flag puts a negative top margin's handle on the
+   * border edge, which is the one edge of that band that never moves.
+   */
+  const outward = box === "margin" && !negative;
+  const atMax = far === outward;
   const half = HANDLE_PX / 2;
   if (side === "top" || side === "bottom") {
     const edge = atMax ? rect.y + rect.height : rect.y;
@@ -244,6 +281,7 @@ export function SpacingHandles({
   bands,
   subject,
   context,
+  onPreviewChange,
 }: SpacingHandlesProps): React.JSX.Element | null {
   const gesture = React.useRef<Gesture | null>(null);
   const [preview, setPreview] = React.useState<string | null>(null);
@@ -273,6 +311,31 @@ export function SpacingHandles({
     });
     return found;
   }, [doc, nodeId]);
+
+  /**
+   * Which spacing boxes this block's author allows to be written.
+   *
+   * ASKED of the engine, exactly as `style-inspector.ts` asks it. `supports` is
+   * a capability declaration whose meaning belongs to the registry, and a
+   * handle that ignored it would offer an edit the Style panel deliberately
+   * withholds — a block that renders a heading's native margin without opting
+   * into margin support would gain a writable control on the canvas and none in
+   * the inspector.
+   *
+   * A block the registry does not know offers nothing, which is the same answer
+   * the panel gives: it can still CLEAR what is stored, and clearing is not
+   * something a drag does.
+   */
+  const writable = React.useMemo(() => {
+    const type = node?.type;
+    const definition = type === undefined ? undefined : getBlock(type);
+    if (definition === undefined) return new Set<string>();
+    return new Set(
+      stylePropertiesForSupports(definition.supports).map(
+        entry => entry.property
+      )
+    );
+  }, [node?.type]);
 
   const targetFor = React.useCallback(
     (address: StyleAddress): ScrubTarget | undefined =>
@@ -429,9 +492,22 @@ export function SpacingHandles({
     (
       band: SpacingBand,
       starts: ReadonlyMap<SpacingSide, number>,
+      refusals: ReadonlyMap<SpacingSide, string>,
       delta: number,
       modifiers: SpacingModifiers
     ): void => {
+      /*
+       * The SAME gate the commit applies. Without it, holding Shift over a box
+       * whose left margin is a token previews the three sides that can move and
+       * then refuses everything on release — the canvas showing an edit that
+       * was never available, and taking it back at the moment the author let
+       * go. A refusal the preview does not honour is a promise the commit
+       * breaks.
+       */
+      if (blockingRefusal(band, refusals, modifiers) !== undefined) {
+        setPreview(null);
+        return;
+      }
       const rules: string[] = [];
       for (const write of valuesFor(band, starts, delta, modifiers)) {
         const target = targetFor(write.address);
@@ -589,7 +665,9 @@ export function SpacingHandles({
           subject.scales
         );
         if (delta === undefined) return;
-        showPreview(live.band, live.starts, delta, modifiersOf(moved));
+        const shown = modifiersOf(moved);
+        live.shown = shown;
+        showPreview(live.band, live.starts, live.refusals, delta, shown);
       };
 
       const onUp = (lifted: PointerEvent): void => {
@@ -603,13 +681,12 @@ export function SpacingHandles({
             subject.scales
           );
           if (delta !== undefined) {
-            commit(
-              live.band,
-              live.starts,
-              live.refusals,
-              delta,
-              modifiersOf(lifted)
-            );
+            /*
+             * `live.shown`, not the release event's modifiers. See `shown`:
+             * releasing Shift before the button is ordinary, and reading the
+             * release would commit a different edit from the one on screen.
+             */
+            commit(live.band, live.starts, live.refusals, delta, live.shown);
           }
         }
         endGesture();
@@ -647,6 +724,7 @@ export function SpacingHandles({
         band,
         starts,
         refusals,
+        shown: modifiersOf(event),
         originX,
         originY,
         active: false,
@@ -661,6 +739,18 @@ export function SpacingHandles({
     },
     [commit, endGesture, showPreview, startsFor, subject.scales]
   );
+
+  /*
+   * After the browser has applied the preview, ask for a fresh measurement.
+   *
+   * A LAYOUT effect, so the bands are re-read before the frame is painted and
+   * never appear a step behind the block they describe. Keyed on the preview
+   * text: an unchanged preview re-measures nothing, and clearing it on release
+   * measures once more against the committed document.
+   */
+  React.useLayoutEffect(() => {
+    onPreviewChange?.();
+  }, [onPreviewChange, preview]);
 
   /*
    * A gesture does not outlive the handles. The overlay unmounts them whenever
@@ -722,6 +812,13 @@ export function SpacingHandles({
   return (
     <>
       {bands.map(band => {
+        /*
+         * No handle where the block's author did not offer the property. The
+         * band still draws — it reports what the page renders, which is true
+         * either way — but a control that wrote it would bypass a capability
+         * declaration the Style panel honours.
+         */
+        if (!writable.has(band.box)) return null;
         const rect = handleRect(band);
         return (
           <div
