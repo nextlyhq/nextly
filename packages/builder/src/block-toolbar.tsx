@@ -47,6 +47,7 @@ import {
   ArrowUp,
   Copy,
   CornerLeftUp,
+  LayoutTemplate,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
@@ -58,8 +59,8 @@ import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
 import { canvasContentRect } from "./geometry-dom";
 import { useBlockActionsContext } from "./keyboard-actions";
+import { useSelectionActions } from "./selection-actions";
 import {
-  toolbarActions,
   toolbarPlacement,
   unionRect,
   type ToolbarAction,
@@ -72,6 +73,9 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "move-up": ArrowUp,
   "move-down": ArrowDown,
   duplicate: Copy,
+  // A page outline rather than a bookmark or a star: what is stored is a piece
+  // of layout, and the same glyph names the Patterns tier in the insert panel.
+  "save-as-pattern": LayoutTemplate,
   delete: Trash2,
 };
 
@@ -99,12 +103,13 @@ export function BlockToolbar({
     null
   );
 
+  // Still read directly: the bar MEASURES against these and re-measures when
+  // the document changes, which is a different use from deciding which verbs to
+  // offer. `document` in particular has to stay bound — dropping it does not
+  // fail, it silently resolves to the window's own.
   const { document, selectedId } = editor;
   const selectedIds = editor.selection.ids;
-  const actions = React.useMemo(
-    () => toolbarActions(document, selectedId, selectedIds),
-    [document, selectedId, selectedIds]
-  );
+  const actions = useSelectionActions(editor);
 
   /*
    * Which button holds the tab stop, per the WAI-ARIA toolbar pattern: one stop

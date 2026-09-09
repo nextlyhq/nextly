@@ -125,7 +125,7 @@ import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, contextMenuTargetOf } from "./canvas";
 import type { EditorState } from "./editor-state";
 import { useBlockActionsContext } from "./keyboard-actions";
-import { toolbarActions } from "./toolbar-actions";
+import { useSelectionActions } from "./selection-actions";
 
 /**
  * The wrapper's style, hoisted so it is one object rather than one per render.
@@ -150,18 +150,16 @@ export function BlockContextMenu({
   children,
 }: BlockContextMenuProps): React.JSX.Element {
   const verbs = useBlockActionsContext();
-  const { document, selectedId } = editor;
+  // Still read directly: what the menu does on OPEN depends on what was clicked
+  // relative to the selection, which is a different use from deciding which
+  // verbs to offer.
+  const { selectedId } = editor;
   const selectedIds = editor.selection.ids;
 
-  /*
-   * Rebuilt on what could change WHICH verbs are offered, for the reason
-   * `EditorCommandPalette` gives: `editor` itself is a fresh object every
-   * render, so depending on it would rebuild this on every frame of a drag.
-   */
-  const actions = React.useMemo(
-    () => toolbarActions(document, selectedId, selectedIds),
-    [document, selectedId, selectedIds]
-  );
+  // The same question the bar asks, asked once. Both surfaces need the whole
+  // selection judged by the host's own rules, and asking it in two places is
+  // how one of them came to ask something narrower.
+  const actions = useSelectionActions(editor);
   const run = React.useMemo(() => blockActionRunners(verbs), [verbs]);
 
   const select = editor.select;

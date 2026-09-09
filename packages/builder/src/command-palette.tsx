@@ -39,6 +39,7 @@ import {
 import * as React from "react";
 import { flushSync } from "react-dom";
 
+import { useModalKeyboardHold } from "./modal-keyboard-hold";
 import { useShellIsActive } from "./shell-active";
 
 /**
@@ -193,30 +194,20 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element {
 }
 
 /**
- * The palette's hold on the keyboard while it is open, registered one scope DEEPER than the host.
+ * The palette's hold on the keyboard while it is open.
  *
- * Depth is what makes the hold reliable: layers at equal depth are ordered by registration, newest
- * first, so at the host's own depth whether the modal wins would depend on whether the host
- * mounted its shortcuts before or after the palette.
+ * Through the shared hold rather than its own `useShortcuts`, so a dialog the
+ * editor raises and this palette cannot end up disagreeing about depth — which
+ * is the part of this that is easy to get wrong and impossible to notice.
  *
- * Separate from the opener, and this is the point. Elevating the OPENER too would put `mod+k`
- * above a blocking layer the host already has up — another modal's — and the palette would open
- * over it, since the manager resolves the deeper exact binding first. The opener stays ambient so
- * an existing modal can refuse it; only the hold is elevated, and only while open.
+ * Separate from the OPENER, and that is the point. Elevating the opener too
+ * would put `mod+k` above a blocking layer the host already has up — another
+ * modal's — and the palette would open over it, since the manager resolves the
+ * deeper exact binding first. The opener stays ambient so an existing modal can
+ * refuse it; only the hold is elevated, and only while open.
  */
 function ModalKeyboardHold({ active }: { active: boolean }): null {
-  useShortcuts([], {
-    name: "command-palette-modal",
-    enabled: active,
-    // Above DEPTH, not merely deep. A host chooses how deeply it scopes its own shortcuts, so any
-    // depth this picked could be tied by a host scope at the same level or beaten by one nested
-    // further — and the manager runs a matching binding before consulting a lower blocker, so
-    // that host shortcut would fire behind the open modal.
-    priority: 1,
-    // The manager already exempts text insertion and Tab, so the search field and the dialog's
-    // focus trap keep working underneath this.
-    blocking: true,
-  });
+  useModalKeyboardHold("command-palette-modal", active);
   return null;
 }
 
