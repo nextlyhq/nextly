@@ -411,6 +411,22 @@ function asGrouped(
  * reason the buckets are: `NaN` and `Infinity` are both `typeof "number"` and
  * both reach a chart as a bar of no height or one that dwarfs every real point.
  */
+/**
+ * Whether text is a timestamp this can be read back as the instant it claims.
+ *
+ * `Date.parse` alone is too permissive for a contract check: it accepts a bare
+ * "2026" and platform-specific spellings. Requiring the canonical form the
+ * server emits means a response that drifted from the contract is caught here
+ * rather than at the point something tries to draw it.
+ */
+function isInstant(text: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(text)) {
+    return false;
+  }
+  const parsed = Date.parse(text);
+  return !Number.isNaN(parsed) && new Date(parsed).toISOString() === text;
+}
+
 function asPoints(
   value: unknown
 ): { start: string; count: number }[] | undefined {
@@ -420,7 +436,14 @@ function asPoints(
   for (const raw of value) {
     if (!isObject(raw)) return undefined;
     const point = raw as { start?: unknown; count?: unknown };
-    if (typeof point.start !== "string") return undefined;
+    // `start` is contractually a UTC instant, and this decoder exists to keep a
+    // malformed or version-skewed response away from the components that draw
+    // it. Arbitrary text reaches a chart as an unlabelled axis tick, or throws
+    // when a component formats it as a date -- turning one bad slot into a
+    // rendering error for the whole dashboard.
+    if (typeof point.start !== "string" || !isInstant(point.start)) {
+      return undefined;
+    }
     if (typeof point.count !== "number" || !Number.isFinite(point.count)) {
       return undefined;
     }

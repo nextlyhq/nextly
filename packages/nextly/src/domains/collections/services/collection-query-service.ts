@@ -69,6 +69,7 @@ import {
 } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { BaseService } from "../../../shared/base-service";
 import {
   convertTimestampsToCamelCase,
@@ -272,6 +273,40 @@ function buildComponentValueCondition(
  * them, and a second copy of this fallback would be a second place for the two
  * to disagree about what the collection declares.
  */
+/**
+ * A collection's fields as they are ADDRESSED on this table, with unnamed
+ * presentational containers flattened into the level they sit in.
+ *
+ * Deliberately not `collectionFieldsFor`, which answers a different question:
+ * the top-level declarations, which is what the draft overlay and the filter
+ * assembly need. A field nested in an unnamed group gets a column at THIS
+ * level, so the runtime schema has it and the widget source advertises it,
+ * while the top-level array never mentions it. Judging a group key from the
+ * top-level array therefore found no declaration for a column that exists --
+ * leaving a date field refused as storing no date, and a decimal grouped
+ * without the scale its author declared.
+ *
+ * Uses the shared walk rather than a second traversal, at its default setting,
+ * which treats every unnamed container as transparent. That is what core's own
+ * callers use and is a superset of the narrower view the source builder takes,
+ * so a column that exists always has a declaration here.
+ *
+ * NOT COVERED BY A TEST IN THIS SUITE, stated rather than left to look
+ * covered. An unnamed container is a REGISTRY shape: the code-first config
+ * refuses a field without a name (FIELD_NAME_REQUIRED), so `defineCollection`
+ * cannot build the case and the harness these tests use builds collections
+ * that way. Reverting this call to `collectionFieldsFor` fails nothing here.
+ * What IS pinned is the other half of the mismatch --
+ * `collection-sources.test.ts` proves the source publishes such a field as a
+ * top-level date, so a guard reading the top-level array refuses something the
+ * source advertised.
+ */
+function addressedFieldsFor(collection: unknown): FieldDefinition[] {
+  return addressableFields(
+    collectionFieldsFor(collection)
+  ) as unknown as FieldDefinition[];
+}
+
 function collectionFieldsFor(collection: unknown): FieldDefinition[] {
   const record = collection as Record<string, unknown>;
   const schemaDefinition = record.schemaDefinition as
@@ -320,6 +355,35 @@ export const MAX_GROUP_BUCKETS = 50;
  */
 export const MAX_TIMESERIES_INTERVALS = 366;
 export const DEFAULT_TIMESERIES_INTERVALS = 30;
+
+/**
+ * Refuse a window anchor that is not a real instant.
+ *
+ * `new Date("nonsense")` is a `Date` the type accepts and whose `getTime()` is
+ * `NaN`, so it survives to build bucket starts that render as `Invalid Date`.
+ * What happens next differs per dialect -- MySQL refuses it while building the
+ * bound, PostgreSQL and SQLite carry it into the statement or into
+ * `toISOString`, which throws -- so the same bad input answers a named 400 on
+ * one database and a generic 500 on the others.
+ *
+ * Checked inside the plan, so it lands after authorization and BEFORE the read
+ * hooks: `beforeOperation` and `beforeRead` are ordinary user code that writes
+ * audit rows and spends rate-limit budget, and a request that was never going
+ * to be answered must not charge the caller for it.
+ */
+function assertUsableWindowAnchor(now: Date | undefined): void {
+  if (now === undefined) return;
+  if (now instanceof Date && Number.isFinite(now.getTime())) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "now",
+        code: "TIMESERIES_WINDOW_INVALID",
+        message: "The instant a timeseries window ends at must be a real date.",
+      },
+    ],
+  });
+}
 
 /** The interval, refused unless an expression exists for it. */
 function assertBucketableInterval(value: unknown): TimeseriesInterval {
@@ -421,6 +485,13 @@ interface FilteredReadParams {
   where?: WhereFilter;
   /** When true, bypass all access control checks */
   overrideAccess?: boolean;
+  /**
+   * The instant a timeseries window ends at, when the caller named one.
+   *
+   * Carried on the shared params so the plan can refuse an unusable one before
+   * the read hooks run, rather than after.
+   */
+  now?: Date;
   /**
    * Refuse the group key unless the column it names stores a date.
    *
@@ -3149,7 +3220,7 @@ export class CollectionQueryService extends BaseService {
     const field = assertGroupKeyUsable(
       groupBy,
       key === undefined ? undefined : schema[key],
-      collectionFieldsFor(
+      addressedFieldsFor(
         await this.collectionService.getCollection(params.collectionName)
       )
     );
@@ -3233,6 +3304,8 @@ export class CollectionQueryService extends BaseService {
     // rendered from the author's declaration -- a decimal's scale, which the
     // adapters otherwise disagree about -- rather than from whatever the driver
     // happened to hand back.
+    assertUsableWindowAnchor(params.now);
+
     const groupDescriptor = this.settledGroupDescriptor(params, groupKey);
 
     const countWhere = await this.hookSettledWhere(params);

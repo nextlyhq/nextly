@@ -902,3 +902,73 @@ describe("useWidgetQueries, timeline results", () => {
     );
   });
 });
+
+describe("useWidgetQueries, a malformed timeline point", () => {
+  it("refuses a start that is not a canonical instant", async () => {
+    // `start` is contractually a UTC instant. Arbitrary text reaches a chart as
+    // an unlabelled tick, or throws when a component formats it as a date,
+    // turning one bad slot into a rendering error for the whole dashboard.
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: true,
+          result: {
+            op: "timeseries",
+            interval: "day",
+            points: [{ start: "not-a-date", count: 1 }],
+          },
+        },
+      ],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          {
+            placementId: "p1",
+            cellKey: "trend",
+            query: seriesQuery("collection:posts"),
+          },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.cellSlots.p1?.trend?.ok).toBe(false)
+    );
+  });
+
+  it("refuses a start that parses but is not the canonical spelling", async () => {
+    // `Date.parse` alone accepts a bare year and platform-specific spellings,
+    // so a response that drifted from the contract would pass a parse check
+    // while carrying something no component can format consistently.
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: true,
+          result: {
+            op: "timeseries",
+            interval: "day",
+            points: [{ start: "2026-03-04", count: 1 }],
+          },
+        },
+      ],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          {
+            placementId: "p1",
+            cellKey: "trend",
+            query: seriesQuery("collection:posts"),
+          },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.cellSlots.p1?.trend?.ok).toBe(false)
+    );
+  });
+});

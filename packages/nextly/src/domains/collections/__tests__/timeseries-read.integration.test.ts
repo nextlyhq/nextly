@@ -60,7 +60,12 @@ const DAY_MS = 24 * HOUR_MS;
 
 async function boot(
   dialect: TestDialect,
-  rows: Array<{ occurredAt: Date; label?: string; price?: number }>
+  rows: Array<{
+    occurredAt: Date;
+    label?: string;
+    price?: number;
+    nestedAt?: Date;
+  }>
 ): Promise<Handler> {
   const t = await createTestNextly({
     dialect,
@@ -612,6 +617,58 @@ describe.each(getConfiguredTestDialects())(
       // empty -- which is also the control that the anchor was honoured rather
       // than ignored in favour of the system clock.
       expect((res.data?.points ?? []).every(p => p.count === 0)).toBe(true);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "an unusable window anchor on %s",
+  dialect => {
+    it("is refused by name rather than reaching the statement", async () => {
+      // `new Date("nonsense")` is a Date the type accepts whose time is NaN.
+      // Left to reach the query, MySQL refuses it while building the bound
+      // while PostgreSQL and SQLite carry it into the statement or into
+      // `toISOString`, so one bad input answered a 400 on one database and a
+      // 500 on the others.
+      const h = await boot(dialect, [{ occurredAt: daysAgo(0) }]);
+
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        now: new Date("nonsense"),
+        dateField: "occurredAt",
+        interval: "day",
+      });
+
+      expect(res.success).toBe(false);
+      expect(res.statusCode).toBe(400);
+      expect(JSON.stringify(res)).toContain("TIMESERIES_WINDOW_INVALID");
+    });
+
+    it("does not run the read hooks for an anchor it refuses", async () => {
+      // Same reason the date-key refusal happens inside the plan: a request
+      // that was never going to be answered must not spend rate-limit budget
+      // or leave an audit trail of a read that did not happen.
+      const h = await boot(dialect, [{ occurredAt: daysAgo(0) }]);
+
+      let ran = 0;
+      const handler: HookHandler = (args: unknown) => {
+        ran += 1;
+        return args;
+      };
+      registerHook("beforeRead", EVENTS, handler);
+      try {
+        const res = await h.timeseriesEntries({
+          collectionName: EVENTS,
+          now: new Date("nonsense"),
+          dateField: "occurredAt",
+          interval: "day",
+        });
+        expect(res.success).toBe(false);
+      } finally {
+        unregisterHook("beforeRead", EVENTS, handler);
+      }
+
+      expect(ran).toBe(0);
     });
   }
 );
