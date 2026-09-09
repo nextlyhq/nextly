@@ -157,6 +157,8 @@ export interface GetSingleOptions {
 
   /** Arbitrary data passed to hooks via context. */
   context?: Record<string, unknown>;
+  /** The HTTP request behind this operation, when one produced it. */
+  request?: Request;
 }
 
 /**
@@ -209,6 +211,8 @@ export interface UpdateSingleOptions {
 
   /** Arbitrary data passed to hooks via context. */
   context?: Record<string, unknown>;
+  /** The HTTP request behind this operation, when one produced it. */
+  request?: Request;
 
   /**
    * The caller's authenticated scope. For a scoped API-key REST write, the

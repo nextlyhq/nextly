@@ -49,7 +49,12 @@ describe("the generic collection door", () => {
       { title: "hi" },
       request
     );
-    expect(createEntry.mock.calls[0]![0]).toMatchObject({ request });
+    // Identity, not `toMatchObject({ request })`. A `Request` keeps everything
+    // on its prototype, so it has no own enumerable properties and matching
+    // one structurally succeeds against `undefined`: the assertion would pass
+    // for the very defect it is here to catch.
+    const passed = createEntry.mock.calls[0]![0] as { request?: unknown };
+    expect(passed.request).toBe(request);
   });
 
   it("says there was none when the caller passed none", async () => {
@@ -93,6 +98,9 @@ describe("the form door", () => {
       { data: { email: "a@b.test" } },
       request
     );
-    expect(handler.createEntry.mock.calls[0]![0]).toMatchObject({ request });
+    const passed = handler.createEntry.mock.calls[0]![0] as {
+      request?: unknown;
+    };
+    expect(passed.request).toBe(request);
   });
 });

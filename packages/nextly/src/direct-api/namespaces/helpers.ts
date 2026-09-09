@@ -84,6 +84,8 @@ export interface AccessOptions {
   fieldAccessUser?: UserContext;
   trusted?: TrustBound;
   authenticatedScope?: AuthenticatedScope;
+  /** The HTTP request behind this operation, when one produced it. */
+  request?: Request;
 }
 
 /**
@@ -119,6 +121,7 @@ export function accessOptions(config: DirectAPIConfig): AccessOptions {
     fieldAccessUser: config.fieldAccessUser,
     trusted: config.trusted,
     authenticatedScope: config.actor,
+    request: config.request,
   };
 }
 

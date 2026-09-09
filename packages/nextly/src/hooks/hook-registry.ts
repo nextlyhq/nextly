@@ -142,6 +142,22 @@ export function isSideEffectHookType(hookType: HookType): boolean {
  * @class HookRegistry
  */
 /**
+ * What a CALLER of `executeBeforeOperation` must supply.
+ *
+ * The same context a handler reads, except that `req` has to be named. This
+ * phase is documented for global rate limiting and auditing, which are the
+ * rules that most need to know whether a request exists at all, and an
+ * optional field here is one an operation can forget while still telling every
+ * such handler, confidently, that there was no visitor. Optional on the
+ * handler-facing {@link BeforeOperationContext}, because a handler reads it
+ * rather than supplying it.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors BeforeOperationContext's own type-erased default
+export type BeforeOperationInput<T = any> = BeforeOperationContext<T> & {
+  req: BeforeOperationContext["req"];
+};
+
+/**
  * Turn whatever a hook threw into the error the boundary should see.
  *
  * A hook that rejects its input does so deliberately, and says how: a
@@ -882,7 +898,7 @@ export class HookRegistry {
    * ```
    */
   async executeBeforeOperation<T>(
-    context: BeforeOperationContext<T>
+    context: BeforeOperationInput<T>
   ): Promise<BeforeOperationArgs<T> | void> {
     // Get hooks for specific collection + global hooks
     const specificKey = this.makeKey("beforeOperation", context.collection);

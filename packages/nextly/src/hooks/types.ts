@@ -138,10 +138,10 @@ export interface HookHttpFacts {
    * one, so a rule that cannot identify a client should decide what to do about
    * that rather than treat them all as the same one.
    */
-  ip: string | null;
+  readonly ip: string | null;
 
   /** The request method, uppercased by the platform (`POST`, `PATCH`). */
-  method: string;
+  readonly method: string;
 }
 
 /**

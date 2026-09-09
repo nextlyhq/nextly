@@ -263,7 +263,7 @@ export class ServiceDispatcher {
       case "rbac":
         return dispatchRbac(this.container, method, p, body);
       case "singles":
-        return dispatchSingles(method, p, body);
+        return dispatchSingles(method, p, body, request.request);
       case "forms":
         return dispatchForms(this.container, method, p, body, request.request);
       case "field-groups":

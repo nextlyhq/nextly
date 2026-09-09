@@ -68,6 +68,10 @@ describe("resolveRequestFacts", () => {
   });
 
   it("hands every hook the same unwritable answer", () => {
+    // `readonly` refuses the assignment at compile time; the cast below takes
+    // that away, so this still measures the runtime freeze rather than the
+    // type. Both matter: a plugin compiled against an older contract reaches
+    // the same object.
     withTrustProxy(true);
     process.env.TRUSTED_PROXY_IPS = "";
     const facts = resolveRequestFacts(post({ "x-real-ip": "203.0.113.7" }));

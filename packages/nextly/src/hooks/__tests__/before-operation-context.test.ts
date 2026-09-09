@@ -16,6 +16,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { HookRegistry } from "../hook-registry";
 import { createPluginContext } from "../../plugins/plugin-context";
 import { registerCollectionHooks } from "../register-collection-hooks";
+import type { BeforeOperationInput } from "../hook-registry";
 import type { BeforeOperationArgs, BeforeOperationContext } from "../types";
 
 type Args = BeforeOperationArgs<Record<string, unknown>>;
@@ -55,7 +56,8 @@ describe("beforeOperation context shape", () => {
       operation: "read",
       args: { where: { archived: false } },
       context: {},
-    } as BeforeOperationContext);
+      req: {},
+    } as BeforeOperationInput);
 
     expect(seen).toHaveLength(1);
     expect(seen[0]?.args).toEqual({ where: { archived: false } });
@@ -78,7 +80,8 @@ describe("beforeOperation context shape", () => {
       operation: "read",
       args: { where: { published: true } },
       context: {},
-    } as BeforeOperationContext);
+      req: {},
+    } as BeforeOperationInput);
 
     expect(result).toEqual({ where: { archived: false } });
   });
@@ -99,7 +102,8 @@ describe("beforeOperation context shape", () => {
       operation: "read",
       args: {},
       context: {},
-    } as BeforeOperationContext);
+      req: {},
+    } as BeforeOperationInput);
 
     expect(result).toEqual({ first: true, second: true });
   });
@@ -136,7 +140,8 @@ describe("beforeOperation context shape", () => {
         operation: "read",
         args: { where: {} },
         context: {},
-      } as BeforeOperationContext);
+        req: {},
+      } as BeforeOperationInput);
       expect(result).toEqual({ where: {} });
     });
 
@@ -254,7 +259,8 @@ describe("the plugin surface can register beforeOperation", () => {
       operation: "read",
       args: {},
       context: {},
-    } as BeforeOperationContext);
+      req: {},
+    } as BeforeOperationInput);
 
     expect(result).toEqual({ scoped: true });
   });
@@ -280,7 +286,8 @@ describe("the plugin surface can register beforeOperation", () => {
       operation: "read",
       args: {},
       context: {},
-    } as BeforeOperationContext);
+      req: {},
+    } as BeforeOperationInput);
 
     expect(result).toEqual({});
   });
@@ -343,7 +350,8 @@ describe("execute() refuses the phase it cannot run", () => {
       operation: "read",
       args: {},
       context: {},
-    } as BeforeOperationContext);
+      req: {},
+    } as BeforeOperationInput);
     expect(ran).toBe(true);
   });
 

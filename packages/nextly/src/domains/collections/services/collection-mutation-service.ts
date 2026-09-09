@@ -2847,6 +2847,7 @@ export class CollectionMutationService extends BaseService {
             ? { id: params.user.id, email: params.user.email }
             : undefined,
           context: sharedContext,
+          req: requestFacts,
         });
 
       // Use modified data if returned by beforeOperation. A hook returning its
@@ -5617,6 +5618,7 @@ export class CollectionMutationService extends BaseService {
             ? { id: params.user.id, email: params.user.email }
             : undefined,
           context: sharedContext,
+          req: requestFacts,
         });
 
       // Use modified data if returned by beforeOperation
@@ -7930,6 +7932,7 @@ export class CollectionMutationService extends BaseService {
           ? { id: params.user.id, email: params.user.email }
           : undefined,
         context: sharedContext,
+        req: requestFacts,
       });
 
       // Note: For delete, we don't use modified id since we already fetched the entry
@@ -8340,6 +8343,7 @@ export class CollectionMutationService extends BaseService {
               ? { id: params.user.id, email: params.user.email }
               : undefined,
             context: sharedContext,
+            req: requestFacts,
             // Bind a beforeOperation hook that reads via context.executor to the
             // caller's transaction connection so it does not re-enter the pool.
             executor: tx.getDrizzle(),
@@ -8920,6 +8924,7 @@ export class CollectionMutationService extends BaseService {
               ? { id: params.user.id, email: params.user.email }
               : undefined,
             context: sharedContext,
+            req: requestFacts,
             // Bind a beforeOperation hook that reads via context.executor to the
             // caller's transaction connection so it does not re-enter the pool.
             executor: tx.getDrizzle(),
@@ -9686,6 +9691,7 @@ export class CollectionMutationService extends BaseService {
             ? { id: params.user.id, email: params.user.email }
             : undefined,
           context: sharedContext,
+          req: requestFacts,
           // Bind a beforeOperation hook that reads via context.executor to the
           // caller's transaction connection so it does not re-enter the pool.
           executor: tx.getDrizzle(),

@@ -1400,6 +1400,7 @@ export class CollectionQueryService extends BaseService {
               ? { id: params.user.id, email: params.user.email }
               : undefined,
             context: params.sharedContext,
+            req: params.requestFacts,
           });
 
         // Returning an args object replaces the arguments wholesale, so a handler
@@ -1473,6 +1474,7 @@ export class CollectionQueryService extends BaseService {
               ? { id: params.user.id, email: params.user.email }
               : undefined,
             context: params.sharedContext,
+            req: params.requestFacts,
           });
 
         // Use the modified id when beforeOperation returned one.

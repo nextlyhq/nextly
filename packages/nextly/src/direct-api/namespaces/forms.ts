@@ -200,7 +200,14 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
 
       const { result: createResult, warnings } = await collectingWarnings(() =>
         ctx.collectionsHandler.createEntry(
-          { collectionName: ctx.submissionsCollectionSlug },
+          {
+            collectionName: ctx.submissionsCollectionSlug,
+            // The third door into the submissions table. A host route calling
+            // this passes the request it was given, so a rule at the write seam
+            // judges this submission on the same facts as one that arrived over
+            // the built-in route.
+            request: args.request,
+          },
           submissionData
         )
       );

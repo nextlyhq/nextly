@@ -95,6 +95,11 @@ const JOB_OWNED_ACCESS_OPTIONS = [
   "enforceFieldAccess",
   "fieldAccessUser",
   "frameworkFilter",
+  // A job runs on nobody's request. Cleared rather than forwarded so job code
+  // cannot hand a hook a request it did not receive: `ctx.req.http` is what a
+  // rate limit or a honeypot reads to decide it is looking at a visitor, and a
+  // job that could supply one could make that rule believe anything.
+  "request",
 ] as const;
 
 type JobOwnedAccessOption = (typeof JOB_OWNED_ACCESS_OPTIONS)[number];

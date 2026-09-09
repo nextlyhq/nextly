@@ -261,7 +261,7 @@ export const COLLECTION_VERSION_METHODS: Record<
     },
   },
   restoreEntryVersion: {
-    execute: async (_svc, p) => {
+    execute: async (_svc, p, _body, request) => {
       const result = await restoreVersionForDocument({
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
@@ -270,6 +270,9 @@ export const COLLECTION_VERSION_METHODS: Record<
         actor: readAuthenticatedActor(p),
         versionNo: Number(p.versionNo),
         params: p,
+        // A restore replays a snapshot through the ordinary update, so its
+        // hooks are told about the caller the same way an edit's are.
+        request,
       });
       return respondAction("Version restored.", result);
     },
