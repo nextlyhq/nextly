@@ -13,14 +13,20 @@ import {
 } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { NextlyError } from "../../errors/nextly-error";
+import { runWithRequestScope } from "../../hooks/request-scope";
 import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
 
 import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
+import { buildPluginRouteCaller } from "./route-caller";
 import type { RouteMatch } from "./route-registry";
-import type { PluginRoute, PluginRouteContext } from "./route-types";
+import type {
+  PluginRoute,
+  PluginRouteCaller,
+  PluginRouteContext,
+} from "./route-types";
 
 /**
  * Map a failure on a plugin route to the error Response a caller receives.
@@ -66,10 +72,14 @@ async function resolvePluginRouteAuth(
   req: Request,
   route: PluginRoute
 ): Promise<
-  | { user: AuthUser | null; authenticatedScope?: AuthenticatedScope }
+  | {
+      user: AuthUser | null;
+      authenticatedScope?: AuthenticatedScope;
+      caller: PluginRouteCaller | null;
+    }
   | { error: NextlyError }
 > {
-  if (route.public === true) return { user: null };
+  if (route.public === true) return { user: null, caller: null };
 
   // requirePermission already enforces authentication, so the permission-gated
   // path needs a single call (avoids verifying the session twice).
@@ -95,7 +105,13 @@ async function resolvePluginRouteAuth(
     authResult.authMethod === "api-key"
       ? apiKeyScopeFrom(authResult)
       : undefined;
-  return { user, authenticatedScope };
+  // Built from the same `authResult` the scope above is derived from, so the
+  // raw grant and the question asked of it cannot disagree about who is asking.
+  return {
+    user,
+    authenticatedScope,
+    caller: buildPluginRouteCaller(authResult),
+  };
 }
 
 function permissionArgs(slug: string): [string, string] {
@@ -176,6 +192,7 @@ export async function runPluginRoute(
     ...matched.baseCtx,
     user: auth.user,
     authenticatedScope: auth.authenticatedScope,
+    caller: auth.caller,
     params: matched.params,
   };
 
@@ -185,13 +202,16 @@ export async function runPluginRoute(
   );
 
   try {
-    // Pinned for the length of the handler so a service call inside it inherits
-    // the key's grants without the handler having to remember. Every route
-    // written before this field existed composes `{ as: "user", user }` by
-    // hand, and an opt-in field leaves all of them authorizing the key as its
-    // owner.
+    // Both scopes pinned for the length of the handler, so a service call
+    // inside it inherits the key's grants and the request without the handler
+    // having to remember either. Every route written before these fields
+    // existed composes `{ as: "user", user }` by hand: an opt-in field leaves
+    // all of them authorizing the key as its owner, and leaves every read and
+    // write they make looking like background work to a hook.
     return markPluginResponse(
-      await runWithCallerScope(auth.authenticatedScope, () => run(req, ctx)),
+      await runWithRequestScope(req, () =>
+        runWithCallerScope(auth.authenticatedScope, () => run(req, ctx))
+      ),
       matched.route
     );
   } catch (err) {

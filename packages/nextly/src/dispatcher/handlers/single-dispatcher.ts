@@ -249,7 +249,7 @@ export const SINGLE_VERSION_METHODS: Record<
     },
   },
   restoreSingleVersion: {
-    execute: async (_svc, p) => {
+    execute: async (_svc, p, _body, request) => {
       const slug = String(p.slug ?? "");
       // The document id comes from the live row, never from the URL: a Single
       // has exactly one document and the client must not name which.
@@ -262,6 +262,9 @@ export const SINGLE_VERSION_METHODS: Record<
         actor: readAuthenticatedActor(p),
         versionNo: Number(p.versionNo),
         params: p,
+        // A restore replays a snapshot through the ordinary update, so its
+        // hooks are told about the caller the same way an edit's are.
+        request,
       });
       return respondAction("Version restored.", result);
     },
@@ -690,7 +693,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     // Bare doc body. The legacy SingleResult envelope is unwrapped here
     // so a service-side failure throws a NextlyError which the
     // dispatcher's error path canonicalises.
-    execute: async (svc, p) => {
+    execute: async (svc, p, _body, request) => {
       const slug = requireParam(p, "slug", "Single slug");
       const richTextFormat = parseRichTextFormat(p.richTextFormat);
       // Absent → undefined so the service applies its published-only default
@@ -706,6 +709,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const user = readAuthenticatedUser(p);
 
       const result = await svc.entry.get(slug, {
+        // The request this read's hooks are told about.
+        request,
         user,
         routeAuthorized: !!user,
         // A scoped API key is judged on its own read grant rather than on the
@@ -753,7 +758,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   updateSingleDocument: {
     // Service returns the legacy SingleResult envelope; unwrap propagates
     // failure as a NextlyError.
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       const slug = requireParam(p, "slug", "Single slug");
       if (!body) throw new Error("Update data is required");
       const user = authenticatedSingleUser(p);
@@ -763,6 +768,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         {
           locale: p.locale,
           user,
+          // The request this write's hooks are told about.
+          request,
           // Who performed the write, recorded on the outbox event: an API-key
           // caller attributes to the key itself rather than the user that owns
           // it. Mirrors the collection update handler.
@@ -1374,7 +1381,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 export function dispatchSingles(
   method: string,
   params: Params,
-  body: unknown
+  body: unknown,
+  request?: Request
 ): Promise<unknown> {
   const singleRegistry = getSingleRegistryFromDI();
   const singleEntryService = getSingleEntryServiceFromDI();
@@ -1411,6 +1419,7 @@ export function dispatchSingles(
       metadata: singleMetadataService,
     },
     params,
-    body
+    body,
+    request
   );
 }

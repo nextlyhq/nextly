@@ -78,8 +78,14 @@ export function readAccessCaller(caller: ReadCaller): ReadAccessCaller {
   };
 }
 
-/** The RBAC service, or undefined before the container is initialized. */
-function getRBACService(): RBACAccessControlService | undefined {
+/**
+ * The RBAC service, or undefined before the container is initialized.
+ *
+ * Exported for `auth/authenticated-scope`, which composes the api-key and
+ * session branches of the same decision and would otherwise hold a fourth copy
+ * of this resolver. It is not part of any published surface.
+ */
+export function getRBACService(): RBACAccessControlService | undefined {
   try {
     if (container.has("rbacAccessControlService")) {
       return container.get<RBACAccessControlService>(

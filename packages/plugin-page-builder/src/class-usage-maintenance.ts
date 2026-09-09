@@ -64,18 +64,18 @@ import { isPlainRecord } from "@nextlyhq/blocks-engine";
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
 import {
-  deriveClassUsageRows,
-  reconcileClassUsage,
+  classUsageIndex,
+  deriveUsageRows,
+  reconcileUsage,
   type ClassUsageSubject,
-  type StoredClassUsageRow,
 } from "./class-usage-reconcile";
 import {
-  type ClassUsageRow,
   type ClassUsageScope,
   type ClassUsageVariant,
 } from "./collections/class-usage-index";
 import { walkPages } from "./paged-walk";
 import { readStoredJson } from "./stored-json";
+import type { UsageIndex, UsageSubject } from "./usage-index";
 
 /**
  * The store operations maintenance needs, declared structurally.
@@ -145,14 +145,14 @@ export function looksLikeBlockDocument(value: unknown): boolean {
   return isPlainRecord(document) && Array.isArray(document.nodes);
 }
 
-/** The columns of a stored row that must each be a string. */
-const ROW_STRING_COLUMNS = [
-  "id",
-  "entity",
-  "entityKey",
-  "field",
-  "classId",
-] as const;
+/**
+ * The columns EVERY stored row must carry as a string.
+ *
+ * The row's own columns are not here: an index reads those itself, through
+ * `readOwn`, because a bare list of names cannot validate a closed set — and
+ * the component index carries one beside its reference.
+ */
+const ROW_STRING_COLUMNS = ["id", "entity", "entityKey", "field"] as const;
 
 /**
  * Read every named key as a string, or nothing if any is not one.
@@ -204,7 +204,23 @@ function readVariant(value: unknown): ClassUsageVariant | null {
  * data arrives unvalidated, one unreadable row must not stop the subject being
  * reconciled, and nothing here knows enough about it to remove it.
  */
-function readStoredRow(item: unknown): StoredClassUsageRow | null {
+function storedRowReader<TRow extends UsageSubject>(
+  index: UsageIndex<TRow>
+): (item: unknown) => (TRow & { id: string }) | null {
+  return item => readStoredRow(index, item);
+}
+
+/**
+ * One stored row under any index, or null when it cannot be read as one.
+ *
+ * The subject columns and the row id are read here because every index has
+ * them; whatever else a row carries is the index's own and it reads that
+ * itself. See {@link UsageIndex.readOwn}.
+ */
+function readStoredRow<TRow extends UsageSubject>(
+  index: UsageIndex<TRow>,
+  item: unknown
+): (TRow & { id: string }) | null {
   if (!isPlainRecord(item)) return null;
 
   const scope = readScope(item.scope);
@@ -223,9 +239,26 @@ function readStoredRow(item: unknown): StoredClassUsageRow | null {
 
   const parts = readStrings(item, ROW_STRING_COLUMNS);
   if (parts === null) return null;
-  const [id, entity, entityKey, field, classId] = parts;
+  const own = index.readOwn(item);
+  if (own === null) return null;
+  const [id, entity, entityKey, field] = parts;
 
-  return { id, scope, entity, entityKey, field, locale, variant, classId };
+  // Asserted because TypeScript cannot see that the subject columns plus the
+  // index's own columns are exactly `TRow`: `Omit` erased the relationship it
+  // would need to check the spread. The two halves are each checked above —
+  // every subject column against its own rule, and `own` by the index — so
+  // what is unchecked here is only that they SUM to the row, which the
+  // descriptor's type states.
+  return {
+    id,
+    scope,
+    entity,
+    entityKey,
+    field,
+    locale,
+    variant,
+    ...own,
+  } as TRow & { id: string };
 }
 
 /**
@@ -238,12 +271,13 @@ function readStoredRow(item: unknown): StoredClassUsageRow | null {
  * expected values onto whatever came back is precisely the operation that hides
  * that. Its removals would then delete another document's rows.
  */
-async function storedRowsWhere(
+async function storedRowsWhere<TRow extends UsageSubject>(
+  index: UsageIndex<TRow>,
   store: ClassUsageIndexStore,
   where: Record<string, { equals: string }>,
   describe: string
-): Promise<StoredClassUsageRow[]> {
-  return rowsWhere(store, where, describe, readStoredRow);
+): Promise<(TRow & { id: string })[]> {
+  return rowsWhere(store, where, describe, storedRowReader(index));
 }
 
 /**
@@ -392,15 +426,24 @@ function describeSubject(subject: ClassUsageSubject): string {
   return `${subject.scope}:${subject.entity}:${subject.entityKey}:${subject.field}`;
 }
 
-/** The rows the index currently holds for one subject. */
-async function storedRowsFor(
+/**
+ * The rows an index currently holds for one subject.
+ *
+ * Kept as the one place that knows how a subject becomes a query, rather than
+ * inlined at each caller: the six predicates have to be bound TOGETHER, and a
+ * caller that assembled its own could bind five and silently read another
+ * document's rows — which the reconciler would then return as removals.
+ */
+async function storedRowsFor<TRow extends UsageSubject>(
+  index: UsageIndex<TRow>,
   store: ClassUsageIndexStore,
-  subject: ClassUsageSubject
-): Promise<StoredClassUsageRow[]> {
-  return storedRowsWhere(
+  subject: UsageSubject
+): Promise<(TRow & { id: string })[]> {
+  return rowsWhere(
     store,
     subjectWhere(subject),
-    describeSubject(subject)
+    describeSubject(subject),
+    storedRowReader(index)
   );
 }
 
@@ -424,19 +467,43 @@ export async function maintainClassUsage(args: {
   document: unknown;
   limits: DocumentLimits;
 }): Promise<ClassUsageMaintenanceReport> {
+  return maintainUsage(classUsageIndex, args);
+}
+
+/**
+ * Bring one subject's rows into agreement with its document, under any index.
+ *
+ * The generic beneath {@link maintainClassUsage}, which is a call to it. The
+ * named function keeps its signature so its tests stay the oracle for this
+ * refactor rather than being edited alongside the code they check.
+ */
+export async function maintainUsage<TRow extends UsageSubject>(
+  index: UsageIndex<TRow>,
+  args: {
+    store: ClassUsageIndexStore;
+    subject: UsageSubject;
+    document: unknown;
+    limits: DocumentLimits;
+  }
+): Promise<ClassUsageMaintenanceReport> {
   const { store, subject } = args;
-  const derivation = deriveClassUsageRows(subject, args.document, args.limits);
+  const derivation = deriveUsageRows(
+    index,
+    subject,
+    args.document,
+    args.limits
+  );
 
   // An incomplete read contributes its marker and nothing else. Reconciling
   // against the prefix it managed to read would remove the rows for every
   // reference past the bound, which is the answer that licences deleting a
   // class the document still applies.
-  const derived: ClassUsageRow[] = derivation.complete
+  const derived: TRow[] = derivation.complete
     ? derivation.rows
     : [derivation.undetermined];
 
-  const stored = await storedRowsFor(store, subject);
-  const { insert, remove } = reconcileClassUsage(subject, derived, stored);
+  const stored = await storedRowsFor(index, store, subject);
+  const { insert, remove } = reconcileUsage(index, subject, derived, stored);
 
   // Inserts before removals. Between the two statements the index reports the
   // subject as referencing both what it did and what it now does — an
@@ -532,7 +599,16 @@ export async function forgetDeletedDocument(args: {
  * Scoped to one entity, field and locale, so a rebuild of one blocks field
  * cannot remove rows belonging to another.
  */
-export async function forgetAbsentDocuments(args: {
+export async function forgetAbsentDocuments<TRow extends UsageSubject>(args: {
+  /**
+   * The index whose rows are being swept.
+   *
+   * Required, and not inferable from the store. Rows are decoded through this
+   * descriptor, and one index's reader answers null for another's rows — the
+   * class reader needs a `classId`, so sweeping the component index through it
+   * examines no rows at all and reports a clean pass having removed nothing.
+   */
+  index: UsageIndex<TRow>;
   store: ClassUsageIndexStore;
   scope: ClassUsageScope;
   entity: string;
@@ -564,6 +640,7 @@ export async function forgetAbsentDocuments(args: {
     variant: { equals: args.variant },
   };
   const rows = await storedRowsWhere(
+    args.index,
     args.store,
     where,
     `${args.scope}:${args.entity}:*:${args.field}`

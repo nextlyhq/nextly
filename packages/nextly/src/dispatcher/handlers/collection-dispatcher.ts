@@ -261,7 +261,7 @@ export const COLLECTION_VERSION_METHODS: Record<
     },
   },
   restoreEntryVersion: {
-    execute: async (_svc, p) => {
+    execute: async (_svc, p, _body, request) => {
       const result = await restoreVersionForDocument({
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
@@ -270,6 +270,9 @@ export const COLLECTION_VERSION_METHODS: Record<
         actor: readAuthenticatedActor(p),
         versionNo: Number(p.versionNo),
         params: p,
+        // A restore replays a snapshot through the ordinary update, so its
+        // hooks are told about the caller the same way an edit's are.
+        request,
       });
       return respondAction("Version restored.", result);
     },
@@ -1151,7 +1154,7 @@ const COLLECTIONS_METHODS: Record<
     // (`{ docs, totalDocs, limit, page, totalPages, hasNextPage,
     // hasPrevPage, ... }`) in CollectionServiceResult; we unwrap it and
     // translate to canonical PaginationMeta via paginatedResponseToMeta.
-    execute: async (svc, p) => {
+    execute: async (svc, p, _body, request) => {
       requireParam(p, "collectionName");
 
       // Build sort parameter from sortBy and sortOrder.
@@ -1184,6 +1187,8 @@ const COLLECTIONS_METHODS: Record<
       const user = readAuthenticatedUser(p);
 
       const result = await svc.listEntries({
+        // The request this operation's hooks are told about.
+        request,
         collectionName: p.collectionName,
         user,
         routeAuthorized: !!user,
@@ -1227,7 +1232,7 @@ const COLLECTIONS_METHODS: Record<
   countEntries: {
     // Wire shape canonicalises on `{ total }`. Service still returns
     // `{ totalDocs }` internally; we translate at the boundary.
-    execute: async (svc, p) => {
+    execute: async (svc, p, _body, request) => {
       requireParam(p, "collectionName");
       // Match listEntries: absent → undefined so the service applies its
       // published-only default; pass `?status=all|draft|published` to widen,
@@ -1241,6 +1246,8 @@ const COLLECTIONS_METHODS: Record<
       const user = readAuthenticatedUser(p);
 
       const result = await svc.countEntries({
+        // The request this operation's hooks are told about.
+        request,
         collectionName: p.collectionName,
         user,
         routeAuthorized: !!user,
@@ -1261,11 +1268,13 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   createEntry: {
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       if (!p.collectionName || !body)
         throw new Error("collectionName and entry data are required");
       const result = await svc.createEntry(
         {
+          // The request this operation's hooks are told about.
+          request,
           collectionName: p.collectionName,
           depth:
             p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
@@ -1302,7 +1311,7 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   getEntry: {
-    execute: async (svc, p) => {
+    execute: async (svc, p, _body, request) => {
       if (!p.collectionName || !p.entryId) {
         throw new Error("collectionName and entryId parameters are required");
       }
@@ -1316,6 +1325,8 @@ const COLLECTIONS_METHODS: Record<
       const user = readAuthenticatedUser(p);
 
       const result = await svc.getEntry({
+        // The request this operation's hooks are told about.
+        request,
         collectionName: p.collectionName,
         entryId: p.entryId,
         user,
@@ -1349,7 +1360,7 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   updateEntry: {
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       if (!p.collectionName || !p.entryId || !body) {
         throw new Error(
           "collectionName, entryId, and update data are required"
@@ -1357,6 +1368,8 @@ const COLLECTIONS_METHODS: Record<
       }
       const result = await svc.updateEntry(
         {
+          // The request this operation's hooks are told about.
+          request,
           collectionName: p.collectionName,
           entryId: p.entryId,
           depth:
@@ -1402,11 +1415,13 @@ const COLLECTIONS_METHODS: Record<
   ),
   deleteEntry: {
     // The deleted record is the `item`.
-    execute: async (svc, p) => {
+    execute: async (svc, p, _body, request) => {
       if (!p.collectionName || !p.entryId) {
         throw new Error("collectionName and entryId parameters are required");
       }
       const result = await svc.deleteEntry({
+        // The request this operation's hooks are told about.
+        request,
         collectionName: p.collectionName,
         entryId: p.entryId,
         userId: p._authenticatedUserId
@@ -1444,7 +1459,7 @@ const COLLECTIONS_METHODS: Record<
   // (per-item failures are first-class data in the body's `errors`
   // array, not server errors).
   bulkDeleteEntries: {
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       const b = body as { ids?: string[] } | undefined;
       if (!p.collectionName) {
         throw new Error("collectionName parameter is required");
@@ -1453,6 +1468,8 @@ const COLLECTIONS_METHODS: Record<
         throw new Error("ids must be a non-empty array");
       }
       const result = await svc.bulkDeleteEntries({
+        // The request this operation's hooks are told about.
+        request,
         collectionName: p.collectionName,
         ids: b.ids,
         userId: p._authenticatedUserId
@@ -1491,7 +1508,7 @@ const COLLECTIONS_METHODS: Record<
   // Bulk update by ids. Successes carry full mutated records so the
   // admin client can refresh its cache without a re-fetch.
   bulkUpdateEntries: {
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       const b = body as
         | { ids?: string[]; data?: Record<string, unknown> }
         | undefined;
@@ -1505,6 +1522,8 @@ const COLLECTIONS_METHODS: Record<
         throw new Error("data must be an object with update values");
       }
       const result = await svc.bulkUpdateEntries({
+        // The request this operation's hooks are told about.
+        request,
         collectionName: p.collectionName,
         ids: b.ids,
         data: b.data,
@@ -1543,7 +1562,7 @@ const COLLECTIONS_METHODS: Record<
   // into the canonical error envelope. Per-entry failures during the
   // update phase land in result.failures and are surfaced via respondBulk.
   bulkUpdateByQuery: {
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       const b = body as
         | {
             where?: Record<string, unknown>;
@@ -1566,6 +1585,8 @@ const COLLECTIONS_METHODS: Record<
       // the id-based bulkUpdateEntries path which already resolves the user.
       const result = await svc.bulkUpdateByQuery(
         {
+          // The request this operation's hooks are told about.
+          request,
           collectionName: p.collectionName,
           // Strip owner-column conditions from the request body so a caller
           // cannot target rows by the system owner column via `body.where`
@@ -1611,12 +1632,14 @@ const COLLECTIONS_METHODS: Record<
     // The bulk-service implementation delegates to
     // mutationService.createEntry which already returns statusCode 201,
     // so the wire status matches end-to-end.
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       if (!p.collectionName || !p.entryId) {
         throw new Error("collectionName and entryId parameters are required");
       }
       const b = body as { overrides?: Record<string, unknown> } | undefined;
       const result = await svc.duplicateEntry({
+        // The request this operation's hooks are told about.
+        request,
         collectionName: p.collectionName,
         entryId: p.entryId,
         overrides: b?.overrides,
@@ -1659,13 +1682,14 @@ export function dispatchCollections(
   services: ServiceContainer,
   method: string,
   params: Params,
-  body: unknown
+  body: unknown,
+  request?: Request
 ): Promise<unknown> {
   const collectionsHandler =
     getCollectionsHandlerFromDI() ?? services.collections;
   const handler = COLLECTIONS_METHODS[method];
   if (!handler) throw new Error(`Unknown method: ${method}`);
-  return handler.execute(collectionsHandler, params, body);
+  return handler.execute(collectionsHandler, params, body, request);
 }
 
 // Test seam: the helper is module-private but pure, and re-exporting
