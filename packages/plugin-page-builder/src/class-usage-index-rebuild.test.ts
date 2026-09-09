@@ -16,7 +16,7 @@ import { classUsageIndex } from "./class-usage-reconcile";
 import { usageTarget } from "./class-usage-write";
 import {
   rebuildClassUsageIndex,
-  rebuildUsageIndexes,
+  rebuildPageBuilderUsageIndexes,
   type ClassUsageDocumentStore,
 } from "./class-usage-index-rebuild";
 import { componentUsageIndex } from "./component-usage";
@@ -660,12 +660,18 @@ describe("repairing every index a site maintains", () => {
     return { store, written };
   }
 
-  it("fills BOTH indexes from one walk", async () => {
+  it("fills BOTH indexes from one walk, through the entry point a host can reach", async () => {
     // The upgrade case, and the reason this entry point exists. An installation
     // that already held pages gets an empty component index and it fills only
     // for pages saved AFTER the upgrade, so every stored reference stays
     // invisible until somebody resaves the page. An empty index answers
     // "references nothing" — the answer a delete check acts on.
+    //
+    // Exercised through `rebuildPageBuilderUsageIndexes` rather than by handing
+    // a targets list to the walk, because the targets list names
+    // package-internal descriptors: a test that builds one proves the WALK
+    // repairs what it is given, and says nothing about whether a host can name
+    // both indexes in the first place.
     const docs = documentStore([
       {
         id: "page-1",
@@ -693,21 +699,21 @@ describe("repairing every index a site maintains", () => {
     const classes = recordingStore();
     const components = recordingStore();
 
-    await rebuildUsageIndexes({
+    await rebuildPageBuilderUsageIndexes({
       limits: DEFAULT_LIMITS,
       documents: docs.store,
-      targets: [
-        usageTarget(classUsageIndex, classes.store),
-        usageTarget(componentUsageIndex, components.store),
-      ],
+      classIndex: classes.store,
+      componentIndex: components.store,
       collection: "pages",
       field: "content",
       locale: "",
       variant: "published",
     });
 
-    // Both asserted together: either alone passes on a rebuild that repaired
-    // one index and silently skipped the other, which is the defect itself.
+    // Both asserted together, and each against the rows only ITS descriptor
+    // produces: either alone passes on a rebuild that repaired one index and
+    // silently skipped the other, which is the defect itself, and comparing
+    // row counts would pass on the two stores wired to the same descriptor.
     expect({
       classes: classes.written.map(r => r.classId),
       components: components.written.map(r => r.componentId),

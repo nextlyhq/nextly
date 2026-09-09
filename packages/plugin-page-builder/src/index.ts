@@ -107,9 +107,17 @@ export type { SiteStyleReader } from "./site-style-storage";
 // second.
 export { classUsageOf } from "./class-usage";
 export type { ClassUsage } from "./class-usage";
+// `rebuildPageBuilderUsageIndexes` rather than the general
+// `rebuildUsageIndexes` behind it. The general one takes the list of indexes to
+// repair, and that list is not a caller's to write: it names package-internal
+// descriptors, and a host that could write it could only ever name the indexes
+// that existed when its code was written — so an index added later would go
+// unrepaired on every upgraded site, which is the undercount this whole export
+// exists to prevent. The preconfigured entry point takes the STORES and knows
+// the set itself.
 export {
   rebuildClassUsageIndex,
-  rebuildUsageIndexes,
+  rebuildPageBuilderUsageIndexes,
   type ClassUsageDocumentStore,
   type ClassUsageRebuildReport,
 } from "./class-usage-index-rebuild";

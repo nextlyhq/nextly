@@ -85,7 +85,15 @@ export interface ClassUsageSubjectOutcome {
   removed: number;
   /** True when the document could not be read whole and a marker was written. */
   undetermined: boolean;
-  /** Absent on success. Present, and the subject is unchanged, on failure. */
+  /**
+   * Absent on success.
+   *
+   * Present when any index for this subject could not be brought into
+   * agreement with the document. The others may still have been, and
+   * `inserted` and `removed` count what actually landed — a failing index does
+   * not stop its siblings, so this is not a claim that the subject is
+   * unchanged.
+   */
   failure?: unknown;
   /** True when no document exists in this locale and variant. */
   absent: boolean;
@@ -110,21 +118,6 @@ export interface ClassUsageWriteReport {
   outcomes: ClassUsageSubjectOutcome[];
 }
 
-/**
- * Reconcile every subject a written document owns.
- *
- * Returns an empty report for the collections this index does not track, which
- * is most of them: `blocksFieldsOf` finds no field, so the document owns no
- * subject and nothing is read. That filter reads the collection configuration
- * passed in rather than a list captured when the plugin was wired, so a
- * collection created after that moment is tracked rather than missed.
- *
- * A failure against one subject does not stop the others. Each subject's rows
- * are independent, and stopping would leave the subjects after the failure
- * stale as well as the one that failed — turning one recoverable disagreement
- * into several for no gain, since reconciliation is idempotent and a rerun
- * repairs whatever this pass could not.
- */
 /**
  * One index and the store its rows live in.
  *
@@ -170,6 +163,21 @@ export function usageTarget<TRow extends UsageSubject>(
   };
 }
 
+/**
+ * Reconcile every subject a written document owns.
+ *
+ * Returns an empty report for the collections this index does not track, which
+ * is most of them: `blocksFieldsOf` finds no field, so the document owns no
+ * subject and nothing is read. That filter reads the collection configuration
+ * passed in rather than a list captured when the plugin was wired, so a
+ * collection created after that moment is tracked rather than missed.
+ *
+ * A failure against one subject does not stop the others. Each subject's rows
+ * are independent, and stopping would leave the subjects after the failure
+ * stale as well as the one that failed — turning one recoverable disagreement
+ * into several for no gain, since reconciliation is idempotent and a rerun
+ * repairs whatever this pass could not.
+ */
 export async function reconcileWrittenDocument(args: {
   store: ClassUsageIndexStore;
   read: ClassUsageDocumentReader;
@@ -232,6 +240,71 @@ export async function reconcileWrittenDocument(args: {
  * separating them would suggest a caller could respond to one differently,
  * which after the write has committed it cannot.
  */
+/**
+ * Maintain EVERY index from one read, whatever any single one of them does.
+ *
+ * A target that throws does not stop the ones after it. The content save has
+ * already committed, so a failure isolated to one derived store has no reason
+ * to leave the others stale as well — and a failure that PERSISTS would
+ * otherwise mean a sibling index never records anything at all: every save
+ * fails at the same target first, so the sibling stays empty, and an empty
+ * index answers "references nothing" for every document. That is the answer a
+ * delete check acts on.
+ *
+ * This is the rule `reconcileWrittenDocument` already applies ACROSS SUBJECTS,
+ * applied across the indexes of one subject for the same reason: stopping
+ * turns one recoverable disagreement into several, for no gain, since
+ * maintenance is idempotent and a rebuild repairs whatever did not land.
+ *
+ * The subject still FAILS when any target did. A caller cannot act on "one of
+ * your indexes is stale" differently from "this subject is stale", and the
+ * remedy is the same rebuild either way.
+ */
+async function maintainEvery(
+  targets: readonly UsageTarget[],
+  args: { subject: UsageSubject; document: unknown; limits: DocumentLimits }
+): Promise<{
+  inserted: number;
+  removed: number;
+  undetermined: boolean;
+  failure?: unknown;
+}> {
+  let inserted = 0;
+  let removed = 0;
+  let undetermined = false;
+  const failures: unknown[] = [];
+
+  for (const target of targets) {
+    try {
+      const report = await target.maintain(args);
+      inserted += report.inserted;
+      removed += report.removed;
+      undetermined = undetermined || report.undetermined;
+    } catch (failure) {
+      failures.push(failure);
+    }
+  }
+
+  if (failures.length === 0) return { inserted, removed, undetermined };
+  return {
+    inserted,
+    removed,
+    undetermined,
+    // A lone failure is reported AS ITSELF. Wrapping one error in an aggregate
+    // would put a wrapper in front of the cause for every consumer that
+    // already reads this field. Several are aggregated rather than reduced to
+    // the first, because separate targets fail for separate reasons and only
+    // one of them would ever be seen.
+    failure:
+      failures.length === 1
+        ? failures[0]
+        : new AggregateError(
+            failures,
+            "more than one usage index failed for this subject"
+          ),
+  };
+}
+
 async function reconcileOne(
   args: {
     read: ClassUsageDocumentReader;
@@ -270,25 +343,14 @@ async function reconcileOne(
       };
     }
 
-    // Every index derives from THIS read. A failure in one is the subject's
-    // failure — the catch below turns it into a reported outcome — because a
-    // caller cannot act on "one of your indexes is stale" any differently, and
-    // the hook's remedy, a rebuild, repairs both.
-    let inserted = 0;
-    let removed = 0;
-    let undetermined = false;
-    for (const target of args.targets) {
-      const report = await target.maintain({
-        subject,
-        document,
-        limits: args.limits,
-      });
-      inserted += report.inserted;
-      removed += report.removed;
-      undetermined = undetermined || report.undetermined;
-    }
+    // Every index derives from THIS read.
+    const maintained = await maintainEvery(args.targets, {
+      subject,
+      document,
+      limits: args.limits,
+    });
 
-    return { subject, inserted, removed, undetermined, absent: false };
+    return { subject, ...maintained, absent: false };
   } catch (failure) {
     return {
       subject,

@@ -26,6 +26,31 @@
  * hook runs BEFORE the caller commits, where a throw would mean something else
  * entirely, and maintenance does not run there.
  *
+ * ## What running post-commit does NOT give, stated rather than implied
+ *
+ * Serialisation with the write. The mutation service releases its transaction
+ * before these hooks run, so two concurrent saves of one document can each read
+ * the index before either has written it, and the loser's diff describes a
+ * document that is no longer the live one — removing rows the winning document
+ * still justifies. `class-usage-reconcile` records the same window from the
+ * reconciler's side and says there that soundness is the write path's to
+ * establish; this is the write path, and it does not establish it.
+ *
+ * Every index maintained here shares the window, because they share the read.
+ * The direction it fails in is the costly one: rows go missing, so a document
+ * that still references something reads as referencing nothing.
+ *
+ * An in-process lock keyed by document is not the fix and is worse than none. A
+ * second application instance is not serialised by it, so it would close the
+ * window on one machine and leave it open on the deployments most likely to see
+ * concurrent saves — a mitigation that fails in the direction of looking
+ * effective. Closing it needs a boundary the writes share, which is the
+ * mutation service's to offer.
+ *
+ * The consequence for callers is the same as the one this whole module is
+ * built around: the index is EVENTUALLY consistent, a rebuild is what repairs
+ * it, and a decision that destroys data must not read it as exact.
+ *
  * @module class-usage-hook
  */
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";

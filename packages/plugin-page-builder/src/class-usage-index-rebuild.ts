@@ -44,6 +44,7 @@ import {
 import { classUsageIndex } from "./class-usage-reconcile";
 import { usageTarget, type UsageTarget } from "./class-usage-write";
 import type { ClassUsageVariant } from "./collections/class-usage-index";
+import { componentUsageIndex } from "./component-usage";
 import { walkPages } from "./paged-walk";
 
 /** How many documents one query asks for. */
@@ -434,11 +435,57 @@ export async function rebuildUsageIndexes(args: {
 }
 
 /**
+ * Repair EVERY usage index this plugin maintains, from one walk.
+ *
+ * The entry point a host reaches for. It names the stores rather than the
+ * targets, because the set of indexes is the PLUGIN's to know: a caller asked
+ * to list them can only list the ones that existed when its code was written,
+ * so an index added in a later version would go unrepaired on every upgraded
+ * site — and an index that is never repaired answers "references nothing" for
+ * every document, which is the answer a delete check acts on.
+ *
+ * That is the same reasoning `rebuildUsageIndexes` applies from the other side.
+ * There the list is required so that omitting one is a decision; here the
+ * decision has already been taken, by the code that knows the whole set.
+ *
+ * Both stores are required for the same reason. A host holding one of them and
+ * not the other is repairing half its derived state, and the half it skips is
+ * indistinguishable afterwards from one that genuinely records nothing.
+ */
+export async function rebuildPageBuilderUsageIndexes(args: {
+  documents: ClassUsageDocumentStore;
+  /** Where the CLASS index's rows live. */
+  classIndex: ClassUsageIndexStore;
+  /** Where the COMPONENT index's rows live. */
+  componentIndex: ClassUsageIndexStore;
+  /** The collection whose documents are walked. */
+  collection: string;
+  /** The blocks field on those documents. */
+  field: string;
+  /** The locale being rebuilt, or `""` when the field is not localized. */
+  locale: string;
+  /** Which stored variant is being rebuilt. */
+  variant: ClassUsageVariant;
+  /** The bounds the documents are rendered under. */
+  limits: DocumentLimits;
+}): Promise<ClassUsageRebuildReport> {
+  const { classIndex, componentIndex, ...rest } = args;
+  return rebuildUsageIndexes({
+    ...rest,
+    targets: [
+      usageTarget(classUsageIndex, classIndex),
+      usageTarget(componentUsageIndex, componentIndex),
+    ],
+  });
+}
+
+/**
  * Repair the class index alone.
  *
- * @deprecated Use {@link rebuildUsageIndexes} and pass every index the site
- * maintains. Kept for one release because the name is published, and it keeps
- * exactly the behaviour it had: a repair of the CLASS index and no other.
+ * @deprecated Use {@link rebuildPageBuilderUsageIndexes}, which repairs every
+ * index the plugin maintains. Kept for one release because the name is
+ * published, and it keeps exactly the behaviour it had: a repair of the CLASS
+ * index and no other.
  *
  * That narrowness is the reason for the rename rather than an accident of it.
  * A site that upgraded and ran this would have left its component index empty,
