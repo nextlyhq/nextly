@@ -672,3 +672,152 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+describe.each(getConfiguredTestDialects())(
+  "a window that reaches before the epoch on %s",
+  dialect => {
+    it("still counts the recent rows", async () => {
+      // 366 yearly intervals is the DOCUMENTED maximum, and in 2026 that window
+      // starts in 1661. On MySQL the lower bound is rendered with
+      // `from_unixtime`, which answers NULL for a negative epoch -- and
+      // `column >= NULL` matches nothing, so the whole series reported zeros
+      // while rows existed. Measured: `from_unixtime(-9750000000)` is NULL and
+      // a probe table holding one row returns 0 for that predicate.
+      const h = await boot(dialect, [
+        { occurredAt: daysAgo(0) },
+        { occurredAt: daysAgo(0) },
+      ]);
+
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        now: clock,
+        dateField: "occurredAt",
+        interval: "year",
+        intervals: 366,
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.data?.points).toHaveLength(366);
+      const total = (res.data?.points ?? []).reduce((s, p) => s + p.count, 0);
+      expect(total).toBe(2);
+      // In the most recent year, which is where both rows were written.
+      expect(res.data?.points.at(-1)?.count).toBe(2);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a malformed date field on %s",
+  dialect => {
+    it("is refused by name rather than as a server fault", async () => {
+      // The public Direct API is callable from JavaScript, where the parameter
+      // type binds nothing. A non-string reached `toSnakeCase`, whose
+      // `.replace` threw a raw TypeError that the service caught as an
+      // unclassified 500 -- unlike every other malformed argument, which gets a
+      // named refusal.
+      const h = await boot(dialect, [{ occurredAt: daysAgo(0) }]);
+
+      for (const bad of [123, 0, false, Number.NaN, {}] as unknown[]) {
+        const res = await h.timeseriesEntries({
+          collectionName: EVENTS,
+          now: clock,
+          dateField: bad as string,
+          interval: "day",
+        });
+
+        // `0`, `false` and `NaN` are the ones that matter: they are FALSY as
+        // well as wrong, so a guard placed after an `if (!value) return` never
+        // sees them and they reach `toSnakeCase`, whose `.replace` throws a raw
+        // TypeError the service reports as an unclassified 500.
+        expect(res.success, `${String(bad)} was accepted`).toBe(false);
+        expect(
+          res.statusCode,
+          `${String(bad)} was not a validation error`
+        ).toBe(400);
+        expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
+      }
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a window no stored row can fall in on %s",
+  dialect => {
+    it("answers every interval as zero", async () => {
+      // Entirely after what a MySQL TIMESTAMP can hold.
+      //
+      // This pins the ANSWER, which is all it can pin. Whether the read
+      // short-circuits or runs an unbounded GROUP BY and then discards every
+      // bucket, the points come out identical -- so removing the short-circuit
+      // fails nothing here, and that was confirmed rather than assumed. What
+      // the short-circuit buys is not scanning a whole table to produce this,
+      // and that is verified by reading the code, not by this test.
+      const h = await boot(dialect, [
+        { occurredAt: daysAgo(0) },
+        { occurredAt: daysAgo(1) },
+      ]);
+
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        now: new Date("2400-01-01T00:00:00.000Z"),
+        dateField: "occurredAt",
+        interval: "day",
+        intervals: 3,
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.data?.points).toHaveLength(3);
+      expect((res.data?.points ?? []).every(p => p.count === 0)).toBe(true);
+      // The points still describe the window asked for, so a caller cannot tell
+      // this apart from a queried answer -- which is the point.
+      expect(res.data?.points.at(-1)?.start).toBe("2400-01-01T00:00:00.000Z");
+    });
+
+    it("still counts rows for a window that overlaps the range", async () => {
+      // The control: a short-circuit that fired for every window would satisfy
+      // the assertion above while making the whole feature answer zero.
+      const h = await boot(dialect, [{ occurredAt: daysAgo(0) }]);
+
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        now: clock,
+        dateField: "occurredAt",
+        interval: "day",
+        intervals: 2,
+      });
+
+      expect(res.data?.points.at(-1)?.count).toBe(1);
+    });
+
+    it("counts a row inside a window whose two ends are BOTH unstorable", async () => {
+      // The second control, and the one the case above cannot supply. Two
+      // unrepresentable ends describe two opposite windows: one lying past the
+      // storable range, and one SURROUNDING it. 366 yearly intervals anchored
+      // in 2040 run from 1675 to 2041, so both ends are dropped on MySQL while
+      // every row a `TIMESTAMP` can hold falls inside -- and deciding from the
+      // rendered bounds rather than from the raw window answers zeros for 1970
+      // through 2038 without reading a row.
+      //
+      // Reachable from an ordinary request: 366 is the documented maximum, and
+      // the anchor is a caller's own reporting parameter.
+      const h = await boot(dialect, [{ occurredAt: daysAgo(0) }]);
+
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        now: new Date("2040-06-01T00:00:00.000Z"),
+        dateField: "occurredAt",
+        interval: "year",
+        intervals: 366,
+      });
+
+      expect(res.success).toBe(true);
+      // Summed rather than positional: the row's bucket is this year, whose
+      // offset from the window's end moves with the calendar.
+      const counted = (res.data?.points ?? []).reduce(
+        (total, point) => total + point.count,
+        0
+      );
+      expect(counted).toBe(1);
+    });
+  }
+);

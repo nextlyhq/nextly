@@ -34,6 +34,16 @@ import { bucketFormat, type TimeseriesInterval } from "./timeseries-interval";
  * of midnight into the adjacent day's bucket.
  */
 /**
+ * What a MySQL `TIMESTAMP` column can hold, as epoch seconds.
+ *
+ * The documented range is 1970-01-01 00:00:01 UTC to 2038-01-19 03:14:07 UTC.
+ * A bound outside it cannot exclude a stored row, and rendering one produces
+ * NULL rather than a comparison.
+ */
+const MYSQL_TIMESTAMP_MIN_EPOCH = 1;
+const MYSQL_TIMESTAMP_MAX_EPOCH = 2147483647;
+
+/**
  * The value a window bound is compared against, spelled so the comparison means
  * the same instant whatever zone the server runs in.
  *
@@ -57,7 +67,7 @@ import { bucketFormat, type TimeseriesInterval } from "./timeseries-interval";
 export function timeseriesBoundOperand(
   instant: Date,
   dialect: SupportedDialect
-): Date | SQL {
+): Date | SQL | undefined {
   if (dialect !== "mysql") return instant;
   const epochSeconds = Math.floor(instant.getTime() / 1000);
   if (!Number.isFinite(epochSeconds)) {
@@ -71,7 +81,52 @@ export function timeseriesBoundOperand(
       ],
     });
   }
+  // A bound outside what a MySQL `TIMESTAMP` can hold is DROPPED rather than
+  // rendered, because `from_unixtime` answers NULL outside its range and
+  // `column >= NULL` matches nothing -- so the predicate meant to bound the
+  // scan would instead empty it, and the whole series would report zeros while
+  // rows exist. Measured: `from_unixtime(-9750000000)` is NULL, and a probe
+  // table holding one row returns 0 for `c >= from_unixtime(-9750000000)`.
+  //
+  // Reachable from an ordinary request, not a contrived one: 366 yearly
+  // intervals is the documented maximum, and in 2026 that window starts in
+  // 1661.
+  //
+  // Dropping the bound is sound rather than a fallback. A `TIMESTAMP` cannot
+  // store an instant outside this range, so a bound beyond it excludes no row
+  // that could exist -- the predicate was never doing anything except limiting
+  // the scan, and there is nothing there to skip.
+  if (epochSeconds < MYSQL_TIMESTAMP_MIN_EPOCH) return undefined;
+  if (epochSeconds > MYSQL_TIMESTAMP_MAX_EPOCH) return undefined;
   return sql`from_unixtime(${epochSeconds})`;
+}
+
+/**
+ * Whether a window can contain any instant the dialect is able to store.
+ *
+ * The rendered bounds cannot answer this, and reading them as though they could
+ * is what makes a spanning window look empty. Each end is dropped
+ * INDIVIDUALLY when it falls outside the storable range, so "both ends were
+ * dropped" describes two opposite windows: one lying entirely to one side of
+ * the range, and one SURROUNDING it. A 366-interval yearly window anchored in
+ * 2040 runs from 1675 to 2041 and drops both ends while containing every
+ * instant a MySQL `TIMESTAMP` can hold, so treating it as unaskable would
+ * answer zeros for 1970 through 2038 without reading a row.
+ *
+ * The endpoints are therefore judged as a RANGE, before either is rendered.
+ * `to` is the exclusive end of the last bucket, so a window ending exactly at
+ * the first storable instant holds nothing.
+ */
+export function timeseriesWindowIsStorable(
+  from: Date,
+  to: Date,
+  dialect: SupportedDialect
+): boolean {
+  if (dialect !== "mysql") return true;
+  return (
+    from.getTime() <= MYSQL_TIMESTAMP_MAX_EPOCH * 1000 &&
+    to.getTime() > MYSQL_TIMESTAMP_MIN_EPOCH * 1000
+  );
 }
 
 export function timeseriesBucketExpression(
