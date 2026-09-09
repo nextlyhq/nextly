@@ -1432,13 +1432,11 @@ export class CollectionQueryService extends BaseService {
     resolvedComponentTables?: Map<string, string>;
     resolvedComponentTypeColumns?: Map<string, string>;
   }): Promise<{
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
-    conditions: any[];
+    conditions: SQLWrapper[];
     componentTables: Map<string, string>;
     componentTypeColumns: Map<string, string>;
   }> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
-    const conditions: any[] = [];
+    const conditions: SQLWrapper[] = [];
     if (!params.where) {
       return {
         conditions,
@@ -1577,8 +1575,7 @@ export class CollectionQueryService extends BaseService {
     resolvedComponentTypeColumns?: Map<string, string>;
   }): Promise<{
     /** The accumulated WHERE terms, in the order they were added. */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
-    conditions: any[];
+    conditions: SQLWrapper[];
     localizedCtx: LocalizedQueryContext | null;
     statusFilter: ReturnType<typeof resolveStatusFilter>;
     /** Geo operators to apply in memory; always empty when `extractGeo` is false. */
@@ -1589,8 +1586,7 @@ export class CollectionQueryService extends BaseService {
     componentTypeColumns: Map<string, string>;
     translationFilter: TranslationStatusFilter | null;
   }> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
-    const conditions: any[] = [];
+    const conditions: SQLWrapper[] = [];
     const { schema, companion, localeChain } = params;
 
     // Row scope: the stored read rule's predicate and the Draft/Published
@@ -1884,8 +1880,9 @@ export class CollectionQueryService extends BaseService {
         collectionName,
         "read",
         toPayload(afterCodeHooks),
-        // eslint-disable-next-line @typescript-eslint/require-await
-        async () => false,
+        // The signature wants a thenable; `async` on a body with nothing to
+        // await only asked for a suppression.
+        () => Promise.resolve(false),
         params.user,
         params.sharedContext
       )
