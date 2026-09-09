@@ -32,7 +32,7 @@ import {
   registerServices,
   shutdownServices,
 } from "../di/register";
-import { getNextly, resetNextlyInstance } from "../direct-api/nextly";
+import { requireNextly, resetNextlyInstance } from "../direct-api/nextly";
 import type { Nextly } from "../direct-api/nextly";
 import { resetEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
 import { normalizeLocalization } from "../domains/i18n/config/normalize";
@@ -771,7 +771,7 @@ async function bootServices(
   let nextlyOverride: Nextly | undefined;
 
   return {
-    // Resolved on access, not while assembling this object. `getNextly()`
+    // Resolved on access, not while assembling this object. `requireNextly()`
     // registers the `nextlyDirectAPI` container binding as a side effect of
     // building its instance, so calling it here made that binding exist under
     // this harness whatever the code under test did. `req.nextly` resolves
@@ -780,7 +780,7 @@ async function bootServices(
     // the harness was answering the question the test was asking. Deferring
     // leaves the container the shape service registration alone gives it.
     get nextly(): Nextly {
-      return nextlyOverride ?? getNextly();
+      return nextlyOverride ?? requireNextly();
     },
     set nextly(replacement: Nextly) {
       nextlyOverride = replacement;

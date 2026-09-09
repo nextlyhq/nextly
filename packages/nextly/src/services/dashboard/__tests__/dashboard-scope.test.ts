@@ -33,7 +33,9 @@ vi.mock("../../../di/container", () => ({
 // itself is pinned at zero; `collection-counts.test.ts` is where the number
 // being the caller's rather than the table's is asserted.
 const { count } = vi.hoisted(() => ({ count: vi.fn() }));
-vi.mock("../../../direct-api/nextly", () => ({ getNextly: () => ({ count }) }));
+vi.mock("../../../direct-api/nextly", () => ({
+  requireNextly: () => ({ count }),
+}));
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 

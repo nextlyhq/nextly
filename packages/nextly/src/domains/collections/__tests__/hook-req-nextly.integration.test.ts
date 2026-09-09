@@ -1,7 +1,7 @@
 /**
  * `req.nextly` is bound for hooks from the moment services are registered.
  *
- * The handle resolved through a container binding that `getNextly()` created as
+ * The handle resolved through a container binding that `requireNextly()` created as
  * a side effect of its FIRST call. A process that never called it therefore
  * handed every hook `undefined` — and a REST or admin write does not call it,
  * so the handle the collections guide's own example reads was absent on exactly
@@ -10,7 +10,7 @@
  * Asserted against a production-shaped boot, and — since the harness stopped
  * resolving the Direct API while building its return value — through the
  * ordinary `createTestNextly` harness as well. The harness case is the one that
- * matters for everything written afterwards: while it called `getNextly()`
+ * matters for everything written afterwards: while it called `requireNextly()`
  * eagerly, the binding existed under it whatever the code did, so a test
  * written there could not fail.
  */
@@ -68,7 +68,7 @@ describe("the Direct API is bound for hook contexts at boot", () => {
     resetAll();
   });
 
-  it("binds nextlyDirectAPI during registerServices, before anything calls getNextly", async () => {
+  it("binds nextlyDirectAPI during registerServices, before anything calls requireNextly", async () => {
     await shutdownServices();
     resetAll();
 
@@ -81,7 +81,7 @@ describe("the Direct API is bound for hook contexts at boot", () => {
     expect(container.has("nextlyDirectAPI")).toBe(true);
   });
 
-  it("resolves to a usable Direct API without a prior getNextly call", async () => {
+  it("resolves to a usable Direct API without a prior requireNextly call", async () => {
     // A binding that cannot produce a working instance is no better than an
     // absent one, so this resolves it and checks the surface a hook would use.
     await shutdownServices();
@@ -123,7 +123,7 @@ describe("the ordinary test harness leaves the binding to service registration",
     // whether the harness resolves the Direct API or not, and a guard reading
     // only that stays green if the harness goes back to resolving it eagerly.
     // Whether the singleton was BUILT is the independent observation, because
-    // that is what an eager `getNextly()` does and a lazy property does not.
+    // that is what an eager `requireNextly()` does and a lazy property does not.
     expect(isNextlyInstantiated()).toBe(false);
     expect(container.has("nextlyDirectAPI")).toBe(true);
 

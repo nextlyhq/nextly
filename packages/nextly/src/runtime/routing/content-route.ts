@@ -28,7 +28,7 @@
  */
 import type { Metadata } from "next";
 
-import { getNextly } from "../../direct-api/nextly";
+import { requireNextly } from "../../direct-api/nextly";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { NextlyError } from "../../errors/nextly-error";
 
@@ -239,7 +239,7 @@ export interface ContentRouteConfig<TNode> {
    * would see beside the page being previewed.
    */
   trustedCollections?: string[];
-  /** A booted Nextly instance (defaults to `getNextly()`). */
+  /** A booted Nextly instance (defaults to `requireNextly()`). */
   nextly?: NextlyContentReader;
   /**
    * Extra cache tags attached to every resolved read, so a write to a related
@@ -458,7 +458,8 @@ function buildRoute<TNode>(
   // The predicate form, for the reads this module issues directly.
   const trusted = (name: string): boolean => trustedSet.has(name);
 
-  const getInstance = (): NextlyContentReader => config.nextly ?? getNextly();
+  const getInstance = (): NextlyContentReader =>
+    config.nextly ?? requireNextly();
 
   /** Whether this request may see unpublished edits at one collection + slug. */
   /**
