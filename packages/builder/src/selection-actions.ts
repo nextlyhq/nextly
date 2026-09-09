@@ -15,6 +15,8 @@
  * @module selection-actions
  */
 
+import * as React from "react";
+
 import type { EditorState } from "./editor-state";
 import {
   useNestingSource,
@@ -33,18 +35,26 @@ export function useSelectionActions(editor: EditorState): ToolbarAction[] {
   const { document, selectedId } = editor;
   const selectedIds = editor.selection.ids;
   const nesting = useNestingSource();
+  const shared = useSelectionActionsContext();
+
   /*
    * The provider's answer where there is one, and this surface's own where
-   * there is not.
+   * there is not — decided INSIDE the memo, which is what makes it both lazy
+   * and correct.
    *
-   * Reading a shared list is not only cheaper: it is what stops two surfaces
-   * disagreeing, which is exactly what happened when the palette asked a
-   * narrower question of its own. And the cost is real — deciding whether a
+   * Lazy, because `??` short-circuits: with a provider above, `toolbarActions`
+   * is never called here at all. That is the point — deciding whether a
    * selection can be SAVED builds the document a save would store, so three
-   * surfaces asking separately made an ordinary edit clone and walk a large
-   * selection three times.
+   * surfaces computing it separately made an ordinary edit clone and walk a
+   * large selection three times.
+   *
+   * Correct, because every input the fallback reads is a dependency. Written as
+   * a thunk memoised on the context alone, a surface with no provider kept its
+   * first answer for ever, and the suppression that made that compile was
+   * hiding it.
    */
-  return useSelectionActionsContext(() =>
-    toolbarActions(document, selectedId, selectedIds, nesting)
+  return React.useMemo(
+    () => shared ?? toolbarActions(document, selectedId, selectedIds, nesting),
+    [shared, document, selectedId, selectedIds, nesting]
   );
 }

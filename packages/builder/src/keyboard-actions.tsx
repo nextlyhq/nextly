@@ -220,26 +220,39 @@ const SelectionActionsContext = React.createContext<ToolbarAction[] | null>(
 );
 
 /**
- * What to offer for the selection, from the nearest provider.
+ * The shared verb list, or `null` when there is no provider above.
  *
- * A surface OUTSIDE one computes its own, which is what a host embedding a
- * single control gets. Inside, every surface reads one answer — and reading one
- * answer is also what stops them disagreeing, which is the property the palette
- * lost when it asked a narrower question of its own.
+ * Deliberately NOT "compute it for me": a caller that handed this a fallback to
+ * run would have to be told when to run it, and the honest answer — whenever
+ * anything the fallback closes over changes — is exactly what this hook cannot
+ * see. Written that way it memoised on the context alone, so a surface outside a
+ * provider kept its FIRST answer for ever: stale availability and stale refusal
+ * reasons on every later selection.
+ *
+ * Answering `null` hands that decision back to the caller, which is the only
+ * place the inputs are known.
  */
-export function useSelectionActionsContext(
-  fallback: () => ToolbarAction[]
-): ToolbarAction[] {
-  const shared = React.useContext(SelectionActionsContext);
-  const computed = React.useMemo(
-    () => (shared === null ? fallback() : shared),
-    // The fallback is only consulted when there is no provider, and it closes
-    // over the caller's own memo inputs — so depending on it here would rebuild
-    // this on every render for a value the provider case never reads.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [shared]
-  );
-  return computed;
+export function useSelectionActionsContext(): ToolbarAction[] | null {
+  return React.useContext(SelectionActionsContext);
+}
+
+/**
+ * The verbs from the nearest {@link BlockKeyboardActions}.
+ *
+ * Throws when there is none. A toolbar without them would render its buttons
+ * and do nothing on every press, which looks like a broken editor rather than
+ * like a missing wrapper — and it would reach a person before it reached a
+ * developer.
+ */
+export function useBlockActionsContext(): BlockActions {
+  const actions = React.useContext(BlockActionsContext);
+  if (actions === null) {
+    throw new Error(
+      "[@nextlyhq/builder] Block actions are only available inside " +
+        "<BlockKeyboardActions>. Render it as an ancestor of whatever uses them."
+    );
+  }
+  return actions;
 }
 
 /**
@@ -261,25 +274,6 @@ export function useNestingSource(): NestingSource {
   // `toolbarActions` is called inside a memo keyed on its arguments — is not
   // handed a new object every render.
   return React.useMemo(() => supplied ?? registryNestingSource(), [supplied]);
-}
-
-/**
- * The verbs from the nearest {@link BlockKeyboardActions}.
- *
- * Throws when there is none. A toolbar without them would render its buttons
- * and do nothing on every press, which looks like a broken editor rather than
- * like a missing wrapper — and it would reach a person before it reached a
- * developer.
- */
-export function useBlockActionsContext(): BlockActions {
-  const actions = React.useContext(BlockActionsContext);
-  if (actions === null) {
-    throw new Error(
-      "[@nextlyhq/builder] Block actions are only available inside " +
-        "<BlockKeyboardActions>. Render it as an ancestor of whatever uses them."
-    );
-  }
-  return actions;
 }
 
 export interface BlockKeyboardActionsOptions {
