@@ -11,8 +11,10 @@ import type { PluginRoute, RouteMethod } from "./route-types";
 export interface RegisteredRoute {
   pluginName: string;
   method: RouteMethod;
-  /** Namespaced path: `/plugins/<pluginName><route.path>`. */
+  /** Where it answers: `/plugins/<pluginName><route.path>`, or `<route.path>`. */
   fullPath: string;
+  /** Which pass matches it. See {@link PluginRoute.mount}. */
+  mount: "plugin" | "root";
   route: PluginRoute;
   baseCtx: PluginContext;
   /** Pre-split path segments (literal, or `:name` capture) for matching. */
@@ -44,21 +46,36 @@ export class PluginRouteRegistry {
     route: PluginRoute,
     baseCtx: PluginContext
   ): void {
-    const fullPath = pluginRouteFullPath(pluginName, route.path);
+    const mount = route.mount ?? "plugin";
+    const fullPath = pluginRouteFullPath(pluginName, route.path, mount);
     this.routes.push({
       pluginName,
       method: route.method,
       fullPath,
+      mount,
       route,
       baseCtx,
       segments: splitPath(fullPath),
     });
   }
 
-  /** Match an incoming (method, path) against registered routes. */
-  match(method: string, path: string): RouteMatch | null {
+  /**
+   * Match an incoming (method, path) against registered routes of one mount.
+   *
+   * The mount is a REQUIRED argument rather than a search across both, because
+   * the two are consulted at different points in the request: namespaced routes
+   * before the built-in router, root routes only after it has declined. Matching
+   * both at once would put a plugin's root route ahead of the core route it
+   * shares a path with, which is the one thing this must not allow.
+   */
+  match(
+    method: string,
+    path: string,
+    mount: "plugin" | "root"
+  ): RouteMatch | null {
     const pathSegments = splitPath(path);
     for (const entry of this.routes) {
+      if (entry.mount !== mount) continue;
       if (entry.method !== method) continue;
       if (entry.segments.length !== pathSegments.length) continue;
       const params: Record<string, string> = {};

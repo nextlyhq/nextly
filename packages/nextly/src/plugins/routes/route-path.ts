@@ -17,9 +17,17 @@
  *
  * @module plugins/routes/route-path
  */
+
+import type { PluginRoute } from "./route-types";
+
 export function pluginRouteFullPath(
   pluginName: string,
-  routePath: string
+  routePath: string,
+  mount: PluginRoute["mount"] = "plugin"
 ): string {
-  return `/plugins/${pluginName}${routePath}`;
+  // A root route answers at the address it declares. It is still collected and
+  // collision-checked like any other, and the dispatcher consults it only after
+  // the built-in router declines, so the namespace it gives up buys no reach
+  // into anything core serves.
+  return mount === "root" ? routePath : `/plugins/${pluginName}${routePath}`;
 }

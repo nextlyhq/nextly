@@ -15,7 +15,7 @@ describe("PluginRouteRegistry", () => {
   it("matches a static namespaced route", () => {
     const reg = getPluginRouteRegistry();
     reg.register("@acme/x", { method: "GET", path: "/ping", handler }, baseCtx);
-    const m = reg.match("GET", "/plugins/@acme/x/ping");
+    const m = reg.match("GET", "/plugins/@acme/x/ping", "plugin");
     expect(m?.pluginName).toBe("@acme/x");
     expect(m?.params).toEqual({});
     expect(m?.route.path).toBe("/ping");
@@ -28,17 +28,21 @@ describe("PluginRouteRegistry", () => {
       { method: "GET", path: "/items/:id", handler },
       baseCtx
     );
-    expect(reg.match("GET", "/plugins/@acme/x/items/42")?.params).toEqual({
+    expect(
+      reg.match("GET", "/plugins/@acme/x/items/42", "plugin")?.params
+    ).toEqual({
       id: "42",
     });
-    expect(reg.match("POST", "/plugins/@acme/x/items/42")).toBeNull();
+    expect(reg.match("POST", "/plugins/@acme/x/items/42", "plugin")).toBeNull();
   });
 
   it("returns null for an unknown plugin/path and clears", () => {
     const reg = getPluginRouteRegistry();
     reg.register("@acme/x", { method: "GET", path: "/ping", handler }, baseCtx);
-    expect(reg.match("GET", "/plugins/@acme/y/ping")).toBeNull();
-    expect(reg.match("GET", "/plugins/@acme/x/ping/extra")).toBeNull();
+    expect(reg.match("GET", "/plugins/@acme/y/ping", "plugin")).toBeNull();
+    expect(
+      reg.match("GET", "/plugins/@acme/x/ping/extra", "plugin")
+    ).toBeNull();
     resetPluginRouteRegistry();
     expect(getPluginRouteRegistry().list()).toHaveLength(0);
   });

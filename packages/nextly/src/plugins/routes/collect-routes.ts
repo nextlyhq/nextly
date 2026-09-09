@@ -10,7 +10,7 @@ export interface CollectedRoute {
   method: PluginRoute["method"];
   /** The plugin-declared path (within its namespace). */
   path: string;
-  /** Namespaced path: `/plugins/<pluginName><path>`. */
+  /** Where it answers: `/plugins/<pluginName><path>`, or `<path>` when rooted. */
   fullPath: string;
   route: PluginRoute;
 }
@@ -39,7 +39,11 @@ export function collectPluginRoutes(
       if (!route.path.startsWith("/")) {
         throw routeInvalidPathError(plugin.name, route.path);
       }
-      const fullPath = pluginRouteFullPath(plugin.name, route.path);
+      const fullPath = pluginRouteFullPath(
+        plugin.name,
+        route.path,
+        route.mount
+      );
       const key = `${route.method} ${fullPath}`;
       const existingOwner = seen.get(key);
       if (existingOwner !== undefined) {

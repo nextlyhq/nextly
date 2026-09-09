@@ -132,4 +132,19 @@ export interface PluginRoute {
   public?: boolean;
   /** Ordered, typed route-level middleware chain. */
   middleware?: Middleware[];
+  /**
+   * Where this route answers.
+   *
+   * `"plugin"` (the default) serves it under `/plugins/<plugin-name><path>`,
+   * which keeps one plugin's routes from colliding with another's by
+   * construction.
+   *
+   * `"root"` serves it at `<path>` itself, so a plugin can own an address its
+   * callers already know. A root route is matched only AFTER the built-in REST
+   * router has declined the path, so it can never shadow a core route: a plugin
+   * claiming `/collections` gets the collections API, not control of it. What it
+   * CAN claim is anything core does not serve, which is what lets a plugin take
+   * over an endpoint core has stopped shipping without the URL changing.
+   */
+  mount?: "plugin" | "root";
 }

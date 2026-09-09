@@ -1041,9 +1041,11 @@ async function handleServiceRequest(
   // their secure-by-default auth (D28) and are matched BEFORE the built-in REST
   // router (which would 400 on these paths). The verb wrappers' withSecurity()
   // already applies CORS/rate-limit/headers around this.
+  const requestPath = "/" + params.join("/");
   const pluginRouteMatch = getPluginRouteRegistry().match(
     httpMethod,
-    "/" + params.join("/")
+    requestPath,
+    "plugin"
   );
   if (pluginRouteMatch) {
     return runPluginRoute(req, pluginRouteMatch);
@@ -1056,6 +1058,21 @@ async function handleServiceRequest(
   );
 
   if (!service || !operation || !method) {
+    // Only now. A plugin may claim a top-level path, and this is the point at
+    // which the built-in router has said it serves nothing there. Asking
+    // earlier would let a plugin answer for `/collections` or `/auth` by
+    // declaring the path first, so the ordering IS the guard: there is no list
+    // of reserved prefixes to keep in step with the routes core adds later,
+    // because core's own answer always comes first.
+    const rootRouteMatch = getPluginRouteRegistry().match(
+      httpMethod,
+      requestPath,
+      "root"
+    );
+    if (rootRouteMatch) {
+      return runPluginRoute(req, rootRouteMatch);
+    }
+
     return new Response(
       JSON.stringify({
         error:
