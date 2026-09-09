@@ -2996,19 +2996,22 @@ export class CollectionQueryService extends BaseService {
   private async resolveReadPlan<TData>(params: FilteredReadParams) {
     const accessUser = params.overrideAccess ? undefined : params.user;
 
-    // 1. Check collection-level access FIRST
-    const accessDenied = await this.accessService.checkCollectionAccess<TData>(
-      params.collectionName,
-      "read",
+    // 1. Check collection-level access FIRST, through the same member the
+    // listing and the read by id go through. An aggregate asking this question
+    // for itself is a second implementation of it: the id, scope and
+    // route-attestation arguments would then have to be kept in step by hand,
+    // and a count that authorized differently from the list it summarises is
+    // exactly the disagreement this service is being shaped to make
+    // impossible. No entry id, because an aggregate names no single row.
+    const accessDenied = await this.denyCollectionRead<TData>({
+      collectionName: params.collectionName,
       accessUser,
-      undefined,
-      undefined,
-      params.overrideAccess,
-      params.routeAuthorized,
+      overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
       // Same scope judgement as listEntries, so a read cannot describe rows
       // the key itself is not allowed to list.
-      params.authenticatedScope
-    );
+      authenticatedScope: params.authenticatedScope,
+    });
     if (accessDenied) {
       return { allowed: false as const, denied: accessDenied };
     }
@@ -3447,9 +3450,25 @@ export class CollectionQueryService extends BaseService {
         overrideAccess: params.overrideAccess,
         authenticatedScope: params.authenticatedScope,
         status: params.status,
-        // The SETTLED id, the one the gate above was given. A custom rule may
-        // decide from it, so resolving the predicate without it asks that rule
-        // about a different subject than the gate did.
+        // The SETTLED id — the row this read will actually return, which is
+        // the subject a predicate has to be about. A custom rule may decide
+        // from it, so resolving without it asks that rule about no document at
+        // all and a rule allowing exactly one row denies every read of it.
+        //
+        // NOT the id the coarse gate above was given. That one ran before
+        // `resolveReadEntryId`, so it judged the id as REQUESTED, and a
+        // `beforeOperation` hook may have rewritten it since. The order is
+        // deliberate and stays: that resolution runs `beforeOperation` and
+        // `beforeRead`, which are ordinary user code that records audit entries
+        // and spends rate-limit budget, and running them for a request
+        // authorization was going to refuse charges the caller for work and
+        // leaves a trail of reads that did not happen.
+        //
+        // The two subjects therefore differ exactly when a hook rewrites the
+        // id, and both must pass: the requested id at the gate, the settled one
+        // here, where `getAccessQueryConstraint` RAISES a denial rather than
+        // returning an absent predicate. That is the fail-closed direction —
+        // a rewrite can narrow what a caller reaches and never widen it.
         entryId,
       });
 
