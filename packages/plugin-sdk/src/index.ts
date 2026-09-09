@@ -271,6 +271,10 @@ export type {
   PluginRouteHandler,
   Middleware,
   RouteMethod,
+  // `ctx.authenticatedScope` is on the context above, so its type has to be
+  // nameable here — otherwise a route helper typed against it widens to
+  // `unknown` and the grant it carries stops being checkable.
+  AuthenticatedScope,
 } from "nextly";
 
 /**

@@ -620,6 +620,10 @@ export type {
   SerializedFieldConfig,
 } from "./plugins/plugin-singles";
 export type { AuthUser } from "./types/auth";
+// Exported for the same reason as `AuthUser` beside it: `PluginRouteContext`
+// carries an `authenticatedScope`, and a plugin typing a helper against it
+// otherwise has to reach into a deep path or widen to `unknown`.
+export type { AuthenticatedScope } from "./auth/authenticated-scope";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).
