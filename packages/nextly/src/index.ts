@@ -625,6 +625,10 @@ export type { AuthUser } from "./types/auth";
 // carries an `authenticatedScope`, and a plugin typing a helper against it
 // otherwise has to reach into a deep path or widen to `unknown`.
 export type { AuthenticatedScope } from "./auth/authenticated-scope";
+export type {
+  PluginRoutePermissionResolver,
+  PluginRoutePermissionScope,
+} from "./plugins/routes/route-permission";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).

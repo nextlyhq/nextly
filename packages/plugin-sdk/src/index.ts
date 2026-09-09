@@ -278,6 +278,10 @@ export type {
   Middleware,
   RouteMethod,
   AuthenticatedScope,
+  // A route gating on one of the plugin's OWN collections gives a function
+  // rather than a slug, because the host can rename those. See `PluginRoute`.
+  PluginRoutePermissionResolver,
+  PluginRoutePermissionScope,
 } from "nextly";
 
 /**
