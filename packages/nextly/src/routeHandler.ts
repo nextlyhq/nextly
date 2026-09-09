@@ -128,6 +128,7 @@ import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
 import { runPluginRoute } from "./plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
+import { shouldRegisterPluginRoutes } from "./plugins/routes/should-register";
 import { assertAdminWidgets } from "./plugins/validate-admin-widgets";
 import { assertClientConfigs } from "./plugins/validate-client-config";
 import {
@@ -1028,6 +1029,35 @@ async function resolveAuthorization(
 /**
  * Handle service requests with authentication and authorization
  */
+/**
+ * Register plugin routes before asking whether one matches, when there are any.
+ *
+ * Plugin routes are registered during service initialisation, and that is lazy:
+ * an app wired through `createDynamicHandlers({ config })` has an empty registry
+ * on its first request. A public plugin route would answer 400 until something
+ * else happened to boot the app, and on a serverless worker that repeats for
+ * every cold start.
+ *
+ * Gated on the config actually declaring a route, so an app with none never
+ * boots on an unknown path. That is what the initialisation further down is
+ * careful about: booting for traffic that is about to be refused hands an
+ * unauthenticated caller a cold start it could not otherwise cause. An app that
+ * DOES contribute routes has to boot to serve them, and a public one has to
+ * boot for an unauthenticated caller by definition.
+ */
+async function ensurePluginRoutesRegistered(): Promise<void> {
+  const registry = getPluginRouteRegistry();
+  if (
+    !shouldRegisterPluginRoutes(
+      registry.list().length,
+      getHandlerConfig()?.plugins
+    )
+  ) {
+    return;
+  }
+  await ensureServicesInitialized();
+}
+
 async function handleServiceRequest(
   req: Request,
   params: string[],
@@ -1042,6 +1072,7 @@ async function handleServiceRequest(
   // router (which would 400 on these paths). The verb wrappers' withSecurity()
   // already applies CORS/rate-limit/headers around this.
   const requestPath = "/" + params.join("/");
+  await ensurePluginRoutesRegistered();
   const pluginRouteMatch = getPluginRouteRegistry().match(
     httpMethod,
     requestPath,

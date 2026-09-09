@@ -64,8 +64,28 @@ export interface PluginRouteWrite {
    * `pluginRouteFullPath` with this plugin's own name, so a plugin cannot
    * invalidate another plugin's cached reads however it spells the path.
    */
-  readonly invalidates?: readonly string[];
+  readonly invalidates?: readonly PluginRouteInvalidation[];
+  /**
+   * Where the route this writes to answers. Defaults to the namespace.
+   *
+   * See {@link PluginRouteRequest.mount}. A write aimed at the wrong mount
+   * requests a path nothing serves, which fails rather than writing elsewhere.
+   */
+  readonly mount?: "plugin" | "root";
 }
+
+/**
+ * A read this write makes stale, named the way the read named itself.
+ *
+ * A bare string carries the write's own mount, which is right whenever both
+ * halves live in the same place. A plugin that serves a rooted write and a
+ * namespaced read has to say so per entry, because the key `usePluginRoute`
+ * cached under is the RESOLVED path: resolved under the wrong mount, the
+ * invalidation names a key nothing holds and the stale read stays on screen.
+ */
+export type PluginRouteInvalidation =
+  | string
+  | { readonly path: string; readonly mount?: "plugin" | "root" };
 
 /** What a write reports back while and after it runs. */
 export interface PluginRouteWriter<TBody, TResult extends object | null> {
@@ -110,9 +130,10 @@ export function usePluginRouteMutation<
   path,
   method = "POST",
   invalidates,
+  mount,
 }: PluginRouteWrite): PluginRouteWriter<TBody, TResult> {
   const client = useQueryClient();
-  const route = pluginRouteFullPath(plugin, path);
+  const route = pluginRouteFullPath(plugin, path, mount);
   const mutation = useMutation<TResult | undefined, Error, PluginWrite<TBody>>({
     // The TARGET travels with the body rather than being closed over. A write
     // paused offline has its options updated by TanStack before its retryer
@@ -189,7 +210,9 @@ export function usePluginRouteMutation<
           // carries the keys it was submitted with.
           invalidates: (invalidates ?? []).map(target => [
             "plugin-route",
-            pluginRouteFullPath(plugin, target),
+            typeof target === "string"
+              ? pluginRouteFullPath(plugin, target, mount)
+              : pluginRouteFullPath(plugin, target.path, target.mount),
           ]),
         });
         // A success clears the last failure — but only one from a write
@@ -216,7 +239,7 @@ export function usePluginRouteMutation<
         setInFlight(inFlightRef.current);
       }
     },
-    [mutateAsync, method, route, plugin, invalidates]
+    [mutateAsync, method, route, plugin, invalidates, mount]
   );
 
   return { write, pending: inFlight > 0, error: failure?.error ?? null };

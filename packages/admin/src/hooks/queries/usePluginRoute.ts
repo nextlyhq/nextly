@@ -93,6 +93,16 @@ export interface PluginRouteRequest {
    * under it should leave this alone and take the default.
    */
   staleTime?: number;
+  /**
+   * Where the route the server registered actually answers.
+   *
+   * Defaults to `"plugin"`, the namespace. A route the plugin declared with
+   * `mount: "root"` answers at its own path instead, and asking for it under
+   * the namespace requests a path nothing serves. That does not raise: an
+   * unserved path answers with nothing and reads as an empty result, which is
+   * the mistake this argument exists to make impossible to fall into silently.
+   */
+  mount?: "plugin" | "root";
 }
 
 /**
@@ -108,8 +118,9 @@ export function usePluginRoute<T extends object | null>({
   path,
   enabled = true,
   staleTime,
+  mount,
 }: PluginRouteRequest): PluginRouteRead<T> {
-  const route = pluginRouteFullPath(plugin, path);
+  const route = pluginRouteFullPath(plugin, path, mount);
   const query = useQuery<T | typeof NO_BODY>({
     // Keyed by the resolved path, so two plugins with the same route path do
     // not share an entry — and so a caller cannot make the key disagree with

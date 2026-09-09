@@ -76,6 +76,73 @@ describe("where a plugin route answers", () => {
     ).toThrow();
   });
 
+  it("collides two rooted patterns that differ only in a parameter's name", () => {
+    // `/hooks/:id` and `/hooks/:slug` are different strings and the same URL.
+    // Keyed on the text, both registered and the winner was whichever plugin
+    // came first, which is registration order dressed up as routing.
+    expect(() =>
+      collectPluginRoutes([
+        {
+          name: "@acme/one",
+          contributes: {
+            routes: [route({ mount: "root", path: "/hooks/:id" })],
+          },
+        },
+        {
+          name: "@acme/two",
+          contributes: {
+            routes: [route({ mount: "root", path: "/hooks/:slug" })],
+          },
+        },
+      ] as never)
+    ).toThrow();
+  });
+
+  it("does NOT collide a literal with a capture", () => {
+    // The control on the rule above, and the reason it is keyed on shape rather
+    // than on "contains a capture": `/items/count` beside `/items/:id` is an
+    // ordinary pair that every router supports. Refusing it would have made the
+    // collision check reject the common case to catch the rare one.
+    expect(() =>
+      collectPluginRoutes([
+        {
+          name: "@acme/one",
+          contributes: {
+            routes: [route({ mount: "root", path: "/items/count" })],
+          },
+        },
+        {
+          name: "@acme/two",
+          contributes: {
+            routes: [route({ mount: "root", path: "/items/:id" })],
+          },
+        },
+      ] as never)
+    ).not.toThrow();
+  });
+
+  it("answers the literal pattern when both could match", () => {
+    // Which makes the pair above unambiguous rather than merely permitted.
+    const reg = new PluginRouteRegistry();
+    reg.register(
+      "@acme/two",
+      route({ mount: "root", path: "/items/:id" }),
+      ctx
+    );
+    reg.register(
+      "@acme/one",
+      route({ mount: "root", path: "/items/count" }),
+      ctx
+    );
+    // Registered SECOND on purpose: first-match-wins would answer with the
+    // capture, and the assertion would pass for the wrong reason if the
+    // specific one had been registered first.
+    expect(reg.match("GET", "/items/count", "root")?.pluginName).toBe(
+      "@acme/one"
+    );
+    expect(reg.match("GET", "/items/42", "root")?.pluginName).toBe("@acme/two");
+  });
+
   it("lets two plugins keep the same path when neither is rooted", () => {
     // The control for the case above: the namespace is what separates them, so
     // this must NOT throw or the collision check is just refusing all reuse.

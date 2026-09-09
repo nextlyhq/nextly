@@ -60,6 +60,19 @@ export class PluginRouteRegistry {
   }
 
   /**
+   * How many segments of a pattern are literal rather than captures.
+   *
+   * The tie-break when more than one pattern matches. `/items/count` and
+   * `/items/:id` both answer `/items/count`, and without a rule the winner is
+   * whichever plugin registered first, which is registration order dressed up
+   * as routing. Preferring literals is what every router does, and it makes
+   * the pair unambiguous instead of merely ordered.
+   */
+  private static literalCount(segments: string[]): number {
+    return segments.filter(seg => !seg.startsWith(":")).length;
+  }
+
+  /**
    * Match an incoming (method, path) against registered routes of one mount.
    *
    * The mount is a REQUIRED argument rather than a search across both, because
@@ -74,6 +87,7 @@ export class PluginRouteRegistry {
     mount: "plugin" | "root"
   ): RouteMatch | null {
     const pathSegments = splitPath(path);
+    let best: { match: RouteMatch; literals: number } | null = null;
     for (const entry of this.routes) {
       if (entry.mount !== mount) continue;
       if (entry.method !== method) continue;
@@ -89,16 +103,23 @@ export class PluginRouteRegistry {
           break;
         }
       }
-      if (matched) {
-        return {
-          pluginName: entry.pluginName,
-          route: entry.route,
-          baseCtx: entry.baseCtx,
-          params,
+      if (!matched) continue;
+      const literals = PluginRouteRegistry.literalCount(entry.segments);
+      // Kept rather than returned: a later pattern may be more specific, and
+      // returning the first match is what made registration order the rule.
+      if (best === null || literals > best.literals) {
+        best = {
+          literals,
+          match: {
+            pluginName: entry.pluginName,
+            route: entry.route,
+            baseCtx: entry.baseCtx,
+            params,
+          },
         };
       }
     }
-    return null;
+    return best?.match ?? null;
   }
 
   list(): RegisteredRoute[] {

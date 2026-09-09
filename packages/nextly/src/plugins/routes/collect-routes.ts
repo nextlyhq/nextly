@@ -16,6 +16,20 @@ export interface CollectedRoute {
 }
 
 /**
+ * A path reduced to what decides whether two patterns answer the same URL.
+ *
+ * Every capture becomes one placeholder, so the NAME of a parameter stops
+ * mattering: two routes that differ only there are indistinguishable at
+ * request time and one of them would never be reached.
+ */
+function collisionShape(fullPath: string): string {
+  return fullPath
+    .split("/")
+    .map(segment => (segment.startsWith(":") ? ":" : segment))
+    .join("/");
+}
+
+/**
  * Pure fold of every ENABLED plugin's `contributes.routes` into namespaced,
  * collision-checked routes. Disabled plugins (`enabled: false`) skip
  * behavior — including routes — while their schema is still applied.
@@ -44,7 +58,12 @@ export function collectPluginRoutes(
         route.path,
         route.mount
       );
-      const key = `${route.method} ${fullPath}`;
+      // Keyed on the SHAPE, not the text. `/hooks/:id` and `/hooks/:slug` are
+      // different strings and the same URL, so an exact-string key let two
+      // plugins claim one address and left the winner to registration order.
+      // A literal still differs from a capture: `/items/count` beside
+      // `/items/:id` is an ordinary pair, and the matcher prefers the literal.
+      const key = `${route.method} ${collisionShape(fullPath)}`;
       const existingOwner = seen.get(key);
       if (existingOwner !== undefined) {
         throw routeCollisionError(route.method, fullPath, [
