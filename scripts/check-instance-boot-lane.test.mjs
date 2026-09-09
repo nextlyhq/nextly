@@ -10,7 +10,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   BOOT_BINDING,
+  integrationName,
   INTEGRATION_SUFFIX,
+  UNIT_LANE_SUFFIXES,
   classify,
   hasIntegrationLane,
   importsBootHelper,
@@ -101,6 +103,25 @@ import { describe, it } from "vitest";`)
     ).toBe(true);
   });
 
+  it("sees a boot reached through a namespace import", () => {
+    // `import * as testing from "..."` names only `testing` in the clause, so
+    // the property access is the fact that identifies the boot. Deciding it
+    // from the import would need the specifier list this deliberately avoids.
+    expect(
+      importsBootHelper(`import * as testing from "nextly/testing";
+const app = await testing.createTestNextly({});`)
+    ).toBe(true);
+  });
+
+  it("does NOT see a property access spelled inside a comment", () => {
+    // The control for the case above: it must still be the compiler deciding,
+    // not a substring of the source.
+    expect(
+      importsBootHelper(`// call testing.createTestNextly() to boot one
+import { describe } from "vitest";`)
+    ).toBe(false);
+  });
+
   it("reads a .tsx suite, which the unit lane also includes", () => {
     expect(
       importsBootHelper(
@@ -113,13 +134,51 @@ import { describe, it } from "vitest";`)
 
 describe("routing a boot to a lane", () => {
   const BOOT = `import { createTestNextly } from "../test-nextly";`;
+  /* A package that can actually run the integration suffix it is given. */
+  const LANE = {
+    "packages/a/package.json": JSON.stringify({
+      scripts: { "test:integration": "vitest run --config i.ts" },
+    }),
+  };
 
-  it("accepts a boot named for the integration lane", () => {
-    const files = { [`packages/a/src/x${INTEGRATION_SUFFIX}`]: BOOT };
-    const { misrouted, covered } = classify(Object.keys(files), reader(files));
+  it("accepts a boot named for the integration lane in a package that runs it", () => {
+    const files = { ...LANE, [`packages/a/src/x${INTEGRATION_SUFFIX}`]: BOOT };
+    const { misrouted, stranded, covered } = classify(
+      [`packages/a/src/x${INTEGRATION_SUFFIX}`],
+      reader(files)
+    );
 
     expect(misrouted).toEqual([]);
+    expect(stranded).toEqual([]);
     expect(covered).toHaveLength(1);
+  });
+
+  it("reports a correctly named boot whose package runs no integration lane", () => {
+    // The worse of the two failures, and the one a filename cannot see: the
+    // suite is not in a slower lane, it is in none, so it stops reporting and
+    // every job stays green.
+    const files = {
+      "packages/a/package.json": JSON.stringify({ scripts: { test: "vitest" } }),
+      [`packages/a/src/x${INTEGRATION_SUFFIX}`]: BOOT,
+    };
+    const { misrouted, stranded, covered } = classify(
+      [`packages/a/src/x${INTEGRATION_SUFFIX}`],
+      reader(files)
+    );
+
+    expect(stranded).toEqual([`packages/a/src/x${INTEGRATION_SUFFIX}`]);
+    expect(covered).toEqual([]);
+    expect(misrouted).toEqual([]);
+  });
+
+  it("reports a booting spec suite, which no integration config can ever collect", () => {
+    // The unit configs take `*.{test,spec}.{ts,tsx}`; every integration config
+    // takes `*.integration.test.ts` and nothing else. A booting `.spec.ts` is
+    // therefore unroutable under its own name rather than merely slow.
+    const files = { ...LANE, "packages/a/src/x.spec.ts": BOOT };
+    const { misrouted } = classify(["packages/a/src/x.spec.ts"], reader(files));
+
+    expect(misrouted).toEqual(["packages/a/src/x.spec.ts"]);
   });
 
   it("reports a boot named for the unit lane", () => {
@@ -142,17 +201,21 @@ describe("routing a boot to a lane", () => {
     // correctly or the parser stopped recognising boots at all. The caller
     // refuses the second, and can only tell them apart from this.
     const files = {
+      ...LANE,
       [`packages/a/src/x${INTEGRATION_SUFFIX}`]: BOOT,
       "packages/b/src/y.test.ts": `import { it } from "vitest";`,
     };
-    const { misrouted, covered } = classify(Object.keys(files), reader(files));
+    const { misrouted, covered } = classify(
+      [`packages/a/src/x${INTEGRATION_SUFFIX}`, "packages/b/src/y.test.ts"],
+      reader(files)
+    );
 
     expect(misrouted).toEqual([]);
     expect(covered).toEqual([`packages/a/src/x${INTEGRATION_SUFFIX}`]);
   });
 
   it("skips a listed file the disk cannot read rather than throwing", () => {
-    const files = { "packages/a/src/x.test.ts": BOOT };
+    const files = { ...LANE, "packages/a/src/x.test.ts": BOOT };
     const { misrouted } = classify(
       ["packages/a/src/x.test.ts", "packages/a/src/gone.test.ts"],
       reader(files)
@@ -191,10 +254,15 @@ describe("whether a rename would land the suite anywhere", () => {
 });
 
 describe("the population it judges", () => {
-  it("keeps test files and drops everything else", () => {
+  it("keeps every suffix the unit lane collects, and drops everything else", () => {
+    // `spec` is in the population because the unit configs take it; a scan that
+    // dropped it would call the repository clean while a boot sat in the unit
+    // lane under a name no integration config can collect.
     const listed = [
       "packages/a/src/x.test.ts",
       "packages/a/src/y.test.tsx",
+      "packages/a/src/s.spec.ts",
+      "packages/a/src/s2.spec.tsx",
       `packages/a/src/z${INTEGRATION_SUFFIX}`,
       "packages/a/src/index.ts",
       "packages/a/package.json",
@@ -204,8 +272,33 @@ describe("the population it judges", () => {
     expect(testFiles(".", () => listed)).toEqual([
       "packages/a/src/x.test.ts",
       "packages/a/src/y.test.tsx",
+      "packages/a/src/s.spec.ts",
+      "packages/a/src/s2.spec.tsx",
       `packages/a/src/z${INTEGRATION_SUFFIX}`,
     ]);
+  });
+
+  it("collects the suffixes the unit configs name", () => {
+    expect(UNIT_LANE_SUFFIXES).toEqual([
+      ".test.ts",
+      ".test.tsx",
+      ".spec.ts",
+      ".spec.tsx",
+    ]);
+  });
+
+  it("renames every unit suffix to the one suffix an integration config takes", () => {
+    // A `.spec.ts` renamed to a `.spec` form would still be collected by no
+    // integration config, so the advice has to cross the suffix families.
+    expect(integrationName("packages/a/src/x.test.ts")).toBe(
+      `packages/a/src/x${INTEGRATION_SUFFIX}`
+    );
+    expect(integrationName("packages/a/src/x.spec.ts")).toBe(
+      `packages/a/src/x${INTEGRATION_SUFFIX}`
+    );
+    expect(integrationName("packages/a/src/x.spec.tsx")).toBe(
+      `packages/a/src/x${INTEGRATION_SUFFIX}`
+    );
   });
 
   it("names the package a file belongs to", () => {

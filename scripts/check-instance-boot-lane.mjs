@@ -26,7 +26,15 @@
  * helper is imported under nine different specifiers - `nextly/testing`,
  * `@nextlyhq/plugin-sdk/testing`, and seven relative paths that differ only by
  * depth - so a specifier list would be a list of the ways a directory can be
- * reached, and a file one level deeper would fall out of the scan.
+ * reached, and a file one level deeper would fall out of the scan. A namespace
+ * import hides the binding from the import clause, so the property access
+ * `<ns>.createTestNextly` counts as well, and for the same reason: it is a fact
+ * about the name rather than about where the name came from.
+ *
+ * ⚠️ Being named for the lane is half of being in it. A package that declares
+ * no `test:integration` runs nothing matching the suffix, so a correctly named
+ * boot there is reported too: that suite is not slow, it is unrun, and green
+ * because of it.
  *
  * ⚠️ What this does not judge: a helper that boots an instance behind another
  * name. This names one binding because one binding is what the repository uses;
@@ -51,6 +59,23 @@ export const BOOT_BINDING = "createTestNextly";
 /** The suffix that routes a file to the integration lane. */
 export const INTEGRATION_SUFFIX = ".integration.test.ts";
 
+/*
+ * What the unit lane collects, which is the population that can be misrouted.
+ *
+ * `spec` is here because the unit configs take it - `src/**\/*.{test,spec}.{ts,tsx}`,
+ * and `src/**\/*.spec.ts` where the two are written out - while every
+ * integration config takes `*.integration.test.ts` and nothing else. A booting
+ * suite named `.spec.ts` is therefore not merely misrouted, it is unroutable
+ * under its current name, and a scan that skipped the suffix would call the
+ * repository clean while one sat in the unit lane.
+ */
+export const UNIT_LANE_SUFFIXES = [
+  ".test.ts",
+  ".test.tsx",
+  ".spec.ts",
+  ".spec.tsx",
+];
+
 /**
  * Every tracked test file, from git rather than a directory walk.
  *
@@ -66,7 +91,7 @@ export function testFiles(cwd, run = execFileSync) {
   return listed
     .split("\0")
     .filter(Boolean)
-    .filter(path => path.endsWith(".test.ts") || path.endsWith(".test.tsx"));
+    .filter(path => UNIT_LANE_SUFFIXES.some(suffix => path.endsWith(suffix)));
 }
 
 /**
@@ -85,6 +110,29 @@ export function importsBootHelper(source, fileName = "test.ts") {
     /* setParentNodes */ false,
     fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   );
+
+  /*
+   * A namespace import hides the binding from the import clause: `import * as
+   * testing from "..."` names only `testing`, and the helper is reached later
+   * as `testing.createTestNextly()`. Deciding that from the import alone would
+   * need a list of the modules the helper can live in, which is the specifier
+   * list this deliberately does not keep. The property access is the fact
+   * instead, and it is one the compiler reports, so a comment or a string
+   * spelling the same thing is still not a boot.
+   */
+  let reachedThroughNamespace = false;
+  const findPropertyAccess = node => {
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      node.name.text === BOOT_BINDING
+    ) {
+      reachedThroughNamespace = true;
+      return;
+    }
+    ts.forEachChild(node, findPropertyAccess);
+  };
+  ts.forEachChild(parsed, findPropertyAccess);
+  if (reachedThroughNamespace) return true;
 
   for (const statement of parsed.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
@@ -106,6 +154,17 @@ export function importsBootHelper(source, fileName = "test.ts") {
 }
 
 /** The package directory a file belongs to, as `packages/<name>`. */
+/**
+ * The name this file needs in order to be collected by the integration lane.
+ *
+ * Every unit-lane suffix maps to the one suffix an integration config takes, so
+ * a `.spec.ts` is renamed as far as `.integration.test.ts` rather than to a
+ * `.spec` form no config would collect.
+ */
+export function integrationName(path) {
+  return path.replace(/\.(test|spec)\.tsx?$/, INTEGRATION_SUFFIX);
+}
+
 export function packageOf(path) {
   const [, name] = path.split("/");
   return name ? `packages/${name}` : undefined;
@@ -137,6 +196,7 @@ export function hasIntegrationLane(packageDir, readManifest) {
  */
 export function classify(files, readSource) {
   const misrouted = [];
+  const stranded = [];
   const covered = [];
 
   for (const path of files) {
@@ -148,11 +208,28 @@ export function classify(files, readSource) {
     }
     if (!importsBootHelper(source, path)) continue;
 
-    if (path.endsWith(INTEGRATION_SUFFIX)) covered.push(path);
-    else misrouted.push(path);
+    if (!path.endsWith(INTEGRATION_SUFFIX)) {
+      misrouted.push(path);
+      continue;
+    }
+
+    /*
+     * The name is only half of being routed. A package that declares no
+     * `test:integration` runs nothing matching the suffix, so a correctly named
+     * boot there is not in a slower lane, it is in no lane: it stops reporting
+     * and every job stays green. That is the worse of the two failures, and
+     * judging the name alone would have called it the clean case.
+     */
+    const packageDir = packageOf(path);
+    if (packageDir && !hasIntegrationLane(packageDir, readSource)) {
+      stranded.push(path);
+      continue;
+    }
+
+    covered.push(path);
   }
 
-  return { misrouted, covered };
+  return { misrouted, stranded, covered };
 }
 
 const invokedDirectly =
@@ -170,7 +247,7 @@ if (invokedDirectly) {
   }
 
   const readSource = path => readFileSync(join(root, path), "utf8");
-  const { misrouted, covered } = classify(files, readSource);
+  const { misrouted, stranded, covered } = classify(files, readSource);
 
   // The control, before the verdict. Every file failing to parse, or the
   // binding being renamed upstream, produces an empty `misrouted` that reads
@@ -184,11 +261,22 @@ if (invokedDirectly) {
     process.exit(2);
   }
 
-  if (misrouted.length > 0) {
+  if (misrouted.length > 0 || stranded.length > 0) {
     console.error("check-instance-boot-lane: FAILED\n");
+
+    for (const path of stranded) {
+      console.error(
+        `  ${path}\n` +
+          `    is named for the integration lane, and ${packageOf(path)} declares ` +
+          "no `test:integration` script, so nothing runs it at all.\n" +
+          "    Give the package an integration config and script, or the suite is " +
+          "green because it never ran.\n"
+      );
+    }
+
     for (const path of misrouted) {
       const packageDir = packageOf(path);
-      const renamed = path.replace(/\.test\.tsx?$/, INTEGRATION_SUFFIX);
+      const renamed = integrationName(path);
       console.error(
         `  ${path}\n` +
           `    imports \`${BOOT_BINDING}\`, so it boots a real instance and needs ` +
@@ -211,9 +299,9 @@ if (invokedDirectly) {
   }
 
   console.log(
-    `check-instance-boot-lane: ok — ${covered.length} suite(s) that boot an ` +
-      `instance are named for the integration lane, out of ${files.length} test ` +
-      "file(s) scanned."
+    `check-instance-boot-lane: ok - ${covered.length} suite(s) that boot an ` +
+      `instance are named for the integration lane AND run by a package that ` +
+      `declares one, out of ${files.length} test file(s) scanned.`
   );
   // Said on the way past, so a reader taking this as proof of routing knows the
   // shape it did not judge.
