@@ -115,16 +115,32 @@ export const MAX_WALKABLE_ENTRIES = 1_000_000;
  * under more than one parent is.
  */
 export class ForestTooLargeError extends Error {
-  constructor(subject: string) {
-    super(
-      `${subject} reaches more than ${String(MAX_WALKABLE_ENTRIES)} entries ` +
-        `and cannot be measured: past that the walk is not affordable. A ` +
-        `forest this large for its object count holds a node placed under ` +
-        `more than one parent, which multiplies entries at every level.`
-    );
+  constructor(message: string) {
+    super(message);
     this.name = "ForestTooLargeError";
   }
 }
+
+/**
+ * The two ways a forest outruns a reader, stated together because the reader
+ * CANNOT tell them apart.
+ *
+ * The bound counts entries and never compares object identity, so a flat forest
+ * of a million distinct nodes reaches it exactly as a shared chain of
+ * twenty-one does. Naming only the sharing reads as a diagnosis rather than a
+ * possibility, and sends a reader hunting for a node under two parents in a
+ * document that has none — a repair that cannot succeed because there is
+ * nothing to find.
+ *
+ * Establishing WHICH one it is would mean holding every visited object to
+ * compare identity, which costs memory proportional to the forest on every
+ * ordinary call to pay for a sentence on the failing one. So both are named and
+ * neither is claimed.
+ */
+const WHY_TOO_LARGE =
+  `A forest reaches this either by genuinely holding that many nodes, or by ` +
+  `holding a node placed under more than one parent — which multiplies ` +
+  `entries at every level, so a few dozen objects can reach millions.`;
 
 /**
  * Visit the forest, refusing rather than answering from a partial walk.
@@ -148,7 +164,13 @@ function walkBounded(
     onEntry(entry.depth);
     return "descend";
   });
-  if (spent) throw new ForestTooLargeError(subject);
+  if (spent) {
+    throw new ForestTooLargeError(
+      `${subject} reaches more than ${String(MAX_WALKABLE_ENTRIES)} entries ` +
+        `and cannot be measured: past that the walk is not affordable. ` +
+        WHY_TOO_LARGE
+    );
+  }
 }
 
 /** Total node count across the forest, slots included. */
@@ -176,25 +198,40 @@ export function treeDepth(nodes: BlockNode[]): number {
  * Serialized size of a document in bytes (UTF-8 of its JSON form — the same
  * bytes that hit storage, so the cap measures what actually gets persisted).
  *
- * The forest is measured FIRST, and this is not belt-and-braces. `JSON.stringify`
- * expands a shared node object into a separate copy per path that reaches it,
- * so the string it builds grows with ENTRIES rather than with objects — and it
+ * `JSON.stringify` expands a shared node object into a separate copy per path
+ * that reaches it, so the string grows with ENTRIES rather than with objects and
  * does not degrade gracefully. Measured on this module's own helpers: 21 shared
- * objects produce 132 MB, and 23 raise `RangeError: Invalid string length`
- * from a document that is a few kilobytes in memory.
+ * objects produce 132 MB, and 23 raise `RangeError: Invalid string length` from
+ * a document that is a few kilobytes in memory. A native `RangeError` names a
+ * string length, which says nothing about the document and cannot be acted on —
+ * and it arrives from the one function whose whole job is to decide whether a
+ * document may be stored, so it lands where a caller is least able to read it.
  *
- * That error is the reason the guard runs before the serialization rather than
- * around it. A native `RangeError` escaping here names a string length, which
- * says nothing about the document and cannot be acted on; it also arrives from
- * the one function whose whole job is to decide whether a document may be
- * stored, so the failure lands where a caller is least able to interpret it.
+ * The refusal is taken FROM the serializer rather than predicted before it, and
+ * that is the whole design. A preflight walk answers a different question than
+ * the one this function asks: `walkForest` reaches `node.slots` by property
+ * access, so it sees inherited and non-enumerable slots and ignores `toJSON`,
+ * while `JSON.stringify` reads own enumerable properties and honours it.
+ * Measured with a node whose `slots` is non-enumerable: the document serializes
+ * to 95 bytes and a preflight walk refused it — a false refusal, on a gate,
+ * against a document that would have saved perfectly.
+ *
+ * Catching what the serializer actually raised cannot diverge from it, costs no
+ * second traversal, and refuses exactly the documents that cannot be measured.
  */
 export function documentBytes(doc: BlockDocument): number {
-  // Guarded at RUNTIME although the type says `BlockNode[]`, because a stored
-  // document arrives unvalidated and `walkForest` is written for exactly that.
-  // A document whose `nodes` is not a list has nothing to measure and is left
-  // to the serializer, which reports its own shape complaint.
-  const nodes = doc.nodes;
-  if (Array.isArray(nodes)) countNodes(nodes);
-  return new TextEncoder().encode(JSON.stringify(doc)).length;
+  try {
+    return new TextEncoder().encode(JSON.stringify(doc)).length;
+  } catch (error) {
+    // `RangeError` is the size failure specifically. A cycle raises TypeError
+    // and a getter that throws raises whatever it threw, so neither is caught
+    // here and neither is renamed into a size complaint it is not.
+    if (error instanceof RangeError) {
+      throw new ForestTooLargeError(
+        `this document cannot be measured: its JSON form is longer than a ` +
+          `string can hold. ${WHY_TOO_LARGE}`
+      );
+    }
+    throw error;
+  }
 }

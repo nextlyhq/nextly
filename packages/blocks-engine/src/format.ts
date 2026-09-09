@@ -54,6 +54,13 @@ export {
   MAX_DEPTH,
   MAX_NODES,
   documentBytes,
+  // What `documentBytes` REFUSES with, by the same rule as the types below: an
+  // entry point that exports a function without the error it throws leaves a
+  // consumer unable to tell that refusal from a defect of its own, or to name
+  // the threshold it hit, without reaching past this entry to the root — which
+  // is the coupling this parser-free entry exists to prevent.
+  ForestTooLargeError,
+  MAX_WALKABLE_ENTRIES,
 } from "./limits";
 
 export { measureBytes, surveyDocument } from "./measure-bytes";

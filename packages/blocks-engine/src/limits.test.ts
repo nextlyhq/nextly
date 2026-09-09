@@ -75,33 +75,90 @@ describe("a forest whose entries outrun its objects", () => {
     expect(() => treeDepth(sharedChain(OVER))).toThrow(ForestTooLargeError);
   });
 
-  it("refuses to SIZE one instead of raising a native string-length error", () => {
+  it("translates the serializer's size failure, and only that one", () => {
     /*
-     * `JSON.stringify` expands a shared node into a copy per path that reaches
-     * it, so the string grows with entries rather than objects and stops with
-     * `RangeError: Invalid string length` — an error naming a string length,
-     * from the one function that decides whether a document may be stored.
+     * The real trigger is a string longer than the engine can hold — 23 shared
+     * objects reach it — and building one costs half a gigabyte, which is not
+     * what a unit suite should spend to observe a translation. The FIXTURE
+     * raises the same error the serializer raises, from inside the same call,
+     * so the mechanism under test is exercised exactly.
      *
-     * The assertion names the type rather than merely requiring a throw:
-     * without it the RangeError this replaced would satisfy the test.
+     * The second half is what makes the first mean anything: a cycle raises
+     * `TypeError` and must pass THROUGH, because renaming an unrelated failure
+     * into a size complaint sends a reader to shrink a document that is fine.
      */
-    expect(() => documentBytes(page(sharedChain(OVER)))).toThrow(
+    const sizeFailure = {
+      id: "s",
+      type: "core/box",
+      version: 1,
+      props: {},
+      toJSON() {
+        throw new RangeError("Invalid string length");
+      },
+    } as unknown as BlockNode;
+    expect(() => documentBytes(page([sizeFailure]))).toThrow(
       ForestTooLargeError
     );
+    expect(() => documentBytes(page([sizeFailure]))).toThrow(
+      /longer than a string can hold/
+    );
+
+    const cyclic = { id: "c", type: "core/box", version: 1, props: {} } as {
+      self?: unknown;
+    } & BlockNode;
+    cyclic.self = cyclic;
     let raised: unknown;
     try {
-      documentBytes(page(sharedChain(OVER)));
+      documentBytes(page([cyclic]));
     } catch (error) {
       raised = error;
     }
-    expect(raised).toBeInstanceOf(ForestTooLargeError);
-    expect(raised).not.toBeInstanceOf(RangeError);
+    expect(raised).toBeInstanceOf(TypeError);
+    expect(raised).not.toBeInstanceOf(ForestTooLargeError);
   });
 
-  it("says what to look for, since the caller's own nodes are rarely the cause", () => {
-    // The message has to name the SHARING. "Too large" sends a reader to trim a
-    // document that is already small, which is the wrong repair.
+  it("offers both causes rather than diagnosing the one it cannot see", () => {
+    /*
+     * The walk counts entries and never compares identity, so it cannot tell a
+     * shared chain from a genuinely enormous flat forest. Naming only the
+     * sharing would send a reader hunting for a node under two parents in a
+     * document that has none — a repair that cannot succeed.
+     *
+     * Both halves are asserted: dropping either leaves a message that reads as
+     * a diagnosis of whichever survived.
+     */
     expect(() => countNodes(sharedChain(OVER))).toThrow(/more than one parent/);
+    expect(() => countNodes(sharedChain(OVER))).toThrow(
+      /genuinely holding that many nodes/
+    );
+  });
+
+  it("does not refuse a document the serializer would have measured", () => {
+    /*
+     * `walkForest` reaches `node.slots` by property access, so it sees a slot
+     * the serializer does not: `JSON.stringify` reads own enumerable properties
+     * only. Predicting the size from the walk refused this document — whose
+     * JSON is under a hundred bytes — which is a false refusal on the function
+     * deciding whether a document may be stored. Measuring what the serializer
+     * ACTUALLY produced cannot diverge from it.
+     */
+    const hidden = {
+      id: "h",
+      type: "core/box",
+      version: 1,
+      props: {},
+    } as unknown as BlockNode;
+    Object.defineProperty(hidden, "slots", {
+      value: { children: sharedChain(OVER) },
+      enumerable: false,
+    });
+
+    const bytes = documentBytes(page([hidden]));
+    expect(bytes).toBeGreaterThan(0);
+    expect(bytes).toBeLessThan(1_000);
+    // The control: the walk really does reach the hidden chain, so this is not
+    // passing because the fixture failed to build one.
+    expect(() => countNodes([hidden])).toThrow(ForestTooLargeError);
   });
 
   it("still answers for a shared forest UNDER the bound", () => {
