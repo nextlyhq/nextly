@@ -374,6 +374,59 @@ describe("the write-seam hook on submissions", () => {
     expect(out?.data).toEqual({ name: "Ada" });
   });
 
+  it("stamps a payload the move itself changed", async () => {
+    // Moving a submission re-projects its answers onto the new form's fields
+    // and can drop one that form does not declare. The stamp on `beforeUpdate`
+    // has already run by then and only marks a patch that arrived with `data`,
+    // so the visitor's stored answers changed with nothing saying who did it.
+    const otherForm = nextlyWith({
+      id: "form2",
+      fields: [
+        { id: "9", name: "name", type: "text", label: "Name", required: true },
+      ],
+    });
+    const out = await prepareSubmissionForWrite(
+      {
+        data: { form: "form2" },
+        operation: "update",
+        user: { id: "admin1" },
+        originalData: {
+          id: "sub1",
+          form: "form1",
+          data: { name: "Ada", email: "ada@example.com" },
+        },
+      },
+      formsSlug,
+      otherForm
+    );
+    expect(out?.data).toEqual({ name: "Ada" });
+    expect(out?.editedBy).toBe("admin1");
+    expect(out?.editedAt).toBeInstanceOf(Date);
+  });
+
+  it("does not stamp a derived payload that did not change", async () => {
+    // The control: a row leaving spam whose answers already satisfy the form is
+    // not an edit, and stamping it would put a name against a change nobody
+    // made.
+    const out = await prepareSubmissionForWrite(
+      {
+        data: { status: "new" },
+        operation: "update",
+        user: { id: "admin1" },
+        originalData: {
+          id: "sub1",
+          form: "form1",
+          status: "spam",
+          data: { name: "Ada", email: "ada@example.com" },
+        },
+      },
+      formsSlug,
+      withForm
+    );
+    expect(out?.editedAt).toBeUndefined();
+    expect(out?.editedBy).toBeUndefined();
+  });
+
   it("refuses an update whose replacement payload the schema rejects", async () => {
     await expect(
       prepareSubmissionForWrite(
@@ -489,13 +542,13 @@ describe("the write-seam hook on submissions", () => {
 
   it("hands the marks to the first taker only", async () => {
     // The mechanism under the test above, stated directly.
-    const payload = { name: "bot" };
-    await asPluginSubmission({ keepAsEvidence: true, payload }, () => {
-      expect(takeSubmissionMarks(payload)?.keepAsEvidence).toBe(true);
-      expect(takeSubmissionMarks(payload)).toBeUndefined();
+    const writing = { form: "form1", status: "spam", payload: { name: "bot" } };
+    await asPluginSubmission({ keepAsEvidence: true, writing }, () => {
+      expect(takeSubmissionMarks(writing)?.keepAsEvidence).toBe(true);
+      expect(takeSubmissionMarks(writing)).toBeUndefined();
     });
     // The control: outside a marked call there is nothing to take.
-    expect(takeSubmissionMarks(payload)).toBeUndefined();
+    expect(takeSubmissionMarks(writing)).toBeUndefined();
   });
 
   it("does not hand the evidence exception to another row's write", async () => {
@@ -505,7 +558,10 @@ describe("the write-seam hook on submissions", () => {
     // the wrong row and left the evidence row to be refused.
     const evidence = { name: "<b>bot</b>", email: "not-an-email" };
     await asPluginSubmission(
-      { keepAsEvidence: true, payload: evidence },
+      {
+        keepAsEvidence: true,
+        writing: { form: "form1", status: "spam", payload: evidence },
+      },
       async () => {
         await expect(
           prepareSubmissionForWrite(
@@ -521,8 +577,23 @@ describe("the write-seam hook on submissions", () => {
           )
         ).rejects.toThrow();
 
+        // Same answers, different form: content alone would have matched.
+        await expect(
+          prepareSubmissionForWrite(
+            {
+              data: { form: "form1", data: evidence, status: "new" },
+              operation: "create",
+            },
+            formsSlug,
+            withForm
+          )
+        ).rejects.toThrow();
+
         const kept = await prepareSubmissionForWrite(
-          { data: { form: "form1", data: evidence }, operation: "create" },
+          {
+            data: { form: "form1", data: evidence, status: "spam" },
+            operation: "create",
+          },
           formsSlug,
           withForm
         );

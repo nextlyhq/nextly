@@ -311,7 +311,11 @@ export async function submitForm(
       {
         keepAsEvidence: isContentSpam,
         form: { id: form.id, fields: form.fields },
-        payload: storedData,
+        writing: {
+          form: form.id,
+          status: submissionData.status,
+          payload: storedData,
+        },
       },
       () =>
         collections.createEntry(

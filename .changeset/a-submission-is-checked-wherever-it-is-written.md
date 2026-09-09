@@ -36,4 +36,8 @@ Stripping markup no longer removes text that only looks like a tag. A `<` opens 
 
 A submission flagged as spam is stored without being validated so a false positive stays reviewable, and that exception now ends where it should: it names the row it was granted for rather than the next write in the call, and marking a row "Not spam" checks the payload it carries against the form.
 
+Moving a submission to another form re-projects its answers onto that form's fields, and that change is stamped as an edit, because the visitor's stored answers changed and nothing else records it.
+
+A parent-form read that fails is no longer reported as a validation error. Only a form that is not there is; a pool timeout or a throwing hook propagates, so a server fault stops arriving as the writer's mistake.
+
 Spam protection stays on `submitForm`, where a honeypot and a rate limit are facts about a request rather than about a row. The built-in submit route does not reach it, and the guide now says so.

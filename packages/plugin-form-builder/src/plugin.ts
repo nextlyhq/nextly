@@ -26,6 +26,8 @@ import {
   asSubmissionDocuments,
 } from "./document-shapes";
 import {
+  sameSubmittedPayload,
+  type SubmissionOriginMarks,
   takeSubmissionMarks,
   prepareSubmission,
 } from "./handlers/prepare-submission";
@@ -957,6 +959,7 @@ export async function prepareSubmissionForWrite(
     data?: Record<string, unknown>;
     operation?: string;
     originalData?: Record<string, unknown>;
+    user?: { id?: string };
   };
   const submission = ctx.data;
   if (!submission || typeof submission !== "object") return ctx.data;
@@ -978,14 +981,59 @@ export async function prepareSubmissionForWrite(
 
   // Taken once, for this payload, and not before here: an early return above
   // would spend a mark on a write that never used it.
-  const marks = takeSubmissionMarks(incoming);
+  const marks = takeSubmissionMarks({
+    form: formId,
+    status: typeof submission.status === "string" ? submission.status : "",
+    payload: incoming,
+  });
 
-  // The handler that already read this form hands it over rather than have the
-  // write read it a second time. That read is not free: `findEntryById` runs
-  // the forms collection's `afterRead` hooks, and this plugin registers one
-  // that COUNTs the form's submissions, so a write was paying for a count of
-  // every write before it. Only ever the form this row names, because the id
-  // has to match.
+  const fields = await fieldsToCheckAgainst(marks, formsSlug, formId, nextly);
+
+  // Content spam keeps its evidence. The handler stores a honeypot or reCAPTCHA
+  // hit flagged rather than dropping it, so a false positive stays recoverable,
+  // and requiring it to be valid would throw away the thing being reviewed. It
+  // is still transformed and sanitized.
+  // Leniency is a fact about the CALL, not about the row. Reading it off
+  // `status` made it caller-controlled: the collection grants public create and
+  // nothing restricts that field, so anyone could post `status: "spam"` and
+  // switch validation off for their own row.
+  const prepared = prepareSubmission({
+    data: incoming,
+    fields,
+    validate: marks?.keepAsEvidence !== true,
+  });
+
+  if (prepared.validationErrors) {
+    throw NextlyError.validation({
+      errors: Object.entries(prepared.validationErrors).map(
+        ([path, message]) => ({ path, code: "INVALID", message })
+      ),
+    });
+  }
+
+  ctx.data = { ...submission, data: prepared.data };
+  if (ctx.operation !== "create" && submission.data === undefined) {
+    stampDerivedEdit(ctx.data, ctx.user, incoming, prepared.data);
+  }
+  return ctx.data;
+}
+
+/**
+ * The fields a submission has to satisfy.
+ *
+ * The handler that already read this form hands it over rather than have the
+ * write read it a second time. That read is not free: `findEntryById` runs the
+ * forms collection's `afterRead` hooks, and this plugin registers one that
+ * COUNTs the form's submissions, so a write was paying for a count of every
+ * write before it. Only ever the form this row names, because the id has to
+ * match.
+ */
+async function fieldsToCheckAgainst(
+  marks: SubmissionOriginMarks | undefined,
+  formsSlug: string,
+  formId: string,
+  nextly: NextlyInstance
+): Promise<AnyFormField[]> {
   const handedOver = marks?.form?.id === formId ? marks.form : null;
   const form = handedOver ?? (await fetchParentForm(formsSlug, formId, nextly));
   if (!form || !Array.isArray(form.fields)) {
@@ -1000,31 +1048,28 @@ export async function prepareSubmissionForWrite(
       ],
     });
   }
+  return form.fields as AnyFormField[];
+}
 
-  // Content spam keeps its evidence. The handler stores a honeypot or reCAPTCHA
-  // hit flagged rather than dropping it, so a false positive stays recoverable,
-  // and requiring it to be valid would throw away the thing being reviewed. It
-  // is still transformed and sanitized.
-  // Leniency is a fact about the CALL, not about the row. Reading it off
-  // `status` made it caller-controlled: the collection grants public create and
-  // nothing restricts that field, so anyone could post `status: "spam"` and
-  // switch validation off for their own row.
-  const prepared = prepareSubmission({
-    data: incoming,
-    fields: form.fields as AnyFormField[],
-    validate: marks?.keepAsEvidence !== true,
-  });
-
-  if (prepared.validationErrors) {
-    throw NextlyError.validation({
-      errors: Object.entries(prepared.validationErrors).map(
-        ([path, message]) => ({ path, code: "INVALID", message })
-      ),
-    });
-  }
-
-  ctx.data = { ...submission, data: prepared.data };
-  return ctx.data;
+/**
+ * Record a payload change this hook derived, since nothing else will.
+ *
+ * A patch that did not carry a payload but changed one is still an edit of what
+ * the visitor sent: moving a submission to another form re-projects its answers
+ * onto that form's fields and can drop one it does not declare. The stamp on
+ * `beforeUpdate` has already run by then and only marks a patch that arrived
+ * with `data`, so without this the stored answers change with nothing in the
+ * row saying who changed them.
+ */
+function stampDerivedEdit(
+  row: Record<string, unknown>,
+  user: { id?: string } | undefined,
+  before: Record<string, unknown>,
+  after: Record<string, unknown>
+): void {
+  if (sameSubmittedPayload(before, after)) return;
+  row.editedAt = new Date();
+  row.editedBy = user?.id ?? null;
 }
 
 async function handleSubmissionCreated(
@@ -1185,7 +1230,14 @@ export async function fetchParentForm(
     );
     return form;
   } catch (err) {
-    nextly.logger.error?.("Form Builder: failed to fetch form", {
+    // A form that is not there is an answer, and the caller decides what a
+    // submission naming no form means. Anything else is the read itself
+    // failing, and it is rethrown: swallowing a pool timeout or a throwing
+    // `afterRead` hook turned a server fault into "this form could not be
+    // read", so the writer was told their submission was invalid, with a status
+    // that says not to retry.
+    if (!NextlyError.isNotFound(err)) throw err;
+    nextly.logger.error?.("Form Builder: form not found", {
       formId,
       error: err instanceof Error ? err.message : String(err),
     });

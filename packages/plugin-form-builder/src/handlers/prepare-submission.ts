@@ -137,19 +137,35 @@ export interface SubmissionOriginMarks {
    */
   form?: Record<string, unknown>;
   /**
-   * The payload the handler is writing, so the exception can name its row.
+   * The row this exception is for, so no other write can take it.
    *
    * Spending the marks on the first write in the scope is not enough on its
-   * own: a hook registered before this plugin runs ahead of its handler, and if
-   * that hook writes a submission of its own the nested row reaches the seam
-   * first. It would take an exception granted to somebody else, and the row the
-   * exception was for would then be validated and refused.
-   *
-   * Compared by content rather than by reference, which was measured rather
-   * than assumed: core rebuilds both the row and its payload on the way to the
-   * hook, so neither arrives as the object the handler passed.
+   * own: a hook registered before this plugin runs ahead of its handler, and a
+   * submission that hook writes reaches the seam first. It would take an
+   * exception granted to another row, and the row it was granted for would then
+   * be validated and refused.
    */
-  payload?: Record<string, unknown>;
+  writing?: IntendedWrite;
+}
+
+/**
+ * The row a marked call is writing, as much of it as tells that row apart.
+ *
+ * The answers alone were not enough: a hook that copies them onto a different
+ * form, or writes them back under a different status, matches on content while
+ * being a different row.
+ *
+ * Compared by content rather than by reference, which was measured rather than
+ * assumed: core rebuilds both the row and its payload on the way to the hook,
+ * so neither arrives as the object the handler passed.
+ */
+export interface IntendedWrite {
+  /** The parent form's id. */
+  form: string;
+  /** The status the handler is storing, which is what the exception is about. */
+  status: string;
+  /** The visitor's answers. */
+  payload: Record<string, unknown>;
 }
 
 /** One marked write, and whether it has already been made. */
@@ -184,7 +200,7 @@ function sameValue(left: unknown, right: unknown): boolean {
 }
 
 /** Whether two submitted payloads say the same thing. */
-function samePayload(
+export function sameSubmittedPayload(
   granted: Record<string, unknown>,
   incoming: Record<string, unknown>
 ): boolean {
@@ -206,15 +222,23 @@ function samePayload(
  * cannot be waved through on the back of the first.
  */
 export function takeSubmissionMarks(
-  payload: Record<string, unknown>
+  writing: IntendedWrite
 ): SubmissionOriginMarks | undefined {
   const scope = submissionOrigin.getStore();
   if (!scope || scope.spent) return undefined;
-  if (scope.marks.payload && !samePayload(scope.marks.payload, payload)) {
-    return undefined;
-  }
+  const granted = scope.marks.writing;
+  if (granted && !sameWrite(granted, writing)) return undefined;
   scope.spent = true;
   return scope.marks;
+}
+
+/** Whether two writes are the same row. */
+function sameWrite(granted: IntendedWrite, writing: IntendedWrite): boolean {
+  return (
+    granted.form === writing.form &&
+    granted.status === writing.status &&
+    sameSubmittedPayload(granted.payload, writing.payload)
+  );
 }
 
 /** A submission ready to store, or the reasons it is not. */
