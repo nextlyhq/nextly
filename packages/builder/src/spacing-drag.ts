@@ -42,6 +42,7 @@ import { DEFAULT_ACTIVATION_PX } from "./canvas-drag";
 import type { Scale } from "./geometry";
 import type { SideOrientation } from "./side-orientation";
 import type { SpacingBox, SpacingSide } from "./spacing-bands";
+import { measurementOf } from "./style-numeric";
 import type { LogicalSide } from "./style-sides";
 import type { StyleAddress } from "./style-values";
 
@@ -278,8 +279,32 @@ function isTokenRef(value: StyleValue): value is { $token: string } {
   );
 }
 
-/** A plain pixel length, with the number it carries. */
-const PX = /^\s*(-?\d+(?:\.\d+)?)px\s*$/;
+/**
+ * The pixel number a stored value holds, or `undefined`.
+ *
+ * DERIVED from `style-numeric`'s grammar rather than matched with a pattern of
+ * this module's own. A second parser here omitted a leading `+`, a leading-dot
+ * fraction and an exponent — all of them valid CSS the catalog and the compiler
+ * accept — so `+10px`, `.5px` and `1e2px` rendered normally while the handle
+ * beside them refused to move, with nothing on screen to explain it. The
+ * numeric affordance in the inspector already asks this question; asking it the
+ * same way is what keeps the two surfaces agreeing about which values are
+ * draggable.
+ */
+function pixelsOf(value: StyleValue): number | undefined {
+  const measured = measurementOf(value);
+  if (measured === undefined) return undefined;
+  /*
+   * A stored NUMBER carries no unit, and is read as pixels. `StyleValue` admits
+   * one at a length position, and the alternative — refusing it — would make a
+   * side undraggable for holding a quantity this gesture can express perfectly
+   * well. Every other unit is refused: see the docblock above on why a `rem` or
+   * a percentage must not be quietly replaced with the pixels it resolves to.
+   */
+  return measured.unit === "px" || measured.unit === ""
+    ? measured.number
+    : undefined;
+}
 
 /**
  * The pixel value a drag on this side begins at, or the reason it may not.
@@ -331,14 +356,9 @@ export function spacingStart(
       reason: "This side is set to a token. Change it in the Style panel.",
     };
   }
-  if (typeof stored === "number" && Number.isFinite(stored)) {
-    return { ok: true, px: Math.round(stored) };
-  }
+  const px = pixelsOf(stored);
+  if (px !== undefined) return { ok: true, px: Math.round(px) };
   if (typeof stored === "string") {
-    const match = PX.exec(stored);
-    if (match?.[1] !== undefined) {
-      return { ok: true, px: Math.round(Number(match[1])) };
-    }
     return {
       ok: false,
       reason: `This side is set to ${stored.trim()}. Change it in the Style panel.`,

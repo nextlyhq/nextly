@@ -59,9 +59,10 @@
 import { nodeClassNames, walkNodes } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { CHROME_ATTRIBUTE } from "./canvas";
+import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
+import { canvasPointerPoints, canvasRootFrom } from "./geometry-dom";
 import type { SideOrientation } from "./side-orientation";
 import type { EdgeLengths, SpacingBand, SpacingSide } from "./spacing-bands";
 import {
@@ -127,6 +128,8 @@ interface Gesture {
   readonly band: SpacingBand;
   /** Every side of this box that has a usable starting value. */
   readonly starts: ReadonlyMap<SpacingSide, number>;
+  /** Why each remaining side has none. See `commit`. */
+  readonly refusals: ReadonlyMap<SpacingSide, string>;
   readonly originX: number;
   readonly originY: number;
   active: boolean;
@@ -181,6 +184,51 @@ function committedMessage(
     return `${handleLabel(band)} ${String(only.px)} pixels`;
   }
   return `${band.box} ${writes.map(write => String(write.px)).join(", ")} pixels`;
+}
+
+/**
+ * Only the sides this gesture actually MOVED.
+ *
+ * A drag that wanders and comes back, or one whose travel rounds to no pixels,
+ * would otherwise write every side the value it already has — which the value
+ * layer turns into a real op wherever the node held nothing of its own, because
+ * `undefined` and `10px` are a genuine difference to it. The author's reward for
+ * a gesture they abandoned would be an undo entry and four explicit overrides
+ * they never asked for.
+ *
+ * Filtered per SIDE rather than on the delta as a whole, so a Shift drag that
+ * pushes one padding against its floor still writes the three that moved.
+ */
+function movedWrites(
+  writes: readonly SpacingWrite[],
+  starts: ReadonlyMap<SpacingSide, number>
+): readonly SpacingWrite[] {
+  return writes.filter(write => write.px !== starts.get(write.side));
+}
+
+/**
+ * Why this gesture cannot be written, or `undefined` when it can.
+ *
+ * A side the gesture ASKED for and cannot write refuses the whole thing. Shift
+ * and Alt promise every side, or the pair across; writing only the subset that
+ * happens to be plain pixels would honour that promise partially and silently —
+ * an author holding Shift over a box whose left margin is a token would get
+ * three sides moved and nothing to say the fourth stayed put.
+ *
+ * Asked per COMMIT rather than at the press, because the modifier is read live:
+ * which sides are being requested changes under the hand, so which refusals
+ * matter changes with it.
+ */
+function blockingRefusal(
+  band: SpacingBand,
+  refusals: ReadonlyMap<SpacingSide, string>,
+  modifiers: SpacingModifiers
+): string | undefined {
+  for (const side of spacingSidesFor(band.side, modifiers)) {
+    const reason = refusals.get(side);
+    if (reason !== undefined) return reason;
+  }
+  return undefined;
 }
 
 /** What is held down, from whichever event is in hand. */
@@ -276,10 +324,13 @@ export function SpacingHandles({
   const startsFor = React.useCallback(
     (
       band: SpacingBand
-    ): { starts: Map<SpacingSide, number>; refusal?: string } => {
+    ): {
+      starts: Map<SpacingSide, number>;
+      refusals: Map<SpacingSide, string>;
+    } => {
       const used = band.box === "margin" ? subject.margin : subject.padding;
       const starts = new Map<SpacingSide, number>();
-      let refusal: string | undefined;
+      const refusals = new Map<SpacingSide, string>();
       for (const side of ["top", "right", "bottom", "left"] as const) {
         const address = addressFor(band, side);
         if (address === undefined) continue;
@@ -287,9 +338,9 @@ export function SpacingHandles({
           node === undefined ? undefined : readStyleValue(node.styles, address);
         const start = spacingStart(stored, used[side]);
         if (start.ok) starts.set(side, start.px);
-        else if (side === band.side) refusal = start.reason;
+        else refusals.set(side, start.reason);
       }
-      return refusal === undefined ? { starts } : { starts, refusal };
+      return { starts, refusals };
     },
     [addressFor, node, subject.margin, subject.padding]
   );
@@ -323,9 +374,15 @@ export function SpacingHandles({
     (
       band: SpacingBand,
       starts: ReadonlyMap<SpacingSide, number>,
+      refusals: ReadonlyMap<SpacingSide, string>,
       delta: number,
       modifiers: SpacingModifiers
     ): void => {
+      const blocked = blockingRefusal(band, refusals, modifiers);
+      if (blocked !== undefined) {
+        setMessage(blocked);
+        return;
+      }
       /*
        * Only the sides this gesture actually MOVED.
        *
@@ -340,10 +397,10 @@ export function SpacingHandles({
        * that pushes one padding against its floor still writes the three sides
        * that moved.
        */
-      const writes = valuesFor(band, starts, delta, modifiers).filter(
-        write => write.px !== starts.get(write.side)
+      const writes = movedWrites(
+        valuesFor(band, starts, delta, modifiers),
+        starts
       );
-      if (writes.length === 0) return;
       const first = writes[0];
       if (first === undefined) return;
       const target = targetFor(first.address);
@@ -424,7 +481,16 @@ export function SpacingHandles({
     (event: React.PointerEvent<HTMLElement>, band: SpacingBand): void => {
       // Only the primary button starts an edit; a context-menu press must not.
       if (event.button !== 0) return;
-      const { starts, refusal } = startsFor(band);
+      /*
+       * One gesture at a time. A second finger, or a pen alongside a touch,
+       * also arrives with `button === 0`: accepted, it would replace the live
+       * gesture's band and starts while the first pointer's document listeners
+       * stayed installed, so the first pointer would go on driving — writing
+       * the second gesture's side — and one listener set would leak.
+       */
+      if (gesture.current !== null) return;
+      const { starts, refusals } = startsFor(band);
+      const refusal = refusals.get(band.side);
       if (refusal !== undefined) {
         setMessage(refusal);
         return;
@@ -438,15 +504,61 @@ export function SpacingHandles({
       const originX = event.clientX;
       const originY = event.clientY;
 
-      const travelled = (moved: PointerEvent): { dx: number; dy: number } => ({
-        dx: moved.clientX - originX,
-        dy: moved.clientY - originY,
-      });
+      /*
+       * The canvas root, so pointer travel can be expressed in the SAME space
+       * the bands were measured in.
+       */
+      const root = canvasRootFrom(host, CANVAS_ROOT_CLASS);
+      const origin =
+        root === null ? null : canvasPointerPoints(originX, originY, root);
+
+      /**
+       * How far the pointer has moved, in both spaces, because the two answer
+       * different questions.
+       *
+       * `hand` is CLIENT pixels and decides the activation threshold: whether a
+       * press was meant as a drag is a property of the hand, and measured in
+       * canvas pixels it would shrink with the zoom.
+       *
+       * `canvas` is the root's own CONTENT space and is what the VALUE comes
+       * from. The two differ by the root's painted scale, which `renderedScale`
+       * deliberately stops below — the bands are children of the root and are
+       * drawn through its transform already, so their rectangles need no such
+       * factor. A pointer does: its coordinates come from the screen with the
+       * root's zoom baked in. Left unconverted, a canvas painted at half size
+       * moves the value half as far as the handle under the hand — and it is
+       * invisible at 100%, which is where a drag is usually tried.
+       *
+       * Converted through `canvasPointerPoints`, which is what `canvas-drag`
+       * aims with. A subtraction of its own here would be a second mapping,
+       * free to disagree with the one every other gesture on this canvas uses.
+       */
+      const travelled = (
+        moved: PointerEvent
+      ): {
+        readonly hand: { dx: number; dy: number };
+        readonly canvas: { dx: number; dy: number };
+      } => {
+        const hand = {
+          dx: moved.clientX - originX,
+          dy: moved.clientY - originY,
+        };
+        if (root === null || origin === null) return { hand, canvas: hand };
+        const now = canvasPointerPoints(moved.clientX, moved.clientY, root);
+        return {
+          hand,
+          canvas: {
+            dx: now.content.x - origin.content.x,
+            dy: now.content.y - origin.content.y,
+          },
+        };
+      };
 
       const onMove = (moved: PointerEvent): void => {
         const live = gesture.current;
         if (live === null || moved.pointerId !== pointerId) return;
-        const { dx, dy } = travelled(moved);
+        const { hand, canvas } = travelled(moved);
+        const { dx, dy } = hand;
         if (!live.active) {
           /*
            * CLIENT pixels, matching the canvas: the threshold separates a click
@@ -473,7 +585,7 @@ export function SpacingHandles({
         const delta = spacingDelta(
           live.band.box,
           live.band.side,
-          { dx, dy },
+          canvas,
           subject.scales
         );
         if (delta === undefined) return;
@@ -487,11 +599,17 @@ export function SpacingHandles({
           const delta = spacingDelta(
             live.band.box,
             live.band.side,
-            travelled(lifted),
+            travelled(lifted).canvas,
             subject.scales
           );
           if (delta !== undefined) {
-            commit(live.band, live.starts, delta, modifiersOf(lifted));
+            commit(
+              live.band,
+              live.starts,
+              live.refusals,
+              delta,
+              modifiersOf(lifted)
+            );
           }
         }
         endGesture();
@@ -501,15 +619,34 @@ export function SpacingHandles({
         endGesture();
       };
 
+      /*
+       * Escape, on the DOCUMENT, for the life of the gesture.
+       *
+       * The handle's own `onKeyDown` cannot be relied on to see it: the press
+       * calls `preventDefault`, which suppresses the browser's focus action, so
+       * a drag begun on a handle that was not already focused leaves focus
+       * wherever it was. Escape then goes to that element, the gesture is never
+       * cancelled, and releasing still commits the edit the author was trying
+       * to abandon.
+       */
+      const onEscape = (pressed: KeyboardEvent): void => {
+        if (pressed.key !== "Escape" || gesture.current === null) return;
+        pressed.preventDefault();
+        endGesture();
+        setMessage("Spacing drag cancelled.");
+      };
+
       const detach = (): void => {
         owner.removeEventListener("pointermove", onMove);
         owner.removeEventListener("pointerup", onUp);
         owner.removeEventListener("pointercancel", onCancel);
+        owner.removeEventListener("keydown", onEscape);
       };
 
       gesture.current = {
         band,
         starts,
+        refusals,
         originX,
         originY,
         active: false,
@@ -520,6 +657,7 @@ export function SpacingHandles({
       owner.addEventListener("pointermove", onMove);
       owner.addEventListener("pointerup", onUp);
       owner.addEventListener("pointercancel", onCancel);
+      owner.addEventListener("keydown", onEscape);
     },
     [commit, endGesture, showPreview, startsFor, subject.scales]
   );
@@ -534,13 +672,10 @@ export function SpacingHandles({
 
   const onKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLElement>, band: SpacingBand): void => {
-      // Escape abandons a drag in flight, leaving the document untouched.
-      if (event.key === "Escape" && gesture.current !== null) {
-        event.preventDefault();
-        endGesture();
-        setMessage("Spacing drag cancelled.");
-        return;
-      }
+      /*
+       * Escape is handled on the document for the life of a gesture, not here:
+       * a drag started on an unfocused handle never gives this element the key.
+       */
       /*
        * The direction lives in `spacing-drag.ts` and runs through the same sign
        * table the pointer does, so the two paths cannot come to disagree about
@@ -551,14 +686,10 @@ export function SpacingHandles({
       if (delta === undefined) return;
 
       event.preventDefault();
-      const { starts, refusal } = startsFor(band);
-      if (refusal !== undefined) {
-        setMessage(refusal);
-        return;
-      }
-      commit(band, starts, delta, modifiersOf(event));
+      const { starts, refusals } = startsFor(band);
+      commit(band, starts, refusals, delta, modifiersOf(event));
     },
-    [commit, endGesture, startsFor]
+    [commit, startsFor]
   );
 
   /*
@@ -592,8 +723,6 @@ export function SpacingHandles({
     <>
       {bands.map(band => {
         const rect = handleRect(band);
-        const used = band.box === "margin" ? subject.margin : subject.padding;
-        const vertical = band.side === "top" || band.side === "bottom";
         return (
           <div
             key={`${band.box}-${band.side}`}
@@ -606,19 +735,26 @@ export function SpacingHandles({
              * must not be: they take no pointer events at all.
              */
             {...{ [CHROME_ATTRIBUTE]: "" }}
-            role="slider"
-            tabIndex={0}
-            aria-label={handleLabel(band)}
-            aria-orientation={vertical ? "vertical" : "horizontal"}
-            aria-valuenow={used[band.side]}
-            aria-valuetext={`${band.label} pixels`}
             /*
-             * Padding has a floor and a margin does not, so only one of them can
-             * honestly state a minimum. No maximum is stated for either: any
-             * number put here would be invented, and a slider claiming a ceiling
-             * the catalog does not have misreports the control's own range.
+             * Deliberately NOT `role="slider"`.
+             *
+             * A slider's `aria-valuemin` and `aria-valuemax` default to 0 and
+             * 100 when omitted, so the role asserts a range whether or not one
+             * is given. This control has no such range: the catalog lets a
+             * margin go negative and neither box has a ceiling, so every
+             * negative margin and every value above 100 would be reported to
+             * assistive technology as outside its own control's bounds. Stating
+             * bounds instead would mean inventing two numbers the catalog does
+             * not have, which misreports the control in the other direction.
+             *
+             * So the value goes in the NAME, where it needs no range to be
+             * meaningful and is read on focus, and every change is announced
+             * through the live region below. A focusable element with an
+             * accurate name and a spoken result describes this control honestly;
+             * a slider with a fabricated range does not.
              */
-            {...(band.box === "padding" ? { "aria-valuemin": 0 } : {})}
+            tabIndex={0}
+            aria-label={`${handleLabel(band)}, ${band.label} pixels`}
             /*
              * Only the press is bound here. Everything after it is followed on
              * the document, because a pointer that has travelled far enough to

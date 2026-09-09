@@ -14,6 +14,7 @@ import {
   spacingValue,
   SPACING_ACTIVATION_PX,
 } from "./spacing-drag";
+import { measurementOf } from "./style-numeric";
 import type { LogicalSide } from "./style-sides";
 
 const SIDES: readonly SpacingSide[] = ["top", "right", "bottom", "left"];
@@ -286,6 +287,33 @@ describe("spacingStart", () => {
 
   it("accepts a bare number", () => {
     expect(spacingStart(16, 0)).toEqual({ ok: true, px: 16 });
+  });
+
+  /*
+   * A side is draggable exactly when the inspector could STEP it, because both
+   * ask `measurementOf`. The set is what matters here, not its members: a
+   * private pattern is free to differ in both directions, and this one did —
+   * it took `1.50px`, which `style-numeric` declines, while refusing `+10px`,
+   * which it also declines. Two arbitrary policies, disagreeing.
+   *
+   * `measurementOfText` refuses a spelling that does not reproduce itself —
+   * `+5`, `.5`, `1.50`, `05` — deliberately, and says why: composing one would
+   * write a value the author never typed. A drag inherits that rather than
+   * arguing with it, so a value the inspector will not step is one the handle
+   * will not drag, and the reason an author is given is the same on both.
+   */
+  it("is draggable exactly where the shared numeric grammar allows", () => {
+    for (const text of ["10px", "-8px", "1.5px", "0px"]) {
+      expect(spacingStart(text, 0).ok, text).toBe(
+        measurementOf(text)?.unit === "px"
+      );
+    }
+    // The spellings that module declines, refused here for its reason rather
+    // than by a pattern of this one's.
+    for (const text of ["+10px", ".5px", "1e2px", "1.50px", "05px"]) {
+      expect(measurementOf(text), text).toBeUndefined();
+      expect(spacingStart(text, 0).ok, text).toBe(false);
+    }
   });
 
   /*

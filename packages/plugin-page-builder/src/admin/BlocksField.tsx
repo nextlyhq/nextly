@@ -2203,7 +2203,16 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const spacingScrub = useMemo(
     () => ({
-      address: { state: styleState, breakpoint: editedBreakpoint },
+      /*
+       * The SHOWN state, not the preserved one. `shownStyleStateFor` forces the
+       * canvas and the inspector back to `base` whenever the state switcher is
+       * off screen — a multi-selection, or a node the inspector cannot edit —
+       * while keeping the author's previous choice for when it returns. A handle
+       * reading the preserved value would preview the base spacing the canvas is
+       * showing and commit under the hidden state, so the change an author just
+       * dragged would vanish on release.
+       */
+      address: { state: shownStyleState, breakpoint: editedBreakpoint },
       breakpoints: canvasRender.styleContext.breakpoints,
       ...(canvasPreviewContainer === undefined
         ? {}
@@ -2222,7 +2231,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
       canvasRender.styleContext.scope,
       canvasRender.styleContext.tokenPrefix,
       editedBreakpoint,
-      styleState,
+      shownStyleState,
       stylePolicy,
     ]
   );

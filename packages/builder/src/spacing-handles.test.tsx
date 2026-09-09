@@ -32,6 +32,7 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
+import { CANVAS_ROOT_CLASS } from "./canvas";
 import { useEditorState, type EditorState } from "./editor-state";
 import type { SpacingBand } from "./spacing-bands";
 import {
@@ -152,8 +153,15 @@ function mount(
   );
 }
 
+/**
+ * One handle, addressed by its accessible NAME.
+ *
+ * The name carries the value, because the control has no honest ARIA range to
+ * put one in: a slider's bounds default to 0 and 100, and this control admits
+ * negative margins and values well above a hundred.
+ */
 function handle(label: string): HTMLElement {
-  return screen.getByRole("slider", { name: label });
+  return screen.getByLabelText(new RegExp(`^${label},`));
 }
 
 /** The node as the editor currently holds it. */
@@ -609,6 +617,54 @@ describe("where the pointer goes once the drag starts", () => {
   });
 });
 
+describe("a side the gesture cannot write", () => {
+  /** A document whose LEFT margin is a token, with the others plain. */
+  const tokenOnTheLeft = () =>
+    documentWith({
+      base: { base: { margin: { inlineStart: { $token: "space-4" } } } },
+    });
+
+  /*
+   * Shift promises every side. Writing the three that happen to be plain pixels
+   * honours that partially and silently: the undo depth, the op count and the
+   * grabbed side's own value all look right, and nothing says the fourth stayed
+   * where it was.
+   */
+  it("refuses the whole gesture when Shift reaches a side it cannot write", () => {
+    mount([band("margin", "top", "10")], subjectWith(), tokenOnTheLeft());
+    drag(handle("top margin"), [{ x: 0, y: -20 }], { shiftKey: true });
+
+    expect(live?.undoDepth).toBe(0);
+    expect(stored("margin", "blockStart")).toBeUndefined();
+    expect(stored("margin", "inlineStart")).toEqual({ $token: "space-4" });
+    expect(screen.getByRole("status").textContent).toMatch(/token/i);
+  });
+
+  /*
+   * And still allows the gesture that does not reach it. The refusal is about
+   * the sides ASKED for, not about the box carrying an awkward value somewhere.
+   */
+  it("allows a gesture whose sides it can all write", () => {
+    mount([band("margin", "top", "10")], subjectWith(), tokenOnTheLeft());
+    drag(handle("top margin"), [{ x: 0, y: -20 }], { altKey: true });
+
+    expect(stored("margin", "blockStart")).toBe("30px");
+    expect(stored("margin", "blockEnd")).toBe("30px");
+    expect(stored("margin", "inlineStart")).toEqual({ $token: "space-4" });
+  });
+
+  it("refuses on the keyboard for the same reason", () => {
+    mount([band("margin", "top", "10")], subjectWith(), tokenOnTheLeft());
+    act(() => {
+      fireEvent.keyDown(handle("top margin"), {
+        key: "ArrowUp",
+        shiftKey: true,
+      });
+    });
+    expect(live?.undoDepth).toBe(0);
+  });
+});
+
 describe("the gesture's edges", () => {
   it("does nothing for a press that never passes the threshold", () => {
     mount([band("margin", "top", "10")]);
@@ -682,6 +738,151 @@ describe("the gesture's edges", () => {
   });
 });
 
+describe("the gesture, when the pointer is not the only thing happening", () => {
+  /*
+   * The press calls `preventDefault`, which suppresses the browser's focus
+   * action — so a drag begun on a handle that was not already focused leaves
+   * focus elsewhere, and Escape never reaches the handle's own key handler.
+   * Dispatched on the BODY here, which is where it would land.
+   */
+  it("cancels on Escape even when the handle never took focus", () => {
+    mount([band("margin", "top", "10")]);
+    act(() => {
+      fireEvent.pointerDown(handle("top margin"), {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    act(() => {
+      fireEvent.pointerMove(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -30,
+      });
+    });
+    expect(document.activeElement).not.toBe(handle("top margin"));
+
+    act(() => {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+    });
+    act(() => {
+      fireEvent.pointerUp(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -30,
+      });
+    });
+
+    expect(live?.undoDepth).toBe(0);
+    expect(stored("margin", "blockStart")).toBeUndefined();
+  });
+
+  /*
+   * A second finger, or a pen beside a touch, also arrives with `button === 0`.
+   * Accepted, it would replace the live gesture's band and starts while the
+   * first pointer's listeners stayed installed — so the first pointer would go
+   * on driving, writing the second gesture's side.
+   */
+  it("ignores a second pointer while one gesture is live", () => {
+    mount([band("margin", "top", "10"), band("padding", "left", "4")]);
+    act(() => {
+      fireEvent.pointerDown(handle("top margin"), {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    act(() => {
+      fireEvent.pointerDown(handle("left padding"), {
+        button: 0,
+        pointerId: 2,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    // The FIRST pointer finishes its own gesture, on its own side.
+    act(() => {
+      fireEvent.pointerMove(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+    act(() => {
+      fireEvent.pointerUp(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+
+    expect(stored("margin", "blockStart")).toBe("30px");
+    expect(stored("padding", "inlineStart")).toBeUndefined();
+    expect(live?.undoDepth).toBe(1);
+  });
+});
+
+describe("a canvas painted at a zoom", () => {
+  /**
+   * Mount the handles inside a canvas root painted at half size.
+   *
+   * `paintedScale` reads `offsetWidth` against the measured rectangle, and jsdom
+   * supplies neither — so both are stubbed. That makes this a test about the
+   * CONVERSION rather than about layout: what is asserted is that pointer travel
+   * is put through the canvas's own mapping before it becomes a value, not that
+   * jsdom laid anything out.
+   */
+  function mountScaled(bands: readonly SpacingBand[]): void {
+    const { container } = render(
+      <div className={CANVAS_ROOT_CLASS}>
+        <Harness
+          bands={bands}
+          subject={subjectWith()}
+          context={BASE}
+          initial={documentWith()}
+        />
+      </div>
+    );
+    const root = container.querySelector(`.${CANVAS_ROOT_CLASS}`);
+    if (root === null) throw new Error("no canvas root");
+    Object.defineProperty(root, "offsetWidth", { value: 1000 });
+    Object.defineProperty(root, "offsetHeight", { value: 1000 });
+    root.getBoundingClientRect = () =>
+      ({ x: 0, y: 0, width: 500, height: 500, top: 0, left: 0 }) as DOMRect;
+  }
+
+  /*
+   * The band rectangles need no zoom factor — they are children of the root and
+   * are drawn through its transform already, which is why `renderedScale` stops
+   * below it. The POINTER does: its coordinates come from the screen. Left
+   * unconverted a half-size canvas moves the value half as far as the handle
+   * under the hand, and it is invisible at 100% zoom, which is where a drag is
+   * usually tried.
+   */
+  it("moves the value by the canvas distance, not the screen distance", () => {
+    mountScaled([band("margin", "top", "10")]);
+    drag(handle("top margin"), [{ x: 0, y: -10 }]);
+    // Ten pixels of hand on a half-size canvas is twenty pixels of page.
+    expect(stored("margin", "blockStart")).toBe("30px");
+  });
+
+  /*
+   * The THRESHOLD stays in client pixels. Whether a press was meant as a drag is
+   * a property of the hand; converted into canvas pixels it would shrink with
+   * the zoom, and a zoomed-out editor would start drags on a click.
+   */
+  it("still measures the activation threshold against the hand", () => {
+    mountScaled([band("margin", "top", "10")]);
+    // Three client pixels is below the four-pixel threshold, and would be six
+    // canvas pixels if the threshold were measured after the conversion.
+    drag(handle("top margin"), [{ x: 0, y: -3 }]);
+    expect(live?.undoDepth).toBe(0);
+  });
+});
+
 describe("what the handle exposes", () => {
   it("is focusable and names its side and box", () => {
     mount([band("margin", "top", "10"), band("padding", "left", "4")]);
@@ -699,10 +900,34 @@ describe("what the handle exposes", () => {
     expect(handle("top margin").closest("[aria-hidden='true']")).toBeNull();
   });
 
-  it("reports the current value, and a floor only where one exists", () => {
+  /*
+   * The value is in the NAME, and no ARIA range is claimed. `role="slider"`
+   * would default `aria-valuemin`/`aria-valuemax` to 0 and 100 whether or not
+   * they are given, so every negative margin and every value over a hundred —
+   * both of which the catalog allows — would be reported as outside the
+   * control's own bounds. Stating bounds instead would mean inventing two
+   * numbers the catalog does not have.
+   */
+  it("carries its value in the accessible name", () => {
     mount([band("margin", "top", "10"), band("padding", "left", "4")]);
-    expect(handle("top margin").getAttribute("aria-valuenow")).toBe("10");
-    expect(handle("top margin").getAttribute("aria-valuemin")).toBeNull();
-    expect(handle("left padding").getAttribute("aria-valuemin")).toBe("0");
+    expect(handle("top margin").getAttribute("aria-label")).toBe(
+      "top margin, 10 pixels"
+    );
+    expect(handle("left padding").getAttribute("aria-label")).toBe(
+      "left padding, 4 pixels"
+    );
+  });
+
+  it("claims no range it cannot honour", () => {
+    mount([band("margin", "top", "-12")]);
+    const element = handle("top margin");
+    expect(element.getAttribute("role")).toBeNull();
+    for (const attribute of [
+      "aria-valuenow",
+      "aria-valuemin",
+      "aria-valuemax",
+    ]) {
+      expect(element.getAttribute(attribute), attribute).toBeNull();
+    }
   });
 });
