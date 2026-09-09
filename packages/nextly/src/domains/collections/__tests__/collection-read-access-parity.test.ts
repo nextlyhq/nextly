@@ -68,6 +68,31 @@ const user = { id: "user-1", roles: ["editor"] };
  * what makes the assertion about the QUERY rather than about a call the service
  * made on the way there.
  */
+/**
+ * Every string the built condition carries — identifiers and bound values.
+ *
+ * A localized member does not compile to a main-table column, so
+ * {@link columnsIn} cannot see it: it becomes an EXISTS against the companion,
+ * naming that table and binding the rule's value. Those strings are what
+ * distinguishes a predicate that was APPLIED from one that was silently
+ * dropped, and a mock database returning fixed rows cannot tell the two apart
+ * on the response alone.
+ */
+function literalsIn(node: unknown, found = new Set<string>()): Set<string> {
+  if (typeof node === "string") {
+    found.add(node);
+    return found;
+  }
+  if (Array.isArray(node)) {
+    for (const child of node) literalsIn(child, found);
+    return found;
+  }
+  if (node && typeof node === "object") {
+    for (const child of Object.values(node)) literalsIn(child, found);
+  }
+  return found;
+}
+
 function columnsIn(node: unknown, found = new Set<symbol>()): Set<symbol> {
   if (typeof node === "symbol") {
     found.add(node);
@@ -382,6 +407,16 @@ describe("read paths narrow by the same stored read rule", () => {
       // here is the two paths answering differently for one rule.
       expect(result.success).toBe(true);
       expect(result.statusCode).toBe(200);
+
+      // Admitting the read is only half of it. The mock database returns
+      // `selectData.rows` without evaluating any SQL, so an implementation that
+      // silently DROPPED the localized member would answer 200 here too — and
+      // would return exactly the rows the rule excludes. So the predicate is
+      // read off the query that was built: the companion table it filters
+      // through, and the value the rule bound.
+      const built = literalsIn(whereCalls()[0]);
+      expect(built).toContain("posts_locales");
+      expect(built).toContain("emea");
     });
 
     it("listEntries admits it too, which is the control", async () => {

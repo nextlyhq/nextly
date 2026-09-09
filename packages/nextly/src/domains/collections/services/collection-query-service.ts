@@ -3466,8 +3466,12 @@ export class CollectionQueryService extends BaseService {
       // answering 403 here and returning rows there, which is the divergence
       // this service exists to not have.
       //
-      // Derived once and reused by the overlay and the relationship expansion
-      // below, so the language cannot drift between them.
+      // BOTH are reused below — the chain by the overlays and the relationship
+      // expansion, the companion by the three overlays that would otherwise
+      // load it again. `loadCompanionSchema` fetches metadata BEFORE it
+      // consults its cache, so each of those is a query rather than a lookup,
+      // and resolving here without passing it on would have added them to
+      // every localized read by id.
       const { localeChain, companion } = await this.localeScope(params);
       // Translated through the shared builder, so a multi-member or
       // non-`equals` predicate binds here exactly as it binds a listing, and a
@@ -3577,7 +3581,7 @@ export class CollectionQueryService extends BaseService {
             params.collectionName,
             [entry as Record<string, unknown>],
             localeChain,
-            undefined,
+            companion,
             statusFilter?.values ?? null // i18n M6: per-locale published filter
           )
       );
@@ -3590,7 +3594,7 @@ export class CollectionQueryService extends BaseService {
             params.collectionName,
             [entry as Record<string, unknown>],
             params.locale,
-            undefined,
+            companion,
             statusFilter?.values ?? null // i18n M6: per-locale published filter
           )
       );
@@ -3603,7 +3607,7 @@ export class CollectionQueryService extends BaseService {
             this.populateTranslationMeta(
               params.collectionName,
               [entry as Record<string, unknown>],
-              undefined,
+              companion,
               statusFilter?.values ?? null // i18n M6: per-locale published filter
             )
         );

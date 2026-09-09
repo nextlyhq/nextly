@@ -881,19 +881,53 @@ describe("CollectionEntryService — Query Contracts", () => {
       );
     });
 
-    it("should sanitize related rows over the assembled response", async () => {
+    it("should sanitize a related row a hook wrote a denied field back onto", async () => {
       selectData.rows = [createSampleEntry({ id: "entry-1" })];
 
-      await service.getEntry({
+      // The scenario the pass exists for, rather than a spy on the pass. A code
+      // hook reintroduces a denied field onto a related row after that row was
+      // first projected; only a sanitization running AFTER the hook can remove
+      // it again.
+      mockHookRegistry.execute.mockImplementation(
+        (phase: string, ctx: { data?: Record<string, unknown> }) => {
+          if (phase === "afterRead" && ctx?.data) {
+            ctx.data.author = { id: "user-1", secret: "leaked" };
+          }
+          return Promise.resolve(undefined);
+        }
+      );
+
+      // The authoritative pass, doing what the real one does to the rows it is
+      // handed. A double that returns `undefined` cannot distinguish a pipeline
+      // that runs it from one that does not, which is what this replaces.
+      mockRelationshipService.reprojectRelatedRows.mockImplementation(
+        (rows: unknown) => {
+          for (const doc of Array.isArray(rows) ? rows : [rows]) {
+            const author = (doc as { author?: Record<string, unknown> })
+              ?.author;
+            if (author) delete author.secret;
+          }
+          return Promise.resolve(undefined);
+        }
+      );
+
+      const result = await service.getEntry({
         collectionName: "posts",
         entryId: "entry-1",
       });
 
-      // The authoritative pass the shared pipeline runs after every source hook
-      // phase. A path that skips it returns a denied field a hook wrote back
-      // onto a related row.
-      expect(mockRelationshipService.reprojectRelatedRows).toHaveBeenCalled();
-      expect(mockRelationshipService.finalizeRelatedRows).toHaveBeenCalled();
+      const author = (
+        result.data as { author?: Record<string, unknown> } | null
+      )?.author;
+
+      // The positive control, and it carries the whole test: without it
+      // `secret` is `undefined` because the hook never reached the document,
+      // which is indistinguishable from the field having been removed.
+      expect(author).toBeDefined();
+      expect(author?.id).toBe("user-1");
+      // Removed by the pass that runs after the hook. A pipeline that skips it,
+      // or runs it before the hook, returns the denied value to the caller.
+      expect(author?.secret).toBeUndefined();
     });
 
     it("should apply field selection to the returned document", async () => {
