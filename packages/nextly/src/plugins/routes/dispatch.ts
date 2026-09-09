@@ -1,6 +1,7 @@
 import { buildErrorResponse } from "../../api/error-response";
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { applySessionCacheHeaders } from "../../api/response-shapes";
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import {
   isErrorResponse,
   requireAuthentication,
@@ -60,7 +61,10 @@ function toErrorResponse(req: Request, err: unknown): Response {
 async function resolvePluginRouteAuth(
   req: Request,
   route: PluginRoute
-): Promise<{ user: AuthUser | null } | { error: NextlyError }> {
+): Promise<
+  | { user: AuthUser | null; authenticatedScope?: AuthenticatedScope }
+  | { error: NextlyError }
+> {
   if (route.public === true) return { user: null };
 
   // requirePermission already enforces authentication, so the permission-gated
@@ -78,7 +82,16 @@ async function resolvePluginRouteAuth(
     email: authResult.userEmail ?? "",
     name: authResult.userName ?? null,
   };
-  return { user };
+  // An API key's own grants travel beside the owner it names. `user` carries
+  // the owner, so a service that resolves permissions from `user.id` reaches
+  // the owner's roles — which is how a viewer-scoped key minted by a
+  // super-admin came to be judged as a super-admin on this path. A session
+  // caller carries no scope and keeps resolving the normal way.
+  const authenticatedScope =
+    authResult.authMethod === "api-key"
+      ? { actorType: "apiKey" as const, permissions: authResult.permissions }
+      : undefined;
+  return { user, authenticatedScope };
 }
 
 function permissionArgs(slug: string): [string, string] {
@@ -158,6 +171,7 @@ export async function runPluginRoute(
   const ctx: PluginRouteContext = {
     ...matched.baseCtx,
     user: auth.user,
+    authenticatedScope: auth.authenticatedScope,
     params: matched.params,
   };
 
