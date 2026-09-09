@@ -8,6 +8,7 @@ import {
   spacingAddress,
   spacingCssValue,
   spacingDelta,
+  spacingGrowsOutward,
   spacingKeyDelta,
   spacingSidesFor,
   spacingStart,
@@ -365,6 +366,81 @@ describe("spacingValue", () => {
 
   it("lets a margin go negative, which the catalog allows", () => {
     expect(spacingValue(4, -40, "margin")).toBe(-36);
+  });
+});
+
+describe("which way a band thickens", () => {
+  /*
+   * A margin lies outside the border box and never moves it — growing one
+   * pushes the neighbour — so it always thickens away from the block, and a
+   * negative one, laid inside the border edge, always inward. Structural.
+   */
+  it("is structural for a margin", () => {
+    expect(spacingGrowsOutward("margin", false, false)).toBe(true);
+    expect(spacingGrowsOutward("margin", false, true)).toBe(true);
+    expect(spacingGrowsOutward("margin", true, false)).toBe(false);
+  });
+
+  /*
+   * A padding is NOT structural, which is the whole finding. Measured in
+   * Chromium: on a block whose height fits its content the border edge moves
+   * outward and the content edge stays; with a fixed height the content edge
+   * moves inward and the border edge stays. So the answer comes from the
+   * element, and this only carries it.
+   */
+  it("takes the measured answer for a padding", () => {
+    expect(spacingGrowsOutward("padding", false, true)).toBe(true);
+    expect(spacingGrowsOutward("padding", false, false)).toBe(false);
+  });
+});
+
+describe("a padding whose block grows outward", () => {
+  /*
+   * The reported defect. On an ordinary auto-height block, increasing
+   * `padding-bottom` moves the BORDER edge down and leaves the content edge
+   * where it was — so the band thickens downward and dragging down must
+   * increase. Assuming the fixed-height model inverted it: the author dragged
+   * down and the value fell while the block grew away from the pointer.
+   */
+  it("grows a bottom padding when the pointer moves DOWN", () => {
+    expect(
+      spacingDelta("padding", "bottom", { dx: 0, dy: 10 }, UNSCALED, true)
+    ).toBe(10);
+  });
+
+  it("still grows a fixed-height block's bottom padding moving UP", () => {
+    expect(
+      spacingDelta("padding", "bottom", { dx: 0, dy: -10 }, UNSCALED, false)
+    ).toBe(10);
+  });
+
+  it("grows a right padding when the pointer moves RIGHT on an auto block", () => {
+    expect(
+      spacingDelta("padding", "right", { dx: 10, dy: 0 }, UNSCALED, true)
+    ).toBe(10);
+  });
+
+  /*
+   * Top and left were already right and must stay so. Measured: on an auto
+   * block, padding-top moves the CONTENT edge down and leaves the border edge
+   * pinned by flow — the inner-edge model — so these read `false`.
+   */
+  it("leaves top and left alone, which the measurement already agreed with", () => {
+    expect(
+      spacingDelta("padding", "top", { dx: 0, dy: 10 }, UNSCALED, false)
+    ).toBe(10);
+    expect(
+      spacingDelta("padding", "left", { dx: 10, dy: 0 }, UNSCALED, false)
+    ).toBe(10);
+  });
+
+  it("carries the same answer to the keyboard", () => {
+    // Up means more on every handle, whichever edge responds.
+    expect(spacingKeyDelta("ArrowUp", "padding", "bottom", true)).toBe(1);
+    expect(spacingKeyDelta("ArrowUp", "padding", "bottom", false)).toBe(1);
+    // And the spatial arrows follow the measured edge.
+    expect(spacingKeyDelta("ArrowRight", "padding", "right", true)).toBe(1);
+    expect(spacingKeyDelta("ArrowLeft", "padding", "right", false)).toBe(1);
   });
 });
 

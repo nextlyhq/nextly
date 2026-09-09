@@ -253,6 +253,38 @@ export function canvasContentPoint(
  * not recognise is therefore accepted, `static`, `relative` and `absolute`
  * included.
  */
+/**
+ * How one element's border box responds to a temporary style, in viewport
+ * coordinates.
+ *
+ * Here rather than beside its caller because this module is the ONE door a
+ * rectangle enters this package through, and `geometry-ownership.test.ts`
+ * enforces it: a second reader is correct about its own question and disagrees
+ * with this one about the shared one. The caller supplies the change and its
+ * exact undo; this reads either side of it and hands back both boxes.
+ *
+ * SYNCHRONOUS throughout, which is what makes it safe against a rendered node.
+ * The write, both reads and the undo happen in one task, so no frame is painted
+ * with the change applied and no `ResizeObserver` is delivered a size that
+ * differs from the one it last reported.
+ *
+ * @param element - the element to measure
+ * @param apply - makes the temporary change
+ * @param undo - puts the element back exactly as it was
+ * @returns its border box before and after the change
+ */
+export function boxAcross(
+  element: Element,
+  apply: () => void,
+  undo: () => void
+): { readonly before: DOMRect; readonly after: DOMRect } {
+  const before = element.getBoundingClientRect();
+  apply();
+  const after = element.getBoundingClientRect();
+  undo();
+  return { before, after };
+}
+
 export function viewportPositioned(element: Element): boolean {
   const view = element.ownerDocument.defaultView;
   if (view === null) return false;

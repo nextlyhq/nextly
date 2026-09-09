@@ -86,6 +86,7 @@ import {
   viewportPositioned,
   type RenderedScale,
 } from "./geometry-dom";
+import { paddingRespondsOutward } from "./padding-response";
 import { orientationOfElement, type SideOrientation } from "./side-orientation";
 import {
   applicableEdges,
@@ -96,6 +97,7 @@ import {
   type EdgeApplicability,
   type EdgeLengths,
   type SpacingBand,
+  type SpacingSide,
 } from "./spacing-bands";
 import {
   SpacingHandles,
@@ -491,6 +493,36 @@ export function SpacingOverlay({
    * them — a drag scaled by one reading against bands drawn from another.
    */
   const [subject, setSubject] = React.useState<SpacingSubject | null>(null);
+  /**
+   * Whether the handles are holding a gesture that has not been released.
+   *
+   * A preview can make its own block undescribable — a margin can push it
+   * partly behind an `overflow: hidden` ancestor, a padding can bring on a
+   * classic scrollbar — and the measurement that follows then legitimately has
+   * no bands to draw. Clearing the subject there unmounts the handles mid-drag:
+   * the listeners detach, the preview disappears, and the gesture ends without
+   * committing and without saying anything. The author sees the drag evaporate.
+   *
+   * So the SUBJECT survives while a gesture is live. The bands still go, which
+   * is honest — nothing is measurable to report — but the control the pointer
+   * is holding stays until it is let go.
+   */
+  const gestureLive = React.useRef(false);
+  /**
+   * Which padding edge responds, remembered per node and side.
+   *
+   * The probe writes to the rendered element, and the canvas watches its
+   * subtree for exactly that — so an unmemoised probe would answer, be observed,
+   * re-measure, and probe again forever. A cache HIT performs no mutation at
+   * all, which is what makes the loop terminate: the first pass probes, the
+   * observation it causes re-measures once, and that pass reads the cache and
+   * mutates nothing.
+   *
+   * Dropped whenever the document changes, because an edit is the thing that can
+   * turn an auto height into a fixed one. It is not keyed on geometry: a block
+   * can gain a definite size without changing size at all.
+   */
+  const responds = React.useRef(new Map<string, boolean>());
   /*
    * How far the layer may paint outside itself, in pixels.
    *
@@ -500,6 +532,15 @@ export function SpacingOverlay({
   const [escape, setEscape] = React.useState(0);
 
   const { document, selectedId } = editor;
+
+  /*
+   * The probe cache is dropped on every edit, because an edit is the thing that
+   * can turn an auto height into a fixed one. Not keyed on geometry: a block can
+   * gain a definite size without changing size at all.
+   */
+  React.useEffect(() => {
+    responds.current.clear();
+  }, [document]);
 
   /*
    * Handles are drawn only for a SINGLE selection.
@@ -531,9 +572,11 @@ export function SpacingOverlay({
       measured: SpacingSubject | null = null
     ): void => {
       setBands(current => (sameBands(current, next) ? current : next));
-      setSubject(current =>
-        sameSubject(current, measured) ? current : measured
-      );
+      setSubject(current => {
+        // Never dropped out from under a live gesture. See `gestureLive`.
+        if (measured === null && gestureLive.current) return current;
+        return sameSubject(current, measured) ? current : measured;
+      });
       setEscape(
         next.length === 0 || layerBox === undefined
           ? 0
@@ -615,6 +658,20 @@ export function SpacingOverlay({
      * It fills the root, so the root's content rectangle IS the layer's, and
      * asking for it separately would be a second answer to one question.
      */
+    /** This node's answer for one side, probed once and then remembered. */
+    const outwardFor = (side: SpacingSide): boolean => {
+      const key = `${selectedId}\u0000${side}`;
+      const known = responds.current.get(key);
+      if (known !== undefined) return known;
+      const realm = block.ownerDocument.defaultView;
+      const answer =
+        realm !== null && block instanceof realm.HTMLElement
+          ? paddingRespondsOutward(block, side)
+          : false;
+      responds.current.set(key, answer);
+      return answer;
+    };
+
     const layerBox = canvasContentRect(root, root);
     apply(
       spacingBands({
@@ -651,6 +708,18 @@ export function SpacingOverlay({
          * left-to-right one must not collapse into one answer.
          */
         orientation: orientationOfElement(block),
+        /*
+         * ASKED of the element, once per node and side. Which edge of a padding
+         * band moves depends on whether the block's size along that axis is
+         * decided by its content, and that is not something the stored styles
+         * can answer — see `padding-response.ts`.
+         */
+        paddingOutward: {
+          top: outwardFor("top"),
+          right: outwardFor("right"),
+          bottom: outwardFor("bottom"),
+          left: outwardFor("left"),
+        },
       }
     );
   }, [selectedId]);
@@ -752,6 +821,11 @@ export function SpacingOverlay({
            * the scrub preview lives in that layer.
            */
           onPreviewChange={measure}
+          /*
+           * So a measurement that finds nothing to draw cannot unmount the
+           * control the pointer is holding. See `gestureLive`.
+           */
+          onGestureChange={held => (gestureLive.current = held)}
         />
       )}
     </div>

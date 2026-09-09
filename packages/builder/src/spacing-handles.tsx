@@ -76,6 +76,7 @@ import {
   spacingAddress,
   spacingCssValue,
   spacingDelta,
+  spacingGrowsOutward,
   spacingKeyDelta,
   spacingSidesFor,
   spacingStart,
@@ -111,6 +112,16 @@ export interface SpacingSubject {
    * the opposite side of every right-to-left block.
    */
   readonly orientation: SideOrientation | undefined;
+  /**
+   * Whether each padding side's OUTER edge is the one that moves.
+   *
+   * Measured from the element rather than assumed, because it depends on the
+   * block's sizing model: on a block whose height fits its content the border
+   * edge moves outward, and on one with a fixed height the content edge moves
+   * inward. See `padding-response.ts`. A handle placed on the wrong edge sits
+   * still while the block grows away from it, and the drag runs backwards.
+   */
+  readonly paddingOutward: Readonly<Record<SpacingSide, boolean>>;
 }
 
 /** The tier a scrub writes to, and what the canvas compiled it with. */
@@ -141,6 +152,16 @@ export interface SpacingHandlesProps {
    * slides under a band and a value chip that stay where the gesture started.
    */
   readonly onPreviewChange?: () => void;
+  /**
+   * Whether a gesture is in flight, so the host can keep this mounted.
+   *
+   * A preview can make its own block undescribable, and the measurement that
+   * follows then has nothing to draw. Unmounting on that removes the control the
+   * pointer is holding: the listeners detach, the preview goes, and the drag
+   * ends without committing and without a word. The host keeps the subject
+   * alive while this is true.
+   */
+  readonly onGestureChange?: (held: boolean) => void;
 }
 
 /** How thick a handle's hit area is, in canvas pixels. */
@@ -186,10 +207,10 @@ interface Gesture {
  * that is follows from the same table `handleRect` uses, read the other way
  * round.
  */
-function collapsed(band: SpacingBand): SpacingBand {
-  const { rect, side, box, negative } = band;
+function collapsed(band: SpacingBand, outward: boolean): SpacingBand {
+  const { rect, side } = band;
   const far = side === "bottom" || side === "right";
-  const atMax = far === (box === "margin" && !negative);
+  const atMax = far === outward;
   const vertical = side === "top" || side === "bottom";
   // The moving edge has met the fixed one, so the band has no extent left.
   const anchored = atMax
@@ -226,10 +247,14 @@ function applied(editor: EditorState, result: StyleWrite): string | undefined {
 }
 
 /** Whether two bands would put their handles on the very same pixels. */
-function sameEdge(one: SpacingBand, other: SpacingBand): boolean {
+function sameEdge(
+  one: SpacingBand,
+  other: SpacingBand,
+  outwardOf: (band: SpacingBand) => boolean
+): boolean {
   if (one.side !== other.side) return false;
-  const a = handleRect(one);
-  const b = handleRect(other);
+  const a = handleRect(one, outwardOf(one));
+  const b = handleRect(other, outwardOf(other));
   return a.x === b.x && a.y === b.y;
 }
 
@@ -240,20 +265,16 @@ function sameEdge(one: SpacingBand, other: SpacingBand): boolean {
  * thickness INTO the band — never out of it, so the control stays over the
  * space it edits.
  */
-function handleRect(band: SpacingBand, nudged = false): Rect {
-  const { rect, side, box, negative } = band;
+function handleRect(band: SpacingBand, outward: boolean, nudged = false): Rect {
+  const { rect, side } = band;
   const far = side === "bottom" || side === "right";
   /*
-   * The edge that moves when the value grows: away from the block for a margin,
-   * toward its middle for a padding. See `spacingDelta` for the same table.
-   *
-   * A NEGATIVE margin inverts it, and `spacingBands` is where that comes from:
-   * such a band is laid INSIDE the border edge, because that is where the space
-   * it removes is, so growing the value extends it further in rather than
-   * further out. Ignoring the flag puts a negative top margin's handle on the
-   * border edge, which is the one edge of that band that never moves.
+   * The edge that MOVES when the value grows, which is where the control
+   * belongs. `outward` says which one that is, and it is not a property of the
+   * box alone: a margin always thickens away from the block and a negative one
+   * always inward, but a padding depends on the block's sizing model and is
+   * measured. See `spacingGrowsOutward` and `padding-response.ts`.
    */
-  const outward = box === "margin" && !negative;
   const atMax = far === outward;
   const half = HANDLE_PX / 2;
   // Into the band, which is the direction away from its moving edge.
@@ -366,6 +387,7 @@ export function SpacingHandles({
   subject,
   context,
   onPreviewChange,
+  onGestureChange,
 }: SpacingHandlesProps): React.JSX.Element | null {
   const gesture = React.useRef<Gesture | null>(null);
   /**
@@ -455,6 +477,24 @@ export function SpacingHandles({
   latest.current.styles = node?.styles;
   latest.current.nodeId = nodeId;
   latest.current.tier = `${context.address.state}\u0000${context.address.breakpoint}`;
+
+  /**
+   * Which way each band thickens, and therefore which edge carries its handle
+   * and which way a drag on it grows the value.
+   *
+   * Structural for a margin — it lies outside the border box and never moves
+   * it. MEASURED for a padding, because it depends on whether the block's size
+   * along that axis is settled by its content: see `padding-response.ts`.
+   */
+  const outwardOf = React.useCallback(
+    (band: SpacingBand): boolean =>
+      spacingGrowsOutward(
+        band.box,
+        band.negative,
+        subject.paddingOutward[band.side]
+      ),
+    [subject.paddingOutward]
+  );
 
   const targetFor = React.useCallback(
     (address: StyleAddress): ScrubTarget | undefined =>
@@ -820,7 +860,8 @@ export function SpacingHandles({
           live.band.box,
           live.band.side,
           canvas,
-          subject.scales
+          subject.scales,
+          outwardOf(live.band)
         );
         if (delta === undefined) return;
         const shown = modifiersOf(moved);
@@ -836,7 +877,8 @@ export function SpacingHandles({
             live.band.box,
             live.band.side,
             travelled(lifted).canvas,
-            subject.scales
+            subject.scales,
+            outwardOf(live.band)
           );
           if (delta !== undefined) {
             /*
@@ -903,7 +945,7 @@ export function SpacingHandles({
       owner.addEventListener("pointercancel", onCancel);
       owner.addEventListener("keydown", onEscape);
     },
-    [commit, endGesture, showPreview, startsFor, subject.scales]
+    [commit, endGesture, outwardOf, showPreview, startsFor, subject.scales]
   );
 
   /*
@@ -917,6 +959,12 @@ export function SpacingHandles({
   React.useLayoutEffect(() => {
     onPreviewChange?.();
   }, [onPreviewChange, preview]);
+
+  // Reported from `held`, which is set for a pointer gesture and for a focused
+  // keyboard one alike — both need the control to outlive a vanished band.
+  React.useEffect(() => {
+    onGestureChange?.(held !== null);
+  }, [held, onGestureChange]);
 
   /*
    * A gesture does not outlive the handles. The overlay unmounts them whenever
@@ -938,7 +986,12 @@ export function SpacingHandles({
        * which way a key grows a value. A key this band does not answer to is
        * left alone rather than swallowed.
        */
-      const delta = spacingKeyDelta(event.key, band.box, band.side);
+      const delta = spacingKeyDelta(
+        event.key,
+        band.box,
+        band.side,
+        outwardOf(band)
+      );
       if (delta === undefined) return;
       /*
        * A pointer gesture owns the value until it is released.
@@ -954,9 +1007,19 @@ export function SpacingHandles({
 
       event.preventDefault();
       const { starts, refusals } = startsFor(band);
+      /*
+       * The band this key is about is held for as long as the handle has focus.
+       *
+       * Stepping a 1px padding down to zero makes `spacingBands` stop drawing
+       * it, and the focused control would unmount underneath the author — focus
+       * falls back to the body, and the next press goes nowhere. A margin can
+       * legitimately continue through zero into negative values, so losing the
+       * handle there loses half the range as well.
+       */
+      setHeld(band);
       commit(band, starts, refusals, delta, modifiersOf(event));
     },
-    [commit, startsFor]
+    [commit, outwardOf, startsFor]
   );
 
   /*
@@ -987,7 +1050,7 @@ export function SpacingHandles({
     held === null ||
     bands.some(band => band.box === held.box && band.side === held.side)
       ? bands
-      : [...bands, collapsed(held)];
+      : [...bands, collapsed(held, outwardOf(held))];
 
   if (orientation === undefined || nodeClass === undefined) {
     /*
@@ -1022,9 +1085,11 @@ export function SpacingHandles({
          * them occupy. Both strips then take pointer events and neither leaves
          * the space it describes.
          */
+        const outward = outwardOf(band);
         const rect = handleRect(
           band,
-          drawn.slice(index + 1).some(later => sameEdge(band, later))
+          outward,
+          drawn.slice(index + 1).some(later => sameEdge(band, later, outwardOf))
         );
         return (
           <div
@@ -1084,6 +1149,14 @@ export function SpacingHandles({
              */
             onPointerDown={event => onPointerDown(event, band)}
             onKeyDown={event => onKeyDown(event, band)}
+            /*
+             * The keyboard's claim on a band ends when focus does. A pointer
+             * gesture still in flight keeps its own claim: it is the one that
+             * has to survive to its release.
+             */
+            onBlur={() => {
+              if (gesture.current === null) setHeld(null);
+            }}
             style={{
               left: `${String(rect.x)}px`,
               top: `${String(rect.y)}px`,

@@ -149,6 +149,12 @@ function subjectWith(overrides: Partial<SpacingSubject> = {}): SpacingSubject {
     padding: { top: 4, right: 4, bottom: 4, left: 4 },
     scales: UNSCALED,
     orientation: { writingMode: "horizontal-tb", direction: "ltr" },
+    /*
+     * The fixed-height answer by default — the content edge moves inward — so
+     * the existing cases keep describing the block they always described. The
+     * auto-height answer has its own cases.
+     */
+    paddingOutward: { top: false, right: false, bottom: false, left: false },
     ...overrides,
   };
 }
@@ -1524,6 +1530,145 @@ describe("a gesture whose TIER changes underneath it", () => {
     render(<TierHarness state="base" />);
     drag(handle("top margin"), [{ x: 0, y: -20 }]);
     expect(live?.undoDepth).toBe(1);
+  });
+});
+
+describe("a handle the keyboard is holding", () => {
+  /*
+   * Stepping a 1px padding down to zero makes `spacingBands` stop drawing it,
+   * and the focused control would unmount underneath the author — focus falls
+   * back to the body and the next press goes nowhere. A margin can legitimately
+   * continue through zero into negative values, so losing the handle there loses
+   * half the range with it.
+   */
+  it("survives its band being measured away", () => {
+    const { rerender } = render(
+      <Harness
+        bands={[band("margin", "top", "1")]}
+        subject={subjectWith({
+          margin: { top: 1, right: 0, bottom: 0, left: 0 },
+        })}
+        context={BASE}
+        initial={documentWith()}
+      />
+    );
+    act(() => {
+      fireEvent.keyDown(handle("top margin"), { key: "ArrowDown" });
+    });
+    // The value reached zero, so the next measurement draws no band at all.
+    rerender(
+      <Harness
+        bands={[]}
+        subject={subjectWith({
+          margin: { top: 0, right: 0, bottom: 0, left: 0 },
+        })}
+        context={BASE}
+        initial={documentWith()}
+      />
+    );
+    expect(
+      screen.queryByRole("spinbutton", { name: "top margin" })
+    ).not.toBeNull();
+  });
+
+  it("carries a margin on through zero into negative values", () => {
+    mount(
+      [band("margin", "top", "1")],
+      subjectWith({ margin: { top: 1, right: 0, bottom: 0, left: 0 } })
+    );
+    const element = handle("top margin");
+    act(() => {
+      fireEvent.keyDown(element, { key: "ArrowDown" });
+    });
+    act(() => {
+      fireEvent.keyDown(element, { key: "ArrowDown" });
+    });
+    expect(stored("margin", "blockStart")).toBe("-1px");
+  });
+
+  /* And it lets go once focus does, so a stale band is not kept for ever. */
+  it("releases the band when focus leaves", () => {
+    const { rerender } = render(
+      <Harness
+        bands={[band("margin", "top", "1")]}
+        subject={subjectWith()}
+        context={BASE}
+        initial={documentWith()}
+      />
+    );
+    const element = handle("top margin");
+    act(() => {
+      fireEvent.keyDown(element, { key: "ArrowDown" });
+    });
+    act(() => {
+      fireEvent.blur(element);
+    });
+    rerender(
+      <Harness
+        bands={[]}
+        subject={subjectWith()}
+        context={BASE}
+        initial={documentWith()}
+      />
+    );
+    expect(screen.queryAllByRole("spinbutton")).toHaveLength(0);
+  });
+});
+
+describe("a padding handle on a block that grows outward", () => {
+  const rect = { x: 0, y: 100, width: 50, height: 20 };
+  const bottomPadding: SpacingBand = {
+    box: "padding",
+    side: "bottom",
+    rect,
+    label: "20",
+    negative: false,
+  };
+
+  /*
+   * The band spans 100..120. On a FIXED-height block the content edge moves
+   * inward, so the handle belongs at the top of the band; on an ordinary
+   * auto-height block the BORDER edge moves outward and it belongs at the
+   * bottom. Assuming one model put the control on the edge that never moves.
+   */
+  it("sits on the outer edge when the block's border edge is the one that moves", () => {
+    mount(
+      [bottomPadding],
+      subjectWith({
+        paddingOutward: { top: false, right: false, bottom: true, left: false },
+      })
+    );
+    expect(handle("bottom padding").style.top).toBe("115.5px");
+  });
+
+  it("sits on the inner edge when the content edge is the one that moves", () => {
+    mount([bottomPadding], subjectWith());
+    expect(handle("bottom padding").style.top).toBe("95.5px");
+  });
+
+  /*
+   * And the drag follows the same answer. Dragging DOWN grows a bottom padding
+   * on an auto-height block, which is what an author sees the block do.
+   */
+  it("grows the value dragging down on an auto-height block", () => {
+    mount(
+      [bottomPadding],
+      subjectWith({
+        padding: { top: 4, right: 4, bottom: 20, left: 4 },
+        paddingOutward: { top: false, right: false, bottom: true, left: false },
+      })
+    );
+    drag(handle("bottom padding"), [{ x: 0, y: 15 }]);
+    expect(stored("padding", "blockEnd")).toBe("35px");
+  });
+
+  it("grows it dragging UP on a fixed-height block", () => {
+    mount(
+      [bottomPadding],
+      subjectWith({ padding: { top: 4, right: 4, bottom: 20, left: 4 } })
+    );
+    drag(handle("bottom padding"), [{ x: 0, y: -15 }]);
+    expect(stored("padding", "blockEnd")).toBe("35px");
   });
 });
 

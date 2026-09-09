@@ -206,7 +206,10 @@ class FakeResizeObserver {
   static instances: FakeResizeObserver[] = [];
   readonly observed: Element[] = [];
   disconnected = false;
-  constructor(_callback: ResizeObserverCallback) {
+  /** Kept so a test can make the overlay re-measure on demand. */
+  readonly callback: ResizeObserverCallback;
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
     FakeResizeObserver.instances.push(this);
   }
   observe(target: Element): void {
@@ -442,6 +445,84 @@ describe("who may write from the canvas", () => {
     expect(
       container.querySelectorAll(".nx-spacing-handles__handle").length
     ).toBeGreaterThan(0);
+  });
+});
+
+describe("a gesture the measurement must not end", () => {
+  /*
+   * A preview can make its own block undescribable — a margin can push it
+   * partly behind an `overflow: hidden` ancestor, a padding can bring on a
+   * classic scrollbar — and the measurement that follows then legitimately has
+   * nothing to draw. Clearing the subject there unmounts the handles mid-drag:
+   * the listeners detach, the preview goes, and the drag ends without
+   * committing and without a word.
+   */
+  /** Make the overlay measure again, the way a real resize would. */
+  function remeasure(): void {
+    const observer = FakeResizeObserver.instances.at(-1);
+    act(() => {
+      observer?.callback([], observer as unknown as ResizeObserver);
+    });
+  }
+
+  it("keeps the handles while a gesture is held, even with no bands to draw", () => {
+    withFakeResizeObserver();
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"));
+    const grabbed = container.querySelector<HTMLElement>(
+      ".nx-spacing-handles__handle"
+    );
+    expect(grabbed).not.toBeNull();
+
+    act(() => {
+      grabbed?.dispatchEvent(
+        new window.PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          pointerId: 1,
+          clientX: 0,
+          clientY: 0,
+        })
+      );
+    });
+
+    /*
+     * The preview has made the block undescribable — it lays out no box at all
+     * now, which is the path that measures NOTHING rather than measuring zeros.
+     * Reaching that path is the whole point: measuring zeros still produces a
+     * subject, so a test that only zeroed the values would pass whether or not
+     * the subject is protected.
+     */
+    stubLayoutBoxes(false);
+    remeasure();
+
+    // The report goes, honestly. The control the pointer is holding does not.
+    expect(labels(container)).toEqual([]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle").length
+    ).toBeGreaterThan(0);
+  });
+
+  /*
+   * The control: with no gesture held, an unmeasurable block loses its handles
+   * as it always did. Without this, keeping the subject for ever would satisfy
+   * the assertion above.
+   */
+  it("drops the handles when nothing is held", () => {
+    withFakeResizeObserver();
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"));
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle").length
+    ).toBeGreaterThan(0);
+
+    stubLayoutBoxes(false);
+    remeasure();
+
+    expect(labels(container)).toEqual([]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle")
+    ).toHaveLength(0);
   });
 });
 

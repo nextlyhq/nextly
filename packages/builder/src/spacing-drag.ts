@@ -231,7 +231,8 @@ export function spacingDelta(
   box: SpacingBox,
   side: SpacingSide,
   movement: { readonly dx: number; readonly dy: number },
-  scales: SpacingScales
+  scales: SpacingScales,
+  outward = spacingGrowsOutward(box, false, false)
 ): number | undefined {
   const scale = box === "margin" ? scales.marginScale : scales.scale;
   const vertical = side === "top" || side === "bottom";
@@ -246,8 +247,8 @@ export function spacingDelta(
   if (!Number.isFinite(factor) || factor === 0) return undefined;
   const travel = vertical ? movement.dy : movement.dx;
   // Positive where the band grows toward the pointer's direction of travel.
-  const outward = side === "top" || side === "left" ? -1 : 1;
-  const sign = box === "margin" ? outward : -outward;
+  const away = side === "top" || side === "left" ? -1 : 1;
+  const sign = outward ? away : -away;
   const delta = (sign * travel) / factor;
   /*
    * `-0` normalised away. Negating a zero travel produces it, and it compares
@@ -446,7 +447,8 @@ const ARROW_MOVES = new Map<
 export function spacingKeyDelta(
   key: string,
   box: SpacingBox,
-  side: SpacingSide
+  side: SpacingSide,
+  outward = spacingGrowsOutward(box, false, false)
 ): number | undefined {
   if (key === "PageUp") return SPACING_PAGE_PX;
   if (key === "PageDown") return -SPACING_PAGE_PX;
@@ -480,10 +482,38 @@ export function spacingKeyDelta(
   // Across the band's own axis this key addresses nothing.
   const vertical = side === "top" || side === "bottom";
   if (vertical !== (move.dx === 0)) return undefined;
-  return spacingDelta(box, side, move, {
-    scale: { x: 1, y: 1 },
-    marginScale: { x: 1, y: 1 },
-  });
+  return spacingDelta(
+    box,
+    side,
+    move,
+    { scale: { x: 1, y: 1 }, marginScale: { x: 1, y: 1 } },
+    outward
+  );
+}
+
+/**
+ * Whether this band thickens AWAY from the block, so a drag outward grows it.
+ *
+ * A margin lies outside the border box and never moves it — growing one pushes
+ * the neighbour rather than the block — so a positive margin always thickens
+ * outward and a negative one, laid inside the border edge, always thickens
+ * inward. That much is structural.
+ *
+ * PADDING is not, and cannot be decided here: whether the border edge moves out
+ * or the content edge moves in depends on whether the block's size along that
+ * axis is settled by its content. `padding-response.ts` asks the element, and
+ * the answer arrives as `measured`.
+ *
+ * @param box - which box the band belongs to
+ * @param negative - whether a margin band is a negative one
+ * @param measured - for padding, whether the OUTER edge was seen to respond
+ */
+export function spacingGrowsOutward(
+  box: SpacingBox,
+  negative: boolean,
+  measured: boolean
+): boolean {
+  return box === "margin" ? !negative : measured;
 }
 
 /** The address one side of one box occupies at the tier being edited. */
