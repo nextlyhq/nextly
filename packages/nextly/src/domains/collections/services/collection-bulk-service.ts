@@ -603,6 +603,9 @@ export class CollectionBulkService extends BaseService {
           routeAuthorized: params.routeAuthorized,
           // Judge the create-as-published on the key's own publish grant.
           authenticatedScope: params.authenticatedScope,
+          // Each row in a batch is its own create, and a caller's hook context
+          // describes the CALL, so every row in it carries the same one.
+          context: params.context,
         },
         duplicateData
       );
@@ -1259,6 +1262,8 @@ export class CollectionBulkService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Arbitrary data passed to hooks via context */
+      context?: Record<string, unknown>;
       // A scoped API key is judged on its OWN publish grant when the batch's
       // transition authorization is pre-resolved, not the key owner's RBAC.
       authenticatedScope?: AuthenticatedScope;

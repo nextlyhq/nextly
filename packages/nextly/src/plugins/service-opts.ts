@@ -21,14 +21,29 @@ import type { AuthUser } from "../types/auth";
 export interface ServiceOpts {
   as?: "user" | "system";
   user?: AuthUser;
+  /**
+   * Arbitrary data handed to this operation's hooks as `ctx.context`.
+   *
+   * How a plugin tells a hook something about the CALL that the row cannot say.
+   * A hook doing expensive presentation work can be told a read is internal and
+   * skip it, and a hook that writes can be told not to recurse. Core has
+   * accepted this on every collection operation for some time and seeds the
+   * shared hook context from it; this facade dropped it, so a plugin could
+   * reach neither.
+   *
+   * It is data, not permission: nothing here bypasses access, validation or any
+   * hook. A hook decides for itself what to do with what it is told.
+   */
+  context?: Record<string, unknown>;
 }
 
 /** Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`. */
 export function resolveServiceOpts(opts: ServiceOpts): {
   user?: RequestContext["user"];
   overrideAccess: boolean;
+  context?: Record<string, unknown>;
 } {
-  const { as, user } = opts;
+  const { as, user, context } = opts;
   const wantsUser = as === "user" || (as === undefined && user !== undefined);
   if (wantsUser) {
     if (!user) {
@@ -43,9 +58,10 @@ export function resolveServiceOpts(opts: ServiceOpts): {
     return {
       overrideAccess: false,
       user: { id: user.id, email: user.email, role: "", permissions: [] },
+      context,
     };
   }
-  return { overrideAccess: true };
+  return { overrideAccess: true, context };
 }
 
 /**
@@ -161,9 +177,14 @@ export function wrapCollectionsForPlugin(
       return async (...args: unknown[]) => {
         const resolved = resolveServiceOpts((args[idx] as ServiceOpts) ?? {});
         const next = [...args];
+        // Rebuilt rather than forwarded, so anything not named here is dropped.
+        // That is what kept a plugin from reaching the hook context: core has
+        // accepted one on every collection operation for some time, and this
+        // literal was the whole reason nothing above could pass one.
         next[idx] = {
           user: resolved.user,
           overrideAccess: resolved.overrideAccess,
+          context: resolved.context,
         };
         const call = () =>
           (fn as (...a: unknown[]) => Promise<unknown>).apply(target, next);

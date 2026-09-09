@@ -572,37 +572,9 @@ export function formBuilder(
 
       // Inject a real submissionCount into form reads (spam excluded — the
       // number answers "how many people submitted", not "how many bots").
-      nextly.hooks.on("afterRead", formsSlug, async (context: unknown) => {
-        const data = (context as { data?: unknown }).data;
-        // afterRead fires for single reads (one record) and list reads
-        // (array); count each form either way. Counts run concurrently —
-        // form lists are paginated, so this is a bounded fan-out of small
-        // indexed queries, not a serial N+1 walk.
-        const records = Array.isArray(data) ? data : data ? [data] : [];
-        await Promise.all(
-          records.map(async record => {
-            const form = record as Record<string, unknown>;
-            if (typeof form.id !== "string") return;
-            try {
-              // Count as system: whoever may read the form may see its
-              // submission volume without holding submission read rights.
-              form.submissionCount = await nextly.services.collections.count(
-                submissionSlug,
-                {
-                  where: {
-                    form: { equals: form.id },
-                    status: { not_equals: "spam" },
-                  },
-                },
-                { as: "system" }
-              );
-            } catch {
-              // A failed count must never break reading the form itself.
-              form.submissionCount = 0;
-            }
-          })
-        );
-      });
+      nextly.hooks.on("afterRead", formsSlug, (context: unknown) =>
+        injectSubmissionCount(context, submissionSlug, nextly)
+      );
     },
   });
 
@@ -1189,6 +1161,73 @@ async function handleSubmissionCreated(
 /**
  * Fetch the parent form document for a submission.
  */
+/**
+ * Put a real `submissionCount` on every form a read returned.
+ *
+ * Spam is excluded, because the number answers "how many people submitted", not
+ * "how many bots". `afterRead` fires for single reads and for list reads, so
+ * both shapes are handled; the counts run concurrently, and form lists are
+ * paginated, so this is a bounded fan-out of small indexed queries rather than
+ * a serial walk.
+ *
+ * A read that asked for the schema alone is left alone. A submission write
+ * reads its parent form only to check the payload against that form's fields,
+ * and counting there is presentation work nobody on that path reads. It also
+ * grows with the form's history, so every submission was paying for a count of
+ * every submission before it.
+ *
+ * The flag decides how much work to do and nothing else. Forged, the worst it
+ * can produce is a form read whose `submissionCount` is absent, and it cannot
+ * come from a request body in any case: the hook context is set by the
+ * server-side caller of the service.
+ */
+export async function injectSubmissionCount(
+  context: unknown,
+  submissionSlug: string,
+  nextly: NextlyInstance
+): Promise<void> {
+  const hook = context as {
+    data?: unknown;
+    context?: Record<string, unknown>;
+  };
+  if (hook.context?.[SCHEMA_ONLY_READ] === true) return;
+
+  const records = Array.isArray(hook.data)
+    ? hook.data
+    : hook.data
+      ? [hook.data]
+      : [];
+  await Promise.all(
+    records.map(async record => {
+      const form = record as Record<string, unknown>;
+      if (typeof form.id !== "string") return;
+      try {
+        // Count as system: whoever may read the form may see its submission
+        // volume without holding submission read rights.
+        form.submissionCount = await nextly.services.collections.count(
+          submissionSlug,
+          {
+            where: {
+              form: { equals: form.id },
+              status: { not_equals: "spam" },
+            },
+          },
+          { as: "system" }
+        );
+      } catch {
+        // A failed count must never break reading the form itself.
+        form.submissionCount = 0;
+      }
+    })
+  );
+}
+
+/**
+ * Tells the form's `afterRead` hook that this read wants the schema and nothing
+ * else, so it can skip work whose only purpose is to be displayed.
+ */
+const SCHEMA_ONLY_READ = "formBuilder.schemaOnlyRead";
+
 export async function fetchParentForm(
   formsSlug: string,
   formId: string,
@@ -1221,7 +1260,7 @@ export async function fetchParentForm(
     const form = await nextly.services.collections.findEntryById(
       formsSlug,
       formId,
-      { as: "system" }
+      { as: "system", context: { [SCHEMA_ONLY_READ]: true } }
     );
     return form;
   } catch (err) {

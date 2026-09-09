@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { wrapCollectionsForPlugin } from "./service-opts";
+import { resolveServiceOpts, wrapCollectionsForPlugin } from "./service-opts";
 
 function mockCollections() {
   return {
@@ -135,5 +135,52 @@ describe("wrapCollectionsForPlugin (D35, Unit C)", () => {
     const m = mockCollections();
     await wrapCollectionsForPlugin(m as never).listCollections();
     expect(m.listCollections).toHaveBeenCalledWith();
+  });
+});
+
+describe("the hook context a plugin passes", () => {
+  // How a plugin tells a hook something about the CALL that the row cannot say.
+  // Core has accepted this on every collection operation for some time and
+  // seeds the shared hook context from it; this facade dropped it, so an
+  // `afterRead` hook doing expensive presentation work could not be told that a
+  // read was internal.
+  it("reaches the service", async () => {
+    const m = mockCollections();
+    await wrapCollectionsForPlugin(m as never).findEntryById("vault", "1", {
+      as: "system",
+      context: { internalRead: true },
+    });
+    expect(m.findEntryById).toHaveBeenCalledWith("vault", "1", {
+      user: undefined,
+      overrideAccess: true,
+      context: { internalRead: true },
+    });
+  });
+
+  it("travels with a user context too", async () => {
+    const m = mockCollections();
+    await wrapCollectionsForPlugin(m as never).createEntry(
+      "vault",
+      { title: "a" },
+      {
+        as: "user",
+        user: { id: "u1", email: "u@x" } as never,
+        context: { seeded: 1 },
+      }
+    );
+    expect(m.createEntry).toHaveBeenCalledWith(
+      "vault",
+      { title: "a" },
+      expect.objectContaining({ context: { seeded: 1 } })
+    );
+  });
+
+  it("is absent when the caller passes none", () => {
+    // The control: a facade that invented a context would satisfy the two
+    // above without carrying anything the caller said.
+    expect(resolveServiceOpts({ as: "system" }).context).toBeUndefined();
+    expect(
+      resolveServiceOpts({ as: "system", context: { a: 1 } }).context
+    ).toEqual({ a: 1 });
   });
 });
