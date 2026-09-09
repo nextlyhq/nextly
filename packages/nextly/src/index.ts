@@ -1046,6 +1046,12 @@ export {
   type TrustedClientIpOptions,
 } from "./utils/get-trusted-client-ip";
 
+// Published because a plugin storing text a visitor typed has to strip markup
+// the way core does, and the absence of this export is why a second copy grew
+// in `@nextlyhq/plugin-form-builder` and then drifted from this one. Sits with
+// the security utilities a plugin already reaches for.
+export { stripHtmlTags } from "./services/security/sanitization-service";
+
 export {
   validateExternalUrl,
   safeFetch,

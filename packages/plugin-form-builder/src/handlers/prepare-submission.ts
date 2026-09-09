@@ -20,6 +20,8 @@
  * stay on the HTTP path.
  */
 
+import { stripHtmlTags } from "nextly";
+
 import type { AnyFormField } from "../types";
 import {
   generateZodSchema,
@@ -42,65 +44,6 @@ const TEXT_FORM_FIELDS = new Set([
   "url",
   "hidden",
 ]);
-
-/** Whether this character would make the `<` before it open a tag. */
-function opensTag(character: string | undefined): boolean {
-  if (character === undefined) return false;
-  return (
-    character === "/" ||
-    character === "!" ||
-    character === "?" ||
-    (character >= "a" && character <= "z") ||
-    (character >= "A" && character <= "Z")
-  );
-}
-
-/**
- * Remove HTML tags from a string, collapse whitespace, and trim.
- *
- * A `<` opens a tag only when what follows it could name one: an ASCII letter,
- * `/` for a closing tag, or `!` and `?` for comments and doctypes. That is the
- * HTML tokenizer's own rule, so what survives here is what a browser would have
- * shown as text anyway. Treating every `<` as a tag cut `2 < 3` down to `2`,
- * which is silent loss in the one column a visitor's own words live in.
- *
- * `<name>` is still removed. Nothing distinguishes it from a tag, and a browser
- * reads it as an unknown element too. A tag left unclosed at the end goes with
- * it: handed `hello <script` a browser completes it rather than showing it.
- *
- * One pass, holding one invariant: a `<` that has been kept is never followed
- * by a character that would open a tag. Removing a tag can put its neighbours
- * together into a new one, and `<<b>img src=x onerror=alert(1)>` became live
- * markup the sanitizer assembled itself, so a kept `<` is dropped the moment
- * the next character would make it dangerous.
- *
- * Repeating a regex until the text stopped changing held the same invariant and
- * was quadratic: `"<".repeat(n) + "b>" + "x>".repeat(n)` exposed one tag per
- * pass, so 90KB of it cost 30,001 passes over the whole string. This route is
- * public and unauthenticated, and sanitizing happens before any length rule, so
- * that was a cheap way to spend the server's CPU. Each character is examined
- * once and dropped at most once.
- */
-function stripHtmlTags(input: string): string {
-  const kept: string[] = [];
-  for (let at = 0; at < input.length; at += 1) {
-    const character = input[at];
-    if (character === "<" && opensTag(input[at + 1])) {
-      const close = input.indexOf(">", at + 1);
-      at = close === -1 ? input.length : close;
-      continue;
-    }
-    while (
-      kept.length > 0 &&
-      kept[kept.length - 1] === "<" &&
-      opensTag(character)
-    ) {
-      kept.pop();
-    }
-    kept.push(character);
-  }
-  return kept.join("").replace(/\s+/g, " ").trim();
-}
 
 /**
  * Sanitize form submission data by stripping HTML tags from free-text fields.
