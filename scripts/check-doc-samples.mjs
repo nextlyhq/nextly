@@ -1923,6 +1923,19 @@ function differsOnlyAtTheEnd(a, b) {
  * author, so a sample using one has forgotten an import. `NextlyEror` is a name
  * of ours with a letter missing. Both were being set aside, which is the docs
  * gate accepting samples that are simply broken.
+ *
+ * What is still set aside, deliberately: a third-party VALUE used without `new`
+ * and without an import, from a package no sample imports, such as `[S3Client]`
+ * or `err instanceof ZodError`. Closing it needs one of two things, and both
+ * were measured and cost more than the gap. Resolving what the corpus imports
+ * reaches `next`, `next/navigation` and `next/image` and none of those three,
+ * because `next/server` and the AWS and Zod packages are never imported here;
+ * enumerating every installed package and subpath is neither cheap nor
+ * hermetic. Requiring the corpus to introduce a name first charges `Users` in
+ * `collections: [Posts, Users, Media]` while setting `Posts` aside, because
+ * `Posts` happens to be imported on another page, and charges `<Chart />` as
+ * well. A report that treats three names in one array differently is not one
+ * anyone can act on.
  */
 export function readerOwnedMention(name, code, extension) {
   if (!/^[A-Z][A-Za-z0-9]*$/.test(name)) return false;
