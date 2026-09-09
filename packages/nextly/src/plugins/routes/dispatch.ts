@@ -9,6 +9,7 @@ import {
 } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { NextlyError } from "../../errors/nextly-error";
+import { runWithRequestScope } from "../../hooks/request-scope";
 import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
@@ -202,13 +203,16 @@ export async function runPluginRoute(
   );
 
   try {
-    // Pinned for the length of the handler so a service call inside it inherits
-    // the key's grants without the handler having to remember. Every route
-    // written before this field existed composes `{ as: "user", user }` by
-    // hand, and an opt-in field leaves all of them authorizing the key as its
-    // owner.
+    // Both scopes pinned for the length of the handler, so a service call
+    // inside it inherits the key's grants and the request without the handler
+    // having to remember either. Every route written before these fields
+    // existed composes `{ as: "user", user }` by hand: an opt-in field leaves
+    // all of them authorizing the key as its owner, and leaves every read and
+    // write they make looking like background work to a hook.
     return markPluginResponse(
-      await runWithCallerScope(auth.authenticatedScope, () => run(req, ctx)),
+      await runWithRequestScope(req, () =>
+        runWithCallerScope(auth.authenticatedScope, () => run(req, ctx))
+      ),
       matched.route
     );
   } catch (err) {
