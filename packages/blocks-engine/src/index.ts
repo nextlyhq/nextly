@@ -103,10 +103,16 @@ export {
   treeDepth,
   documentBytes,
   // Published because the three readers above now REFUSE a forest they cannot
-  // afford to walk, and a caller that wants to report that rather than let it
-  // escape has to be able to name it. The bound travels with it so a caller can
-  // say what it exceeded rather than restating the number.
+  // afford to measure, and a caller that wants to report that rather than let
+  // it escape has to be able to name it.
+  //
+  // BOTH bounds travel with it, because they are different units and a caller
+  // cannot tell from the error which it hit: `countNodes` and `treeDepth` count
+  // forest ENTRIES, while `documentBytes` counts the VALUES the serializer
+  // visits — six per node on a measured document, so the two numbers are not
+  // comparable and neither can stand in for the other.
   MAX_WALKABLE_ENTRIES,
+  MAX_SERIALIZED_VALUES,
   ForestTooLargeError,
 } from "./limits";
 export type { DocumentLimits } from "./limits";

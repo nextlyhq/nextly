@@ -75,46 +75,65 @@ describe("a forest whose entries outrun its objects", () => {
     expect(() => treeDepth(sharedChain(OVER))).toThrow(ForestTooLargeError);
   });
 
-  it("translates the serializer's size failure, and only that one", () => {
+  it("aborts serialization at the bound instead of building the string first", () => {
     /*
-     * The real trigger is a string longer than the engine can hold — 23 shared
-     * objects reach it — and building one costs half a gigabyte, which is not
-     * what a unit suite should spend to observe a translation. The FIXTURE
-     * raises the same error the serializer raises, from inside the same call,
-     * so the mechanism under test is exercised exactly.
+     * The bound rides the serializer's OWN traversal through a replacer, so it
+     * stops before the string exists. Catching the eventual failure instead
+     * would pay the whole cost first: the 21-object case allocates 132 MB and a
+     * deeper one exhausts the heap before any catchable error is raised.
      *
-     * The second half is what makes the first mean anything: a cycle raises
-     * `TypeError` and must pass THROUGH, because renaming an unrelated failure
-     * into a size complaint sends a reader to shrink a document that is fine.
+     * 30 objects is chosen because it CANNOT be serialized at all — a billion
+     * entries — so a passing assertion here proves the abort is early rather
+     * than merely eventual. The test would not complete otherwise.
      */
-    const sizeFailure = {
-      id: "s",
+    const start = Date.now();
+    expect(() => documentBytes(page(sharedChain(30)))).toThrow(
+      ForestTooLargeError
+    );
+    expect(Date.now() - start).toBeLessThan(10_000);
+  });
+
+  it("leaves a RangeError from the document's own hook alone", () => {
+    /*
+     * A `toJSON`, a getter or a proxy trap may raise `RangeError` for its own
+     * reasons. Renaming that into a size refusal tells a caller to shrink or
+     * de-share a document whose problem is in its hook, and loses the original
+     * diagnostic — so nothing here catches it.
+     *
+     * This replaces an earlier test that RAISED a RangeError through `toJSON`
+     * to stand in for the size failure. It passed, and it pinned exactly the
+     * misclassification described above: the fixture proved the translation
+     * happened, never that the serializer had hit its own limit.
+     */
+    const own = new RangeError("from the document's own hook");
+    const hooked = {
+      id: "h",
       type: "core/box",
       version: 1,
       props: {},
       toJSON() {
-        throw new RangeError("Invalid string length");
+        throw own;
       },
     } as unknown as BlockNode;
-    expect(() => documentBytes(page([sizeFailure]))).toThrow(
-      ForestTooLargeError
-    );
-    expect(() => documentBytes(page([sizeFailure]))).toThrow(
-      /longer than a string can hold/
-    );
 
-    const cyclic = { id: "c", type: "core/box", version: 1, props: {} } as {
-      self?: unknown;
-    } & BlockNode;
-    cyclic.self = cyclic;
     let raised: unknown;
     try {
-      documentBytes(page([cyclic]));
+      documentBytes(page([hooked]));
     } catch (error) {
       raised = error;
     }
-    expect(raised).toBeInstanceOf(TypeError);
+    expect(raised).toBe(own);
     expect(raised).not.toBeInstanceOf(ForestTooLargeError);
+  });
+
+  it("measures an ordinary document byte-for-byte as plain stringify would", () => {
+    // The replacer must not change the OUTPUT, only bound the work. Without
+    // this, a replacer that dropped or rewrote values would still pass every
+    // refusal test above while silently reporting the wrong size.
+    const doc = page(chain(20));
+    expect(documentBytes(doc)).toBe(
+      new TextEncoder().encode(JSON.stringify(doc)).length
+    );
   });
 
   it("offers both causes rather than diagnosing the one it cannot see", () => {

@@ -61,6 +61,7 @@ import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import {
   countNodes,
   DEFAULT_LIMITS,
+  ForestTooLargeError,
   MAX_COMPOSED_DEPTH,
   MAX_ENVELOPE_ENTRIES,
   type DocumentLimits,
@@ -1362,7 +1363,7 @@ function refundDiscardedSlots(
     if (kept.has(name)) continue;
     const children = ownEntry(slots, name);
     if (!Array.isArray(children)) continue;
-    run.budget += countNodes(children);
+    run.budget += refundableCount(children);
   }
 }
 
@@ -2064,10 +2065,33 @@ function survivesGating(
  * content, which is what `nodes` holds until something places it. Refunding a
  * composed size credited a number the survey never took, in either direction.
  */
+/**
+ * What a subtree is worth as a REFUND, or nothing when it cannot be counted.
+ *
+ * `countNodes` refuses a forest whose entries outrun the machine bound rather
+ * than answering from a partial walk, and a refund is the wrong place to let
+ * that escape. This module's whole limit strategy is to degrade — a document
+ * past its budget comes back unchanged or with instances left unresolved, so a
+ * visitor gets the page rather than a blank screen — and an exception thrown
+ * midway through composition replaces that with nothing at all.
+ *
+ * Nothing is the conservative refund. It leaves the run believing it has spent
+ * more than it has, so the budget it already checks runs out and the existing
+ * graceful path takes over, which is the same outcome by the intended route.
+ */
+function refundableCount(nodes: BlockNode[]): number {
+  try {
+    return countNodes(nodes);
+  } catch (error) {
+    if (error instanceof ForestTooLargeError) return 0;
+    throw error;
+  }
+}
+
 function refundPlannedSlots(plan: NodePlan, run: ResolveRun): void {
   if (plan.slots === undefined) return;
   for (const content of plan.slots.values()) {
-    run.budget += countNodes(content.nodes);
+    run.budget += refundableCount(content.nodes);
   }
 }
 

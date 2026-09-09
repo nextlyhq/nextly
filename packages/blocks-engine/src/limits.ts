@@ -102,6 +102,22 @@ export const DEFAULT_LIMITS: DocumentLimits = {
 export const MAX_WALKABLE_ENTRIES = 1_000_000;
 
 /**
+ * How many values {@link documentBytes} may serialize before it refuses.
+ *
+ * A different unit from {@link MAX_WALKABLE_ENTRIES} and deliberately its own
+ * constant, because the serializer counts VALUES rather than nodes: measured on
+ * a 5,000-node document, `JSON.stringify` visits six values per node. Two
+ * million is therefore roughly 333,000 nodes — sixty-six times the default node
+ * cap, the same order of headroom `MAX_WALKABLE_DEPTH` keeps over
+ * `DEFAULT_LIMITS.maxDepth`.
+ *
+ * Reusing the entry bound here would have been a bound in the wrong unit,
+ * six times tighter than it reads, and would refuse documents a site could
+ * legitimately configure.
+ */
+export const MAX_SERIALIZED_VALUES = 2_000_000;
+
+/**
  * A forest whose entries outrun {@link MAX_WALKABLE_ENTRIES}.
  *
  * Thrown rather than answered around, because every honest answer here is a
@@ -207,31 +223,45 @@ export function treeDepth(nodes: BlockNode[]): number {
  * and it arrives from the one function whose whole job is to decide whether a
  * document may be stored, so it lands where a caller is least able to read it.
  *
- * The refusal is taken FROM the serializer rather than predicted before it, and
- * that is the whole design. A preflight walk answers a different question than
- * the one this function asks: `walkForest` reaches `node.slots` by property
- * access, so it sees inherited and non-enumerable slots and ignores `toJSON`,
- * while `JSON.stringify` reads own enumerable properties and honours it.
- * Measured with a node whose `slots` is non-enumerable: the document serializes
- * to 95 bytes and a preflight walk refused it — a false refusal, on a gate,
- * against a document that would have saved perfectly.
+ * The bound is applied BY the serializer's own traversal, through a replacer,
+ * and that is the whole design. It has to satisfy two requirements that defeat
+ * the obvious approaches separately.
  *
- * Catching what the serializer actually raised cannot diverge from it, costs no
- * second traversal, and refuses exactly the documents that cannot be measured.
+ * A PREFLIGHT WALK cannot be used, because it answers a different question:
+ * `walkForest` reaches `node.slots` by property access, so it sees inherited
+ * and non-enumerable slots and ignores `toJSON`, while `JSON.stringify` reads
+ * own enumerable properties and honours it. Measured with a node whose `slots`
+ * is non-enumerable — the document serializes to 95 bytes and a preflight walk
+ * refused it. A false refusal, on the gate deciding whether a document may be
+ * stored, against a document that would have saved perfectly.
+ *
+ * CATCHING THE FAILURE afterwards cannot be used either, because by then the
+ * cost has been paid: the string is built until it cannot grow, so the 21-object
+ * case still allocates 132 MB and a larger one exhausts the heap before any
+ * catchable error exists. It also cannot tell the serializer's own size failure
+ * from a `RangeError` thrown by a `toJSON`, a getter or a proxy trap, and
+ * renaming one of those into a size complaint tells a caller to shrink a
+ * document whose problem is in its own hook.
+ *
+ * A replacer is called by the serializer for every value it actually visits, so
+ * counting there uses the SAME traversal — it cannot diverge from what gets
+ * serialized, and it aborts before the string is built rather than after.
+ * Measured: byte-identical output on ordinary documents, and a shared forest of
+ * any depth refuses in about 60 ms instead of exhausting memory. A `RangeError`
+ * from a document's own hook now propagates untouched, because nothing here
+ * catches it.
  */
 export function documentBytes(doc: BlockDocument): number {
-  try {
-    return new TextEncoder().encode(JSON.stringify(doc)).length;
-  } catch (error) {
-    // `RangeError` is the size failure specifically. A cycle raises TypeError
-    // and a getter that throws raises whatever it threw, so neither is caught
-    // here and neither is renamed into a size complaint it is not.
-    if (error instanceof RangeError) {
+  let visited = 0;
+  const json = JSON.stringify(doc, function replacer(_key, value: unknown) {
+    visited += 1;
+    if (visited > MAX_SERIALIZED_VALUES) {
       throw new ForestTooLargeError(
-        `this document cannot be measured: its JSON form is longer than a ` +
-          `string can hold. ${WHY_TOO_LARGE}`
+        `this document cannot be measured: serializing it visits more than ` +
+          `${String(MAX_SERIALIZED_VALUES)} values. ${WHY_TOO_LARGE}`
       );
     }
-    throw error;
-  }
+    return value;
+  });
+  return new TextEncoder().encode(json).length;
 }
