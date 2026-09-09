@@ -129,6 +129,26 @@ const text = defineBlock<{ value: string }>({
 });
 
 /**
+ * A block whose own root element carries an `id` the BLOCK chose.
+ *
+ * Nothing in the first-party library does this today — `form` puts ids on its
+ * inner controls, which this boundary never touches — but a plugin's block may,
+ * and the node's id rule has to say what happens when both want the attribute.
+ */
+const ownedId = defineBlock<{ value: string }>({
+  name: "test/owned-id",
+  version: 1,
+  description: "Renders a root carrying its own id.",
+  example: { props: { value: "hi" } },
+  defaultProps: { value: "" },
+  render: ({ props, className }) => (
+    <p className={className} id="block-owned">
+      {props.value}
+    </p>
+  ),
+});
+
+/**
  * A block that answers whether these props make it draw, so one document can
  * hold an instance on each side of the declaration.
  */
@@ -1005,6 +1025,146 @@ describe("PageRenderer", () => {
       expect(html).toContain('title="A section"');
       // The class the block was handed must survive the clone.
       expect(html).toMatch(bothClasses("test/text"));
+    });
+
+    it("emits no id at all for an empty cssId, rather than an empty one", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "anchored" },
+              cssId: "",
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      // An empty id addresses nothing: the DOM Standard unsets an element's ID
+      // when the attribute is the empty string, and the HTML Standard requires
+      // at least one character. Emitting it put invalid markup on the page that
+      // no anchor, label or selector could reach.
+      expect(html).not.toContain('id=""');
+      // The element still rendered — without this the assertion above passes on
+      // a page that drew nothing at all.
+      expect(html).toContain("anchored");
+    });
+
+    it("lets an empty cssId shadow the bag rather than promoting the bag's id", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "anchored" },
+              cssId: "",
+              attributes: { id: "hero", title: "A section" },
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      // The separating property. Dropping the empty id is right; letting the
+      // shadowed bag id take its place is a DIFFERENT change, and it is the one
+      // a naive rewrite makes — the bag is assigned first, so removing only the
+      // overwrite leaves `hero` on an element the author gave no id.
+      expect(html).not.toContain('id="hero"');
+      expect(html).not.toContain('id=""');
+      // The rest of the bag is untouched by the id rule.
+      expect(html).toContain('title="A section"');
+    });
+
+    it("reads the attribute bag case-insensitively, last variant winning", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "anchored" },
+              attributes: { id: "hero", ID: "" },
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      // HTML attribute names are ASCII case-insensitive, so these are one
+      // attribute written twice and the later wins — leaving an empty id, which
+      // is no id. Reporting `hero` here would name something nothing renders.
+      expect(html).not.toContain('id="hero"');
+      expect(html).not.toContain('id=""');
+      expect(html).toContain("anchored");
+    });
+
+    it("renders the bag's id when a non-string cssId is normalised away", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "anchored" },
+              // A stored document can hold anything. Only a STRING shadows, so
+              // this one does not, and the bag is what reaches the page.
+              cssId: null as unknown as string,
+              attributes: { id: "hero" },
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).toContain('id="hero"');
+    });
+
+    it("leaves a block's OWN root id alone when the node supplies none", async () => {
+      // Two node states mean "this node contributes no id": the field absent,
+      // and the field present but empty. They now behave the SAME — the block's
+      // id survives both — where an empty one used to overwrite it with `id=""`
+      // and leave the element addressable by nothing.
+      //
+      // Suppressing it was collateral of assigning the empty string rather than
+      // a rule anything stated. It is also the harmful direction: an empty
+      // `cssId` arrives by import, never from this editor, and a block whose
+      // root id is the target of its own `aria-labelledby` or `htmlFor` would
+      // lose that wiring because of a value the author did not type.
+      for (const nodeFields of [
+        {},
+        { cssId: "" },
+        { attributes: { id: "" } },
+      ]) {
+        const html = await renderToHtml(
+          <PageRenderer
+            document={doc(
+              node("a", "test/owned-id", {
+                props: { value: "anchored" },
+                ...nodeFields,
+              })
+            )}
+            blocks={createBlockResolver([ownedId as AnyBlockDefinition])}
+          />
+        );
+
+        expect(html).toContain('id="block-owned"');
+        expect(html).not.toContain('id=""');
+      }
+    });
+
+    it("lets the node's id win over a block's own root id", async () => {
+      // The other half, and the one that must not regress: when the node DOES
+      // name an id, it is the node's that reaches the page. Without this the
+      // test above passes on a renderer that ignores the node entirely.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/owned-id", {
+              props: { value: "anchored" },
+              cssId: "author-chose",
+            })
+          )}
+          blocks={createBlockResolver([ownedId as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).toContain('id="author-chose"');
+      expect(html).not.toContain('id="block-owned"');
     });
 
     it("never lets a stored attribute reinterpret the element", async () => {

@@ -38,3 +38,59 @@ describe("resolveServiceOpts", () => {
     expect(() => resolveServiceOpts({ as: "user" })).toThrow();
   });
 });
+
+/**
+ * `user` names the key's OWNER, so a facade that receives it alone resolves the
+ * owner's roles and a viewer-scoped key minted by a super-admin is judged as a
+ * super-admin. This is the hop that either carries the key's own grants or
+ * drops them.
+ */
+describe("resolveServiceOpts — the caller's own scope", () => {
+  const KEY_SCOPE = {
+    actorType: "apiKey" as const,
+    permissions: ["read-posts"],
+  };
+
+  it("forwards an API key's grants alongside the account", () => {
+    expect(
+      resolveServiceOpts({
+        as: "user",
+        user: { id: "u1", email: "u@e.com", name: "U" },
+        authenticatedScope: KEY_SCOPE,
+      })
+    ).toEqual({
+      overrideAccess: false,
+      user: { id: "u1", email: "u@e.com", role: "", permissions: [] },
+      authenticatedScope: KEY_SCOPE,
+    });
+  });
+
+  it("omits the key entirely for a session caller, who has no key scope", () => {
+    // The control. `toEqual` ignores an explicitly-undefined property, so
+    // asserting the scope is absent has to be done on the KEYS — otherwise a
+    // hop that always wrote `authenticatedScope: undefined` would satisfy it,
+    // and so would one that wrote nothing.
+    const resolved = resolveServiceOpts({
+      as: "user",
+      user: { id: "u1", email: "u@e.com", name: "U" },
+    });
+    // On the KEY rather than the value: `toEqual` ignores an
+    // explicitly-undefined property, so comparing against `undefined` would be
+    // satisfied by a hop that always wrote `authenticatedScope: undefined` and
+    // by one that wrote nothing, which are different behaviours downstream.
+    //
+    // Asserting this one key rather than the whole key set, because the set is
+    // shared: `context` arrived here from another change and broke an
+    // exact-set assertion that was never about it.
+    expect(Object.keys(resolved)).not.toContain("authenticatedScope");
+    expect(resolved.overrideAccess).toBe(false);
+  });
+
+  it("drops a scope under system elevation, which bypasses the check it feeds", () => {
+    // A scope only means anything to an access check, and `as:'system'` skips
+    // it. Carrying one here would imply a narrowing that is not applied.
+    expect(
+      resolveServiceOpts({ as: "system", authenticatedScope: KEY_SCOPE })
+    ).toEqual({ overrideAccess: true });
+  });
+});

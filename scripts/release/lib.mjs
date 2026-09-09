@@ -268,7 +268,20 @@ export function isBootstrapPlaceholderOnly(state) {
  */
 export async function fetchRegistryState(name) {
   const response = await fetch(`${REGISTRY}/${name.replace("/", "%2F")}`, {
-    headers: { accept: "application/vnd.npm.install-v1+json" },
+    headers: {
+      accept: "application/vnd.npm.install-v1+json",
+      /*
+       * The registry sits behind a CDN, and every caller of this function is
+       * asking what is true NOW rather than what was true recently: the
+       * preflight decides what still needs publishing, the bootstrap check
+       * decides whether a package exists, and the verification decides whether
+       * a release is complete. A cached packument answers all three with the
+       * state before the publish, and the verification would then spend its
+       * whole budget re-reading one stale copy and conclude the packages never
+       * arrived. Revalidation is what makes waiting meaningful.
+       */
+      "cache-control": "no-cache",
+    },
   });
 
   if (response.status === 404) return null;
@@ -377,6 +390,132 @@ export async function fetchAllRegistryStates(manifest) {
     ])
   );
   return new Map(states);
+}
+
+
+/*
+ * How long to keep asking the registry before calling a package missing.
+ *
+ * A publish is not one event. `changeset publish` returns once npm has accepted
+ * every tarball, but a package becomes readable on the packument endpoint some
+ * time later, and for a train this size that lag is measured in minutes rather
+ * than in the "few seconds" a per-package view of it suggests: across twenty
+ * packages accepted within one second of each other, the last four became
+ * readable 47s, 125s, 179s and 186s afterwards. A budget shorter than that
+ * reports a complete release as incomplete.
+ *
+ * The cost of the two mistakes is not symmetric, which is what sets the size.
+ * Publishing has already succeeded by the time this runs, so waiting too long
+ * spends CI minutes and nothing else. Giving up too early withholds the tag and
+ * the GitHub release from a release npm accepted, leaving npm, git and the
+ * releases page describing different things, and it does so on a step whose red
+ * cross means "look again later" rather than "something is wrong" — which is
+ * the kind of red that teaches a reader to wave the next one through.
+ *
+ * Ten minutes is roughly three times the longest settle observed, and the job
+ * that runs it allows forty-five.
+ */
+const SETTLE_BUDGET_MS = 10 * 60 * 1000;
+
+/*
+ * Backoff rather than a fixed interval: a release that settles immediately is
+ * the common case and should not pay a long first wait, while one that needs
+ * minutes should not ask the registry a hundred times to find out.
+ */
+const FIRST_DELAY_MS = 5_000;
+const MAX_DELAY_MS = 30_000;
+
+/**
+ * Packages that are not yet fully released, each with the reason. A missing
+ * version and a stale dist-tag are reported separately because they need
+ * different fixes: the first is a failed publish, the second a tag that was
+ * never moved.
+ */
+export function collectProblems(manifest, registry, preState) {
+  const problems = [];
+
+  for (const entry of manifest) {
+    const state = registry.get(entry.name);
+
+    if (state === null) {
+      problems.push({
+        name: entry.name,
+        reason: "package not found on registry",
+      });
+      continue;
+    }
+
+    if (!state.versions.includes(entry.version)) {
+      problems.push({
+        name: entry.name,
+        reason: `version ${entry.version} not published`,
+      });
+      continue;
+    }
+
+    const expectedTag = getExpectedDistTag(state, preState);
+    const actual = state.distTags[expectedTag];
+    if (actual !== entry.version) {
+      problems.push({
+        name: entry.name,
+        reason:
+          `dist-tag "${expectedTag}" points at ${actual ?? "nothing"}, ` +
+          `so ${entry.name}@${expectedTag} does not resolve to ${entry.version}`,
+      });
+    }
+  }
+
+  return problems;
+}
+
+/**
+ * Ask the registry until it agrees the release is complete, or the budget runs out.
+ *
+ * The clock, the sleeper and the fetch are parameters so the waiting can be
+ * exercised without one: a test that actually slept would have to choose
+ * between a slow suite and a budget too small to describe the behaviour.
+ *
+ * Returns the last answer either way. A caller reports the problems; deciding
+ * that an incomplete release is a failure is not this function's job, because
+ * the same wait is the right one whether the caller exits or reports.
+ */
+export async function waitForCompleteRelease({
+  manifest,
+  preState,
+  fetchStates,
+  sleep: wait,
+  now,
+  budgetMs = SETTLE_BUDGET_MS,
+  firstDelayMs = FIRST_DELAY_MS,
+  maxDelayMs = MAX_DELAY_MS,
+}) {
+  const deadline = now() + budgetMs;
+  let delay = firstDelayMs;
+  let registry;
+  let problems;
+  let attempts = 0;
+
+  for (;;) {
+    registry = await fetchStates(manifest);
+    problems = collectProblems(manifest, registry, preState);
+    attempts += 1;
+    if (problems.length === 0) break;
+
+    // Measured against the deadline rather than counted, so the budget states a
+    // duration and stays true however long a registry round trip takes.
+    const remaining = deadline - now();
+    if (remaining <= 0) break;
+
+    const pause = Math.min(delay, remaining);
+    console.log(
+      `Waiting for ${problems.length} package(s) to settle on the registry ` +
+        `(attempt ${attempts}, ${Math.round(remaining / 1000)}s of budget left)...`
+    );
+    await wait(pause);
+    delay = Math.min(delay * 2, maxDelayMs);
+  }
+
+  return { registry, problems, attempts };
 }
 
 export { REGISTRY, REPO_ROOT };

@@ -1,6 +1,7 @@
 import { buildErrorResponse } from "../../api/error-response";
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { applySessionCacheHeaders } from "../../api/response-shapes";
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import {
   isErrorResponse,
   requireAuthentication,
@@ -12,10 +13,16 @@ import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
 
+import { runWithCallerScope } from "./caller-scope";
 import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
+import { buildPluginRouteCaller } from "./route-caller";
 import type { RouteMatch } from "./route-registry";
-import type { PluginRoute, PluginRouteContext } from "./route-types";
+import type {
+  PluginRoute,
+  PluginRouteCaller,
+  PluginRouteContext,
+} from "./route-types";
 
 /**
  * Map a failure on a plugin route to the error Response a caller receives.
@@ -60,8 +67,15 @@ function toErrorResponse(req: Request, err: unknown): Response {
 async function resolvePluginRouteAuth(
   req: Request,
   route: PluginRoute
-): Promise<{ user: AuthUser | null } | { error: NextlyError }> {
-  if (route.public === true) return { user: null };
+): Promise<
+  | {
+      user: AuthUser | null;
+      authenticatedScope?: AuthenticatedScope;
+      caller: PluginRouteCaller | null;
+    }
+  | { error: NextlyError }
+> {
+  if (route.public === true) return { user: null, caller: null };
 
   // requirePermission already enforces authentication, so the permission-gated
   // path needs a single call (avoids verifying the session twice).
@@ -78,7 +92,26 @@ async function resolvePluginRouteAuth(
     email: authResult.userEmail ?? "",
     name: authResult.userName ?? null,
   };
-  return { user };
+  // An API key's own grants travel beside the owner it names. `user` carries
+  // the owner, so a service that resolves permissions from `user.id` reaches
+  // the owner's roles — which is how a viewer-scoped key minted by a
+  // super-admin came to be judged as a super-admin on this path. A session
+  // caller carries no scope and keeps resolving the normal way.
+  const authenticatedScope =
+    authResult.authMethod === "api-key"
+      ? {
+          actorType: "apiKey" as const,
+          permissions: authResult.permissions,
+          roles: authResult.roles,
+        }
+      : undefined;
+  // Built from the same `authResult` the scope above is derived from, so the
+  // raw grant and the question asked of it cannot disagree about who is asking.
+  return {
+    user,
+    authenticatedScope,
+    caller: buildPluginRouteCaller(authResult),
+  };
 }
 
 function permissionArgs(slug: string): [string, string] {
@@ -158,6 +191,8 @@ export async function runPluginRoute(
   const ctx: PluginRouteContext = {
     ...matched.baseCtx,
     user: auth.user,
+    authenticatedScope: auth.authenticatedScope,
+    caller: auth.caller,
     params: matched.params,
   };
 
@@ -167,7 +202,15 @@ export async function runPluginRoute(
   );
 
   try {
-    return markPluginResponse(await run(req, ctx), matched.route);
+    // Pinned for the length of the handler so a service call inside it inherits
+    // the key's grants without the handler having to remember. Every route
+    // written before this field existed composes `{ as: "user", user }` by
+    // hand, and an opt-in field leaves all of them authorizing the key as its
+    // owner.
+    return markPluginResponse(
+      await runWithCallerScope(auth.authenticatedScope, () => run(req, ctx)),
+      matched.route
+    );
   } catch (err) {
     return markPluginResponse(toErrorResponse(req, err), matched.route);
   }

@@ -24,7 +24,7 @@ permissions apply:
 
 | `opts` | Behaviour |
 |---|---|
-| `{ as: "user", user }` | Runs as that user — **RBAC enforced** by `user.id`. Use this in request handlers; pass the route's `ctx.user`. |
+| `{ as: "user", user }` | Runs as that caller — **RBAC enforced**. In a plugin route the caller's API-key scope is carried automatically, so a key is judged on its own grants rather than its owner's; pass `authenticatedScope` explicitly only to narrow it. |
 | `{ as: "system" }` | Elevates — **bypasses the access check** for trusted, non-user work (jobs, derived data, lookups). Visible and greppable by design. |
 | `{}` / omitted | No user → defaults to **system** (jobs, CLI, migrations). |
 

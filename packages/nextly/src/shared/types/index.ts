@@ -9,6 +9,8 @@
  * @since 1.0.0
  */
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+
 /**
  * Type alias for Drizzle database instance.
  * Using `any` because the concrete Drizzle type varies by dialect
@@ -58,6 +60,17 @@ export interface RequestContext {
   fallbackLocale?: string | false;
   /** Unique request identifier for tracing/logging */
   requestId?: string;
+  /**
+   * The caller's own authorization scope when they arrived on an API key.
+   *
+   * `user` names the key's OWNER, so an access check that resolves permissions
+   * from `user.id` reads the owner's roles — which is how a viewer-scoped key
+   * minted by a super-admin came to be judged as a super-admin. This carries
+   * the grants stamped on the KEY, and the access services already prefer it
+   * over the owner when it is present. Absent for a session or system caller,
+   * who resolve the normal way.
+   */
+  authenticatedScope?: AuthenticatedScope;
   /**
    * @experimental Bypass the access check for this operation (D35 system
    * elevation). Validation/hooks/events still run — only the access check is

@@ -591,7 +591,7 @@ describe("InspectorPanel advanced fields", () => {
 
   it("REMOVES an id rather than storing an empty one", () => {
     // A node that never had an id and one whose id was cleared are the same
-    // node; an empty string would render as `id=""`.
+    // node; an empty string would be a third state that shadows the bag.
     const editor = mount({ cssId: "hero" });
     openAdvanced();
 
@@ -1669,9 +1669,9 @@ describe("the block set the collision check answers about", () => {
 
 describe("a node whose CSS id is present but empty", () => {
   /*
-   * The renderer treats the modelled field as PRESENT whenever it is a string:
-   * it writes `extra.id = cssId` on `cssId !== undefined`, so `cssId: ""`
-   * renders `id=""` AND shadows any `id` in the attribute bag. The inspection
+   * The rule treats the modelled field as PRESENT whenever it is a string, so
+   * `cssId: ""` shadows any `id` in the attribute bag AND renders none of its
+   * own, leaving the element with no id. The inspection
    * collapsed it with an absent field, so the panel showed an empty box, every
    * clear attempt read as untouched, and no `unset` could ever be emitted.
    *
@@ -1806,7 +1806,7 @@ describe("what the empty-id note promises", () => {
     const note = screen.getByRole("status").textContent ?? "";
     // The control: the note IS shown, so this is not passing on its absence.
     expect(note).toContain("empty id");
-    expect(note).not.toContain("hides the id");
+    expect(note).not.toContain("is ignored");
   });
 
   it("DOES claim it when the renderer would emit one", () => {
@@ -1817,7 +1817,7 @@ describe("what the empty-id note promises", () => {
     } as unknown as Partial<BlockNode>);
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
 
-    expect(screen.getByRole("status").textContent).toContain("hides the id");
+    expect(screen.getByRole("status").textContent).toContain("is ignored");
   });
 });
 
