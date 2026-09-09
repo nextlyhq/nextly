@@ -406,7 +406,9 @@ export function SpacingHandles({
     nodeId: string;
     /** The tier the surface is editing, so a gesture can notice it moved. */
     tier: string;
-  }>({ styles: undefined, nodeId: "", tier: "" });
+    /** The canvas scale it is painted at, for the same reason. */
+    scale: string;
+  }>({ styles: undefined, nodeId: "", tier: "", scale: "" });
   const [preview, setPreview] = React.useState<string | null>(null);
   /**
    * The band a gesture is holding, kept alive for the gesture's lifetime.
@@ -472,11 +474,22 @@ export function SpacingHandles({
     );
   }, [node?.type]);
 
+  /** The tier this render is editing, as one comparable value. */
+  const tier = `${context.address.state}\u0000${context.address.breakpoint}`;
+
+  /** The scale this render measures in, as one comparable value. */
+  const scaleKey = `${String(subject.scales.scale.x)},${String(
+    subject.scales.scale.y
+  )},${String(subject.scales.marginScale.x)},${String(
+    subject.scales.marginScale.y
+  )}`;
+
   // Refreshed on every render, so a listener from an earlier one reads today's
   // document rather than the one the gesture began in.
   latest.current.styles = node?.styles;
   latest.current.nodeId = nodeId;
   latest.current.tier = `${context.address.state}\u0000${context.address.breakpoint}`;
+  latest.current.scale = scaleKey;
 
   /**
    * Which way each band thickens, and therefore which edge carries its handle
@@ -600,8 +613,6 @@ export function SpacingHandles({
   );
 
   /** Write the gesture's result to the document, as ONE op. */
-  /** The tier this render is editing, as one comparable value. */
-  const tier = `${context.address.state}\u0000${context.address.breakpoint}`;
 
   const commit = React.useCallback(
     (
@@ -661,6 +672,17 @@ export function SpacingHandles({
        * somewhere they are not looking.
        */
       if (latest.current.tier !== tier) return;
+      /*
+       * And the canvas must still be painted at the scale the gesture began in.
+       *
+       * A shell panel resizing, or the window changing, can alter fit zoom
+       * without crossing a breakpoint — so the tier guard above does not see it.
+       * The origin was converted to content coordinates at the OLD scale while
+       * every later point is converted at the new one, so their subtraction
+       * reports a large movement for a pointer that never moved, and the result
+       * is then divided by the frozen old scale before it is committed.
+       */
+      if (latest.current.scale !== scaleKey) return;
       const result = scrubCommitOps(
         target,
         /*
@@ -681,7 +703,7 @@ export function SpacingHandles({
     // `node.styles` is deliberately absent: the commit reads the LATEST styles
     // through a ref, so rebuilding this callback per edit would only replace the
     // listeners of a gesture already in flight.
-    [editor, nodeId, targetFor, tier, valuesFor]
+    [editor, nodeId, scaleKey, targetFor, tier, valuesFor]
   );
 
   /** Draw the gesture's result without touching the document. */

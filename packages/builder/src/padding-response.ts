@@ -38,9 +38,6 @@ import type { SpacingSide } from "./spacing-bands";
 /** How far the probe pushes the padding, in CSS pixels. */
 const PROBE_PX = 10;
 
-/** Half the probe, as the threshold a real response has to clear. */
-const MOVED_PX = PROBE_PX / 2;
-
 /** The inline property one side's padding is written through. */
 const PROPERTY: Record<SpacingSide, string> = {
   top: "padding-top",
@@ -67,21 +64,21 @@ const COMPUTED: Record<
   left: "paddingLeft",
 };
 
-/** Whether the border edge on `side` moved away from the block's middle. */
+/** How far the border edge on `side` moved away from the block's middle. */
 function edgeMovedOut(
   before: DOMRect,
   after: DOMRect,
   side: SpacingSide
-): boolean {
+): number {
   switch (side) {
     case "top":
-      return before.top - after.top > MOVED_PX;
+      return before.top - after.top;
     case "bottom":
-      return after.bottom - before.bottom > MOVED_PX;
+      return after.bottom - before.bottom;
     case "left":
-      return before.left - after.left > MOVED_PX;
+      return before.left - after.left;
     case "right":
-      return after.right - before.right > MOVED_PX;
+      return after.right - before.right;
   }
 }
 
@@ -103,7 +100,8 @@ function edgeMovedOut(
  */
 export function paddingRespondsOutward(
   block: HTMLElement,
-  side: SpacingSide
+  side: SpacingSide,
+  scale: number
 ): boolean {
   const property = PROPERTY[side];
   const style = block.style;
@@ -146,5 +144,20 @@ export function paddingRespondsOutward(
     }
   );
 
-  return edgeMovedOut(before, after, side);
+  /*
+   * Judged against what the probe SHOULD have moved at this canvas's scale.
+   *
+   * `boxAcross` answers in viewport pixels, and the canvas is painted through a
+   * transform — so ten CSS pixels of padding move the edge by ten times the
+   * scale on screen, which is five at half zoom and two and a half at quarter.
+   * A fixed threshold in viewport pixels therefore reads an ordinary
+   * outward-growing block as stationary on any zoomed canvas, places the handle
+   * on the edge that never moves and inverts the drag: exactly the defect this
+   * module exists to remove, reintroduced by the units it was measured in.
+   *
+   * Half the expected motion separates the two answers cleanly, because the
+   * other one is not a smaller movement — it is no movement at all.
+   */
+  const expected = PROBE_PX * (Number.isFinite(scale) && scale > 0 ? scale : 1);
+  return edgeMovedOut(before, after, side) > expected / 2;
 }

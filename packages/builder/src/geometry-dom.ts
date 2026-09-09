@@ -285,6 +285,35 @@ export function boxAcross(
   return { before, after };
 }
 
+/**
+ * How much smaller than its own layout the canvas root is PAINTED.
+ *
+ * The factor that sits between the two units this package mixes: a computed
+ * length is unscaled CSS pixels, and anything from `getBoundingClientRect` has
+ * already been through the canvas's transform. `renderedScale` deliberately
+ * stops BELOW the root — the overlay is a child of the root and is drawn
+ * through that transform already — so any comparison whose two readings sit on
+ * opposite sides of it has to compose this back in.
+ *
+ * Asked against the root's OWN realm, as {@link canvasRootFrom} does. A canvas
+ * portalled into a same-origin iframe has a root built by that document's
+ * constructor, so the ambient `HTMLElement` is a different function object and
+ * a plain `instanceof` is false for an ordinary div — which would substitute an
+ * identity scale on a canvas that really is scaled, the very case this exists
+ * for.
+ *
+ * Identity for a root this cannot measure. `offsetWidth` is an HTML property,
+ * so a genuinely foreign root — an SVG element, or one with no window at all —
+ * cannot be asked how much smaller it is painted, and answering 1 leaves the
+ * arithmetic as it was before there was a canvas scale.
+ */
+export function canvasPaintedScale(root: Element): Scale {
+  const realm = root.ownerDocument.defaultView;
+  return realm !== null && root instanceof realm.HTMLElement
+    ? paintedScale(root, root.getBoundingClientRect())
+    : { x: 1, y: 1 };
+}
+
 export function viewportPositioned(element: Element): boolean {
   const view = element.ownerDocument.defaultView;
   if (view === null) return false;
@@ -1249,26 +1278,7 @@ function ancestorClipContext(
    * so the symptom is an overlay that silently stops drawing rather than one
    * that draws wrongly.
    */
-  const realm = root.ownerDocument.defaultView;
-  const painted =
-    realm !== null && root instanceof realm.HTMLElement
-      ? paintedScale(root, root.getBoundingClientRect())
-      : /*
-         * Identity for a root this cannot measure.
-         *
-         * Asked against the root's OWN realm, as {@link canvasRootFrom} already
-         * does. A canvas portalled into a same-origin iframe has a root built
-         * by that document's constructor, so the ambient `HTMLElement` is a
-         * different function object and a plain `instanceof` is false for an
-         * ordinary div — substituting an identity scale on a canvas that really
-         * is scaled, which is the very case this composition exists for.
-         *
-         * `offsetWidth` is an HTML property, so a genuinely foreign root — an
-         * SVG element, or one with no window at all — cannot be asked how much
-         * smaller it is painted. Answering 1 leaves the arithmetic exactly as it
-         * was before there was a canvas scale.
-         */
-        { x: 1, y: 1 };
+  const painted = canvasPaintedScale(root);
   const own = renderedScale(node, root);
   const scale: RenderedScale = {
     ...own,

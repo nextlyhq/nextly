@@ -226,6 +226,14 @@ function withFakeResizeObserver() {
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
 }
 
+/** Make the overlay measure again, the way a real resize would. */
+function remeasure(): void {
+  const observer = FakeResizeObserver.instances.at(-1);
+  act(() => {
+    observer?.callback([], observer as unknown as ResizeObserver);
+  });
+}
+
 function labels(container: HTMLElement): string[] {
   return Array.from(
     container.querySelectorAll(".nx-spacing-overlay__value")
@@ -457,14 +465,6 @@ describe("a gesture the measurement must not end", () => {
    * the listeners detach, the preview goes, and the drag ends without
    * committing and without a word.
    */
-  /** Make the overlay measure again, the way a real resize would. */
-  function remeasure(): void {
-    const observer = FakeResizeObserver.instances.at(-1);
-    act(() => {
-      observer?.callback([], observer as unknown as ResizeObserver);
-    });
-  }
-
   it("keeps the handles while a gesture is held, even with no bands to draw", () => {
     withFakeResizeObserver();
     stubComputedStyle({ a: { marginTop: "16px" } });

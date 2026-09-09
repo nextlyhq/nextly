@@ -1473,6 +1473,70 @@ describe("a gesture whose subject changes underneath it", () => {
   });
 });
 
+describe("a gesture whose canvas SCALE changes underneath it", () => {
+  /*
+   * A shell panel resizing, or the window changing, can alter fit zoom without
+   * crossing a breakpoint — so the tier guard does not see it. The gesture's
+   * origin was converted to content coordinates at the OLD scale while every
+   * later point is converted at the new one, so their subtraction reports a
+   * large movement for a pointer that never moved, and the result is divided by
+   * the frozen old scale before it is committed.
+   */
+  function ScaleHarness({ zoom }: { zoom: number }): React.JSX.Element {
+    const editor = useEditorState({ initialDocument: documentWith() });
+    live = editor;
+    return (
+      <SpacingHandles
+        editor={editor}
+        bands={[band("margin", "top", "10")]}
+        subject={subjectWith({
+          scales: {
+            scale: { x: zoom, y: zoom },
+            marginScale: { x: zoom, y: zoom },
+          },
+        })}
+        context={BASE}
+      />
+    );
+  }
+
+  it("abandons the gesture rather than committing across scales", () => {
+    const { rerender } = render(<ScaleHarness zoom={1} />);
+    act(() => {
+      fireEvent.pointerDown(handle("top margin"), {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    act(() => {
+      fireEvent.pointerMove(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+    rerender(<ScaleHarness zoom={0.5} />);
+    act(() => {
+      fireEvent.pointerUp(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+
+    expect(live?.undoDepth).toBe(0);
+  });
+
+  /* The control: a gesture at a steady scale must still commit. */
+  it("commits when the scale holds still", () => {
+    render(<ScaleHarness zoom={1} />);
+    drag(handle("top margin"), [{ x: 0, y: -20 }]);
+    expect(live?.undoDepth).toBe(1);
+  });
+});
+
 describe("a gesture whose TIER changes underneath it", () => {
   /*
    * The state switcher and the canvas width live outside this component, so

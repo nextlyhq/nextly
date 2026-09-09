@@ -78,6 +78,7 @@ import type { EditorState } from "./editor-state";
 import type { Rect, Scale } from "./geometry";
 import {
   canvasContentRect,
+  canvasPaintedScale,
   canvasRootFrom,
   clippedByAncestor,
   hasScrollbarGutter,
@@ -428,6 +429,9 @@ const RESTING_BASE: SpacingScrubContext = {
  * handles a new object and restart every gesture they hold. `sameBands` already
  * does this for the bands; a subject compared by identity would defeat it.
  */
+/** The four sides, for comparisons that must cover all of them. */
+const SIDES: readonly SpacingSide[] = ["top", "right", "bottom", "left"];
+
 function sameEdges(one: EdgeLengths, other: EdgeLengths): boolean {
   return (
     one.top === other.top &&
@@ -476,7 +480,26 @@ function sameSubject(
     sameEdges(one.margin, other.margin) &&
     sameEdges(one.padding, other.padding) &&
     sameScales(one.scales, other.scales) &&
-    sameOrientation(one.orientation, other.orientation)
+    sameOrientation(one.orientation, other.orientation) &&
+    /*
+     * The probed answer is part of what a handle IS, so it belongs in this
+     * comparison. An edit can turn a block from content-sized to fixed-sized
+     * without changing a single measured length — the cache is re-probed and
+     * answers differently, and a comparison blind to it would keep the old
+     * subject: the handle stays on the edge that has stopped moving and the drag
+     * keeps the direction that has stopped being right, until some unrelated
+     * margin or scale change happens to force a replacement.
+     *
+     * NOT covered by a test of its own, and said here rather than left to be
+     * discovered. What `paddingOutward` DOES once it reaches the handles is
+     * covered — `spacing-handles.test.tsx` asserts both the edge it places the
+     * control on and the direction it drags in. What is untested is this
+     * propagation step: reaching it needs a measurement whose probe answers
+     * differently while every other length holds still, and every attempt to
+     * stage that in jsdom broke the measurement chain it was standing on. A
+     * test that fights its harness is worth less than a note that does not.
+     */
+    SIDES.every(side => one.paddingOutward[side] === other.paddingOutward[side])
   );
 }
 
@@ -658,6 +681,12 @@ export function SpacingOverlay({
      * It fills the root, so the root's content rectangle IS the layer's, and
      * asking for it separately would be a second answer to one question.
      */
+    /*
+     * How much smaller than its layout the canvas is PAINTED, which is the unit
+     * the probe's movement will be seen in. Read once per measurement.
+     */
+    const rootPainted = canvasPaintedScale(root);
+
     /** This node's answer for one side, probed once and then remembered. */
     const outwardFor = (side: SpacingSide): boolean => {
       const key = `${selectedId}\u0000${side}`;
@@ -666,7 +695,23 @@ export function SpacingOverlay({
       const realm = block.ownerDocument.defaultView;
       const answer =
         realm !== null && block instanceof realm.HTMLElement
-          ? paddingRespondsOutward(block, side)
+          ? paddingRespondsOutward(
+              block,
+              side,
+              /*
+               * The scale the probe's movement will be SEEN at. `boxAcross`
+               * answers in viewport pixels and the canvas is painted through a
+               * transform, so ten CSS pixels of padding move the edge by ten
+               * times this on screen. Composed with the root's own painted
+               * scale, which `renderedScale` stops below on purpose: that
+               * exclusion is right for a band drawn inside the root and wrong
+               * for a rectangle read off the viewport.
+               */
+              (side === "top" || side === "bottom" ? scale.y : scale.x) *
+                (side === "top" || side === "bottom"
+                  ? rootPainted.y
+                  : rootPainted.x)
+            )
           : false;
       responds.current.set(key, answer);
       return answer;
