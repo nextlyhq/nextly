@@ -1505,6 +1505,65 @@ function finishInlineEdit(
 }
 
 /**
+ * Raising the save-as-pattern form, and everything that has to be true first.
+ *
+ * A hook rather than three pieces of state in the editor, and not only because
+ * that function is the most complex in the package: the three are one gesture.
+ * An open passage has to be committed before the document is worth saving, the
+ * document that comes back is what the form must store, and the control the
+ * author pressed has to be remembered before it loses focus. Split across the
+ * editor they would be three things to keep in step; here the order is the
+ * function body.
+ */
+function useSavePatternVerb(
+  editor: { document: BlockDocument },
+  inline: { commit: () => InlineEditOutcome }
+): {
+  /** The document to save from, or `null` when the author has not asked. */
+  readonly document: BlockDocument | null;
+  /** What had focus when they asked, so the form can give it back. */
+  readonly returnFocusTo: HTMLElement | null;
+  readonly open: () => void;
+  readonly close: () => void;
+} {
+  const [document, setDocument] = useState<BlockDocument | null>(null);
+  /*
+   * The opener, read at the GESTURE.
+   *
+   * The toolbar button, the menu item or the palette row still has focus while
+   * this runs, and by the time the dialog is mounting it does not — measured,
+   * it has gone even by Radix's own "about to take focus" hook. This is the
+   * last moment it is knowable.
+   */
+  const [openedFrom, setOpenedFrom] = useState<HTMLElement | null>(null);
+
+  const open = useCallback(() => {
+    /*
+     * An open inline passage is COMMITTED first, and its document is what the
+     * form saves.
+     *
+     * A rich-text editor holds the author's words itself while they type — the
+     * canvas keeps the caret still — so `editor.document` during an open
+     * passage is the one from before it. A form snapshotting that stores a
+     * pattern missing the words on screen, silently.
+     *
+     * A REFUSED commit declines to open the form at all, for the reason the
+     * exit gesture declines to close: the words are in the passage and nowhere
+     * else, and the author has been told what happened.
+     */
+    const finished = finishInlineEdit(inline, editor.document);
+    if (!finished.mayClose) return;
+    const active = window.document.activeElement;
+    setOpenedFrom(active instanceof HTMLElement ? active : null);
+    setDocument(finished.document);
+  }, [editor.document, inline]);
+
+  const close = useCallback(() => setDocument(null), []);
+
+  return { document, returnFocusTo: openedFrom, open, close };
+}
+
+/**
  * The form's save shortcut, parsed from the SAME spec the form registers.
  *
  * Asked of the shortcut library rather than written out here. A hand-rolled
@@ -1770,40 +1829,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   // itself, because the verb that raises it belongs to the shared chain — the
   // toolbar, the context menu and the palette all reach it — while everything
   // the form needs is mounted only while it is up. See `SavePatternPrompt`.
-  const [savingPattern, setSavingPattern] = useState<BlockDocument | null>(
-    null
-  );
-  /*
-   * An open inline passage is COMMITTED first, and its document is what the
-   * form saves.
-   *
-   * A rich-text editor holds the author's words itself while they type — the
-   * canvas keeps the caret still — so `editor.document` during an open passage
-   * is the one from before it. A form snapshotting that stores a pattern
-   * missing the words on screen, silently, which is the same reason leaving the
-   * editor commits first.
-   *
-   * A REFUSED commit declines to open the form at all, for the reason the exit
-   * gesture declines to close: the words are in the passage and nowhere else,
-   * and the author has been told what happened.
-   */
-  /*
-   * What had focus when the author asked, so the form can give it back.
-   *
-   * Read HERE because this is the last moment it is knowable: the toolbar
-   * button, the menu item or the palette row still has focus during the
-   * gesture, and by the time the dialog is mounting it does not — measured, it
-   * has already gone even by Radix's own "about to take focus" hook.
-   */
-  const savePatternOpener = useRef<HTMLElement | null>(null);
-  const openSavePattern = useCallback(() => {
-    const finished = finishInlineEdit(inline, editor.document);
-    if (!finished.mayClose) return;
-    const active = window.document.activeElement;
-    savePatternOpener.current = active instanceof HTMLElement ? active : null;
-    setSavingPattern(finished.document);
-  }, [editor.document, inline]);
-  const closeSavePattern = useCallback(() => setSavingPattern(null), []);
+  const savePattern = useSavePatternVerb(editor, inline);
 
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
@@ -2697,7 +2723,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         <BlockKeyboardActions
           editor={editor}
           onEditText={inline.begin}
-          onSaveAsPattern={openSavePattern}
+          onSaveAsPattern={savePattern.open}
         >
           {/*
             Inside the verbs provider, which is what lets the palette run
@@ -2853,12 +2879,10 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             from the palette, the context menu or a keystroke.
           */}
           <SavePatternPrompt
-            document={savingPattern}
+            document={savePattern.document}
             selectedIds={editor.selection.ids}
-            onClose={closeSavePattern}
-            {...(savePatternOpener.current === null
-              ? {}
-              : { returnFocusTo: savePatternOpener.current })}
+            onClose={savePattern.close}
+            returnFocusTo={savePattern.returnFocusTo}
           />
         </BlockKeyboardActions>
       </BuilderShell>

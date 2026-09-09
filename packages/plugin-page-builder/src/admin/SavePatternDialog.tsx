@@ -158,7 +158,7 @@ export interface SavePatternDialogProps {
    * Used only while it is still CONNECTED. Two of the three controls that open
    * this have unmounted by the time it closes.
    */
-  returnFocusTo?: HTMLElement;
+  returnFocusTo?: HTMLElement | null;
   /**
    * Why the last save failed, when one did.
    *
@@ -330,7 +330,7 @@ export function SavePatternDialog({
          * environment cannot show.
          */
         onCloseAutoFocus={event => {
-          if (returnFocusTo === undefined || !returnFocusTo.isConnected) return;
+          if (!returnFocusTo?.isConnected) return;
           event.preventDefault();
           returnFocusTo.focus();
         }}
