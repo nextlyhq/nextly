@@ -30,6 +30,18 @@ export interface RestoreConfirmDialogProps {
   versionNo: number;
   /** Whether this document is published, which decides how urgent this is. */
   isPublished?: boolean;
+  /**
+   * Whether the editor behind this restore holds unsaved changes. Restoring
+   * replaces the live document, and the refresh that follows discards that
+   * work — an author must be told before confirming, not discover it after.
+   */
+  unsavedChanges?: boolean;
+  /**
+   * A transient reason the confirm action is disabled — a refusal that
+   * arrived after the dialog opened. The action stays visible so the
+   * refusal's reason is still on screen behind it, but cannot be fired.
+   */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   isRestoring?: boolean;
 }
@@ -39,6 +51,8 @@ export function RestoreConfirmDialog({
   onOpenChange,
   versionNo,
   isPublished = false,
+  unsavedChanges = false,
+  confirmDisabled = false,
   onConfirm,
   isRestoring = false,
 }: RestoreConfirmDialogProps) {
@@ -55,14 +69,19 @@ export function RestoreConfirmDialog({
                 {isPublished ? ", and the document is published" : ""}.
               </p>
               <p>
-                Nothing is lost. The current content is kept as its own version,
-                and restoring records a new one — so you can undo this by
-                restoring again.
+                {unsavedChanges
+                  ? "Nothing already saved is lost. The current saved content is kept as its own version, and restoring records a new one — so you can undo this by restoring again."
+                  : "Nothing is lost. The current content is kept as its own version, and restoring records a new one — so you can undo this by restoring again."}
               </p>
               <p>
                 Values that were never stored in a version, such as passwords,
                 are left as they are.
               </p>
+              {unsavedChanges ? (
+                <p className="font-medium text-foreground">
+                  The editor has unsaved changes that this restore will discard.
+                </p>
+              ) : null}
             </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -75,7 +94,7 @@ export function RestoreConfirmDialog({
               event.preventDefault();
               onConfirm();
             }}
-            disabled={isRestoring}
+            disabled={isRestoring || confirmDisabled}
           >
             {isRestoring ? (
               <>

@@ -147,6 +147,37 @@ async function runGroupBy(
 }
 
 /**
+ * How many rows fall in each interval of a recent window.
+ *
+ * Reaches the row set through the same `sharedReadArgs` a count does, and the
+ * domain that owns the rows resolves that set once for all of them. Nothing
+ * about access is decided here.
+ */
+async function runTimeseries(
+  collection: string,
+  query: WidgetQuery,
+  caller: ReadCaller
+): Promise<WidgetResult> {
+  // `validateWidgetQuery` refuses a `timeseries` op carrying neither key, so by
+  // the time a query reaches execution both are present. The fallbacks keep
+  // that assumption from becoming an unchecked cast.
+  const dateField = query.dateField ?? "";
+  const interval = query.interval ?? "day";
+  const result = await requireNextly().timeseries({
+    collection,
+    dateField,
+    interval,
+    // The query's own limit bounds the WINDOW, which is what a limit means for
+    // a timeline: how many intervals come back. `validateWidgetQuery` clamps
+    // and defaults it, so ignoring it here would let a card asking for a week
+    // receive a month.
+    intervals: query.limit,
+    ...sharedReadArgs(query, caller),
+  });
+  return { op: "timeseries", points: result.points, interval: result.interval };
+}
+
+/**
  * The columns a caller may actually see, paired with the source's label.
  *
  * Derived from the ROWS that came back, not from the source declaration alone,
@@ -247,11 +278,18 @@ export async function executeWidgetQuery(
   if (query.op === "count") return runCount(collection, query, caller);
   if (query.op === "list") return runList(collection, query, caller, source);
   if (query.op === "groupBy") return runGroupBy(collection, query, caller);
+  if (query.op === "timeseries") {
+    return runTimeseries(collection, query, caller);
+  }
 
-  // Same refusal as every other source/op dead end, for the same reason: this
-  // one is reachable only for an op a source DECLARED support for, so a
-  // distinct message would say which sources declare which ops.
+  // Every declared op now has an arm, so the compiler narrows `query.op` to
+  // `never` here. The guard STAYS: a request body is untyped, and an op added
+  // to the vocabulary without an arm would otherwise fall out of this function
+  // returning `undefined` rather than being refused. Widened through a `string`
+  // binding rather than a cast, so adding an op keeps this compiling while the
+  // arms above are what decide whether it is reachable.
+  const unimplemented: string = query.op;
   failUnavailableSourceOrOp(
-    `op "${query.op}" on source "${query.source}" is not implemented yet`
+    `op "${unimplemented}" on source "${query.source}" is not implemented yet`
   );
 }

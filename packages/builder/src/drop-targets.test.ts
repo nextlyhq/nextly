@@ -77,7 +77,7 @@ function documentOf(nodes: BlockNode[]): BlockDocument {
 function rootRegion(childIds: string[], axis: "x" | "y" = "y"): DropRegion {
   return {
     id: ROOT_REGION,
-    at: { at: "root" },
+    at: { kind: "root" },
     depth: 0,
     rect: { x: 0, y: 0, width: 400, height: 1000 },
     axis,
@@ -178,7 +178,7 @@ describe("targetsInRegion", () => {
     // would read as "beside this container" rather than "inside it".
     const region: DropRegion = {
       id: "box::children",
-      at: { at: "slot", parentType: "core/box", slot: "children" },
+      at: { kind: "slot", parentType: "core/box", slot: "children" },
       parentId: "box",
       slot: "children",
       depth: 1,
@@ -219,7 +219,7 @@ describe("targetsInRegion", () => {
   it("addresses a slot region by parent and slot, never by position", () => {
     const region: DropRegion = {
       id: "box::children",
-      at: { at: "slot", parentType: "core/box", slot: "children" },
+      at: { kind: "slot", parentType: "core/box", slot: "children" },
       parentId: "box",
       slot: "children",
       depth: 1,
@@ -298,12 +298,45 @@ describe("collectRegions", () => {
 
     expect(regions.map(r => r.id)).toEqual([ROOT_REGION]);
   });
+
+  it("carries the placement target the nesting rule will be asked about", () => {
+    // The region's `at` is what `blockAllowedAt` receives for every drop into
+    // it, and a slot region reporting itself as the root asks a DIFFERENT
+    // question: the root case reads only the child's permitted parents, so the
+    // container's own allow-list is never consulted and a child restricted to
+    // that container is refused where it belongs. Nothing throws either way —
+    // the two are both valid targets — so the discriminant is asserted here
+    // rather than inferred from a drop that happened to resolve.
+    //
+    // `parentType` is the CONTAINER's type, never the dragged block's: the rule
+    // asks what this container admits, and a target naming the child would have
+    // the container answer for itself.
+    const regions = collectRegions(
+      documentOf([
+        node("outer", "core/box", { children: [node("inner", "core/row")] }),
+      ]),
+      slots,
+      rectsOf({
+        outer: { x: 0, y: 0, width: 400, height: 300 },
+        inner: { x: 20, y: 20, width: 360, height: 100 },
+      })
+    );
+
+    expect(regions.map(r => [r.id, r.at])).toEqual([
+      [ROOT_REGION, { kind: "root" }],
+      [
+        "outer::children",
+        { kind: "slot", parentType: "core/box", slot: "children" },
+      ],
+      ["inner::items", { kind: "slot", parentType: "core/row", slot: "items" }],
+    ]);
+  });
 });
 
 describe("regionAt", () => {
   const outer: DropRegion = {
     id: "outer::children",
-    at: { at: "slot", parentType: "core/box", slot: "children" },
+    at: { kind: "slot", parentType: "core/box", slot: "children" },
     parentId: "outer",
     slot: "children",
     depth: 1,
@@ -313,7 +346,7 @@ describe("regionAt", () => {
   };
   const inner: DropRegion = {
     id: "inner::items",
-    at: { at: "slot", parentType: "core/row", slot: "items" },
+    at: { kind: "slot", parentType: "core/row", slot: "items" },
     parentId: "inner",
     slot: "items",
     depth: 2,
@@ -426,7 +459,7 @@ describe("resolveDrop", () => {
     const regions = [
       {
         id: "acc::panels",
-        at: { at: "slot", parentType: "core/accordion", slot: "panels" },
+        at: { kind: "slot", parentType: "core/accordion", slot: "panels" },
         parentId: "acc",
         slot: "panels",
         depth: 1,
@@ -482,7 +515,7 @@ describe("resolveDrop", () => {
         regions: [
           {
             id: ROOT_REGION,
-            at: { at: "root" },
+            at: { kind: "root" },
             depth: 0,
             rect: { x: 0, y: 0, width: 400, height: 200 },
             axis: "y",

@@ -179,9 +179,9 @@ export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
  * carrying its own copy of this ranking would certify its own copy, and would
  * keep passing through exactly the correction it exists to catch.
  *
- * `InsertTarget` and `SlotSource` travel with them because the region types are
- * written in terms of both: a consumer that can name a region but not what it
- * accepts cannot ask the nesting rule about one.
+ * `PlacementTarget` and `SlotSource` travel with them because the region types
+ * are written in terms of both: a consumer that can name a region but not what
+ * it accepts cannot ask the nesting rule about one.
  */
 export {
   axisOfRects,
@@ -203,6 +203,13 @@ export {
   blockAllowedAt,
   registryBlockSource,
   registrySlotSource,
+  // The engine spells the placement destination, and this package re-exports
+  // that spelling rather than a second one: the drop and region types below are
+  // written in terms of it, and a consumer holding one has to be able to hand it
+  // straight to the nesting rule. `InsertTarget` is the name it used to carry,
+  // kept for one release so a host importing it still compiles.
+  type PlacementTarget,
+  /** @deprecated Import `PlacementTarget`; its discriminant is `kind`. */
   type InsertTarget,
   // The shape a host has to supply for the panel to offer saved patterns. The
   // prop has existed since the tier landed and the type did not, so a host

@@ -49,12 +49,25 @@ export function HistoricalDocumentBanner({
           underneath it — unreachable by pointer while the panel that led the
           reader here is still open. */}
       <div className="flex items-center gap-2">
+        {/* type="button": the banner renders inside the entry form, and a
+            submit-typed button here would fire a native form submit —
+            saving the live document — instead of running its own action. */}
         {onRestore ? (
-          <Button size="sm" onClick={onRestore} disabled={restoreDisabled}>
+          <Button
+            size="sm"
+            type="button"
+            onClick={onRestore}
+            disabled={restoreDisabled}
+          >
             Restore this version
           </Button>
         ) : null}
-        <Button variant="outline" size="sm" onClick={onReturnToCurrent}>
+        <Button
+          variant="outline"
+          size="sm"
+          type="button"
+          onClick={onReturnToCurrent}
+        >
           Back to current
         </Button>
       </div>

@@ -305,6 +305,20 @@ export {
 // emit. `sources.ts` reaches only `NextlyError` and an import-free helper, so
 // publishing it on this client-safe surface pulls no server code after it.
 export { WIDGET_SOURCE_FIELD_TYPES } from "./domains/widgets/sources";
+// The interval vocabulary, on this client-safe surface for the same reason the
+// field types are: the admin has to label a timeline's axis and decide it can
+// draw the width it was handed, and re-listing the intervals in the browser is
+// a second copy that agrees on the day it is written.
+//
+// Taken from `timeseries-interval`, which carries no database import. The
+// expression builder beside it reaches Drizzle, and exporting the vocabulary
+// from THERE put `drizzle-orm` in the admin's browser bundle -- refused by
+// `client-bundle-boundary.test.ts`, which is why the two are separate modules.
+export {
+  isTimeseriesInterval,
+  TIMESERIES_INTERVALS,
+} from "./domains/collections/query/timeseries-interval";
+export type { TimeseriesInterval } from "./domains/collections/query/timeseries-interval";
 export type {
   WidgetOp,
   WidgetSourceField,

@@ -2177,6 +2177,82 @@ describe("componentIdsIn", () => {
   });
 });
 
+describe("resolveComponentInstances under an unusable cap", () => {
+  // A host states `limits` in its own config, so a computed one — a cap read
+  // from an environment variable that is not set, say — arrives as `NaN`. That
+  // is not a loose bound but NO bound: `budget <= 0` is false against it, the
+  // survey never records that it stopped, and the refusal below it never
+  // fires. The document is then composed from a survey that read only part of
+  // it, which is the state that refusal exists to prevent.
+  const oversized = () => {
+    const nodes: BlockNode[] = [
+      ...Array.from({ length: DEFAULT_LIMITS.maxNodes + 10 }, (_, i) =>
+        node(`n${i}`)
+      ),
+      instance("i1", "def-1"),
+    ];
+    return { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "page", nodes };
+  };
+  const definitions = {
+    get: () => ({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component" as const,
+      nodes: [node("d1")],
+    }),
+  };
+
+  it("refuses an oversized document under an ordinary cap", () => {
+    // The control. Without it the refusal below could be read as this function
+    // simply never composing anything in this fixture.
+    const doc = oversized() as BlockDocument;
+    const out = resolveComponentInstances(doc, definitions as never, {
+      limits: DEFAULT_LIMITS,
+    });
+
+    expect({
+      referenced: out.referenced,
+      composed: out.document !== doc,
+    }).toEqual({ referenced: [], composed: false });
+  });
+
+  it("refuses a cap that would remove the bound rather than set one", () => {
+    // Asserted through the helper's own message, which names both the subject
+    // and the field: a bare `toThrow()` would pass on any error this function
+    // might raise for another reason.
+    expect(() =>
+      resolveComponentInstances(
+        oversized() as BlockDocument,
+        definitions as never,
+        {
+          limits: { ...DEFAULT_LIMITS, maxNodes: Number.NaN },
+        }
+      )
+    ).toThrow(/resolveComponentInstances: maxNodes/);
+  });
+
+  it("reads each cap it uses exactly once", () => {
+    // The caller owns this object, so a member that answers differently
+    // between reads lets the survey validate under one cap and the composition
+    // run under another. One read cannot disagree with itself.
+    let reads = 0;
+    const counting = {
+      ...DEFAULT_LIMITS,
+      get maxNodes() {
+        reads += 1;
+        return DEFAULT_LIMITS.maxNodes;
+      },
+    };
+
+    resolveComponentInstances(
+      page([instance("i1", "def-1")]),
+      definitions as never,
+      { limits: counting }
+    );
+
+    expect(reads).toBe(1);
+  });
+});
+
 describe("componentUsageIn", () => {
   // Three entries exactly, so the budget can be set above, at and below the
   // size of the forest. The reference is the LAST of them, which is what makes

@@ -387,7 +387,40 @@ export function resolveComponentInstances(
     return unchanged;
   }
 
-  const limits = options.limits ?? DEFAULT_LIMITS;
+  // Taken by name and validated once, rather than read from the caller's object
+  // wherever a cap is wanted. Two separate faults meet on this line.
+  //
+  // A `NaN` cap is not a loose bound, it is NO bound: `budget <= 0` is false
+  // against it, so the survey never stops and `survey.truncated` is never set —
+  // and the refusal directly below, which exists because composing from a
+  // partial survey is worse than not composing, silently never fires. Measured
+  // on a document of `maxNodes + 11` entries: under the default cap the
+  // resolver returns the document unchanged and references nothing, and under
+  // a `NaN` cap it composes it. `limits.maxNodes - survey.count` is NaN too,
+  // so the slot budget fails open as well.
+  //
+  // And `options.limits` is an object the CALLER owns, read four times here. A
+  // member that answers differently between reads lets the survey validate
+  // under one cap while the composition runs under another — the same fault
+  // this module's planner neighbour was fixed for.
+  //
+  // `maxBytes` is carried but NOT validated: nothing here reads it, and
+  // refusing a value this function never consults would reject callers it has
+  // always served. It is taken by name so the snapshot is whole.
+  const supplied = options.limits ?? DEFAULT_LIMITS;
+  const limits: DocumentLimits = {
+    maxDepth: boundedLimit(
+      supplied.maxDepth,
+      "maxDepth",
+      "resolveComponentInstances"
+    ),
+    maxNodes: boundedLimit(
+      supplied.maxNodes,
+      "maxNodes",
+      "resolveComponentInstances"
+    ),
+    maxBytes: supplied.maxBytes,
+  };
   const survey = surveyHost(document.nodes, limits.maxNodes);
   // A survey that stopped at the cap collected a PREFIX of the document's ids,
   // so every id minted afterwards would be checked against a set missing

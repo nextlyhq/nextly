@@ -8,7 +8,9 @@
  * @module domains/widgets/built-in-sources
  */
 
+import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { entryTitleField } from "../collections/entry-title";
+import { classifyFieldKind } from "../schema/services/field-column-descriptor";
 
 import {
   replaceSourcesOfKind,
@@ -51,6 +53,26 @@ const TIMESTAMP_FIELDS: readonly WidgetSourceField[] = [
  * text, which is what the column stores.
  */
 const STATUS_FIELD: WidgetSourceField = { name: "status", type: "string" };
+
+/**
+ * The other column the status lifecycle creates, and the one a "what went live
+ * this week" timeline buckets by.
+ *
+ * Appended on exactly the same terms as `status`, because it carries exactly
+ * the same presence in the canonical registry: `first_published_at` is declared
+ * `presence: "withStatusLifecycle"`, the same value the status column has, and
+ * it is readable rather than stripped from responses.
+ *
+ * Left out, the read path had the column and could bucket it -- the descriptor
+ * resolves through `getSystemColumnDescriptors` -- while the SOURCE did not
+ * advertise it, so widget validation refused every timeline over first
+ * publication before execution. That is the same failure the status field's own
+ * docblock describes, in the direction of a column that exists and is denied.
+ */
+const FIRST_PUBLISHED_FIELD: WidgetSourceField = {
+  name: "firstPublishedAt",
+  type: "date",
+};
 
 /**
  * Field types a widget must never see, however the caller declares the
@@ -114,9 +136,24 @@ const PRINTABLE_FIELD_TYPES: ReadonlySet<string> = new Set([
   "radio",
 ]);
 
-/** Map a Nextly field type onto the coarse type a query validator needs. */
-function toSourceType(fieldType: string): WidgetSourceField["type"] {
-  switch (fieldType) {
+/**
+ * Map a Nextly field onto the coarse type a query validator needs.
+ *
+ * The built-in names are answered directly, because the mapping is a statement
+ * about what those fields MEAN rather than about the column they emit.
+ *
+ * Anything unrecognised is a PLUGIN field type, and those are asked of the
+ * canonical field-to-column classifier instead of falling through to "string".
+ * A plugin field declaring `storage: "timestamp"` gets a timestamp column and
+ * is bucketable by the read, so advertising it as a string made a timeseries
+ * over it refusable at validation -- the source describing the field as
+ * something the storage says it is not.
+ */
+function toSourceType(field: {
+  type: string;
+  [key: string]: unknown;
+}): WidgetSourceField["type"] {
+  switch (field.type) {
     case "number":
     case "float":
     case "integer":
@@ -128,8 +165,25 @@ function toSourceType(fieldType: string): WidgetSourceField["type"] {
     case "datetime":
       return "date";
     default:
-      return "string";
+      return pluginSourceType(field);
   }
+}
+
+/** What a plugin field's declared STORAGE makes it, in the source vocabulary. */
+function pluginSourceType(field: {
+  type: string;
+  [key: string]: unknown;
+}): WidgetSourceField["type"] {
+  // `classifyFieldKind` is the one place that knows what column a field emits,
+  // for built-in and plugin types alike. Anything it cannot place stays a
+  // string, which is what an unknown field was always described as.
+  const kind = classifyFieldKind(field as FieldDefinition, "collection");
+  if (kind === "timestamp") return "date";
+  if (kind === "boolean") return "boolean";
+  if (kind === "integer" || kind === "double" || kind === "decimal") {
+    return "number";
+  }
+  return "string";
 }
 
 /**
@@ -180,7 +234,11 @@ function retainedDeclarations<T extends { name: string; type: string }>(
 }
 
 function exposedFields(
-  fields: Array<{ name: string; type: string; label?: string }>
+  // DERIVED from the input contract rather than spelled again. This shape was
+  // written out a third time here, narrower than the one the caller passes, so
+  // a property added to the contract reached this function and was invisible
+  // to it -- which is how `localized` was dropped on the way to the source.
+  fields: WidgetSourceCollection["fields"]
 ): WidgetSourceField[] {
   // The label travels with the field. This function REBUILDS each entry rather
   // than passing it through -- `type` is mapped into the source vocabulary
@@ -188,7 +246,11 @@ function exposedFields(
   // missing between the collection registry and the source in the first place.
   return retainedDeclarations(fields).map(field => ({
     name: field.name,
-    type: toSourceType(field.type),
+    type: toSourceType(field),
+    // Carried because the coarse `type` cannot express it: a localized date is
+    // still a date, and a validator reading only the type would approve a
+    // timeline the read then refuses.
+    ...(field.localized === true && { localized: true }),
     ...(field.label !== undefined && { label: field.label }),
   }));
 }
@@ -202,6 +264,13 @@ export interface WidgetSourceCollection {
     label?: string;
     /** Whether the field stores an ARRAY. A scalar type may still be one. */
     hasMany?: boolean;
+    /**
+     * Whether the field's values are stored per locale.
+     *
+     * Declared here rather than read through a cast, so a caller that drops it
+     * is a compile error instead of a flag that silently never arrives.
+     */
+    localized?: boolean;
   }>;
   /**
    * What a human calls this collection — the registry's plural label.
@@ -241,7 +310,9 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
   const seen = new Set(declared.map(f => f.name));
   const systemFields: WidgetSourceField[] = [IDENTITY_FIELD];
   if (collection.timestamps !== false) systemFields.push(...TIMESTAMP_FIELDS);
-  if (collection.status === true) systemFields.push(STATUS_FIELD);
+  if (collection.status === true) {
+    systemFields.push(STATUS_FIELD, FIRST_PUBLISHED_FIELD);
+  }
 
   const id = `collection:${collection.slug}`;
   const fields = [
@@ -294,12 +365,16 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
     // path answers. Advisory only -- see `WidgetSource.requiredPermission`
     // for why nothing enforces it.
     requiredPermission: `read-${collection.slug}`,
-    // `groupBy` alongside them because a collection source is the one kind
-    // whose rows go through the read pipeline that can settle an aggregate
-    // against the caller's own access. A system source answers from its own
-    // service and would have to implement grouping itself, so it does not
-    // declare support here and is refused by name.
-    supports: ["count", "list", "groupBy"],
+    // `groupBy` and `timeseries` alongside them because a collection source is
+    // the one kind whose rows go through the read pipeline that can settle an
+    // aggregate against the caller's own access. A system source answers from
+    // its own service and would have to implement grouping itself, so it does
+    // not declare support here and is refused by name.
+    //
+    // An op the executor implements but no source DECLARES is unreachable:
+    // validation refuses it before execution, so the branch is dead and the
+    // advertised op cannot be used.
+    supports: ["count", "list", "groupBy", "timeseries"],
     fields,
   };
 }

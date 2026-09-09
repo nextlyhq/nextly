@@ -639,7 +639,7 @@ export function InsertPanel({
             point,
             point.kind === "inside-selection"
               ? getBlock(
-                  point.target.at === "slot" ? point.target.parentType : ""
+                  point.target.kind === "slot" ? point.target.parentType : ""
                 )?.editor?.label
               : undefined
           )}

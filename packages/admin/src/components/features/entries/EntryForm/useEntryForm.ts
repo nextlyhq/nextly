@@ -13,7 +13,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { FieldConfig } from "nextly/config";
-import { useMemo, useCallback, useEffect } from "react";
+import { useMemo, useCallback, useEffect, useRef } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
@@ -492,6 +492,24 @@ export function useEntryForm({
   // Singular label for UI
   const singularLabel = getSingularLabel(collection);
 
+  // The mutations run in parallel, so nothing downstream serialises a second
+  // write against a first one still in flight — the guard has to live HERE,
+  // at the one gate every submission passes through, not in the controls the
+  // handler must not depend on.
+  const isSubmitting =
+    createMutation.isPending ||
+    updateMutation.isPending ||
+    discardMutation.isPending;
+
+  //
+  // The synchronous half of the same guard. `isSubmitting` is render state:
+  // it publishes one render behind the mutation, so two submissions in the
+  // same turn both read false and both write — two identical creates. The
+  // latch is set the moment the first submission enters and released when it
+  // settles, closing that gap.
+  //
+  const submissionLatch = useRef(false);
+
   // Submit handler. The intent arg names the user's button click and
   // determines payload shape (see EntryFormIntent). Without an intent,
   // submission keeps the existing status and just persists dirty fields
@@ -499,50 +517,57 @@ export function useEntryForm({
   const handleSubmit = useCallback(
     async (e?: React.BaseSyntheticEvent, intent?: EntryFormIntent) => {
       e?.preventDefault();
+      if (isSubmitting || submissionLatch.current) return;
+      submissionLatch.current = true;
+      try {
+        await form.handleSubmit(async rawData => {
+          // Why: intent → payload mapping is the core PR-3 bug fix —
+          // extracted to mapIntentToPayload above so the contract is
+          // unit-testable without renderHook plumbing.
+          const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
 
-      await form.handleSubmit(async rawData => {
-        // Why: intent → payload mapping is the core PR-3 bug fix —
-        // extracted to mapIntentToPayload above so the contract is
-        // unit-testable without renderHook plumbing.
-        const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
-
-        try {
-          if (mode === "create") {
-            const result = await createMutation.mutateAsync(
-              data as Record<string, EntryValue>
-            );
-            // Reset form to mark as clean after successful create
-            form.reset(data);
-            // The entry, not the envelope: the mutation now resolves to the
-            // whole response so the hook can report post-commit failures, and
-            // this callback's contract is the saved row.
-            onSuccess?.(result.item);
-          } else {
-            if (!entry?.id) {
-              throw new Error("Entry ID is required for update");
+          try {
+            if (mode === "create") {
+              const result = await createMutation.mutateAsync(
+                data as Record<string, EntryValue>
+              );
+              // Reset form to mark as clean after successful create
+              form.reset(data);
+              // The entry, not the envelope: the mutation now resolves to the
+              // whole response so the hook can report post-commit failures, and
+              // this callback's contract is the saved row.
+              onSuccess?.(result.item);
+            } else {
+              if (!entry?.id) {
+                throw new Error("Entry ID is required for update");
+              }
+              // entryId is passed to useUpdateEntry hook, so we just pass data here
+              const result = await updateMutation.mutateAsync(
+                data as Record<string, EntryValue>
+              );
+              // Reset form to mark as clean after successful update
+              form.reset(data);
+              onSuccess?.(result.item);
             }
-            // entryId is passed to useUpdateEntry hook, so we just pass data here
-            const result = await updateMutation.mutateAsync(
-              data as Record<string, EntryValue>
-            );
-            // Reset form to mark as clean after successful update
-            form.reset(data);
-            onSuccess?.(result.item);
+          } catch (error) {
+            // Server errors are automatically mapped to form fields via setError
+            // passed to the mutation hooks. Only log for debugging.
+            console.error("Form submission error:", error);
+            onError?.(error);
           }
-        } catch (error) {
-          // Server errors are automatically mapped to form fields via setError
-          // passed to the mutation hooks. Only log for debugging.
-          console.error("Form submission error:", error);
-          onError?.(error);
-        }
-      })(e);
+        })(e);
+      } finally {
+        submissionLatch.current = false;
+      }
     },
     [
       form,
       mode,
+
       entry?.id,
       createMutation,
       updateMutation,
+      isSubmitting,
       onSuccess,
       onError,
       blankPasswordFields,
@@ -573,6 +598,20 @@ export function useEntryForm({
     if (mode !== "edit" || !entry?.id) {
       return;
     }
+    // Discard is a write like any other: the same latch the submit gate holds
+    // keeps a save started in the same turn from running concurrently, whose
+    // completion order would otherwise decide the working-draft state. A
+    // latched call is REFUSED, not queued silently — every other path here
+    // rejects so the awaiting confirm dialog stays open with its retry
+    // context, and a refused discard must not close it as though it landed.
+    if (isSubmitting || submissionLatch.current) {
+      const latchedError = new Error(
+        "A save is already in progress — wait for it to finish, then discard again."
+      );
+      onError?.(latchedError);
+      throw latchedError;
+    }
+    submissionLatch.current = true;
     try {
       const result = await discardMutation.mutateAsync();
       form.reset(getDefaultValues(fields, result.item));
@@ -583,8 +622,10 @@ export function useEntryForm({
       // this, stays open on failure and keeps its retry context rather than
       // closing as it does on success.
       throw error;
+    } finally {
+      submissionLatch.current = false;
     }
-  }, [mode, entry?.id, discardMutation, form, fields, onError]);
+  }, [isSubmitting, mode, entry?.id, discardMutation, form, fields, onError]);
 
   // Cancel handler
   const handleCancel = useCallback(() => {
@@ -601,10 +642,7 @@ export function useEntryForm({
     // await the discard and keep its loading state visible until it settles.
     handleDiscardWorkingDraft: () => handleDiscardWorkingDraft(),
     handleCancel,
-    isSubmitting:
-      createMutation.isPending ||
-      updateMutation.isPending ||
-      discardMutation.isPending,
+    isSubmitting,
     isDeleting: deleteMutation.isPending,
     isDirty: form.formState.isDirty,
     mode,

@@ -194,7 +194,22 @@ export interface WidgetStatCell {
    * a group key beside it, which the registration check does not look at and
    * the executor would drop.
    */
-  query: WidgetQuery & { op: "count"; groupBy?: never };
+  /**
+   * A count, with every key belonging to another op closed off.
+   *
+   * `groupBy`, `dateField` and `interval` are optional on `WidgetQuery` because
+   * it stays flat, so without these a stats cell carrying one COMPILES and is
+   * then refused by the endpoint on every load -- a permanently failed stat the
+   * type could have caught. Each op-specific key is named rather than the type
+   * being derived from a union member, because `keyof` over a union keeps only
+   * the shared keys and would quietly stop demanding a position on new ones.
+   */
+  query: WidgetQuery & {
+    op: "count";
+    groupBy?: never;
+    dateField?: never;
+    interval?: never;
+  };
   /** Where this number navigates. A cell without one draws as plain text. */
   link?: { label: string; href: string };
 }
@@ -1018,6 +1033,20 @@ function cellQueryProblem(query: unknown, at: string): string | undefined {
   // bind: a plugin compiled separately, JavaScript, and a cast.
   if ((query as WidgetQuery).op !== "count") {
     return `${at} must be a "count" query, because a stats cell draws one number`;
+  }
+  // A key belonging to another op is refused rather than ignored. Carried
+  // alongside `count` it would pass registration, be refused by the dashboard
+  // endpoint on every load, and leave a permanently failed stat -- with nothing
+  // pointing at the declaration that caused it.
+  //
+  // Named as a list rather than derived from a type, because this exists for
+  // the callers a type does not reach; the type beside it closes the same keys
+  // for the callers it does.
+  const foreign = (["groupBy", "dateField", "interval"] as const).filter(
+    key => (query as Record<string, unknown>)[key] !== undefined
+  );
+  if (foreign.length > 0) {
+    return `${at} is a "count" query and cannot carry ${foreign.join(", ")}`;
   }
   return undefined;
 }

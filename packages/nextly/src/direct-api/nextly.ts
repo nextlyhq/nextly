@@ -119,6 +119,8 @@ import type {
   CountResult,
   GroupArgs,
   GroupResult,
+  TimeseriesArgs,
+  TimeseriesResult,
   CreateArgs,
   RowFromCollectionSlug,
   RowFromSingleSlug,
@@ -550,6 +552,11 @@ export class Nextly implements NextlyContext {
     return collectionsNs.group(this, args);
   }
 
+  /** How many documents fall in each interval of a recent window. */
+  timeseries(args: TimeseriesArgs): Promise<TimeseriesResult> {
+    return collectionsNs.timeseries(this, args);
+  }
+
   /** Bulk-delete multiple documents by IDs (partial success pattern). */
   bulkDelete(args: BulkDeleteArgs): Promise<BulkOperationResult> {
     return collectionsNs.bulkDelete(this, args);
@@ -789,6 +796,7 @@ export const nextly = {
   delete: (args: DeleteArgs) => requireNextly().delete(args),
   count: (args: CountArgs) => requireNextly().count(args),
   group: (args: GroupArgs) => requireNextly().group(args),
+  timeseries: (args: TimeseriesArgs) => requireNextly().timeseries(args),
   bulkDelete: (args: BulkDeleteArgs) => requireNextly().bulkDelete(args),
   duplicate: <TSlug extends CollectionSlug>(args: DuplicateArgs<TSlug>) =>
     requireNextly().duplicate(args),

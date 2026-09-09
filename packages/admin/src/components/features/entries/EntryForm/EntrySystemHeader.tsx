@@ -68,6 +68,13 @@ export interface EntrySystemHeaderProps {
   /** Whether the form has unsaved changes. Toggles Discard menu item. */
   isDirty?: boolean;
   /**
+   * The editor's WHOLE unsaved-work state — form dirtiness plus state a
+   * field holds outside the form (the page builder commits on exit). The
+   * restore confirmation must reflect both: restoring replaces the live
+   * document, and the refresh that follows discards work in either place.
+   */
+  hasUnsavedWork?: boolean;
+  /**
    * Whether recording is possible for this document at all. False for an entry
    * that has never been saved, which has no id for the endpoint to address.
    */
@@ -256,6 +263,7 @@ export function EntrySystemHeader({
   isSubmitting = false,
   isInvalid = false,
   isDirty = false,
+  hasUnsavedWork = false,
   autosaveEnabled = false,
   autosaveStatus = "idle",
   autosaveLastSavedAt = null,
@@ -563,11 +571,16 @@ export function EntrySystemHeader({
    * One merge for both halves. Splitting them would let the bar draw a built-in
    * verb wired to a contribution that lost its collision — Delete, from the
    * model, running somebody else's handler.
+   *
+   * A past version on screen withholds the page's contributions entirely, the
+   * same treatment the model gives the built-in writes: they act on the LIVE
+   * document, which is not what is on screen, and a contributor cannot be
+   * expected to know about history — the header is where that knowledge lives.
    */
   const withContributions = acceptContributions(
     documentVerbs,
     actionBindings,
-    contributedActions
+    isReadingHistory ? [] : contributedActions
   );
 
   const entryLabel =
@@ -859,6 +872,15 @@ export function EntrySystemHeader({
           // Restore reuses the ordinary edit permission, so a caller who may
           // only read history is not offered a write that would be refused.
           canRestore={canUpdateDocument}
+          // The restore's confirmation must disclose what happens to unsaved
+          // work in the live editor — restoring replaces the live document,
+          // and the refresh that follows discards it. The WHOLE unsaved-work
+          // state, not just form dirtiness: state a field holds outside the
+          // form (the page builder's pending document) is lost the same way.
+          liveDirty={hasUnsavedWork}
+          // A claim arriving while the confirmation is open: the trigger
+          // removes itself, and the open dialog must refuse as well.
+          restoreRefused={documentLocked || isSubmitting}
           // The live document's status, which is what a restore changes — the
           // selected version's own status describes the past.
           liveStatus={effectiveStatus}

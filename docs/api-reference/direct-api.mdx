@@ -269,6 +269,92 @@ console.log("Published posts:", total);
 
 **Returns:** `CountResult` (`{ total: number }`).
 
+### group
+
+Count documents per distinct value of one field. Returns the buckets largest
+first.
+
+```typescript
+const { buckets, truncated } = await nextly.group({
+  collection: "orders",
+  groupBy: "region",
+  where: { status: { equals: "paid" } },
+  bucketLimit: 10,
+});
+
+// [{ value: "emea", count: 42 }, { value: null, count: 3 }]
+```
+
+`group` reaches the same rows `count` does, so buckets can never describe rows
+a `count` with the same arguments would have excluded.
+
+A `null` value is a bucket in its own right — "how many orders have no region"
+is a real answer, and folding it into another bucket would misreport both.
+
+Ranking and the cap happen in the database after grouping finishes, so the
+buckets you get back are genuinely the largest. `truncated` is `true` when the
+cap left some out; a chart drawn from a capped set is not the whole picture, so
+show that rather than hiding it.
+
+Some fields cannot be grouped, and the refusal names the reason: a field with a
+read rule, any spelling of it, a password field, the owner column, a field
+transformed by an `afterRead` hook, and anything stored as JSON. Buckets are the
+distinct values of a column, so grouping publishes the whole value set in one
+request where a `where` yields it one probe at a time.
+
+<Callout type="info">
+  **Text buckets follow your database's collation.** MySQL's default collation
+  ignores case, so `US` and `us` are one bucket there and two on PostgreSQL and
+  SQLite. Nextly does not override this: your filters use the same collation, so
+  grouping and filtering agree with each other — a bucket's count always matches
+  what a `where` on that value returns. The trade-off is that the same content
+  can chart differently on a different database.
+</Callout>
+
+**Returns:** `GroupResult` (`{ buckets: { value: string | null; count: number }[]; truncated: boolean }`).
+
+### timeseries
+
+Count documents per interval of a recent window, for a trend line.
+
+```typescript
+const { points, interval } = await nextly.timeseries({
+  collection: "orders",
+  dateField: "createdAt",
+  interval: "day",
+  intervals: 30,
+});
+
+// [{ start: "2026-03-02T00:00:00.000Z", count: 4 }, ...]
+```
+
+`interval` is one of `hour`, `day`, `week`, `month` or `year`. Weeks start on
+Monday, following ISO-8601.
+
+`intervals` is how many intervals the window covers, ending with the current
+one; it defaults to 30 and is capped at 366. The window bounds the **read**, not
+just the answer: its oldest start becomes a lower bound on the date column, so a
+long history is never scanned to draw a short chart.
+
+An interval with no documents comes back with a count of `0` rather than being
+left out. A `GROUP BY` cannot report a bucket it never grouped, so the quiet day
+would simply be missing — and a line drawn through the gap reads as steady
+activity rather than none. A zero here always means "no documents", never
+"unknown": every interval in the window was read.
+
+<Callout type="info">
+  **Buckets are computed in UTC.** A document's interval is decided by the UTC
+  wall clock its date was stored with, so the same document lands in the same
+  interval whoever is looking. Format `start` in the viewer's own timezone when
+  you draw it.
+</Callout>
+
+`dateField` must be a field stored as a date, and it is refused on the same
+terms a group key is — a field carrying a read rule, or the owner column, cannot
+place documents on a timeline either.
+
+**Returns:** `TimeseriesResult` (`{ points: { start: string; count: number }[]; interval: TimeseriesInterval }`).
+
 ### bulkDelete
 
 Delete many documents by IDs with first-class partial-success semantics. Use this when you need the per-item failure detail that `delete({ where })` cannot give you.

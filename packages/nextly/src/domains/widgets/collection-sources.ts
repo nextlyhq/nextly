@@ -117,14 +117,19 @@ function storedAtThisLevel(container: UnvalidatedContainer): boolean {
  * level. That walk is also iterative and cycle-guarded, so a group that
  * contains itself terminates instead of overflowing the stack.
  */
-function readableFields(
-  fields: unknown
-): Array<{ name: string; type: string; label?: string; hasMany?: boolean }> {
+function readableFields(fields: unknown): Array<{
+  name: string;
+  type: string;
+  label?: string;
+  hasMany?: boolean;
+  localized?: boolean;
+}> {
   const usable: Array<{
     name: string;
     type: string;
     label?: string;
     hasMany?: boolean;
+    localized?: boolean;
   }> = [];
   for (const raw of addressableFields(fields, {
     descendInto: storedAtThisLevel,
@@ -134,6 +139,7 @@ function readableFields(
       type?: unknown;
       label?: unknown;
       hasMany?: unknown;
+      localized?: unknown;
     };
     if (typeof field.name === "string" && typeof field.type === "string") {
       // The label is carried when the field has a usable one, and omitted
@@ -153,6 +159,14 @@ function readableFields(
         // same claim as a scalar value -- so a title chosen on type alone can
         // still resolve to an array, which the row renderer declines to print.
         ...(field.hasMany === true && { hasMany: true }),
+        // 🔴 STORAGE LOCATION, carried for the reason cardinality is. A
+        // localized field's values live in the `_locales` companion rather
+        // than on this table, so it can be SELECTED and cannot be grouped or
+        // bucketed -- and the coarse source type cannot say so, since a
+        // localized date is still a date. Dropped here, a validator reading
+        // only the type approves a timeline the read then refuses, leaving a
+        // widget that fails on every load.
+        ...(field.localized === true && { localized: true }),
         ...(label && { label }),
       });
     }

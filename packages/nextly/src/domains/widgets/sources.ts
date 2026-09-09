@@ -43,6 +43,17 @@ export interface WidgetSourceField {
   name: string;
   type: WidgetSourceFieldType;
   /**
+   * Whether this field's values are stored per locale.
+   *
+   * A localized field lives in the `_locales` companion rather than on the
+   * collection's own table, so it can be SELECTED by a list but cannot be
+   * grouped or bucketed. The coarse `type` cannot express that -- a localized
+   * date is still a date -- so a validator reading only the type approves a
+   * timeline over it and the read then refuses it, leaving a widget that fails
+   * on every load.
+   */
+  localized?: boolean;
+  /**
    * What a human calls this field, when the source knows.
    *
    * A widget that draws a TABLE needs a column heading, and the only honest
@@ -483,4 +494,41 @@ export function listSources(): WidgetSource[] {
 
 export function clearSources(): void {
   store().clear();
+}
+
+/**
+ * Refuse a query carrying a field this source does not consume.
+ *
+ * The TABLE stays with each source and only the walk lives here. That split is
+ * the point: an exhaustive `Record<keyof WidgetQuery, ...>` beside the source
+ * is what makes `check-types` fail there when a query field is added, so
+ * someone decides what the new field means for that source rather than having
+ * it silently accepted and dropped. Sharing the tables would answer that
+ * question once, for every source, which is the coupling the tables exist to
+ * prevent.
+ *
+ * A key present but `undefined` is not carried input: `readWidgetQuery` reads
+ * every property once into a fresh object, so an absent field can arrive as an
+ * own key holding `undefined`, and treating that as supplied would refuse an
+ * ordinary query.
+ *
+ * The field names travel in the refusal, which is careful not to describe a
+ * source the caller may not be able to see.
+ */
+export function refuseUnconsumedQueryFields<TQuery extends object>(
+  query: TQuery,
+  use: Record<keyof TQuery & string, "consumed" | "refused">,
+  sourceId: string
+): void {
+  const carried = Object.entries(query)
+    .filter(
+      ([name, value]) =>
+        value !== undefined && use[name as keyof TQuery & string] === "refused"
+    )
+    .map(([name]) => name);
+  if (carried.length > 0) {
+    failUnavailableSourceOrOp(
+      `source "${sourceId}" answers a fixed question and cannot honour: ${carried.join(", ")}`
+    );
+  }
 }
