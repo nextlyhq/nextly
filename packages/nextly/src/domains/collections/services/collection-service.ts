@@ -72,6 +72,7 @@ import type {
 import { BaseService } from "../../../shared/base-service";
 import type { WhereFilter } from "../query/query-operators";
 
+import { forwardedFromContext } from "./forwarded-context";
 import type { CollectionMetadataService } from "./collection-metadata-service";
 import type { BatchOperationResult } from "./collection-types";
 
@@ -557,9 +558,7 @@ export class CollectionService extends BaseService {
     const result = await this.entryService.createEntry(
       {
         collectionName,
-        user: context.user,
-        overrideAccess: context.overrideAccess,
-        context: context.context,
+        ...forwardedFromContext(context),
       },
       data
     );
@@ -606,9 +605,7 @@ export class CollectionService extends BaseService {
     return this.entryService.createEntries(
       {
         collectionName,
-        user: context.user,
-        overrideAccess: context.overrideAccess,
-        context: context.context,
+        ...forwardedFromContext(context),
       },
       data
     );
@@ -636,9 +633,7 @@ export class CollectionService extends BaseService {
 
     const result = await this.entryService.listEntries({
       collectionName,
-      user: context.user,
-      overrideAccess: context.overrideAccess,
-      context: context.context,
+      ...forwardedFromContext(context),
       page,
       limit,
       // D56: forward the rich-query options the facade previously dropped, so
@@ -689,9 +684,7 @@ export class CollectionService extends BaseService {
 
     const result = await this.entryService.countEntries({
       collectionName,
-      user: context.user,
-      overrideAccess: context.overrideAccess,
-      context: context.context,
+      ...forwardedFromContext(context),
       where: options.where as WhereFilter | undefined,
       search: options.search,
     });
@@ -722,9 +715,7 @@ export class CollectionService extends BaseService {
     const result = await this.entryService.getEntry({
       collectionName,
       entryId,
-      user: context.user,
-      overrideAccess: context.overrideAccess,
-      context: context.context,
+      ...forwardedFromContext(context),
     });
 
     if (!result.success) {
@@ -765,9 +756,7 @@ export class CollectionService extends BaseService {
       {
         collectionName,
         entryId,
-        user: context.user,
-        overrideAccess: context.overrideAccess,
-        context: context.context,
+        ...forwardedFromContext(context),
       },
       data
     );
@@ -813,9 +802,7 @@ export class CollectionService extends BaseService {
     const result = await this.entryService.deleteEntry({
       collectionName,
       entryId,
-      user: context.user,
-      overrideAccess: context.overrideAccess,
-      context: context.context,
+      ...forwardedFromContext(context),
     });
 
     if (!result.success) {
