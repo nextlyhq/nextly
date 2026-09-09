@@ -465,6 +465,56 @@ describe("the rules the bar judges a save by", () => {
     expect(save.getAttribute("title")).toContain("belongs inside");
   });
 
+  it("judges a SET by the whole selection, not by the primary block", () => {
+    /*
+     * `a` and `c` share a parent with `b` between them. Asked about `a` alone
+     * the selection looks perfectly savable — so a bar that passed only the
+     * primary would offer a save the planner refuses, and the author would meet
+     * the refusal after filling a form.
+     *
+     * This is the case a hook shared with the context menu exists to keep true
+     * of both: it went uncaught while each surface asked the question itself.
+     */
+    register();
+    const document = documentOf([
+      { id: "a", type: "acme/leaf", version: 1, props: {} } as BlockNode,
+      { id: "b", type: "acme/leaf", version: 1, props: {} } as BlockNode,
+      { id: "c", type: "acme/leaf", version: 1, props: {} } as BlockNode,
+    ]);
+    const editor = {
+      ...editorSpy(document, "a"),
+      selection: { ids: ["a", "c"], primary: "a" },
+    };
+
+    mount(editor);
+
+    const save = screen.getByLabelText("Save as pattern");
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(save.getAttribute("title")).toContain("no gaps");
+  });
+
+  it("offers the save for a set that IS one run", () => {
+    // The control for the case above: the same three blocks, selected without a
+    // gap, are savable — so the refusal is the RULE talking rather than the bar
+    // refusing every set.
+    register();
+    const document = documentOf([
+      { id: "a", type: "acme/leaf", version: 1, props: {} } as BlockNode,
+      { id: "b", type: "acme/leaf", version: 1, props: {} } as BlockNode,
+      { id: "c", type: "acme/leaf", version: 1, props: {} } as BlockNode,
+    ]);
+    const editor = {
+      ...editorSpy(document, "a"),
+      selection: { ids: ["a", "b"], primary: "a" },
+    };
+
+    mount(editor);
+
+    expect(
+      screen.getByLabelText("Save as pattern").getAttribute("aria-disabled")
+    ).toBeNull();
+  });
+
   it("offers the save under the registry's own rules", () => {
     // The control, and the reason the case above is about the SOURCE rather
     // than about saving being broken: the same selection, with nothing
