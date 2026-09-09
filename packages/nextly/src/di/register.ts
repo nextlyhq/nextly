@@ -35,7 +35,7 @@ import type {
 import type { FieldConfig } from "../collections/fields/types";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
 import type { SchemaRegistry } from "../database/schema-registry";
-import { getNextly } from "../direct-api/nextly";
+import { requireNextly } from "../direct-api/nextly";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
@@ -1259,17 +1259,17 @@ export async function registerServices(
   //
   // `req.nextly` is how a hook reaches other collections, and the collections
   // guide's own examples use it. It resolved through this container binding,
-  // which `getNextly()` created as a side effect of its FIRST call -- so a
+  // which `requireNextly()` created as a side effect of its FIRST call -- so a
   // process that never called it handed every hook `undefined`. A REST or admin
   // write does not call it, which made the documented handle absent on exactly
   // the paths hooks run on most.
   //
   // Registered here instead, where service wiring belongs, so the binding
-  // exists from boot. The factory is lazy: `getNextly()` still builds the
+  // exists from boot. The factory is lazy: `requireNextly()` still builds the
   // instance on first resolution, and still returns the current one afterwards,
   // so `resetNextlyInstance()` keeps working for tests.
   if (!container.has("nextlyDirectAPI")) {
-    container.register("nextlyDirectAPI", () => getNextly());
+    container.register("nextlyDirectAPI", () => requireNextly());
   }
 
   // Opened immediately BEFORE registration publishes, which is the last point

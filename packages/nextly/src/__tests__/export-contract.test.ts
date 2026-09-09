@@ -42,6 +42,25 @@ const FORBIDDEN = [
   "COMPONENT_MIGRATION_STATUSES",
 ];
 
+/**
+ * Names already published from two entry points meaning different things.
+ *
+ * 🔴 Recorded, not accepted. Each is the same defect `getNextly` was: one name,
+ * two functions, and nothing at an import site to say which one arrived.
+ * `isFieldGroupType` is a boolean test in one place and a generic narrowing in
+ * the other; `createAdapter` is the CLI's and the database factory's, which
+ * take different arguments and do different work.
+ *
+ * They are listed rather than fixed here because each needs the same decision
+ * `getNextly` needed about which keeps the name, and answering three of those
+ * inside one rename is how a considered API becomes an incidental one. Listing
+ * them is what makes a FOURTH fail this test on the day it appears.
+ */
+const KNOWN_ARITY_CLASHES = [
+  "isFieldGroupType: nextly takes 1, nextly/field-group-type takes 2",
+  "createAdapter: nextly takes 1, nextly/database takes 1, nextly/cli/utils takes 0",
+];
+
 const manifestUrl = new URL("../../package.json", import.meta.url);
 const packageRoot = path.dirname(fileURLToPath(manifestUrl));
 
@@ -98,6 +117,60 @@ describe("published export surface", () => {
       expect(leaked).toEqual([]);
     }
   );
+
+  // 🔴 The defect this generalises: `getNextly` was published from `nextly` as
+  // an async function taking a required config, and from `nextly/runtime` as a
+  // synchronous one taking none. Same name, opposite tolerance for an
+  // uninitialised process, and nothing said so at an import site. It cost a
+  // wrong example in the package's own JSDoc, a wrong sentence in a test
+  // header, and a defensive assertion in the admin's code generator.
+  //
+  // Arity is the cheap half of a signature and it separates the two cases that
+  // matter: a function that demands configuration from one that takes none.
+  it("does not publish one name from two entries with different arities", async () => {
+    const seen = new Map<string, Array<{ entry: string; arity: number }>>();
+    for (const [entry, source] of ENTRY_POINTS) {
+      const mod = (await import(pathToFileURL(source).href)) as Record<
+        string,
+        unknown
+      >;
+      for (const [name, value] of Object.entries(mod)) {
+        if (typeof value !== "function") continue;
+        seen.set(name, [
+          ...(seen.get(name) ?? []),
+          { entry, arity: value.length },
+        ]);
+      }
+    }
+    const clashing = [...seen.entries()]
+      .filter(
+        ([, places]) =>
+          places.length > 1 &&
+          new Set(places.map(place => place.arity)).size > 1
+      )
+      .map(
+        ([name, places]) =>
+          `${name}: ${places
+            .map(place => `${place.entry} takes ${String(place.arity)}`)
+            .join(", ")}`
+      );
+    expect(clashing).toEqual(KNOWN_ARITY_CLASHES);
+    // The control: a scan that imported nothing would report no clash. This
+    // asserts the scan actually read a surface.
+    expect(seen.size).toBeGreaterThan(50);
+  });
+
+  it("publishes each way to reach an instance under its own name", async () => {
+    // The two are kept apart on purpose. `getNextly` initialises and is correct
+    // whether or not the process has booted; `requireNextly` reads what is
+    // already registered and throws when there is none.
+    const root = (await import("../index")) as Record<string, unknown>;
+    const runtime = (await import("../runtime")) as Record<string, unknown>;
+    expect(typeof root.getNextly).toBe("function");
+    expect(typeof runtime.requireNextly).toBe("function");
+    expect("getNextly" in runtime).toBe(false);
+    expect("requireNextly" in root).toBe(false);
+  });
 
   it("exposes the field-group vocabulary from the config entry point", async () => {
     // The counterpart to the list above: absence alone would also be satisfied

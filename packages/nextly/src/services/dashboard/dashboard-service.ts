@@ -20,7 +20,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
-import { getNextly } from "../../direct-api/nextly";
+import { requireNextly } from "../../direct-api/nextly";
 import type { CountArgs, FindArgs } from "../../direct-api/types";
 import { COMMON_TITLE_FIELDS } from "../../domains/collections/entry-title";
 import { entryHeading } from "../../lib/entry-heading";
@@ -577,7 +577,7 @@ export class DashboardService extends BaseService {
     status: "all" | "published" | "draft" = "all"
   ): Promise<number> {
     try {
-      const result = await getNextly().count({
+      const result = await requireNextly().count({
         collection: coll.slug,
         overrideAccess: false,
         user: caller.user,
@@ -691,7 +691,7 @@ export class DashboardService extends BaseService {
   ): Promise<RecentEntry[]> {
     try {
       const titleField = coll.useAsTitle ?? "title";
-      const result = await getNextly().find({
+      const result = await requireNextly().find({
         collection: coll.slug,
         limit,
         sort: "-updatedAt",

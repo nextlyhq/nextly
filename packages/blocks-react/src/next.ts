@@ -37,7 +37,7 @@ import {
   createPublicSingleRoute,
   createSingleRoute,
   entryIdTag,
-  getNextly,
+  requireNextly,
   nextlyTags,
   releaseBoundedRevalidate,
   nextlySingleTags,
@@ -390,7 +390,7 @@ function emitPath(slug: string): string | null {
  * them explicitly on every call, so they never depended on those defaults.
  */
 function readerFor(config: BlocksPageConfig): NextlyContentReader {
-  return config.nextly ?? getNextly();
+  return config.nextly ?? requireNextly();
 }
 
 /** An empty page, for a field that exists and holds no document yet. */
