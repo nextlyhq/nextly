@@ -25,10 +25,8 @@
  * @module builder-commands
  */
 
-import type { BlockDocument, NestingSource } from "@nextlyhq/blocks-engine";
-
 import type { BuilderCommand } from "./command-palette";
-import { toolbarActions, type ToolbarActionId } from "./toolbar-actions";
+import type { ToolbarAction, ToolbarActionId } from "./toolbar-actions";
 
 /** The verbs a palette command needs, as `BlockKeyboardActions` publishes them. */
 export interface CommandVerbs {
@@ -56,27 +54,18 @@ export interface CommandVerbs {
 
 /** Everything the command list is built from. */
 export interface BuilderCommandsInput {
-  readonly document: BlockDocument;
-  readonly selectedId: string | null;
   /**
-   * Every selected id, defaulting to the primary alone.
+   * What the bar would offer for this selection, from `toolbarActions`.
    *
-   * Threaded because availability is DERIVED from `toolbarActions`, and some of
-   * what that decides is a property of the whole selection rather than of the
-   * block the bar is drawn against. Asked about the primary alone, this palette
-   * offered `Save block as pattern` for two blocks with a third between them —
-   * a command the toolbar showed as unavailable, which then posted the whole
-   * selection and was refused by the server.
+   * Taken rather than derived, and that is what keeps availability DERIVED in
+   * the sense that matters: the palette now shows exactly the list the toolbar
+   * and the context menu are drawing, because it is the same array. Asked
+   * separately it was a second call — one that could be given a narrower
+   * question, which is how this surface came to offer a verb the bar refused —
+   * and not a cheap one either, since deciding whether a selection can be saved
+   * builds the document a save would store.
    */
-  readonly selectedIds?: readonly string[];
-  /**
-   * The nesting rules to judge a selection by, defaulting to the registry.
-   *
-   * Present for the reason the ids are: the toolbar and the context menu ask
-   * the host's own rules, and a palette resolving the default instead would
-   * offer what they refuse.
-   */
-  readonly nesting?: NestingSource;
+  readonly actions: readonly ToolbarAction[];
   readonly verbs: CommandVerbs;
   readonly undo: () => void;
   readonly redo: () => void;
@@ -170,10 +159,7 @@ export function blockActionRunners(
  * refuses to run is worse there than one that was never offered.
  */
 export function builderCommands({
-  document,
-  selectedId,
-  selectedIds,
-  nesting,
+  actions,
   verbs,
   undo,
   redo,
@@ -183,12 +169,7 @@ export function builderCommands({
 }: BuilderCommandsInput): BuilderCommand[] {
   const run = blockActionRunners(verbs);
 
-  const blockCommands = toolbarActions(
-    document,
-    selectedId,
-    selectedIds,
-    nesting
-  )
+  const blockCommands = actions
     .filter(action => action.enabled)
     .map(action => {
       const copy = BLOCK_COMMAND_COPY[action.id];

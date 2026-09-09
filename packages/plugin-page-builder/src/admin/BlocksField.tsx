@@ -65,6 +65,7 @@ import {
 } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
+  CANVAS_ROOT_CLASS,
   authoredBreakpoints,
   BlockToolbar,
   BreakpointManager,
@@ -1521,8 +1522,8 @@ function useSavePatternVerb(
 ): {
   /** The document to save from, or `null` when the author has not asked. */
   readonly document: BlockDocument | null;
-  /** What had focus when they asked, so the form can give it back. */
-  readonly returnFocusTo: HTMLElement | null;
+  /** Where focus should go when the form closes, asked at that moment. */
+  readonly returnFocusTo: () => HTMLElement | null;
   readonly open: () => void;
   readonly close: () => void;
 } {
@@ -1560,7 +1561,28 @@ function useSavePatternVerb(
 
   const close = useCallback(() => setDocument(null), []);
 
-  return { document, returnFocusTo: openedFrom, open, close };
+  /*
+   * Resolved at the CLOSE, not at the open.
+   *
+   * The control that raised the form is usually gone by then: a context-menu
+   * item unmounts with its menu, and a palette row with the palette. Focusing a
+   * detached node does nothing and leaves the author on the body, at the top of
+   * the page — so the fallback is the editor itself.
+   *
+   * The canvas REGION rather than the canvas root: the root is a plain div with
+   * no tabindex, so focusing it does nothing, while the region the shell wraps
+   * it in is `tabIndex={0}` because a keyboard author has to be able to scroll
+   * the page. Found by walking up from the root rather than by its label, which
+   * is display copy.
+   */
+  const returnFocusTo = useCallback((): HTMLElement | null => {
+    if (openedFrom?.isConnected === true) return openedFrom;
+    const root = window.document.querySelector(`.${CANVAS_ROOT_CLASS}`);
+    const region = root?.closest<HTMLElement>("[tabindex]") ?? null;
+    return region;
+  }, [openedFrom]);
+
+  return { document, returnFocusTo, open, close };
 }
 
 /**

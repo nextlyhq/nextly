@@ -46,6 +46,7 @@ import {
   selectionDuplication,
   selectionMove,
 } from "./selection-ops";
+import { toolbarActions, type ToolbarAction } from "./toolbar-actions";
 
 /**
  * The bindings, and why these keys.
@@ -202,6 +203,46 @@ const BlockActionsContext = React.createContext<BlockActions | null>(null);
 const NestingContext = React.createContext<NestingSource | null>(null);
 
 /**
+ * The verbs for the current selection, computed once for every surface.
+ *
+ * The bar, the right-click menu and the palette each need the same list, and
+ * `toolbarActions` is not a cheap read: deciding whether a selection can be
+ * saved BUILDS the document a save would store — it clones the selected forest,
+ * re-identifies it and surveys the result — because that is what makes the
+ * answer exact. Asked three times, an ordinary edit copies and walks a large
+ * selection three times before anything is drawn.
+ *
+ * Published from here because this is the one place above all three that
+ * already holds the editor and the rules they must agree about.
+ */
+const SelectionActionsContext = React.createContext<ToolbarAction[] | null>(
+  null
+);
+
+/**
+ * What to offer for the selection, from the nearest provider.
+ *
+ * A surface OUTSIDE one computes its own, which is what a host embedding a
+ * single control gets. Inside, every surface reads one answer — and reading one
+ * answer is also what stops them disagreeing, which is the property the palette
+ * lost when it asked a narrower question of its own.
+ */
+export function useSelectionActionsContext(
+  fallback: () => ToolbarAction[]
+): ToolbarAction[] {
+  const shared = React.useContext(SelectionActionsContext);
+  const computed = React.useMemo(
+    () => (shared === null ? fallback() : shared),
+    // The fallback is only consulted when there is no provider, and it closes
+    // over the caller's own memo inputs — so depending on it here would rebuild
+    // this on every render for a value the provider case never reads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [shared]
+  );
+  return computed;
+}
+
+/**
  * The nesting rules to judge a placement by, from the nearest provider.
  *
  * Falls back to the registry, which is what the canvas, the insert panel and the
@@ -305,6 +346,17 @@ export interface BlockKeyboardActionsResult {
    * one reaching only the keyboard.
    */
   readonly nesting: NestingSource;
+  /**
+   * What to OFFER for the current selection, computed once for every surface.
+   *
+   * Told apart from {@link BlockKeyboardActionsResult.actions} by the question
+   * each answers: those are verbs to RUN, this is the list of what may be run
+   * and why not. Returned so the provider publishes the same list it built
+   * rather than each surface rebuilding it — and rebuilding it is not cheap,
+   * because deciding whether a selection can be saved builds the document a
+   * save would store.
+   */
+  readonly selectionActions: ToolbarAction[];
 }
 
 /**
@@ -809,6 +861,24 @@ export function useBlockKeyboardActions({
     onSaveAsPattern,
   ]);
 
+  /*
+   * The verb list, computed ONCE for every surface below.
+   *
+   * See {@link SelectionActionsContext}: the save preflight builds the document
+   * a save would store, so three surfaces asking separately made an ordinary
+   * edit copy and walk the selection three times.
+   */
+  const selectionActions = React.useMemo(
+    () =>
+      toolbarActions(
+        editor.document,
+        editor.selectedId,
+        editor.selection.ids,
+        nestingSource
+      ),
+    [editor.document, editor.selectedId, editor.selection.ids, nestingSource]
+  );
+
   const actions = React.useMemo<BlockActions>(
     () => ({
       move: moveSelected,
@@ -826,7 +896,12 @@ export function useBlockKeyboardActions({
     ]
   );
 
-  return { announcement, actions, nesting: nestingSource };
+  return {
+    announcement,
+    actions,
+    nesting: nestingSource,
+    selectionActions,
+  };
 }
 
 /**
@@ -859,6 +934,7 @@ export function BlockKeyboardActions({
     announcement,
     actions,
     nesting: rules,
+    selectionActions: offered,
   } = useBlockKeyboardActions({
     editor,
     enabled,
@@ -877,12 +953,14 @@ export function BlockKeyboardActions({
   // has nothing it was already watching.
   return (
     <NestingContext.Provider value={rules}>
-      <BlockActionsContext.Provider value={actions}>
-        <p aria-live="polite" role="status" className="nx-sr-only">
-          {announcement}
-        </p>
-        {children}
-      </BlockActionsContext.Provider>
+      <SelectionActionsContext.Provider value={offered}>
+        <BlockActionsContext.Provider value={actions}>
+          <p aria-live="polite" role="status" className="nx-sr-only">
+            {announcement}
+          </p>
+          {children}
+        </BlockActionsContext.Provider>
+      </SelectionActionsContext.Provider>
     </NestingContext.Provider>
   );
 }

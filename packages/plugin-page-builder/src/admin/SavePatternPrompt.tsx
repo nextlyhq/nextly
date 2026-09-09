@@ -50,12 +50,12 @@ export interface SavePatternPromptProps {
   /** Called when the prompt is finished with, saved or not. */
   onClose: () => void;
   /**
-   * What had focus when the author asked, so it can be given back.
+   * Where focus goes when the form closes, asked at that moment.
    *
-   * Read by the caller rather than here: by the time this mounts the opener has
-   * already lost focus, so the gesture is the last moment it is knowable.
+   * Resolved by the caller rather than here: what had focus is knowable only at
+   * the gesture, and whether it is still there is knowable only at the close.
    */
-  returnFocusTo?: HTMLElement | null;
+  returnFocusTo?: () => HTMLElement | null;
 }
 
 /**

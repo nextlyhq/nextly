@@ -15,10 +15,11 @@
  * @module selection-actions
  */
 
-import * as React from "react";
-
 import type { EditorState } from "./editor-state";
-import { useNestingSource } from "./keyboard-actions";
+import {
+  useNestingSource,
+  useSelectionActionsContext,
+} from "./keyboard-actions";
 import { toolbarActions, type ToolbarAction } from "./toolbar-actions";
 
 /**
@@ -32,8 +33,18 @@ export function useSelectionActions(editor: EditorState): ToolbarAction[] {
   const { document, selectedId } = editor;
   const selectedIds = editor.selection.ids;
   const nesting = useNestingSource();
-  return React.useMemo(
-    () => toolbarActions(document, selectedId, selectedIds, nesting),
-    [document, selectedId, selectedIds, nesting]
+  /*
+   * The provider's answer where there is one, and this surface's own where
+   * there is not.
+   *
+   * Reading a shared list is not only cheaper: it is what stops two surfaces
+   * disagreeing, which is exactly what happened when the palette asked a
+   * narrower question of its own. And the cost is real — deciding whether a
+   * selection can be SAVED builds the document a save would store, so three
+   * surfaces asking separately made an ordinary edit clone and walk a large
+   * selection three times.
+   */
+  return useSelectionActionsContext(() =>
+    toolbarActions(document, selectedId, selectedIds, nesting)
   );
 }

@@ -44,10 +44,33 @@ function verbs(): CommandVerbs & Record<string, ReturnType<typeof vi.fn>> {
   } as unknown as CommandVerbs & Record<string, ReturnType<typeof vi.fn>>;
 }
 
-function build(over: Partial<Parameters<typeof builderCommands>[0]> = {}) {
+/**
+ * The palette's list for a selection, taking the bar's answer as the palette
+ * now does.
+ *
+ * The actions come from `toolbarActions` here rather than being written down,
+ * which is the same derivation the palette makes — what changed is only that
+ * the list is computed once above both surfaces instead of twice.
+ */
+function build(
+  over: Partial<Parameters<typeof builderCommands>[0]> = {},
+  selection: {
+    document?: BlockDocument;
+    selectedId?: string | null;
+    selectedIds?: readonly string[];
+    nesting?: { parentsOf: () => undefined };
+  } = {}
+) {
+  const document = selection.document ?? documentOf([node("a"), node("b")]);
+  const selectedId =
+    selection.selectedId === undefined ? "a" : selection.selectedId;
   return builderCommands({
-    document: documentOf([node("a"), node("b")]),
-    selectedId: "a",
+    actions: toolbarActions(
+      document,
+      selectedId,
+      selection.selectedIds,
+      selection.nesting
+    ),
     verbs: verbs(),
     undo: vi.fn(),
     redo: vi.fn(),
@@ -59,13 +82,13 @@ function build(over: Partial<Parameters<typeof builderCommands>[0]> = {}) {
 
 describe("builderCommands", () => {
   it("offers no block commands without a selection", () => {
-    expect(build({ selectedId: null }).map(c => c.id)).toEqual([]);
+    expect(build({}, { selectedId: null }).map(c => c.id)).toEqual([]);
   });
 
   it("omits a block verb the toolbar would show as unavailable", () => {
     // `a` is first, so it cannot move up. Derived rather than re-decided: this
     // is the same answer the toolbar gives, from the same call.
-    const ids = build({ selectedId: "a" }).map(c => c.id);
+    const ids = build({}, { selectedId: "a" }).map(c => c.id);
 
     expect(ids).toContain("block.move-down");
     expect(ids).not.toContain("block.move-up");
@@ -75,10 +98,13 @@ describe("builderCommands", () => {
     // The case that separates deriving from re-deciding. A lock stops moving
     // and deleting but NOT duplicating, and only a rule that asked
     // `toolbarActions` gets all three right at once.
-    const ids = build({
-      document: documentOf([node("a", { locked: true }), node("b")]),
-      selectedId: "a",
-    }).map(c => c.id);
+    const ids = build(
+      {},
+      {
+        document: documentOf([node("a", { locked: true }), node("b")]),
+        selectedId: "a",
+      }
+    ).map(c => c.id);
 
     expect(ids).toContain("block.duplicate");
     expect(ids).not.toContain("block.move-down");
@@ -87,7 +113,7 @@ describe("builderCommands", () => {
 
   it("runs the verb the command names", () => {
     const spies = verbs();
-    const commands = build({ selectedId: "a", verbs: spies });
+    const commands = build({ verbs: spies }, { selectedId: "a" });
 
     commands.find(c => c.id === "block.duplicate")?.run();
     expect(spies.duplicate).toHaveBeenCalled();
@@ -115,12 +141,16 @@ describe("builderCommands", () => {
     // Two rows sharing an id are both marked selected and Enter runs the first
     // whichever the author chose — a defect the palette's own contract calls
     // out and cannot defend against itself.
-    const ids = build({
-      selectedId: "b",
-      canUndo: true,
-      canRedo: true,
-      onExit: vi.fn(),
-    }).map(c => c.id);
+    const ids = build(
+      {
+        canUndo: true,
+        canRedo: true,
+        onExit: vi.fn(),
+      },
+      {
+        selectedId: "b",
+      }
+    ).map(c => c.id);
 
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids.length).toBeGreaterThan(4);
@@ -207,10 +237,7 @@ describe("the palette asks the question the toolbar asks", () => {
     const document = documentOf([node("a"), node("b"), node("c")]);
 
     const offered = builderCommands({
-      document,
-      selectedId: "a",
-      selectedIds: ["a", "c"],
-      nesting: anyParent,
+      actions: toolbarActions(document, "a", ["a", "c"], anyParent),
       verbs: verbs(),
       undo: vi.fn(),
       redo: vi.fn(),
@@ -227,10 +254,7 @@ describe("the palette asks the question the toolbar asks", () => {
     const document = documentOf([node("a"), node("b"), node("c")]);
 
     const offered = builderCommands({
-      document,
-      selectedId: "a",
-      selectedIds: ["a", "b"],
-      nesting: anyParent,
+      actions: toolbarActions(document, "a", ["a", "b"], anyParent),
       verbs: verbs(),
       undo: vi.fn(),
       redo: vi.fn(),
@@ -251,10 +275,7 @@ describe("the palette asks the question the toolbar asks", () => {
     const compared = selections.map(ids => ({
       ids,
       palette: builderCommands({
-        document,
-        selectedId: ids[0] ?? null,
-        selectedIds: ids,
-        nesting: anyParent,
+        actions: toolbarActions(document, ids[0] ?? null, ids, anyParent),
         verbs: verbs(),
         undo: vi.fn(),
         redo: vi.fn(),

@@ -144,21 +144,20 @@ export interface SavePatternDialogProps {
    */
   onSave: (fields: SavePatternFields) => Promise<boolean>;
   /**
-   * What to put focus back on when this closes.
+   * Where to put focus when this closes, asked at the moment it closes.
    *
    * Radix restores focus to the TRIGGER, and this dialog has none: it is opened
-   * from the toolbar, the context menu or the palette. Without this, focus
-   * lands on the body and a keyboard author is returned to the top of the page.
+   * from the toolbar, the context menu or the palette. Without an answer here
+   * focus lands on the body and a keyboard author is returned to the top of the
+   * page.
    *
-   * Supplied by the caller because only the caller was there. Measured: by
-   * `onOpenAutoFocus` the opener has already lost focus, so the last moment it
-   * can be read is the gesture that asked for the form — before any of this
-   * mounts.
-   *
-   * Used only while it is still CONNECTED. Two of the three controls that open
-   * this have unmounted by the time it closes.
+   * A FUNCTION rather than an element, because the right answer depends on when
+   * it is asked. The control that opened this may be gone by now — a menu item
+   * is unmounted the moment its menu closes, which is before this even
+   * appeared — and the caller is the only one that can say what to fall back
+   * to. Answering `null` leaves Radix its own default.
    */
-  returnFocusTo?: HTMLElement | null;
+  returnFocusTo?: () => HTMLElement | null;
   /**
    * Why the last save failed, when one did.
    *
@@ -317,22 +316,11 @@ export function SavePatternDialog({
           view while the fields move. */}
       <DialogContent
         className="flex max-h-[85vh] flex-col"
-        /*
-         * `isConnected` is a PRECONDITION, not something a test here can catch.
-         *
-         * Two of the three controls that raise this form unmount while it is
-         * up, so a detached opener is the ordinary case rather than the exotic
-         * one — and focusing a detached node does nothing while
-         * `preventDefault` has already thrown away whatever Radix would have
-         * done instead. Measured in jsdom, both paths end on the body, so a
-         * test over it would pass with the check removed; it stays because the
-         * cost is one comparison and the thing it protects is a fallback this
-         * environment cannot show.
-         */
         onCloseAutoFocus={event => {
-          if (!returnFocusTo?.isConnected) return;
+          const target = returnFocusTo?.() ?? null;
+          if (target === null) return;
           event.preventDefault();
-          returnFocusTo.focus();
+          target.focus();
         }}
       >
         <form

@@ -510,7 +510,7 @@ describe("reaching the save without the mouse", () => {
           onOpenChange={setOpen}
           subject="3 blocks"
           onSave={vi.fn(async () => true)}
-          returnFocusTo={opener}
+          returnFocusTo={() => opener}
         />
       );
     }
@@ -549,5 +549,66 @@ describe("reaching the save without the mouse", () => {
       bubbles: true,
     });
     await vi.waitFor(() => expect(onSave).toHaveBeenCalled());
+  });
+});
+
+describe("where focus goes when the opener has gone", () => {
+  it("takes whatever the caller answers at the moment it closes", async () => {
+    // The control that raised the form is usually gone by then — a menu item
+    // unmounts with its menu — so the answer cannot be an element captured at
+    // the open. It is asked for one, at the close.
+    const fallback = window.document.createElement("button");
+    window.document.body.append(fallback);
+    const asked: string[] = [];
+
+    function Host(): React.JSX.Element {
+      const [open, setOpen] = React.useState(true);
+      return inScope(
+        <SavePatternDialog
+          open={open}
+          onOpenChange={setOpen}
+          subject="3 blocks"
+          onSave={vi.fn(async () => true)}
+          returnFocusTo={() => {
+            asked.push("asked");
+            return fallback;
+          }}
+        />
+      );
+    }
+    render(<Host />);
+    // Not asked while it is open: a resolver called at the open would answer
+    // about a moment that has not happened.
+    expect(asked).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+    // Awaited because the resolver runs as Radix UNMOUNTS the content, which
+    // is a commit later than the click.
+    await vi.waitFor(() => expect(asked).toEqual(["asked"]));
+    expect(window.document.activeElement).toBe(fallback);
+    fallback.remove();
+  });
+
+  it("leaves Radix its own default when the caller answers nothing", () => {
+    // The control. A dialog that always suppressed the default would take away
+    // whatever Radix would otherwise have done, for callers with no answer.
+    function Host(): React.JSX.Element {
+      const [open, setOpen] = React.useState(true);
+      return inScope(
+        <SavePatternDialog
+          open={open}
+          onOpenChange={setOpen}
+          subject="3 blocks"
+          onSave={vi.fn(async () => true)}
+          returnFocusTo={() => null}
+        />
+      );
+    }
+
+    expect(() => {
+      render(<Host />);
+      fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    }).not.toThrow();
   });
 });

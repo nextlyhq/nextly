@@ -135,12 +135,23 @@ export function usePluginRouteMutation<
     // caller is told about and may repeat deliberately, and a write that is
     // retried wrongly costs duplicate data nothing can identify afterwards.
     retry: false,
-    onSuccess: async (_answered, sent: PluginWrite<TBody>) => {
+    onSuccess: (_answered, sent: PluginWrite<TBody>) => {
       // The keys THIS write carried, not the ones the hook points at now. A
       // callback reading the latest render refreshes the wrong plugin's reads
       // when the target changed while the request was in flight, and leaves
       // the data it did change stale.
-      await Promise.all(
+      //
+      // NOT awaited, deliberately. Returning the promise keeps the mutation
+      // pending until every invalidated read has refetched — so a write is
+      // reported as still running while a GET it does not depend on comes back,
+      // and a surface that closes on success sits there until it does. A
+      // plugin's reads can be large: the page builder's own library route is
+      // bounded at sixteen mebibytes, and a save waited for all of it before
+      // its dialog could close.
+      //
+      // The refresh still happens, and the surface that reads it re-renders
+      // when it lands. What changes is only that the WRITE stops waiting.
+      void Promise.all(
         sent.invalidates.map(queryKey => client.invalidateQueries({ queryKey }))
       );
     },
