@@ -33,8 +33,65 @@ export interface PluginRouteContext extends PluginContext {
    * judged on its own grant.
    */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * What the caller may DO, as opposed to who they are. `null` on a `public`
+   * route reached without a session, exactly like `user`.
+   *
+   * Distinct from `authenticatedScope` above, which is the raw grant an API key
+   * arrived with and is `undefined` for a session — correctly, since a session's
+   * grants are resolved on demand and it holds no stamped scope. A route reading
+   * the scope alone can therefore answer for a key and not for a signed-in
+   * person, and "may this author create here" is asked about people.
+   *
+   * Separate from `user` rather than folded into it because {@link AuthUser} is
+   * the identity every auth path constructs — the session issuer, the password
+   * strategy, registration, refresh — and none of those has a scope to put on
+   * it. Widening it would make the security-relevant half optional at every one
+   * of those sites, which is the shape that goes missing without failing.
+   */
+  caller: PluginRouteCaller | null;
   /** Path parameters captured from `:param` segments in the route's path. */
   params: Record<string, string>;
+}
+
+/**
+ * @public What the authenticated caller of a plugin route may do.
+ *
+ * Deliberately NOT a permission array. A session caller's permissions are
+ * resolved on demand from the database and its list is empty by design, so a
+ * route reading one directly would refuse every session user while appearing to
+ * check something.
+ */
+export interface PluginRouteCaller {
+  /**
+   * How the caller authenticated. An `api-key` caller is judged on the key's
+   * OWN stamped scope, which is narrower than its owner's grants by design.
+   */
+  authMethod: "session" | "api-key";
+  /**
+   * The authenticating API key's own id, present only for an `api-key` caller.
+   * Carried so a write can be attributed to the specific key rather than only
+   * to the user that owns it.
+   */
+  apiKeyId?: string;
+  /**
+   * Verified non-canonical claims from the caller's token — a tenant, a plan,
+   * an entitlement. Present when the token carried any.
+   */
+  claims?: Record<string, unknown>;
+  /**
+   * May this caller perform `action` on `resource`?
+   *
+   * `action`/`resource` are the two halves of a permission slug (`create` +
+   * `posts`), composed here rather than by the caller so the convention lives
+   * in one place. Answers `false` rather than throwing when access cannot be
+   * established.
+   *
+   * A UX and routing aid, not the enforcement point: the write itself is still
+   * authorized independently, and a route that only asks this has authorized
+   * nothing.
+   */
+  can(action: string, resource: string): Promise<boolean>;
 }
 
 /**

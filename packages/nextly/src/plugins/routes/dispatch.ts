@@ -16,8 +16,13 @@ import type { AuthUser } from "../../types/auth";
 import { runWithCallerScope } from "./caller-scope";
 import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
+import { buildPluginRouteCaller } from "./route-caller";
 import type { RouteMatch } from "./route-registry";
-import type { PluginRoute, PluginRouteContext } from "./route-types";
+import type {
+  PluginRoute,
+  PluginRouteCaller,
+  PluginRouteContext,
+} from "./route-types";
 
 /**
  * Map a failure on a plugin route to the error Response a caller receives.
@@ -63,10 +68,14 @@ async function resolvePluginRouteAuth(
   req: Request,
   route: PluginRoute
 ): Promise<
-  | { user: AuthUser | null; authenticatedScope?: AuthenticatedScope }
+  | {
+      user: AuthUser | null;
+      authenticatedScope?: AuthenticatedScope;
+      caller: PluginRouteCaller | null;
+    }
   | { error: NextlyError }
 > {
-  if (route.public === true) return { user: null };
+  if (route.public === true) return { user: null, caller: null };
 
   // requirePermission already enforces authentication, so the permission-gated
   // path needs a single call (avoids verifying the session twice).
@@ -96,7 +105,13 @@ async function resolvePluginRouteAuth(
           roles: authResult.roles,
         }
       : undefined;
-  return { user, authenticatedScope };
+  // Built from the same `authResult` the scope above is derived from, so the
+  // raw grant and the question asked of it cannot disagree about who is asking.
+  return {
+    user,
+    authenticatedScope,
+    caller: buildPluginRouteCaller(authResult),
+  };
 }
 
 function permissionArgs(slug: string): [string, string] {
@@ -177,6 +192,7 @@ export async function runPluginRoute(
     ...matched.baseCtx,
     user: auth.user,
     authenticatedScope: auth.authenticatedScope,
+    caller: auth.caller,
     params: matched.params,
   };
 
