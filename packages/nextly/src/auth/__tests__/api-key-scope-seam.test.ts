@@ -38,21 +38,20 @@ const SRC = join(__dirname, "..", "..");
 const SEAM_DEFINITION = join(SRC, "auth", "authenticated-scope.ts");
 
 /**
- * The dispatcher's param decode, which rebuilds a scope from strings.
+ * What this guard does NOT reach, stated rather than left to be discovered.
  *
- * Exempt because it has nothing better to build from: route params carry the
- * stored slugs and nothing else, so there are no rows for `apiKeyScopeFrom` to
- * take. It is also no longer the answer anyone gets — `readAuthenticatedScope`
- * prefers the scope pinned for the request and reaches this only where nothing
- * pinned one. Named here rather than left to the count, so a reader can see
- * that the exemption is about a transport that cannot carry rows.
+ * The pattern matches the literal `actorType: "apiKey"`, which is the shape all
+ * eight instances took. A scope built from a VARIABLE actor type does not match
+ * it — `dispatcher/helpers/authenticated-actor.ts` returns
+ * `{ actorType: type, permissions }`, and no pattern that catches that could
+ * tell it from any other object being assembled.
+ *
+ * That file is a deliberate exception in any case: route params carry strings,
+ * so it has no rows for `apiKeyScopeFrom` to take, and nothing reads its answer
+ * while a scope is pinned for the request. But it is UNREACHED here rather than
+ * excluded here, and an exclusion list naming it would say the guard considered
+ * it when the guard cannot see it.
  */
-const LOSSY_DECODE = join(
-  SRC,
-  "dispatcher",
-  "helpers",
-  "authenticated-actor.ts"
-);
 
 /** Every product source file — tests excluded, they may model any shape. */
 function productSources(): { path: string; text: string }[] {
@@ -67,7 +66,7 @@ function productSources(): { path: string; text: string }[] {
       }
       if (!name.endsWith(".ts") && !name.endsWith(".tsx")) continue;
       if (name.endsWith(".test.ts") || name.endsWith(".test-d.ts")) continue;
-      if (full === SEAM_DEFINITION || full === LOSSY_DECODE) continue;
+      if (full === SEAM_DEFINITION) continue;
       out.push({ path: full, text: readFileSync(full, "utf8") });
     }
   };

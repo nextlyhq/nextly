@@ -104,13 +104,17 @@ function freezeScope(scope: AuthenticatedScope): AuthenticatedScope {
  */
 export function apiKeyScope(
   grants: readonly GrantedPermission[],
-  roles: readonly string[]
+  roles?: readonly string[]
 ): AuthenticatedScope {
   return freezeScope({
     actorType: "apiKey",
     permissions: grants.map(grant => grant.slug),
     grants: [...grants],
-    roles: [...roles],
+    // OMITTED when the caller has none, never `[]`. `apiKeyWriteAllowed` reads
+    // `scope.roles ?? user.roles`, and an empty array is not nullish — so
+    // fabricating one here would shadow the caller's own roles and deny every
+    // rule that asks for one.
+    ...(roles ? { roles: [...roles] } : {}),
   });
 }
 
@@ -134,14 +138,14 @@ export function apiKeyScopeFrom(caller: {
   // An absent role list is the same as an empty one to every reader.
   roles?: readonly string[];
 }): AuthenticatedScope {
-  if (caller.grants) return apiKeyScope(caller.grants, caller.roles ?? []);
+  if (caller.grants) return apiKeyScope(caller.grants, caller.roles);
   // No rows, so `grants` is left ABSENT rather than empty: absent means "this
   // scope never had them", which `ruleFacingPermissions` answers honestly, and
   // an empty array would mean "this key holds nothing" and deny everything.
   return freezeScope({
     actorType: "apiKey",
     permissions: [...(caller.permissions ?? [])],
-    roles: [...(caller.roles ?? [])],
+    ...(caller.roles ? { roles: [...caller.roles] } : {}),
   });
 }
 
@@ -168,7 +172,7 @@ export function narrowScope(
       ),
     });
   }
-  return apiKeyScope(scope.grants.filter(keep), scope.roles ?? []);
+  return apiKeyScope(scope.grants.filter(keep), scope.roles);
 }
 
 /**
