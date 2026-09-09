@@ -202,6 +202,22 @@ const gatePlugin = definePlugin({
       },
       {
         method: "POST",
+        path: "/can-read-notes",
+        /**
+         * `ctx.caller.can()` — the question an admin panel asks BEFORE it
+         * offers a verb, so a wrong answer hides a control the caller is
+         * entitled to rather than failing a write it was going to make.
+         *
+         * It must agree with what the write would actually enforce, and the
+         * collection's rule is written in the spelling the documentation shows.
+         */
+        handler: async (_req, ctx) => {
+          const may = await ctx.caller!.can("read", "notes");
+          return Response.json({ may });
+        },
+      },
+      {
+        method: "POST",
         path: "/mutate-scope",
         /**
          * A handler that narrows its own scope in place — the thing
@@ -248,6 +264,7 @@ function post(
     | "read-one"
     | "read-spelled"
     | "narrow-then-read"
+    | "can-read-notes"
     | "mutate-scope",
   headers: Record<string, string>
 ): Promise<Response> {
@@ -597,6 +614,31 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
       second.map(g => g.slug).sort(),
       "a second resolve returned grants a caller had added to the first"
     ).toEqual(["read-notes", "read-posts"]);
+  });
+
+  it("answers `caller.can()` the way the write would answer", async () => {
+    const key = await viewerKeyOwnedBySuperAdmin();
+
+    // The control. If the READ itself is refused, `can()` returning false is
+    // correct and this test proves nothing about the spelling.
+    await seedNote();
+    const read = await post("read-spelled", { authorization: `Bearer ${key}` });
+    expect(
+      ((await read.json()) as { read: boolean }).read,
+      "the write path must allow this read, or `can()` is right to say no"
+    ).toBe(true);
+
+    const res = await post("can-read-notes", {
+      authorization: `Bearer ${key}`,
+    });
+    const body = (await res.json()) as { may: boolean };
+    expect(
+      body.may,
+      "`can()` said the caller may not do what the same caller then did. It " +
+        "builds its own scope by hand, so the rows a rule's `resource:action` " +
+        "spelling derives from never reach it and every documented permission " +
+        "predicate answers false."
+    ).toBe(true);
   });
 
   it("does not let a handler edit the grants it was handed", async () => {

@@ -126,17 +126,22 @@ export function apiKeyScope(
  */
 export function apiKeyScopeFrom(caller: {
   grants?: readonly GrantedPermission[];
-  permissions: readonly string[];
-  roles: readonly string[];
+  permissions?: readonly string[];
+  // Optional even though `AuthContext` declares it required: a context built
+  // by hand — a mock, a replayed request, an endpoint assembling one from
+  // parts — omits it, and this runs on the authorization path where throwing
+  // turns a missing field into a 500 on every request that shape reaches.
+  // An absent role list is the same as an empty one to every reader.
+  roles?: readonly string[];
 }): AuthenticatedScope {
-  if (caller.grants) return apiKeyScope(caller.grants, caller.roles);
+  if (caller.grants) return apiKeyScope(caller.grants, caller.roles ?? []);
   // No rows, so `grants` is left ABSENT rather than empty: absent means "this
   // scope never had them", which `ruleFacingPermissions` answers honestly, and
   // an empty array would mean "this key holds nothing" and deny everything.
   return freezeScope({
     actorType: "apiKey",
-    permissions: [...caller.permissions],
-    roles: [...caller.roles],
+    permissions: [...(caller.permissions ?? [])],
+    roles: [...(caller.roles ?? [])],
   });
 }
 
