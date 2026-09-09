@@ -53,12 +53,9 @@ contributes: {
         const rows = await ctx.services.collections.listEntries(
           ctx.self.collections.submissions,
           {},
-          {
-            as: "user",
-            user: ctx.user ?? undefined,
-            // Judges an API key on ITS grants, not its owner's roles.
-            authenticatedScope: ctx.authenticatedScope,
-          }
+          // An API key here is judged on its own grants: the dispatcher
+          // pins the caller's scope for the request.
+          { as: "user", user: ctx.user ?? undefined }
         );
         return Response.json({ items: rows.data });
       },

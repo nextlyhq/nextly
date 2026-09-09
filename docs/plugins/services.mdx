@@ -24,7 +24,7 @@ permissions apply:
 
 | `opts` | Behaviour |
 |---|---|
-| `{ as: "user", user, authenticatedScope }` | Runs as that caller — **RBAC enforced**. Pass the route's `ctx.user` AND `ctx.authenticatedScope`: `user` names the account, which for an API key is the key's OWNER, so forwarding it alone authorizes the key as whoever minted it. |
+| `{ as: "user", user }` | Runs as that caller — **RBAC enforced**. In a plugin route the caller's API-key scope is carried automatically, so a key is judged on its own grants rather than its owner's; pass `authenticatedScope` explicitly only to narrow it. |
 | `{ as: "system" }` | Elevates — **bypasses the access check** for trusted, non-user work (jobs, derived data, lookups). Visible and greppable by design. |
 | `{}` / omitted | No user → defaults to **system** (jobs, CLI, migrations). |
 
@@ -38,7 +38,7 @@ events.
 
 Pick the elevation deliberately. A public route that lists published content should use
 `{ as: "system" }` (the data is public-derived); a route that returns a user's own
-records should use `{ as: "user", user: ctx.user ?? undefined, authenticatedScope: ctx.authenticatedScope }`.
+records should use `{ as: "user", user: ctx.user ?? undefined }`.
 
 ## Collection methods
 

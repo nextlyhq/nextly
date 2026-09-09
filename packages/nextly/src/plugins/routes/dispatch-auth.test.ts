@@ -155,8 +155,16 @@ describe("plugin route dispatch — the caller's own scope", () => {
 
     const res = await runPluginRoute(req(), match(scopeRoute()));
     expect(res.status).toBe(200);
+    // Roles travel with the permissions. A code-defined rule may decide on a
+    // role — `create: ({ roles }) => roles.includes("editor")` — and judging a
+    // role-based key on the OWNER's roles is the same defect in the direction
+    // that denies.
     expect(await res.json()).toEqual({
-      scope: { actorType: "apiKey", permissions: ["read-posts"] },
+      scope: {
+        actorType: "apiKey",
+        permissions: ["read-posts"],
+        roles: ["viewer"],
+      },
     });
   });
 
