@@ -30,7 +30,7 @@ Form submissions are transformed, sanitized and validated on a `beforeChange` ho
 
 Sanitizing now runs before validation, so a rule judges the value that will actually be stored. `<b></b>` no longer satisfies a required field and then reduces to an empty string.
 
-Stripping markup no longer removes text that only looks like a tag. A `<` opens a tag only when what follows could name one, which is the HTML tokenizer's own rule, so an answer containing `2 < 3` survives intact. Stripping repeats until the text stops changing, because removing one tag can put its neighbours together into another.
+Stripping markup no longer removes text that only looks like a tag. A `<` opens a tag only when what follows could name one, which is the HTML tokenizer's own rule, so an answer containing `2 < 3` survives intact. Stripping is a single pass that keeps one invariant: a `<` it kept is never followed by a character that would open a tag. Removing a tag can put its neighbours together into another one, and rescanning until the text stopped changing held the same invariant at quadratic cost, which an unauthenticated caller could spend the server's CPU on.
 
 `validateSubmission` asks the same rule rather than restating it, so a preflight check and the write can no longer disagree about the same submission.
 

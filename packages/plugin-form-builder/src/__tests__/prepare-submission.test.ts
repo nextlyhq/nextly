@@ -110,6 +110,23 @@ describe("prepareSubmission", () => {
     }
   });
 
+  it("strips a hostile value in time proportional to its length", () => {
+    // `<`*n + `b>` + `x>`*n exposes one tag per pass, so a rule that rescanned
+    // until the text stopped changing did n passes over the whole string.
+    // Measured on that rule: 15KB took 23ms, 30KB 70ms and 60KB 261ms, four
+    // times the work for twice the input, while 360KB here takes about 9ms.
+    // Both public write paths sanitize before any length rule applies, so the
+    // difference is whose CPU an unauthenticated caller gets to spend.
+    const n = 120_000;
+    const hostile = "<".repeat(n) + "b>" + "x>".repeat(n);
+    const { data } = prepareSubmission({
+      data: { name: hostile, email: "ada@example.com" },
+      fields,
+      validate: false,
+    });
+    expect(String(data.name)).not.toMatch(/<[a-zA-Z/!?]/);
+  }, 2000);
+
   it("still removes what a browser would read as a tag", () => {
     // The control for the test above: narrowing the pattern must not stop it
     // removing markup. Each of these is tag-open syntax, including the one

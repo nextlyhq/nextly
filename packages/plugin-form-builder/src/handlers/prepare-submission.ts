@@ -45,6 +45,18 @@ const TEXT_FORM_FIELDS = new Set([
   "hidden",
 ]);
 
+/** Whether this character would make the `<` before it open a tag. */
+function opensTag(character: string | undefined): boolean {
+  if (character === undefined) return false;
+  return (
+    character === "/" ||
+    character === "!" ||
+    character === "?" ||
+    (character >= "a" && character <= "z") ||
+    (character >= "A" && character <= "Z")
+  );
+}
+
 /**
  * Remove HTML tags from a string, collapse whitespace, and trim.
  *
@@ -55,28 +67,41 @@ const TEXT_FORM_FIELDS = new Set([
  * which is silent loss in the one column a visitor's own words live in.
  *
  * `<name>` is still removed. Nothing distinguishes it from a tag, and a browser
- * reads it as an unknown element too.
+ * reads it as an unknown element too. A tag left unclosed at the end goes with
+ * it: handed `hello <script` a browser completes it rather than showing it.
  *
- * A tag left unclosed at end of string is still removed: handed `hello <script`
- * a browser completes it rather than showing it.
+ * One pass, holding one invariant: a `<` that has been kept is never followed
+ * by a character that would open a tag. Removing a tag can put its neighbours
+ * together into a new one, and `<<b>img src=x onerror=alert(1)>` became live
+ * markup the sanitizer assembled itself, so a kept `<` is dropped the moment
+ * the next character would make it dangerous.
  *
- * Repeated until the text stops changing, because removing a tag can put its
- * neighbours together into a new one. `<<b>img src=x onerror=alert(1)>` loses
- * the inner `<b>` and one pass hands back `<img src=x onerror=alert(1)>`, which
- * is live markup the sanitizer assembled itself. Each pass can only shorten the
- * text, so the loop ends, and it ends with nothing a browser would read as a
- * tag left in it.
+ * Repeating a regex until the text stopped changing held the same invariant and
+ * was quadratic: `"<".repeat(n) + "b>" + "x>".repeat(n)` exposed one tag per
+ * pass, so 90KB of it cost 30,001 passes over the whole string. This route is
+ * public and unauthenticated, and sanitizing happens before any length rule, so
+ * that was a cheap way to spend the server's CPU. Each character is examined
+ * once and dropped at most once.
  */
-const HTML_TAG = /<[a-zA-Z/!?][^>]*(?:>|$)/g;
-
 function stripHtmlTags(input: string): string {
-  let text = input;
-  let previous;
-  do {
-    previous = text;
-    text = text.replace(HTML_TAG, "");
-  } while (text !== previous);
-  return text.replace(/\s+/g, " ").trim();
+  const kept: string[] = [];
+  for (let at = 0; at < input.length; at += 1) {
+    const character = input[at];
+    if (character === "<" && opensTag(input[at + 1])) {
+      const close = input.indexOf(">", at + 1);
+      at = close === -1 ? input.length : close;
+      continue;
+    }
+    while (
+      kept.length > 0 &&
+      kept[kept.length - 1] === "<" &&
+      opensTag(character)
+    ) {
+      kept.pop();
+    }
+    kept.push(character);
+  }
+  return kept.join("").replace(/\s+/g, " ").trim();
 }
 
 /**
