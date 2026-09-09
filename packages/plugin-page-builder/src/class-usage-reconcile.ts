@@ -186,6 +186,10 @@ export const classUsageIndex: UsageIndex<ClassUsageRow> = {
   // The class row carries nothing beside its reference, so the key IS the id.
   reconcileKeyOf: row => row.classId,
   rowFor: (subject, referenceId) => ({ ...subject, classId: referenceId }),
+  // The class row carries nothing beside its reference, so naming the class is
+  // the whole question. Its marker is disjoint by LENGTH — longer than a class
+  // id may be — so it cannot be matched by an id a caller could ask about.
+  whereReferencing: referenceId => ({ classId: { equals: referenceId } }),
   markerFor: subject => ({ ...subject, classId: UNDETERMINED_CLASS_ID }),
   isMarker: row => row.classId === UNDETERMINED_CLASS_ID,
   derive: (document, limits) => classUsageOf(document, limits),

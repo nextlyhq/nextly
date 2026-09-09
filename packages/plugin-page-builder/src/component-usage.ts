@@ -30,6 +30,11 @@ import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
 import type { ComponentUsageRow } from "./collections/component-usage-index";
 import { readStoredJson } from "./stored-json";
+import {
+  countDocumentsUsing,
+  type GroupedUsageReader,
+  type UsageCount,
+} from "./usage-count";
 import type { UsageDerivation, UsageIndex } from "./usage-index";
 
 /**
@@ -107,6 +112,15 @@ export const componentUsageIndex: UsageIndex<ComponentUsageRow> = {
   // the parser skips is not reconciled either, so the contradiction would
   // survive every save rather than being cleared by the next one.
   reconcileKeyOf: row => `${row.kind}:${row.componentId}`,
+  // BOTH columns, because this index keeps a marker beside its references and
+  // the two are told apart by `kind`. Matching on the id alone would be correct
+  // only by accident: a marker stores the empty string, which no caller can ask
+  // about — so the day a marker carries something else, a count that had never
+  // said what it wanted would start including it.
+  whereReferencing: referenceId => ({
+    kind: { equals: "reference" },
+    componentId: { equals: referenceId },
+  }),
   rowFor: (subject, referenceId) => ({
     ...subject,
     kind: "reference",
@@ -122,3 +136,25 @@ export const componentUsageIndex: UsageIndex<ComponentUsageRow> = {
   isMarker: row => row.kind === "unreadable",
   derive: (document, limits) => componentUsageOf(document, limits),
 };
+
+/**
+ * How many documents place `componentId`, and whether that is all of them.
+ *
+ * The read behind "used on N pages". A host asks this rather than counting
+ * rows itself, so there is one reading of what a page using a component twice
+ * means — one page, not two.
+ *
+ * `complete: false` says the answer is a floor. A surface that drops it reports
+ * a component used on thousands of pages as used on the cap, and an author
+ * deciding whether to change something reads that as "barely used".
+ */
+export async function componentUsageCount(args: {
+  read: GroupedUsageReader;
+  componentId: string;
+}): Promise<UsageCount> {
+  return countDocumentsUsing({
+    index: componentUsageIndex,
+    read: args.read,
+    referenceId: args.componentId,
+  });
+}

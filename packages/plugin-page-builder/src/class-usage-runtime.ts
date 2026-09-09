@@ -16,6 +16,7 @@
 import type { ClassUsageIndexStore } from "./class-usage-maintenance";
 import type { ClassUsageSubject } from "./class-usage-reconcile";
 import type { ClassUsageDocumentReader } from "./class-usage-write";
+import type { GroupedUsageReader } from "./usage-count";
 
 /**
  * The part of the Direct API this needs.
@@ -39,6 +40,31 @@ export interface ClassUsageDirectApi {
     depth?: number;
     overrideAccess?: boolean;
   }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
+  /**
+   * A GROUPED read, for the question a listing cannot answer affordably.
+   *
+   * "How many documents reference this" is a count of DISTINCT documents, and
+   * the index holds a row per field, per locale and per stored variant — so one
+   * page using one component in two languages while holding a pending draft
+   * contributes several. Paging every row into the plugin to deduplicate would
+   * spend exactly the population the index exists to make cheap; grouping
+   * answers it in the database.
+   *
+   * `truncated` is part of the answer rather than an aside. The server caps how
+   * many buckets it returns, so a component used on more documents than that
+   * cap comes back short AND complete-looking, which is the reading that would
+   * report a widely used component as barely used.
+   */
+  group(args: {
+    collection: string;
+    groupBy: string;
+    where?: Record<string, unknown>;
+    bucketLimit?: number;
+    overrideAccess?: boolean;
+  }): Promise<{
+    buckets: { value: string | null; count: number }[];
+    truncated: boolean;
+  }>;
   findByID(args: {
     collection: string;
     id: string;
@@ -329,4 +355,38 @@ function localeOptions(subject: ClassUsageSubject): {
 function documentIn(row: unknown, subject: ClassUsageSubject): unknown {
   if (typeof row !== "object" || row === null) return undefined;
   return (row as Record<string, unknown>)[subject.field];
+}
+
+/**
+ * A grouped reader over one usage index, backed by the Direct API.
+ *
+ * Reads AS THE SYSTEM for the reason every other read of these tables does:
+ * the index denies every access rule it declares, so an untrusted read answers
+ * an empty set — and an empty set is indistinguishable from a thing nothing
+ * uses, which is the answer that makes deleting it look safe.
+ *
+ * The bucket cap is left to the server rather than named here. Asking for a
+ * specific one would be a second opinion about a bound this package does not
+ * own, and the answer carries `truncated` either way — so the count reports the
+ * limit it actually met rather than the one it hoped for.
+ */
+export function usageCountReader(
+  nextly: ClassUsageDirectApi,
+  /** The index collection's RESOLVED slug, since an integrator may rename it. */
+  indexCollection: string
+): GroupedUsageReader {
+  return async args => {
+    const grouped = await nextly.group({
+      collection: indexCollection,
+      groupBy: args.groupBy,
+      where: args.where,
+      ...AS_THE_SYSTEM,
+    });
+    // The bucket COUNT, not the row counts inside them. Each bucket is one
+    // document; summing `count` would put the per-row multiplicity back.
+    return {
+      bucketCount: grouped.buckets.length,
+      truncated: grouped.truncated,
+    };
+  };
 }

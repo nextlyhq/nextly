@@ -28,7 +28,9 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { usageCountReader } from "../class-usage-runtime";
 import { COMPONENT_USAGE_INDEX_SLUG } from "../collections/component-usage-index";
+import { componentUsageCount } from "../component-usage";
 import { pageBuilder } from "../plugin";
 
 /** One stored reference, in the shape the maintenance path writes. */
@@ -83,25 +85,17 @@ describe.each(getConfiguredTestDialects())(
         });
       }
 
-      const grouped = await nextly.group({
-        collection: COMPONENT_USAGE_INDEX_SLUG,
-        groupBy: "entityKey",
-        where: { componentId: { equals: "header" } },
-        // The index denies every access rule it declares, so an untrusted read
-        // answers an empty set — which is indistinguishable from a component
-        // nothing uses, and is the answer that permits deleting it.
-        overrideAccess: true,
+      // Through the SHIPPED entry point, not a hand-written grouped read. A
+      // probe that composed the query itself would prove the database can
+      // answer and say nothing about whether the code a host calls asks it
+      // correctly — the predicate, the group key and the trusted read are
+      // exactly what this has to get right.
+      const count = await componentUsageCount({
+        read: usageCountReader(nextly, COMPONENT_USAGE_INDEX_SLUG),
+        componentId: "header",
       });
 
-      expect({
-        pages: grouped.buckets.length,
-        keys: grouped.buckets.map(b => b.value).sort(),
-        truncated: grouped.truncated,
-      }).toEqual({
-        pages: 2,
-        keys: ["page-1", "page-2"],
-        truncated: false,
-      });
+      expect(count).toEqual({ documents: 2, complete: true });
     });
 
     it("answers zero for a component nothing references", async () => {
@@ -117,14 +111,12 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
 
-      const grouped = await nextly.group({
-        collection: COMPONENT_USAGE_INDEX_SLUG,
-        groupBy: "entityKey",
-        where: { componentId: { equals: "never-placed" } },
-        overrideAccess: true,
+      const count = await componentUsageCount({
+        read: usageCountReader(nextly, COMPONENT_USAGE_INDEX_SLUG),
+        componentId: "never-placed",
       });
 
-      expect(grouped.buckets).toEqual([]);
+      expect(count).toEqual({ documents: 0, complete: true });
     });
   }
 );

@@ -126,6 +126,22 @@ export type { ClassUsageIndexStore } from "./class-usage-maintenance";
 // the rebuild without naming the variant, and a caller left to spell it as a
 // string can spell it wrong.
 export type { ClassUsageVariant } from "./collections/class-usage-index";
+
+// "Used on N pages", and the reader that answers it.
+//
+// Public because the question belongs to the host's surfaces — a library tile,
+// a component's own header — and because counting it any other way gets a
+// different number. A row is filed per field, per locale and per stored
+// variant, so a host counting rows would report one page as several and watch
+// the figure climb whenever somebody added a translation.
+//
+// `usageCountReader` comes with it: the count is asked of a grouped read that
+// must run as the system, since the index denies every access rule it declares
+// and an untrusted read answers an empty set — indistinguishable from a
+// component nothing uses.
+export { componentUsageCount } from "./component-usage";
+export { usageCountReader } from "./class-usage-runtime";
+export type { UsageCount, GroupedUsageReader } from "./usage-count";
 /*
  * `editorChoiceFields` is gone, along with the per-entry editor switch.
  *

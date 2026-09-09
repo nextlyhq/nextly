@@ -178,6 +178,23 @@ export interface UsageIndex<TRow extends UsageSubject> {
   rowFor(subject: UsageSubject, referenceId: string): TRow;
 
   /**
+   * Which stored rows record a reference to `referenceId`.
+   *
+   * A PREDICATE rather than a column name, and the difference is the reason
+   * this member exists where a bare `referenceColumn` did not survive. Naming
+   * the column leaves the caller to compose the rest of the question, and the
+   * rest is not the same for every index: one that keeps a marker beside its
+   * references has to exclude those, and a caller assembling the clause itself
+   * would have to know that — which is the index's knowledge, spent at the call
+   * site.
+   *
+   * Counting is what needs it. "How many documents reference this" is asked of
+   * the database, so the question has to travel as a filter rather than as rows
+   * read back and sorted through here.
+   */
+  whereReferencing(referenceId: string): Record<string, { equals: string }>;
+
+  /**
    * The row recording that `subject` could not be read whole.
    *
    * ONE row rather than a row per reference the walk managed, because a
