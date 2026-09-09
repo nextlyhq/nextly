@@ -57,6 +57,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
     async find(
       args: FindFormsArgs = {}
     ): Promise<ListResult<Record<string, unknown>>> {
+      const config = mergeConfig(ctx.defaultConfig, args);
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
 
@@ -70,7 +71,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         page,
         limit,
         where: Object.keys(where).length > 0 ? where : undefined,
-        request: args.request,
+        request: config.request,
       });
 
       if (!result.success) {
@@ -115,7 +116,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
           collectionName: ctx.formsCollectionSlug,
           where: { slug: { equals: args.slug } },
           limit: 1,
-          request: args.request,
+          request: config.request,
         });
 
         if (!result.success) {
@@ -147,6 +148,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
     },
 
     async submit(args: SubmitFormArgs): Promise<SubmitFormResult> {
+      const config = mergeConfig(ctx.defaultConfig, args);
       if (!args.form) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -168,7 +170,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         disableErrors: true,
         // Part of the same request as the submission below, so the form
         // lookup's read hooks are told about it too.
-        request: args.request,
+        request: config.request,
       });
 
       // The same answer the HTTP paths give. This used to say one fixed
@@ -211,7 +213,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
             // this passes the request it was given, so a rule at the write seam
             // judges this submission on the same facts as one that arrived over
             // the built-in route.
-            request: args.request,
+            request: config.request,
           },
           submissionData
         )
@@ -243,6 +245,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
     async submissions(
       args: FormSubmissionsArgs
     ): Promise<ListResult<Record<string, unknown>>> {
+      const config = mergeConfig(ctx.defaultConfig, args);
       if (!args.form) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -263,6 +266,10 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         const form = await namespace.findBySlug({
           slug: args.form,
           disableErrors: true,
+          // Part of the same operation as the read below, so its hooks are
+          // told about the caller rather than classifying half of one
+          // operation as background work.
+          request: config.request,
         });
 
         if (!form) {
@@ -279,7 +286,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         page,
         limit,
         where: { form: { equals: formId } },
-        request: args.request,
+        request: config.request,
       });
 
       if (!result.success) {

@@ -2,18 +2,19 @@
  * Pinning the HTTP request that produced an operation, for the length of it.
  *
  * Hooks are told about the request through `ctx.req.http`, and an operation can
- * be handed one explicitly. Availability is not enough. Every service call
- * already written names its own arguments, so an opt-in field leaves each of
- * them reporting background work for browser traffic, and every call path
- * written next has to remember. Threading it by hand was tried first, and four
- * rounds of review found paths that had not been threaded: a version restore,
- * a Direct API read, a form lookup, a bulk readback. The shape of that finding
- * is the design telling you where the boundary belongs.
+ * be handed one explicitly. Availability is not enough. A service call names
+ * its own arguments, so an opt-in field is carried only by the call paths that
+ * name it, and a path that does not is not silent: it reports background work
+ * for browser traffic, which is the answer a request-scoped rule acts on. The
+ * paths are many and indirect -- a version restore reaches an update through a
+ * read gate, a Direct API write reads its own result back, a form submission
+ * looks up its form first -- so an omission is invisible at the call site and
+ * wrong several layers away.
  *
- * So the HTTP boundary pins the request instead, and `resolveRequestFacts`
- * reads it when the caller named none. An explicit request still wins, so a
- * caller that knows better than the ambient value keeps saying so, and the
- * existing explicit call sites keep meaning what they say.
+ * So the HTTP boundary pins the request, and `resolveRequestFacts` reads it
+ * when the caller named none. An explicit request still wins, so a caller that
+ * knows better than the ambient value keeps saying so, and every call site that
+ * names one keeps meaning what it says.
  *
  * `AsyncLocalStorage` rather than a module variable: requests are served
  * concurrently, and a shared variable would hand one request's address to

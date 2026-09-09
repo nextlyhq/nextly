@@ -1,11 +1,12 @@
 /**
  * The pinned request reaches a call path nobody threaded.
  *
- * That is the whole point of pinning it. Four rounds of review found paths
- * that forwarded the request nowhere -- a version restore's read gate, three
- * Direct API form reads, a form lookup, a bulk readback -- and each was a
- * correct call site that simply had not been told. A rule reading
- * `ctx.req.http` took every one of them for background work.
+ * That is the whole point of pinning it. A version restore's read gate, a
+ * Direct API form read, a form lookup and a bulk update's readback all reach
+ * the hook layer without naming a request, because each is an intermediate
+ * call several layers below the one the caller made. A rule reading
+ * `ctx.req.http` takes an unnamed request for background work, so a path that
+ * cannot name one has to inherit it instead.
  *
  * The other half matters as much: a job started from inside a request must not
  * inherit it, or a server-side import is judged as the visitor who set it off.

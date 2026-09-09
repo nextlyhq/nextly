@@ -3,10 +3,9 @@
  *
  * This is the seam that covers the handlers exported directly from `nextly/api/*`
  * -- versions, media, singles detail and the rest -- which never pass through
- * the service dispatcher. Threading the request into each of them by hand is
- * what four rounds of review kept finding half-done; pinning it here is what
- * makes a hook several layers down see the caller without every layer between
- * naming it.
+ * the service dispatcher and so are not reached by the scope it opens. Pinning
+ * here is what lets a hook several layers below one of them see the caller
+ * without every layer in between naming the request.
  *
  * @module api/__tests__/with-error-handler-request-scope
  */
