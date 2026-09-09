@@ -1870,6 +1870,66 @@ describe("what a definition may not be", () => {
     }
   });
 
+  it("takes the caps by name, so how they are stored does not matter", () => {
+    // The snapshot above has to copy the RIGHT SET, and a spread copies own
+    // enumerable properties — the wrong set at both ends. It misses a member
+    // reached through the prototype or defined non-enumerably, so a caps
+    // object that reads perfectly well arrives with every cap `undefined`;
+    // and it reads members the planner never uses, so an unrelated getter on
+    // the caller's object runs, and a throwing one takes the call down.
+    //
+    // Each case is a caps object that behaves identically under a NAMED read
+    // and differently under a spread, so all three fail together the moment
+    // the snapshot goes back to copying properties wholesale.
+    const doc = page([
+      node("i1", {
+        type: COMPONENT_INSTANCE_TYPE,
+        props: { componentId: "def-1" },
+      }),
+    ]);
+    const convert = (limits: DocumentLimits) =>
+      planConvertToComponent(
+        doc,
+        ["i1"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent,
+        limits
+      ).problem;
+
+    // Reached through the prototype: `Object.create` leaves no own property.
+    const inherited = Object.create(DEFAULT_LIMITS) as DocumentLimits;
+
+    // Own, but not enumerable — as a class instance's accessors would be.
+    const nonEnumerable = {} as DocumentLimits;
+    for (const key of ["maxDepth", "maxNodes", "maxBytes"] as const) {
+      Object.defineProperty(nonEnumerable, key, {
+        value: DEFAULT_LIMITS[key],
+        enumerable: false,
+      });
+    }
+
+    // A caller's own metadata riding along on the caps object.
+    const withUnrelated = { ...DEFAULT_LIMITS } as DocumentLimits;
+    Object.defineProperty(withUnrelated, "meta", {
+      enumerable: true,
+      get() {
+        throw new Error("this getter is not the planner's business");
+      },
+    });
+
+    expect({
+      inherited: convert(inherited),
+      nonEnumerable: convert(nonEnumerable),
+      withUnrelated: convert(withUnrelated),
+    }).toEqual({
+      inherited: "self-reference",
+      nonEnumerable: "self-reference",
+      withUnrelated: "self-reference",
+    });
+  });
+
   it("refuses an exposure list whose indices are accessors", () => {
     // A genuine array, with entries that would be well formed, that computes
     // them. Neither the array check nor the entry guards see it, and reading
