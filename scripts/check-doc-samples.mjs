@@ -891,6 +891,16 @@ export const UNRESOLVED_IMPORT = /error TS2307: Cannot find module '([^']+)'/;
 /** An undefined name, which may or may not be a defect. */
 export const MISSING_NAME = /error TS2304: Cannot find name '([^']+)'/;
 
+/**
+ * A shorthand property with nothing in scope to fill it.
+ *
+ * `{ Page }` is the same missing name as `Page`, and TypeScript reports it as
+ * TS18004 rather than TS2304. Reading only TS2304 meant the same reader-owned
+ * name was charged or set aside according to the punctuation around it.
+ */
+export const MISSING_SHORTHAND =
+  /error TS18004: No value exists in scope for the shorthand property '([^']+)'/;
+
 /** The package part of a specifier: @nextlyhq/plugin-sdk/testing -> @nextlyhq/plugin-sdk. */
 export const packageOf = specifier => {
   const parts = specifier.split("/");
@@ -1835,14 +1845,29 @@ export function usedOnlyAsValue(code, name, extension = "tsx") {
 }
 
 /** Whether a block ever constructs this name. */
+/**
+ * The name a `new` expression needs in scope.
+ *
+ * `new AWS.S3Client()` needs `AWS`, not `S3Client`: the constructor is reached
+ * through a namespace, and the namespace is the binding the sample forgot to
+ * import. Reading only a bare identifier missed every qualified constructor.
+ */
+function constructorRoot(expression) {
+  let at = expression;
+  while (
+    ts.isPropertyAccessExpression(at) ||
+    ts.isElementAccessExpression(at) ||
+    ts.isParenthesizedExpression(at)
+  ) {
+    at = at.expression;
+  }
+  return ts.isIdentifier(at) ? at.text : undefined;
+}
+
 export function constructedInBlock(code, name, extension = "tsx") {
   let constructed = false;
   const visit = node => {
-    if (
-      ts.isNewExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === name
-    ) {
+    if (ts.isNewExpression(node) && constructorRoot(node.expression) === name) {
       constructed = true;
     }
     ts.forEachChild(node, visit);
@@ -1898,9 +1923,37 @@ export function misspelledExport(name, exported = workspaceExports()) {
     if (other === wanted) continue;
     if (!withinOneEdit(wanted, other)) continue;
     if (differsOnlyAtTheEnd(wanted, other)) continue;
+    if (sharedOpening(wanted, other) < SAME_WORD_OPENING) continue;
     return true;
   }
   return false;
+}
+
+/**
+ * How much of a name has to match before one edit makes it a misspelling.
+ *
+ * One edit is a wide net over short names, and the net was catching the reader.
+ * Four-letter component names sit one substitution from something this
+ * workspace exports at a startling rate: `Host` from `POST`, and `Cost`, `Past`,
+ * `Cart`, `Fork` and `Last` from their own neighbours. Every one of those is a
+ * name a reader would plausibly give a component, and all six were charged.
+ *
+ * A misspelling keeps the opening of the word it meant, because that is the
+ * part already typed when the mistake happens: `Skelton` keeps `skel` and
+ * `NextlyEror` keeps `nextlyer`. A collision does not: `host` and `post` share
+ * nothing, `past` and `post` share one letter, `fork` and `form` three. Four is
+ * where the two populations separate, and it also puts every four-letter name
+ * out of reach, since matching four and differing by one more needs five.
+ */
+const SAME_WORD_OPENING = 4;
+
+/** How many leading characters two names have in common. */
+function sharedOpening(a, b) {
+  let shared = 0;
+  while (shared < a.length && shared < b.length && a[shared] === b[shared]) {
+    shared += 1;
+  }
+  return shared;
 }
 
 /** Whether one name is the other with a character added at the end. */
@@ -2020,7 +2073,10 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
       implicitAny.push(line);
       continue;
     }
-    const name = line.match(MISSING_NAME);
+    // Both spellings of the same question: a name the block uses and nothing
+    // here defines. `{ Page }` reports as TS18004 and `Page` as TS2304, and
+    // they get the same answer.
+    const name = line.match(MISSING_NAME) ?? line.match(MISSING_SHORTHAND);
     if (name) {
       const [file, idx] = line.split("  ")[0].split("#");
       const index = Number.parseInt(idx, 10);
