@@ -236,9 +236,25 @@ export function statesBootBudget(source) {
   if (!exported) return false;
 
   let config = exported.expression;
-  // `defineConfig({...})` is a passthrough; an object literal may be exported
-  // directly, and vitest accepts both.
+  /*
+   * 🔴 Only `defineConfig` is unwrapped, and anything else FAILS CLOSED.
+   *
+   * `defineConfig(x)` returns `x`, so its argument is the config. No other call
+   * promises that. `mergeConfig(a, b)` returns a composition in which `b`
+   * overrides `a`, so unwrapping to the first argument reads budgets that the
+   * exported config does not have: `mergeConfig({test:{testTimeout:30000}},
+   * {test:{testTimeout:1000}})` would be accepted while the suite ran on one
+   * second. Evaluating composition is not something a syntax read can do, so a
+   * call this does not recognise is reported rather than guessed at.
+   */
   if (ts.isCallExpression(config)) {
+    const callee = config.expression;
+    const name = ts.isIdentifier(callee)
+      ? callee.text
+      : ts.isPropertyAccessExpression(callee)
+        ? callee.name.text
+        : undefined;
+    if (name !== "defineConfig") return false;
     if (config.arguments.length === 0) return false;
     config = config.arguments[0];
   }

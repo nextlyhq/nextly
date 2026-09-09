@@ -431,6 +431,28 @@ export default defineConfig({ test: { include: ["src/**/*.test.ts"] } });`)
     ).toBe(false);
   });
 
+  it("does NOT unwrap a call it cannot reason about, such as mergeConfig", () => {
+    // `defineConfig(x)` returns `x`, so its argument is the config. `mergeConfig`
+    // returns a composition where the SECOND argument wins, so reading the first
+    // reports budgets the exported config does not have.
+    expect(
+      statesBootBudget(`import { mergeConfig } from "vitest/config";
+export default mergeConfig(
+  { test: { testTimeout: 30000, hookTimeout: 30000 } },
+  { test: { testTimeout: 1000, hookTimeout: 1000 } }
+);`)
+    ).toBe(false);
+  });
+
+  it("still accepts the wrapper it does understand", () => {
+    // The control for the case above: it would pass on a predicate that had
+    // stopped unwrapping anything at all.
+    expect(
+      statesBootBudget(`import { defineConfig } from "vitest/config";
+export default defineConfig({ test: { testTimeout: 30000, hookTimeout: 30000 } });`)
+    ).toBe(true);
+  });
+
   it("reads a config exported without the defineConfig wrapper", () => {
     // The positive control for the decoy case: it would pass on a predicate
     // that had simply stopped finding budgets anywhere.
