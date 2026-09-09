@@ -487,10 +487,15 @@ describe("reaching the save without the mouse", () => {
      * fallback, focus lands on the body and a keyboard author is returned to
      * the top of the page.
      *
-     * Driven through a real close rather than a spy, because the restore runs
-     * as Radix UNMOUNTS the content — a controlled dialog whose `open` never
-     * changes never reaches it, and a test that only pressed Cancel would pass
-     * while the restore did nothing.
+     * The opener is passed IN rather than read here, because by the time this
+     * mounts it has already lost focus — measured, it is gone even by Radix's
+     * own "about to take focus" hook, which is why capturing it there returned
+     * the body.
+     *
+     * Driven through a real close, because the restore runs as Radix UNMOUNTS
+     * the content: a controlled dialog whose `open` never changes never reaches
+     * it, and a test that only pressed Cancel would pass while the restore did
+     * nothing.
      */
     const opener = window.document.createElement("button");
     opener.textContent = "Save as pattern";
@@ -505,6 +510,7 @@ describe("reaching the save without the mouse", () => {
           onOpenChange={setOpen}
           subject="3 blocks"
           onSave={vi.fn(async () => true)}
+          returnFocusTo={opener}
         />
       );
     }
@@ -515,5 +521,33 @@ describe("reaching the save without the mouse", () => {
 
     await vi.waitFor(() => expect(window.document.activeElement).toBe(opener));
     opener.remove();
+  });
+
+  it("does not submit while an input method is composing", async () => {
+    /*
+     * Typing Japanese, Chinese or Korean goes through an IME, and Enter is how
+     * a candidate is accepted. Submitting there stores a pattern named with
+     * whatever was half-composed, on the first press of the key the author used
+     * to finish a word — the same class of defect as a slug that came back
+     * empty for those scripts.
+     */
+    const { onSave } = mount();
+    fillRequired("見出し");
+
+    fireEvent.keyDown(screen.getByLabelText("Name"), {
+      key: "Enter",
+      isComposing: true,
+      bubbles: true,
+    });
+
+    expect(onSave).not.toHaveBeenCalled();
+
+    // The control: the SAME key, once composition has finished, does submit —
+    // so this is the IME talking rather than Enter having been disabled.
+    fireEvent.keyDown(screen.getByLabelText("Name"), {
+      key: "Enter",
+      bubbles: true,
+    });
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalled());
   });
 });

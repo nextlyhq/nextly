@@ -49,6 +49,13 @@ export interface SavePatternPromptProps {
   selectedIds: readonly string[];
   /** Called when the prompt is finished with, saved or not. */
   onClose: () => void;
+  /**
+   * What had focus when the author asked, so it can be given back.
+   *
+   * Read by the caller rather than here: by the time this mounts the opener has
+   * already lost focus, so the gesture is the last moment it is knowable.
+   */
+  returnFocusTo?: HTMLElement;
 }
 
 /**
@@ -66,6 +73,7 @@ export function SavePatternPrompt({
   document,
   selectedIds,
   onClose,
+  returnFocusTo,
 }: SavePatternPromptProps): React.JSX.Element | null {
   if (document === null) return null;
   return (
@@ -73,6 +81,7 @@ export function SavePatternPrompt({
       document={document}
       selectedIds={selectedIds}
       onClose={onClose}
+      {...(returnFocusTo === undefined ? {} : { returnFocusTo })}
     />
   );
 }
@@ -100,6 +109,7 @@ function SavePatternForm({
   document,
   selectedIds,
   onClose,
+  returnFocusTo,
 }: Omit<SavePatternPromptProps, "document"> & {
   document: BlockDocument;
 }): React.JSX.Element {
@@ -159,6 +169,7 @@ function SavePatternForm({
       categories={library.categories}
       onSave={fields => storing(fields)}
       {...(writer.error === undefined ? {} : { error: writer.error })}
+      {...(returnFocusTo === undefined ? {} : { returnFocusTo })}
     />
   );
 }

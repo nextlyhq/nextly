@@ -1787,9 +1787,20 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * gesture declines to close: the words are in the passage and nowhere else,
    * and the author has been told what happened.
    */
+  /*
+   * What had focus when the author asked, so the form can give it back.
+   *
+   * Read HERE because this is the last moment it is knowable: the toolbar
+   * button, the menu item or the palette row still has focus during the
+   * gesture, and by the time the dialog is mounting it does not — measured, it
+   * has already gone even by Radix's own "about to take focus" hook.
+   */
+  const savePatternOpener = useRef<HTMLElement | null>(null);
   const openSavePattern = useCallback(() => {
     const finished = finishInlineEdit(inline, editor.document);
     if (!finished.mayClose) return;
+    const active = window.document.activeElement;
+    savePatternOpener.current = active instanceof HTMLElement ? active : null;
     setSavingPattern(finished.document);
   }, [editor.document, inline]);
   const closeSavePattern = useCallback(() => setSavingPattern(null), []);
@@ -2845,6 +2856,9 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             document={savingPattern}
             selectedIds={editor.selection.ids}
             onClose={closeSavePattern}
+            {...(savePatternOpener.current === null
+              ? {}
+              : { returnFocusTo: savePatternOpener.current })}
           />
         </BlockKeyboardActions>
       </BuilderShell>

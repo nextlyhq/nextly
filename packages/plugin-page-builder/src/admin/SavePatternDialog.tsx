@@ -144,6 +144,22 @@ export interface SavePatternDialogProps {
    */
   onSave: (fields: SavePatternFields) => Promise<boolean>;
   /**
+   * What to put focus back on when this closes.
+   *
+   * Radix restores focus to the TRIGGER, and this dialog has none: it is opened
+   * from the toolbar, the context menu or the palette. Without this, focus
+   * lands on the body and a keyboard author is returned to the top of the page.
+   *
+   * Supplied by the caller because only the caller was there. Measured: by
+   * `onOpenAutoFocus` the opener has already lost focus, so the last moment it
+   * can be read is the gesture that asked for the form — before any of this
+   * mounts.
+   *
+   * Used only while it is still CONNECTED. Two of the three controls that open
+   * this have unmounted by the time it closes.
+   */
+  returnFocusTo?: HTMLElement;
+  /**
    * Why the last save failed, when one did.
    *
    * Rendered only after an attempt made from THIS dialog, so a failure left
@@ -167,6 +183,7 @@ export function SavePatternDialog({
   categories,
   onSave,
   error,
+  returnFocusTo,
 }: SavePatternDialogProps) {
   const [title, setTitle] = React.useState("");
   const [granularity, setGranularity] = React.useState<PatternGranularity | "">(
@@ -249,6 +266,19 @@ export function SavePatternDialog({
    */
   const submitOnEnter = (event: React.KeyboardEvent<HTMLFormElement>): void => {
     if (event.key !== "Enter" || event.defaultPrevented) return;
+    /*
+     * MID-COMPOSITION Enter belongs to the input method, not to this form.
+     *
+     * Typing Japanese, Chinese or Korean goes through an IME, and Enter is how
+     * a candidate is accepted — so submitting here would store a pattern named
+     * with whatever was half-composed, on the first press of a key the author
+     * used to finish a word. The same class of defect as the slug that came
+     * back empty for those scripts.
+     *
+     * Read off the NATIVE event: React's synthetic keyboard event has never
+     * carried `isComposing` as part of its documented shape.
+     */
+    if (event.nativeEvent.isComposing) return;
     const target = event.target;
     if (
       target instanceof HTMLTextAreaElement ||
@@ -262,23 +292,6 @@ export function SavePatternDialog({
     event.preventDefault();
     event.currentTarget.requestSubmit();
   };
-
-  /*
-   * Where focus goes when this closes.
-   *
-   * Radix restores focus to the TRIGGER, and this dialog has none — it is
-   * opened from the toolbar, the context menu or the palette, which are three
-   * different controls and two of them have unmounted by the time it closes. So
-   * the fallback is the element that had focus when the form opened, captured
-   * here and used only while it is still connected: otherwise focus lands on
-   * the body and a keyboard author is returned to the top of the page.
-   */
-  const openedFrom = React.useRef<HTMLElement | null>(null);
-  React.useEffect(() => {
-    if (!open) return;
-    const active = window.document.activeElement;
-    openedFrom.current = active instanceof HTMLElement ? active : null;
-  }, [open]);
 
   const listId = React.useId();
 
@@ -304,11 +317,22 @@ export function SavePatternDialog({
           view while the fields move. */}
       <DialogContent
         className="flex max-h-[85vh] flex-col"
+        /*
+         * `isConnected` is a PRECONDITION, not something a test here can catch.
+         *
+         * Two of the three controls that raise this form unmount while it is
+         * up, so a detached opener is the ordinary case rather than the exotic
+         * one — and focusing a detached node does nothing while
+         * `preventDefault` has already thrown away whatever Radix would have
+         * done instead. Measured in jsdom, both paths end on the body, so a
+         * test over it would pass with the check removed; it stays because the
+         * cost is one comparison and the thing it protects is a fallback this
+         * environment cannot show.
+         */
         onCloseAutoFocus={event => {
-          const origin = openedFrom.current;
-          if (origin === null || !origin.isConnected) return;
+          if (returnFocusTo === undefined || !returnFocusTo.isConnected) return;
           event.preventDefault();
-          origin.focus();
+          returnFocusTo.focus();
         }}
       >
         <form
