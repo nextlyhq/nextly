@@ -33,6 +33,21 @@ import type { RequestActorType } from "./request-actor";
 export interface AuthenticatedScope {
   actorType: RequestActorType;
   permissions: string[];
+  /**
+   * The key's OWN resolved role slugs, when authentication resolved them.
+   *
+   * A code-defined rule may decide on a role rather than a permission —
+   * `create: ({ roles }) => roles.includes("editor")` — and the user object
+   * reaching that rule names the key's OWNER. Judging a role-based key on the
+   * owner's roles is the same defect as judging it on the owner's permissions,
+   * in the direction that DENIES: a key assigned the editor role is refused
+   * because the roles it was checked against were never its own.
+   *
+   * Optional because the read paths that construct a scope from an
+   * already-resolved caller carry roles on the user instead; `apiKeyWriteAllowed`
+   * prefers this and falls back to that, so neither path loses them.
+   */
+  roles?: string[];
 }
 
 /**
@@ -90,6 +105,10 @@ export async function apiKeyWriteAllowed(
     userId: user.id,
     authMethod: "api-key",
     permissions: scope.permissions,
-    roles: user.roles ?? [],
+    // The KEY's roles when it carries them. `user` names the owner, so its
+    // roles are the owner's — the very thing this function exists not to judge
+    // on. The read paths resolve the key's roles onto the user before calling
+    // here, which is why that remains the fallback rather than an error.
+    roles: scope.roles ?? user.roles ?? [],
   });
 }

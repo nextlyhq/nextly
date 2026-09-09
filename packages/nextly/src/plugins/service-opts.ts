@@ -10,6 +10,8 @@ import type {
 import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
 
+import { currentCallerScope } from "./routes/caller-scope";
+
 /**
  * @public Elevation options for the managed `ctx.services` path.
  * Default: `system` when no `user` is supplied (no-user → system). Validation/
@@ -58,7 +60,12 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   overrideAccess: boolean;
   context?: Record<string, unknown>;
 } {
-  const { as, user, context, authenticatedScope } = opts;
+  const { as, user, context } = opts;
+  // The caller's own scope wins when named; otherwise the one the dispatcher
+  // pinned for this request. A route that omits it is the common case, not the
+  // exception, so the ambient value is what makes the key's grants reach the
+  // access check at all.
+  const authenticatedScope = opts.authenticatedScope ?? currentCallerScope();
   const wantsUser = as === "user" || (as === undefined && user !== undefined);
   if (wantsUser) {
     if (!user) {

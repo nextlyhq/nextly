@@ -43,16 +43,16 @@ const writePlugin = definePlugin({
       {
         method: "POST",
         path: "/write",
+        // Composes `{ as: "user", user }` and NOTHING else — the shape every
+        // first-party route already written uses. The scope has to reach the
+        // access check without the handler naming it, or the fix only helps
+        // routes nobody has written yet.
         handler: async (_req, ctx) => {
           try {
             const created = await ctx.services.collections.createEntry(
               "posts",
               { title: "written by a read-only key" },
-              {
-                as: "user",
-                user: ctx.user ?? undefined,
-                authenticatedScope: ctx.authenticatedScope,
-              }
+              { as: "user", user: ctx.user ?? undefined }
             );
             return Response.json({ wrote: true, id: created.item });
           } catch (error) {
@@ -63,14 +63,38 @@ const writePlugin = definePlugin({
           }
         },
       },
+      {
+        method: "POST",
+        path: "/read",
+        // Same shape, an operation the key DOES hold. Separates "held to its
+        // grant" from "denied everything".
+        handler: async (_req, ctx) => {
+          try {
+            const found = await ctx.services.collections.listEntries(
+              "posts",
+              {},
+              { as: "user", user: ctx.user ?? undefined }
+            );
+            return Response.json({ read: true, count: found.data.length });
+          } catch (error) {
+            return Response.json(
+              { read: false, reason: String(error) },
+              { status: 403 }
+            );
+          }
+        },
+      },
     ],
   },
 });
 
-function post(headers: Record<string, string>): Promise<Response> {
+function post(
+  sub: "write" | "read",
+  headers: Record<string, string>
+): Promise<Response> {
   const handlers = createDynamicHandlers();
-  const url = `http://localhost/api/plugins/${PLUGIN}/write`;
-  const params = ["plugins", ...PLUGIN.split("/"), "write"];
+  const url = `http://localhost/api/plugins/${PLUGIN}/${sub}`;
+  const params = ["plugins", ...PLUGIN.split("/"), sub];
   return handlers.POST(new Request(url, { method: "POST", headers }), {
     params: Promise.resolve({ params }),
   });
@@ -99,105 +123,148 @@ afterEach(async () => {
   handle = undefined;
 });
 
-describe("a plugin route judges an API key on its own grants", () => {
-  it("refuses a write from a read-only key minted by a super-admin", async () => {
-    const nextly = handle!.nextly as unknown as {
-      users: {
-        create: (a: { data: Record<string, unknown> }) => Promise<{
-          item: { id: string };
-        }>;
-      };
+/**
+ * A `viewer` role holding ONLY `read-posts`, and a role-based key scoped to it,
+ * minted by the super-admin first user.
+ *
+ * Role-based rather than read-only because `resolveApiKeyPermissions` derives a
+ * read-only key's grants from its OWNER's enumerated slugs — and a super-admin
+ * has none, its power being an implicit bypass rather than a list. Such a key
+ * resolves to an empty scope and is refused everything, which cannot separate
+ * "held to its grant" from "denied outright". A role-based key resolves from
+ * the ROLE, so it holds exactly `read-posts` and both directions are testable.
+ * It is also the vector `auth/authenticated-scope.ts` names in its own header.
+ */
+async function viewerKeyOwnedBySuperAdmin(): Promise<string> {
+  const nextly = handle!.nextly as unknown as {
+    users: {
+      create: (a: { data: Record<string, unknown> }) => Promise<{
+        item: { id: string };
+      }>;
     };
+    permissions: {
+      find: (a: { limit: number }) => Promise<{
+        items: { id: string; slug: string }[];
+      }>;
+    };
+    roles: {
+      create: (a: { data: Record<string, unknown> }) => Promise<{
+        item: { id: string };
+      }>;
+    };
+  };
 
-    const owner = await nextly.users.create({
-      data: {
-        email: "owner@example.com",
-        password: "Password123!",
-        name: "Owner",
-        isActive: true,
-      },
-    });
-    const ownerId = owner.item.id;
+  // The first user of an install holds the seeded super-admin role. Asserted
+  // in the test rather than here, so the precondition is visible where it is
+  // relied on.
+  const owner = await nextly.users.create({
+    data: {
+      email: "owner@example.com",
+      password: "Password123!",
+      name: "Owner",
+      isActive: true,
+    },
+  });
 
-    // The precondition the whole test rests on. Asserted rather than assumed:
-    // if the first user ever stopped being a super-admin, the assertion below
-    // would pass because nothing was privileged, not because the key was
-    // correctly refused — a green with the mechanism absent.
+  const permissions = await nextly.permissions.find({ limit: 300 });
+  const readPosts = permissions.items.find(p => p.slug === "read-posts");
+  expect(
+    readPosts,
+    "the `read-posts` permission must be seeded, or the role below grants nothing"
+  ).toBeDefined();
+
+  const viewer = await nextly.roles.create({
+    data: {
+      name: "Viewer",
+      slug: "viewer",
+      permissionIds: [readPosts!.id],
+    },
+  });
+
+  const apiKeys = handle!.getService("apiKeyService") as unknown as {
+    createApiKey: (
+      userId: string,
+      input: {
+        name: string;
+        tokenType: string;
+        roleId?: string;
+        expiresIn: string;
+      }
+    ) => Promise<{ key: string; meta: { id: string } }>;
+    resolveApiKeyPermissions: (
+      tokenType: string,
+      roleId: string | null,
+      userId: string,
+      keyId: string
+    ) => Promise<string[]>;
+  };
+
+  const { key, meta } = await apiKeys.createApiKey(owner.item.id, {
+    name: "viewer key for a contractor",
+    tokenType: "role-based",
+    roleId: viewer.item.id,
+    expiresIn: "never",
+  });
+
+  // The scope this whole suite is about. Asserted so a resolution change that
+  // emptied it would fail here, naming the cause, rather than downstream as a
+  // refusal that looks like the guard working.
+  const scope = await apiKeys.resolveApiKeyPermissions(
+    "role-based",
+    viewer.item.id,
+    owner.item.id,
+    meta.id
+  );
+  expect(scope, "the key must hold read and NOT create").toEqual([
+    "read-posts",
+  ]);
+
+  ownerId = owner.item.id;
+  return key;
+}
+
+let ownerId = "";
+
+describe("a plugin route judges an API key on its own grants", () => {
+  it("refuses a write the key's own grant does not cover", async () => {
+    const key = await viewerKeyOwnedBySuperAdmin();
+
+    // The precondition the escalation depends on. Without a privileged owner
+    // the write below is refused because nobody was privileged, not because
+    // the key was held to its grant.
     expect(
       await isSuperAdmin(ownerId),
-      "the owner must be a super-admin, or this test proves nothing"
+      "the key's owner must be a super-admin, or this test proves nothing"
     ).toBe(true);
 
-    const apiKeys = handle!.getService("apiKeyService") as unknown as {
-      createApiKey: (
-        userId: string,
-        input: { name: string; tokenType: string; expiresIn: string }
-      ) => Promise<{ key: string; meta: { id: string } }>;
-    };
-    const { key } = await apiKeys.createApiKey(ownerId, {
-      name: "read-only contractor key",
-      tokenType: "read-only",
-      expiresIn: "never",
-    });
-
-    const res = await post({ authorization: `Bearer ${key}` });
-
-    // The key authenticated — this is not a 401 in disguise.
+    const res = await post("write", { authorization: `Bearer ${key}` });
     expect(
       res.status,
-      "a 401 would mean the key never reached the handler, so the write was " +
-        "refused by authentication rather than by the key's scope"
+      "a 401 would mean the key never reached the handler"
     ).not.toBe(401);
 
     const body = (await res.json()) as { wrote: boolean };
     expect(
       body.wrote,
-      "a read-only key wrote through a plugin route. Its owner is a " +
+      "a viewer-scoped key wrote through a plugin route. Its owner is a " +
         "super-admin, so the access check resolved the OWNER rather than the " +
         "key's own grants."
     ).toBe(false);
   });
 
-  it("still lets that key read, so the refusal is about the grant not the key", async () => {
-    // The control. Without it, a key rejected for any reason at all — expired,
-    // malformed, unrecognised — satisfies the assertion above identically to
-    // one correctly held to a read-only scope.
-    const nextly = handle!.nextly as unknown as {
-      users: {
-        create: (a: { data: Record<string, unknown> }) => Promise<{
-          item: { id: string };
-        }>;
-      };
-    };
-    const owner = await nextly.users.create({
-      data: {
-        email: "reader@example.com",
-        password: "Password123!",
-        name: "Reader",
-        isActive: true,
-      },
-    });
+  it("allows the read that grant DOES cover, through the same route shape", async () => {
+    // The discriminating control. An implementation that authenticates the key
+    // and then refuses every scoped operation passes the write-denial above
+    // identically; only an authorized operation succeeding separates the two.
+    const key = await viewerKeyOwnedBySuperAdmin();
 
-    const apiKeys = handle!.getService("apiKeyService") as unknown as {
-      createApiKey: (
-        userId: string,
-        input: { name: string; tokenType: string; expiresIn: string }
-      ) => Promise<{ key: string; meta: { id: string } }>;
-    };
-    const { key } = await apiKeys.createApiKey(owner.item.id, {
-      name: "read-only contractor key",
-      tokenType: "read-only",
-      expiresIn: "never",
-    });
+    const res = await post("read", { authorization: `Bearer ${key}` });
+    const body = (await res.json()) as { read: boolean; reason?: string };
 
-    const auth = handle!.getService("apiKeyService") as unknown as {
-      authenticateApiKey: (raw: string) => Promise<unknown>;
-    };
-    const resolved = await auth.authenticateApiKey(key);
     expect(
-      resolved,
-      "the key must authenticate, or the refusal above is about the key " +
-        "being unusable rather than about its scope"
-    ).toBeTruthy();
+      body.read,
+      "the key holds `read-posts`, so a refusal here is blanket rather than " +
+        `scoped: ${body.reason ?? ""}`
+    ).toBe(true);
   });
 });

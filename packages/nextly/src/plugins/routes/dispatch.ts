@@ -13,6 +13,7 @@ import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
 
+import { runWithCallerScope } from "./caller-scope";
 import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
 import type { RouteMatch } from "./route-registry";
@@ -89,7 +90,11 @@ async function resolvePluginRouteAuth(
   // caller carries no scope and keeps resolving the normal way.
   const authenticatedScope =
     authResult.authMethod === "api-key"
-      ? { actorType: "apiKey" as const, permissions: authResult.permissions }
+      ? {
+          actorType: "apiKey" as const,
+          permissions: authResult.permissions,
+          roles: authResult.roles,
+        }
       : undefined;
   return { user, authenticatedScope };
 }
@@ -181,7 +186,15 @@ export async function runPluginRoute(
   );
 
   try {
-    return markPluginResponse(await run(req, ctx), matched.route);
+    // Pinned for the length of the handler so a service call inside it inherits
+    // the key's grants without the handler having to remember. Every route
+    // written before this field existed composes `{ as: "user", user }` by
+    // hand, and an opt-in field leaves all of them authorizing the key as its
+    // owner.
+    return markPluginResponse(
+      await runWithCallerScope(auth.authenticatedScope, () => run(req, ctx)),
+      matched.route
+    );
   } catch (err) {
     return markPluginResponse(toErrorResponse(req, err), matched.route);
   }
