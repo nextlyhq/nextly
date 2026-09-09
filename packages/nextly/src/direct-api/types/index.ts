@@ -42,10 +42,12 @@ export type {
   DeleteArgs,
   CountArgs,
   GroupArgs,
+  TimeseriesArgs,
   BulkDeleteArgs,
   DuplicateArgs,
   CountResult,
   GroupResult,
+  TimeseriesResult,
   DeleteResult,
   BulkOperationResult,
 } from "./collections";

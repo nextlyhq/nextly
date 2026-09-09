@@ -14,7 +14,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, and, or, like, ilike, sql, asc, desc } from "drizzle-orm";
+import { eq, and, or, like, ilike, sql, asc, desc, gte, lt } from "drizzle-orm";
 
 import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
@@ -69,6 +69,7 @@ import {
 } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { BaseService } from "../../../shared/base-service";
 import {
   convertTimestampsToCamelCase,
@@ -133,7 +134,14 @@ import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
-import { classifyFieldKind } from "../../schema/services/field-column-descriptor";
+import {
+  classifyFieldKind,
+  DEFAULT_DECIMAL_SCALE,
+  getColumnDescriptor,
+  getSystemColumnDescriptors,
+  type ColumnDescriptor,
+  type SupportedDialect,
+} from "../../schema/services/field-column-descriptor";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   draftDocumentFacts,
@@ -148,6 +156,17 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
+import {
+  timeseriesBoundOperand,
+  timeseriesBucketExpression,
+} from "../query/timeseries-bucket";
+import {
+  bucketStartToDbText,
+  intervalAfter,
+  intervalWindow,
+  isTimeseriesInterval,
+  type TimeseriesInterval,
+} from "../query/timeseries-interval";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
@@ -254,6 +273,40 @@ function buildComponentValueCondition(
  * them, and a second copy of this fallback would be a second place for the two
  * to disagree about what the collection declares.
  */
+/**
+ * A collection's fields as they are ADDRESSED on this table, with unnamed
+ * presentational containers flattened into the level they sit in.
+ *
+ * Deliberately not `collectionFieldsFor`, which answers a different question:
+ * the top-level declarations, which is what the draft overlay and the filter
+ * assembly need. A field nested in an unnamed group gets a column at THIS
+ * level, so the runtime schema has it and the widget source advertises it,
+ * while the top-level array never mentions it. Judging a group key from the
+ * top-level array therefore found no declaration for a column that exists --
+ * leaving a date field refused as storing no date, and a decimal grouped
+ * without the scale its author declared.
+ *
+ * Uses the shared walk rather than a second traversal, at its default setting,
+ * which treats every unnamed container as transparent. That is what core's own
+ * callers use and is a superset of the narrower view the source builder takes,
+ * so a column that exists always has a declaration here.
+ *
+ * NOT COVERED BY A TEST IN THIS SUITE, stated rather than left to look
+ * covered. An unnamed container is a REGISTRY shape: the code-first config
+ * refuses a field without a name (FIELD_NAME_REQUIRED), so `defineCollection`
+ * cannot build the case and the harness these tests use builds collections
+ * that way. Reverting this call to `collectionFieldsFor` fails nothing here.
+ * What IS pinned is the other half of the mismatch --
+ * `collection-sources.test.ts` proves the source publishes such a field as a
+ * top-level date, so a guard reading the top-level array refuses something the
+ * source advertised.
+ */
+function addressedFieldsFor(collection: unknown): FieldDefinition[] {
+  return addressableFields(
+    collectionFieldsFor(collection)
+  ) as unknown as FieldDefinition[];
+}
+
 function collectionFieldsFor(collection: unknown): FieldDefinition[] {
   const record = collection as Record<string, unknown>;
   const schemaDefinition = record.schemaDefinition as
@@ -291,6 +344,105 @@ function fieldTrustOf(params: {
  * buckets travel back.
  */
 export const MAX_GROUP_BUCKETS = 50;
+
+/**
+ * How many intervals one timeseries may cover, and how many it covers by default.
+ *
+ * A timeseries is bounded by its WINDOW rather than by a cap on the answer, so
+ * this bounds the read itself: the window's start becomes a lower bound on the
+ * date column, which an index can serve. 366 covers a year of days without
+ * letting an hourly request walk an unbounded history.
+ */
+export const MAX_TIMESERIES_INTERVALS = 366;
+export const DEFAULT_TIMESERIES_INTERVALS = 30;
+
+/**
+ * Refuse a window anchor that is not a real instant.
+ *
+ * `new Date("nonsense")` is a `Date` the type accepts and whose `getTime()` is
+ * `NaN`, so it survives to build bucket starts that render as `Invalid Date`.
+ * What happens next differs per dialect -- MySQL refuses it while building the
+ * bound, PostgreSQL and SQLite carry it into the statement or into
+ * `toISOString`, which throws -- so the same bad input answers a named 400 on
+ * one database and a generic 500 on the others.
+ *
+ * Checked inside the plan, so it lands after authorization and BEFORE the read
+ * hooks: `beforeOperation` and `beforeRead` are ordinary user code that writes
+ * audit rows and spends rate-limit budget, and a request that was never going
+ * to be answered must not charge the caller for it.
+ */
+function assertUsableWindowAnchor(now: Date | undefined): void {
+  if (now === undefined) return;
+  if (now instanceof Date && Number.isFinite(now.getTime())) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "now",
+        code: "TIMESERIES_WINDOW_INVALID",
+        message: "The instant a timeseries window ends at must be a real date.",
+      },
+    ],
+  });
+}
+
+/** The interval, refused unless an expression exists for it. */
+function assertBucketableInterval(value: unknown): TimeseriesInterval {
+  if (isTimeseriesInterval(value)) return value;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "interval",
+        code: "TIMESERIES_INTERVAL_UNSUPPORTED",
+        message: `"${String(value)}" is not an interval a timeseries can bucket by.`,
+      },
+    ],
+  });
+}
+
+/**
+ * How many intervals the window covers, within the documented bound.
+ *
+ * `Number.isFinite` first, for the reason the bucket cap checks it: `Math.trunc`,
+ * `Math.max` and `Math.min` all PRESERVE `NaN`, so a computed count arriving as
+ * one would reach the window builder and throw rather than fall back to the
+ * documented default.
+ */
+function boundedIntervalCount(requested: unknown): number {
+  if (!Number.isFinite(requested)) return DEFAULT_TIMESERIES_INTERVALS;
+  return Math.min(
+    Math.max(1, Math.trunc(requested as number)),
+    MAX_TIMESERIES_INTERVALS
+  );
+}
+
+/**
+ * Refuse a timeline over a column that does not store a date.
+ *
+ * Judged by the column's declared SHAPE rather than by the field's type name,
+ * so a plugin field storing a timestamp is bucketable on the same terms as a
+ * built-in one.
+ */
+function assertDateColumn(
+  descriptor: ColumnDescriptor | undefined,
+  dateField: string
+): void {
+  if (descriptor?.kind === "timestamp") return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: `dateField.${dateField}`,
+        code: "FIELD_NOT_A_DATE",
+        message: `"${dateField}" does not store a date, so its rows cannot be placed on a timeline.`,
+      },
+    ],
+  });
+}
+
+/** How many rows fall in each interval of a window, oldest interval first. */
+interface TimeseriesPoints {
+  points: { start: string; count: number }[];
+  interval: TimeseriesInterval;
+}
 
 /** Distinct values of one field with how many rows carry each. */
 interface GroupedRows {
@@ -333,6 +485,22 @@ interface FilteredReadParams {
   where?: WhereFilter;
   /** When true, bypass all access control checks */
   overrideAccess?: boolean;
+  /**
+   * The instant a timeseries window ends at, when the caller named one.
+   *
+   * Carried on the shared params so the plan can refuse an unusable one before
+   * the read hooks run, rather than after.
+   */
+  now?: Date;
+  /**
+   * Refuse the group key unless the column it names stores a date.
+   *
+   * Carried on the params rather than checked by the caller after the fact, so
+   * the refusal happens inside the plan and therefore before the read hooks
+   * run. A timeline is the only read that needs it; a count and a bucket set
+   * group whatever scalar they were given.
+   */
+  requireTimestampGroupKey?: boolean;
   /**
    * This `where` was built by the framework from a route it was asked to
    * render, not received from a request.
@@ -474,11 +642,37 @@ function ungroupableKind(field: FieldDefinition): string | undefined {
  * the wrong order; a dropped GROUP BY collapses every bucket into one row and
  * answers with a single total that reads exactly like a real one.
  */
+/**
+ * Why a DECLARED field cannot be a group key, if it cannot.
+ *
+ * The reasons that depend on the declaration are answered together and before
+ * the missing-column refusal, because a declared field can legitimately have no
+ * column on this table and the reason matters more than the absence.
+ */
+function declaredFieldProblem(
+  declared: FieldDefinition | undefined,
+  groupBy: string
+): string | undefined {
+  if (declared === undefined) return undefined;
+  // A localized field's values live in the `_locales` companion rather than in
+  // this table, so the column lookup finds nothing. Refusing it as "not a
+  // column on this collection" reads as a typo for a field that is declared and
+  // spelled correctly, which sends the reader looking in the wrong place.
+  if (declared.localized === true) {
+    return `"${groupBy}" is a localized field, so its values are stored per locale rather than on this collection. Grouping over a localized field is not supported yet.`;
+  }
+  const ungroupable = ungroupableKind(declared);
+  if (ungroupable !== undefined) {
+    return `"${groupBy}" ${ungroupable}. Group by a scalar field instead.`;
+  }
+  return undefined;
+}
+
 function assertGroupKeyUsable(
   groupBy: string,
   column: unknown,
   declaredFields: FieldDefinition[]
-): void {
+): FieldDefinition | undefined {
   const snake = toSnakeCase(groupBy);
   const isOwner =
     groupBy === "created_by" ||
@@ -496,6 +690,29 @@ function assertGroupKeyUsable(
       ],
     });
   }
+  // Resolved BEFORE the missing-column refusal below, because a declared field
+  // can legitimately have no column on this table and the reason matters more
+  // than the absence.
+  const spelled = new Set([
+    groupBy,
+    toSnakeCase(groupBy),
+    toCamelCase(groupBy),
+  ]);
+  const declared = declaredFields.find(field => spelled.has(field.name));
+
+  const declaredProblem = declaredFieldProblem(declared, groupBy);
+  if (declaredProblem !== undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `groupBy.${groupBy}`,
+          code: "FIELD_NOT_GROUPABLE",
+          message: declaredProblem,
+        },
+      ],
+    });
+  }
+
   if (!column) {
     throw NextlyError.validation({
       errors: [
@@ -513,25 +730,6 @@ function assertGroupKeyUsable(
   // stored hash out through a path with nothing on it to clear the value.
   // `assertGroupableField` does not reach this: it judges fields carrying an
   // `access.read` rule, and a password field's guarantee comes from its type.
-  const spelled = new Set([
-    groupBy,
-    toSnakeCase(groupBy),
-    toCamelCase(groupBy),
-  ]);
-  const declared = declaredFields.find(field => spelled.has(field.name));
-  const ungroupable = declared ? ungroupableKind(declared) : undefined;
-  if (ungroupable !== undefined) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: `groupBy.${groupBy}`,
-          code: "FIELD_NOT_GROUPABLE",
-          message: `"${groupBy}" ${ungroupable}. Group by a scalar field instead.`,
-        },
-      ],
-    });
-  }
-
   if (isPasswordFieldName(declaredFields, groupBy)) {
     throw NextlyError.validation({
       errors: [
@@ -544,6 +742,12 @@ function assertGroupKeyUsable(
       ],
     });
   }
+
+  // Handed back rather than looked up again by the caller. The declaration is
+  // what decides how a bucket's value is rendered -- a decimal's scale, a
+  // date's interval -- and a second lookup is a second answer that has to
+  // agree with this one.
+  return declared;
 }
 
 /**
@@ -567,8 +771,57 @@ function assertGroupKeyUsable(
  * A date travels as ISO rather than through the platform's default rendering,
  * so the same row groups to the same label on every runtime.
  */
-function bucketLabel(value: unknown): string | null {
-  if (value == null) return null;
+function decimalLabel(value: unknown, scale: number): string | undefined {
+  // PostgreSQL and MySQL hand a decimal back as text precisely because it can
+  // exceed what a double holds, so the text is never parsed to re-render it.
+  // SQLite builds its numeric columns to read back as a JS number, which is the
+  // one adapter whose decimal arrives already parsed; its own rendering is
+  // taken rather than a fixed-point one.
+  const text =
+    typeof value === "string"
+      ? value.trim()
+      : typeof value === "number" && Number.isFinite(value)
+        ? String(value)
+        : undefined;
+  if (text === undefined) return undefined;
+
+  const match = /^(-?\d+)(?:\.(\d*))?$/.exec(text);
+  if (!match) return undefined;
+  const [, whole, fraction = ""] = match;
+
+  // PADS up to the declared scale and never truncates below what the value
+  // carries. Rounding to the scale would merge buckets the database kept
+  // apart: SQLite's NUMERIC affinity is best-effort and does not enforce the
+  // declared scale, so a column declared with scale 2 can hold 1.001 and 1.002
+  // as two distinct groups -- and labelling both "1.00" hands back separate
+  // counts under one label, which is the merge a bucket label exists to avoid.
+  //
+  // Two values that genuinely differ therefore still label differently on
+  // different adapters, because they ARE different: PostgreSQL rounds 1.001 to
+  // 1.00 on write while SQLite stores it whole. Making the labels agree by
+  // discarding digits would report data that is not there.
+  const padded = fraction.padEnd(Math.max(0, scale), "0");
+  return padded === "" ? whole : `${whole}.${padded}`;
+}
+
+/**
+ * The label the column's DECLARATION decides, where it decides one.
+ *
+ * Only a decimal has one today: the same stored value reaches this as the
+ * number 1 on SQLite and the string "1.00" on the other two, so a rendering
+ * chosen from the value alone would label identical data differently per
+ * adapter.
+ */
+function declaredLabel(
+  value: unknown,
+  descriptor?: ColumnDescriptor
+): string | undefined {
+  if (descriptor?.kind !== "decimal") return undefined;
+  return decimalLabel(value, descriptor.scale ?? DEFAULT_DECIMAL_SCALE);
+}
+
+/** The label a scalar renders to, or `undefined` when the value is structured. */
+function scalarLabel(value: unknown): string | undefined {
   if (value instanceof Date) return value.toISOString();
   if (typeof value === "string") return value;
   if (
@@ -578,6 +831,21 @@ function bucketLabel(value: unknown): string | null {
   ) {
     return String(value);
   }
+  return undefined;
+}
+
+function bucketLabel(
+  value: unknown,
+  descriptor?: ColumnDescriptor
+): string | null {
+  if (value == null) return null;
+  // The declaration is asked first: it is the only source that knows the
+  // author's intent for the value, where the renderings below know only its
+  // runtime shape.
+  const declared = declaredLabel(value, descriptor);
+  if (declared !== undefined) return declared;
+  const scalar = scalarLabel(value);
+  if (scalar !== undefined) return scalar;
   // Everything else is structured. `JSON.stringify` answers `undefined` for a
   // value it cannot represent, which becomes the null bucket rather than the
   // string "undefined" sitting among real labels.
@@ -588,10 +856,11 @@ function toBuckets(
   rows: Array<{
     value: unknown;
     total: number | string | null;
-  }>
+  }>,
+  descriptor?: ColumnDescriptor
 ): Array<{ value: string | null; count: number }> {
   return rows.map(row => ({
-    value: bucketLabel(row.value),
+    value: bucketLabel(row.value, descriptor),
     count: Number(row.total ?? 0),
   }));
 }
@@ -2861,12 +3130,86 @@ export class CollectionQueryService extends BaseService {
    * run. Collection authorization still comes first: whether the collection is
    * readable at all outranks what was asked of it.
    */
+  /**
+   * The dialect a grouped read builds its expressions for.
+   *
+   * Narrowed to the supported union here rather than read loosely at each use:
+   * the bucketing expressions are chosen by exhaustive comparison, so a value
+   * outside the union has to be refused rather than silently falling through
+   * to whichever branch happens to be last.
+   */
+  private groupDialect(): SupportedDialect {
+    const dialect = this.adapter?.dialect;
+    return dialect === "mysql" || dialect === "sqlite" ? dialect : "postgresql";
+  }
+
+  /**
+   * The column shape a group key resolves to, from the module that already owns
+   * the field-to-column mapping for every dialect.
+   */
+  private groupKeyDescriptor(
+    field: FieldDefinition | undefined,
+    columnKey: string | undefined
+  ): ColumnDescriptor | undefined {
+    const dialect = this.groupDialect();
+    if (field !== undefined) {
+      return getColumnDescriptor(field, dialect, "collection") ?? undefined;
+    }
+    if (columnKey === undefined) return undefined;
+
+    // `created_at` and `updated_at` are INJECTED rather than declared, so they
+    // never appear in the author's field list and the lookup above cannot see
+    // them -- while they are the two columns a timeline is most often drawn
+    // over. Resolved through the canonical system-column descriptors rather
+    // than by naming them here, so a system column added there is bucketable
+    // without a second edit.
+    //
+    // The option set is the widest one deliberately. It decides which columns
+    // are INJECTED, and whether this collection has the column is already
+    // settled: the key reached here only by resolving against the runtime
+    // schema's own properties. What is wanted from this call is the column's
+    // SHAPE, which does not vary with the option set.
+    const system = getSystemColumnDescriptors(dialect, {
+      hasTitleField: false,
+      hasSlugField: false,
+      hasStatus: true,
+    }).find(column => column.name === toSnakeCase(columnKey));
+    if (system === undefined) return undefined;
+    return {
+      name: system.name,
+      dialectType: system.dialectType,
+      ...(system.length === undefined ? {} : { length: system.length }),
+      nullable: system.nullable,
+      kind: system.kind,
+    };
+  }
+
+  /**
+   * The group key's column shape, with every refusal that depends on it made.
+   *
+   * Runs BEFORE the read hooks, for the reason the key itself is validated
+   * before them: `beforeOperation` and `beforeRead` are ordinary user code that
+   * records audit entries and spends rate-limit budget, so a request that was
+   * never going to be answered must not charge the caller for work or leave a
+   * trail of reads that did not happen.
+   */
+  private settledGroupDescriptor(
+    params: FilteredReadParams,
+    groupKey: { key?: string; field?: FieldDefinition }
+  ): ColumnDescriptor | undefined {
+    const descriptor = this.groupKeyDescriptor(groupKey.field, groupKey.key);
+    if (params.requireTimestampGroupKey === true) {
+      assertDateColumn(descriptor, params.groupBy ?? "");
+    }
+    return descriptor;
+  }
+
   private async validatedGroupKey(
     params: FilteredReadParams,
     schema: Record<string, unknown>
-  ): Promise<string | undefined> {
+  ): Promise<{ key?: string; field?: FieldDefinition }> {
     const groupBy = params.groupBy;
-    if (groupBy === undefined) return undefined;
+    if (groupBy === undefined) return {};
     // OWN properties only: `schema` is an ordinary object, so a key like
     // `toString` resolves to a prototype method rather than `undefined`, which
     // read as a column and failed inside the query builder as a 500 where the
@@ -2874,14 +3217,14 @@ export class CollectionQueryService extends BaseService {
     const key = [groupBy, toSnakeCase(groupBy)].find(name =>
       Object.prototype.hasOwnProperty.call(schema, name)
     );
-    assertGroupKeyUsable(
+    const field = assertGroupKeyUsable(
       groupBy,
       key === undefined ? undefined : schema[key],
-      collectionFieldsFor(
+      addressedFieldsFor(
         await this.collectionService.getCollection(params.collectionName)
       )
     );
-    return key;
+    return { key, field };
   }
 
   /**
@@ -2952,9 +3295,18 @@ export class CollectionQueryService extends BaseService {
     // module exists to remove.
     const groupKey =
       params.groupBy === undefined
-        ? undefined
+        ? {}
         : await this.validatedGroupKey(params, schema);
-    const groupColumn = groupKey === undefined ? undefined : schema[groupKey];
+    const groupColumn =
+      groupKey.key === undefined ? undefined : schema[groupKey.key];
+    // The column's SHAPE, from the module that already owns the field-to-column
+    // mapping for every dialect. Resolved here beside the column so a bucket is
+    // rendered from the author's declaration -- a decimal's scale, which the
+    // adapters otherwise disagree about -- rather than from whatever the driver
+    // happened to hand back.
+    assertUsableWindowAnchor(params.now);
+
+    const groupDescriptor = this.settledGroupDescriptor(params, groupKey);
 
     const countWhere = await this.hookSettledWhere(params);
 
@@ -3025,7 +3377,13 @@ export class CollectionQueryService extends BaseService {
     );
     if (restriction) whereConditions.push(restriction);
 
-    return { allowed: true as const, schema, whereConditions, groupColumn };
+    return {
+      allowed: true as const,
+      schema,
+      whereConditions,
+      groupColumn,
+      groupDescriptor,
+    };
   }
 
   async countEntries(
@@ -3161,7 +3519,7 @@ export class CollectionQueryService extends BaseService {
         statusCode: 200,
         message: "Buckets retrieved successfully",
         data: {
-          buckets: toBuckets(rows.slice(0, cap)),
+          buckets: toBuckets(rows.slice(0, cap), plan.groupDescriptor),
           truncated: rows.length > cap,
         },
       };
@@ -3176,6 +3534,145 @@ export class CollectionQueryService extends BaseService {
         success: false,
         // Mirrors countEntries: a refused access constraint is a 403 and a
         // refused group key a 400, not a server fault.
+        statusCode: NextlyError.is(error) ? error.statusCode : 500,
+        message,
+        data: null,
+        ...errorEnvelopeFields(error),
+      };
+    }
+  }
+
+  /**
+   * How many rows fall in each interval of a recent window.
+   *
+   * A timeseries is a grouped read whose key is a bucketing EXPRESSION over a
+   * date column rather than the column itself, so it reaches its rows through
+   * the same `resolveReadPlan` a count and a bucket set do. Assembling its own
+   * filters would let it describe a wider row set than a count of the same
+   * request -- the shape of the aggregate permission failures reported against
+   * other systems, where a rule narrowed the rows and the aggregate counted
+   * past it.
+   *
+   * The window bounds the READ, not the answer. Its oldest interval start
+   * becomes a lower bound on the date column itself, which an index can serve;
+   * comparing the bucketing expression instead would be correct and would scan
+   * the table, because no index covers a computed value.
+   *
+   * Intervals with no rows are returned with a count of zero rather than
+   * omitted. A `GROUP BY` cannot report a bucket it never grouped, so a quiet
+   * day is simply absent -- and a line drawn through the gap reads as steady
+   * activity rather than none, which is wrong in the direction a reader acts on.
+   */
+  async timeseriesEntries(
+    params: FilteredReadParams & {
+      dateField: string;
+      interval: TimeseriesInterval;
+      intervals?: number;
+      /**
+       * The instant the window ends at, defaulting to now.
+       *
+       * Taken from the caller for the reason `releaseNow` is: a window and the
+       * rows it describes have to be settled against ONE clock. Two reads of
+       * the system clock either side of a fixture write can straddle midnight,
+       * which moves every point one interval and is a real intermittent
+       * failure rather than a hypothetical one.
+       *
+       * It is also the honest way to ask for a window that is not "now" -- a
+       * report as of a period end, rather than as of whenever it happened to
+       * run.
+       */
+      now?: Date;
+    }
+  ): Promise<CollectionServiceResult<TimeseriesPoints>> {
+    try {
+      const interval = assertBucketableInterval(params.interval);
+      const count = boundedIntervalCount(params.intervals);
+
+      // The date key travels as `groupBy`, so every refusal a grouped read
+      // already makes applies unchanged: a field carrying a read rule, any
+      // spelling of it, the owner column, a key naming no column.
+      const plan = await this.resolveReadPlan<TimeseriesPoints>({
+        ...params,
+        groupBy: params.dateField,
+        requireTimestampGroupKey: true,
+      });
+      if (!plan.allowed) return plan.denied;
+      const { schema, whereConditions } = plan;
+      const column = plan.groupColumn;
+
+      const window = intervalWindow(params.now ?? new Date(), interval, count);
+      const dialect = this.groupDialect();
+      const bucket = timeseriesBucketExpression(column, interval, dialect);
+
+      const rows = await this.db
+        .select({ bucket, total: sql<number>`count(*)` })
+        .from(schema)
+        // BOTH ends of the window bound the SCAN, as comparisons on the COLUMN
+        // rather than on the bucketing expression, so an index over the date can
+        // serve them; no index covers a computed value.
+        //
+        // The upper bound is not symmetry. A date field holds future values --
+        // a scheduled publication, an event date -- and bounded only below, the
+        // database groups every one of them into buckets the answer then throws
+        // away, so the documented interval cap would bound the answer while the
+        // read walked the rest of the table.
+        //
+        // Neither bound can change the answer: the points are built from the
+        // window, and a bucket outside it is never looked up.
+        .where(
+          and(
+            ...whereConditions,
+            gte(column, timeseriesBoundOperand(window[0], dialect)),
+            lt(
+              column,
+              timeseriesBoundOperand(
+                intervalAfter(window[window.length - 1], interval),
+                dialect
+              )
+            )
+          )
+        )
+        // The SAME expression in the SELECT and the GROUP BY. MySQL's
+        // `only_full_group_by` refuses a `GROUP BY` that differs from the
+        // selected expression, so these cannot be spelled apart.
+        //
+        // No ORDER BY: the answer is assembled from the window in chronological
+        // order and each interval's count is looked up by key, so the order
+        // rows arrive in cannot reach the result.
+        .groupBy(bucket);
+
+      const counted = new Map<string, number>();
+      for (const row of rows) {
+        if (typeof row.bucket === "string") {
+          counted.set(row.bucket, Number(row.total ?? 0));
+        }
+      }
+
+      return {
+        success: true,
+        statusCode: 200,
+        message: "Timeseries retrieved successfully",
+        data: {
+          interval,
+          // Built from the WINDOW rather than from the rows, so the answer has
+          // one point per interval whether or not the database grouped it.
+          points: window.map(start => ({
+            start: start.toISOString(),
+            count: counted.get(bucketStartToDbText(start)) ?? 0,
+          })),
+        },
+      };
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Failed to build timeseries";
+      this.logger.error("Error building timeseries", {
+        collectionName: params.collectionName,
+        error: message,
+      });
+      return {
+        success: false,
+        // Mirrors groupEntries: a refused access constraint is a 403 and a
+        // refused date key a 400, not a server fault.
         statusCode: NextlyError.is(error) ? error.statusCode : 500,
         message,
         data: null,

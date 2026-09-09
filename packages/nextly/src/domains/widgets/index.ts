@@ -70,3 +70,19 @@ export {
   type WidgetSourceCollection,
 } from "./built-in-sources";
 export { refreshCollectionSources } from "./collection-sources";
+
+/**
+ * The interval vocabulary a `timeseries` query names.
+ *
+ * Published from the widgets barrel because `WidgetQuery.interval` IS a
+ * `TimeseriesInterval`, and every contract a published shape names travels with
+ * it: a public property whose type has no public name can be inferred but never
+ * annotated. Without this an author holding a `WidgetQuery` cannot declare a
+ * reusable interval variable, or offer the choices, without restating the
+ * closed set -- a second copy that agrees on the day it is written.
+ */
+export {
+  isTimeseriesInterval,
+  TIMESERIES_INTERVALS,
+  type TimeseriesInterval,
+} from "../collections/query/timeseries-interval";

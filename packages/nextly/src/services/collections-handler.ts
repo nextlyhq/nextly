@@ -833,6 +833,13 @@ export class CollectionsHandler {
     return this.entryService.groupEntries(params);
   }
 
+  /** How many rows fall in each interval of a recent window. */
+  async timeseriesEntries(
+    params: Parameters<CollectionEntryService["timeseriesEntries"]>[0]
+  ): ReturnType<CollectionEntryService["timeseriesEntries"]> {
+    return this.entryService.timeseriesEntries(params);
+  }
+
   /**
    * Update an existing entry.
    * @param params - Collection name, entry ID, optional user ID, and optional depth for relationship population

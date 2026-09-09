@@ -24,7 +24,17 @@ import {
 
 type Row = {
   slug: string;
-  fields: Array<{ name: string; type: string; label?: string }>;
+  fields: Array<{
+    // Optional because an unnamed presentational container is a registry shape
+    // the code-first config cannot express, and this fixture models the
+    // registry.
+    name?: string;
+    type: string;
+    label?: string;
+    /** A registry row can carry this; the source builder reads it. */
+    localized?: boolean;
+    fields?: Array<{ name: string; type: string }>;
+  }>;
   timestamps?: boolean;
   status?: boolean;
   labels?: unknown;
@@ -103,6 +113,65 @@ describe("refreshCollectionSources", () => {
     const source = getSource("collection:reports");
     expect(source?.kind).toBe("collection");
     expect(source?.fields.map(f => f.name)).toContain("title");
+  });
+
+  it("advertises a date nested in an unnamed group as a top-level field", async () => {
+    // An unnamed presentational container is FLATTENED: its children get
+    // columns at the container's own level, so the runtime schema has them and
+    // this source publishes them without the container in the path.
+    //
+    // That is only reachable from the REGISTRY -- the code-first config refuses
+    // a field without a name (FIELD_NAME_REQUIRED), so `defineCollection`
+    // cannot express it. It matters because anything judging such a field from
+    // the collection's TOP-LEVEL array finds no declaration for a column that
+    // exists, and refuses a field this source advertised.
+    registryHolds([
+      {
+        slug: "reports",
+        fields: [
+          { name: "title", type: "text" },
+          { type: "group", fields: [{ name: "nestedAt", type: "date" }] },
+        ],
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    const fields = getSource("collection:reports")?.fields ?? [];
+    const byName = new Map(fields.map(f => [f.name, f]));
+    expect(byName.get("nestedAt")?.type).toBe("date");
+    // The control: the container itself is not published as a field, so this
+    // is flattening rather than the group being exposed alongside its children.
+    expect(byName.has("group")).toBe(false);
+  });
+
+  it("carries a field's localization from the registry onto the source", async () => {
+    // Through the WHOLE path -- registry, `readableFields`, `exposedFields` --
+    // because that is where the flag was being dropped. A test that hands a
+    // pre-built field to the source builder skips the step that lost it.
+    //
+    // The coarse source type cannot express this: a localized date is still a
+    // date, so a validator reading only the type approves a timeline the read
+    // then refuses, leaving a widget that fails on every load.
+    registryHolds([
+      {
+        slug: "reports",
+        fields: [
+          { name: "publishedAt", type: "date" },
+          { name: "translatedAt", type: "date", localized: true },
+        ],
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    const fields = getSource("collection:reports")?.fields ?? [];
+    const byName = new Map(fields.map(f => [f.name, f]));
+    expect(byName.get("translatedAt")?.localized).toBe(true);
+    // The control: an ordinary date must NOT be marked, or the flag would
+    // refuse every timeline rather than the localized ones.
+    expect(byName.get("publishedAt")?.localized).toBeUndefined();
+    expect(byName.get("publishedAt")?.type).toBe("date");
   });
 
   it("carries a field's human label onto the source", async () => {

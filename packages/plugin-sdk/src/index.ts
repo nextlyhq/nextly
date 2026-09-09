@@ -460,6 +460,8 @@ export {
   WIDGET_OPS,
   WIDGET_SOURCE_KINDS,
   WIDGET_SOURCE_FIELD_TYPES,
+  TIMESERIES_INTERVALS,
+  isTimeseriesInterval,
   registerWidget,
   registerSource,
   type WidgetDefinition,
@@ -477,4 +479,5 @@ export {
   type WidgetSourceFieldType,
   type WidgetSourceKind,
   type WidgetOp,
+  type TimeseriesInterval,
 } from "nextly";
