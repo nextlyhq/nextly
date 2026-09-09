@@ -1,3 +1,4 @@
+import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
 import { NextlyError } from "../errors/nextly-error";
@@ -8,6 +9,8 @@ import type {
 } from "../services/collections/collection-service";
 import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
+
+import { currentCallerScope } from "./routes/caller-scope";
 
 /**
  * @public Elevation options for the managed `ctx.services` path.
@@ -35,15 +38,34 @@ export interface ServiceOpts {
    * hook. A hook decides for itself what to do with what it is told.
    */
   context?: Record<string, unknown>;
+  /**
+   * The caller's own authorization scope when they arrived on an API key —
+   * `ctx.authenticatedScope`, passed straight through.
+   *
+   * `user` names the key's OWNER, so without this the access check resolves the
+   * owner's roles and a viewer-scoped key minted by a super-admin is judged as
+   * a super-admin. A route serving an API key must forward it; a session caller
+   * has none and resolves the normal way.
+   *
+   * Unlike `context` above this IS permission: it narrows what the caller may
+   * do, never widens it.
+   */
+  authenticatedScope?: AuthenticatedScope;
 }
 
 /** Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`. */
 export function resolveServiceOpts(opts: ServiceOpts): {
   user?: RequestContext["user"];
+  authenticatedScope?: AuthenticatedScope;
   overrideAccess: boolean;
   context?: Record<string, unknown>;
 } {
   const { as, user, context } = opts;
+  // The caller's own scope wins when named; otherwise the one the dispatcher
+  // pinned for this request. A route that omits it is the common case, not the
+  // exception, so the ambient value is what makes the key's grants reach the
+  // access check at all.
+  const authenticatedScope = opts.authenticatedScope ?? currentCallerScope();
   const wantsUser = as === "user" || (as === undefined && user !== undefined);
   if (wantsUser) {
     if (!user) {
@@ -59,6 +81,7 @@ export function resolveServiceOpts(opts: ServiceOpts): {
       overrideAccess: false,
       user: { id: user.id, email: user.email, role: "", permissions: [] },
       context,
+      ...(authenticatedScope ? { authenticatedScope } : {}),
     };
   }
   return { overrideAccess: true, context };
@@ -177,15 +200,13 @@ export function wrapCollectionsForPlugin(
       return async (...args: unknown[]) => {
         const resolved = resolveServiceOpts((args[idx] as ServiceOpts) ?? {});
         const next = [...args];
-        // Rebuilt rather than forwarded, so anything not named here is dropped.
-        // That is what kept a plugin from reaching the hook context: core has
-        // accepted one on every collection operation for some time, and this
-        // literal was the whole reason nothing above could pass one.
-        next[idx] = {
-          user: resolved.user,
-          overrideAccess: resolved.overrideAccess,
-          context: resolved.context,
-        };
+        // Spread rather than named one by one. Rebuilding this literal is
+        // what kept a plugin from reaching the hook context, and the same
+        // shape then dropped an API key's scope on its way to the access
+        // check — twice, because a hand-written list is a second
+        // implementation of what `resolveServiceOpts` already decided. A
+        // spread cannot forget a field.
+        next[idx] = { ...resolved } satisfies RequestContext;
         const call = () =>
           (fn as (...a: unknown[]) => Promise<unknown>).apply(target, next);
 

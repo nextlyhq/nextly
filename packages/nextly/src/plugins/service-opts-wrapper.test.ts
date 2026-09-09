@@ -59,6 +59,38 @@ describe("wrapCollectionsForPlugin (D35, Unit C)", () => {
     );
   });
 
+  it("as:'user' with an API key hands the key's own grants to the facade", async () => {
+    // The end of the chain the dispatcher starts: a plugin route serving a
+    // scoped key passes `ctx.authenticatedScope` through, and the facade must
+    // receive it. Without it the facade resolves the key OWNER's roles, so a
+    // viewer-scoped key minted by a super-admin is authorized as one.
+    const m = mockCollections();
+    await wrapCollectionsForPlugin(m as never).createEntry(
+      "vault",
+      { title: "a" },
+      {
+        as: "user",
+        user: { id: "u1", email: "u@e.com" },
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["read-vault"],
+        },
+      }
+    );
+    expect(m.createEntry).toHaveBeenCalledWith(
+      "vault",
+      { title: "a" },
+      {
+        user: { id: "u1", email: "u@e.com", role: "", permissions: [] },
+        overrideAccess: false,
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["read-vault"],
+        },
+      }
+    );
+  });
+
   it("as:'user' with no user rejects (INVALID_INPUT) before delegating", async () => {
     const m = mockCollections();
     await expect(

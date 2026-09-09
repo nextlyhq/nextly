@@ -1,3 +1,4 @@
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { AuthUser } from "../../types/auth";
 import type { PermissionSlug } from "../contributions";
 import type { PluginContext } from "../plugin-context";
@@ -19,6 +20,19 @@ export interface PluginRouteContext extends PluginContext {
    * session. Pass it to secure-by-default services as `{ as: 'user', user }`.
    */
   user: AuthUser | null;
+  /**
+   * The caller's own authorization scope when they arrived on an API key, and
+   * `undefined` for a session or a `public` route.
+   *
+   * A key is authoritative on the grants stamped on IT, never on the roles of
+   * whoever minted it. `user` alone cannot carry that: it names the owner, so a
+   * service asked to judge `user.id` resolves the owner's database permissions
+   * and a viewer-scoped key minted by an administrator inherits the
+   * administrator's reach. Forwarding this alongside `user` — which
+   * `ServiceOpts` does automatically for `ctx.services` — is what keeps the key
+   * judged on its own grant.
+   */
+  authenticatedScope?: AuthenticatedScope;
   /** Path parameters captured from `:param` segments in the route's path. */
   params: Record<string, string>;
 }

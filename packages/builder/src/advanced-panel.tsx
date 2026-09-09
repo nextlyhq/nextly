@@ -66,9 +66,9 @@ export interface AdvancedPanelProps {
   /**
    * The element's `id`, or `undefined` when the node carries no such field.
    *
-   * The two are different states and the renderer reads them differently: a
-   * stored `""` is PRESENT, renders `id=""`, and shadows any `id` in the bag
-   * below. The panel has to be able to say which one it is looking at, or the
+   * The two are different states and the rule reads them differently: a stored
+   * `""` is PRESENT, shadows any `id` in the bag below, and renders no id of
+   * its own. The panel has to be able to say which one it is looking at, or the
    * empty-but-present one can never be removed.
    */
   readonly cssId: string | undefined;
@@ -448,10 +448,11 @@ export function AdvancedPanel({
         {/*
           The EMPTY-BUT-PRESENT id, which the box above cannot express.
 
-          A field holding `""` renders `id=""` and shadows any `id` in the bag
-          below, and no amount of typing in an already-empty box says "remove
-          it" — the draft matches what was loaded, so a commit correctly finds
-          nothing to do. This is the gesture that was missing.
+          A field holding `""` shadows any `id` in the bag below and renders
+          none of its own, so the element ends up with no id — and no amount of
+          typing in an already-empty box says "remove it", because the draft
+          matches what was loaded and a commit correctly finds nothing to do.
+          This is the gesture that was missing.
 
           Shown only in that state. Cleaning it up on open would be a write
           nobody asked for, and folding it into an unrelated save would change
@@ -461,10 +462,9 @@ export function AdvancedPanel({
         */}
         {cssId !== "" ? null : (
           <p className="nx-inspector__note" role="status">
-            This block has an empty id set, which renders as{" "}
-            <code>id=&quot;&quot;</code>
+            This block has an empty id set, so it renders no id at all
             {emptyIdShadows
-              ? " and hides the id set in the attributes below"
+              ? " and the id in the attributes below is ignored"
               : ""}
             .{" "}
             <Button

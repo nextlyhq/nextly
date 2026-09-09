@@ -1007,6 +1007,93 @@ describe("PageRenderer", () => {
       expect(html).toMatch(bothClasses("test/text"));
     });
 
+    it("emits no id at all for an empty cssId, rather than an empty one", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "anchored" },
+              cssId: "",
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      // An empty id addresses nothing: the DOM Standard unsets an element's ID
+      // when the attribute is the empty string, and the HTML Standard requires
+      // at least one character. Emitting it put invalid markup on the page that
+      // no anchor, label or selector could reach.
+      expect(html).not.toContain('id=""');
+      // The element still rendered — without this the assertion above passes on
+      // a page that drew nothing at all.
+      expect(html).toContain("anchored");
+    });
+
+    it("lets an empty cssId shadow the bag rather than promoting the bag's id", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "anchored" },
+              cssId: "",
+              attributes: { id: "hero", title: "A section" },
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      // The separating property. Dropping the empty id is right; letting the
+      // shadowed bag id take its place is a DIFFERENT change, and it is the one
+      // a naive rewrite makes — the bag is assigned first, so removing only the
+      // overwrite leaves `hero` on an element the author gave no id.
+      expect(html).not.toContain('id="hero"');
+      expect(html).not.toContain('id=""');
+      // The rest of the bag is untouched by the id rule.
+      expect(html).toContain('title="A section"');
+    });
+
+    it("reads the attribute bag case-insensitively, last variant winning", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "anchored" },
+              attributes: { id: "hero", ID: "" },
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      // HTML attribute names are ASCII case-insensitive, so these are one
+      // attribute written twice and the later wins — leaving an empty id, which
+      // is no id. Reporting `hero` here would name something nothing renders.
+      expect(html).not.toContain('id="hero"');
+      expect(html).not.toContain('id=""');
+      expect(html).toContain("anchored");
+    });
+
+    it("renders the bag's id when a non-string cssId is normalised away", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "anchored" },
+              // A stored document can hold anything. Only a STRING shadows, so
+              // this one does not, and the bag is what reaches the page.
+              cssId: null as unknown as string,
+              attributes: { id: "hero" },
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).toContain('id="hero"');
+    });
+
     it("never lets a stored attribute reinterpret the element", async () => {
       const html = await renderToHtml(
         <PageRenderer

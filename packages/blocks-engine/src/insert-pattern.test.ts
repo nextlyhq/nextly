@@ -686,9 +686,9 @@ describe("which DOM ids an insert steers around", () => {
   });
 
   it("treats an EMPTY cssId as shadowing the bag, because the renderer does", () => {
-    // The renderer's guard is `cssId !== undefined`, not "non-empty" — so a
-    // node carrying `cssId: ""` beside `attributes.id: "hero"` emits `id=""`
-    // and never `hero`. The destination therefore does not hold `hero`, and
+    // The rule reads `cssId` as "wins when present", not "wins when non-empty"
+    // — so a node carrying `cssId: ""` beside `attributes.id: "hero"` renders
+    // no id and never `hero`. The destination therefore does not hold `hero`, and
     // steering around it would rename authored content for nothing.
     //
     // This case is the whole difference between reading `cssId` as "wins when
