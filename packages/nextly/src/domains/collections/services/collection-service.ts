@@ -559,6 +559,7 @@ export class CollectionService extends BaseService {
         collectionName,
         user: context.user,
         overrideAccess: context.overrideAccess,
+        context: context.context,
       },
       data
     );
@@ -636,6 +637,7 @@ export class CollectionService extends BaseService {
       collectionName,
       user: context.user,
       overrideAccess: context.overrideAccess,
+      context: context.context,
       page,
       limit,
       // D56: forward the rich-query options the facade previously dropped, so
@@ -720,6 +722,7 @@ export class CollectionService extends BaseService {
       entryId,
       user: context.user,
       overrideAccess: context.overrideAccess,
+      context: context.context,
     });
 
     if (!result.success) {
@@ -762,6 +765,7 @@ export class CollectionService extends BaseService {
         entryId,
         user: context.user,
         overrideAccess: context.overrideAccess,
+        context: context.context,
       },
       data
     );
@@ -809,6 +813,7 @@ export class CollectionService extends BaseService {
       entryId,
       user: context.user,
       overrideAccess: context.overrideAccess,
+      context: context.context,
     });
 
     if (!result.success) {
