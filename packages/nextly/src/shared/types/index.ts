@@ -64,6 +64,17 @@ export interface RequestContext {
    * skipped. Default: undefined (enforce access).
    */
   overrideAccess?: boolean;
+  /**
+   * Arbitrary data handed to this operation's hooks as `ctx.context`.
+   *
+   * The way a caller tells a hook something about the CALL that the row cannot
+   * say. A hook that does expensive presentation work can be told this read is
+   * internal and skip it; a hook that writes can be told not to recurse. The
+   * entry service has accepted this on every operation for some time and seeds
+   * the shared hook context from it, but the service layer dropped it, so
+   * nothing above could reach it.
+   */
+  context?: Record<string, unknown>;
 }
 
 /**

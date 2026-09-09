@@ -19,7 +19,11 @@ import {
   submissionMarks,
 } from "../handlers/prepare-submission";
 import { validateSubmission } from "../handlers/submit-form";
-import { formBuilder, prepareSubmissionForWrite } from "../plugin";
+import {
+  formBuilder,
+  injectSubmissionCount,
+  prepareSubmissionForWrite,
+} from "../plugin";
 import type { AnyFormField } from "../types";
 
 const fields = [
@@ -905,5 +909,50 @@ describe("a submission written straight to the collection", () => {
         },
       })
     ).rejects.toThrow();
+  });
+});
+
+describe("the submission count on a form read", () => {
+  const nextlyCounting = () => {
+    const count = vi.fn().mockResolvedValue(7);
+    return {
+      count,
+      nextly: { services: { collections: { count } } } as never,
+    };
+  };
+
+  it("counts on an ordinary read", async () => {
+    const { count, nextly } = nextlyCounting();
+    const form: Record<string, unknown> = { id: "form1" };
+    await injectSubmissionCount({ data: form }, "form-submissions", nextly);
+    expect(form.submissionCount).toBe(7);
+    expect(count).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the count when the read asked for the schema alone", async () => {
+    // A submission write reads its parent form only to check the payload
+    // against that form's fields. Counting there is presentation work nobody on
+    // that path reads, and it grows with the form's history, so every
+    // submission was paying for a count of every submission before it.
+    const { count, nextly } = nextlyCounting();
+    const form: Record<string, unknown> = { id: "form1" };
+    await injectSubmissionCount(
+      { data: form, context: { "formBuilder.schemaOnlyRead": true } },
+      "form-submissions",
+      nextly
+    );
+    expect(count).toHaveBeenCalledTimes(0);
+    expect(form.submissionCount).toBeUndefined();
+  });
+
+  it("counts every form a list read returned", async () => {
+    // The control for the two above: `afterRead` fires for single reads and for
+    // list reads, so a rule that only handled one shape would pass the first
+    // test and do nothing here.
+    const { count, nextly } = nextlyCounting();
+    const forms = [{ id: "a" }, { id: "b" }] as Record<string, unknown>[];
+    await injectSubmissionCount({ data: forms }, "form-submissions", nextly);
+    expect(count).toHaveBeenCalledTimes(2);
+    expect(forms.map(f => f.submissionCount)).toEqual([7, 7]);
   });
 });
