@@ -33,6 +33,11 @@ The existing `componentIdsIn` answers only the first half: it walks under a
 node budget and stops silently, so a document too large to read whole returns
 the same empty list as one referencing nothing. That is the wrong way round
 for anything deciding whether a component is still in use, because "references
-nothing" is the answer that allows deleting it. `componentIdsIn` is unchanged
-for its own callers and is now derived from the richer answer, so the two
+nothing" is the answer that allows deleting it. `componentIdsIn` keeps its own
+signature and result, and is now derived from the richer answer, so the two
 cannot drift apart.
+
+`componentIdsIn` and `componentUsageIn` now refuse a `maxNodes` of `NaN`
+instead of walking without a bound. `NaN` never satisfied the stop test, so
+the budget was not merely loose, it was absent — a document of any size was
+read whole. Any other numeric budget behaves as before.

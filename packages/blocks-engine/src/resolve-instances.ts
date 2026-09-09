@@ -65,6 +65,7 @@ import {
   MAX_ENVELOPE_ENTRIES,
   type DocumentLimits,
 } from "./limits";
+import { boundedLimit } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
 import { hashId } from "./style/node-class";
@@ -300,9 +301,34 @@ export function componentUsageIn(
   nodes: readonly unknown[],
   maxNodes: number = DEFAULT_LIMITS.maxNodes
 ): ComponentUsage {
+  // Through the published helper rather than a check written here, because its
+  // own docblock says why it is published: more than one walk is held to these
+  // numbers and they have to agree about what counts as a bound. A second rule
+  // spelled locally is how two walks come to accept different budgets.
+  //
+  // `NaN` is the case that matters. Every `budget <= 0` comparison against it
+  // is false, so the walk never stops — the bound is not loosened, it is GONE,
+  // and an unbounded read of an arbitrarily large stored document is exactly
+  // what the budget exists to prevent.
+  //
+  // A FRACTIONAL budget is accepted, and that is the helper's decision rather
+  // than an oversight here. It costs at most one node beyond the cap — 2.5
+  // reads three entries — and the answer stays truthful, because `complete`
+  // reports what the walk actually reached rather than what the budget
+  // allowed. Refusing it here and nowhere else would make this walk disagree
+  // with the helper that exists to stop walks disagreeing.
+  //
+  // The RETURNED value is what the walk spends, though nothing can currently
+  // tell it from `maxNodes`: the helper validates and returns its input
+  // unchanged, so the two are the same number on every path that gets past it,
+  // and a break-verify swapping them kills no test. Stated rather than left to
+  // look tested, and kept anyway — a helper that later normalises, by flooring
+  // a fraction say, is honoured here for free and silently ignored by the
+  // other spelling.
+  const cap = boundedLimit(maxNodes, "maxNodes", "componentUsageIn");
   const ids: string[] = [];
   const seen = new Set<string>();
-  let budget = maxNodes;
+  let budget = cap;
   // Set on the branch that ENDS the walk early, rather than derived afterwards
   // from `budget === 0`. A forest holding exactly `maxNodes` entries spends the
   // last of the budget on its last entry and is read WHOLE, so a check on the
