@@ -8,7 +8,7 @@
  * @since 0.1.0
  */
 
-import { formAvailability, NO_SUCH_FORM } from "nextly";
+import { formAvailability, NextlyError, NO_SUCH_FORM } from "nextly";
 import type { PluginContext } from "nextly";
 
 import { asFormDocument, asSubmissionDocument } from "../document-shapes";
@@ -51,6 +51,21 @@ export interface SubmitFormOptions {
     /** Submitter's user agent string */
     userAgent?: string;
   };
+
+  /**
+   * The HTTP request this submission arrived on.
+   *
+   * A route calling this helper is its own route, outside everything Nextly
+   * pins a request around, so nothing else can supply it. Without it the write
+   * reaches the submissions hooks looking like a seed or a job, and every rule
+   * scoped to a visitor stands down: the rate limit above all.
+   *
+   * The request rather than an address, because the core resolves the client
+   * from it under this deployment's proxy-trust settings. `metadata.ipAddress`
+   * is a string the caller chose, which is the right shape for the audit column
+   * it fills and the wrong shape for deciding who to throttle.
+   */
+  request?: Request;
 }
 
 /**
@@ -133,7 +148,7 @@ export async function submitForm(
   options: SubmitFormOptions,
   context: SubmitFormContext
 ): Promise<SubmitFormResult> {
-  const { formSlug, data, metadata } = options;
+  const { formSlug, data, metadata, request } = options;
   const { pluginContext, pluginConfig } = context;
   const { collections } = pluginContext.services;
   const { logger } = pluginContext;
@@ -226,35 +241,20 @@ export async function submitForm(
       Object.entries(data).filter(([key]) => !declaredFieldNames.has(key))
     );
 
+    // The honeypot only, and only to decide whether to validate. It is a pure
+    // read of the payload, so running it here and again at the write seam
+    // costs nothing and cannot disagree. The RATE LIMIT is not asked here: it
+    // counts, and a check with a side effect run twice counts one submission
+    // twice. The seam owns that one, and owns the verdict written to the row.
     const spamResult = await checkSpam({
       data: undeclaredData,
-      ipAddress: metadata?.ipAddress,
       formSlug,
       config: {
         // Per-form overrides win where set; blank inherits the plugin config.
         honeypot:
           settings.honeypotEnabled ?? pluginConfig.spamProtection.honeypot,
-        rateLimit: pluginConfig.spamProtection.rateLimit,
-        recaptcha: {
-          ...pluginConfig.spamProtection.recaptcha,
-          enabled:
-            settings.captchaEnabled ??
-            pluginConfig.spamProtection.recaptcha?.enabled ??
-            false,
-        },
       },
     });
-
-    // Rate-limit hits are pure volume — storing them would turn the limiter
-    // into a database DoS, so they are rejected without a trace (still with
-    // fake success so the client learns nothing).
-    if (spamResult.isSpam && spamResult.reason === "rate_limit") {
-      logger.info?.("Spam submission rejected (rate limit)", {
-        formSlug,
-        ipAddress: metadata?.ipAddress,
-      });
-      return { success: true };
-    }
 
     const isContentSpam = spamResult.isSpam;
 
@@ -309,16 +309,42 @@ export async function submitForm(
     // is evidence this handler chose to keep rather than a caller asking for
     // validation to be skipped. The form goes with it so the seam does not read
     // it a second time.
-    const submission = await collections.createEntry(
-      pluginConfig.formSubmissionOverrides.slug,
-      asPluginSubmission(submissionData, {
-        keepAsEvidence: isContentSpam,
-        form: { id: form.id, fields: form.fields },
-      }),
-      // Public form submission — create as system. No ambient user; an
-      // empty context already resolves to system, but be explicit.
-      { as: "system" }
-    );
+    let submission: Awaited<ReturnType<typeof collections.createEntry>>;
+    try {
+      submission = await collections.createEntry(
+        pluginConfig.formSubmissionOverrides.slug,
+        asPluginSubmission(submissionData, {
+          keepAsEvidence: isContentSpam,
+          form: { id: form.id, fields: form.fields },
+        }),
+        // Public form submission — create as system. No ambient user; an
+        // empty context already resolves to system, but be explicit.
+        //
+        // The request travels with it so the seam judges this submission on the
+        // same facts as one arriving through a Nextly route. Omitted by a caller
+        // that has none, and then the seam correctly reads the write as
+        // server-side work.
+        { as: "system", ...(request ? { request } : {}) }
+      );
+    } catch (error) {
+      // The seam refuses a submission over the limit, and refuses it the same
+      // way at every door. This helper answers its own caller with a success
+      // anyway: a host route calls it to serve a browser, and a bot told it was
+      // limited learns the rate to sit under.
+      //
+      // This is NOT the built-in `POST /api/forms/:slug/submit`, which core's
+      // form dispatcher serves without calling this at all. That endpoint
+      // returns the refusal as a 429.
+      //
+      // Nothing is stored. A limiter that wrote a row per refusal would hand an
+      // attacker a way to fill the database with the very volume it exists to
+      // refuse.
+      if (NextlyError.isRateLimited(error)) {
+        logger.info?.("Form submission refused (rate limit)", { formSlug });
+        return { success: true };
+      }
+      throw error;
+    }
 
     logger.info?.("Form submission created successfully", {
       formSlug,

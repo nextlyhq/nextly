@@ -721,6 +721,17 @@ function assertDateFieldBucketable(
       `dateField "${dateField}" on "${source.id}" is localized, so its values are stored per locale and cannot be placed on a timeline`
     );
   }
+  // Read off the DESCRIPTION rather than asked of the read's own guard. That
+  // guard reaches the field-level registry, and this module is type-checked by
+  // the admin, whose project does not define the `@nextly/*` aliases that graph
+  // pulls in -- importing it here reported a hundred errors about code the
+  // admin never touches. The source builder runs server-side and marks each
+  // date it publishes, so the answer still comes from one place.
+  if (declaredField?.bucketable === false) {
+    fail(
+      `dateField "${dateField}" on "${source.id}" cannot be grouped, so its rows cannot be placed on a timeline`
+    );
+  }
   const declaredType = declaredField?.type;
   if (declaredType !== "date") {
     fail(

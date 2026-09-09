@@ -24,14 +24,25 @@ const FACADE = join(__dirname, "..", "collection-service.ts");
 /**
  * The transaction entry points, which forward `user` alone.
  *
- * Not an oversight and not exempt on principle: their destination params
- * (`CreateEntryWriteParams`, `UpdateEntryWriteParams`, and the inline type on
- * `deleteEntryInTransaction`) declare no `authenticatedScope`, so there is
- * nowhere for it to go. They are also outside the plugin-facing surface —
- * `CONTEXT_INDEX` in `plugins/service-opts.ts` wraps seven methods and none of
- * these is among them — so no plugin route reaches them. Widening those params
- * is its own change; until then this names the gap rather than letting the
- * count below quietly absorb it.
+ * Their destination params (`CreateEntryWriteParams`, `UpdateEntryWriteParams`,
+ * and the inline type on `deleteEntryInTransaction`) declare no
+ * `authenticatedScope`, so there is nowhere in the argument for it to go.
+ *
+ * An earlier version of this comment also claimed no plugin route reaches them,
+ * on the grounds that `CONTEXT_INDEX` in `plugins/service-opts.ts` wraps seven
+ * methods and none of these is among them. That was wrong in the direction that
+ * excuses: `PluginCollectionService` is `Omit<CollectionService, AccessMethod |
+ * WriteMethod>`, which KEEPS every method not in those two unions, and the
+ * proxy binds anything absent from `CONTEXT_INDEX` straight through. So a
+ * plugin reaches all four, and a scoped key writing through one of them was
+ * judged on its owner.
+ *
+ * What closes it is not this argument: `checkCollectionAccess` reads the
+ * request's own scope when its caller did not name one, so the gate is correct
+ * whether or not the params ever carry it. These sites stay listed because the
+ * FORWARD is still incomplete — a caller wanting to narrow a transaction write
+ * has no way to say so — and a new one should come here and say why rather than
+ * joining an unbounded set nothing reads.
  */
 const TRANSACTION_SITES = 3;
 

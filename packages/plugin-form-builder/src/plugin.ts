@@ -31,6 +31,7 @@ import {
   type SubmissionOriginMarks,
   prepareSubmission,
 } from "./handlers/prepare-submission";
+import { checkSpam, type SpamCheckResult } from "./handlers/spam-detection";
 import type {
   AnyFormField,
   BeforeEmailFilterContext,
@@ -932,6 +933,7 @@ export async function prepareSubmissionForWrite(
     operation?: string;
     originalData?: Record<string, unknown>;
     user?: { id?: string };
+    req?: { http?: { ip: string | null; method: string } };
   };
   const submission = ctx.data;
   if (!submission || typeof submission !== "object") return ctx.data;
@@ -954,7 +956,29 @@ export async function prepareSubmissionForWrite(
   // Read off the row itself, so it describes this write and no other.
   const marks = submissionMarks(submission);
 
-  const fields = await fieldsToCheckAgainst(marks, formsSlug, formId, nextly);
+  const form = await formToCheckAgainst(marks, formsSlug, formId, nextly);
+  const fields = form.fields as AnyFormField[];
+
+  // Spam is judged HERE, at the seam every door passes through, rather than in
+  // the route: the submissions collection grants public create, so the generic
+  // collection create is a second public door and the Direct API a third. A
+  // rule that lives in one of them guards one of them.
+  //
+  // Only when a request produced this write. `ctx.req.http` is absent for a
+  // seed, an import or a job, and a rule aimed at a visitor must not judge a
+  // server that is importing ten thousand rows as one.
+  const spam =
+    ctx.operation === "create" && ctx.req?.http
+      ? await judgeSubmission(incoming, form, ctx.req.http, nextly)
+      : undefined;
+
+  if (spam?.reason === "rate_limit") {
+    // Refused, not stored: a limiter that wrote a row per refusal would turn
+    // volume into a database it fills for the attacker. The plugin's own route
+    // answers its visitor with a success anyway, so a bot learns nothing from
+    // it; the other doors are machine-facing and get the honest 429.
+    throw NextlyError.rateLimited();
+  }
 
   // Content spam keeps its evidence. The handler stores a honeypot or reCAPTCHA
   // hit flagged rather than dropping it, so a false positive stays recoverable,
@@ -967,7 +991,7 @@ export async function prepareSubmissionForWrite(
   const prepared = prepareSubmission({
     data: incoming,
     fields,
-    validate: marks?.keepAsEvidence !== true,
+    validate: marks?.keepAsEvidence !== true && spam === undefined,
   });
 
   if (prepared.validationErrors) {
@@ -979,6 +1003,14 @@ export async function prepareSubmissionForWrite(
   }
 
   ctx.data = { ...submission, data: prepared.data };
+  if (spam) {
+    // Flagged, never dropped: a false positive stays reviewable in the Spam
+    // view and recoverable through "Not spam". Written here rather than trusted
+    // from the payload, because the collection grants public create and nothing
+    // restricts these fields, so a caller could otherwise mark its own row.
+    ctx.data.status = "spam";
+    ctx.data.spamReason = spam.reason ?? null;
+  }
   if (ctx.operation !== "create" && submission.data === undefined) {
     stampDerivedEdit(ctx.data, ctx.user, incoming, prepared.data);
   }
@@ -995,12 +1027,12 @@ export async function prepareSubmissionForWrite(
  * write before it. Only ever the form this row names, because the id has to
  * match.
  */
-async function fieldsToCheckAgainst(
+async function formToCheckAgainst(
   marks: SubmissionOriginMarks | undefined,
   formsSlug: string,
   formId: string,
   nextly: NextlyInstance
-): Promise<AnyFormField[]> {
+): Promise<Record<string, unknown>> {
   const handedOver = marks?.form?.id === formId ? marks.form : null;
   const form = handedOver ?? (await fetchParentForm(formsSlug, formId, nextly));
   if (!form || !Array.isArray(form.fields)) {
@@ -1015,7 +1047,74 @@ async function fieldsToCheckAgainst(
       ],
     });
   }
-  return form.fields as AnyFormField[];
+  return form;
+}
+
+/**
+ * The part of a rate-limit key that names the form.
+ *
+ * The ID, never the slug. A door that hands the seam the form it already read
+ * carries `{ id, fields }`, and a door that makes the seam fetch it carries the
+ * whole row: keyed on whatever each happens to have, one form gets one window
+ * per door and a caller alternating between two doors spends two budgets.
+ *
+ * Only a string identifies a form. A row whose id is unusable is limited as its
+ * own bucket rather than silently joining a neighbour's.
+ */
+function rateLimitKeyFor(form: Record<string, unknown>): string {
+  const { id } = form;
+  return typeof id === "string" && id.length > 0 ? id : "unidentified-form";
+}
+
+/**
+ * Whether this submission looks like a bot's, and why.
+ *
+ * `undefined` means nothing was detected, which is not the same as "no rule
+ * ran": a form that disables the honeypot and a deployment that configures no
+ * rate limit both answer that way, and both mean the submission is stored as an
+ * ordinary one.
+ *
+ * The address comes from the core, resolved under the deployment's proxy-trust
+ * settings, so it is the closest untrusted hop rather than whatever the sender
+ * put in `x-forwarded-for`. `null` means no address could be trusted, and the
+ * rate limit does not run: keying it on a placeholder would put every
+ * unidentifiable client in one window, where the first bot to fill it locks out
+ * every visitor behind an untrusted proxy. The honeypot still applies, because
+ * it reads the payload rather than the caller.
+ */
+async function judgeSubmission(
+  payload: Record<string, unknown>,
+  form: Record<string, unknown>,
+  http: { ip: string | null; method: string },
+  nextly: NextlyInstance
+): Promise<SpamCheckResult | undefined> {
+  const config = getFormBuilderConfig(nextly);
+  if (!config) return undefined;
+
+  // The trap is set among the keys the form does NOT declare. Several honeypot
+  // names are ones a real form might use -- `website`, `url_field` -- so
+  // probing the whole payload would flag every submission to a form that
+  // declares one, and flag it as bot traffic.
+  const declared = new Set(
+    (Array.isArray(form.fields) ? form.fields : [])
+      .map(field => (field as { name?: unknown }).name)
+      .filter((name): name is string => typeof name === "string")
+  );
+  const undeclared = Object.fromEntries(
+    Object.entries(payload).filter(([key]) => !declared.has(key))
+  );
+
+  const settings = (form.settings ?? {}) as { honeypotEnabled?: boolean };
+  const verdict = await checkSpam({
+    data: undeclared,
+    ipAddress: http.ip ?? undefined,
+    formSlug: rateLimitKeyFor(form),
+    config: {
+      honeypot: settings.honeypotEnabled ?? config.spamProtection.honeypot,
+      rateLimit: config.spamProtection.rateLimit,
+    },
+  });
+  return verdict.isSpam ? verdict : undefined;
 }
 
 /**

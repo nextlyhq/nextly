@@ -37,6 +37,15 @@ export interface RateLimitCheckResult {
  * Holds no state of its own — every window lives in the store — so
  * constructing one per request is free, and two limiters over the same store
  * enforce one shared limit.
+ *
+ * @public
+ *
+ * Distinct from `createRateLimiter`, which builds REST middleware that reads a
+ * request and answers with a `Response`. This is the limiter underneath that
+ * decision, driven directly with a key, a limit and a window, for a caller that
+ * already knows what it is counting. Both run over the same
+ * {@link RateLimitStore}, so a deployment that configures one store has one
+ * shared window whichever drives it.
  */
 export class RateLimiter {
   constructor(

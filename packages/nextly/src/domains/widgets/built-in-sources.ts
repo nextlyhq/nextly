@@ -9,7 +9,9 @@
  */
 
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import { isGroupableFieldName } from "../../shared/lib/filterable-fields";
 import { entryTitleField } from "../collections/entry-title";
+import { isGroupKeyDeclaration } from "../collections/query/group-key-declaration";
 import { classifyFieldKind } from "../schema/services/field-column-descriptor";
 
 import {
@@ -319,6 +321,52 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
     ...declared,
     ...systemFields.filter(field => !seen.has(field.name)),
   ];
+
+  // Asked of the SAME guards the read asks, rather than re-deriving what makes
+  // a key usable. This runs server-side, so it can reach both the field
+  // registry and the declarations the validator cannot -- and the answer is
+  // MARKED on the field so the validator reads a description instead of
+  // re-deciding.
+  //
+  // Two halves, because the read has two: what the DECLARATION rules out (a
+  // localized field, a structure) and what the field-level REGISTRY rules out
+  // (a read rule the caller does not satisfy). Restating either here would let
+  // the catalog go on hiding a key the read had started accepting, which is the
+  // direction that fails silently -- a supported path with nothing offering it.
+  //
+  // Asking the rule rather than restating it has NO behavioural signature
+  // today, and no test can be written that separates the two: only fields
+  // typed `date` reach this, and their declaration can differ from a plain
+  // localized check on nothing the classifier currently produces. The property
+  // is that the two move together WHEN the rule changes, which is a fact about
+  // the next edit rather than about any input available now.
+  //
+  // A system column has no declaration and no field-level rule, so it is
+  // bucketable without consulting either.
+  // Bridged the same way `pluginSourceType` bridges it: a source collection
+  // carries the subset of a declaration this module needs, and the group-key
+  // rule reads the same keys the classifier does.
+  const declarationOf = new Map(
+    retainedDeclarations(collection.fields).map(field => [
+      field.name,
+      field as FieldDefinition,
+    ])
+  );
+  const canBucket = (field: WidgetSourceField): boolean =>
+    !seen.has(field.name) ||
+    (isGroupKeyDeclaration(declarationOf.get(field.name), field.name) &&
+      isGroupableFieldName("collection", collection.slug, field.name));
+  // Only the REFUSALS are marked. A date the read would reject is stated as
+  // such; everything else is left alone, so a source built anywhere else keeps
+  // whatever it declared.
+  const marked = fields.map(field =>
+    field.type === "date" && !canBucket(field)
+      ? { ...field, bucketable: false }
+      : field
+  );
+  const bucketableDates = marked.filter(
+    field => field.type === "date" && field.bucketable !== false
+  );
   // Through the shared rule, with BOTH halves: the author's nomination and the
   // names it must exist in. Resolved once here so no consumer has to ask again
   // with only one of them.
@@ -374,8 +422,17 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
     // An op the executor implements but no source DECLARES is unreachable:
     // validation refuses it before execution, so the branch is dead and the
     // advertised op cannot be used.
-    supports: ["count", "list", "groupBy", "timeseries"],
-    fields,
+    // `timeseries` is offered only when this source exposes a date the read
+    // would actually accept. A collection with `timestamps: false` and no
+    // usable date field has no valid timeseries query at all, and a date
+    // carrying a read rule is refused by `assertGroupableField` on every
+    // dashboard request -- widgets execute with `overrideAccess: false`. Either
+    // way, advertising the op makes a card that fails on every load.
+    supports:
+      bucketableDates.length > 0
+        ? ["count", "list", "groupBy", "timeseries"]
+        : ["count", "list", "groupBy"],
+    fields: marked,
   };
 }
 

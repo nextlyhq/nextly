@@ -126,6 +126,8 @@ function buildNextlyInstance(
     update: directAPI.update.bind(directAPI),
     delete: directAPI.delete.bind(directAPI),
     count: directAPI.count.bind(directAPI),
+    group: directAPI.group.bind(directAPI),
+    timeseries: directAPI.timeseries.bind(directAPI),
     bulkDelete: directAPI.bulkDelete.bind(directAPI),
     duplicate: directAPI.duplicate.bind(directAPI),
     findSingle: directAPI.findSingle.bind(directAPI),

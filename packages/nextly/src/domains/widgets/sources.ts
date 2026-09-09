@@ -54,6 +54,26 @@ export interface WidgetSourceField {
    */
   localized?: boolean;
   /**
+   * Whether the read would accept this date as a bucketing key.
+   *
+   * Marked by the source builder, which runs server-side and can ask the same
+   * guard the read asks. The validator cannot: it is type-checked by the admin,
+   * whose project does not define the aliases that guard's dependency graph
+   * pulls in. So the description carries the answer instead, and there is still
+   * one place that decides it.
+   *
+   * Absent means the read has no objection. Only `false` refuses, and the
+   * builder sets it explicitly on the dates it knows the read would reject.
+   *
+   * That direction is deliberate. Defaulting to "not bucketable" would silently
+   * remove the op from every source registered by hand -- a plugin author
+   * declaring a perfectly ordinary date would lose it without being told, for a
+   * flag that is a framework detail rather than something they should have to
+   * know. The builder is the only production path for a collection source and
+   * it marks every date it publishes, so nothing is lost by trusting absence.
+   */
+  bucketable?: boolean;
+  /**
    * What a human calls this field, when the source knows.
    *
    * A widget that draws a TABLE needs a column heading, and the only honest
