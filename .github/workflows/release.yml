@@ -100,6 +100,33 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Asked BEFORE the path splits, because the answer matters on both.
+      #
+      # `0.0.2-alpha.64` and `0.0.2-alpha.65` each sat on npm with no tag and no
+      # GitHub Release: verification gave up on a slow registry, its non-zero
+      # exit skipped the two steps that write them, and the next commit landed
+      # before anyone re-ran it. Nothing said so.
+      #
+      # 🔴 Gating this on the version-PR path would miss the case that matters
+      # most. A test-only or CI-only merge adds no changeset, so the next push
+      # after a failed release takes the PUBLISH path, where the finalize step
+      # finds the tag missing and creates it at THIS checkout's HEAD - a commit
+      # the packages were never built from. Running first means the state is
+      # reported before anything acts on it.
+      #
+      # `github.sha`, never the workspace: on the version path the changesets
+      # action switches the checkout to `changeset-release/main` and bumps every
+      # manifest in it, so a working-tree read asks about the NEXT version,
+      # which is deliberately unpublished. A newly bumped version reads as
+      # nothing to describe yet, which is the intended no-op.
+      #
+      # It reports and never repairs. The repair depends on which artifact is
+      # missing, and the script says which.
+      - name: The release main declares is finalized
+        run: node scripts/release/check-finalized.mjs "${{ github.sha }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+
       - name: Create Release PR or Publish
         id: changesets
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
@@ -138,30 +165,6 @@ jobs:
       - name: Verify every package reached the registry
         if: steps.changesets.outputs.hasChangesets == 'false'
         run: pnpm release:verify
-
-      # The other path, where nothing looked before. When changesets are
-      # waiting, this run opens a version PR and publishes nothing, so `main`
-      # still declares the PREVIOUS release: exactly the moment to ask whether
-      # that one ever finished. Both `0.0.2-alpha.64` and `0.0.2-alpha.65` sat
-      # on npm with no tag and no GitHub Release because verification had
-      # failed, its non-zero exit skipped the two steps that write them, and the
-      # next commit landed before anyone re-ran it.
-      #
-      # `github.sha` rather than the workspace, and this is load-bearing: on this
-      # path the changesets action has switched the checkout to
-      # `changeset-release/main` and bumped every manifest in it, so reading the
-      # working tree would ask about the NEXT version, which is deliberately
-      # unpublished.
-      #
-      # It reports and never repairs. The repair is re-running the release run
-      # that published the version, because that re-runs at the commit the
-      # packages were built from; anything tagging HEAD would tag a commit that
-      # was never released.
-      - name: The previous release is finalized
-        if: steps.changesets.outputs.hasChangesets == 'true'
-        run: node scripts/release/check-finalized.mjs "${{ github.sha }}"
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
 
       - name: Create consolidated GitHub Release
         if: steps.changesets.outputs.hasChangesets == 'false'
