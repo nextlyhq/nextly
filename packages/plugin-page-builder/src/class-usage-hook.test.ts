@@ -18,6 +18,16 @@ import {
 } from "./class-usage-hook";
 
 const INDEX = "nx_pb_class_usage";
+/**
+ * The COMPONENT index's collection, wired like the plugin wires it.
+ *
+ * Omitting it left the registration with `undefined`, so the re-entry guard
+ * excluded a collection that does not exist, the delete loop asked a store for
+ * one, and the fake below — keyed on "is this the class index" — answered the
+ * component store with the DOCUMENT payload. Every test here then exercised a
+ * configuration the plugin never creates.
+ */
+const COMPONENT_INDEX = "nx_pb_component_usage";
 
 /** A document whose single node applies the given classes. */
 const documentUsing = (...classes: string[]) => ({
@@ -66,7 +76,10 @@ function harness(
     // bare document, and every test passed while no index row was ever found
     // and no classes were ever derived.
     find: vi.fn(async (a: { collection?: string }) =>
-      a.collection !== INDEX
+      // EITHER index collection answers as an index, not as a document read.
+      // Keying on the class index alone made the component store receive the
+      // document payload and read pages as though they were its own rows.
+      a.collection !== INDEX && a.collection !== COMPONENT_INDEX
         ? {
             items: [{ id: "p1", content: documentUsing("hero") }],
             meta: { hasNext: false },
@@ -89,6 +102,7 @@ function harness(
   registerClassUsageMaintenance({
     ctx,
     indexCollection: INDEX,
+    componentIndexCollection: COMPONENT_INDEX,
     draftSplit: options.draftSplit ?? (async () => ({ eligible: false })),
     locales: () => options.locales ?? [],
     limits: () => DEFAULT_LIMITS,
@@ -248,6 +262,39 @@ describe("a document that was deleted", () => {
     await fireDelete({ collection: "single:site-style" });
 
     expect(api.find).not.toHaveBeenCalled();
+  });
+
+  it("cleans the OTHER index when one of them cannot be reached", async () => {
+    // The class index is asked first. Letting its failure end the loop stranded
+    // the healthy index's rows too — and the document is already gone, so no
+    // later save revisits them: only a rebuild nobody knows to run would.
+    const { fireDelete, api } = harness();
+    api.find.mockImplementation(async (a: { collection?: string }) => {
+      if (a.collection === INDEX) throw new Error("class index unreachable");
+      return {
+        items: [
+          {
+            id: "k1",
+            scope: "collection",
+            entity: "pages",
+            entityKey: "p1",
+            field: "content",
+            locale: "",
+            variant: "published",
+            kind: "reference",
+            componentId: "header",
+          },
+        ],
+        meta: { hasNext: false },
+      };
+    });
+
+    // Still raises, because one index genuinely failed.
+    await expect(fireDelete()).rejects.toThrow(/could not forget/);
+    // And the reachable index's row was removed anyway, which is the property.
+    expect(api.delete).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "k1" })
+    );
   });
 
   it("RAISES when the rows cannot be removed, so the caller is told", async () => {
