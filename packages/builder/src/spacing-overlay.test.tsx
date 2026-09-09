@@ -27,7 +27,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CANVAS_ROOT_CLASS, Canvas } from "./canvas";
 import type { EditorState } from "./editor-state";
-import { SpacingOverlay } from "./spacing-overlay";
+import { probeScale, SpacingOverlay } from "./spacing-overlay";
 
 afterEach(() => {
   cleanup();
@@ -650,5 +650,67 @@ describe("a computed style that changes with nothing else", () => {
     await settle();
 
     expect(labels(container)).toEqual(["16"]);
+  });
+});
+
+describe("the scale a probe's movement is seen at", () => {
+  /*
+   * Measured in Chromium. Under `scale(0.5)` on the BLOCK itself, a ten-pixel
+   * margin probe still moves the edge ten pixels while a ten-pixel padding
+   * probe moves it five — because a padding renders inside the element's own
+   * transform and scales with it, while a margin displaces the box in the
+   * PARENT's coordinates, which that transform never touches.
+   *
+   * `renderedScale` separates the two and `spacingDelta` already divides by the
+   * matching one. Reading the composed scale for both asked the margin for
+   * twice the movement there was, read a moving edge as pinned, and inverted
+   * the handle on any transformed block.
+   */
+  const halfItself = {
+    // The COMPOSED scale: the block's own half, with no ancestor transform.
+    x: 0.5,
+    y: 0.5,
+    describable: true,
+    selfMoved: { top: false, right: false, bottom: false, left: false },
+    ancestor: { x: 1, y: 1 },
+  };
+  const unpainted = { x: 1, y: 1 };
+
+  it("ignores the block's own transform for a margin", () => {
+    expect(probeScale("margin", "left", halfItself, unpainted)).toBe(1);
+    expect(probeScale("margin", "top", halfItself, unpainted)).toBe(1);
+  });
+
+  it("applies it for a padding", () => {
+    expect(probeScale("padding", "left", halfItself, unpainted)).toBe(0.5);
+    expect(probeScale("padding", "top", halfItself, unpainted)).toBe(0.5);
+  });
+
+  /*
+   * An ANCESTOR's transform scales the whole subtree it lays out, gaps
+   * included, so it applies to both boxes.
+   */
+  it("applies an ancestor's transform to both boxes", () => {
+    const halfAbove = {
+      ...halfItself,
+      x: 0.5,
+      y: 0.5,
+      ancestor: { x: 0.5, y: 0.5 },
+    };
+    expect(probeScale("margin", "left", halfAbove, unpainted)).toBe(0.5);
+    expect(probeScale("padding", "left", halfAbove, unpainted)).toBe(0.5);
+  });
+
+  /*
+   * And the canvas's own painted scale composes either way, because it is above
+   * the element and the probe is read off the viewport through it.
+   */
+  it("composes the canvas's painted scale for both", () => {
+    expect(probeScale("margin", "top", halfItself, { x: 0.5, y: 0.5 })).toBe(
+      0.5
+    );
+    expect(probeScale("padding", "top", halfItself, { x: 0.5, y: 0.5 })).toBe(
+      0.25
+    );
   });
 });

@@ -514,6 +514,40 @@ function sameSubject(
  * probed before" is a whole one that reads better with a name than as another
  * branch inside a function about geometry.
  */
+/**
+ * The scale the probe's movement will be SEEN at, for one box on one side.
+ *
+ * A margin takes the ANCESTOR scale and a padding the composed one, and what
+ * separates them is the element's OWN transform: a padding renders inside that
+ * transform and scales with it, while a margin displaces the box in the
+ * PARENT's coordinates, which the element's own transform never touches.
+ * Measured in Chromium — under `scale(0.5)` on the block itself, a ten-pixel
+ * margin probe still moves the edge ten pixels while a ten-pixel padding probe
+ * moves it five.
+ *
+ * `renderedScale` already separates the two and says why, and `spacingDelta`
+ * already divides by the matching one of the pair. Reading the composed scale
+ * for both was asking a question this package had answered, and getting it
+ * wrong: on a transformed block the margin threshold wanted twice the movement
+ * there was, read a moving edge as pinned, and inverted the handle.
+ *
+ * The root's own painted scale composes either way, because it is above the
+ * element and applies to both boxes alike.
+ */
+export function probeScale(
+  box: SpacingBox,
+  side: SpacingSide,
+  scale: RenderedScale,
+  rootPainted: Scale
+): number {
+  const vertical = side === "top" || side === "bottom";
+  const laidOutIn = box === "margin" ? scale.ancestor : scale;
+  return (
+    (vertical ? laidOutIn.y : laidOutIn.x) *
+    (vertical ? rootPainted.y : rootPainted.x)
+  );
+}
+
 function answersFor(
   probed: WeakMap<EditorState["document"], Map<string, boolean>>,
   document: EditorState["document"]
@@ -729,19 +763,7 @@ export function SpacingOverlay({
               block,
               box,
               side,
-              /*
-               * The scale the probe's movement will be SEEN at. `boxAcross`
-               * answers in viewport pixels and the canvas is painted through a
-               * transform, so ten CSS pixels of padding move the edge by ten
-               * times this on screen. Composed with the root's own painted
-               * scale, which `renderedScale` stops below on purpose: that
-               * exclusion is right for a band drawn inside the root and wrong
-               * for a rectangle read off the viewport.
-               */
-              (side === "top" || side === "bottom" ? scale.y : scale.x) *
-                (side === "top" || side === "bottom"
-                  ? rootPainted.y
-                  : rootPainted.x)
+              probeScale(box, side, scale, rootPainted)
             )
           : false;
       answers.set(key, answer);
@@ -844,7 +866,26 @@ export function SpacingOverlay({
    */
   React.useEffect(() => {
     if (hidden || selectedId === null) return;
-    return watchCanvasFor(() => layer.current, measure);
+    return watchCanvasFor(
+      () => layer.current,
+      change => {
+        /*
+         * A resized CANVAS can have re-resolved the breakpoint, and which width
+         * model a block is in is exactly what these answers depend on: a
+         * `margin-right` is pinned by the container on an auto width and pushes
+         * outward on a fixed one, so the same block answers oppositely on either
+         * side of a media query with no edit and no new document.
+         *
+         * Only on a resize, and that is what makes it safe rather than a loop.
+         * The probe writes to a node this same subscription watches, so clearing
+         * on a MUTATION would have each probe schedule the next forever. It
+         * cannot cause a resize: it restores the element inside one task, so the
+         * observer never sees a size differing from the one it last delivered.
+         */
+        if (change === "resized") responds.current.delete(document);
+        measure();
+      }
+    );
     /*
      * `document` re-subscribes, and dropping it strands the observer on a
      * DETACHED element. An edit replaces the rendered tree while the selection

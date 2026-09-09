@@ -42,6 +42,18 @@ import { canvasRootFrom } from "./geometry-dom";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /**
+ * Which kind of change a subscriber is being told about.
+ *
+ * `resized` is the CANVAS FRAME changing size, and it is separated from the
+ * rest for one reason: it is the only change here that can re-resolve a media
+ * query, so it is the only one after which an answer derived from the applied
+ * CSS — which of two width models a block is in, say — may have gone stale. A
+ * caller that only re-measures rectangles can ignore the distinction; one that
+ * caches something about the computed style cannot.
+ */
+export type CanvasChange = "resized" | "moved";
+
+/**
  * Everything an overlay drawn over this canvas has to re-measure for.
  *
  * ONE call rather than a list a caller assembles: which changes can move a
@@ -57,13 +69,14 @@ import { CANVAS_ROOT_CLASS } from "./shell-state";
  * @param ownLayer - reads the caller's own layer element, and is read rather
  *   than passed because the layer does not exist until after the first render;
  *   it locates the canvas AND says which mutations are the caller's own
- * @param moved - re-measure; called once per change, never per frame
+ * @param moved - re-measure; called once per change, never per frame, and told
+ *   which KIND of change it was — see {@link CanvasChange}
  * @returns unsubscribes everything this installed, or `undefined` when there
  *   was no canvas root to install anything on
  */
 export function watchCanvasFor(
   ownLayer: () => HTMLElement | null,
-  moved: () => void
+  moved: (change: CanvasChange) => void
 ): (() => void) | undefined {
   const element = ownLayer();
   const root =
@@ -84,7 +97,10 @@ export function watchCanvasFor(
  * @param moved - re-measure; called once per change, never per frame
  * @returns unsubscribes everything this installed
  */
-function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
+function watchCanvasGeometry(
+  root: HTMLElement,
+  moved: (change: CanvasChange) => void
+): () => void {
   /*
    * EVERY rendered node is observed, not only the ones a caller draws over:
    * what moves a node is often a SIBLING changing size rather than the node
@@ -105,7 +121,19 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
   const sizes =
     typeof ResizeObserver === "undefined"
       ? null
-      : new ResizeObserver(() => moved());
+      : new ResizeObserver(entries => {
+          /*
+           * The ROOT resizing is reported apart from a node resizing, because
+           * the canvas FRAME changing width is what re-resolves a media query —
+           * and a caller holding an answer that depends on which rules applied
+           * has no other way to hear that they may have changed. A node
+           * resizing cannot do it: an image finishing its load moves
+           * rectangles without altering a single declaration.
+           */
+          moved(
+            entries.some(entry => entry.target === root) ? "resized" : "moved"
+          );
+        });
   if (sizes !== null) {
     sizes.observe(root);
     for (const node of nodeElements(root)) sizes.observe(node);
@@ -128,7 +156,7 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
    * would mean measuring on every one, which costs more than an overlay being
    * briefly behind a transition the author is watching.
    */
-  const settled = (): void => moved();
+  const settled = (): void => moved("moved");
   root.addEventListener("transitionend", settled);
   root.addEventListener("transitioncancel", settled);
   root.addEventListener("scroll", settled, true);
@@ -176,7 +204,7 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
 function watchCanvasStyleMutations(
   root: HTMLElement,
   ownOutput: () => HTMLElement | null,
-  moved: () => void
+  moved: (change: CanvasChange) => void
 ): () => void {
   // Absent in jsdom unless a test supplies one, and absent in older browsers.
   // A missing observer costs a re-measure rather than correctness: every caller
@@ -194,7 +222,7 @@ function watchCanvasStyleMutations(
     const outside = records.some(
       record => own === null || !own.contains(record.target)
     );
-    if (outside) moved();
+    if (outside) moved("moved");
   });
   /*
    * Every kind of record, because every kind can carry a new rule: a sheet

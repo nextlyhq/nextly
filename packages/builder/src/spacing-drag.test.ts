@@ -8,7 +8,7 @@ import {
   spacingAddress,
   spacingCssValue,
   spacingDelta,
-  spacingGrowsOutward,
+  spacingBandDrawnOutward,
   spacingKeyDelta,
   spacingSidesFor,
   spacingStart,
@@ -394,7 +394,7 @@ describe("which way a band thickens", () => {
    */
   it("takes the measured answer, for either box", () => {
     for (const measured of [true, false]) {
-      expect(spacingGrowsOutward(false, measured), String(measured)).toBe(
+      expect(spacingBandDrawnOutward(false, measured), String(measured)).toBe(
         measured
       );
     }
@@ -407,8 +407,38 @@ describe("which way a band thickens", () => {
    * rectangle's two edges swap roles and the measured answer swaps with them.
    */
   it("mirrors the answer for a band drawn inside the border edge", () => {
-    expect(spacingGrowsOutward(true, true)).toBe(false);
-    expect(spacingGrowsOutward(true, false)).toBe(true);
+    expect(spacingBandDrawnOutward(true, true)).toBe(false);
+    expect(spacingBandDrawnOutward(true, false)).toBe(true);
+  });
+
+  /*
+   * And mirrors ONLY that. Where the handle sits and which way the number grows
+   * are two questions, and a negative band answers them differently: raising a
+   * `margin-top` from `-20px` to `-10px` moves the border edge DOWN, the same
+   * direction a positive one moves it, because the sign changes where the
+   * rectangle is drawn and not which physical edge responds.
+   *
+   * Fed the mirrored answer, `spacingDelta` inverted: a drag DOWN on the
+   * correctly placed handle of a negative top margin returned a negative delta,
+   * committing `-30px` and running the block away from the pointer.
+   */
+  it("does not mirror the direction the value grows", () => {
+    const measured = false;
+    expect(spacingBandDrawnOutward(true, measured)).toBe(true);
+    // A drag DOWN on a top band grows it, which is the inward reading, and it
+    // is the measured answer that says so rather than the mirrored one.
+    expect(
+      spacingDelta("margin", "top", { dx: 0, dy: 10 }, UNSCALED, measured)
+    ).toBe(10);
+    expect(
+      spacingDelta(
+        "margin",
+        "top",
+        { dx: 0, dy: 10 },
+        UNSCALED,
+        spacingBandDrawnOutward(true, measured)
+      )
+    ).toBe(-10);
   });
 });
 

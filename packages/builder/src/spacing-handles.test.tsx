@@ -1745,6 +1745,60 @@ describe("a padding handle on a block that grows outward", () => {
   });
 });
 
+describe("a negative margin, whose band is drawn mirrored", () => {
+  /*
+   * `spacingBands` lays a negative margin INSIDE the border edge, reflected
+   * across it, so the rectangle's far edge swaps. Where the handle sits and
+   * which way the number grows therefore come apart, and one boolean answered
+   * both until review caught it.
+   *
+   * Measured in Chromium: raising a `margin-top` from `-20px` to `-10px` moves
+   * the block's border edge DOWN and leaves the outer edge pinned where the
+   * predecessor put it — the same edge that responds for a POSITIVE top
+   * margin, because the sign changes where the band is drawn and not which
+   * edge the layout moves. So the probe reads `false` here exactly as it does
+   * there.
+   */
+  const rect = { x: 0, y: 100, width: 50, height: 20 };
+  const negativeTop: SpacingBand = {
+    box: "margin",
+    side: "top",
+    rect,
+    label: "-20",
+    negative: true,
+  };
+  const borderEdgeResponds = (): SpacingSubject =>
+    subjectWith({
+      margin: { top: -20, right: 10, bottom: 10, left: 10 },
+      outward: {
+        margin: { top: false, right: true, bottom: true, left: true },
+        padding: { top: false, right: false, bottom: false, left: false },
+      },
+    });
+
+  /*
+   * The band spans 100..120, and for a negative one the border edge is the TOP
+   * of that rectangle rather than the bottom. The mirrored answer is what puts
+   * the handle there.
+   */
+  it("puts the handle on the mirrored rectangle's moving edge", () => {
+    mount([negativeTop], borderEdgeResponds());
+    expect(handle("top margin").style.top).toBe("95.5px");
+  });
+
+  /*
+   * And the drag does NOT take the mirrored answer. Dragging the handle down
+   * follows the border edge down, which is the direction that raises the value
+   * toward zero. Mirroring here committed `-30px` and ran the block away from
+   * the pointer.
+   */
+  it("raises the value toward zero dragging DOWN", () => {
+    mount([negativeTop], borderEdgeResponds());
+    drag(handle("top margin"), [{ x: 0, y: 10 }]);
+    expect(stored("margin", "blockStart")).toBe("-10px");
+  });
+});
+
 describe("what the block's author allows", () => {
   /*
    * `supports` is the block author's capability declaration, and the Style

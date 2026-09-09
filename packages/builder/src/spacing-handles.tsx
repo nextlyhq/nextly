@@ -81,7 +81,7 @@ import {
   spacingAddress,
   spacingCssValue,
   spacingDelta,
-  spacingGrowsOutward,
+  spacingBandDrawnOutward,
   spacingKeyDelta,
   spacingSidesFor,
   spacingStart,
@@ -509,9 +509,29 @@ export function SpacingHandles({
    * while the outer edge stays pinned by whatever precedes it. See
    * `spacing-response.ts`, which asks rather than assumes.
    */
-  const outwardOf = React.useCallback(
+  const drawnOutwardOf = React.useCallback(
     (band: SpacingBand): boolean =>
-      spacingGrowsOutward(band.negative, subject.outward[band.box][band.side]),
+      spacingBandDrawnOutward(
+        band.negative,
+        subject.outward[band.box][band.side]
+      ),
+    [subject.outward]
+  );
+
+  /**
+   * Which way the VALUE grows, which is a different question and was the same
+   * boolean until review caught it.
+   *
+   * The measured answer, taken unmirrored. A negative band is drawn reflected
+   * across the border edge, so its rectangle's far edge swaps — but the
+   * physical edge that responds does not, and neither does the arithmetic:
+   * raising a `margin-top` from `-20px` to `-10px` moves the border edge down,
+   * exactly as raising a positive one does. Feeding the mirrored answer to
+   * `spacingDelta` made a drag on the correctly placed handle commit `-30px`
+   * and run the block away from the pointer.
+   */
+  const valueOutwardOf = React.useCallback(
+    (band: SpacingBand): boolean => subject.outward[band.box][band.side],
     [subject.outward]
   );
 
@@ -889,7 +909,7 @@ export function SpacingHandles({
           live.band.side,
           canvas,
           subject.scales,
-          outwardOf(live.band)
+          valueOutwardOf(live.band)
         );
         if (delta === undefined) return;
         const shown = modifiersOf(moved);
@@ -906,7 +926,7 @@ export function SpacingHandles({
             live.band.side,
             travelled(lifted).canvas,
             subject.scales,
-            outwardOf(live.band)
+            valueOutwardOf(live.band)
           );
           if (delta !== undefined) {
             /*
@@ -973,7 +993,7 @@ export function SpacingHandles({
       owner.addEventListener("pointercancel", onCancel);
       owner.addEventListener("keydown", onEscape);
     },
-    [commit, endGesture, outwardOf, showPreview, startsFor, subject.scales]
+    [commit, endGesture, showPreview, startsFor, subject.scales, valueOutwardOf]
   );
 
   /*
@@ -1018,7 +1038,7 @@ export function SpacingHandles({
         event.key,
         band.box,
         band.side,
-        outwardOf(band)
+        valueOutwardOf(band)
       );
       if (delta === undefined) return;
       /*
@@ -1047,7 +1067,7 @@ export function SpacingHandles({
       setHeld(band);
       commit(band, starts, refusals, delta, modifiersOf(event));
     },
-    [commit, outwardOf, startsFor]
+    [commit, startsFor, valueOutwardOf]
   );
 
   /*
@@ -1078,7 +1098,7 @@ export function SpacingHandles({
     held === null ||
     bands.some(band => band.box === held.box && band.side === held.side)
       ? bands
-      : [...bands, collapsed(held, outwardOf(held))];
+      : [...bands, collapsed(held, drawnOutwardOf(held))];
 
   if (orientation === undefined || nodeClass === undefined) {
     /*
@@ -1113,11 +1133,13 @@ export function SpacingHandles({
          * them occupy. Both strips then take pointer events and neither leaves
          * the space it describes.
          */
-        const outward = outwardOf(band);
+        const outward = drawnOutwardOf(band);
         const rect = handleRect(
           band,
           outward,
-          drawn.slice(index + 1).some(later => sameEdge(band, later, outwardOf))
+          drawn
+            .slice(index + 1)
+            .some(later => sameEdge(band, later, drawnOutwardOf))
         );
         return (
           <div

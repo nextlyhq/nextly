@@ -225,7 +225,9 @@ export interface SpacingScales {
  * @param side - the physical edge being dragged
  * @param movement - pointer travel in CLIENT pixels
  * @param scales - the scales the bands were measured at
- * @param outward - which edge of the band moves, from {@link spacingGrowsOutward}
+ * @param outward - whether the responding edge moves AWAY from the block, which
+ *   is the measured answer as it comes: NOT mirrored for a negative band, since
+ *   the sign changes where the rectangle is drawn and not which edge responds
  * @returns the value change in CSS pixels, or `undefined` at an unusable scale
  */
 export function spacingDelta(
@@ -443,7 +445,8 @@ const ARROW_MOVES = new Map<
  * @param key - the `KeyboardEvent.key` that was pressed
  * @param box - which box the focused band belongs to
  * @param side - the physical edge the focused handle sits on
- * @param outward - which edge of the band moves, from {@link spacingGrowsOutward}
+ * @param outward - whether the responding edge moves AWAY from the block, taken
+ *   unmirrored exactly as {@link spacingDelta} takes it
  * @returns the value change in CSS pixels, or `undefined` to ignore the key
  */
 export function spacingKeyDelta(
@@ -494,24 +497,31 @@ export function spacingKeyDelta(
 }
 
 /**
- * Whether this band thickens AWAY from the block, so a drag outward grows it.
+ * Whether the drawn BAND thickens away from the block, which is where its
+ * handle goes.
  *
- * The BOX does not decide this, and it used to: a margin was called structural
+ * The box does not decide this, and it used to: a margin was called structural
  * on the reasoning that it lies outside the border box and cannot move it.
  * Measured, that is false for `margin-top`, for `margin-left`, and for
  * `margin-right` on an auto-width block — `spacing-response.ts` carries the
- * table and now answers for both boxes. So `measured` is the whole answer, and
- * there is no longer a side of this to decide from the box's name.
+ * table and answers for both boxes now.
  *
- * A NEGATIVE band is the one thing that probe cannot see, because it is a fact
- * about how the band is DRAWN rather than about how the block responds:
- * `spacingBands` lays a negative margin INSIDE the border edge, mirrored across
- * it. The rectangle's two edges swap roles, and the measured answer swaps too.
+ * A NEGATIVE band mirrors it, and this is the only question it mirrors.
+ * `spacingBands` lays a negative margin INSIDE the border edge, reflected
+ * across it, so the rectangle's two edges swap which of them is the far one.
+ *
+ * THIS IS NOT THE DRAG DIRECTION, and conflating the two was a defect review
+ * caught. Where the handle sits and which way the NUMBER grows are separate
+ * questions that a negative band answers differently: the value of a
+ * `margin-top` rising from `-20px` to `-10px` moves the border edge DOWN, the
+ * same direction it moves for a positive one, because the physical edge that
+ * responds does not care about the sign. Only the rectangle is mirrored, so
+ * only this is. `spacingDelta` takes the measured answer unmirrored.
  *
  * @param negative - whether a margin band is a negative one
  * @param measured - whether the band's OUTER edge was seen to respond
  */
-export function spacingGrowsOutward(
+export function spacingBandDrawnOutward(
   negative: boolean,
   measured: boolean
 ): boolean {

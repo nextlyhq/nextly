@@ -38,6 +38,15 @@ fixed width, do the opposite. The editor now asks the element on every side, for
 margins as it already did for paddings, so the handle sits on the edge that
 responds and the drag follows the pointer.
 
-The probe's answers are now reached through the document they were measured
-from, so an edit that turns a content-sized block into a fixed-sized one takes
-its new answer immediately rather than waiting for an unrelated resize.
+The answers are re-taken when the canvas frame resizes, so a block whose width
+model changes at a breakpoint gets the handle its new layout wants rather than
+the one the previous breakpoint measured. They are also reached through the
+document they were measured from, so an edit that turns a content-sized block
+into a fixed-sized one takes its new answer immediately.
+
+Two smaller corrections come with it. A handle on a negative margin now grows
+the value in the direction the edge actually travels, instead of committing a
+larger negative number and running the block away from the pointer. And a
+transformed block is measured against the scale its margins are laid out in
+rather than the one it renders at, which had inverted the handle on any block
+carrying a transform of its own.
