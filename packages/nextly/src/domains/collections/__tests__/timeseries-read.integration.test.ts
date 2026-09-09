@@ -11,6 +11,9 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { registerHook, unregisterHook } from "../../../hooks";
+import type { HookHandler } from "../../../hooks/types";
+
 import { date, defineCollection, number, text } from "../../../config";
 import {
   createTestNextly,
@@ -340,6 +343,158 @@ describe.each(getConfiguredTestDialects())(
         { value: "1.00", count: 2 },
         { value: "2.50", count: 1 },
       ]);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a timeseries over a system column on %s",
+  dialect => {
+    it("buckets by createdAt, which no author declares", async () => {
+      // `created_at` is INJECTED rather than declared, so it is absent from the
+      // author's field list and the descriptor lookup that reads that list
+      // cannot see it -- while it is the column a timeline is most often drawn
+      // over, and the one the documentation uses.
+      const h = await boot(dialect, [
+        { occurredAt: daysAgo(0) },
+        { occurredAt: daysAgo(0) },
+      ]);
+
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        dateField: "createdAt",
+        interval: "day",
+        intervals: 3,
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.data?.points).toHaveLength(3);
+      // Both rows were written now, so today's point carries them.
+      expect(res.data?.points.at(-1)?.count).toBe(2);
+    });
+
+    it("accepts the snake spelling of the same system column", async () => {
+      const h = await boot(dialect, [{ occurredAt: daysAgo(0) }]);
+
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        dateField: "created_at",
+        interval: "day",
+        intervals: 2,
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.data?.points.at(-1)?.count).toBe(1);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a refused timeline on %s",
+  dialect => {
+    it("does not run the read hooks for a key that stores no date", async () => {
+      // `beforeRead` is ordinary user code that records audit entries and
+      // spends rate-limit budget. A request that was never going to be answered
+      // must not charge the caller for work, so the date-key refusal has to
+      // happen inside the plan rather than after it.
+      const h = await boot(dialect, [{ occurredAt: daysAgo(0), label: "a" }]);
+
+      let ran = 0;
+      const handler: HookHandler = (args: unknown) => {
+        ran += 1;
+        return args;
+      };
+      registerHook("beforeRead", EVENTS, handler);
+      try {
+        const res = await h.timeseriesEntries({
+          collectionName: EVENTS,
+          dateField: "label",
+          interval: "day",
+        });
+        expect(res.success).toBe(false);
+        expect(JSON.stringify(res)).toContain("FIELD_NOT_A_DATE");
+      } finally {
+        unregisterHook("beforeRead", EVENTS, handler);
+      }
+
+      expect(ran).toBe(0);
+    });
+
+    it("still runs the read hooks for a timeline it accepts", async () => {
+      // The control. Without it, a plan that refused EVERY timeline would
+      // satisfy the assertion above while breaking the feature.
+      const h = await boot(dialect, [{ occurredAt: daysAgo(0) }]);
+
+      let ran = 0;
+      const handler: HookHandler = (args: unknown) => {
+        ran += 1;
+        return args;
+      };
+      registerHook("beforeRead", EVENTS, handler);
+      try {
+        const res = await h.timeseriesEntries({
+          collectionName: EVENTS,
+          dateField: "occurredAt",
+          interval: "day",
+          intervals: 2,
+        });
+        expect(res.success).toBe(true);
+      } finally {
+        unregisterHook("beforeRead", EVENTS, handler);
+      }
+
+      expect(ran).toBeGreaterThan(0);
+    });
+
+    it("leaves a future-dated row out of every point", async () => {
+      // The scan is bounded ABOVE as well as below, because a date field holds
+      // future values -- a scheduled publication, an event date. That bound
+      // limits what the database reads and cannot change this answer, since the
+      // points are built from the window; it is verified by reading the
+      // statement. What this pins is that a future row is not folded into the
+      // most recent point.
+      const h = await boot(dialect, [
+        { occurredAt: daysAgo(0) },
+        { occurredAt: new Date(Date.now() + 5 * DAY_MS) },
+      ]);
+
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        dateField: "occurredAt",
+        interval: "day",
+        intervals: 3,
+      });
+
+      const counts = (res.data?.points ?? []).map(p => p.count);
+      expect(counts).toEqual([0, 0, 1]);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a decimal bucket label on %s",
+  dialect => {
+    it("keeps apart two values the database kept apart", async () => {
+      // SQLite's NUMERIC affinity is best-effort and does not enforce the
+      // declared scale, so a column declared with scale 2 can hold 1.001 and
+      // 1.002 as two distinct groups. Rounding the label to the scale would
+      // hand back separate counts under one label -- the merge a bucket label
+      // exists to prevent.
+      const h = await boot(dialect, [
+        { occurredAt: daysAgo(0), price: 1.001 },
+        { occurredAt: daysAgo(0), price: 1.002 },
+      ]);
+
+      const res = await h.groupEntries({
+        collectionName: EVENTS,
+        groupBy: "price",
+      });
+
+      expect(res.success).toBe(true);
+      const labels = (res.data?.buckets ?? []).map(b => b.value);
+      // However each adapter chose to STORE these, no two buckets may share a
+      // label: the counts behind them are different rows.
+      expect(new Set(labels).size).toBe(labels.length);
     });
   }
 );

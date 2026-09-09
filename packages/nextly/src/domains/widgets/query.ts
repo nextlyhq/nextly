@@ -694,6 +694,34 @@ function refuseTimelineKeysOutsideTimeseries(
 }
 
 /**
+ * Confirms a timeline key names a field the source declared AS A DATE.
+ *
+ * The type is checked here rather than at execution because the source already
+ * states it. Accepted, a non-date key would reach the read, be refused there
+ * for storing no date, and arrive as a failed widget slot -- a runtime answer
+ * to a question the declaration already answers.
+ */
+function assertDateFieldBucketable(
+  source: WidgetSource,
+  dateField: string,
+  declared: ReadonlySet<string>
+): void {
+  if (!declared.has(dateField)) {
+    fail(
+      `dateField references undeclared field "${dateField}" on "${source.id}"`
+    );
+  }
+  const declaredType = source.fields.find(
+    field => field.name === dateField
+  )?.type;
+  if (declaredType !== "date") {
+    fail(
+      `dateField "${dateField}" on "${source.id}" is a ${String(declaredType)} field; a timeseries needs a date`
+    );
+  }
+}
+
+/**
  * Confirms the timeline keys agree with the op, and name a declared field.
  *
  * Judged together with the op for the reason the group key is: a `dateField`
@@ -734,11 +762,7 @@ function assertTimeseriesAgreesWithOp(
     fail('sort is not valid for op "timeseries"; points are ordered by time');
   }
   if (typeof dateField !== "string") fail("dateField must be a string");
-  if (!declared.has(dateField)) {
-    fail(
-      `dateField references undeclared field "${dateField}" on "${source.id}"`
-    );
-  }
+  assertDateFieldBucketable(source, dateField, declared);
   if (!isTimeseriesInterval(interval)) {
     fail(`interval must be one of ${TIMESERIES_INTERVALS.join(", ")}`);
   }

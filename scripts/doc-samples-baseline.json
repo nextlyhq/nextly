@@ -1,8 +1,8 @@
 {
   "coverage": {
     "pages": 49,
-    "samples": 330,
-    "compiled": 200
+    "samples": 332,
+    "compiled": 202
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -18,8 +18,8 @@
       "compiled": 3
     },
     "docs/api-reference/direct-api.mdx": {
-      "samples": 35,
-      "compiled": 34
+      "samples": 37,
+      "compiled": 36
     },
     "docs/api-reference/rest-api.mdx": {
       "samples": 3,
@@ -294,11 +294,11 @@
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/api-reference/direct-api.mdx": {
-      "suppressed #34 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
-      "suppressed #34 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
-      "suppressed #34 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
+      "suppressed #36 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
+      "suppressed #36 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
+      "suppressed #36 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
       "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #34 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #36 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/getting-started/index.mdx": {
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,

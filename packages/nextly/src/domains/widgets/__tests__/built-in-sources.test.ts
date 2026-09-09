@@ -23,6 +23,28 @@ describe("built-in sources", () => {
     expect(source?.supports).toContain("list");
   });
 
+  it("declares every aggregate op a collection read can answer", () => {
+    // An op the executor implements but no source DECLARES is unreachable:
+    // validation refuses it before execution, so the branch is dead code and
+    // the advertised operation cannot be used from a dashboard. Asserted as the
+    // WHOLE set rather than one `toContain` per op, so an op added to the
+    // executor without being declared here fails rather than passing unnoticed.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    expect(getSource("collection:posts")?.supports).toEqual([
+      "count",
+      "list",
+      "groupBy",
+      "timeseries",
+    ]);
+  });
+
   it("keeps the FIRST declaration when two declared fields share a name", () => {
     // `readableFields` flattens unnamed presentational groups into the level
     // they sit in, so a top-level `title` and a `title` inside an unnamed group

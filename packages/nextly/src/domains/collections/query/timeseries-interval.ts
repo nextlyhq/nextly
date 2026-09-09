@@ -178,6 +178,27 @@ export function intervalWindow(
 }
 
 /**
+ * The start of the interval that FOLLOWS one, as an exclusive upper bound.
+ *
+ * A window needs both ends. Bounded only below, a read still scans and groups
+ * every row after the window -- a scheduled publication date or an event date
+ * puts rows in the future, and they are grouped and then discarded, so the
+ * documented cap bounds the answer while the database reads the whole table.
+ *
+ * Stepped by calendar field for the reason the window is: a month is not a
+ * constant width.
+ */
+export function intervalAfter(start: Date, interval: TimeseriesInterval): Date {
+  const next = new Date(start.getTime());
+  if (interval === "hour") next.setUTCHours(next.getUTCHours() + 1);
+  else if (interval === "day") next.setUTCDate(next.getUTCDate() + 1);
+  else if (interval === "week") next.setUTCDate(next.getUTCDate() + 7);
+  else if (interval === "month") next.setUTCMonth(next.getUTCMonth() + 1);
+  else next.setUTCFullYear(next.getUTCFullYear() + 1);
+  return next;
+}
+
+/**
  * The database's own spelling of an interval start, so a generated label and a
  * grouped one compare as equal text.
  */

@@ -1015,3 +1015,64 @@ describe("validateWidgetQuery, timeline keys", () => {
     ).toThrow(/sort is not valid for op "timeseries"/);
   });
 });
+
+describe("validateWidgetQuery, a timeline key must name a date", () => {
+  beforeEach(() => {
+    registerSource({
+      id: "collection:mixed",
+      label: "Mixed",
+      kind: "collection",
+      supports: ["count", "timeseries"],
+      fields: [
+        { name: "title", type: "string" },
+        { name: "views", type: "number" },
+        { name: "createdAt", type: "date" },
+      ],
+    });
+  });
+
+  it("refuses a date field the source declares as something else", () => {
+    // The source already states each field's type, so this is refusable here.
+    // Accepted, it would reach the read, be refused there for storing no date,
+    // and arrive as a failed widget slot -- a runtime answer to a question the
+    // declaration already answers.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:mixed",
+        op: "timeseries",
+        dateField: "title",
+        interval: "day",
+      })
+    ).toThrow(/is a string field; a timeseries needs a date/);
+  });
+
+  it("refuses a numeric field just as firmly", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:mixed",
+        op: "timeseries",
+        dateField: "views",
+        interval: "day",
+      })
+    ).toThrow(/is a number field; a timeseries needs a date/);
+  });
+
+  it("accepts the field the source declares as a date", () => {
+    // The control. Without it a guard that refused every key would satisfy both
+    // assertions above while making the op unusable.
+    expect(
+      validateWidgetQuery({
+        source: "collection:mixed",
+        op: "timeseries",
+        dateField: "createdAt",
+        interval: "day",
+      })
+    ).toEqual({
+      source: "collection:mixed",
+      op: "timeseries",
+      dateField: "createdAt",
+      interval: "day",
+      limit: 5,
+    });
+  });
+});

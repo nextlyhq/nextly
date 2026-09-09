@@ -294,12 +294,16 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
     // path answers. Advisory only -- see `WidgetSource.requiredPermission`
     // for why nothing enforces it.
     requiredPermission: `read-${collection.slug}`,
-    // `groupBy` alongside them because a collection source is the one kind
-    // whose rows go through the read pipeline that can settle an aggregate
-    // against the caller's own access. A system source answers from its own
-    // service and would have to implement grouping itself, so it does not
-    // declare support here and is refused by name.
-    supports: ["count", "list", "groupBy"],
+    // `groupBy` and `timeseries` alongside them because a collection source is
+    // the one kind whose rows go through the read pipeline that can settle an
+    // aggregate against the caller's own access. A system source answers from
+    // its own service and would have to implement grouping itself, so it does
+    // not declare support here and is refused by name.
+    //
+    // An op the executor implements but no source DECLARES is unreachable:
+    // validation refuses it before execution, so the branch is dead and the
+    // advertised op cannot be used.
+    supports: ["count", "list", "groupBy", "timeseries"],
     fields,
   };
 }

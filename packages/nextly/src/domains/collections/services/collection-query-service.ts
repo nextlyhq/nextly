@@ -14,7 +14,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, and, or, like, ilike, sql, asc, desc, gte } from "drizzle-orm";
+import { eq, and, or, like, ilike, sql, asc, desc, gte, lt } from "drizzle-orm";
 
 import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
@@ -137,6 +137,7 @@ import {
   classifyFieldKind,
   DEFAULT_DECIMAL_SCALE,
   getColumnDescriptor,
+  getSystemColumnDescriptors,
   type ColumnDescriptor,
   type SupportedDialect,
 } from "../../schema/services/field-column-descriptor";
@@ -157,6 +158,7 @@ import { workingDraftLocale } from "../../versions/working-draft-locale";
 import { timeseriesBucketExpression } from "../query/timeseries-bucket";
 import {
   bucketStartToDbText,
+  intervalAfter,
   intervalWindow,
   isTimeseriesInterval,
   type TimeseriesInterval,
@@ -417,6 +419,15 @@ interface FilteredReadParams {
   /** When true, bypass all access control checks */
   overrideAccess?: boolean;
   /**
+   * Refuse the group key unless the column it names stores a date.
+   *
+   * Carried on the params rather than checked by the caller after the fact, so
+   * the refusal happens inside the plan and therefore before the read hooks
+   * run. A timeline is the only read that needs it; a count and a bucket set
+   * group whatever scalar they were given.
+   */
+  requireTimestampGroupKey?: boolean;
+  /**
    * This `where` was built by the framework from a route it was asked to
    * render, not received from a request.
    *
@@ -657,22 +668,36 @@ function assertGroupKeyUsable(
  * so the same row groups to the same label on every runtime.
  */
 function decimalLabel(value: unknown, scale: number): string | undefined {
-  // The string path is kept off `Number` on purpose: PostgreSQL and MySQL hand
-  // a decimal back as text precisely because it can exceed what a double holds,
-  // so parsing it to re-render it would lose the digits the type exists for.
-  if (typeof value === "string") {
-    const match = /^(-?\d+)(?:\.(\d*))?$/.exec(value.trim());
-    if (!match) return undefined;
-    const [, whole, fraction = ""] = match;
-    if (scale <= 0) return whole;
-    return `${whole}.${fraction.padEnd(scale, "0").slice(0, scale)}`;
-  }
-  // SQLite builds its numeric columns to read back as a JS number, so this is
-  // the one adapter whose decimal arrives already parsed.
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value.toFixed(Math.max(0, scale));
-  }
-  return undefined;
+  // PostgreSQL and MySQL hand a decimal back as text precisely because it can
+  // exceed what a double holds, so the text is never parsed to re-render it.
+  // SQLite builds its numeric columns to read back as a JS number, which is the
+  // one adapter whose decimal arrives already parsed; its own rendering is
+  // taken rather than a fixed-point one.
+  const text =
+    typeof value === "string"
+      ? value.trim()
+      : typeof value === "number" && Number.isFinite(value)
+        ? String(value)
+        : undefined;
+  if (text === undefined) return undefined;
+
+  const match = /^(-?\d+)(?:\.(\d*))?$/.exec(text);
+  if (!match) return undefined;
+  const [, whole, fraction = ""] = match;
+
+  // PADS up to the declared scale and never truncates below what the value
+  // carries. Rounding to the scale would merge buckets the database kept
+  // apart: SQLite's NUMERIC affinity is best-effort and does not enforce the
+  // declared scale, so a column declared with scale 2 can hold 1.001 and 1.002
+  // as two distinct groups -- and labelling both "1.00" hands back separate
+  // counts under one label, which is the merge a bucket label exists to avoid.
+  //
+  // Two values that genuinely differ therefore still label differently on
+  // different adapters, because they ARE different: PostgreSQL rounds 1.001 to
+  // 1.00 on write while SQLite stores it whole. Making the labels agree by
+  // discarding digits would report data that is not there.
+  const padded = fraction.padEnd(Math.max(0, scale), "0");
+  return padded === "" ? whole : `${whole}.${padded}`;
 }
 
 /**
@@ -3019,12 +3044,60 @@ export class CollectionQueryService extends BaseService {
    * the field-to-column mapping for every dialect.
    */
   private groupKeyDescriptor(
-    field: FieldDefinition | undefined
+    field: FieldDefinition | undefined,
+    columnKey: string | undefined
   ): ColumnDescriptor | undefined {
-    if (field === undefined) return undefined;
-    return (
-      getColumnDescriptor(field, this.groupDialect(), "collection") ?? undefined
-    );
+    const dialect = this.groupDialect();
+    if (field !== undefined) {
+      return getColumnDescriptor(field, dialect, "collection") ?? undefined;
+    }
+    if (columnKey === undefined) return undefined;
+
+    // `created_at` and `updated_at` are INJECTED rather than declared, so they
+    // never appear in the author's field list and the lookup above cannot see
+    // them -- while they are the two columns a timeline is most often drawn
+    // over. Resolved through the canonical system-column descriptors rather
+    // than by naming them here, so a system column added there is bucketable
+    // without a second edit.
+    //
+    // The option set is the widest one deliberately. It decides which columns
+    // are INJECTED, and whether this collection has the column is already
+    // settled: the key reached here only by resolving against the runtime
+    // schema's own properties. What is wanted from this call is the column's
+    // SHAPE, which does not vary with the option set.
+    const system = getSystemColumnDescriptors(dialect, {
+      hasTitleField: false,
+      hasSlugField: false,
+      hasStatus: true,
+    }).find(column => column.name === toSnakeCase(columnKey));
+    if (system === undefined) return undefined;
+    return {
+      name: system.name,
+      dialectType: system.dialectType,
+      ...(system.length === undefined ? {} : { length: system.length }),
+      nullable: system.nullable,
+      kind: system.kind,
+    };
+  }
+
+  /**
+   * The group key's column shape, with every refusal that depends on it made.
+   *
+   * Runs BEFORE the read hooks, for the reason the key itself is validated
+   * before them: `beforeOperation` and `beforeRead` are ordinary user code that
+   * records audit entries and spends rate-limit budget, so a request that was
+   * never going to be answered must not charge the caller for work or leave a
+   * trail of reads that did not happen.
+   */
+  private settledGroupDescriptor(
+    params: FilteredReadParams,
+    groupKey: { key?: string; field?: FieldDefinition }
+  ): ColumnDescriptor | undefined {
+    const descriptor = this.groupKeyDescriptor(groupKey.field, groupKey.key);
+    if (params.requireTimestampGroupKey === true) {
+      assertDateColumn(descriptor, params.groupBy ?? "");
+    }
+    return descriptor;
   }
 
   private async validatedGroupKey(
@@ -3127,7 +3200,7 @@ export class CollectionQueryService extends BaseService {
     // rendered from the author's declaration -- a decimal's scale, which the
     // adapters otherwise disagree about -- rather than from whatever the driver
     // happened to hand back.
-    const groupDescriptor = this.groupKeyDescriptor(groupKey.field);
+    const groupDescriptor = this.settledGroupDescriptor(params, groupKey);
 
     const countWhere = await this.hookSettledWhere(params);
 
@@ -3401,12 +3474,11 @@ export class CollectionQueryService extends BaseService {
       const plan = await this.resolveReadPlan<TimeseriesPoints>({
         ...params,
         groupBy: params.dateField,
+        requireTimestampGroupKey: true,
       });
       if (!plan.allowed) return plan.denied;
       const { schema, whereConditions } = plan;
       const column = plan.groupColumn;
-
-      assertDateColumn(plan.groupDescriptor, params.dateField);
 
       const window = intervalWindow(new Date(), interval, count);
       const bucket = timeseriesBucketExpression(
@@ -3418,13 +3490,25 @@ export class CollectionQueryService extends BaseService {
       const rows = await this.db
         .select({ bucket, total: sql<number>`count(*)` })
         .from(schema)
-        // The window's oldest start bounds the SCAN. It is deliberately a
-        // comparison on the COLUMN rather than on the bucketing expression, so
-        // an index over the date can serve it; no index covers a computed
-        // value. This bounds how much the database reads and cannot change the
-        // answer, because the points below are built from the window and a
-        // bucket outside it is never looked up.
-        .where(and(...whereConditions, gte(column, window[0])))
+        // BOTH ends of the window bound the SCAN, as comparisons on the COLUMN
+        // rather than on the bucketing expression, so an index over the date can
+        // serve them; no index covers a computed value.
+        //
+        // The upper bound is not symmetry. A date field holds future values --
+        // a scheduled publication, an event date -- and bounded only below, the
+        // database groups every one of them into buckets the answer then throws
+        // away, so the documented interval cap would bound the answer while the
+        // read walked the rest of the table.
+        //
+        // Neither bound can change the answer: the points are built from the
+        // window, and a bucket outside it is never looked up.
+        .where(
+          and(
+            ...whereConditions,
+            gte(column, window[0]),
+            lt(column, intervalAfter(window[window.length - 1], interval))
+          )
+        )
         // The SAME expression in the SELECT and the GROUP BY. MySQL's
         // `only_full_group_by` refuses a `GROUP BY` that differs from the
         // selected expression, so these cannot be spelled apart.
