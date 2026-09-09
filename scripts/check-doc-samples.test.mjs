@@ -1446,6 +1446,11 @@ describe("the workspace's own exported names", () => {
       expect(readerOwnedMention("Media", "declare const m: Media;", "ts")).toBe(
         false
       );
+      // And `typeof Media` needs the value, which nothing here exports, so it
+      // is the reader's the way `collections: [Media]` is.
+      expect(readerOwnedMention("Media", "type X = typeof Media;", "ts")).toBe(
+        true
+      );
       // A name exported as a value stays a finding however it is used.
       expect(
         readerOwnedMention("Skeleton", "const el = <Skeleton />;", "tsx")
@@ -1540,9 +1545,10 @@ describe("how a block used a name", () => {
     expect(usedOnlyAsValue("declare const m: Media;", "Media", "ts")).toBe(
       false
     );
-    expect(usedOnlyAsValue("type X = typeof Media;", "Media", "ts")).toBe(
-      false
-    );
+    // `typeof X` is written in a type position and reads X out of the VALUE
+    // namespace, so it is a value use however it looks. This assertion used to
+    // record the opposite.
+    expect(usedOnlyAsValue("type X = typeof Media;", "Media", "ts")).toBe(true);
   });
 
   it("keeps the finding when a block uses the name both ways", () => {

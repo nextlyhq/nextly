@@ -1817,7 +1817,11 @@ export function usedOnlyAsValue(code, name, extension = "tsx") {
     if (ts.isIdentifier(node) && node.text === name) {
       mentioned = true;
       for (let at = node.parent; at; at = at.parent) {
-        if (ts.isTypeNode(at) || ts.isTypeQueryNode(at)) {
+        // `typeof X` is written in a type position and reads X out of the
+        // VALUE namespace, so it is a value use however it looks. Asked before
+        // the general test below, because a type query is itself a type node.
+        if (ts.isTypeQueryNode(at)) break;
+        if (ts.isTypeNode(at)) {
           asType = true;
           break;
         }
