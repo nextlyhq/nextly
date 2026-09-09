@@ -1,5 +1,4 @@
 ---
-
 "@nextlyhq/adapter-drizzle": patch
 "@nextlyhq/adapter-mysql": patch
 "@nextlyhq/adapter-postgres": patch
@@ -25,6 +24,7 @@
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/ui": patch
+---
 
 Honeypot and rate limiting ran in the form route. The submissions collection
 grants public create on purpose, so a visitor can submit without an account,
