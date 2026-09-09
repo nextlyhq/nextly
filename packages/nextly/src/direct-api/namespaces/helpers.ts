@@ -149,6 +149,7 @@ export function callerAccess(
   | "fieldAccessUser"
   | "trusted"
   | "actor"
+  | "request"
 > {
   return {
     user: config.user,
@@ -165,6 +166,11 @@ export function callerAccess(
     // bound is not merely lost — it is replaced by an unbounded override.
     trusted: config.trusted,
     actor: config.actor,
+    // Same reason again, one field over: a nested read that omits it re-enters
+    // `mergeConfig` and takes the INSTANCE default, so a readback would be
+    // classified differently from the write it is reading back -- background
+    // work beside a visitor's write, in one operation.
+    request: config.request,
   };
 }
 
