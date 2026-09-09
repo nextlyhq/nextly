@@ -125,8 +125,10 @@ export interface ShortcutLayerOptions {
    * Fixing it needs the manager to record when a layer is ACTIVATED, which registration order
    * does not capture: `useShortcuts` registers once at mount and updates its options in place, so
    * a layer enabled later still carries its mount-time sequence. Not attempted here because
-   * nothing reaches it yet — `priority` is new and one layer sets it, so no two layers currently
-   * share a nonzero value.
+   * nothing reaches it yet: the layers that raise priority are modal HOLDS, and a hold blocks the
+   * keystroke that would open the next one — the command palette cannot be summoned over a dialog
+   * that is already holding, so two of them are not both active for a keystroke to be resolved
+   * between.
    */
   priority?: number;
   /** Whether the layer participates at all. A disabled layer neither matches nor blocks. */

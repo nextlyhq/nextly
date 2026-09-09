@@ -37,6 +37,7 @@ import { BlockContextMenu } from "./block-context-menu";
 import { Canvas } from "./canvas";
 import type { EditorState } from "./editor-state";
 import { BlockKeyboardActions } from "./keyboard-actions";
+import { toolbarActions } from "./toolbar-actions";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
 afterEach(() => {
@@ -95,7 +96,7 @@ function editorSpy(doc: BlockDocument, selectedId: string | null): EditorState {
 function mount(editor: EditorState) {
   return render(
     <ShortcutProvider>
-      <BlockKeyboardActions editor={editor}>
+      <BlockKeyboardActions onSaveAsPattern={() => undefined} editor={editor}>
         <BlockContextMenu editor={editor}>
           <Canvas
             document={editor.document}
@@ -138,16 +139,17 @@ describe("the canvas's right-click menu", () => {
     const { container } = mount(editorSpy(pair(), "a"));
     fireEvent.contextMenu(blockElement(container));
 
+    // Taken from the same call the menu takes them from, rather than written
+    // down here: a literal list keeps passing while a verb appears on the bar
+    // and not in this menu, which is the exact divergence this test names.
+    const expected = toolbarActions(pair(), "a").map(action => action.label);
+
+    // The control: an empty model would make the comparison vacuous.
+    expect(expected.length).toBeGreaterThan(1);
     const labels = screen
       .getAllByRole("menuitem")
       .map(item => item.textContent);
-    expect(labels).toEqual([
-      "Select parent",
-      "Move up",
-      "Move down",
-      "Duplicate",
-      "Delete",
-    ]);
+    expect(labels).toEqual(expected);
   });
 
   it("runs the verb the keystrokes run", () => {

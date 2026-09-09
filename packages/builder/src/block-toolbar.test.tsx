@@ -18,6 +18,7 @@
  *
  * @module block-toolbar.test
  */
+import type { NestingSource } from "@nextlyhq/blocks-engine";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +36,7 @@ import { BlockToolbar } from "./block-toolbar";
 import { Canvas } from "./canvas";
 import type { EditorState } from "./editor-state";
 import { BlockKeyboardActions } from "./keyboard-actions";
+import { toolbarActions } from "./toolbar-actions";
 
 afterEach(() => {
   cleanup();
@@ -114,10 +116,18 @@ function editorSpy(
  * without rendered blocks tests a permanently hidden toolbar — which is how the
  * first draft of these cases came back unable to find a single button.
  */
-function tree(editor: EditorState, props: { hidden?: boolean }) {
+function tree(
+  editor: EditorState,
+  props: { hidden?: boolean },
+  nesting?: NestingSource
+) {
   return (
     <ShortcutProvider>
-      <BlockKeyboardActions editor={editor}>
+      <BlockKeyboardActions
+        onSaveAsPattern={() => undefined}
+        editor={editor}
+        {...(nesting === undefined ? {} : { nesting })}
+      >
         <Canvas
           document={editor.document}
           siteStyles={{ css: "", classes: {} } as never}
@@ -130,8 +140,12 @@ function tree(editor: EditorState, props: { hidden?: boolean }) {
   );
 }
 
-function mount(editor: EditorState, props: { hidden?: boolean } = {}) {
-  const result = render(tree(editor, props));
+function mount(
+  editor: EditorState,
+  props: { hidden?: boolean } = {},
+  nesting?: NestingSource
+) {
+  const result = render(tree(editor, props, nesting));
   return {
     ...result,
     /** Re-render with the selection moved, as a verb that changes it does. */
@@ -157,13 +171,26 @@ describe("BlockToolbar", () => {
     expect(screen.queryByRole("toolbar")).toBeNull();
   });
 
-  it("offers the five verbs, named", () => {
+  it("names every verb the model offers, in its order", () => {
+    // Derived from `toolbarActions` rather than listed, so a verb added to the
+    // model is asserted here the day it arrives. A literal list passes forever
+    // while the bar grows a button nobody checks — and this component's whole
+    // job is to draw what that function decided.
     register();
-    mount(editorSpy(pair(), "a"));
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
 
+    const expected = toolbarActions(
+      editor.document,
+      editor.selectedId,
+      editor.selection.ids
+    ).map(action => action.label);
+
+    // The control: an empty model would make the comparison vacuous.
+    expect(expected.length).toBeGreaterThan(1);
     expect(
       screen.getAllByRole("button").map(b => b.getAttribute("aria-label"))
-    ).toEqual(["Select parent", "Move up", "Move down", "Duplicate", "Delete"]);
+    ).toEqual(expected);
   });
 
   it("presses the SAME verb the keystroke presses", () => {
@@ -295,21 +322,23 @@ describe("BlockToolbar", () => {
     mount(editorSpy(pair(), "a"));
 
     const buttons = screen.getAllByRole("button");
+    // One stop, and every other button out of the tab order — stated as a shape
+    // rather than a fixed-length list, so it still describes the rule when the
+    // bar gains a verb.
+    expect(buttons.length).toBeGreaterThan(1);
     expect(buttons.map(b => b.getAttribute("tabindex"))).toEqual([
       "0",
-      "-1",
-      "-1",
-      "-1",
-      "-1",
+      ...buttons.slice(1).map(() => "-1"),
     ]);
 
     fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowRight" });
     expect(document.activeElement).toBe(buttons[1]);
 
-    // Wrapping, so Delete is one press from Select parent rather than four.
+    // Wrapping, so the last verb is one press from the first rather than a walk
+    // back along the bar.
     fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowLeft" });
     fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowLeft" });
-    expect(document.activeElement).toBe(buttons[4]);
+    expect(document.activeElement).toBe(buttons.at(-1));
   });
 
   it("keeps the roving stop where FOCUS is when the selection moves", () => {
@@ -329,8 +358,9 @@ describe("BlockToolbar", () => {
 
     fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowRight" });
 
-    // Delete, the button after the focused one — not Move up, which is where a
-    // stop reset to 0 would have sent it.
+    // The button AFTER the focused one — not the second button, which is where
+    // a stop reset to 0 would have sent it. Named by position rather than by
+    // verb, because which verb sits there is the bar's business.
     expect(document.activeElement).toBe(buttons[4]);
   });
 
@@ -404,5 +434,97 @@ describe("a press on the toolbar and the canvas's own click handling", () => {
     // With the gesture, which the canvas now reports alongside the id: a plain
     // click on background is a "replace" with nothing to replace it with.
     expect(editor.select).toHaveBeenCalledWith(null, "replace");
+  });
+});
+
+describe("the rules the bar judges a save by", () => {
+  it("asks the HOST's nesting source, not the registry", () => {
+    /*
+     * A host may supply its own rules to `BlockKeyboardActions` instead of
+     * registering them globally, and until this the keyboard enforced them
+     * while the bar consulted the registry. One selection could then be offered
+     * here and refused by the save it opens.
+     *
+     * The rules below forbid this block at a document root, which is what a
+     * saved pattern's blocks become — so a bar reading them refuses the save,
+     * and one reading the registry does not.
+     */
+    register();
+    const rootIsForbidden: NestingSource = {
+      parentsOf: type => (type === "acme/leaf" ? ["acme/box"] : undefined),
+    };
+
+    mount(editorSpy(pair(), "a"), {}, rootIsForbidden);
+
+    // `aria-disabled`, not the attribute: this bar keeps an unavailable verb in
+    // the tab sequence deliberately, so the reason is reachable. Asserting
+    // `disabled` checks something this component never sets, and passes either
+    // way — which is how the first version of this case read as green.
+    const save = screen.getByLabelText("Save as pattern");
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(save.getAttribute("title")).toContain("belongs inside");
+  });
+
+  it("judges a SET by the whole selection, not by the primary block", () => {
+    /*
+     * `a` and `c` share a parent with `b` between them. Asked about `a` alone
+     * the selection looks perfectly savable — so a bar that passed only the
+     * primary would offer a save the planner refuses, and the author would meet
+     * the refusal after filling a form.
+     *
+     * This is the case a hook shared with the context menu exists to keep true
+     * of both: it went uncaught while each surface asked the question itself.
+     */
+    register();
+    const document = documentOf([
+      { id: "a", type: "acme/leaf", version: 1, props: {} } as BlockNode,
+      { id: "b", type: "acme/leaf", version: 1, props: {} } as BlockNode,
+      { id: "c", type: "acme/leaf", version: 1, props: {} } as BlockNode,
+    ]);
+    const editor = {
+      ...editorSpy(document, "a"),
+      selection: { ids: ["a", "c"], primary: "a" },
+    };
+
+    mount(editor);
+
+    const save = screen.getByLabelText("Save as pattern");
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(save.getAttribute("title")).toContain("no gaps");
+  });
+
+  it("offers the save for a set that IS one run", () => {
+    // The control for the case above: the same three blocks, selected without a
+    // gap, are savable — so the refusal is the RULE talking rather than the bar
+    // refusing every set.
+    register();
+    const document = documentOf([
+      { id: "a", type: "acme/leaf", version: 1, props: {} } as BlockNode,
+      { id: "b", type: "acme/leaf", version: 1, props: {} } as BlockNode,
+      { id: "c", type: "acme/leaf", version: 1, props: {} } as BlockNode,
+    ]);
+    const editor = {
+      ...editorSpy(document, "a"),
+      selection: { ids: ["a", "b"], primary: "a" },
+    };
+
+    mount(editor);
+
+    expect(
+      screen.getByLabelText("Save as pattern").getAttribute("aria-disabled")
+    ).toBeNull();
+  });
+
+  it("offers the save under the registry's own rules", () => {
+    // The control, and the reason the case above is about the SOURCE rather
+    // than about saving being broken: the same selection, with nothing
+    // supplied, is savable.
+    register();
+
+    mount(editorSpy(pair(), "a"));
+
+    const save = screen.getByLabelText("Save as pattern");
+    expect(save.getAttribute("aria-disabled")).toBeNull();
+    expect(save.getAttribute("title")).toBe("Save as pattern");
   });
 });

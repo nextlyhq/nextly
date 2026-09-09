@@ -25,10 +25,8 @@
  * @module builder-commands
  */
 
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
-
 import type { BuilderCommand } from "./command-palette";
-import { toolbarActions, type ToolbarActionId } from "./toolbar-actions";
+import type { ToolbarAction, ToolbarActionId } from "./toolbar-actions";
 
 /** The verbs a palette command needs, as `BlockKeyboardActions` publishes them. */
 export interface CommandVerbs {
@@ -36,12 +34,38 @@ export interface CommandVerbs {
   readonly delete: () => void;
   readonly duplicate: () => void;
   readonly selectParent: () => void;
+  /**
+   * Begin storing the selection in the pattern library.
+   *
+   * REQUIRED, like the four above it, and that is a decision rather than an
+   * oversight. Nothing else here is a capability a host may lack, and making
+   * this one optional produces the shape the totalised runner map exists to
+   * prevent: a verb the bar offers with nothing bound to it, which reaches an
+   * author as a button that does nothing. Required, the compiler names every
+   * host that has to wire it.
+   *
+   * A host with no library to save into is a real case and not one there is a
+   * second example of yet. Designing an availability model against a guess is
+   * how a surface ends up with a control that is dimmed for a reason nobody can
+   * phrase; when there is a second host it can be designed against that.
+   */
+  readonly saveAsPattern: () => void;
 }
 
 /** Everything the command list is built from. */
 export interface BuilderCommandsInput {
-  readonly document: BlockDocument;
-  readonly selectedId: string | null;
+  /**
+   * What the bar would offer for this selection, from `toolbarActions`.
+   *
+   * Taken rather than derived, and that is what keeps availability DERIVED in
+   * the sense that matters: the palette now shows exactly the list the toolbar
+   * and the context menu are drawing, because it is the same array. Asked
+   * separately it was a second call — one that could be given a narrower
+   * question, which is how this surface came to offer a verb the bar refused —
+   * and not a cheap one either, since deciding whether a selection can be saved
+   * builds the document a save would store.
+   */
+  readonly actions: readonly ToolbarAction[];
   readonly verbs: CommandVerbs;
   readonly undo: () => void;
   readonly redo: () => void;
@@ -79,6 +103,13 @@ const BLOCK_COMMAND_COPY: Record<
     label: "Duplicate block",
     keywords: ["duplicate", "copy", "clone", "repeat"],
   },
+  "save-as-pattern": {
+    label: "Save block as pattern",
+    // "reuse" and "template" are what an author who has used another builder
+    // searches with; the taxonomy calls it a pattern and they need not know
+    // that before they can find it.
+    keywords: ["save", "pattern", "library", "reuse", "template", "snippet"],
+  },
   delete: {
     label: "Delete block",
     keywords: ["delete", "remove", "destroy", "clear"],
@@ -113,6 +144,7 @@ export function blockActionRunners(
     "move-up": () => verbs.move("up"),
     "move-down": () => verbs.move("down"),
     duplicate: verbs.duplicate,
+    "save-as-pattern": verbs.saveAsPattern,
     delete: verbs.delete,
   };
 }
@@ -127,8 +159,7 @@ export function blockActionRunners(
  * refuses to run is worse there than one that was never offered.
  */
 export function builderCommands({
-  document,
-  selectedId,
+  actions,
   verbs,
   undo,
   redo,
@@ -138,7 +169,7 @@ export function builderCommands({
 }: BuilderCommandsInput): BuilderCommand[] {
   const run = blockActionRunners(verbs);
 
-  const blockCommands = toolbarActions(document, selectedId)
+  const blockCommands = actions
     .filter(action => action.enabled)
     .map(action => {
       const copy = BLOCK_COMMAND_COPY[action.id];
