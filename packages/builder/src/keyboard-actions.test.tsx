@@ -451,7 +451,7 @@ describe("useBlockKeyboardActions", () => {
 
   it("refuses the save WITHOUT opening the form when the grant is absent", () => {
     /*
-     * Codex P2 on #1678. The floating toolbar keeps an unavailable verb
+     * The floating toolbar keeps an unavailable verb
      * focusable through `aria-disabled` and calls its runner anyway — that is
      * deliberate, so a verb can announce its own refusal. A grant that only
      * dimmed the description would therefore open the save form for exactly the

@@ -54,7 +54,7 @@ describe("the pattern capability route", () => {
   });
 
   it("requires PUBLISH as well, because the save creates a published row", async () => {
-    // Codex P2 on #1678, confirmed against the write: `save-pattern-route`
+    // `save-pattern-route`
     // persists `status: "published"`, and core resolves the publish grant
     // separately from create for that transition — its own docblock says an
     // author without it "is refused by core". An answer naming `create` alone
