@@ -1133,11 +1133,24 @@ export function planConvertToComponent<TFields>(
   // OTHER single read was refused, which is what makes this the fifth read's
   // agreement with the first rather than a general validation weakness.
   //
-  // A spread rather than a per-member copy so a member added to
-  // `DocumentLimits` is snapshotted too: a list written out here would go on
-  // reading the new one live, which is the failure this exists to prevent
-  // wearing a different member's name.
-  const bounds: DocumentLimits = { ...limits };
+  // Named property reads rather than a spread. A spread copies OWN ENUMERABLE
+  // properties, which is the wrong set at both ends: it MISSES a member reached
+  // through the prototype or defined non-enumerably — measured, a
+  // `Object.create(DEFAULT_LIMITS)` reads `maxNodes` as 5,000 and spreads to
+  // `{}`, so every cap arrives `undefined` and a call that worked throws from
+  // `renameScopes` — and it READS unrelated members the planner never uses, so
+  // a caller whose limits object carries an enumerable getter for something
+  // else has that getter run, and a throwing one takes this call down.
+  //
+  // The annotation is what keeps the list honest: `DocumentLimits` is a closed
+  // set of required members, so a member added to it stops this literal
+  // compiling rather than being quietly read live. An OPTIONAL member added
+  // later would not, and would have to be added here by hand.
+  const bounds: DocumentLimits = {
+    maxDepth: limits.maxDepth,
+    maxNodes: limits.maxNodes,
+    maxBytes: limits.maxBytes,
+  };
 
   const saved = plannedSave(document, selectedIds, nesting, bounds);
   if (saved.problem !== undefined) return saved;
