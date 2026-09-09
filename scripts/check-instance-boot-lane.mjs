@@ -85,7 +85,7 @@ export const UNIT_LANE_SUFFIXES = [
  * ignored scratch file cannot enter the population and be judged.
  */
 export function testFiles(cwd, run = execFileSync) {
-  const listed = run("git", ["ls-files", "-z", "--", "packages"], {
+  const listed = run("git", ["ls-files", "-z", "--", "packages", "templates"], {
     cwd,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
@@ -174,6 +174,61 @@ export function importsBootHelper(source, fileName = "test.ts") {
   return false;
 }
 
+/**
+ * Whether a path is a scaffolded project rather than one of this repo's packages.
+ *
+ * The two are judged by different rules because they are different shapes. A
+ * package here sits in a monorepo with two lanes and a build running beside it,
+ * so a boot is routed to the lane sized for one. A template is a single-package
+ * project a user receives with one vitest config, one test script and nothing
+ * to contend with, so there is no second lane to route to and inventing one
+ * would put monorepo machinery in someone's new plugin. What it can do is state
+ * a budget, which is the thing the routing was buying.
+ */
+export function isTemplate(path) {
+  return path.startsWith("templates/");
+}
+
+/** The vitest budget a boot needs, whichever mechanism supplies it. */
+export const BOOT_BUDGET_MS = 30_000;
+
+/**
+ * Whether a config states timeouts a boot can finish inside.
+ *
+ * Read off the parsed config rather than matched in the text, for the same
+ * reason the imports are: a number in a comment explaining the defaults is not
+ * a number vitest will use. Both budgets are required because a boot in
+ * `beforeEach` is governed by `hookTimeout` and the case body by `testTimeout`,
+ * and vitest's defaults for the two differ.
+ */
+export function statesBootBudget(source) {
+  const parsed = ts.createSourceFile(
+    "vitest.config.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.TS
+  );
+  const found = new Map();
+  const walk = node => {
+    if (
+      ts.isPropertyAssignment(node) &&
+      ts.isIdentifier(node.name) &&
+      (node.name.text === "testTimeout" || node.name.text === "hookTimeout") &&
+      ts.isNumericLiteral(node.initializer)
+    ) {
+      found.set(node.name.text, Number(node.initializer.text));
+    }
+    ts.forEachChild(node, walk);
+  };
+  ts.forEachChild(parsed, walk);
+
+  return (
+    (found.get("testTimeout") ?? 0) >= BOOT_BUDGET_MS &&
+    (found.get("hookTimeout") ?? 0) >= BOOT_BUDGET_MS
+  );
+}
+
 /** The package directory a file belongs to, as `packages/<name>`. */
 /**
  * The name this file needs in order to be collected by the integration lane.
@@ -187,8 +242,8 @@ export function integrationName(path) {
 }
 
 export function packageOf(path) {
-  const [, name] = path.split("/");
-  return name ? `packages/${name}` : undefined;
+  const [root, name] = path.split("/");
+  return name ? `${root}/${name}` : undefined;
 }
 
 /**
@@ -218,6 +273,7 @@ export function hasIntegrationLane(packageDir, readManifest) {
 export function classify(files, readSource) {
   const misrouted = [];
   const stranded = [];
+  const underBudget = [];
   const covered = [];
 
   for (const path of files) {
@@ -228,6 +284,33 @@ export function classify(files, readSource) {
       continue; // a file git lists and the disk cannot read is the linter's business
     }
     if (!importsBootHelper(source, path)) continue;
+
+    /*
+     * A template boots in the one lane it has, so the question is whether that
+     * lane states a budget a boot can finish inside. Demanding the integration
+     * suffix here would demand a second config and a second script in a project
+     * that ships with one test.
+     */
+    if (isTemplate(path)) {
+      const configPath = `${packageOf(path)}/vitest.config.ts`;
+      let config;
+      try {
+        config = readSource(configPath);
+      } catch {
+        underBudget.push({ path, configPath, reason: "has no vitest config" });
+        continue;
+      }
+      if (!statesBootBudget(config)) {
+        underBudget.push({
+          path,
+          configPath,
+          reason: `does not set testTimeout and hookTimeout to at least ${BOOT_BUDGET_MS}ms`,
+        });
+        continue;
+      }
+      covered.push(path);
+      continue;
+    }
 
     if (!path.endsWith(INTEGRATION_SUFFIX)) {
       misrouted.push(path);
@@ -250,7 +333,7 @@ export function classify(files, readSource) {
     covered.push(path);
   }
 
-  return { misrouted, stranded, covered };
+  return { misrouted, stranded, underBudget, covered };
 }
 
 const invokedDirectly =
@@ -268,7 +351,7 @@ if (invokedDirectly) {
   }
 
   const readSource = path => readFileSync(join(root, path), "utf8");
-  const { misrouted, stranded, covered } = classify(files, readSource);
+  const { misrouted, stranded, underBudget, covered } = classify(files, readSource);
 
   // The control, before the verdict. Every file failing to parse, or the
   // binding being renamed upstream, produces an empty `misrouted` that reads
@@ -282,8 +365,20 @@ if (invokedDirectly) {
     process.exit(2);
   }
 
-  if (misrouted.length > 0 || stranded.length > 0) {
+  if (misrouted.length > 0 || stranded.length > 0 || underBudget.length > 0) {
     console.error("check-instance-boot-lane: FAILED\n");
+
+    for (const { path, configPath, reason } of underBudget) {
+      console.error(
+        `  ${path}\n` +
+          `    boots an instance, and ${configPath} ${reason}.\n` +
+          `    A scaffolded project has one lane and nothing to contend with, so\n` +
+          `    it states the budget rather than routing around it: set\n` +
+          `    testTimeout and hookTimeout to ${BOOT_BUDGET_MS}. A boot in\n` +
+          "    `beforeEach` is governed by hookTimeout, the case body by\n" +
+          "    testTimeout, and vitest's defaults for the two differ.\n"
+      );
+    }
 
     for (const path of stranded) {
       console.error(
@@ -321,8 +416,12 @@ if (invokedDirectly) {
 
   console.log(
     `check-instance-boot-lane: ok - ${covered.length} suite(s) that boot an ` +
-      `instance are named for the integration lane AND run by a package that ` +
-      `declares one, out of ${files.length} test file(s) scanned.`
+      `instance have a budget sized for one, out of ${files.length} test ` +
+      "file(s) scanned."
+  );
+  console.log(
+    "  a package suite earns it by running in the integration lane; a " +
+      "scaffolded template by stating the timeouts, having only one lane."
   );
   // Said on the way past, so a reader taking this as proof of routing knows the
   // shape it did not judge.
