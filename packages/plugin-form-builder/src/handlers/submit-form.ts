@@ -8,7 +8,7 @@
  * @since 0.1.0
  */
 
-import { formAvailability, NO_SUCH_FORM } from "nextly";
+import { formAvailability, NextlyError, NO_SUCH_FORM } from "nextly";
 import type { PluginContext } from "nextly";
 
 import { asFormDocument, asSubmissionDocument } from "../document-shapes";
@@ -226,35 +226,20 @@ export async function submitForm(
       Object.entries(data).filter(([key]) => !declaredFieldNames.has(key))
     );
 
+    // The honeypot only, and only to decide whether to validate. It is a pure
+    // read of the payload, so running it here and again at the write seam
+    // costs nothing and cannot disagree. The RATE LIMIT is not asked here: it
+    // counts, and a check with a side effect run twice counts one submission
+    // twice. The seam owns that one, and owns the verdict written to the row.
     const spamResult = await checkSpam({
       data: undeclaredData,
-      ipAddress: metadata?.ipAddress,
       formSlug,
       config: {
         // Per-form overrides win where set; blank inherits the plugin config.
         honeypot:
           settings.honeypotEnabled ?? pluginConfig.spamProtection.honeypot,
-        rateLimit: pluginConfig.spamProtection.rateLimit,
-        recaptcha: {
-          ...pluginConfig.spamProtection.recaptcha,
-          enabled:
-            settings.captchaEnabled ??
-            pluginConfig.spamProtection.recaptcha?.enabled ??
-            false,
-        },
       },
     });
-
-    // Rate-limit hits are pure volume — storing them would turn the limiter
-    // into a database DoS, so they are rejected without a trace (still with
-    // fake success so the client learns nothing).
-    if (spamResult.isSpam && spamResult.reason === "rate_limit") {
-      logger.info?.("Spam submission rejected (rate limit)", {
-        formSlug,
-        ipAddress: metadata?.ipAddress,
-      });
-      return { success: true };
-    }
 
     const isContentSpam = spamResult.isSpam;
 
@@ -309,16 +294,34 @@ export async function submitForm(
     // is evidence this handler chose to keep rather than a caller asking for
     // validation to be skipped. The form goes with it so the seam does not read
     // it a second time.
-    const submission = await collections.createEntry(
-      pluginConfig.formSubmissionOverrides.slug,
-      asPluginSubmission(submissionData, {
-        keepAsEvidence: isContentSpam,
-        form: { id: form.id, fields: form.fields },
-      }),
-      // Public form submission — create as system. No ambient user; an
-      // empty context already resolves to system, but be explicit.
-      { as: "system" }
-    );
+    let submission: Awaited<ReturnType<typeof collections.createEntry>>;
+    try {
+      submission = await collections.createEntry(
+        pluginConfig.formSubmissionOverrides.slug,
+        asPluginSubmission(submissionData, {
+          keepAsEvidence: isContentSpam,
+          form: { id: form.id, fields: form.fields },
+        }),
+        // Public form submission — create as system. No ambient user; an
+        // empty context already resolves to system, but be explicit.
+        { as: "system" }
+      );
+    } catch (error) {
+      // The seam refuses a submission over the limit, and refuses it the same
+      // way at every door. This one answers its VISITOR with a success anyway:
+      // a bot that is told it was limited learns the rate to sit under, and a
+      // form is the one door where the caller is a browser. The other doors are
+      // machine-facing and get the 429 the seam threw.
+      //
+      // Nothing is stored. A limiter that wrote a row per refusal would hand an
+      // attacker a way to fill the database with the very volume it exists to
+      // refuse.
+      if (NextlyError.isRateLimited(error)) {
+        logger.info?.("Form submission refused (rate limit)", { formSlug });
+        return { success: true };
+      }
+      throw error;
+    }
 
     logger.info?.("Form submission created successfully", {
       formSlug,

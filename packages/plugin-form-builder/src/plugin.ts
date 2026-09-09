@@ -1091,9 +1091,22 @@ async function judgeSubmission(
   const config = getFormBuilderConfig(nextly);
   if (!config) return undefined;
 
+  // The trap is set among the keys the form does NOT declare. Several honeypot
+  // names are ones a real form might use -- `website`, `url_field` -- so
+  // probing the whole payload would flag every submission to a form that
+  // declares one, and flag it as bot traffic.
+  const declared = new Set(
+    (Array.isArray(form.fields) ? form.fields : [])
+      .map(field => (field as { name?: unknown }).name)
+      .filter((name): name is string => typeof name === "string")
+  );
+  const undeclared = Object.fromEntries(
+    Object.entries(payload).filter(([key]) => !declared.has(key))
+  );
+
   const settings = (form.settings ?? {}) as { honeypotEnabled?: boolean };
   const verdict = await checkSpam({
-    data: payload,
+    data: undeclared,
     ipAddress: http.ip ?? undefined,
     formSlug: rateLimitKeyFor(form),
     config: {
