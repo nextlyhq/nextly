@@ -133,19 +133,44 @@ describe("what the save posts", () => {
 });
 
 describe("what the save reports back", () => {
-  it("answers TRUE when the route answered", async () => {
-    writing();
+  it("hands back the ROUTE's answer, warnings and all", async () => {
+    // Not a boolean. A post-commit hook cannot un-write the row, so the route
+    // reports its failures as `warnings` beside a success — and a client that
+    // reduced every answer to `true` would present an unindexed pattern, a
+    // failed webhook or an unpurged cache as a clean save.
+    const warnings = [
+      {
+        severity: "failure",
+        phase: "afterChange",
+        key: "patterns",
+        message: "x",
+      },
+    ];
+    const write = vi.fn(async () => ({
+      message: "Pattern created.",
+      item: { id: "p1" },
+      warnings,
+    }));
+    mutation.mockReturnValue({
+      write,
+      pending: false,
+      error: null,
+    } as unknown as ReturnType<typeof usePluginRouteMutation>);
     const { result } = renderHook(() => useSavePattern());
 
-    let saved: boolean | undefined;
+    let answered: unknown;
     await act(async () => {
-      saved = await result.current.save(document, ["a"], fields);
+      answered = await result.current.save(document, ["a"], fields);
     });
 
-    expect(saved).toBe(true);
+    expect(answered).toEqual({
+      message: "Pattern created.",
+      item: { id: "p1" },
+      warnings,
+    });
   });
 
-  it("answers FALSE when the write resolved with nothing", async () => {
+  it("answers NOTHING when the write resolved with nothing", async () => {
     // The published hook resolves `undefined` on failure rather than
     // rejecting, so the absence of an answer IS the failure signal. A caller
     // that read it as "answered with no body" would close the form on a refused
@@ -153,13 +178,13 @@ describe("what the save reports back", () => {
     const write = refusing();
     const { result } = renderHook(() => useSavePattern());
 
-    let saved: boolean | undefined;
+    let answered: unknown;
     await act(async () => {
-      saved = await result.current.save(document, ["a"], fields);
+      answered = await result.current.save(document, ["a"], fields);
     });
 
     expect(write).toHaveBeenCalled();
-    expect(saved).toBe(false);
+    expect(answered).toBeUndefined();
   });
 
   it("phrases a failure through the admin's own extractor", async () => {

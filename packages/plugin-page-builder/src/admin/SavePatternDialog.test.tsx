@@ -9,16 +9,29 @@
  * default**, because nothing downstream can tell an author who has not answered
  * from one whose answer happens to be the default.
  */
+import { ShortcutProvider } from "@nextlyhq/ui";
 import { fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   PATTERN_GRANULARITIES,
+  isInsertableGranularity,
   type SavePatternFields,
 } from "../library-contract";
 
 import { SavePatternDialog } from "./SavePatternDialog";
+
+/**
+ * The form inside the shortcut context it holds.
+ *
+ * The dialog blocks the canvas's shortcuts for its whole lifetime, which needs
+ * a provider above it. Rendering it bare throws — which is itself the assertion
+ * that the hold is real, since a form that had dropped it would render happily.
+ */
+function inScope(node: React.ReactNode) {
+  return <ShortcutProvider>{node}</ShortcutProvider>;
+}
 
 function mount(
   overrides: Partial<React.ComponentProps<typeof SavePatternDialog>> = {}
@@ -26,13 +39,15 @@ function mount(
   const onSave = vi.fn(async () => true);
   const onOpenChange = vi.fn();
   render(
-    <SavePatternDialog
-      open
-      onOpenChange={onOpenChange}
-      subject="3 blocks"
-      onSave={onSave}
-      {...overrides}
-    />
+    inScope(
+      <SavePatternDialog
+        open
+        onOpenChange={onOpenChange}
+        subject="3 blocks"
+        onSave={onSave}
+        {...overrides}
+      />
+    )
   );
   return { onSave, onOpenChange };
 }
@@ -62,25 +77,46 @@ describe("what the form asks for", () => {
     expect(screen.queryByLabelText(/slug/i)).toBeNull();
   });
 
-  it("offers every granularity the vocabulary holds", () => {
-    // Derived from the contract rather than from a list written here, so a
-    // granularity added to the vocabulary is covered the day it arrives.
+  it("offers exactly the granularities a surface can offer BACK", () => {
+    // Not the whole vocabulary. A page-granularity pattern is a way to start a
+    // page, the insert panel filters it out by design, and the surface that
+    // would offer it does not exist yet — so choosing it stores a row that
+    // disappears from the builder the moment it is written.
+    //
+    // Both sides derived from the contract, so a granularity added to the
+    // vocabulary is covered the day it arrives, and one that becomes offerable
+    // moves here without this test being edited.
+    const offerable = PATTERN_GRANULARITIES.filter(isInsertableGranularity);
     mount();
 
-    expect(screen.getAllByRole("radio")).toHaveLength(
-      PATTERN_GRANULARITIES.length
-    );
+    // The control: a filter that removed everything would satisfy the
+    // comparison against an empty list.
+    expect(offerable.length).toBeGreaterThan(1);
+    expect(offerable.length).toBeLessThan(PATTERN_GRANULARITIES.length);
+    expect(screen.getAllByRole("radio")).toHaveLength(offerable.length);
   });
 
-  it("explains what the chosen granularity means", () => {
-    // The page case is the footgun this exists for: choosing it files the
-    // pattern somewhere the author is not expecting to find it.
-    // Every hint is visible without opening anything: an author choosing
-    // "Page" has to be able to read what it means before they choose it, not
-    // after.
+  it("does not offer a granularity nothing could show again", () => {
+    // Named directly as well as counted, because a count agrees with any filter
+    // that removes ONE option — including one that removed the wrong one.
     mount();
 
-    expect(screen.getByText(/not when inserting into one/i)).toBeTruthy();
+    expect(screen.queryByRole("radio", { name: "Page" })).toBeNull();
+    expect(screen.getByRole("radio", { name: "Section" })).toBeTruthy();
+  });
+
+  it("explains every option without the author opening anything", () => {
+    // A picker hides the sentences behind a click, and the choice is required
+    // and has no default — so the explanations have to be readable BEFORE the
+    // choice rather than after it.
+    mount();
+
+    for (const radio of screen.getAllByRole("radio")) {
+      const described = radio.getAttribute("aria-describedby");
+      expect(described).toBeTruthy();
+      const hint = window.document.getElementById(described ?? "");
+      expect(hint?.textContent ?? "").not.toBe("");
+    }
   });
 
   it("suggests the categories the library already uses", () => {
@@ -185,13 +221,15 @@ describe("what the form sends, and what it does afterwards", () => {
     const onSave = vi.fn(async () => false);
     const onOpenChange = vi.fn();
     render(
-      <SavePatternDialog
-        open
-        onOpenChange={onOpenChange}
-        subject="3 blocks"
-        onSave={onSave}
-        error="A pattern with that name already exists."
-      />
+      inScope(
+        <SavePatternDialog
+          open
+          onOpenChange={onOpenChange}
+          subject="3 blocks"
+          onSave={onSave}
+          error="A pattern with that name already exists."
+        />
+      )
     );
     fillRequired("Hero");
     fireEvent.change(screen.getByLabelText(/Description/), {
@@ -216,13 +254,15 @@ describe("what the form sends, and what it does afterwards", () => {
     // The reason belongs to the writer and outlives any one form, so a failure
     // left over from an earlier save must not appear beside an untouched form.
     render(
-      <SavePatternDialog
-        open
-        onOpenChange={vi.fn()}
-        subject="3 blocks"
-        onSave={vi.fn(async () => true)}
-        error="A pattern with that name already exists."
-      />
+      inScope(
+        <SavePatternDialog
+          open
+          onOpenChange={vi.fn()}
+          subject="3 blocks"
+          onSave={vi.fn(async () => true)}
+          error="A pattern with that name already exists."
+        />
+      )
     );
 
     expect(screen.queryByRole("alert")).toBeNull();
@@ -241,12 +281,14 @@ describe("while the write is in flight", () => {
     // submit a second.
     const onOpenChange = vi.fn();
     render(
-      <SavePatternDialog
-        open
-        onOpenChange={onOpenChange}
-        subject="3 blocks"
-        onSave={neverSettles()}
-      />
+      inScope(
+        <SavePatternDialog
+          open
+          onOpenChange={onOpenChange}
+          subject="3 blocks"
+          onSave={neverSettles()}
+        />
+      )
     );
     fillRequired();
     fireEvent.click(screen.getByRole("button", { name: /save pattern/i }));
@@ -262,12 +304,14 @@ describe("while the write is in flight", () => {
 
   it("says so on the button, rather than ignoring a press in silence", async () => {
     render(
-      <SavePatternDialog
-        open
-        onOpenChange={vi.fn()}
-        subject="3 blocks"
-        onSave={neverSettles()}
-      />
+      inScope(
+        <SavePatternDialog
+          open
+          onOpenChange={vi.fn()}
+          subject="3 blocks"
+          onSave={neverSettles()}
+        />
+      )
     );
     fillRequired();
     fireEvent.click(screen.getByRole("button", { name: /save pattern/i }));
@@ -287,12 +331,14 @@ describe("while the write is in flight", () => {
     // cases above.
     const onOpenChange = vi.fn();
     render(
-      <SavePatternDialog
-        open
-        onOpenChange={onOpenChange}
-        subject="3 blocks"
-        onSave={vi.fn(async () => true)}
-      />
+      inScope(
+        <SavePatternDialog
+          open
+          onOpenChange={onOpenChange}
+          subject="3 blocks"
+          onSave={vi.fn(async () => true)}
+        />
+      )
     );
 
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
@@ -330,5 +376,57 @@ describe("what the granularity group tells assistive technology", () => {
     });
 
     expect(group.getAttribute("aria-required")).toBe("true");
+  });
+});
+
+describe("what the form does to the canvas underneath it", () => {
+  it("holds the editor's shortcuts for its whole lifetime", () => {
+    // A focus trap keeps Tab inside the dialog and does nothing about
+    // shortcuts: the canvas registers its bindings on the document, so Delete,
+    // Mod+D and Alt+Arrow reach the page behind this form and Mod+K opens the
+    // palette over it. An author correcting a name can destroy the block they
+    // are naming — and the moment focus sits on a radio or a button is exactly
+    // when a bare keystroke is a canvas verb.
+    //
+    // Asserted through the CONTEXT the hold requires: a form that had dropped
+    // it renders happily outside a provider, and this does not.
+    expect(() =>
+      render(
+        <SavePatternDialog
+          open
+          onOpenChange={vi.fn()}
+          subject="3 blocks"
+          onSave={vi.fn(async () => true)}
+        />
+      )
+    ).toThrow(/ShortcutProvider/);
+  });
+
+  it("renders inside one, so the throw above is about the hold", () => {
+    // The control. Without it the case above passes against a form that throws
+    // for some entirely different reason.
+    expect(() => mount()).not.toThrow();
+  });
+});
+
+describe("fitting a short viewport", () => {
+  it("caps the dialog and scrolls its body, not the whole form", () => {
+    // Four explained options plus the optional fields make this taller than a
+    // short screen, and a refusal alert makes it taller again. `DialogContent`
+    // is fixed and has no maximum height of its own, so without this the footer
+    // — or the field that needs correcting — sits off-screen with no way to
+    // reach it. The BODY scrolls so Save and Cancel stay in view.
+    mount();
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.className).toMatch(/max-h-\[85vh\]/);
+
+    const scroller = dialog.querySelector(".overflow-y-auto");
+    expect(scroller).toBeTruthy();
+    // The footer is OUTSIDE the scrolling region, which is what keeps it in
+    // view rather than scrolling away with the fields.
+    expect(
+      scroller?.contains(screen.getByRole("button", { name: /save pattern/i }))
+    ).toBe(false);
   });
 });

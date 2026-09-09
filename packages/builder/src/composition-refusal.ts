@@ -95,6 +95,17 @@ const REFUSAL_COPY: Record<PlanProblem, string> = {
  * than leaving it to be looked up again — `NestingVerdict` says why — so this
  * never asks the rule source a second question.
  *
+ * **What the set MEANS depends on the cause**, which is the reading
+ * `refusalWording` already takes of the same list. For `not-allowed-in-slot`
+ * the planner answers with what the SLOT ACCEPTS — the children it will hold —
+ * and for the other two with the CONTAINERS the refused block may sit in.
+ * Read as containers either way, a narrowed slot produces "It belongs inside
+ * Heading or Text" about blocks that are neither containers nor where anything
+ * belongs.
+ *
+ * The joiner follows from that: containers are alternatives an author picks
+ * between, and a slot's list is an enumeration of what it holds.
+ *
  * Through the SAME prose the drag refusal uses. The set holds registry
  * specifiers, and a namespace wildcard is not a block name: read naively,
  * `core/*` announces that a block "belongs inside *".
@@ -103,9 +114,9 @@ export function compositionRefusalReason(refusal: PlanRefusal): string {
   const sentence = REFUSAL_COPY[refusal.problem];
   const permitted = (refusal.permitted ?? []).map(permittedLabel);
   if (permitted.length === 0) return sentence;
-  // "or", because these are containers an author picks BETWEEN — the same
-  // reading the drag refusal takes of the same list.
-  return `${sentence} It belongs inside ${asPermittedList(permitted, "or")}.`;
+  return refusal.problem === "not-allowed-in-slot"
+    ? `${sentence} It takes ${asPermittedList(permitted, "and")}.`
+    : `${sentence} It belongs inside ${asPermittedList(permitted, "or")}.`;
 }
 
 /**

@@ -20,12 +20,17 @@
  * @module keyboard-actions
  */
 
-import { findNode, registryNestingSource } from "@nextlyhq/blocks-engine";
-import type { NestingSource } from "@nextlyhq/blocks-engine";
+import {
+  findNode,
+  registryNestingSource,
+  saveAsPatternRefusal,
+  type NestingSource,
+} from "@nextlyhq/blocks-engine";
 import { useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
+import { compositionRefusalReason } from "./composition-refusal";
 import type { EditorState } from "./editor-state";
 import {
   keyboardMovePosition,
@@ -770,24 +775,54 @@ export function useBlockKeyboardActions({
     }
   );
 
+  /*
+   * The planner's verdict, honoured HERE rather than left to each surface.
+   *
+   * The toolbar keeps an unavailable verb focusable and still calls its runner,
+   * deliberately, so the verb can announce its own refusal — that is how the
+   * existing verbs behave, and a bare pass-through would instead open a form
+   * and post a selection the planner has already rejected.
+   *
+   * Announced rather than merely refused, for the same reason: an author who
+   * pressed a dimmed control is owed the reason, and the live region is where
+   * every other refusal here is said.
+   *
+   * The host is asked only once the verdict is yes, so the form never opens
+   * over a selection that cannot be saved.
+   */
+  const saveSelectionAsPattern = React.useCallback(() => {
+    const refusal = saveAsPatternRefusal(
+      editor.document,
+      editor.selection.ids,
+      nestingSource
+    );
+    if (refusal !== undefined) {
+      announce(compositionRefusalReason(refusal));
+      return;
+    }
+    onSaveAsPattern();
+  }, [
+    editor.document,
+    editor.selection.ids,
+    nestingSource,
+    announce,
+    onSaveAsPattern,
+  ]);
+
   const actions = React.useMemo<BlockActions>(
     () => ({
       move: moveSelected,
       delete: deleteSelected,
       duplicate: duplicateSelected,
       selectParent,
-      // Passed straight through, unwrapped. Every other verb here computes a
-      // plan, applies it and announces the result; this one only says the author
-      // asked. Announcing here as well would put the builder's voice on a form
-      // it does not draw, and would say "saved" before anything was.
-      saveAsPattern: onSaveAsPattern,
+      saveAsPattern: saveSelectionAsPattern,
     }),
     [
       moveSelected,
       deleteSelected,
       duplicateSelected,
       selectParent,
-      onSaveAsPattern,
+      saveSelectionAsPattern,
     ]
   );
 

@@ -17,6 +17,7 @@
  *
  * @module admin/BlocksField.inline-outcome.test
  */
+import { ShortcutProvider } from "@nextlyhq/ui";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm, useWatch, type Control } from "react-hook-form";
@@ -77,12 +78,17 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       onExit?: () => void;
       children?: React.ReactNode;
     }): React.JSX.Element => (
-      <div>
-        <button type="button" onClick={onExit}>
-          Leave editor
-        </button>
-        {children}
-      </div>
+      // The shortcut context comes with the real shell, and the save form holds
+      // the keyboard while it is open — so a plain div here fails inside the
+      // form rather than telling us anything about the subject.
+      <ShortcutProvider>
+        <div>
+          <button type="button" onClick={onExit}>
+            Leave editor
+          </button>
+          {children}
+        </div>
+      </ShortcutProvider>
     ),
     BreakpointManager: nothing,
     BreakpointSwitcher: nothing,

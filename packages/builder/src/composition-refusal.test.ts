@@ -86,7 +86,7 @@ describe("naming the containers a block belongs in", () => {
 
   it("names a WILDCARD as the group it is, not as a block called *", () => {
     // A slot may admit a whole namespace. Read as a block name it humanises to
-    // the bare "*", so the sentence would end "belongs inside *".
+    // the bare "*", so the sentence would end "takes *".
     const sentence = compositionRefusalReason({
       problem: "not-allowed-in-slot",
       permitted: ["core/*"],
@@ -94,6 +94,28 @@ describe("naming the containers a block belongs in", () => {
 
     expect(sentence).toContain("any core block");
     expect(sentence).not.toContain("*");
+  });
+
+  it("reads a SLOT's list as what it accepts, not as where the block belongs", () => {
+    // The planner answers `not-allowed-in-slot` with what the slot HOLDS. Read
+    // as containers, a narrowed slot tells an author their block "belongs
+    // inside Heading or Text" — two blocks that are neither containers nor
+    // anywhere anything belongs.
+    const slot = compositionRefusalReason({
+      problem: "not-allowed-in-slot",
+      permitted: ["core/heading", "core/text"],
+    });
+    const parents = compositionRefusalReason({
+      problem: "restricted-at-root",
+      permitted: ["core/heading", "core/text"],
+    });
+
+    expect(slot).toContain("takes Heading and Text");
+    expect(slot).not.toContain("belongs inside");
+    // The control: the SAME list under a container cause still reads as
+    // containers, so the branch is the cause talking rather than the wording
+    // having changed for everyone.
+    expect(parents).toContain("belongs inside Heading or Text");
   });
 
   it("joins several with OR, because they are alternatives", () => {

@@ -28,6 +28,7 @@
  */
 import { findNode, type BlockDocument } from "@nextlyhq/blocks-engine";
 import { layerLabel } from "@nextlyhq/builder";
+import { toast } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { usePatternLibrary } from "./pattern-library-client";
@@ -115,6 +116,40 @@ function SavePatternForm({
     subject: subjectOf(document, selectedIds),
   }));
 
+  /*
+   * A save that COMMITTED but reported failures afterwards is still a save.
+   *
+   * A post-commit hook cannot un-write the row — an unindexed pattern, a
+   * webhook that did not fire, a cache nobody purged — so failing the form
+   * would tell the author their pattern is not there when it is, and invite
+   * them to write it twice. The form closes and the partial failure is said out
+   * loud instead, which is the only remedy a durable row leaves.
+   *
+   * Through the admin's own toast, so this reads the way every other partial
+   * write in the panel reads rather than inventing a second voice for it.
+   */
+  const storing = React.useCallback(
+    async (fields: Parameters<typeof writer.save>[2]) => {
+      const answered = await writer.save(
+        saving.document,
+        saving.selectedIds,
+        fields
+      );
+      if (answered === undefined) return false;
+      const warnings = answered.warnings ?? [];
+      if (warnings.length > 0) {
+        toast.warning(
+          `Pattern saved, but ${warnings.length === 1 ? "one follow-up step" : `${warnings.length} follow-up steps`} did not finish.`
+        );
+      }
+      return true;
+    },
+    // `saving` is in here even though it never changes: a snapshot taken once
+    // at mount is stable by construction, and stating it is cheaper than a
+    // suppression that would also hide the next dependency somebody forgets.
+    [writer, saving]
+  );
+
   return (
     <SavePatternDialog
       open
@@ -123,9 +158,7 @@ function SavePatternForm({
       }}
       subject={saving.subject}
       categories={library.categories}
-      onSave={fields =>
-        writer.save(saving.document, saving.selectedIds, fields)
-      }
+      onSave={fields => storing(fields)}
       {...(writer.error === undefined ? {} : { error: writer.error })}
     />
   );

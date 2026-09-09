@@ -48,20 +48,25 @@ import {
 /** What a surface needs to save a selection and report how it went. */
 export interface SavePatternWriter {
   /**
-   * Store this selection, answering whether it was stored.
+   * Store this selection, answering with what the route said.
    *
-   * A BOOLEAN rather than a message, because the message is not available at
-   * this moment: `usePluginRouteMutation` records a failure in state, so it
-   * reaches a caller on the next render rather than in the promise. Splitting
-   * the two is what keeps the form from showing a stale reason next to a fresh
-   * refusal — the answer says whether to close, {@link SavePatternWriter.error}
-   * says what to show.
+   * The RESPONSE rather than a boolean, and `undefined` for a refusal. A save
+   * can commit and still be partly unsuccessful — a post-commit hook cannot
+   * un-write the row, so the route reports it as `warnings` beside a success —
+   * and reducing every answer to `true` presents an unindexed pattern, a failed
+   * webhook or an unpurged cache as a clean save. The row cannot be un-saved,
+   * so saying so is the only remedy there is.
+   *
+   * The failure REASON still arrives separately, on
+   * {@link SavePatternWriter.error}: `usePluginRouteMutation` records it in
+   * state, so it reaches a caller on the next render rather than in this
+   * promise.
    */
   readonly save: (
     document: BlockDocument,
     selectedIds: readonly string[],
     fields: SavePatternFields
-  ) => Promise<boolean>;
+  ) => Promise<SavePatternResponse | undefined>;
   /** Whether a save is in flight. */
   readonly saving: boolean;
   /**
@@ -132,7 +137,7 @@ export function useSavePattern(): SavePatternWriter {
       document: BlockDocument,
       selectedIds: readonly string[],
       fields: SavePatternFields
-    ) => (await write({ document, selectedIds, fields })) !== undefined,
+    ) => await write({ document, selectedIds, fields }),
     [write]
   );
 

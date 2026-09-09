@@ -30,6 +30,7 @@
  *
  * @module admin/SavePatternDialog
  */
+import { useModalKeyboardHold } from "@nextlyhq/builder";
 import {
   Alert,
   AlertDescription,
@@ -50,6 +51,7 @@ import * as React from "react";
 
 import {
   PATTERN_GRANULARITIES,
+  isInsertableGranularity,
   type PatternGranularity,
   type SavePatternFields,
 } from "../library-contract";
@@ -86,6 +88,25 @@ const GRANULARITY_COPY: Record<
     hint: "A whole page. Offered when starting a new page, not when inserting into one.",
   },
 };
+
+/**
+ * The granularities this form offers, which is not the whole vocabulary.
+ *
+ * A pattern is worth saving only if some surface can offer it back, and today
+ * exactly one does: the insert panel, which asks `isInsertableGranularity`. A
+ * page-granularity pattern is a way to START a page, the panel filters it out
+ * by design, and the surface that would offer it does not exist yet — so
+ * choosing it stores a row that disappears from the builder the moment it is
+ * written.
+ *
+ * DERIVED from the same question the panel asks rather than a list with `page`
+ * removed. When the start-from-a-pattern surface lands, what changes is which
+ * granularities a surface can offer back — and that answer lives in the
+ * contract, next to the map that classifies them, rather than here.
+ */
+const OFFERED_GRANULARITIES = PATTERN_GRANULARITIES.filter(value =>
+  isInsertableGranularity(value)
+);
 
 /** Props for {@link SavePatternDialog}. */
 export interface SavePatternDialogProps {
@@ -200,6 +221,14 @@ export function SavePatternDialog({
     setRefused(true);
   };
 
+  // The canvas's shortcuts are registered on the DOCUMENT, so a focus trap does
+  // nothing about them: Delete, Mod+D and Alt+Arrow reach the page behind this
+  // form, and Mod+K opens the palette over it. An author correcting a name can
+  // destroy the block they are naming. Held for the form's whole lifetime
+  // rather than while a field has focus, because the moment focus sits on a
+  // radio or a button is exactly when a bare keystroke is a canvas verb.
+  useModalKeyboardHold("save-pattern-dialog", open);
+
   const listId = React.useId();
 
   return (
@@ -216,8 +245,17 @@ export function SavePatternDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent>
-        <form onSubmit={event => void submit(event)}>
+      {/* Capped and scrolled: four explained options and a refusal alert make
+          this taller than a short viewport, and `DialogContent` is fixed with
+          no maximum height of its own — so the footer, or the field that needs
+          correcting, ends up off-screen with no way to reach it. The BODY
+          scrolls rather than the whole dialog, which keeps Save and Cancel in
+          view while the fields move. */}
+      <DialogContent className="flex max-h-[85vh] flex-col">
+        <form
+          onSubmit={event => void submit(event)}
+          className="flex min-h-0 flex-col"
+        >
           <DialogHeader>
             <DialogTitle>Save as pattern</DialogTitle>
             <DialogDescription>
@@ -226,7 +264,7 @@ export function SavePatternDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-4 py-4">
+          <div className="grid min-h-0 gap-4 overflow-y-auto py-4">
             <div className="grid gap-1.5">
               <Label htmlFor="nx-save-pattern-title">Name</Label>
               <Input
@@ -274,7 +312,7 @@ export function SavePatternDialog({
                 {/* Built from the vocabulary rather than listed again, so the
                     options and the copy above cannot disagree about which
                     granularities exist. */}
-                {PATTERN_GRANULARITIES.map(value => (
+                {OFFERED_GRANULARITIES.map(value => (
                   <div
                     key={value}
                     className="grid grid-cols-[auto_1fr] items-start gap-2"

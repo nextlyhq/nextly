@@ -30,6 +30,12 @@ import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 /** The verb the editor published, as the chain was handed it. */
 let offeredVerb: (() => void) | undefined;
 
+/** What the route reports failed AFTER the row committed, for the test in hand. */
+let saveWarnings: unknown[] = [];
+
+/** What the panel was told out loud. */
+const announced: string[] = [];
+
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
   const nothing = (): null => null;
@@ -96,7 +102,11 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // form appearing — but the module the form imports resolves it at load, so a
   // mock that omitted it would fail the import rather than the assertion.
   usePluginRouteMutation: () => ({
-    write: async () => ({ message: "Pattern created.", item: { id: "p1" } }),
+    write: async () => ({
+      message: "Pattern created.",
+      item: { id: "p1" },
+      ...(saveWarnings.length === 0 ? {} : { warnings: saveWarnings }),
+    }),
     pending: false,
     error: null,
   }),
@@ -126,8 +136,25 @@ function openEditor(): void {
   fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 }
 
+vi.mock("@nextlyhq/ui", async importOriginal => {
+  // Spread rather than replaced: the form below draws real components from
+  // here, so a closed literal would blank them.
+  const real = await importOriginal<Record<string, unknown>>();
+  return {
+    ...real,
+    toast: {
+      warning: (message: string) => announced.push(message),
+      error: (message: string) => announced.push(message),
+      success: () => {},
+      info: () => {},
+    },
+  };
+});
+
 beforeEach(() => {
   offeredVerb = undefined;
+  saveWarnings = [];
+  announced.length = 0;
 });
 
 afterEach(cleanup);
@@ -177,5 +204,54 @@ describe("reaching the save-as-pattern form", () => {
     expect(
       screen.queryByRole("heading", { name: /save as pattern/i })
     ).toBeNull();
+  });
+});
+
+describe("a save that committed and then partly failed", () => {
+  /** Fill the form the way an author would and submit it. */
+  async function saveAs(name: string): Promise<void> {
+    React.act(() => {
+      offeredVerb?.();
+    });
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: name },
+    });
+    fireEvent.click(screen.getByRole("radio", { name: "Section" }));
+    fireEvent.click(screen.getByRole("button", { name: /save pattern/i }));
+    await vi.waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: /save as pattern/i })
+      ).toBeNull()
+    );
+  }
+
+  it("says so, rather than presenting a partial success as a clean one", async () => {
+    // A post-commit hook cannot un-write the row — an unindexed pattern, a
+    // webhook that did not fire — so failing the form would tell the author
+    // their pattern is not there when it is. Saying it out loud is the only
+    // remedy a durable row leaves.
+    saveWarnings = [
+      {
+        severity: "failure",
+        phase: "afterChange",
+        key: "patterns",
+        message: "x",
+      },
+    ];
+    openEditor();
+
+    await saveAs("Hero");
+
+    expect(announced.join(" ")).toMatch(/did not finish/i);
+  });
+
+  it("says nothing when every follow-up step finished", async () => {
+    // The control. Without it a form that warned unconditionally would satisfy
+    // the case above and cry wolf on every ordinary save.
+    openEditor();
+
+    await saveAs("Hero");
+
+    expect(announced).toEqual([]);
   });
 });
