@@ -15,6 +15,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, and, or, like, ilike, sql, asc, desc, gte, lt } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 
 import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
@@ -426,6 +427,60 @@ function windowOperands(
       intervalAfter(window[window.length - 1], interval),
       dialect
     ),
+  };
+}
+
+/**
+ * The ends of the window that the dialect can actually compare against, or
+ * `undefined` when NEITHER can.
+ *
+ * A bound the dialect cannot represent is dropped; a window where both ends are
+ * unrepresentable is a different thing and must not be read as "no bounds
+ * needed". Dropping both would group the entire collection and then discard
+ * every bucket -- an unbounded aggregate over a large table, produced to answer
+ * a timeline that is empty by construction. Only reachable on MySQL, whose
+ * `TIMESTAMP` carries a range; the other two always render their bounds.
+ *
+ * Answers the OPERANDS rather than the comparisons, so the comparison is built
+ * where the column still carries the type the schema gave it.
+ */
+function windowScope(
+  window: Date[],
+  interval: TimeseriesInterval,
+  dialect: SupportedDialect
+): { from?: Date | SQL; to?: Date | SQL } | undefined {
+  const { from, to } = windowOperands(window, interval, dialect);
+  if (from === undefined && to === undefined) return undefined;
+  return {
+    ...(from === undefined ? {} : { from }),
+    ...(to === undefined ? {} : { to }),
+  };
+}
+
+/**
+ * The read this timeline resolves its rows through.
+ *
+ * The date key travels as `groupBy`, so every refusal a grouped read already
+ * makes applies unchanged: a field carrying a read rule, any spelling of it,
+ * the owner column, a key naming no column. The two `require` flags move the
+ * timeline's own preconditions inside the plan, where they land after
+ * collection authorization and before the read hooks.
+ *
+ * `releaseNow` takes the same anchor the window does, so a scheduled release
+ * becoming due mid-read cannot leave the labels describing a later window than
+ * the row filter admitted.
+ */
+function timelineReadPlanRequest(
+  params: FilteredReadParams & { dateField: string; interval: unknown },
+  anchor: Date
+): FilteredReadParams {
+  return {
+    ...params,
+    groupBy: params.dateField,
+    requireTimestampGroupKey: true,
+    requireBucketableInterval: true,
+    now: anchor,
+    releaseNow: params.releaseNow ?? anchor,
   };
 }
 
@@ -3256,6 +3311,47 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
+   * The window as points, taking each interval's count from what was grouped.
+   *
+   * Built from the WINDOW rather than from the rows, so the answer carries one
+   * point per interval whether or not the database grouped that interval --
+   * which is what makes a quiet stretch read as zero rather than disappear.
+   */
+  private timeseriesAnswer(
+    window: Date[],
+    interval: TimeseriesInterval,
+    counted: Map<string, number>
+  ): CollectionServiceResult<TimeseriesPoints> {
+    return {
+      success: true,
+      statusCode: 200,
+      message: "Timeseries retrieved successfully",
+      data: {
+        interval,
+        points: window.map(start => ({
+          start: start.toISOString(),
+          count: counted.get(bucketStartToDbText(start)) ?? 0,
+        })),
+      },
+    };
+  }
+
+  /**
+   * The answer for a window no stored row can fall in: every interval, zero.
+   *
+   * Shaped exactly like a queried answer, because a caller cannot tell the two
+   * apart and should not have to -- zero means no rows either way.
+   */
+  private emptyTimeseries(
+    window: Date[],
+    interval: TimeseriesInterval
+  ): CollectionServiceResult<TimeseriesPoints> {
+    // Through the same assembly a queried answer uses, with nothing counted, so
+    // the two cannot drift into different shapes.
+    return this.timeseriesAnswer(window, interval, new Map());
+  }
+
+  /**
    * The group key's column shape, with every refusal that depends on it made.
    *
    * Runs BEFORE the read hooks, for the reason the key itself is validated
@@ -3675,14 +3771,9 @@ export class CollectionQueryService extends BaseService {
       // would get a detailed validation response for a collection the same
       // request with a good interval answers with an access refusal -- which
       // tells them the collection exists.
-      const plan = await this.resolveReadPlan<TimeseriesPoints>({
-        ...params,
-        groupBy: params.dateField,
-        requireTimestampGroupKey: true,
-        requireBucketableInterval: true,
-        now: anchor,
-        releaseNow: params.releaseNow ?? anchor,
-      });
+      const plan = await this.resolveReadPlan<TimeseriesPoints>(
+        timelineReadPlanRequest(params, anchor)
+      );
       if (!plan.allowed) return plan.denied;
       const { schema, whereConditions } = plan;
       const column = plan.groupColumn;
@@ -3694,10 +3785,13 @@ export class CollectionQueryService extends BaseService {
 
       // Built here, where the column keeps the type the schema gave it, so the
       // comparison needs no cast the compiler cannot check.
-      const { from, to } = windowOperands(window, interval, dialect);
+      const scope = windowScope(window, interval, dialect);
+      // `undefined` means the window does not overlap what the column can
+      // store, so no row can fall in it and there is nothing to ask.
+      if (scope === undefined) return this.emptyTimeseries(window, interval);
       const bounds = [
-        ...(from === undefined ? [] : [gte(column, from)]),
-        ...(to === undefined ? [] : [lt(column, to)]),
+        ...(scope.from === undefined ? [] : [gte(column, scope.from)]),
+        ...(scope.to === undefined ? [] : [lt(column, scope.to)]),
       ];
 
       const rows = await this.db
@@ -3733,20 +3827,7 @@ export class CollectionQueryService extends BaseService {
 
       const counted = countedByBucket(rows);
 
-      return {
-        success: true,
-        statusCode: 200,
-        message: "Timeseries retrieved successfully",
-        data: {
-          interval,
-          // Built from the WINDOW rather than from the rows, so the answer has
-          // one point per interval whether or not the database grouped it.
-          points: window.map(start => ({
-            start: start.toISOString(),
-            count: counted.get(bucketStartToDbText(start)) ?? 0,
-          })),
-        },
-      };
+      return this.timeseriesAnswer(window, interval, counted);
     } catch (error: unknown) {
       const message =
         error instanceof Error ? error.message : "Failed to build timeseries";

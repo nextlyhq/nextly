@@ -57,37 +57,40 @@ describe("init - Nextly API", () => {
       expect(typeof nextly.shutdown).toBe("function");
     });
 
-    it("carries every collection read the Direct API offers", async () => {
-      // DERIVED from the lazy singleton rather than listed here. The instance
-      // is assembled by hand-binding one method at a time, so a read added to
-      // the Direct API is silently absent from the DOCUMENTED path until
-      // somebody notices -- which is what happened to `group`, missing since it
-      // shipped, and then to `timeseries`. Both were callable through the lazy
-      // `nextly` object and `undefined` through `getNextly({ config })`, so the
-      // recommended spelling was the broken one.
+    it("carries every method the lazy Direct API offers", async () => {
+      // DERIVED from the lazy object's OWN surface. A hand-written list of
+      // expected names would share the omission it is meant to catch: a method
+      // added to the Direct API and forgotten on the instance would normally be
+      // forgotten in the list too, and the test would stay green -- which is
+      // exactly how `group` stayed missing from `getNextly({ config })` from
+      // the day it shipped, with a hand-written `PUBLIC_MEMBERS` list beside it
+      // that omitted it as well.
       //
-      // Comparing the two surfaces means the next omission fails here instead
-      // of reaching a consumer.
+      // Both were callable through the lazy `nextly` object and `undefined`
+      // through `getNextly({ config })`, so the recommended spelling was the
+      // broken one.
       const instance = await getNextly(testOptions());
       const { nextly: lazy } = await import("../direct-api/nextly");
 
-      const READS = [
-        "find",
-        "findByID",
-        "count",
-        "group",
-        "timeseries",
-      ] as const;
-      for (const name of READS) {
-        expect(
-          typeof (lazy as unknown as Record<string, unknown>)[name],
-          `the lazy object is missing ${name}, so this test cannot judge the instance`
-        ).toBe("function");
-        expect(
-          typeof (instance as unknown as Record<string, unknown>)[name],
-          `getNextly({ config }) is missing ${name}`
-        ).toBe("function");
-      }
+      const offered = Object.entries(lazy as Record<string, unknown>)
+        .filter(([, value]) => typeof value === "function")
+        .map(([name]) => name);
+
+      // The derivation has to have found something, or an empty list would make
+      // every assertion below vacuous.
+      expect(offered.length).toBeGreaterThan(5);
+      expect(offered).toContain("group");
+      expect(offered).toContain("timeseries");
+
+      const missing = offered.filter(
+        name =>
+          typeof (instance as unknown as Record<string, unknown>)[name] !==
+          "function"
+      );
+      expect(
+        missing,
+        "methods the lazy API offers that getNextly() lacks"
+      ).toEqual([]);
     });
 
     it("should return the same instance on subsequent calls (singleton)", async () => {

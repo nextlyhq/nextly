@@ -170,15 +170,27 @@ const REFUSALS: Record<Position, { code: string; because: string }> = {
   },
 };
 
-function refuse(fields: string[], at: Position): never {
+/**
+ * The errors a read-rule refusal carries, without throwing them.
+ *
+ * Split from `refuse` so a caller that must ANSWER whether a field is usable
+ * reads the same refusal a caller that GATES on it throws -- rather than the
+ * two composing the underlying checks separately and drifting apart.
+ */
+function refusalFor(
+  fields: string[],
+  at: Position
+): Array<{ path: string; code: string; message: string }> {
   const { code, because } = REFUSALS[at];
-  throw NextlyError.validation({
-    errors: fields.map(field => ({
-      path: `${at}.${field}`,
-      code,
-      message: `The field "${field}" carries a read rule, so it cannot be used to ${at === "groupBy" ? "group" : at === "sort" ? "sort" : "filter"}. ${because}`,
-    })),
-  });
+  return fields.map(field => ({
+    path: `${at}.${field}`,
+    code,
+    message: `The field "${field}" carries a read rule, so it cannot be used to ${at === "groupBy" ? "group" : at === "sort" ? "sort" : "filter"}. ${because}`,
+  }));
+}
+
+function refuse(fields: string[], at: Position): never {
+  throw NextlyError.validation({ errors: refusalFor(fields, at) });
 }
 
 /**
@@ -273,49 +285,38 @@ export function assertSortableField(
  * cannot decide fails closed.
  */
 /**
- * Whether an UNTRUSTED caller could ever group by this field.
+ * Why this field cannot be a group key, if it cannot.
  *
- * The same two questions `assertGroupableField` asks, through the same
- * helpers, in the shape a describer needs rather than a gate: a source deciding
- * what to advertise cannot use an assertion without catching its own refusal.
- *
- * Answers for the untrusted case on purpose. A widget executes with
- * `overrideAccess: false`, so a field this returns `false` for is one every
- * dashboard request would be refused -- advertising it makes a card that fails
- * on every load, with nothing pointing at the declaration that caused it.
+ * THE one decision. `assertGroupableField` throws what this returns and
+ * `isGroupableFieldName` reads whether it returned anything, so a restriction
+ * added here reaches both. Two independent compositions of the same two checks
+ * is how a source goes on advertising a field the read has started refusing.
  */
-export function isGroupableFieldName(
+export function groupableFieldProblem(
   kind: EntityKind,
   slug: string,
-  name: string
-): boolean {
-  if (transformedFields(kind, slug, [name]).length > 0) return false;
-  return protectedFields(kind, slug, [name]).length === 0;
-}
-
-export function assertGroupableField(
-  kind: EntityKind,
-  slug: string,
-  groupBy: string | undefined,
+  groupBy: unknown,
   opts: { overrideAccess?: boolean; frameworkFilter?: boolean } = {}
-): void {
-  if (!groupBy) return;
-  // Guarded HERE because this is the first thing to touch the raw value, and
-  // `.split` on a non-string throws a raw `TypeError` that the calling service
-  // catches as an unclassified 500 -- unlike every other malformed argument,
-  // which gets a named refusal. The public Direct API is callable from
-  // JavaScript, where the parameter type binds nothing.
+): Array<{ path: string; code: string; message: string }> | undefined {
+  // `undefined` and `null` both mean "no group key was given", and an empty
+  // string is the same absence spelled differently. Anything else non-string is
+  // MALFORMED, and is refused here rather than reaching `.split` or
+  // `toSnakeCase` -- whose `.replace` throws a raw `TypeError` the calling
+  // service catches as an unclassified 500. Checked BEFORE the absence test,
+  // because `0`, `false` and `NaN` are falsy AND wrong: treating them as absent
+  // let them through to exactly the crash this exists to replace.
+  if (groupBy === undefined || groupBy === null) return undefined;
   if (typeof groupBy !== "string") {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "groupBy",
-          code: "FIELD_NOT_GROUPABLE",
-          message: "The field to group by must be given as a string.",
-        },
-      ],
-    });
+    return [
+      {
+        path: "groupBy",
+        code: "FIELD_NOT_GROUPABLE",
+        message: "The field to group by must be given as a string.",
+      },
+    ];
   }
+  if (groupBy === "") return undefined;
+
   // Nested paths address the field that OWNS the rule, as `where` does.
   const name = groupBy.split(".")[0];
 
@@ -328,18 +329,43 @@ export function assertGroupableField(
   // the caller's trust.
   const transformed = transformedFields(kind, slug, [name]);
   if (transformed.length > 0) {
-    throw NextlyError.validation({
-      errors: transformed.map(field => ({
-        path: `groupBy.${field}`,
-        code: "FIELD_NOT_GROUPABLE",
-        message: `The field "${field}" is transformed when it is read, so its stored value is not the one a read returns. Grouping would publish the stored value as a bucket label, past the hook that changes it.`,
-      })),
-    });
+    return transformed.map(field => ({
+      path: `groupBy.${field}`,
+      code: "FIELD_NOT_GROUPABLE",
+      message: `The field "${field}" is transformed when it is read, so its stored value is not the one a read returns. Grouping would publish the stored value as a bucket label, past the hook that changes it.`,
+    }));
   }
 
-  if (opts.overrideAccess || opts.frameworkFilter) return;
+  if (opts.overrideAccess || opts.frameworkFilter) return undefined;
   const denied = protectedFields(kind, slug, [name]);
-  if (denied.length > 0) refuse(denied, "groupBy");
+  if (denied.length > 0) return refusalFor(denied, "groupBy");
+  return undefined;
+}
+
+/**
+ * Whether an UNTRUSTED caller could ever group by this field.
+ *
+ * Derived from the one decision above rather than repeating its checks, so a
+ * restriction added there reaches this too. Answers for the untrusted case on
+ * purpose: a widget executes with `overrideAccess: false`, so a field this
+ * returns `false` for is one every dashboard request would be refused.
+ */
+export function isGroupableFieldName(
+  kind: EntityKind,
+  slug: string,
+  name: string
+): boolean {
+  return groupableFieldProblem(kind, slug, name) === undefined;
+}
+
+export function assertGroupableField(
+  kind: EntityKind,
+  slug: string,
+  groupBy: string | undefined,
+  opts: { overrideAccess?: boolean; frameworkFilter?: boolean } = {}
+): void {
+  const errors = groupableFieldProblem(kind, slug, groupBy, opts);
+  if (errors) throw NextlyError.validation({ errors });
 }
 
 /**

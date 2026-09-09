@@ -717,16 +717,76 @@ describe.each(getConfiguredTestDialects())(
       // named refusal.
       const h = await boot(dialect, [{ occurredAt: daysAgo(0) }]);
 
+      for (const bad of [123, 0, false, Number.NaN, {}] as unknown[]) {
+        const res = await h.timeseriesEntries({
+          collectionName: EVENTS,
+          now: clock,
+          dateField: bad as string,
+          interval: "day",
+        });
+
+        // `0`, `false` and `NaN` are the ones that matter: they are FALSY as
+        // well as wrong, so a guard placed after an `if (!value) return` never
+        // sees them and they reach `toSnakeCase`, whose `.replace` throws a raw
+        // TypeError the service reports as an unclassified 500.
+        expect(res.success, `${String(bad)} was accepted`).toBe(false);
+        expect(
+          res.statusCode,
+          `${String(bad)} was not a validation error`
+        ).toBe(400);
+        expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
+      }
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a window no stored row can fall in on %s",
+  dialect => {
+    it("answers every interval as zero", async () => {
+      // Entirely after what a MySQL TIMESTAMP can hold.
+      //
+      // This pins the ANSWER, which is all it can pin. Whether the read
+      // short-circuits or runs an unbounded GROUP BY and then discards every
+      // bucket, the points come out identical -- so removing the short-circuit
+      // fails nothing here, and that was confirmed rather than assumed. What
+      // the short-circuit buys is not scanning a whole table to produce this,
+      // and that is verified by reading the code, not by this test.
+      const h = await boot(dialect, [
+        { occurredAt: daysAgo(0) },
+        { occurredAt: daysAgo(1) },
+      ]);
+
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        now: new Date("2400-01-01T00:00:00.000Z"),
+        dateField: "occurredAt",
+        interval: "day",
+        intervals: 3,
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.data?.points).toHaveLength(3);
+      expect((res.data?.points ?? []).every(p => p.count === 0)).toBe(true);
+      // The points still describe the window asked for, so a caller cannot tell
+      // this apart from a queried answer -- which is the point.
+      expect(res.data?.points.at(-1)?.start).toBe("2400-01-01T00:00:00.000Z");
+    });
+
+    it("still counts rows for a window that overlaps the range", async () => {
+      // The control: a short-circuit that fired for every window would satisfy
+      // the assertion above while making the whole feature answer zero.
+      const h = await boot(dialect, [{ occurredAt: daysAgo(0) }]);
+
       const res = await h.timeseriesEntries({
         collectionName: EVENTS,
         now: clock,
-        dateField: 123 as unknown as string,
+        dateField: "occurredAt",
         interval: "day",
+        intervals: 2,
       });
 
-      expect(res.success).toBe(false);
-      expect(res.statusCode).toBe(400);
-      expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
+      expect(res.data?.points.at(-1)?.count).toBe(1);
     });
   }
 );
