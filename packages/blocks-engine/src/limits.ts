@@ -76,15 +76,89 @@ export const DEFAULT_LIMITS: DocumentLimits = {
   maxBytes: DEFAULT_MAX_DOCUMENT_BYTES,
 };
 
+/**
+ * How many entries a whole-forest reader may visit before it refuses.
+ *
+ * A machine limit like `MAX_WALKABLE_DEPTH` in `ops.ts`, not a product one:
+ * {@link MAX_NODES} is a rule a site may raise, and this is the point past
+ * which reading the forest at all stops being affordable whatever any site
+ * says. Two hundred times the default node cap, so it only ever fires on
+ * forests no product setting would have allowed.
+ *
+ * It exists because entries are not bounded by OBJECTS. `walkForest`
+ * deliberately revisits a node object reached under two different parents —
+ * one object placed in two slots is two elements of the document, and counting
+ * it once would report half a real size and pass a cap the document exceeds.
+ * That is right for a count and it makes the walk exponential in depth for a
+ * forest whose branches share objects: measured on this module's own helpers, a
+ * chain of 21 distinct objects each holding the next twice walks 2,097,151
+ * entries, and every further object doubles it.
+ *
+ * A stored document can never be such a forest, because `JSON.parse` produces
+ * fresh objects and cannot express sharing. One built in memory by code can be,
+ * and these readers decide whether a document may be stored at all — so the
+ * unbounded version failed in the worst possible place.
+ */
+export const MAX_WALKABLE_ENTRIES = 1_000_000;
+
+/**
+ * A forest whose entries outrun {@link MAX_WALKABLE_ENTRIES}.
+ *
+ * Thrown rather than answered around, because every honest answer here is a
+ * refusal: a count taken from a walk that stopped early is a PARTIAL one, and
+ * returning it as a whole number is a bound that fails in the passing
+ * direction — the document reads as smaller than it is and passes the very cap
+ * this module exists to enforce.
+ *
+ * Named so a caller can tell it from a defect in its own input handling. The
+ * `nodes` a caller holds are almost never the cause; a node object reached
+ * under more than one parent is.
+ */
+export class ForestTooLargeError extends Error {
+  constructor(subject: string) {
+    super(
+      `${subject} reaches more than ${String(MAX_WALKABLE_ENTRIES)} entries ` +
+        `and cannot be measured: past that the walk is not affordable. A ` +
+        `forest this large for its object count holds a node placed under ` +
+        `more than one parent, which multiplies entries at every level.`
+    );
+    this.name = "ForestTooLargeError";
+  }
+}
+
+/**
+ * Visit the forest, refusing rather than answering from a partial walk.
+ *
+ * The one place the bound is applied, so the three readers below cannot drift
+ * on where it sits or on what happens when it is reached.
+ */
+function walkBounded(
+  nodes: BlockNode[],
+  subject: string,
+  onEntry: (depth: number) => void
+): void {
+  let seen = 0;
+  let spent = false;
+  walkForest(nodes, entry => {
+    seen += 1;
+    if (seen > MAX_WALKABLE_ENTRIES) {
+      spent = true;
+      return "stop";
+    }
+    onEntry(entry.depth);
+    return "descend";
+  });
+  if (spent) throw new ForestTooLargeError(subject);
+}
+
 /** Total node count across the forest, slots included. */
 export function countNodes(nodes: BlockNode[]): number {
   let count = 0;
   // EVERY entry counts, malformed ones included: the cap exists to reject a
   // document by its real element count, so an array padded with junk must not
   // slip past it.
-  walkForest(nodes, () => {
+  walkBounded(nodes, "this forest", () => {
     count += 1;
-    return "descend";
   });
   return count;
 }
@@ -92,9 +166,8 @@ export function countNodes(nodes: BlockNode[]): number {
 /** Deepest nesting level in the forest; an empty forest is depth 0. */
 export function treeDepth(nodes: BlockNode[]): number {
   let deepest = 0;
-  walkForest(nodes, entry => {
-    if (entry.depth > deepest) deepest = entry.depth;
-    return "descend";
+  walkBounded(nodes, "this forest", depth => {
+    if (depth > deepest) deepest = depth;
   });
   return deepest;
 }
@@ -102,7 +175,26 @@ export function treeDepth(nodes: BlockNode[]): number {
 /**
  * Serialized size of a document in bytes (UTF-8 of its JSON form — the same
  * bytes that hit storage, so the cap measures what actually gets persisted).
+ *
+ * The forest is measured FIRST, and this is not belt-and-braces. `JSON.stringify`
+ * expands a shared node object into a separate copy per path that reaches it,
+ * so the string it builds grows with ENTRIES rather than with objects — and it
+ * does not degrade gracefully. Measured on this module's own helpers: 21 shared
+ * objects produce 132 MB, and 23 raise `RangeError: Invalid string length`
+ * from a document that is a few kilobytes in memory.
+ *
+ * That error is the reason the guard runs before the serialization rather than
+ * around it. A native `RangeError` escaping here names a string length, which
+ * says nothing about the document and cannot be acted on; it also arrives from
+ * the one function whose whole job is to decide whether a document may be
+ * stored, so the failure lands where a caller is least able to interpret it.
  */
 export function documentBytes(doc: BlockDocument): number {
+  // Guarded at RUNTIME although the type says `BlockNode[]`, because a stored
+  // document arrives unvalidated and `walkForest` is written for exactly that.
+  // A document whose `nodes` is not a list has nothing to measure and is left
+  // to the serializer, which reports its own shape complaint.
+  const nodes = doc.nodes;
+  if (Array.isArray(nodes)) countNodes(nodes);
   return new TextEncoder().encode(JSON.stringify(doc)).length;
 }
