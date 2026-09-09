@@ -26,16 +26,18 @@
 "@nextlyhq/ui": patch
 ---
 
-A spacing drag handle sat on the wrong edge for half the sides, and dragged
+A spacing drag handle sat on the wrong edge for most margins, and dragged
 backwards there.
 
-Which edge of a band moves when its value grows is a property of the layout, not
-of the box: a `margin-top` in normal flow moves the block's border edge down
-while its outer edge stays pinned by whatever precedes it, and `margin-bottom`
-does the opposite. The editor now asks the element instead of assuming, for
-margins as it already did for paddings, so the control sits on the edge that
-responds and the drag follows the pointer on every side.
+Which edge of a band moves when its value grows is a property of the layout
+rather than of the box. Measured in Chromium, growing `margin-top` drives the
+block's border edge down while its outer edge stays pinned by whatever precedes
+it; `margin-left` does the same against the container, and so does `margin-right`
+on a block whose width is auto — while `margin-bottom`, and `margin-right` on a
+fixed width, do the opposite. The editor now asks the element on every side, for
+margins as it already did for paddings, so the handle sits on the edge that
+responds and the drag follows the pointer.
 
-The probe's answers are also cleared before the measurement that reads them,
-rather than after it — so a block that changes from content-sized to fixed-sized
-picks up its new answer immediately instead of waiting for an unrelated resize.
+The probe's answers are now reached through the document they were measured
+from, so an edit that turns a content-sized block into a fixed-sized one takes
+its new answer immediately rather than waiting for an unrelated resize.

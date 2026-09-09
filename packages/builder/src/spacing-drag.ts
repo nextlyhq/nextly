@@ -225,6 +225,7 @@ export interface SpacingScales {
  * @param side - the physical edge being dragged
  * @param movement - pointer travel in CLIENT pixels
  * @param scales - the scales the bands were measured at
+ * @param outward - which edge of the band moves, from {@link spacingGrowsOutward}
  * @returns the value change in CSS pixels, or `undefined` at an unusable scale
  */
 export function spacingDelta(
@@ -232,7 +233,7 @@ export function spacingDelta(
   side: SpacingSide,
   movement: { readonly dx: number; readonly dy: number },
   scales: SpacingScales,
-  outward = spacingGrowsOutward(box, false, false)
+  outward: boolean
 ): number | undefined {
   const scale = box === "margin" ? scales.marginScale : scales.scale;
   const vertical = side === "top" || side === "bottom";
@@ -442,13 +443,14 @@ const ARROW_MOVES = new Map<
  * @param key - the `KeyboardEvent.key` that was pressed
  * @param box - which box the focused band belongs to
  * @param side - the physical edge the focused handle sits on
+ * @param outward - which edge of the band moves, from {@link spacingGrowsOutward}
  * @returns the value change in CSS pixels, or `undefined` to ignore the key
  */
 export function spacingKeyDelta(
   key: string,
   box: SpacingBox,
   side: SpacingSide,
-  outward = spacingGrowsOutward(box, false, false)
+  outward: boolean
 ): number | undefined {
   if (key === "PageUp") return SPACING_PAGE_PX;
   if (key === "PageDown") return -SPACING_PAGE_PX;
@@ -494,26 +496,26 @@ export function spacingKeyDelta(
 /**
  * Whether this band thickens AWAY from the block, so a drag outward grows it.
  *
- * A margin lies outside the border box and never moves it — growing one pushes
- * the neighbour rather than the block — so a positive margin always thickens
- * outward and a negative one, laid inside the border edge, always thickens
- * inward. That much is structural.
+ * The BOX does not decide this, and it used to: a margin was called structural
+ * on the reasoning that it lies outside the border box and cannot move it.
+ * Measured, that is false for `margin-top`, for `margin-left`, and for
+ * `margin-right` on an auto-width block — `spacing-response.ts` carries the
+ * table and now answers for both boxes. So `measured` is the whole answer, and
+ * there is no longer a side of this to decide from the box's name.
  *
- * PADDING is not, and cannot be decided here: whether the border edge moves out
- * or the content edge moves in depends on whether the block's size along that
- * axis is settled by its content. `padding-response.ts` asks the element, and
- * the answer arrives as `measured`.
+ * A NEGATIVE band is the one thing that probe cannot see, because it is a fact
+ * about how the band is DRAWN rather than about how the block responds:
+ * `spacingBands` lays a negative margin INSIDE the border edge, mirrored across
+ * it. The rectangle's two edges swap roles, and the measured answer swaps too.
  *
- * @param box - which box the band belongs to
  * @param negative - whether a margin band is a negative one
- * @param measured - for padding, whether the OUTER edge was seen to respond
+ * @param measured - whether the band's OUTER edge was seen to respond
  */
 export function spacingGrowsOutward(
-  box: SpacingBox,
   negative: boolean,
   measured: boolean
 ): boolean {
-  return box === "margin" ? !negative : measured;
+  return measured !== negative;
 }
 
 /** The address one side of one box occupies at the tier being edited. */

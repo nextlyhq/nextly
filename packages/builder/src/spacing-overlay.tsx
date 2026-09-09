@@ -535,7 +535,7 @@ export function SpacingOverlay({
    */
   const gestureLive = React.useRef(false);
   /**
-   * Which padding edge responds, remembered per node and side.
+   * Which spacing edge responds, remembered per document, node and side.
    *
    * The probe writes to the rendered element, and the canvas watches its
    * subtree for exactly that — so an unmemoised probe would answer, be observed,
@@ -544,13 +544,22 @@ export function SpacingOverlay({
    * observation it causes re-measures once, and that pass reads the cache and
    * mutates nothing.
    *
-   * Dropped whenever the document changes, because an edit is the thing that can
-   * turn an auto height into a fixed one. It is not keyed on geometry: a block
-   * can gain a definite size without changing size at all.
+   * Reached THROUGH the document rather than emptied when it changes, because an
+   * edit is the thing that can turn an auto height into a fixed one and no
+   * answer may outlive it. It is not keyed on geometry: a block can gain a
+   * definite size without changing size at all.
+   *
+   * That key is also what makes it safe to read while React renders
+   * concurrently. Emptying the map meant writing to a ref DURING render, and a
+   * render React then abandons — suspended, or dropped for a higher-priority
+   * update — leaves that write standing with no measurement taken, while the
+   * canvas still mounted refills the map from its own observer. Answers reached
+   * through the document they were measured from cannot be crossed that way: an
+   * abandoned document's map is never looked up again, and is collected with it.
    */
-  const responds = React.useRef(new Map<string, boolean>());
-  /** The document those answers were probed against. See below. */
-  const probedFor = React.useRef<EditorState["document"] | null>(null);
+  const responds = React.useRef(
+    new WeakMap<EditorState["document"], Map<string, boolean>>()
+  );
   /*
    * How far the layer may paint outside itself, in pixels.
    *
@@ -560,29 +569,6 @@ export function SpacingOverlay({
   const [escape, setEscape] = React.useState(0);
 
   const { document, selectedId } = editor;
-
-  /*
-   * The probe cache is dropped on every edit, because an edit is the thing that
-   * can turn an auto height into a fixed one. Not keyed on geometry: a block can
-   * gain a definite size without changing size at all — which is also why
-   * clearing it late is not good enough.
-   *
-   * Cleared during RENDER rather than in an effect, and the ordering is the
-   * whole point. The measurement runs in a layout effect keyed on the same
-   * document, and a passive effect runs after it — so a cache cleared there is
-   * cleared AFTER the measurement that needed it, and `outwardFor` reuses the
-   * answer for the block the edit just changed. Nothing schedules a further
-   * measurement, and since the block's dimensions did not move there may be no
-   * resize to correct it either: the handle stays on the edge that has stopped
-   * moving until some unrelated geometry event.
-   *
-   * Comparing the previous document rather than depending on one, because a ref
-   * assignment during render has no dependency array to be ordered against.
-   */
-  if (probedFor.current !== document) {
-    probedFor.current = document;
-    responds.current.clear();
-  }
 
   /*
    * Handles are drawn only for a SINGLE selection.
@@ -706,10 +692,19 @@ export function SpacingOverlay({
      */
     const rootPainted = canvasPaintedScale(root);
 
+    /*
+     * THIS document's answers, created on the first probe that needs them. The
+     * measurement reads them in a layout effect, so the entry is made where the
+     * measurement happens rather than during render.
+     */
+    const cached = responds.current.get(document);
+    const answers = cached ?? new Map<string, boolean>();
+    if (cached === undefined) responds.current.set(document, answers);
+
     /** This node's answer for one box and side, probed once and remembered. */
     const outwardFor = (box: SpacingBox, side: SpacingSide): boolean => {
       const key = `${selectedId}\u0000${box}\u0000${side}`;
-      const known = responds.current.get(key);
+      const known = answers.get(key);
       if (known !== undefined) return known;
       const realm = block.ownerDocument.defaultView;
       const answer =
@@ -733,7 +728,7 @@ export function SpacingOverlay({
                   : rootPainted.x)
             )
           : false;
-      responds.current.set(key, answer);
+      answers.set(key, answer);
       return answer;
     };
 
@@ -774,10 +769,10 @@ export function SpacingOverlay({
          */
         orientation: orientationOfElement(block),
         /*
-         * ASKED of the element, once per node and side. Which edge of a padding
-         * band moves depends on whether the block's size along that axis is
-         * decided by its content, and that is not something the stored styles
-         * can answer — see `padding-response.ts`.
+         * ASKED of the element, once per node and side, for BOTH boxes. Which
+         * edge of a band moves depends on how the block's size and position are
+         * settled along that axis, and no stored style answers that — a margin
+         * no more than a padding. See `spacing-response.ts`.
          */
         outward: {
           margin: {
@@ -795,7 +790,10 @@ export function SpacingOverlay({
         },
       }
     );
-  }, [selectedId]);
+    // `document` reaches this document's probe answers, and a measurement that
+    // closed over an earlier one would file today's answers under yesterday's
+    // key — and read yesterday's back.
+  }, [selectedId, document]);
 
   React.useLayoutEffect(() => {
     if (hidden) {
@@ -806,9 +804,10 @@ export function SpacingOverlay({
       return;
     }
     measure();
-    // `document` is not read by `measure` and is listed anyway: an edit resizes
-    // the selected block, which is most of what the inspector does, and bands
-    // keyed on the selection alone would keep describing the layout it had.
+    // `document` is `measure`'s own dependency and is listed here too, because
+    // this effect must run for a reason of its own: an edit resizes the selected
+    // block, which is most of what the inspector does, and bands keyed on the
+    // selection alone would keep describing the layout it had.
   }, [measure, hidden, document]);
 
   /*

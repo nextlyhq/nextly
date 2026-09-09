@@ -280,10 +280,9 @@ function handleRect(band: SpacingBand, outward: boolean, nudged = false): Rect {
   const far = side === "bottom" || side === "right";
   /*
    * The edge that MOVES when the value grows, which is where the control
-   * belongs. `outward` says which one that is, and it is not a property of the
-   * box alone: a margin always thickens away from the block and a negative one
-   * always inward, but a padding depends on the block's sizing model and is
-   * measured. See `spacingGrowsOutward` and `padding-response.ts`.
+   * belongs. `outward` says which one that is, and it is a property of neither
+   * the box nor the side: both boxes depend on the block's sizing model, so both
+   * are measured. See `spacingGrowsOutward` and `spacing-response.ts`.
    */
   const atMax = far === outward;
   const half = HANDLE_PX / 2;
@@ -505,17 +504,14 @@ export function SpacingHandles({
    * Which way each band thickens, and therefore which edge carries its handle
    * and which way a drag on it grows the value.
    *
-   * Structural for a margin — it lies outside the border box and never moves
-   * it. MEASURED for a padding, because it depends on whether the block's size
-   * along that axis is settled by its content: see `padding-response.ts`.
+   * MEASURED for both boxes. It was once structural for a margin, on reasoning
+   * the element disagrees with: growing `margin-top` drives the border edge down
+   * while the outer edge stays pinned by whatever precedes it. See
+   * `spacing-response.ts`, which asks rather than assumes.
    */
   const outwardOf = React.useCallback(
     (band: SpacingBand): boolean =>
-      spacingGrowsOutward(
-        band.box,
-        band.negative,
-        subject.outward[band.box][band.side]
-      ),
+      spacingGrowsOutward(band.negative, subject.outward[band.box][band.side]),
     [subject.outward]
   );
 

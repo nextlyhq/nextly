@@ -25,23 +25,31 @@
  * complete by construction.
  *
  * MARGINS were once excluded from this on the reasoning that one lies outside
- * the border box and never moves it. That was wrong, and measured wrong the same
- * way: in normal flow and in a flex column alike, growing `margin-top` moves the
- * block's border edge DOWN while the outer margin edge — pinned by whatever
- * precedes it — stays exactly where it was. `margin-bottom` is the opposite, and
- * so the four sides do not agree with each other any more than the paddings do.
+ * the border box and never moves it. That was wrong, and wrong the same way the
+ * padding table was: by reasoning about layout rather than asking it. Measured
+ * in Chromium on a block in normal flow, and again in a flex column:
  *
- * | side | what moves |
- * | --- | --- |
- * | `margin-top`, `margin-left` | the border edge, INWARD |
- * | `margin-bottom`, `margin-right` | the outer edge, outward |
+ * | band | border edge | outer margin edge |
+ * | --- | --- | --- |
+ * | `margin-top` | moves INWARD | pinned by what precedes it |
+ * | `margin-left` | moves INWARD | pinned by the container |
+ * | `margin-right`, auto width | moves INWARD | pinned by the container |
+ * | `margin-right`, fixed width | pinned | moves outward |
+ * | `margin-bottom` | pinned | moves outward |
  *
- * The two boxes read the same probe in opposite directions, and that is not an
- * inconsistency but the geometry: a padding band's far edge from the block's
- * middle IS the border edge, and a margin band's far edge is the other one. So
- * the border edge moving means a padding grew outward and a margin grew inward.
+ * Exactly one of a margin band's two edges moves, so asking whether the BORDER
+ * edge moved answers it: if it did, the outer edge is the pinned one. And the
+ * question is not which SIDE — `margin-right` answers both ways depending on
+ * whether the width is settled — which is why no table can stand in for asking.
  *
- * @module padding-response
+ * The two boxes therefore read the probe differently, and the difference is the
+ * geometry rather than an inconsistency. A padding band's far edge from the
+ * block's middle IS the border edge, and a padding can only push it outward, so
+ * a padding is answered by SIGNED outward movement. A margin band's far edge is
+ * the other one, and a margin drives the border edge either way, so a margin is
+ * answered by whether it moved AT ALL.
+ *
+ * @module spacing-response
  */
 
 import { boxAcross } from "./geometry-dom";
@@ -169,13 +177,20 @@ export function spacingRespondsOutward(
    * other one is not a smaller movement — it is no movement at all.
    */
   const expected = PROBE_PX * (Number.isFinite(scale) && scale > 0 ? scale : 1);
-  const borderEdgeMoved = edgeMovedOut(before, after, side) > expected / 2;
+  const moved = edgeMovedOut(before, after, side);
   /*
-   * Read in opposite directions for the two boxes, because the border edge is
-   * the far edge of a padding band and the NEAR edge of a margin one. A border
-   * edge that moved outward therefore means a padding thickened away from the
-   * block — and means a margin thickened toward it, since its own outer edge
-   * stayed where whatever precedes it pinned it.
+   * A padding is asked whether the border edge moved OUTWARD, because that edge
+   * is the far one of its band and a padding cannot pull it inward: growing one
+   * either pushes the border edge out or is absorbed by a size already settled.
    */
-  return box === "padding" ? borderEdgeMoved : !borderEdgeMoved;
+  if (box === "padding") return moved > expected / 2;
+  /*
+   * A margin is asked whether that edge moved AT ALL, and the sign is precisely
+   * what the first attempt at this got wrong. `margin-top` drives the border
+   * edge DOWN — inward, which reads NEGATIVE here — so a signed comparison filed
+   * it under "did not move", concluded the outer edge was the live one, and put
+   * the handle back on the pinned edge this module exists to find. A border edge
+   * that moved means the outer one is pinned, and so the band grows inward.
+   */
+  return Math.abs(moved) <= expected / 2;
 }

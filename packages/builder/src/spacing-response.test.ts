@@ -10,11 +10,12 @@
  * against a node the canvas is rendering: it writes to that element, and it must
  * restore it exactly, or it is an edit nobody made.
  *
- * @module padding-response.test
+ * @module spacing-response.test
  */
 
 import { describe, expect, it } from "vitest";
 
+import type { SpacingBox, SpacingSide } from "./spacing-bands";
 import { spacingRespondsOutward } from "./spacing-response";
 
 function block(css?: string): HTMLElement {
@@ -79,36 +80,139 @@ describe("the threshold is judged in the units the probe is SEEN in", () => {
   });
 });
 
-describe("the two boxes read the same probe in opposite directions", () => {
+describe("every side, against what Chromium actually does", () => {
   /*
-   * The border edge is the FAR edge of a padding band and the NEAR edge of a
-   * margin one, so a border edge that moved outward means a padding thickened
-   * away from the block and a margin thickened toward it.
+   * The rows below were MEASURED, in Chromium, one case at a time: a block in
+   * normal flow, its band's two edges read before and after the value grew by
+   * ten. They are here rather than in a comment because two rounds of this
+   * module shipped a table reasoned out instead, and both were wrong.
    *
-   * Measured in Chromium, and this is what made the old table wrong on both
-   * counts: `margin-top` in normal flow and in a flex column moves the block's
-   * border edge DOWN while its outer edge stays pinned by whatever precedes it,
-   * and `margin-bottom` does the opposite.
+   * `signed` is what `edgeMovedOut` sees — the border edge's movement AWAY from
+   * the block's middle — and it is negative wherever the border edge came
+   * inward, which is the case a signed comparison silently filed under "did not
+   * move at all".
+   *
+   * Note `margin-right` appearing twice with opposite answers. That is the row
+   * that rules out any table keyed on the side: growing it on an auto-width
+   * block eats the block's own width and leaves the outer edge pinned to the
+   * container, while on a fixed-width one it pushes outward.
    */
-  function respondsWith(box: "margin" | "padding", grewBy: number): boolean {
+  const MEASURED = [
+    {
+      case: "flow margin-top",
+      box: "margin",
+      side: "top",
+      signed: -10,
+      out: false,
+    },
+    {
+      case: "flow margin-bottom",
+      box: "margin",
+      side: "bottom",
+      signed: 0,
+      out: true,
+    },
+    {
+      case: "flow margin-left",
+      box: "margin",
+      side: "left",
+      signed: -10,
+      out: false,
+    },
+    {
+      case: "auto-width margin-right",
+      box: "margin",
+      side: "right",
+      signed: -10,
+      out: false,
+    },
+    {
+      case: "fixed-width margin-right",
+      box: "margin",
+      side: "right",
+      signed: 0,
+      out: true,
+    },
+    {
+      case: "auto-height padding-bottom",
+      box: "padding",
+      side: "bottom",
+      signed: 10,
+      out: true,
+    },
+    {
+      case: "fixed-height padding-bottom",
+      box: "padding",
+      side: "bottom",
+      signed: 0,
+      out: false,
+    },
+    {
+      case: "auto-height padding-top",
+      box: "padding",
+      side: "top",
+      signed: 0,
+      out: false,
+    },
+    {
+      case: "auto-height padding-right",
+      box: "padding",
+      side: "right",
+      signed: 0,
+      out: false,
+    },
+  ] as const satisfies readonly {
+    readonly case: string;
+    readonly box: SpacingBox;
+    readonly side: SpacingSide;
+    readonly signed: number;
+    readonly out: boolean;
+  }[];
+
+  /*
+   * jsdom lays nothing out, so the movement each row measured is supplied
+   * directly: the border box is stubbed to displace that edge by `signed`
+   * pixels outward, negative meaning inward.
+   */
+  function respondsWhenBorderMoves(
+    box: SpacingBox,
+    side: SpacingSide,
+    signed: number
+  ): boolean {
     const element = block();
+    const base = { top: 100, bottom: 200, left: 100, right: 200 };
     let call = 0;
     element.getBoundingClientRect = () => {
       call += 1;
-      const bottom = call === 1 ? 100 : 100 + grewBy;
-      return { top: 0, bottom, left: 0, right: 100 } as DOMRect;
+      if (call === 1) return { ...base } as DOMRect;
+      const after = { ...base };
+      if (side === "top") after.top = base.top - signed;
+      if (side === "bottom") after.bottom = base.bottom + signed;
+      if (side === "left") after.left = base.left - signed;
+      if (side === "right") after.right = base.right + signed;
+      return after as DOMRect;
     };
-    return spacingRespondsOutward(element, box, "bottom", 1);
+    return spacingRespondsOutward(element, box, side, 1);
   }
 
-  it("reads a moving border edge as a padding growing outward", () => {
-    expect(respondsWith("padding", 10)).toBe(true);
-    expect(respondsWith("padding", 0)).toBe(false);
-  });
+  it.each(MEASURED)(
+    "$case: a border edge moving $signed reads as outward $out",
+    ({ box, side, signed, out }) => {
+      expect(respondsWhenBorderMoves(box, side, signed)).toBe(out);
+    }
+  );
 
-  it("reads the same movement as a margin growing INWARD", () => {
-    expect(respondsWith("margin", 10)).toBe(false);
-    expect(respondsWith("margin", 0)).toBe(true);
+  /*
+   * The margin question is whether that edge moved AT ALL, so the two signs of
+   * one movement must give one answer. Asserted apart from the table because it
+   * is the property, and the table is only the evidence for it.
+   */
+  it("reads a margin's border edge the same way whichever way it moved", () => {
+    for (const side of ["top", "bottom", "left", "right"] as const) {
+      expect(respondsWhenBorderMoves("margin", side, 10), side).toBe(
+        respondsWhenBorderMoves("margin", side, -10)
+      );
+    }
   });
 });
 
