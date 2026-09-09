@@ -31,6 +31,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defineCollection, text } from "../../../config";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { isSuperAdmin } from "../../../services/lib/permissions";
+import { narrowScope } from "../../../auth/authenticated-scope";
 import { definePlugin } from "../../plugin-context";
 import { createTestNextly, type TestNextly } from "../../test-nextly";
 
@@ -75,7 +76,20 @@ const spelledNotes = defineCollection({
     read: ({ permissions }: { permissions: string[] }) =>
       permissions.includes("notes:read"),
   },
-  fields: [text({ name: "title" })],
+  fields: [
+    text({ name: "title" }),
+    text({
+      name: "gatedByPermission",
+      // A DIFFERENT grant from the collection's own read rule above. Narrowing
+      // this one away must hide the field while leaving the row readable; gate
+      // both on the same grant and the whole read is refused, which would pass
+      // for the wrong reason.
+      access: {
+        read: ({ permissions }: { permissions: string[] }) =>
+          permissions.includes("posts:read"),
+      },
+    } as never),
+  ],
 });
 
 const gatePlugin = definePlugin({
@@ -160,6 +174,34 @@ const gatePlugin = definePlugin({
       },
       {
         method: "POST",
+        path: "/narrow-then-read",
+        /**
+         * A route restricting itself before a call, which is what
+         * `ctx.authenticatedScope` exists to allow.
+         *
+         * It gives up `read-posts` and keeps `read-notes`, so the row stays
+         * readable and only the field gated on the surrendered grant should
+         * disappear.
+         */
+        handler: async (_req, ctx) => {
+          const narrowed = narrowScope(
+            ctx.authenticatedScope!,
+            grant => grant.slug !== "read-posts"
+          );
+          const found = await ctx.services.collections.listEntries(
+            "notes",
+            {},
+            {
+              as: "user",
+              user: ctx.user ?? undefined,
+              authenticatedScope: narrowed,
+            }
+          );
+          return Response.json({ rows: found.data });
+        },
+      },
+      {
+        method: "POST",
         path: "/mutate-scope",
         /**
          * A handler that narrows its own scope in place — the thing
@@ -170,8 +212,20 @@ const gatePlugin = definePlugin({
         handler: async (_req, ctx) => {
           const scope = ctx.authenticatedScope;
           const before = scope ? [...scope.permissions] : [];
-          scope?.permissions.splice(0, scope.permissions.length);
-          return Response.json({ before, after: scope?.permissions ?? [] });
+          // The edit the type system refuses and the runtime must refuse too.
+          // Cast away the readonly so this compiles: a plugin written in
+          // JavaScript has no type to stop it, and the freeze is what does.
+          let refused = false;
+          try {
+            (scope?.permissions as string[] | undefined)?.splice(0);
+          } catch {
+            refused = true;
+          }
+          return Response.json({
+            before,
+            refused,
+            after: [...(scope?.permissions ?? [])],
+          });
         },
       },
     ],
@@ -179,7 +233,12 @@ const gatePlugin = definePlugin({
 });
 
 function post(
-  sub: "tx-write" | "read-one" | "read-spelled" | "mutate-scope",
+  sub:
+    | "tx-write"
+    | "read-one"
+    | "read-spelled"
+    | "narrow-then-read"
+    | "mutate-scope",
   headers: Record<string, string>
 ): Promise<Response> {
   const handlers = createDynamicHandlers();
@@ -188,6 +247,32 @@ function post(
   return handlers.POST(new Request(url, { method: "POST", headers }), {
     params: Promise.resolve({ params }),
   });
+}
+
+/**
+ * The same read over REST, which is a different transport with a different way
+ * of carrying the caller's scope.
+ *
+ * Route params are strings, so the scope written into them recovered the stored
+ * permission slugs and neither the caller's roles nor the rows a rule's
+ * `resource:action` spelling comes from. Every gate reading it therefore judged
+ * an API key on a scope missing most of itself — in the direction that DENIES.
+ */
+function restGet(
+  collection: string,
+  headers: Record<string, string>
+): Promise<Response> {
+  const handlers = createDynamicHandlers();
+  return handlers.GET(
+    new Request(`http://localhost/api/collections/${collection}/entries`, {
+      headers,
+    }),
+    {
+      params: Promise.resolve({
+        params: ["collections", collection, "entries"],
+      }),
+    }
+  );
 }
 
 let handle: TestNextly | undefined;
@@ -308,6 +393,21 @@ function forgetResolvedGrants(): void {
   ).invalidatePermissionsCache(keyId);
 }
 
+/** Seed a `notes` row as the trusted server. */
+async function seedNote(): Promise<void> {
+  await (
+    handle!.nextly as unknown as {
+      create: (a: {
+        collection: string;
+        data: Record<string, unknown>;
+      }) => Promise<unknown>;
+    }
+  ).create({
+    collection: "notes",
+    data: { title: "n", gatedByPermission: "secret" },
+  });
+}
+
 /** Seed a row as the trusted server, so the read tests have something to read. */
 async function seedPost(): Promise<void> {
   const nextly = handle!.nextly as unknown as {
@@ -389,7 +489,61 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
     ).toBe(true);
   });
 
-  it("does not let a handler's narrowing outlive its own request", async () => {
+  it("carries a narrowing to the FIELD gate, not just the coarse one", async () => {
+    const key = await viewerKeyOwnedBySuperAdmin();
+    await seedNote();
+    const res = await post("narrow-then-read", {
+      authorization: `Bearer ${key}`,
+    });
+    const body = (await res.json()) as { rows: Record<string, unknown>[] };
+    // The control. The narrowing kept `read-notes`, so the row must still come
+    // back — otherwise the field is missing because the whole read was refused,
+    // which the assertion below cannot tell from a narrowing that worked.
+    expect(
+      body.rows.length,
+      "the narrowing kept `read-notes`, so the row must still be readable"
+    ).toBeGreaterThan(0);
+    expect(body.rows[0]?.title, "the ungated field must survive").toBe("n");
+    expect(
+      body.rows[0],
+      "the route gave up `read-posts` and a field gated on it was returned " +
+        "anyway. The coarse check compares the stored slugs and the FIELD rule " +
+        "reads the other spelling, so a narrowing that only reached one of " +
+        "them left the field open."
+    ).not.toHaveProperty("gatedByPermission");
+  });
+
+  it("carries the key's whole scope over REST, not a lossy copy of it", async () => {
+    const key = await viewerKeyOwnedBySuperAdmin();
+    await seedNote();
+
+    const res = await restGet("notes", { authorization: `Bearer ${key}` });
+    expect(
+      res.status,
+      "a 401 would mean the key never authenticated on this transport"
+    ).not.toBe(401);
+
+    const body = (await res.json()) as {
+      items?: Record<string, unknown>[];
+    };
+    // The collection's own rule reads `permissions.includes("notes:read")` and
+    // the key holds `read-notes`. A refusal here means the rule was handed the
+    // stored spelling, which no documented rule is written in.
+    expect(
+      body.items?.length,
+      "the collection rule asks for `notes:read` and the key holds that grant"
+    ).toBeGreaterThan(0);
+    // And the field rule, which asks for a grant the key also holds. Absent
+    // means the same lossy scope reached one gate deeper.
+    expect(
+      body.items?.[0],
+      "a field gated on `posts:read` was withheld from a key that holds " +
+        "`read-posts`. The REST scope carried neither the rows that spelling " +
+        "is derived from nor the caller's roles."
+    ).toHaveProperty("gatedByPermission");
+  });
+
+  it("does not let a handler edit the grants it was handed", async () => {
     // Three requests, because the grants are handed out from two branches and
     // BOTH must hand out a copy: the first request resolves them fresh, and
     // every request after it reads the five-minute cache. Two requests exercise
@@ -404,14 +558,25 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
       const res = await post("mutate-scope", {
         authorization: `Bearer ${key}`,
       });
-      const body = (await res.json()) as { before: string[]; after: string[] };
-      // Each handler clears its own scope in place. What the NEXT request sees
-      // is the question; `before` is read from the scope it was handed.
+      const body = (await res.json()) as {
+        before: string[];
+        after: string[];
+        refused: boolean;
+      };
+      // The handler tried to clear its own scope and must have been refused.
+      // Without this the assertions below pass on a build where the handler
+      // silently did nothing, which cannot distinguish a scope that is
+      // protected from one nobody attacked.
       expect(
-        body.after,
-        "the handler must actually have cleared its own scope, or nothing was " +
-          "mutated and the requests after it prove nothing"
-      ).toEqual([]);
+        body.refused,
+        "editing the scope in place must throw. A writable array here is one " +
+          "the handler can desync from `grants`, and the field gate reads the " +
+          "spelling derived from `grants`."
+      ).toBe(true);
+      expect(
+        [...body.after].sort(),
+        "the scope must be unchanged after the refused edit"
+      ).toEqual(["read-notes", "read-posts"]);
       return [...body.before].sort();
     };
 

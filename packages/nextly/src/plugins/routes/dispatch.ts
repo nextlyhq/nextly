@@ -1,7 +1,10 @@
 import { buildErrorResponse } from "../../api/error-response";
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { applySessionCacheHeaders } from "../../api/response-shapes";
-import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import {
+  apiKeyScope,
+  type AuthenticatedScope,
+} from "../../auth/authenticated-scope";
 import { runWithCallerScope } from "../../auth/caller-scope";
 import {
   isErrorResponse,
@@ -90,12 +93,7 @@ async function resolvePluginRouteAuth(
   // caller carries no scope and keeps resolving the normal way.
   const authenticatedScope =
     authResult.authMethod === "api-key"
-      ? {
-          actorType: "apiKey" as const,
-          permissions: authResult.permissions,
-          rulePermissions: authResult.rulePermissions,
-          roles: authResult.roles,
-        }
+      ? apiKeyScope(authResult.grants ?? [], authResult.roles)
       : undefined;
   return { user, authenticatedScope };
 }

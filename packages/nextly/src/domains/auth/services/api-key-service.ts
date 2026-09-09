@@ -37,6 +37,7 @@ import { createHash, randomBytes, randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
+import type { GrantedPermission } from "../../../auth/authenticated-scope";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import { apiKeys as apiKeysMysql } from "../../../schemas/api-keys/mysql";
@@ -260,7 +261,7 @@ export function isKeyExpired(expiresAt: Date | null): boolean {
 // an ApiKeyService instance — same pattern as services/lib/permissions.ts.
 const _apiKeyPermissionsCache = new Map<
   string,
-  { grants: ApiKeyGrants; cachedAt: number }
+  { grants: readonly GrantedPermission[]; cachedAt: number }
 >();
 const _PERMISSIONS_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -280,46 +281,11 @@ const _PERMISSIONS_CACHE_TTL_MS = 5 * 60 * 1000;
  * supported by `RolePermissionService`, so splitting on the hyphen would invent
  * a resource that no row names.
  */
-interface ApiKeyGrants {
-  /** `action-resource`, as stored. What the coarse grant check tests. */
-  slugs: string[];
-  /** `resource:action`. What a code-defined access rule receives. */
-  rulePermissions: string[];
-}
-
-/** A copy, so a caller narrowing its own scope cannot edit the shared cache. */
-function copyGrants(grants: ApiKeyGrants): ApiKeyGrants {
-  return {
-    slugs: [...grants.slugs],
-    rulePermissions: [...grants.rulePermissions],
-  };
-}
-
-/** One permission row, carrying everything both spellings are composed from. */
-interface ApiKeyPermissionRow {
-  slug: string;
-  action: string;
-  resource: string;
-}
-
-/**
- * Both spellings off one row set, deduplicated independently.
- *
- * `resource:action` is built the way `listEffectivePermissions` builds it for a
- * session caller, so a rule reads the same string whichever way the request
- * authenticated — which is the property `AccessFunction` states as its contract.
- */
-function projectGrants(rows: ApiKeyPermissionRow[]): ApiKeyGrants {
-  const slugs = new Set<string>();
-  const rulePermissions = new Set<string>();
-  for (const row of rows) {
-    slugs.add(row.slug);
-    rulePermissions.add(`${row.resource}:${row.action}`);
-  }
-  return {
-    slugs: Array.from(slugs),
-    rulePermissions: Array.from(rulePermissions),
-  };
+/** Distinct rows, keyed on the slug — the identity a grant is stored under. */
+function dedupeGrants(rows: GrantedPermission[]): GrantedPermission[] {
+  const bySlug = new Map<string, GrantedPermission>();
+  for (const row of rows) if (!bySlug.has(row.slug)) bySlug.set(row.slug, row);
+  return Array.from(bySlug.values());
 }
 
 /**
@@ -726,8 +692,13 @@ export class ApiKeyService extends BaseService {
     userId: string,
     keyId: string
   ): Promise<string[]> {
-    return (await this.resolveApiKeyGrants(tokenType, roleId, userId, keyId))
-      .slugs;
+    const grants = await this.resolveApiKeyGrants(
+      tokenType,
+      roleId,
+      userId,
+      keyId
+    );
+    return grants.map(grant => grant.slug);
   }
 
   /**
@@ -749,16 +720,16 @@ export class ApiKeyService extends BaseService {
     roleId: string | null,
     userId: string,
     keyId: string
-  ): Promise<ApiKeyGrants> {
+  ): Promise<readonly GrantedPermission[]> {
     const cacheKey = `apikey:${keyId}`;
     const now = Date.now();
 
     const cached = _apiKeyPermissionsCache.get(cacheKey);
     if (cached && now - cached.cachedAt < _PERMISSIONS_CACHE_TTL_MS) {
-      return copyGrants(cached.grants);
+      return cached.grants;
     }
 
-    let rows: ApiKeyPermissionRow[];
+    let rows: GrantedPermission[];
 
     if (tokenType === "role-based") {
       // Guard: referenced role was deleted via onDelete: "set null"
@@ -767,7 +738,7 @@ export class ApiKeyService extends BaseService {
           `API key ${keyId} is role-based but its role has been deleted — all requests will be denied`,
           { keyId }
         );
-        return { slugs: [], rulePermissions: [] };
+        return Object.freeze([]);
       }
       rows = await this.resolveRolePermissionRows(roleId);
     } else {
@@ -783,9 +754,16 @@ export class ApiKeyService extends BaseService {
           : all;
     }
 
-    const grants = projectGrants(rows);
+    // Frozen rather than copied per caller. The array and its rows are shared
+    // by every request this key makes for the TTL, and a caller narrowing its
+    // own scope used to edit the key's real grants through exactly this
+    // reference. `narrowScope` returns a new scope instead, so nothing needs to
+    // write here and nothing may.
+    const grants = Object.freeze(
+      dedupeGrants(rows).map(row => Object.freeze(row))
+    );
     _apiKeyPermissionsCache.set(cacheKey, { grants, cachedAt: now });
-    return copyGrants(grants);
+    return grants;
   }
 
   /**
@@ -842,7 +820,7 @@ export class ApiKeyService extends BaseService {
 
   private async resolveRolePermissionRows(
     roleId: string
-  ): Promise<ApiKeyPermissionRow[]> {
+  ): Promise<GrantedPermission[]> {
     const rows = await this.db
       .select({
         slug: this.permissionsTable.slug,
@@ -856,12 +834,12 @@ export class ApiKeyService extends BaseService {
       )
       .where(eq(this.rolePermissionsTable.roleId, roleId));
 
-    return rows as ApiKeyPermissionRow[];
+    return rows as GrantedPermission[];
   }
 
   private async resolveUserPermissionRows(
     userId: string
-  ): Promise<ApiKeyPermissionRow[]> {
+  ): Promise<GrantedPermission[]> {
     const rows = await this.db
       .select({
         slug: this.permissionsTable.slug,
@@ -879,7 +857,7 @@ export class ApiKeyService extends BaseService {
       )
       .where(eq(this.userRolesTable.userId, userId));
 
-    return rows as ApiKeyPermissionRow[];
+    return rows as GrantedPermission[];
   }
 
   /**

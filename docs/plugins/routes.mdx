@@ -48,17 +48,38 @@ plugin `ctx` (services/db/events/logger/self/…) **plus** per-request fields:
 
 ### The two spellings of a permission
 
-`ctx.authenticatedScope` carries the same grants twice, because a permission is
-written two ways and both are correct:
+A permission is written two ways, and both are correct:
 
-| Field | Spelling | Where it is used |
-|---|---|---|
-| `permissions` | `read-posts` | The stored slug — the database, the admin's permission matrix, and `requiredPermission` on a route. |
-| `rulePermissions` | `posts:read` | What a code-defined `access` rule receives, on a collection, a Single or a field. |
+| Spelling | Where it is used |
+|---|---|
+| `read-posts` | The stored slug — the database, the admin's permission matrix, and `requiredPermission` on a route. |
+| `posts:read` | What a code-defined `access` rule receives, on a collection, a Single or a field. |
 
-Both are built from the same permission row, so they always name the same set.
-Read `permissions` when you are comparing against a slug; read `rulePermissions`
-when you are reproducing what an `access` rule would see.
+`ctx.authenticatedScope.permissions` gives you the first. Both are derived from
+`ctx.authenticatedScope.grants`, the permission rows the key resolved to, so
+they can never name different sets.
+
+### Narrowing the scope before a sensitive call
+
+A route may give up part of its own authority for one call. Use `narrowScope`;
+the scope's arrays are frozen, so editing them is refused:
+
+```ts
+import { narrowScope } from "@nextlyhq/plugin-sdk";
+
+const readOnly = narrowScope(ctx.authenticatedScope!, g => g.action === "read");
+
+await ctx.services.collections.updateEntry("posts", id, data, {
+  as: "user",
+  user: ctx.user ?? undefined,
+  authenticatedScope: readOnly, // refused: the scope no longer holds the write
+});
+```
+
+The narrowed scope applies for the whole call, so every check underneath sees
+it — the collection gate, each field's `access` rule, and anything nested. It
+can only ever remove authority; a scope cannot grant itself something the key
+was not issued.
 
 | `ctx.params` | Path parameters captured from `:param` segments. |
 

@@ -623,7 +623,15 @@ export type { AuthUser } from "./types/auth";
 // Exported for the same reason as `AuthUser` beside it: `PluginRouteContext`
 // carries an `authenticatedScope`, and a plugin typing a helper against it
 // otherwise has to reach into a deep path or widen to `unknown`.
-export type { AuthenticatedScope } from "./auth/authenticated-scope";
+export type {
+  AuthenticatedScope,
+  GrantedPermission,
+} from "./auth/authenticated-scope";
+// `narrowScope` is a VALUE, not a type: a route restricting itself before a
+// sensitive call has no other correct way to do it. The scope's arrays are
+// frozen, and editing one in place would leave the spelling the field gate
+// reads still holding the surrendered grant.
+export { narrowScope } from "./auth/authenticated-scope";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).

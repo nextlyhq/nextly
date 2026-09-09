@@ -26,7 +26,10 @@
  * @module shared/lib/field-level-registry
  */
 
-import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import {
+  type AuthenticatedScope,
+  ruleFacingPermissions,
+} from "../../auth/authenticated-scope";
 import { currentCallerScope } from "../../auth/caller-scope";
 import { NextlyError } from "../../errors/nextly-error";
 import { normalizeHookError } from "../../hooks/normalize-hook-error";
@@ -103,8 +106,8 @@ function grantsResolver(
     const effective = scope ?? currentCallerScope();
     if (effective?.actorType === "apiKey") {
       pending = Promise.resolve({
-        permissions: effective.rulePermissions ?? effective.permissions,
-        roles: effective.roles ?? [],
+        permissions: ruleFacingPermissions(effective),
+        roles: [...(effective.roles ?? [])],
       });
       return pending;
     }
