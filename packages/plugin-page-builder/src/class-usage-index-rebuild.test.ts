@@ -12,10 +12,14 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 
+import { classUsageIndex } from "./class-usage-reconcile";
+import { usageTarget } from "./class-usage-write";
 import {
   rebuildClassUsageIndex,
+  rebuildUsageIndexes,
   type ClassUsageDocumentStore,
 } from "./class-usage-index-rebuild";
+import { componentUsageIndex } from "./component-usage";
 import type { ClassUsageIndexStore } from "./class-usage-maintenance";
 
 const documentUsing = (...classes: string[]) => ({
@@ -638,5 +642,75 @@ describe("the coordinates an existence check is asked in", () => {
     });
 
     expect(asked).toEqual(["gone-page:fr:draft"]);
+  });
+});
+
+describe("repairing every index a site maintains", () => {
+  /** A store that keeps whole rows, so each index's own columns are visible. */
+  function recordingStore() {
+    const written: Record<string, unknown>[] = [];
+    const store: ClassUsageIndexStore = {
+      find: async () => ({ items: [], meta: { hasNext: false } }),
+      create: async args => {
+        written.push(args.data);
+        return {};
+      },
+      delete: async () => ({}),
+    };
+    return { store, written };
+  }
+
+  it("fills BOTH indexes from one walk", async () => {
+    // The upgrade case, and the reason this entry point exists. An installation
+    // that already held pages gets an empty component index and it fills only
+    // for pages saved AFTER the upgrade, so every stored reference stays
+    // invisible until somebody resaves the page. An empty index answers
+    // "references nothing" — the answer a delete check acts on.
+    const docs = documentStore([
+      {
+        id: "page-1",
+        content: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            {
+              id: "a",
+              type: "core/text",
+              version: 1,
+              props: {},
+              classes: ["hero"],
+            },
+            {
+              id: "i1",
+              type: "nextly/component-instance",
+              version: 1,
+              props: { componentId: "header" },
+            },
+          ],
+        },
+      },
+    ]);
+    const classes = recordingStore();
+    const components = recordingStore();
+
+    await rebuildUsageIndexes({
+      limits: DEFAULT_LIMITS,
+      documents: docs.store,
+      targets: [
+        usageTarget(classUsageIndex, classes.store),
+        usageTarget(componentUsageIndex, components.store),
+      ],
+      collection: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    // Both asserted together: either alone passes on a rebuild that repaired
+    // one index and silently skipped the other, which is the defect itself.
+    expect({
+      classes: classes.written.map(r => r.classId),
+      components: components.written.map(r => r.componentId),
+    }).toEqual({ classes: ["hero"], components: ["header"] });
   });
 });

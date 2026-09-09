@@ -183,7 +183,8 @@ export function deriveClassUsageRows(
 export const classUsageIndex: UsageIndex<ClassUsageRow> = {
   readOwn: item =>
     typeof item.classId === "string" ? { classId: item.classId } : null,
-  referenceOf: row => row.classId,
+  // The class row carries nothing beside its reference, so the key IS the id.
+  reconcileKeyOf: row => row.classId,
   rowFor: (subject, referenceId) => ({ ...subject, classId: referenceId }),
   markerFor: subject => ({ ...subject, classId: UNDETERMINED_CLASS_ID }),
   isMarker: row => row.classId === UNDETERMINED_CLASS_ID,
@@ -281,7 +282,7 @@ export function reconcileUsage<TRow extends UsageSubject>(
     }
   }
 
-  const wanted = new Set(derived.map(row => index.referenceOf(row)));
+  const wanted = new Set(derived.map(row => index.reconcileKeyOf(row)));
   // Which classes a SURVIVING stored row records. A class reaches this set only
   // by having a row that is both wanted and the first of its class, which is
   // what makes it the right thing to subtract the inserts from: a class whose
@@ -309,16 +310,16 @@ export function reconcileUsage<TRow extends UsageSubject>(
     // re-derives from the row that won. That is a property of the write path,
     // which cannot be established here, and this comment is where it is
     // recorded rather than assumed.
-    const duplicate = kept.has(index.referenceOf(row));
-    if (duplicate || !wanted.has(index.referenceOf(row))) {
+    const duplicate = kept.has(index.reconcileKeyOf(row));
+    if (duplicate || !wanted.has(index.reconcileKeyOf(row))) {
       remove.push(row.id);
       continue;
     }
-    kept.add(index.referenceOf(row));
+    kept.add(index.reconcileKeyOf(row));
   }
 
   return {
-    insert: derived.filter(row => !kept.has(index.referenceOf(row))),
+    insert: derived.filter(row => !kept.has(index.reconcileKeyOf(row))),
     remove,
   };
 }

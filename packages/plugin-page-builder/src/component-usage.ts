@@ -95,7 +95,18 @@ export const componentUsageIndex: UsageIndex<ComponentUsageRow> = {
     if (typeof componentId !== "string") return null;
     return { kind, componentId };
   },
-  referenceOf: row => row.componentId,
+  // The KIND is part of the key, not only the id. A stored row can contradict
+  // itself — `kind: "unreadable"` beside a real component id, after a restore
+  // or a hand edit — and keying on the id alone makes that row and the genuine
+  // reference to the same component look like one record: the malformed one is
+  // kept, the real one is never inserted, and reconciliation cannot tell them
+  // apart to repair it. With the kind in the key the contradiction is simply a
+  // row no derivation claims, so the next save removes it.
+  //
+  // Rejecting it in `readOwn` instead was the other option and is worse: a row
+  // the parser skips is not reconciled either, so the contradiction would
+  // survive every save rather than being cleared by the next one.
+  reconcileKeyOf: row => `${row.kind}:${row.componentId}`,
   rowFor: (subject, referenceId) => ({
     ...subject,
     kind: "reference",

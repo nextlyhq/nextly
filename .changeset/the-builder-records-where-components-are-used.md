@@ -39,3 +39,10 @@ read rather than the document being read twice.
 A page too large to read whole records that fact rather than recording nothing,
 because "embeds no components" is the answer that would make deleting one look
 safe.
+
+Repairing the indexes is now one call, `rebuildUsageIndexes`, which takes every
+index a site maintains. `rebuildClassUsageIndex` still works and still repairs
+the class index alone; it is deprecated for one release because that narrowness
+is exactly the trap — a site that upgraded and ran it would have left its
+component index empty, and an empty index reports every component as used
+nowhere.

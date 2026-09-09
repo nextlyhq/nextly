@@ -109,6 +109,7 @@ export { classUsageOf } from "./class-usage";
 export type { ClassUsage } from "./class-usage";
 export {
   rebuildClassUsageIndex,
+  rebuildUsageIndexes,
   type ClassUsageDocumentStore,
   type ClassUsageRebuildReport,
 } from "./class-usage-index-rebuild";

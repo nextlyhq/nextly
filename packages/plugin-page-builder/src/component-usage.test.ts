@@ -1,7 +1,8 @@
 import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { componentUsageOf } from "./component-usage";
+import { reconcileUsage } from "./class-usage-reconcile";
+import { componentUsageIndex, componentUsageOf } from "./component-usage";
 
 const COMPONENT_INSTANCE_TYPE = "nextly/component-instance";
 
@@ -76,5 +77,64 @@ describe("what a stored document says about the components it embeds", () => {
         usage: componentUsageOf(stored, DEFAULT_LIMITS),
       }).toEqual({ stored, usage: { ids: [], complete: true } });
     }
+  });
+});
+
+describe("a stored row that contradicts itself", () => {
+  const subject = {
+    scope: "collection" as const,
+    entity: "pages",
+    entityKey: "p1",
+    field: "content",
+    locale: "",
+    variant: "published" as const,
+  };
+
+  it("does not let a malformed marker suppress the real reference", () => {
+    // A row can say it could not read the page AND name a component — after a
+    // restore, a hand edit, or a super-admin write. Keyed on the component id
+    // alone, that row and a genuine reference to the same component look like
+    // ONE record: the malformed one is kept, the real one is never inserted,
+    // and no later save can tell them apart to repair it.
+    //
+    // With the kind in the key it is simply a row no derivation claims, so the
+    // next save removes it and inserts the reference.
+    const malformed = {
+      ...subject,
+      kind: "unreadable" as const,
+      componentId: "header",
+      id: "row-1",
+    };
+    const derived = [componentUsageIndex.rowFor(subject, "header")];
+
+    const { insert, remove } = reconcileUsage(
+      componentUsageIndex,
+      subject,
+      derived,
+      [malformed]
+    );
+
+    expect({
+      inserted: insert.map(r => `${r.kind}:${r.componentId}`),
+      removed: remove,
+    }).toEqual({ inserted: ["reference:header"], removed: ["row-1"] });
+  });
+
+  it("keeps a well-formed marker while the page still cannot be read", () => {
+    // The control. Without it, a key that simply never matched anything would
+    // satisfy the case above by removing every stored row and re-inserting.
+    const marker = { ...componentUsageIndex.markerFor(subject), id: "row-1" };
+
+    const { insert, remove } = reconcileUsage(
+      componentUsageIndex,
+      subject,
+      [componentUsageIndex.markerFor(subject)],
+      [marker]
+    );
+
+    expect({ inserted: insert.length, removed: remove }).toEqual({
+      inserted: 0,
+      removed: [],
+    });
   });
 });

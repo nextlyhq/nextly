@@ -39,9 +39,10 @@ import { isPlainRecord } from "@nextlyhq/blocks-engine";
 
 import {
   forgetAbsentDocuments,
-  maintainClassUsage,
   type ClassUsageIndexStore,
 } from "./class-usage-maintenance";
+import { classUsageIndex } from "./class-usage-reconcile";
+import { usageTarget, type UsageTarget } from "./class-usage-write";
 import type { ClassUsageVariant } from "./collections/class-usage-index";
 import { walkPages } from "./paged-walk";
 
@@ -188,15 +189,15 @@ interface PageTally {
  * are the ones nobody knows to look at.
  */
 async function rebuildOnePage(
-  items: readonly unknown[],
   args: {
-    index: ClassUsageIndexStore;
+    targets: readonly UsageTarget[];
     collection: string;
     field: string;
     locale: string;
     variant: ClassUsageVariant;
     limits: DocumentLimits;
   },
+  items: readonly unknown[],
   visited: Set<string>
 ): Promise<PageTally> {
   let scanned = 0;
@@ -208,19 +209,34 @@ async function rebuildOnePage(
     scanned += 1;
     visited.add(item.id);
 
-    const report = await maintainClassUsage({
-      store: args.index,
-      subject: {
-        scope: "collection",
-        entity: args.collection,
-        entityKey: item.id,
-        field: args.field,
-        locale: args.locale,
-        variant: args.variant,
-      },
-      document: item[args.field],
-      limits: args.limits,
-    });
+    const subject = {
+      scope: "collection" as const,
+      entity: args.collection,
+      entityKey: item.id,
+      field: args.field,
+      locale: args.locale,
+      variant: args.variant,
+    };
+
+    // Every index, from ONE document. A rebuild that repaired only some of them
+    // is the shape this whole slice exists to avoid: the unrepaired index reads
+    // as "references nothing", which is the answer a delete check acts on.
+    let changed = false;
+    let unread = false;
+    for (const target of args.targets) {
+      const report = await target.maintain({
+        subject,
+        document: item[args.field],
+        limits: args.limits,
+      });
+      if (report.undetermined) unread = true;
+      if (report.inserted > 0 || report.removed > 0) changed = true;
+    }
+    const report = {
+      undetermined: unread,
+      inserted: changed ? 1 : 0,
+      removed: 0,
+    };
 
     if (report.undetermined) undetermined += 1;
     // Repaired means the rows CHANGED, which is a different question from
@@ -247,9 +263,19 @@ async function rebuildOnePage(
  * or its next rebuild, and holding every document still would cost more than
  * the thing it prevents.
  */
-export async function rebuildClassUsageIndex(args: {
+export async function rebuildUsageIndexes(args: {
   documents: ClassUsageDocumentStore;
-  index: ClassUsageIndexStore;
+  /**
+   * Every index to repair from this one walk.
+   *
+   * Required, and a list rather than one store, because that is what makes
+   * leaving an index out a DECISION rather than an omission. An index absent
+   * from a rebuild is not merely unrepaired: for every document the walk
+   * visited it answers "references nothing", which cannot be told from a
+   * document that genuinely references none — and that is the answer a delete
+   * check acts on.
+   */
+  targets: readonly UsageTarget[];
   /** The collection whose documents are walked. */
   collection: string;
   /** The blocks field on those documents. */
@@ -317,6 +343,9 @@ export async function rebuildClassUsageIndex(args: {
   // Collected during the SAME walk that reconciles, rather than by reading the
   // documents again. Two reads would let a document created between them be
   // read as absent, and lose rows it should keep.
+  // Resolved ONCE. A default that allocated per page would build a target for
+  // every page of the walk, and a caller's own list would be re-read as often.
+  const resolvedTargets = args.targets;
   const visited = new Set<string>();
 
   await walkPages({
@@ -336,7 +365,11 @@ export async function rebuildClassUsageIndex(args: {
         variant: args.variant,
       }),
     onPage: async items => {
-      const tally = await rebuildOnePage(items, args, visited);
+      const tally = await rebuildOnePage(
+        { ...args, targets: resolvedTargets },
+        items,
+        visited
+      );
       scanned += tally.scanned;
       repaired += tally.repaired;
       undetermined += tally.undetermined;
@@ -346,30 +379,65 @@ export async function rebuildClassUsageIndex(args: {
   // AFTER the walk, and only after it completed: the sweep decides absence from
   // the set of documents actually seen, so running it against a partial walk
   // would delete the rows of every document the walk had not reached yet.
-  const { removed } = await forgetAbsentDocuments({
-    store: args.index,
-    scope: "collection",
-    entity: args.collection,
-    field: args.field,
-    locale: args.locale,
-    variant: args.variant,
-    visited,
-    // Asked only about a document the walk did not see, so a stable collection
-    // costs nothing. A row survives unless the document is confirmed GONE —
-    // failing towards keeping a row, because a kept stale row over-counts and
-    // blocks a delete, while a wrongly removed one under-counts and permits
-    // deleting a class the live document still renders.
-    stillExists: id =>
-      args.documents.exists({
-        collection: args.collection,
-        id,
-        // The subject's own coordinates, not the document's id alone. A row is
-        // filed under all of them, so the question that decides whether to
-        // remove it has to be asked in all of them.
-        locale: args.locale,
-        variant: args.variant,
-      }),
-  });
+  // EVERY index, for the reason the maintenance loop covers every index: a
+  // sweep that skipped one leaves rows naming documents that no longer exist,
+  // and nothing later reconciles a row whose document is gone.
+  let removed = 0;
+  for (const target of resolvedTargets) {
+    const swept = await forgetAbsentDocuments({
+      store: target.store,
+      scope: "collection",
+      entity: args.collection,
+      field: args.field,
+      locale: args.locale,
+      variant: args.variant,
+      visited,
+      // Asked only about a document the walk did not see, so a stable collection
+      // costs nothing. A row survives unless the document is confirmed GONE —
+      // failing towards keeping a row, because a kept stale row over-counts and
+      // blocks a delete, while a wrongly removed one under-counts and permits
+      // deleting a class the live document still renders.
+      stillExists: id =>
+        args.documents.exists({
+          collection: args.collection,
+          id,
+          // The subject's own coordinates, not the document's id alone. A row is
+          // filed under all of them, so the question that decides whether to
+          // remove it has to be asked in all of them.
+          locale: args.locale,
+          variant: args.variant,
+        }),
+    });
+    removed += swept.removed;
+  }
 
   return { scanned, repaired, undetermined, orphansRemoved: removed };
+}
+
+/**
+ * Repair the class index alone.
+ *
+ * @deprecated Use {@link rebuildUsageIndexes} and pass every index the site
+ * maintains. Kept for one release because the name is published, and it keeps
+ * exactly the behaviour it had: a repair of the CLASS index and no other.
+ *
+ * That narrowness is the reason for the rename rather than an accident of it.
+ * A site that upgraded and ran this would have left its component index empty,
+ * and an empty index answers "references nothing" for every document — which
+ * is the answer a delete check acts on.
+ */
+export async function rebuildClassUsageIndex(args: {
+  documents: ClassUsageDocumentStore;
+  index: ClassUsageIndexStore;
+  collection: string;
+  field: string;
+  locale: string;
+  variant: ClassUsageVariant;
+  limits: DocumentLimits;
+}): Promise<ClassUsageRebuildReport> {
+  const { index, ...rest } = args;
+  return rebuildUsageIndexes({
+    ...rest,
+    targets: [usageTarget(classUsageIndex, index)],
+  });
 }

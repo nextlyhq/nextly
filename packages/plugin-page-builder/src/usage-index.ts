@@ -160,8 +160,19 @@ export interface UsageIndex<TRow extends UsageSubject> {
    */
   readOwn(item: Record<string, unknown>): Omit<TRow, keyof UsageSubject> | null;
 
-  /** The reference a row records. */
-  referenceOf(row: TRow): string;
+  /**
+   * The key a row is reconciled by: two rows sharing one are the same record.
+   *
+   * NOT simply "the reference id", though for an index whose rows carry
+   * nothing else it is exactly that. Reconciliation matches derived rows
+   * against stored ones through this and removes what no derived row claims,
+   * so anything that distinguishes two rows an index must keep apart has to be
+   * IN it. An index whose rows carry a second column that changes their meaning
+   * — a marker flag, say — includes it, or a stored row contradicting itself
+   * suppresses the real one and no reconciliation can repair it, because the
+   * two look like the same record.
+   */
+  reconcileKeyOf(row: TRow): string;
 
   /** A row recording that `subject` references `referenceId`. */
   rowFor(subject: UsageSubject, referenceId: string): TRow;

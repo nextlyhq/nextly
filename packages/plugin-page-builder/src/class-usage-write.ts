@@ -135,6 +135,14 @@ export interface ClassUsageWriteReport {
  * save — the write amplification the design names in as many words.
  */
 export interface UsageTarget {
+  /**
+   * The store this index's rows live in.
+   *
+   * Exposed beside `maintain` because a rebuild's SWEEP — removing the rows of
+   * documents the walk never saw — addresses rows by subject columns and needs
+   * no knowledge of the row's own shape. Only the row type has to stay hidden.
+   */
+  readonly store: ClassUsageIndexStore;
   maintain(args: {
     subject: UsageSubject;
     document: unknown;
@@ -157,6 +165,7 @@ export function usageTarget<TRow extends UsageSubject>(
   store: ClassUsageIndexStore
 ): UsageTarget {
   return {
+    store,
     maintain: args => maintainUsage(index, { ...args, store }),
   };
 }
