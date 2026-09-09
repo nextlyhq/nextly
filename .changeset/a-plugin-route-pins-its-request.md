@@ -1,5 +1,4 @@
 ---
-
 "@nextlyhq/adapter-drizzle": patch
 "@nextlyhq/adapter-mysql": patch
 "@nextlyhq/adapter-postgres": patch
@@ -25,6 +24,7 @@
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/ui": patch
+---
 
 A plugin-contributed route reached the collections through the managed facade
 without carrying the request it was serving, so a hook underneath one read a
