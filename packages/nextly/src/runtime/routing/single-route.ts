@@ -30,7 +30,7 @@
  */
 import type { Metadata } from "next";
 
-import { getNextly } from "../../direct-api/nextly";
+import { requireNextly } from "../../direct-api/nextly";
 import type { Nextly } from "../../direct-api/nextly";
 import type { UserContext } from "../../direct-api/types/shared";
 import { NextlyError } from "../../errors/nextly-error";
@@ -48,7 +48,7 @@ export type SingleDocument = Record<string, unknown>;
  * The booted-Nextly surface these helpers need.
  *
  * Typed structurally rather than as the Direct API class so BOTH the internal
- * singleton and the public instance returned by `await getNextly(config)`
+ * singleton and the public instance returned by `await requireNextly(config)`
  * satisfy it — the public interface does not expose the Direct API's internal
  * handlers.
  */
@@ -169,7 +169,7 @@ export interface SingleRouteConfig<TNode> {
   /**
    * A booted Nextly instance. Defaults to the runtime singleton, which requires
    * services to be registered — pass one explicitly (the value from
-   * `await getNextly(config)`) from a frontend that boots the config itself,
+   * `await requireNextly(config)`) from a frontend that boots the config itself,
    * because a public page can be the first request a cold server handles.
    */
   nextly?: NextlySingleReader;
@@ -383,7 +383,7 @@ function buildSingleRoute<TNode>(
   async function read(
     grant: SingleDraftGrantResult
   ): Promise<SingleDocument | null> {
-    const reader = config.nextly ?? getNextly();
+    const reader = config.nextly ?? requireNextly();
     try {
       const document = await reader.findSingle(readArgs(grant));
       return document ?? null;

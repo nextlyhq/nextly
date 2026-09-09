@@ -1,6 +1,7 @@
 /**
- * The Direct API's `getNextly()` is exported from the package root, so a Server
- * Component can call `nextly.find()` on it. It is SYNCHRONOUS, so it cannot
+ * The Direct API's `requireNextly()` is exported from `nextly/runtime`, and the
+ * `nextly` proxy on the package root resolves every call through it, so a
+ * Server Component reaches it either way. It is SYNCHRONOUS, so it cannot
  * wait for boot migrations the way the async surfaces do — and it decided
  * readiness from `isServicesRegistered()` alone, which is true throughout a
  * production boot's migration wait.
@@ -24,7 +25,7 @@ vi.mock("../../di/register", () => ({
   getService: () => undefined,
 }));
 
-const { getNextly } = await import("../nextly");
+const { requireNextly } = await import("../nextly");
 
 beforeEach(() => {
   // `mockReset`, not `clearAllMocks`: the latter clears recorded CALLS but
@@ -41,18 +42,18 @@ describe("the Direct API consults the boot-migrations gate", () => {
       });
     });
 
-    expect(() => getNextly()).toThrow(
+    expect(() => requireNextly()).toThrow(
       expect.objectContaining({ code: "NEXTLY_BOOT_MIGRATIONS_PENDING" })
     );
   });
 
   /**
-   * The control. Without it the assertion above is satisfied by a `getNextly`
+   * The control. Without it the assertion above is satisfied by a `requireNextly`
    * that throws unconditionally — which would break every Direct API call in
    * development and in any app that does not run boot migrations.
    */
   it("returns an instance once the gate has settled", () => {
-    expect(() => getNextly()).not.toThrow();
+    expect(() => requireNextly()).not.toThrow();
     expect(assertBootMigrationsSettled).toHaveBeenCalled();
   });
 });
