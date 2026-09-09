@@ -152,8 +152,7 @@ export function isSideEffectHookType(hookType: HookType): boolean {
  * handler-facing {@link BeforeOperationContext}, because a handler reads it
  * rather than supplying it.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors BeforeOperationContext's own type-erased default
-export type BeforeOperationInput<T = any> = BeforeOperationContext<T> & {
+export type BeforeOperationInput<T = unknown> = BeforeOperationContext<T> & {
   req: BeforeOperationContext["req"];
 };
 

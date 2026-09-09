@@ -14,6 +14,7 @@ import { container } from "../di/container";
 import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
 import { readProxyTrustSettings } from "../utils/proxy-trust";
 
+import { currentRequest } from "./request-scope";
 import type { HookHttpFacts } from "./types";
 
 /** The `req` fields a request contributes, ready to merge into a hook context. */
@@ -35,10 +36,14 @@ const NO_REQUEST: ResolvedRequestFacts = Object.freeze({});
 export function resolveRequestFacts(
   request: Request | undefined
 ): ResolvedRequestFacts {
-  if (!request) return NO_REQUEST;
+  // The caller's own request wins; otherwise the one the HTTP boundary pinned.
+  // The fallback is what makes this reach a call path nobody threaded, which is
+  // every path that reads or writes on the way to serving a request.
+  const source = request ?? currentRequest();
+  if (!source) return NO_REQUEST;
 
   const headers: Record<string, string> = {};
-  request.headers.forEach((value, key) => {
+  source.headers.forEach((value, key) => {
     headers[key] = value;
   });
 
@@ -48,8 +53,8 @@ export function resolveRequestFacts(
     // A hook that could rewrite the address would be rewriting what the hook
     // after it is asked to judge.
     http: Object.freeze({
-      ip: getTrustedClientIp(request, readProxyTrustSettings(readConfig)),
-      method: request.method,
+      ip: getTrustedClientIp(source, readProxyTrustSettings(readConfig)),
+      method: source.method,
     }),
   };
 }

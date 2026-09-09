@@ -70,6 +70,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         page,
         limit,
         where: Object.keys(where).length > 0 ? where : undefined,
+        request: args.request,
       });
 
       if (!result.success) {
@@ -114,6 +115,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
           collectionName: ctx.formsCollectionSlug,
           where: { slug: { equals: args.slug } },
           limit: 1,
+          request: args.request,
         });
 
         if (!result.success) {
@@ -164,6 +166,9 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
       const form = await namespace.findBySlug({
         slug: args.form,
         disableErrors: true,
+        // Part of the same request as the submission below, so the form
+        // lookup's read hooks are told about it too.
+        request: args.request,
       });
 
       // The same answer the HTTP paths give. This used to say one fixed
@@ -274,6 +279,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         page,
         limit,
         where: { form: { equals: formId } },
+        request: args.request,
       });
 
       if (!result.success) {

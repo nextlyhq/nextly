@@ -62,6 +62,7 @@ import type {
   UpdateArgs,
   UpdateSingleArgs,
 } from "../../direct-api/types";
+import { runWithRequestScope } from "../../hooks/request-scope";
 import type { Nextly } from "../../init/nextly-instance";
 import type { UserContext } from "../collections/services/collection-types";
 
@@ -348,14 +349,20 @@ export function createJobContentApi(
       // the spread, which is what makes the clearing reach the merge.
       const caller = { ...((args ?? {}) as Record<string, unknown>) };
       for (const owned of JOB_OWNED_ACCESS_OPTIONS) caller[owned] = undefined;
-      return operation({
-        ...caller,
-        // Applied AFTER the stripped arguments, so a future edit that stopped
-        // stripping would still not let an explicit `overrideAccess: true`
-        // through.
-        overrideAccess: false,
-        ...(user === null ? {} : { user }),
-      });
+      // Clearing the field is not enough once the HTTP boundary pins the
+      // request ambiently: a job started from inside a request would otherwise
+      // inherit it and be judged as the visitor who set it going. Runs on
+      // nobody's request, which is what a job is.
+      return runWithRequestScope(undefined, () =>
+        operation({
+          ...caller,
+          // Applied AFTER the stripped arguments, so a future edit that stopped
+          // stripping would still not let an explicit `overrideAccess: true`
+          // through.
+          overrideAccess: false,
+          ...(user === null ? {} : { user }),
+        })
+      );
     };
   }
   return bound as unknown as JobContentApi;
