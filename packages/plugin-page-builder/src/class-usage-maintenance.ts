@@ -68,7 +68,6 @@ import {
   deriveUsageRows,
   reconcileUsage,
   type ClassUsageSubject,
-  type StoredClassUsageRow,
 } from "./class-usage-reconcile";
 import {
   type ClassUsageScope,
@@ -272,12 +271,13 @@ function readStoredRow<TRow extends UsageSubject>(
  * expected values onto whatever came back is precisely the operation that hides
  * that. Its removals would then delete another document's rows.
  */
-async function storedRowsWhere(
+async function storedRowsWhere<TRow extends UsageSubject>(
+  index: UsageIndex<TRow>,
   store: ClassUsageIndexStore,
   where: Record<string, { equals: string }>,
   describe: string
-): Promise<StoredClassUsageRow[]> {
-  return rowsWhere(store, where, describe, storedRowReader(classUsageIndex));
+): Promise<(TRow & { id: string })[]> {
+  return rowsWhere(store, where, describe, storedRowReader(index));
 }
 
 /**
@@ -599,7 +599,16 @@ export async function forgetDeletedDocument(args: {
  * Scoped to one entity, field and locale, so a rebuild of one blocks field
  * cannot remove rows belonging to another.
  */
-export async function forgetAbsentDocuments(args: {
+export async function forgetAbsentDocuments<TRow extends UsageSubject>(args: {
+  /**
+   * The index whose rows are being swept.
+   *
+   * Required, and not inferable from the store. Rows are decoded through this
+   * descriptor, and one index's reader answers null for another's rows — the
+   * class reader needs a `classId`, so sweeping the component index through it
+   * examines no rows at all and reports a clean pass having removed nothing.
+   */
+  index: UsageIndex<TRow>;
   store: ClassUsageIndexStore;
   scope: ClassUsageScope;
   entity: string;
@@ -631,6 +640,7 @@ export async function forgetAbsentDocuments(args: {
     variant: { equals: args.variant },
   };
   const rows = await storedRowsWhere(
+    args.index,
     args.store,
     where,
     `${args.scope}:${args.entity}:*:${args.field}`

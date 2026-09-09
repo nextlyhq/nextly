@@ -40,9 +40,11 @@ A page too large to read whole records that fact rather than recording nothing,
 because "embeds no components" is the answer that would make deleting one look
 safe.
 
-Repairing the indexes is now one call, `rebuildUsageIndexes`, which takes every
-index a site maintains. `rebuildClassUsageIndex` still works and still repairs
-the class index alone; it is deprecated for one release because that narrowness
-is exactly the trap — a site that upgraded and ran it would have left its
-component index empty, and an empty index reports every component as used
-nowhere.
+Repairing the indexes is now one call, `rebuildPageBuilderUsageIndexes`, which
+takes the document store and both index stores and repairs every index the
+plugin maintains — it names the set itself, so an index added in a later
+version is repaired without a caller having to know it exists.
+`rebuildClassUsageIndex` still works and still repairs the class index alone;
+it is deprecated for one release because that narrowness is exactly the trap —
+a site that upgraded and ran it would have left its component index empty, and
+an empty index reports every component as used nowhere.

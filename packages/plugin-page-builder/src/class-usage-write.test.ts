@@ -361,6 +361,39 @@ describe("a subject that fails", () => {
     });
   });
 
+  it("still reports a target that rejected without a reason", async () => {
+    // `Promise.reject()` and `throw undefined` both carry no value. Callers
+    // identify a failed subject by `failure !== undefined`, so passing that
+    // value straight through would report the subject as reconciled while its
+    // index stayed stale — the failure erased by the field that exists to
+    // carry it.
+    const silent: ClassUsageIndexStore = {
+      find: async () => {
+        throw undefined;
+      },
+      create: async () => ({}),
+      delete: async () => ({}),
+    };
+
+    const report = await reconcileWrittenDocument({
+      store: silent,
+      read: async () => documentUsing("hero"),
+      collection: {
+        slug: "pages",
+        fields: [{ type: "blocks", name: "content" }],
+        hasDrafts: false,
+      },
+      documentId: "p1",
+      locales: [],
+      limits: DEFAULT_LIMITS,
+    });
+
+    expect({
+      counted: report.failures.length,
+      reported: report.failures[0]?.failure !== undefined,
+    }).toEqual({ counted: 1, reported: true });
+  });
+
   it("reports EVERY target that failed, not only the first", async () => {
     // Separate indexes fail for separate reasons — a missing table is not a
     // lost connection — and reducing them to the first hides the one nobody

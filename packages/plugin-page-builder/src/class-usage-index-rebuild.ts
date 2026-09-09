@@ -37,10 +37,7 @@
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 import { isPlainRecord } from "@nextlyhq/blocks-engine";
 
-import {
-  forgetAbsentDocuments,
-  type ClassUsageIndexStore,
-} from "./class-usage-maintenance";
+import { type ClassUsageIndexStore } from "./class-usage-maintenance";
 import { classUsageIndex } from "./class-usage-reconcile";
 import { usageTarget, type UsageTarget } from "./class-usage-write";
 import type { ClassUsageVariant } from "./collections/class-usage-index";
@@ -462,8 +459,7 @@ export async function rebuildUsageIndexes(args: {
     // holding rows for documents that no longer exist, and nothing later
     // reconciles a row whose document is gone.
     try {
-      const swept = await forgetAbsentDocuments({
-        store: target.store,
+      const swept = await target.forgetAbsent({
         scope: "collection",
         entity: args.collection,
         field: args.field,
@@ -565,6 +561,14 @@ export async function rebuildPageBuilderUsageIndexes(args: {
  * A site that upgraded and ran this would have left its component index empty,
  * and an empty index answers "references nothing" for every document — which
  * is the answer a delete check acts on.
+ *
+ * It also RAISES a failure rather than reporting one, which the walk behind it
+ * no longer does. That difference is the point of this wrapper rather than an
+ * oversight: code written against the published signature puts the call in a
+ * `try` and cannot inspect a field that did not exist when it was written, so
+ * reporting instead of raising would turn a failed repair into a silent
+ * success for every existing caller. A caller that wants the partial report
+ * moves to the new entry point, where the field is part of the contract.
  */
 export async function rebuildClassUsageIndex(args: {
   documents: ClassUsageDocumentStore;
@@ -576,8 +580,23 @@ export async function rebuildClassUsageIndex(args: {
   limits: DocumentLimits;
 }): Promise<ClassUsageRebuildReport> {
   const { index, ...rest } = args;
-  return rebuildUsageIndexes({
+  const report = await rebuildUsageIndexes({
     ...rest,
     targets: [usageTarget(classUsageIndex, index)],
   });
+  if (report.failure !== undefined) {
+    // The ORIGINAL value where it is one, so a caller's existing `catch` sees
+    // what it always saw. A store that rejects with something other than an
+    // error is wrapped rather than rethrown, because a non-error rejection
+    // reaching a caller is what makes a failure unreadable at the point it is
+    // finally logged.
+    throw report.failure instanceof Error
+      ? report.failure
+      : new Error(
+          "[page-builder] the class-usage rebuild failed, and the store " +
+            "rejected with a value that is not an error",
+          { cause: report.failure }
+        );
+  }
+  return report;
 }

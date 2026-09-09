@@ -231,21 +231,40 @@ async function forget(
   });
   if (target === null) return;
 
-  try {
-    // Every index, because a document's rows survive it in each of them and
-    // nothing later reconciles rows naming a document that no longer exists.
-    for (const indexCollection of [
-      args.indexCollection,
-      args.componentIndexCollection,
-    ]) {
+  // Every index, because a document's rows survive it in each of them and
+  // nothing later reconciles rows naming a document that no longer exists.
+  //
+  // EACH ONE ATTEMPTED, whatever the ones before it did. The document is
+  // already gone, so a store that cannot be reached now will not be revisited
+  // by any later save — only a rebuild reaches those rows. Letting the first
+  // failure end the loop would strand the healthy indexes' rows too, for a
+  // document that no longer exists, and they would count towards their
+  // references until somebody ran a rebuild nobody knew was needed.
+  const failures: unknown[] = [];
+  for (const indexCollection of [
+    args.indexCollection,
+    args.componentIndexCollection,
+  ]) {
+    try {
       await forgetDeletedDocument({
         store: classUsageIndexStore(target.nextly, indexCollection),
         scope: "collection",
         entity: target.slug,
         entityKey: target.documentId,
       });
+    } catch (thrown) {
+      failures.push(thrown);
     }
-  } catch (failure) {
+  }
+
+  if (failures.length > 0) {
+    const failure =
+      failures.length === 1
+        ? failures[0]
+        : new AggregateError(
+            failures,
+            "more than one usage index could not forget a deleted document"
+          );
     // Raised for the same reason maintenance raises: `after*` is a side-effect
     // phase whose throw the registry converts into a warning the caller
     // receives, and the delete itself is already committed. Swallowing would

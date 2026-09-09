@@ -700,6 +700,107 @@ describe("repairing every index a site maintains", () => {
     },
   });
 
+  /** An index store holding fixed rows and recording its deletes. */
+  function storeHolding(rows: Record<string, unknown>[]) {
+    const deleted: string[] = [];
+    const store: ClassUsageIndexStore = {
+      find: async args => {
+        const key = args.where.entityKey?.equals;
+        // The sweep asks WITHOUT an entityKey; maintenance asks with one.
+        return {
+          items:
+            key === undefined ? rows : rows.filter(r => r.entityKey === key),
+          meta: { hasNext: false },
+        };
+      },
+      create: async () => ({}),
+      delete: async args => {
+        deleted.push(args.id);
+        return {};
+      },
+    };
+    return { store, deleted };
+  }
+
+  it("keeps the DEPRECATED entry point raising rather than reporting", async () => {
+    // Code written against the published signature puts the call in a `try`
+    // and cannot inspect a field that did not exist when it was written. The
+    // walk behind it now reports failures instead of raising them, so the
+    // wrapper restores the contract its callers compiled against: reporting
+    // here would turn a failed repair into a silent success for every one.
+    const docs = documentStore([onePage("page-1", "hero")]);
+
+    await expect(
+      rebuildClassUsageIndex({
+        limits: DEFAULT_LIMITS,
+        documents: docs.store,
+        index: unavailableStore("class index unavailable"),
+        collection: "pages",
+        field: "content",
+        locale: "",
+        variant: "published",
+      })
+    ).rejects.toThrow("class index unavailable");
+  });
+
+  it("sweeps the COMPONENT index's orphan rows, not only the class index's", async () => {
+    // The sweep decodes rows through an index descriptor, and one index's
+    // reader answers null for another's rows. Swept through the class reader,
+    // every component row is skipped for having no `classId` — so the sweep
+    // examines nothing, removes nothing, and reports a clean pass. The rows of
+    // a document deleted outside the hook then count for ever.
+    const docs = documentStore([onePage("page-1", "hero")]);
+    const classes = storeHolding([
+      {
+        id: "c-orphan",
+        scope: "collection",
+        entity: "pages",
+        entityKey: "deleted-page",
+        field: "content",
+        locale: "",
+        variant: "published",
+        classId: "ghost",
+      },
+    ]);
+    const components = storeHolding([
+      {
+        id: "k-orphan",
+        scope: "collection",
+        entity: "pages",
+        entityKey: "deleted-page",
+        field: "content",
+        locale: "",
+        variant: "published",
+        kind: "reference",
+        componentId: "ghost-component",
+      },
+    ]);
+
+    const report = await rebuildPageBuilderUsageIndexes({
+      limits: DEFAULT_LIMITS,
+      documents: docs.store,
+      classIndex: classes.store,
+      componentIndex: components.store,
+      collection: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    // BOTH asserted: the class half is the control. Without it a sweep that
+    // removed nothing at all would fail this test for the wrong reason, and
+    // one that removed everything would pass it for the wrong reason.
+    expect({
+      classOrphan: classes.deleted.includes("c-orphan"),
+      componentOrphan: components.deleted.includes("k-orphan"),
+      orphansRemoved: report.orphansRemoved,
+    }).toEqual({
+      classOrphan: true,
+      componentOrphan: true,
+      orphansRemoved: 2,
+    });
+  });
+
   it("repairs the OTHER indexes when one of them cannot be reached", async () => {
     // The rebuild is the remedy for a stale index, so abandoning the walk at
     // the first store that cannot answer means the repair path fails in

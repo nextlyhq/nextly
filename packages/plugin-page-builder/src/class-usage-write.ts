@@ -36,6 +36,7 @@ import {
   type BlocksFieldsCollection,
 } from "./class-usage-blocks-fields";
 import {
+  forgetAbsentDocuments,
   maintainUsage,
   type ClassUsageIndexStore,
   type ClassUsageMaintenanceReport,
@@ -45,6 +46,7 @@ import {
   type ClassUsageSubject,
 } from "./class-usage-reconcile";
 import { classUsageSubjectsFor } from "./class-usage-subjects";
+import type { ClassUsageVariant } from "./collections/class-usage-index";
 import type { UsageIndex, UsageSubject } from "./usage-index";
 
 /**
@@ -128,19 +130,33 @@ export interface ClassUsageWriteReport {
  * save — the write amplification the design names in as many words.
  */
 export interface UsageTarget {
-  /**
-   * The store this index's rows live in.
-   *
-   * Exposed beside `maintain` because a rebuild's SWEEP — removing the rows of
-   * documents the walk never saw — addresses rows by subject columns and needs
-   * no knowledge of the row's own shape. Only the row type has to stay hidden.
-   */
-  readonly store: ClassUsageIndexStore;
   maintain(args: {
     subject: UsageSubject;
     document: unknown;
     limits: DocumentLimits;
   }): Promise<ClassUsageMaintenanceReport>;
+  /**
+   * Remove this index's rows for documents a rebuild's walk never saw.
+   *
+   * A METHOD rather than an exposed store, because the sweep decodes rows
+   * through the index's own descriptor and one index's reader answers null for
+   * another's rows. Handing a caller the bare store let it sweep the component
+   * index through the class reader, which examined no rows at all and reported
+   * a clean pass having removed nothing — a sweep that cannot see its own rows
+   * fails silently and in the direction that keeps them.
+   *
+   * Behind the method the row type stays erased, exactly as `maintain` keeps
+   * it, so a list of targets can still hold indexes whose rows differ.
+   */
+  forgetAbsent(args: {
+    scope: "collection";
+    entity: string;
+    field: string;
+    locale: string;
+    variant: ClassUsageVariant;
+    visited: ReadonlySet<string>;
+    stillExists: (entityKey: string) => Promise<boolean>;
+  }): Promise<{ removed: number }>;
 }
 
 /**
@@ -158,8 +174,8 @@ export function usageTarget<TRow extends UsageSubject>(
   store: ClassUsageIndexStore
 ): UsageTarget {
   return {
-    store,
     maintain: args => maintainUsage(index, { ...args, store }),
+    forgetAbsent: args => forgetAbsentDocuments({ ...args, index, store }),
   };
 }
 
@@ -260,6 +276,28 @@ export async function reconcileWrittenDocument(args: {
  * your indexes is stale" differently from "this subject is stale", and the
  * remedy is the same rebuild either way.
  */
+/**
+ * The value that will be carried as a subject's failure.
+ *
+ * Never `undefined` when there was a failure, whatever was thrown. A rejection
+ * carries any value at all — `Promise.reject()` supplies none — and the field
+ * this feeds is read as "did this fail", so an undefined cause and no cause at
+ * all would be the same answer.
+ */
+function reportableFailure(failures: readonly unknown[]): unknown {
+  const named = failures.map(failure =>
+    failure === undefined
+      ? new Error("a usage index rejected without a reason")
+      : failure
+  );
+  return named.length === 1
+    ? named[0]
+    : new AggregateError(
+        named,
+        "more than one usage index failed for this subject"
+      );
+}
+
 async function maintainEvery(
   targets: readonly UsageTarget[],
   args: { subject: UsageSubject; document: unknown; limits: DocumentLimits }
@@ -290,18 +328,19 @@ async function maintainEvery(
     inserted,
     removed,
     undetermined,
-    // A lone failure is reported AS ITSELF. Wrapping one error in an aggregate
-    // would put a wrapper in front of the cause for every consumer that
-    // already reads this field. Several are aggregated rather than reduced to
-    // the first, because separate targets fail for separate reasons and only
-    // one of them would ever be seen.
-    failure:
-      failures.length === 1
-        ? failures[0]
-        : new AggregateError(
-            failures,
-            "more than one usage index failed for this subject"
-          ),
+    // A lone failure is reported AS ITSELF, so a consumer already reading this
+    // field gets the cause rather than a wrapper around it. Several are
+    // aggregated rather than reduced to the first, because separate targets
+    // fail for separate reasons and only one would ever be seen.
+    //
+    // Except when the thrown value IS `undefined`, which `Promise.reject()`
+    // and `throw undefined` both produce. Callers identify a failed subject by
+    // `failure !== undefined`, so passing that value through would report the
+    // subject as reconciled while its index stayed stale — the failure erased
+    // by the very field that exists to carry it. A stand-in error is
+    // substituted, because "a target rejected and said nothing" is still a
+    // failure and must read as one.
+    failure: reportableFailure(failures),
   };
 }
 
