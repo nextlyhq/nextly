@@ -72,9 +72,9 @@ import type {
 import { BaseService } from "../../../shared/base-service";
 import type { WhereFilter } from "../query/query-operators";
 
-import { forwardedFromContext } from "./forwarded-context";
 import type { CollectionMetadataService } from "./collection-metadata-service";
 import type { BatchOperationResult } from "./collection-types";
+import { forwardedFromContext } from "./forwarded-context";
 
 /**
  * Convert the structured {@link SortOptions} into the entry service's string
