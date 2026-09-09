@@ -51,6 +51,21 @@ export interface SubmitFormOptions {
     /** Submitter's user agent string */
     userAgent?: string;
   };
+
+  /**
+   * The HTTP request this submission arrived on.
+   *
+   * A route calling this helper is its own route, outside everything Nextly
+   * pins a request around, so nothing else can supply it. Without it the write
+   * reaches the submissions hooks looking like a seed or a job, and every rule
+   * scoped to a visitor stands down: the rate limit above all.
+   *
+   * The request rather than an address, because the core resolves the client
+   * from it under this deployment's proxy-trust settings. `metadata.ipAddress`
+   * is a string the caller chose, which is the right shape for the audit column
+   * it fills and the wrong shape for deciding who to throttle.
+   */
+  request?: Request;
 }
 
 /**
@@ -133,7 +148,7 @@ export async function submitForm(
   options: SubmitFormOptions,
   context: SubmitFormContext
 ): Promise<SubmitFormResult> {
-  const { formSlug, data, metadata } = options;
+  const { formSlug, data, metadata, request } = options;
   const { pluginContext, pluginConfig } = context;
   const { collections } = pluginContext.services;
   const { logger } = pluginContext;
@@ -304,14 +319,22 @@ export async function submitForm(
         }),
         // Public form submission — create as system. No ambient user; an
         // empty context already resolves to system, but be explicit.
-        { as: "system" }
+        //
+        // The request travels with it so the seam judges this submission on the
+        // same facts as one arriving through a Nextly route. Omitted by a caller
+        // that has none, and then the seam correctly reads the write as
+        // server-side work.
+        { as: "system", ...(request ? { request } : {}) }
       );
     } catch (error) {
       // The seam refuses a submission over the limit, and refuses it the same
-      // way at every door. This one answers its VISITOR with a success anyway:
-      // a bot that is told it was limited learns the rate to sit under, and a
-      // form is the one door where the caller is a browser. The other doors are
-      // machine-facing and get the 429 the seam threw.
+      // way at every door. This helper answers its own caller with a success
+      // anyway: a host route calls it to serve a browser, and a bot told it was
+      // limited learns the rate to sit under.
+      //
+      // This is NOT the built-in `POST /api/forms/:slug/submit`, which core's
+      // form dispatcher serves without calling this at all. That endpoint
+      // returns the refusal as a 429.
       //
       // Nothing is stored. A limiter that wrote a row per refusal would hand an
       // attacker a way to fill the database with the very volume it exists to

@@ -1053,17 +1053,17 @@ async function formToCheckAgainst(
 /**
  * The part of a rate-limit key that names the form.
  *
- * Only a string identifies a form; anything else shares a key with everything
- * else that is not a string, and one form's burst would then limit another.
- * Falls back to a constant that is explicit about naming no form, so a row
- * whose slug and id are both unusable is limited as its own bucket rather than
- * silently joining a neighbour's.
+ * The ID, never the slug. A door that hands the seam the form it already read
+ * carries `{ id, fields }`, and a door that makes the seam fetch it carries the
+ * whole row: keyed on whatever each happens to have, one form gets one window
+ * per door and a caller alternating between two doors spends two budgets.
+ *
+ * Only a string identifies a form. A row whose id is unusable is limited as its
+ * own bucket rather than silently joining a neighbour's.
  */
 function rateLimitKeyFor(form: Record<string, unknown>): string {
-  const { slug, id } = form;
-  if (typeof slug === "string" && slug.length > 0) return slug;
-  if (typeof id === "string" && id.length > 0) return id;
-  return "unidentified-form";
+  const { id } = form;
+  return typeof id === "string" && id.length > 0 ? id : "unidentified-form";
 }
 
 /**
