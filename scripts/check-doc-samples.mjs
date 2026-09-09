@@ -2086,12 +2086,12 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
     // Both spellings of the same question: a name the block uses and nothing
     // here defines. `{ Page }` reports as TS18004 and `Page` as TS2304, and
     // they get the same answer.
-    const name = line.match(MISSING_NAME) ?? line.match(MISSING_SHORTHAND);
-    if (name) {
+    const name = nameIn(line);
+    if (name !== undefined) {
       const [file, idx] = line.split("  ")[0].split("#");
       const index = Number.parseInt(idx, 10);
-      if (declaredEarlier(name[1], file, index, samples)) continued.push(line);
-      else if (mentionIsReaderOwned(name[1], file, index, samples))
+      if (declaredEarlier(name, file, index, samples)) continued.push(line);
+      else if (mentionIsReaderOwned(name, file, index, samples))
         readerNames.push(line);
       else real.push(line);
       continue;
@@ -2317,7 +2317,18 @@ export function auditBasis() {
 
 /** The page and the name a diagnostic is about: `page.mdx#3` and `adapter`. */
 export const originOf = line => line.split("  ")[0].split(":")[0];
-export const nameIn = line => line.match(MISSING_NAME)?.[1];
+/**
+ * The name a diagnostic says is missing, in either spelling.
+ *
+ * `Page` reports as TS2304 and `{ Page }` as TS18004, and every question asked
+ * of a missing name downstream is the same question. Asking it in one place is
+ * what stops the two drifting: the classifier learned the shorthand first, then
+ * the rebuild, while the survivor pass below still read TS2304 alone, so a
+ * rebased shorthand was dropped as already-reported and its continuation stayed
+ * excused without ever being recompiled.
+ */
+export const nameIn = line =>
+  line.match(MISSING_NAME)?.[1] ?? line.match(MISSING_SHORTHAND)?.[1];
 
 /**
  * The page a diagnostic belongs to, for grouping and for the baseline's keys.
@@ -2368,8 +2379,7 @@ export function namesToRebuild(continuations) {
   const byOrigin = new Map();
   for (const line of continuations) {
     const origin = line.split("  ")[0].split(":")[0];
-    const name =
-      line.match(MISSING_NAME)?.[1] ?? line.match(MISSING_SHORTHAND)?.[1];
+    const name = nameIn(line);
     if (name) byOrigin.set(origin, [...(byOrigin.get(origin) ?? []), name]);
   }
   return byOrigin;
@@ -2580,7 +2590,7 @@ async function auditDocs() {
       )
     );
     for (const line of rebased) {
-      if (MISSING_NAME.test(line)) {
+      if (nameIn(line) !== undefined) {
         const origin = originOf(line);
         const name = String(nameIn(line));
         const inherited = (inheritedByOrigin.get(origin) ?? []).includes(name);
