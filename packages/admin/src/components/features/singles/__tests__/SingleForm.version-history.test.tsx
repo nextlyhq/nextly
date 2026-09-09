@@ -115,9 +115,12 @@ vi.mock("@admin/hooks/useLocalization", () => ({
   }),
 }));
 
-vi.mock("@admin/components/features/versions/VersionSnapshotForm", () => ({
-  VersionSnapshotForm: () => <div data-testid="snapshot-form" />,
-}));
+vi.mock(
+  "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm",
+  () => ({
+    ReadOnlyDocumentForm: () => <div data-testid="snapshot-form" />,
+  })
+);
 
 import {
   SingleForm,

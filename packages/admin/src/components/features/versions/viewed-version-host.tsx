@@ -20,6 +20,7 @@ import type { FieldConfig } from "nextly/config";
 import { useMemo, useState, type ReactNode } from "react";
 
 import { EntryFormToolbarSlots } from "@admin/components/features/entries/EntryForm/EntryFormToolbarSlots";
+import { ReadOnlyDocumentForm } from "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm";
 import {
   EntryLocaleProvider,
   useEntryLocale,
@@ -42,7 +43,6 @@ import {
 } from "./document-history-context";
 import { HistoricalDocumentBanner } from "./HistoricalDocumentBanner";
 import { snapshotToFormValues } from "./snapshot-to-form-values";
-import { VersionSnapshotForm } from "./VersionSnapshotForm";
 
 /**
  * Whether the chosen version is actually on screen.
@@ -421,7 +421,11 @@ export function ViewedVersionBody({
                   field — writing into the version this area claims is frozen.
                   Empty is the context's own answer for "offers nothing". */}
               <TranslationFieldProvider value={{}}>
-                <VersionSnapshotForm fields={fields} values={values ?? {}} />
+                <ReadOnlyDocumentForm
+                  fields={fields}
+                  values={values ?? {}}
+                  mode="edit"
+                />
               </TranslationFieldProvider>
             </EntryLocaleProvider>
           )}

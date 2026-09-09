@@ -26,22 +26,25 @@ const { snapshotProps } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@admin/components/features/versions/VersionSnapshotForm", () => ({
-  VersionSnapshotForm: (props: {
-    fields?: unknown[];
-    values?: Record<string, unknown>;
-  }) => {
-    // The source-fill context is read INSIDE the snapshot, where a field
-    // would read it: whatever lands here is what its affordances would use.
-    const source = useTranslationField();
-    snapshotProps.current = {
-      fields: props.fields,
-      values: props.values,
-      source: { ...source },
-    };
-    return <div data-testid="snapshot-form" />;
-  },
-}));
+vi.mock(
+  "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm",
+  () => ({
+    ReadOnlyDocumentForm: (props: {
+      fields?: unknown[];
+      values?: Record<string, unknown>;
+    }) => {
+      // The source-fill context is read INSIDE the snapshot, where a field
+      // would read it: whatever lands here is what its affordances would use.
+      const source = useTranslationField();
+      snapshotProps.current = {
+        fields: props.fields,
+        values: props.values,
+        source: { ...source },
+      };
+      return <div data-testid="snapshot-form" />;
+    },
+  })
+);
 
 import {
   historicalToolbarValue,
