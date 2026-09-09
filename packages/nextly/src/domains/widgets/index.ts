@@ -34,6 +34,7 @@ export {
   validateReadWidgetQuery,
   type RawWidgetQuery,
   type WidgetQuery,
+  type WidgetQuerySpec,
 } from "./query";
 export {
   WIDGET_OPS,

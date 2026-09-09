@@ -24,11 +24,26 @@ entry and returns `null` on a genuine miss (render `notFound()`), rethrowing a
 transient read error so a DB blip never bakes a permanently-cached 404.
 
 ```ts
-import { resolveContent } from "nextly/runtime";
+import { resolveContent, type ContentEntry } from "nextly/runtime";
 import { notFound } from "next/navigation";
 
-const post = await resolveContent("posts", slug, { depth: 2 });
-if (!post) notFound();
+// `ContentEntry` is `Record<string, unknown>`: the entry is whatever the
+// collection holds, so read fields off it deliberately rather than assuming a
+// shape. `nextly generate:types` is what turns this into a named type.
+function Post({ entry }: { entry: ContentEntry }) {
+  return <article>{String(entry.title ?? "")}</article>;
+}
+
+export default async function PostPage({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
+  const { slug } = await params;
+  const post = await resolveContent("posts", slug, { depth: 2 });
+  if (!post) notFound();
+  return <Post entry={post} />;
+}
 ```
 
 **Publish state.** By default `resolveContent` reads `status: "published"`.
@@ -245,11 +260,15 @@ The function is handed the collection and slug being resolved, so the answer can
 be scoped to a document:
 
 ```ts
+import { createContentRoute, readPreviewScope } from "nextly/runtime";
+
 const route = createContentRoute({
   collections: ["pages"],
   draft: async ({ collection }) => {
-    const scope = await readPreviewScope(previewConfig);
-    if (scope === null || scope.collection !== collection) return false;
+    const scope = await readPreviewScope();
+    // A Single's token names no collection, so it cannot grant this route's draft.
+    if (scope === null || !("collection" in scope)) return false;
+    if (scope.collection !== collection) return false;
     // Name the entry, do not just answer yes: slugs are not unique.
     return { entryId: scope.entryId };
   },
@@ -305,7 +324,11 @@ card, and `robots` from `noindex`). Blank `seo` fields fall back to the values
 you pass; caller `openGraph` / `twitter` extras win.
 
 ```ts
-export async function generateMetadata({ params }) {
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
   const { slug } = await params;
   const post = await getPostBySlug(slug);
   if (!post) return {};

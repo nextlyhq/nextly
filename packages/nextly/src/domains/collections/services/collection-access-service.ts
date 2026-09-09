@@ -359,8 +359,16 @@ export class CollectionAccessService extends BaseService {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
 
-      // If collection not found, let other code handle it
-      if (errorMessage?.includes("not found")) {
+      /*
+       * If the collection is not found, let other code handle it -- asked by
+       * TYPE. `getRecordOrThrow` raises `NextlyError.notFound()` with no
+       * message override, so its text is "Not found." and this lowercase
+       * comparison never matched the error it was written for: a genuinely
+       * missing collection took the branch below and answered 500 instead of
+       * the 404 the read paths give it. The message check also caught any
+       * unrelated failure whose wording happened to contain those words.
+       */
+      if (NextlyError.isNotFound(error)) {
         return null;
       }
 
@@ -508,8 +516,15 @@ export class CollectionAccessService extends BaseService {
     try {
       collection = await this.collectionService.getCollection(collectionName);
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("not found")) return null;
+      /*
+       * 🔴 The TYPED answer, not the message. `getRecordOrThrow` raises
+       * `NextlyError.notFound()` with no message override, so the text is
+       * "Not found." -- capital N -- and a lowercase `includes("not found")`
+       * misses the only error this branch exists for, while still catching any
+       * unrelated failure whose wording happens to match. Matching on prose is
+       * wrong in both directions at once.
+       */
+      if (NextlyError.isNotFound(error)) return null;
       throw error;
     }
 

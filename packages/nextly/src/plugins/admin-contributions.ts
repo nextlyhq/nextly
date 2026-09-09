@@ -6,7 +6,7 @@ import type {
   WidgetAction,
   QuerylessWidgetArchetype,
   WidgetArchetype,
-  WidgetQuery,
+  WidgetQuerySpec,
   WidgetSetting,
   WidgetSize,
 } from "../domains/widgets";
@@ -256,8 +256,16 @@ interface PluginAdminWidgetBase {
 interface PluginAdminCustomWidgetBase extends PluginAdminWidgetBase {
   /** Component rendered for this widget. */
   component: ComponentPath;
-  /** Still executed server-side, and handed to the component as its slot. */
-  query?: WidgetQuery;
+  /**
+   * Still executed server-side, and handed to the component as its slot.
+   *
+   * {@link WidgetQuerySpec} rather than the flat query, so an op and its group
+   * key have to agree at compile time. That pairing is not version-dependent
+   * the way `archetype` is -- a grouping op with no key describes no request
+   * any core could answer -- so it is one of the few things this contract can
+   * pin without guessing at a newer admin.
+   */
+  query?: WidgetQuerySpec;
 }
 
 /**
@@ -293,8 +301,13 @@ export type PluginAdminCustomWidget = PluginAdminCustomWidgetBase &
  */
 export interface PluginAdminDataWidget extends PluginAdminWidgetBase {
   archetype: DataWidgetArchetype;
-  /** The widget's data request, validated and executed server-side. */
-  query: WidgetQuery;
+  /**
+   * The widget's data request, validated and executed server-side.
+   *
+   * {@link WidgetQuerySpec} for the reason the custom variant uses it: the op
+   * and its group key must agree, and that is true of every core.
+   */
+  query: WidgetQuerySpec;
   /**
    * Optional FALLBACK body, for an archetype this admin release cannot draw
    * yet. Omit it and the card says so by name.

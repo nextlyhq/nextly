@@ -177,7 +177,7 @@ import { defineSingle, text, number } from "nextly/config";
 
 const blogSettings = defineSingle({
   slug: "blog-settings",
-  labels: { singular: "Blog Settings" },
+  label: { singular: "Blog Settings" },
   fields: [
     text({ name: "blogTitle", required: true, label: "Blog Title" }),
     text({ name: "tagline", label: "Tagline" }),

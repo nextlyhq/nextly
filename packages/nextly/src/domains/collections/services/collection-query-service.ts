@@ -26,7 +26,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
-import { toSnakeCase } from "../../../lib/case-conversion";
+import { toCamelCase, toSnakeCase } from "../../../lib/case-conversion";
 import { statusCondition } from "../../../lib/status-condition";
 import {
   expansionStatusScope,
@@ -82,11 +82,13 @@ import {
 } from "../../../shared/lib/field-level-registry";
 import {
   assertFilterableFields,
+  assertGroupableField,
   assertSortableField,
   filterSearchableFields,
 } from "../../../shared/lib/filterable-fields";
 import {
   hasPasswordField,
+  isPasswordFieldName,
   stripPasswordFieldValues,
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
@@ -131,6 +133,7 @@ import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
+import { classifyFieldKind } from "../../schema/services/field-column-descriptor";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   draftDocumentFacts,
@@ -150,6 +153,7 @@ import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 import {
+  isJsonFieldType,
   getTableName,
   getSearchableFields,
   getMinSearchLength,
@@ -275,6 +279,321 @@ function fieldTrustOf(params: {
   enforceFieldAccess?: boolean;
 }): boolean {
   return params.overrideAccess === true && params.enforceFieldAccess !== true;
+}
+
+/**
+ * How many buckets one grouped read may return.
+ *
+ * A group key with unbounded cardinality -- an id, a title, a timestamp --
+ * produces one bucket per row, so an uncapped GROUP BY is a full table read
+ * wearing an aggregate's name. The cap bounds the ANSWER, never the scan: the
+ * database groups every matching row and this decides how many of the finished
+ * buckets travel back.
+ */
+export const MAX_GROUP_BUCKETS = 50;
+
+/** Distinct values of one field with how many rows carry each. */
+interface GroupedRows {
+  buckets: { value: string | null; count: number }[];
+  /**
+   * Whether buckets were left out because the cap was reached.
+   *
+   * Reported for the reason `atLeast` is reported on a bounded count: a chart
+   * that silently omits categories reads as the whole picture, and a reader
+   * acts on the category it shows as largest.
+   */
+  truncated: boolean;
+}
+
+/**
+ * Everything a filtered read needs to settle the row set a caller is allowed
+ * to see.
+ *
+ * Named rather than written inline at each call, because more than one
+ * operation asks this same question and differs only in what it computes over
+ * the rows the answer settles on. Two copies of the list would be two places
+ * for a filter to be added to one read and forgotten on the other, and the
+ * reads would then describe different row sets while looking alike.
+ */
+interface FilteredReadParams {
+  collectionName: string;
+  user?: UserContext;
+  /**
+   * The instant the enclosing read resolved releases against.
+   *
+   * Set only by `listEntries`, which calls this as its own continuation. A
+   * standalone count takes its own clock; a nested one MUST take its
+   * parent's, or a release becoming due between the two makes the page report
+   * pre-release rows beside a post-release `totalDocs`.
+   */
+  releaseNow?: Date;
+  /** Search query to filter entries by searchable fields */
+  search?: string;
+  /** Where clause for advanced filtering */
+  where?: WhereFilter;
+  /** When true, bypass all access control checks */
+  overrideAccess?: boolean;
+  /**
+   * This `where` was built by the framework from a route it was asked to
+   * render, not received from a request.
+   *
+   * Exempts it from `assertFilterableFields`, whose subject is a caller
+   * CHOOSING probe values against a field it may not read. Per-operation and
+   * never a config field, so a nested call cannot inherit it.
+   */
+  frameworkFilter?: boolean;
+  /**
+   * Which collections a trusted read may reach as relationships are expanded,
+   * asked per RELATED collection. Absent means every populated target inherits
+   * the caller's trust. Evaluated as `overrideAccess && trusted(target)`, so it
+   * can only ever narrow. See {@link RelatedRowReadContext.trusted}.
+   */
+  trusted?: TrustBound;
+  /**
+   * The route middleware already ran the RBAC gate for the authorizing
+   * operation; skip only that redundant re-check while stored read rules
+   * (owner-only filter) still apply. Mirrors listEntries so the count
+   * beside a route-authorized enumeration answers the same question and
+   * does not fall back to 0 for update/delete-only callers.
+   */
+  routeAuthorized?: boolean;
+  /**
+   * The caller's authenticated scope, mirroring listEntries so a scoped key
+   * counts exactly the rows it can list.
+   */
+  authenticatedScope?: AuthenticatedScope;
+  /**
+   * Draft/Published filter override (only effective when collection.status === true).
+   * See listEntries for full semantics.
+   */
+  status?: StatusOption;
+  /**
+   * Requested content locale (i18n M4). Kept in parity with listEntries so a locale-scoped
+   * filter (M4c EXISTS) counts the same rows the page returns. For plain reads it has no
+   * effect on the count (localized display resolution is post-query).
+   */
+  locale?: string;
+  /** Fallback control (`false`/`"none"` disables fallback). */
+  fallbackLocale?: string | false;
+  /**
+   * Set by `listEntries`, which has already run the read hooks for this
+   * request and forwards the filter they settled on. A standalone count runs
+   * them itself, so the total answers the same question as a list would.
+   */
+  readHooksAlreadyRan?: boolean;
+  /**
+   * Language filter, already extracted by the caller (listEntries). When present it is
+   * applied directly instead of re-extracting `_translated` from `where` — listEntries strips
+   * `_translated` from the where it forwards, so re-extraction would find nothing and the count
+   * would over-count.
+   */
+  translationFilter?: TranslationStatusFilter;
+  /**
+   * Component table names and discriminator columns, already resolved by the
+   * caller (listEntries) for this same request.
+   *
+   * The list path resolves both to build its page, then asks for a total over
+   * the same filters, so without this the count repeats a registry lookup per
+   * component slug and a catalog introspection per table: column and index
+   * reads on Postgres and MySQL, a PRAGMA each on SQLite. A standalone count
+   * omits them and resolves its own.
+   */
+  resolvedComponentTables?: Map<string, string>;
+  resolvedComponentTypeColumns?: Map<string, string>;
+  /** Arbitrary data passed to hooks via context */
+  context?: Record<string, unknown>;
+  /**
+   * The field whose distinct values become buckets.
+   *
+   * Judged by `assertQueryReadable` alongside `where` and `sort`, because the
+   * bucket set IS the distinct values of the column: grouping by a field the
+   * caller may not read hands back the whole value set at once, where a
+   * `where` yields it one probe at a time.
+   */
+  groupBy?: string;
+}
+
+/**
+ * Field types whose column holds a STRUCTURE rather than a value.
+ *
+ * Not groupable, and refused rather than serialised. Two rows carrying the
+ * same content with their keys in a different order are one bucket under
+ * PostgreSQL's `jsonb`, which normalises, and two under SQLite, which groups
+ * the stored text — so the same data answers a different count per adapter
+ * while every answer looks ordinary. A label chosen here cannot fix that: the
+ * grouping already happened in the database.
+ */
+/**
+ * Why a declared field cannot be a group key, or `undefined` if it can.
+ *
+ * Asked of the CANONICAL classifier the DDL is built from, rather than of a
+ * list of type names kept here. A plugin field type declaring `storage: "json"`
+ * is mapped to a JSON column by that classifier and would be invisible to such
+ * a list — so it would group, and answer differently per adapter.
+ *
+ * `skip` is a field whose values live in another table (a component, a
+ * many-to-many), so this collection has no column to group by. `json` is a
+ * structure: two rows holding the same content with their keys written in a
+ * different order are ONE bucket under PostgreSQL's `jsonb`, which normalises,
+ * and TWO under SQLite, which compares the stored text. The grouping happens in
+ * the database, so no label chosen afterwards reconciles them.
+ */
+function ungroupableKind(field: FieldDefinition): string | undefined {
+  // Asked of the LOGICAL storage as well as the physical column, because the
+  // two disagree and only one of them decides what the value looks like.
+  // `classifyFieldKind` answers what column the DDL emits: `richText` gets
+  // `longText`, and a `hasMany` text or select gets a text column. The read
+  // and mutation paths nonetheless serialize those values as JSON through
+  // `isJsonFieldType`, so the stored bytes are a document and grouping them
+  // returns raw serialized JSON as labels -- splitting equal content that was
+  // written with its keys in a different order.
+  if (isJsonFieldType(field.type, field)) {
+    return "is stored as serialized JSON, so its buckets would depend on how that text was written rather than on what it means";
+  }
+  const kind = classifyFieldKind(field, "collection");
+  if (kind === "skip") {
+    return "keeps its values in another table, so this collection has no column for it";
+  }
+  if (kind === "json") {
+    return "holds a structure rather than a value, so its buckets would depend on how the database compares stored JSON";
+  }
+  return undefined;
+}
+
+/**
+ * Refuse a group key that would disclose by grouping, or that names nothing.
+ *
+ * The owner column is stripped from responses and excluded from sort, because
+ * ordering by it lets a caller target rows by creator; grouping by it is that
+ * disclosure in one request -- a bucket per author with how much each wrote.
+ * `assertGroupableField` does not reach it: that guard judges fields carrying
+ * a read rule, and this is a system column carrying none.
+ *
+ * An unresolved column is refused rather than skipped, which is the deliberate
+ * difference from the sort path. A dropped ORDER BY returns the right rows in
+ * the wrong order; a dropped GROUP BY collapses every bucket into one row and
+ * answers with a single total that reads exactly like a real one.
+ */
+function assertGroupKeyUsable(
+  groupBy: string,
+  column: unknown,
+  declaredFields: FieldDefinition[]
+): void {
+  const snake = toSnakeCase(groupBy);
+  const isOwner =
+    groupBy === "created_by" ||
+    groupBy === "createdBy" ||
+    snake === "created_by";
+  if (isOwner) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `groupBy.${groupBy}`,
+          code: "FIELD_NOT_GROUPABLE",
+          message:
+            "Rows cannot be grouped by their creator. The buckets would report how many rows each user owns.",
+        },
+      ],
+    });
+  }
+  if (!column) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `groupBy.${groupBy}`,
+          code: "FIELD_NOT_GROUPABLE",
+          message: `"${groupBy}" is not a column on this collection, so there is nothing to group by.`,
+        },
+      ],
+    });
+  }
+
+  // A password value never leaves the server, and the strip that enforces that
+  // works on ROWS. An aggregate returns none, so a bucket label would carry the
+  // stored hash out through a path with nothing on it to clear the value.
+  // `assertGroupableField` does not reach this: it judges fields carrying an
+  // `access.read` rule, and a password field's guarantee comes from its type.
+  const spelled = new Set([
+    groupBy,
+    toSnakeCase(groupBy),
+    toCamelCase(groupBy),
+  ]);
+  const declared = declaredFields.find(field => spelled.has(field.name));
+  const ungroupable = declared ? ungroupableKind(declared) : undefined;
+  if (ungroupable !== undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `groupBy.${groupBy}`,
+          code: "FIELD_NOT_GROUPABLE",
+          message: `"${groupBy}" ${ungroupable}. Group by a scalar field instead.`,
+        },
+      ],
+    });
+  }
+
+  if (isPasswordFieldName(declaredFields, groupBy)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `groupBy.${groupBy}`,
+          code: "FIELD_NOT_GROUPABLE",
+          message:
+            "A password field cannot be grouped by. Its stored value never leaves the server, and buckets would carry it as their labels.",
+        },
+      ],
+    });
+  }
+}
+
+/**
+ * Bucket rows as the wire carries them.
+ *
+ * Annotated rather than inferred because the group column is resolved from a
+ * dynamic schema, so the select cannot describe its own row shape. A date
+ * travels as ISO rather than through the platform's default rendering, so the
+ * same row groups to the same label on every runtime.
+ */
+/**
+ * One bucket's label, keeping values distinct that the database kept distinct.
+ *
+ * A JSON-backed column (`json`, `repeater`, `group`, `blocks`, a `hasMany`
+ * relationship) comes back from PostgreSQL and MySQL as an object or an array.
+ * `String()` renders every object as `[object Object]` and flattens arrays to
+ * lossy comma-joined text, so two buckets the database grouped apart would
+ * arrive wearing the same label — a chart that silently merges categories and
+ * whose numbers no longer add up to the rows behind them.
+ *
+ * A date travels as ISO rather than through the platform's default rendering,
+ * so the same row groups to the same label on every runtime.
+ */
+function bucketLabel(value: unknown): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string") return value;
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  // Everything else is structured. `JSON.stringify` answers `undefined` for a
+  // value it cannot represent, which becomes the null bucket rather than the
+  // string "undefined" sitting among real labels.
+  return JSON.stringify(value) ?? null;
+}
+
+function toBuckets(
+  rows: Array<{
+    value: unknown;
+    total: number | string | null;
+  }>
+): Array<{ value: string | null; count: number }> {
+  return rows.map(row => ({
+    value: bucketLabel(row.value),
+    count: Number(row.total ?? 0),
+  }));
 }
 
 export class CollectionQueryService extends BaseService {
@@ -538,6 +857,7 @@ export class CollectionQueryService extends BaseService {
     collectionName: string;
     where?: WhereFilter;
     sort?: string;
+    groupBy?: string;
     overrideAccess?: boolean;
     frameworkFilter?: boolean;
   }): void {
@@ -557,6 +877,20 @@ export class CollectionQueryService extends BaseService {
       opts
     );
     assertSortableField("collection", params.collectionName, params.sort, opts);
+    // A group key discloses by a third route: the buckets it returns ARE the
+    // distinct values of the column, so grouping by a field the caller may not
+    // read hands back the value set directly rather than one probe at a time.
+    //
+    // 🔴 WITHOUT `frameworkFilter`. That flag attests that a `where` was built
+    // by the framework from a route it was asked to render, which is a claim
+    // about the FILTER and says nothing about a grouping key travelling beside
+    // it. Forwarding it here would let a framework-built read publish the
+    // distinct values of a field its caller may not read — the exemption
+    // widening past the thing it was granted for. Trust still exempts, because
+    // `overrideAccess` is a claim about the caller rather than about one clause.
+    assertGroupableField("collection", params.collectionName, params.groupBy, {
+      overrideAccess: opts.overrideAccess,
+    });
   }
 
   /**
@@ -2516,244 +2850,208 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
-   * Count entries in a collection.
+   * Refuse a geo predicate on a read that returns no rows to test it against.
    *
-   * Returns the total number of entries matching the provided criteria.
-   * Uses efficient SQL COUNT query without fetching entry data.
-   * Applies collection-level access control.
-   *
-   * Security checks are applied in order:
-   * 1. Collection-level access (AccessControlService)
-   *
-   * Runs the read hooks that precede a query -- `beforeOperation` and
-   * `beforeRead` -- so the total describes the rows a list would return. There
-   * is no after phase: those reshape a document, and a count has none.
-   *
-   * Skipped when the caller sets `readHooksAlreadyRan`, which `listEntries`
-   * does for the count it takes for its own total.
-   *
-   * @param params - Collection name, optional user context, and optional search query
-   * @returns Count result with totalDocs or error
-   *
-   * @example
-   * ```typescript
-   * // Count all entries
-   * const result = await entryService.countEntries({
-   *   collectionName: 'posts',
-   *   user: { id: 'user-123', role: 'editor' }
-   * });
-   * console.log(result.data.totalDocs); // 42
-   *
-   * // Count with search filter
-   * const filtered = await entryService.countEntries({
-   *   collectionName: 'posts',
-   *   user: { id: 'user-123' },
-   *   search: 'tutorial'
-   * });
-   *
-   * // Count with where clause
-   * const published = await entryService.countEntries({
-   *   collectionName: 'posts',
-   *   user: { id: 'user-123' },
-   *   where: { status: { equals: 'published' } }
-   * });
-   * ```
+   * `listEntries` evaluates geo operators in memory over the rows it fetched.
+   * An aggregate has no rows, and `buildWhereClause` emits no SQL for them, so
+   * leaving one in place would answer over every candidate the geo filter was
+   * meant to exclude -- a number that looks ordinary and counts the wrong set.
    */
-  // Flagged on CRAP only (cyclomatic 14, cognitive 15 are both under their
-  // thresholds); CRAP multiplies complexity by MISSING coverage, and the
-  // coverage term here is estimated rather than measured. It is covered by its
-  // own describe block plus the count leg of the access-parity suite.
-  //
-  // This method got SIMPLER: it was cyclomatic 44 / cognitive 54 / CRAP 462 and
-  // critical before its predicate stopped being a second copy of the list
-  // path's. The finding survives because the change touched its lines, not
-  // because anything here grew.
-  // fallow-ignore-next-line complexity
-  async countEntries(params: {
-    collectionName: string;
-    user?: UserContext;
-    /**
-     * The instant the enclosing read resolved releases against.
-     *
-     * Set only by `listEntries`, which calls this as its own continuation. A
-     * standalone count takes its own clock; a nested one MUST take its
-     * parent's, or a release becoming due between the two makes the page report
-     * pre-release rows beside a post-release `totalDocs`.
-     */
-    releaseNow?: Date;
-    /** Search query to filter entries by searchable fields */
-    search?: string;
-    /** Where clause for advanced filtering */
-    where?: WhereFilter;
-    /** When true, bypass all access control checks */
-    overrideAccess?: boolean;
-    /**
-     * This `where` was built by the framework from a route it was asked to
-     * render, not received from a request.
-     *
-     * Exempts it from `assertFilterableFields`, whose subject is a caller
-     * CHOOSING probe values against a field it may not read. Per-operation and
-     * never a config field, so a nested call cannot inherit it.
-     */
-    frameworkFilter?: boolean;
-    /**
-     * Which collections a trusted read may reach as relationships are expanded,
-     * asked per RELATED collection. Absent means every populated target inherits
-     * the caller's trust. Evaluated as `overrideAccess && trusted(target)`, so it
-     * can only ever narrow. See {@link RelatedRowReadContext.trusted}.
-     */
-    trusted?: TrustBound;
-    /**
-     * The route middleware already ran the RBAC gate for the authorizing
-     * operation; skip only that redundant re-check while stored read rules
-     * (owner-only filter) still apply. Mirrors listEntries so the count
-     * beside a route-authorized enumeration answers the same question and
-     * does not fall back to 0 for update/delete-only callers.
-     */
-    routeAuthorized?: boolean;
-    /**
-     * The caller's authenticated scope, mirroring listEntries so a scoped key
-     * counts exactly the rows it can list.
-     */
-    authenticatedScope?: AuthenticatedScope;
-    /**
-     * Draft/Published filter override (only effective when collection.status === true).
-     * See listEntries for full semantics.
-     */
-    status?: StatusOption;
-    /**
-     * Requested content locale (i18n M4). Kept in parity with listEntries so a locale-scoped
-     * filter (M4c EXISTS) counts the same rows the page returns. For plain reads it has no
-     * effect on the count (localized display resolution is post-query).
-     */
-    locale?: string;
-    /** Fallback control (`false`/`"none"` disables fallback). */
-    fallbackLocale?: string | false;
-    /**
-     * Set by `listEntries`, which has already run the read hooks for this
-     * request and forwards the filter they settled on. A standalone count runs
-     * them itself, so the total answers the same question as a list would.
-     */
-    readHooksAlreadyRan?: boolean;
-    /**
-     * Language filter, already extracted by the caller (listEntries). When present it is
-     * applied directly instead of re-extracting `_translated` from `where` — listEntries strips
-     * `_translated` from the where it forwards, so re-extraction would find nothing and the count
-     * would over-count.
-     */
-    translationFilter?: TranslationStatusFilter;
-    /**
-     * Component table names and discriminator columns, already resolved by the
-     * caller (listEntries) for this same request.
-     *
-     * The list path resolves both to build its page, then asks for a total over
-     * the same filters, so without this the count repeats a registry lookup per
-     * component slug and a catalog introspection per table: column and index
-     * reads on Postgres and MySQL, a PRAGMA each on SQLite. A standalone count
-     * omits them and resolves its own.
-     */
-    resolvedComponentTables?: Map<string, string>;
-    resolvedComponentTypeColumns?: Map<string, string>;
-    /** Arbitrary data passed to hooks via context */
-    context?: Record<string, unknown>;
-  }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
+  private refuseGeoInAggregate(
+    collectionName: string,
+    where: WhereFilter | undefined
+  ): void {
+    const { geoFilters } = extractGeoFilters(where);
+    if (geoFilters.length === 0) return;
+    throw NextlyError.invalidInput({
+      message:
+        "A geo filter cannot be counted. Geo predicates are evaluated over fetched rows, so they apply to a list but not to a count; remove the geo operator or take the total from the list instead.",
+      logContext: {
+        collection: collectionName,
+        operators: geoFilters.map(f => f.operator),
+      },
+    });
+  }
+
+  /**
+   * The filter a read actually runs, after the read hooks have had it.
+   *
+   * A standalone read runs them for the reason it mirrors every other
+   * `listEntries` filter: its answer has to describe the rows a list would
+   * return. Skipped when `listEntries` already ran them and forwarded what
+   * they settled on, so one request never runs them twice.
+   */
+  private async hookSettledWhere(
+    params: FilteredReadParams
+  ): Promise<WhereFilter | undefined> {
+    if (params.readHooksAlreadyRan) return params.where;
+    return this.resolveReadWhere({
+      collectionName: params.collectionName,
+      where: params.where,
+      user: params.user,
+      sharedContext: { ...params.context },
+    });
+  }
+
+  /**
+   * The key this schema carries for a group-by, once it has earned the right
+   * to name one.
+   *
+   * Answers the KEY rather than the column so the caller reads the column out
+   * of the schema itself, where its type is in scope: a column handed back
+   * through here would arrive widened and need a cast the compiler could not
+   * check.
+   *
+   * Runs before the read hooks. `beforeOperation` and `beforeRead` are
+   * ordinary user code that records audit entries and spends rate-limit
+   * budget, and a key that was never going to be accepted should not make them
+   * run. Collection authorization still comes first: whether the collection is
+   * readable at all outranks what was asked of it.
+   */
+  private async validatedGroupKey(
+    params: FilteredReadParams,
+    schema: Record<string, unknown>
+  ): Promise<string | undefined> {
+    const groupBy = params.groupBy;
+    if (groupBy === undefined) return undefined;
+    // OWN properties only: `schema` is an ordinary object, so a key like
+    // `toString` resolves to a prototype method rather than `undefined`, which
+    // read as a column and failed inside the query builder as a 500 where the
+    // contract promises a named refusal.
+    const key = [groupBy, toSnakeCase(groupBy)].find(name =>
+      Object.prototype.hasOwnProperty.call(schema, name)
+    );
+    assertGroupKeyUsable(
+      groupBy,
+      key === undefined ? undefined : schema[key],
+      collectionFieldsFor(
+        await this.collectionService.getCollection(params.collectionName)
+      )
+    );
+    return key;
+  }
+
+  /**
+   * The locale chain this read resolves against, and the companion table its
+   * localized values live in.
+   *
+   * Loaded together because the companion is only worth reading when there IS
+   * a chain — or when the caller asked for every locale — and the two are read
+   * as one pair by everything downstream. Mirrors `listEntries` so a
+   * locale-scoped search or filter describes the SAME rows the page returns.
+   */
+  private async localeScope(params: FilteredReadParams): Promise<{
+    localeChain: ReturnType<CollectionQueryService["resolveLocaleChain"]>;
+    companion: Awaited<
+      ReturnType<CollectionFileManager["loadCompanionSchema"]>
+    > | null;
+  }> {
+    const localeChain = this.resolveLocaleChain(
+      params.locale,
+      params.fallbackLocale
+    );
+    const companion =
+      localeChain || params.locale === "all"
+        ? await this.fileManager.loadCompanionSchema(params.collectionName)
+        : null;
+    return { localeChain, companion };
+  }
+
+  private async resolveReadPlan<TData>(params: FilteredReadParams) {
+    const accessUser = params.overrideAccess ? undefined : params.user;
+
+    // 1. Check collection-level access FIRST
+    const accessDenied = await this.accessService.checkCollectionAccess<TData>(
+      params.collectionName,
+      "read",
+      accessUser,
+      undefined,
+      undefined,
+      params.overrideAccess,
+      params.routeAuthorized,
+      // Same scope judgement as listEntries, so a read cannot describe rows
+      // the key itself is not allowed to list.
+      params.authenticatedScope
+    );
+    if (accessDenied) {
+      return { allowed: false as const, denied: accessDenied };
+    }
+
+    // A count is a cleaner oracle than a listing, not a lesser one: "how many
+    // rows carry this value" answers 1 or 0 without returning a row at all.
+    // A bucket set is the same oracle with more places to read it.
+    this.assertQueryReadable(params);
+
+    const schema = await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    );
+
+    // BEFORE the hooks. A refused group key is refused whatever the hooks
+    // settle on, and `beforeOperation`/`beforeRead` are ordinary user code:
+    // they record audit entries and spend rate-limit budget. Running them for
+    // a request that was never going to be answered charges the caller for
+    // work and leaves a trail of reads that did not happen. Authorization
+    // stays first, because whether the collection is readable at all outranks
+    // what was asked of it.
+    // Resolved HERE, where the schema's own column type is in scope, and
+    // carried on the plan. Re-resolving it at the point of use was a second
+    // lookup that had to agree with this one, which is the seam this whole
+    // module exists to remove.
+    const groupKey =
+      params.groupBy === undefined
+        ? undefined
+        : await this.validatedGroupKey(params, schema);
+    const groupColumn = groupKey === undefined ? undefined : schema[groupKey];
+
+    const countWhere = await this.hookSettledWhere(params);
+
+    this.refuseGeoInAggregate(params.collectionName, countWhere);
+
+    const { localeChain, companion } = await this.localeScope(params);
+
+    // The predicate, from the one method that builds it. An aggregate that
+    // assembled its own filters beside `listEntries` would answer a question
+    // no read can check, and the two would drift the first time a condition
+    // was added to one of them. A count and a bucket set enter here as the
+    // same read the page runs, minus the rows.
+    const { conditions: whereConditions } = await this.resolveReadConditions({
+      collectionName: params.collectionName,
+      // The enclosing read's instant when this is its continuation, and this
+      // read's own clock when it was called directly, so a release becoming
+      // due mid-request cannot put pre-release rows beside a post-release
+      // total.
+      releaseNow: params.releaseNow ?? new Date(),
+      where: countWhere,
+      search: params.search,
+      status: params.status,
+      overrideAccess: params.overrideAccess,
+      accessUser,
+      authenticatedScope: params.authenticatedScope,
+      schema,
+      companion,
+      localeChain,
+      // An aggregate has no rows to evaluate a geo predicate over, and
+      // `refuseGeoInAggregate` above refused one rather than answering over
+      // the candidates it was meant to exclude.
+      extractGeo: false,
+      // Stripped from the `where` `listEntries` forwards, so it is passed
+      // separately or the aggregate would find nothing and over-count.
+      translationFilter: params.translationFilter,
+      // Resolved once for this request by the caller; see the parameters.
+      resolvedComponentTables: params.resolvedComponentTables,
+      resolvedComponentTypeColumns: params.resolvedComponentTypeColumns,
+    });
+
+    return { allowed: true as const, schema, whereConditions, groupColumn };
+  }
+
+  async countEntries(
+    params: FilteredReadParams
+  ): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     try {
-      const accessUser = params.overrideAccess ? undefined : params.user;
-
-      // 1. Check collection-level access FIRST
-      // The same gate listEntries runs, so a count cannot describe rows the
-      // caller is not allowed to list.
-      const accessDenied = await this.denyCollectionRead<{ totalDocs: number }>(
-        {
-          collectionName: params.collectionName,
-          accessUser,
-          overrideAccess: params.overrideAccess,
-          routeAuthorized: params.routeAuthorized,
-          authenticatedScope: params.authenticatedScope,
-        }
-      );
-      if (accessDenied) {
-        return accessDenied;
-      }
-
-      // A count is a cleaner oracle than a listing, not a lesser one: "how many
-      // rows carry this value" answers 1 or 0 without returning a row at all.
-      this.assertQueryReadable(params);
-
-      const schema = await this.fileManager.loadDynamicSchema(
-        params.collectionName
-      );
-
-      // A standalone count runs the read hooks for the same reason it mirrors
-      // every other listEntries filter: the total has to describe the rows a
-      // list would return. Skipped when listEntries already ran them and
-      // forwarded what they settled on.
-      const countWhere = params.readHooksAlreadyRan
-        ? params.where
-        : await this.resolveReadWhere({
-            collectionName: params.collectionName,
-            where: params.where,
-            user: params.user,
-            sharedContext: { ...params.context },
-          });
-
-      // A count cannot apply geo predicates: `listEntries` evaluates them in
-      // memory over the rows it fetched, and there are no rows here.
-      // `buildWhereClause` emits no SQL for them, so leaving one in place would
-      // return a total describing every candidate the geo filter was meant to
-      // exclude. Refusing says so instead of answering wrongly.
-      const { geoFilters: countGeoFilters } = extractGeoFilters(countWhere);
-      if (countGeoFilters.length > 0) {
-        throw NextlyError.invalidInput({
-          message:
-            "A geo filter cannot be counted. Geo predicates are evaluated over fetched rows, so they apply to a list but not to a count; remove the geo operator or take the total from the list instead.",
-          logContext: {
-            collection: params.collectionName,
-            operators: countGeoFilters.map(f => f.operator),
-          },
-        });
-      }
-
-      // i18n M4c: mirror listEntries' localized-query context so a locale-scoped search/where
-      // counts the SAME rows the page returns (count==list parity).
-      const localeChain = this.resolveLocaleChain(
-        params.locale,
-        params.fallbackLocale
-      );
-      const companion =
-        localeChain || params.locale === "all"
-          ? await this.fileManager.loadCompanionSchema(params.collectionName)
-          : null;
-
-      // The enclosing read's instant when this count is its continuation, and
-      // this count's own clock when it was called directly.
-      const readNow = params.releaseNow ?? new Date();
-
-      // The same predicate `listEntries` builds, from the same method. The
-      // total has to answer the question the rows answered, and it stopped
-      // being possible for the two to disagree when they stopped being two.
-      const { conditions: whereConditions } = await this.resolveReadConditions({
-        collectionName: params.collectionName,
-        releaseNow: readNow,
-        where: countWhere,
-        search: params.search,
-        status: params.status,
-        overrideAccess: params.overrideAccess,
-        accessUser,
-        authenticatedScope: params.authenticatedScope,
-        schema,
-        companion,
-        localeChain,
-        // A count has no rows to evaluate a geo predicate over, and refused one
-        // above rather than answering a total that ignores it.
-        extractGeo: false,
-        // Stripped from the `where` listEntries forwards, so it is passed
-        // separately or the count would find nothing and over-count.
-        translationFilter: params.translationFilter,
-        // Resolved once for this request by the caller; see the parameters.
-        resolvedComponentTables: params.resolvedComponentTables,
-        resolvedComponentTypeColumns: params.resolvedComponentTypeColumns,
-      });
+      const plan = await this.resolveReadPlan<{ totalDocs: number }>(params);
+      if (!plan.allowed) return plan.denied;
+      const { schema, whereConditions } = plan;
 
       // Build the count query
       let query = this.db.select({ count: sql<number>`count(*)` }).from(schema);
@@ -2793,6 +3091,111 @@ export class CollectionQueryService extends BaseService {
         data: null,
         // Same reason as listEntries: without the code the boundary rebuilds a
         // typed refusal as a generic internal error.
+        ...errorEnvelopeFields(error),
+      };
+    }
+  }
+
+  /**
+   * How many rows carry each distinct value of one field, over exactly the
+   * rows a `countEntries` with the same request would have counted.
+   *
+   * Shares `resolveReadPlan` with the count rather than assembling its own
+   * filters. An aggregate that built its own could describe a wider row set
+   * than a count of the same query, which is the shape of the aggregate
+   * permission failures reported against other systems: a rule narrowed the
+   * rows and the aggregate counted past it.
+   *
+   * Ranking and the cap both happen IN THE DATABASE, after grouping is
+   * complete, so the cap decides only which finished buckets travel back and
+   * never which rows were aggregated. A cap applied to the SCAN instead --
+   * reading part of the table and grouping whatever it saw -- can reorder the
+   * buckets themselves, making the largest one whichever the read order
+   * reached first. That answer is indistinguishable from the true one and
+   * wrong in the direction a reader acts on.
+   *
+   * One row past the cap is fetched so "there are more" is observed rather
+   * than assumed, then dropped before answering.
+   */
+  async groupEntries(
+    params: FilteredReadParams & { groupBy: string; bucketLimit?: number }
+  ): Promise<CollectionServiceResult<GroupedRows>> {
+    try {
+      const plan = await this.resolveReadPlan<GroupedRows>(params);
+      if (!plan.allowed) return plan.denied;
+      const { schema, whereConditions } = plan;
+
+      // OWN properties only. `schema` is an ordinary object, so a key like
+      // `toString` resolves to a prototype method rather than `undefined`,
+      // which read as a column and reached the query builder -- answering a
+      // 500 where the contract promises a named `FIELD_NOT_GROUPABLE`.
+      // Resolved and approved by the plan, before the read hooks ran. Read
+      // from there rather than looked up again: two lookups that must agree is
+      // exactly the seam this service keeps removing.
+      const column = plan.groupColumn;
+
+      // `Number.isFinite` first, because `Math.trunc`, `Math.max` and
+      // `Math.min` all PRESERVE `NaN`: a computed bucket limit that arrived as
+      // one would reach the query builder as `.limit(NaN)` and fail the read
+      // rather than fall back to the documented bound.
+      const requestedCap = params.bucketLimit;
+      const cap = Number.isFinite(requestedCap)
+        ? Math.min(
+            Math.max(1, Math.trunc(requestedCap as number)),
+            MAX_GROUP_BUCKETS
+          )
+        : MAX_GROUP_BUCKETS;
+
+      let query = this.db
+        .select({ value: column, total: sql<number>`count(*)` })
+        .from(schema);
+
+      if (whereConditions.length > 0) {
+        query = query.where(
+          whereConditions.length === 1
+            ? whereConditions[0]
+            : and(...whereConditions)
+        );
+      }
+
+      const rows = await query
+        .groupBy(column)
+        // The value breaks ties, so two buckets of equal size come back in a
+        // fixed order and the cap cannot drop a different one per request.
+        //
+        // NULL is placed explicitly, before the value is compared. Left to the
+        // dialect, `ORDER BY <col>` puts NULL last on PostgreSQL and first on
+        // MySQL and SQLite -- so with a cap and enough equally sized buckets,
+        // the adapters return DIFFERENT BUCKET SETS rather than the same set
+        // in a different order: one drops the null bucket, the others keep it.
+        // `IS NULL` sorts false before true everywhere, which puts the null
+        // bucket last on all three.
+        .orderBy(desc(sql`count(*)`), sql`${column} IS NULL`, asc(column))
+        .limit(cap + 1);
+
+      return {
+        success: true,
+        statusCode: 200,
+        message: "Buckets retrieved successfully",
+        data: {
+          buckets: toBuckets(rows.slice(0, cap)),
+          truncated: rows.length > cap,
+        },
+      };
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Failed to group entries";
+      this.logger.error("Error grouping entries", {
+        collectionName: params.collectionName,
+        error: message,
+      });
+      return {
+        success: false,
+        // Mirrors countEntries: a refused access constraint is a 403 and a
+        // refused group key a 400, not a server fault.
+        statusCode: NextlyError.is(error) ? error.statusCode : 500,
+        message,
+        data: null,
         ...errorEnvelopeFields(error),
       };
     }

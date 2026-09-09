@@ -690,8 +690,13 @@ describe("POST /api/dashboard/query", () => {
       const unknownSource = await postWidgetQuery(
         makeReq({ queries: [{ source: "collection:salaries", op: "count" }] })
       );
+      // `timeseries` because the op has to be one NO source declares, and a
+      // collection source now declares `groupBy`. Whichever op stands here
+      // must stay unsupported: once one is implemented this test starts
+      // comparing a validation message against a source refusal and says so
+      // loudly, which is the intended way to find out.
       const unsupportedOp = await postWidgetQuery(
-        makeReq({ queries: [{ source: "collection:posts", op: "groupBy" }] })
+        makeReq({ queries: [{ source: "collection:posts", op: "timeseries" }] })
       );
 
       const a = (await slotsOf(unknownSource))[0];
@@ -701,7 +706,7 @@ describe("POST /api/dashboard/query", () => {
       expect(b.ok).toBe(false);
       expect(a.error).toBe(b.error);
       expect(a.error).not.toContain("salaries");
-      expect(b.error).not.toContain("groupBy");
+      expect(b.error).not.toContain("timeseries");
     });
 
     it("keeps the source/op detail in the log", async () => {

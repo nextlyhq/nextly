@@ -150,8 +150,22 @@ jobs:
           # run only inside the gated ci job — so an edit to either must not
           # skip the very job that checks it. They are re-added after the
           # inert filter rather than encoded in it, because ERE cannot negate.
+          #
+          # `docs/` is re-added for the same reason and it is a newer one: the
+          # published pages carry TypeScript the `Doc samples compile` step
+          # checks, and that step lives in the gated job because it needs the
+          # packages built. Left inert, the one check that reads these pages
+          # would be the one thing a change to them skipped.
+          #
+          # The cost is real: a prose-only edit under docs/ now runs the whole
+          # job. A path filter cannot tell prose from a code fence, and a gate
+          # that does not run for the changes it exists to ratchet is worth
+          # nothing, which this repository learned the expensive way when a
+          # change that could not compile reached production because no check
+          # built the app.
           NOT_INERT=$({ printf '%s\n' "$CHANGED" | grep -vE "$INERT" || true
-                        printf '%s\n' "$CHANGED" | grep -xE 'AGENTS(\.measured)?\.md' || true; } | sort -u | grep . || true)
+                        printf '%s\n' "$CHANGED" | grep -xE 'AGENTS(\.measured)?\.md' || true
+                        printf '%s\n' "$CHANGED" | grep -E '^docs/' || true; } | sort -u | grep . || true)
 
           {
             echo "### CI scope"
@@ -235,13 +249,15 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:docs-claims
 
-      # The integration jobs select packages with a hand-written filter list, so
-      # a package that gains the task and is not added to it runs NOWHERE: the
-      # unit job no longer includes those files and no leg selects them, and
-      # every job stays green because what would have been reported is absent.
-      - name: Integration lane covers every package that declares it
+      # Both lanes select packages with a hand-written filter list, so a package
+      # that gains a test task and is not added to one runs NOWHERE, and every
+      # job stays green because what would have been reported is absent. That is
+      # not hypothetical: `nextly` and `@nextlyhq/admin` sat outside the unit
+      # list with 15623 passing tests between them until this check was widened
+      # to cover `test` as well as `test:integration`.
+      - name: Every test task is run by a lane
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: pnpm check:integration-lane
+        run: pnpm check:test-lanes
 
       # The About line and topic list are repository settings, not files, so every
       # check that reads git's index is blind to them. Reports unverifiable rather
@@ -521,6 +537,20 @@ jobs:
 
       # `./e2e` is named explicitly: it is a workspace member but sits under
       # neither glob, being neither something we publish nor something we run.
+      # After Build, deliberately: the samples resolve `nextly` and `@nextlyhq/*`
+      # through the real exports map of the packages in this commit, which
+      # exists only once they are built. Mapped paths would have answered for a
+      # subpath the package does not export, and the exports map is exactly what
+      # a sample can get wrong: three snippets in the authentication guide
+      # imported `nextly/lib/env`, which is not in it.
+      #
+      # It ratchets rather than gates outright, because the pages already carry
+      # findings and a check that is red when nothing is wrong teaches people to
+      # re-run reds instead of reading them.
+      - name: Doc samples compile
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
+        run: pnpm check:doc-samples
+
       - name: Lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: pnpm turbo lint --continue --filter='./packages/*' --filter='./apps/*' --filter='./e2e'
@@ -533,49 +563,40 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
-      # Unit tests. Named packages rather than all of them: `nextly` and
-      # `@nextlyhq/admin` carry a large pre-existing failing baseline (stale
-      # test scaffolding, not product bugs) and are being repaired in a
-      # follow-up that adds them here once green. Everything gated below passes
-      # today, so a new failure in any of these packages is a real regression
-      # and blocks the merge — which is the whole point, and the reason the job
-      # was named "Test" long before it ran any.
+      # Unit tests. WHAT runs is not written here: `lane:test` in the root
+      # manifest holds it, and `check:test-lanes` asks turbo what that script
+      # selects rather than reading this file. A workflow is a poor place to
+      # keep a selection — it cannot be run on a laptop, and a checker that
+      # wants to know what CI runs has to parse a shell command out of YAML,
+      # which was tried and produced twelve ways to be wrong.
       #
-      # ui / storage-s3 / storage-uploadthing have no test files yet; listed so
-      # they gate automatically the moment they gain one.
-      # admin-css is listed because its suite compiles a fixture stylesheet, and
-      # what that compile emits depends on the repository around it rather than
-      # on this package alone - so it is a suite an unrelated change can turn
-      # red, which is exactly the kind nothing should have to remember to run.
+      # The script selects `./packages/*` MINUS `nextly` and `@nextlyhq/admin`,
+      # which each have a runner to themselves below; the same location idiom
+      # Build and Lint above
+      # already use, so a package added there gates on the commit that adds it.
+      # It was a written-out list of twenty-two names until `nextly` (907 files,
+      # 11562 tests) and `@nextlyhq/admin` (407, 4061) were found passing
+      # outside it, gating nothing, on `e6797c5d1`.
+      #
       # NOT gated on Build, unlike the four steps around it: turbo.jsonc gives
-      # `test` `dependsOn: ["^build"]`, so `turbo test` rebuilds the dependency
-      # subgraph of whatever it is filtered to. A Build failure in a package
-      # none of these depends on - an app, which is a leaf - would otherwise
-      # silence every suite listed here for no reason, and a failure in
-      # one they DO depend on is reported as an attributed `#build` failure
-      # here rather than as the type-aware noise the others would produce.
+      # `test` `dependsOn: ["^build"]`, so it rebuilds the dependency subgraph
+      # of whatever it is filtered to. A Build failure in a package none of
+      # these depends on - an app, which is a leaf - would otherwise silence
+      # every suite here for no reason, and a failure in one they DO depend on
+      # is reported as an attributed `#build` failure rather than as the
+      # type-aware noise the others would produce.
+      #
+      # The script also carries `--concurrency=50%`, which is what makes room
+      # for the full set: turbo defaults to 10 tasks at once, a runner here has
+      # 4 vCPUs, and each task's vitest spawns cores-1 workers of its own, so
+      # the step was asking for about 30 processes on 4 cores. Wall-clock
+      # timeouts measure per-test CPU, and oversubscription that deep pushed
+      # jsdom component suites past their budgets the first time the full set
+      # ran. At 50% the step completes in 15m39s with 35 tasks. Capping WORKERS
+      # instead would not have helped, since cores-1 on a 4-vCPU runner is 3.
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: >-
-          pnpm turbo test
-          --filter=@nextlyhq/blocks-engine
-          --filter=@nextlyhq/blocks-react
-          --filter=@nextlyhq/builder
-          --filter=@nextlyhq/plugin-page-builder
-          --filter=@nextlyhq/plugin-form-builder
-          --filter=@nextlyhq/plugin-seo
-          --filter=@nextlyhq/plugin-sdk
-          --filter=@nextlyhq/ui
-          --filter=@nextlyhq/admin-css
-          --filter=@nextlyhq/adapter-drizzle
-          --filter=@nextlyhq/adapter-postgres
-          --filter=@nextlyhq/adapter-mysql
-          --filter=@nextlyhq/adapter-sqlite
-          --filter=@nextlyhq/storage-s3
-          --filter=@nextlyhq/storage-uploadthing
-          --filter=@nextlyhq/storage-vercel-blob
-          --filter=@nextlyhq/telemetry
-          --filter=create-nextly-app
+        run: pnpm lane:test
         env:
           TURBO_CACHE_DIR: .turbo
 
@@ -592,7 +613,7 @@ jobs:
       # that needs only what the Build step has already produced.
       - name: Playground tests
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
-        run: pnpm --filter playground exec vitest run
+        run: pnpm lane:test:playground
         env:
           TURBO_CACHE_DIR: .turbo
 
@@ -645,6 +666,219 @@ jobs:
         with:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # `nextly`'s unit suite, on a runner of its own.
+  #
+  # It is 907 files and 11562 tests, and inside the `ci` job's Test step it was
+  # 811s of 1804s — 45% of the work and the critical path on its own. Sharing a
+  # 4-vCPU runner with everything else, it took that step from 3.4 to 15.7
+  # minutes and the whole job from 13.1 to 28.5, which every contributor waits
+  # for on every push.
+  #
+  # `needs: changes` and NOT `needs: ci`, which is the point: this runs beside
+  # the lint, typecheck and build rather than after them, so the wall clock is
+  # the longer of the two jobs instead of their sum.
+  #
+  # WHAT it runs is not written here. `lane:test:nextly` in the root manifest
+  # holds it, `lane:test` excludes the same package, and `check:test-lanes`
+  # asks turbo what each selects — so the two cannot drift into running nextly
+  # twice or not at all.
+  #
+  # A plain job rather than a matrix over package names, deliberately: the lane
+  # check reads the workflow only to confirm the script is NAMED in it, and
+  # `pnpm lane:test:${{ matrix.package }}` would hide that name behind an
+  # expression. A second package moving here is a copy of this job, which is
+  # cheap and stays legible to the check.
+  unit-tests-nextly:
+    name: Unit tests (nextly)
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # Scoped to the JOB like every other `.turbo` cache in these workflows:
+      # this one builds only nextly's dependency subgraph, and an entry keyed on
+      # the commit alone would be read by jobs that built something else.
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `test` dependsOn `^build`, so turbo builds what nextly needs and nothing
+      # else. No separate Build step: this job has one question to answer.
+      - name: Test
+        run: pnpm lane:test:nextly
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Only a job that finished its work publishes what it learned.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # `@nextlyhq/admin`'s unit suite, on a runner of its own, for the reason the
+  # job above gives: it was 598s of the shared step's 1804s, a third of the
+  # work, and second only to `nextly`. With both moved, what stays behind is
+  # 395s across twenty packages.
+  #
+  # A second plain job rather than a matrix over the two, deliberately, and the
+  # trade is stated where it is paid: a matrix would spell this
+  # `pnpm lane:test:${{ matrix.package }}`, and the lane check reads the
+  # workflow only to confirm the script is NAMED in it. Forty duplicated lines
+  # that a check can read beat a template it cannot.
+  unit-tests-admin:
+    name: Unit tests (admin)
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # These suites render React under jsdom, which is why the package carries
+      # a 10s budget rather than vitest's 5s default. Alone on the runner they
+      # get `cores-1` workers to themselves instead of competing with twenty
+      # other packages, which is the contention that made that budget tight.
+      - name: Test
+        run: pnpm lane:test:admin
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Only a job that finished its work publishes what it learned.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # The one check that can block a merge, standing for all of them.
+  #
+  # 🔴 Measured before this existed: the only required status check on `main`
+  # was `Decide what this commit can affect`, a job that works out which paths a
+  # commit touches and then succeeds. Lint, typecheck, the unit suites and the
+  # browser tests were every one of them ADVISORY, so a red job could sit beside
+  # a merge that went through. Adding 15,764 tests to a job made them run; it
+  # did not make them gate.
+  #
+  # Listing those jobs individually as required checks is the obvious fix, and
+  # this repository has both of the reasons it does not work. A SKIPPED job
+  # never reports, and a required check that never reports blocks the branch for
+  # ever — every job here carries `if: needs.changes.outputs.inert != 'true'`,
+  # so a commit touching only inert paths would become unmergeable. And a matrix
+  # job's check is named from the expression it interpolates, so the list would
+  # restate names the workflow generates, which is the drift `check:test-lanes`
+  # exists to stop.
+  #
+  # So this depends on them and reports their verdict, and THIS is the check to
+  # require. Jobs can be added and removed here without touching a repository
+  # setting.
+  #
+  # `needs` IS the merge policy, and putting it here is most of the value. It
+  # used to live in a repository setting, where it appeared in no diff and no
+  # review — which is how it came to require one trivial job and nothing else
+  # without anyone deciding that. It is now a list a reviewer reads beside the
+  # jobs it names.
+  #
+  # ⚠️ The limit, stated rather than covered badly: nothing checks that a NEW
+  # job was added to this list, so one that is not here is advisory. That is a
+  # hand-written list, and this repository has spent real effort removing those
+  # — but the alternatives are worse. Deriving it would mean reading the job
+  # structure out of this YAML, which is the exact fallible read `check:test-
+  # lanes` was rewritten to stop doing, and no parser is available to scripts
+  # without taking a dependency for one call. What makes the trade acceptable is
+  # that both halves are now in ONE file a few dozen lines apart, so a job added
+  # without a line here is visible in the diff that adds it.
+  #
+  # The suites below — the browser tests, the scaffold and dev-script smokes —
+  # are deliberately NOT here yet: widening what blocks a merge is a decision
+  # about how the project ships, not a detail of this mechanism, and each is one
+  # line when that decision is made.
+  gate:
+    name: CI gate
+    # `always()`, and it is the whole point: a gate that is skipped when
+    # something upstream fails reports nothing, and nothing is what a required
+    # check must never report.
+    if: always()
+    needs:
+      - changes
+      - comments
+      - ci
+      - unit-tests-nextly
+      - unit-tests-admin
+      - entry-guard-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      # No install: the verdict is computed from the `needs` context alone, so
+      # this reads no dependency and can report even when the install that every
+      # other job depends on is what failed.
+      - name: Every job this depends on passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          INERT: ${{ needs.changes.outputs.inert }}
+        run: node scripts/ci-gate.mjs
 
   # The admin, in a real browser, against a real server and a real database.
   # Covers the class of failure the unit and integration suites structurally

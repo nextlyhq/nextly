@@ -55,7 +55,7 @@ export default defineConfig({
 
 ## How Plugins Work
 
-Every plugin implements the `PluginDefinition` interface from `nextly`. The lifecycle has two phases:
+Every plugin implements the `PluginDefinition` interface from `@nextlyhq/plugin-sdk`, the stable import surface for plugin authors. The lifecycle has two phases:
 
 ### 1. Declarative + setup phase
 
@@ -113,10 +113,17 @@ See the **[Plugin Author Guide](/docs/plugins/author-guide)** for the full workf
 Plugins can control where their collections appear in the admin sidebar and customize their visual appearance.
 
 ```typescript
+import type { PluginDefinition } from '@nextlyhq/plugin-sdk';
+import { MyCollection } from './collections/my-collection';
+
 const plugin: PluginDefinition = {
   name: 'my-plugin',
-  collections: [MyCollection],
+  version: '0.1.0',
+  nextly: '>=0.0.2-alpha.63',
+  contributes: { collections: [MyCollection] },
 
+  // Placement and appearance stay at the top level. This is complementary to
+  // `contributes.admin`, which is the declarative menu, pages and views surface.
   admin: {
     order: 50,
     description: 'What this plugin does',
@@ -138,6 +145,8 @@ Host applications can override a plugin's sidebar placement and appearance throu
 
 ```typescript
 // nextly.config.ts
+import { AdminPlacement } from 'nextly';
+
 export default defineConfig({
   plugins: [fb.plugin],
   admin: {

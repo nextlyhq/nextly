@@ -167,7 +167,10 @@ You can override the built-in email templates in `defineConfig()` without touchi
 // nextly.config.ts
 export default defineConfig({
   email: {
-    providerConfig: { /* ... */ },
+    providerConfig: {
+      provider: "resend",
+      apiKey: process.env.RESEND_API_KEY!,
+    },
     from: "noreply@example.com",
     templates: {
       passwordReset: (data) => ({

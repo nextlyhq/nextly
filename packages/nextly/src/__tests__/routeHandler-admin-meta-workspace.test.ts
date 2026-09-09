@@ -114,7 +114,13 @@ describe("admin-meta split over HTTP", () => {
     );
 
     expect(response.headers.get("cache-control")).toBe("private, no-store");
-    expect(response.headers.get("vary")).toBe("Cookie");
+    // Every credential the answer can depend on, asserted by membership: this
+    // route is session-gated and `requireAuthentication` also accepts an API
+    // key, so the header names both. Pinning the whole string would make
+    // naming another credential a test failure rather than a decision.
+    const vary = response.headers.get("vary") ?? "";
+    expect(vary).toContain("Cookie");
+    expect(vary).toContain("Authorization");
   });
 
   it("leaves the public route cacheable", async () => {

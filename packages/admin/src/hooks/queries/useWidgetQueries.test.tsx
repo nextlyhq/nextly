@@ -32,6 +32,12 @@ function wrapper({ children }: { children: ReactNode }) {
 
 const countQuery = (source: string): WidgetQuery => ({ source, op: "count" });
 
+const groupQuery = (source: string): WidgetQuery => ({
+  source,
+  op: "groupBy",
+  groupBy: "status",
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -682,5 +688,91 @@ describe("useWidgetQueries", () => {
       ok: false,
       error: expect.stringMatching(/could not be/i),
     });
+  });
+});
+
+describe("useWidgetQueries, grouped results", () => {
+  it("carries a grouped answer through to the slot", async () => {
+    // The decoder recognised `count` and `list` only, so every grouped payload
+    // became the malformed-response error and no card could ever draw one.
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: true,
+          result: {
+            op: "groupBy",
+            buckets: [
+              { value: "published", count: 4 },
+              { value: null, count: 1 },
+            ],
+            truncated: true,
+          },
+        },
+      ],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          {
+            placementId: "p1",
+            cellKey: "byStatus",
+            query: groupQuery("collection:posts"),
+          },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.cellSlots.p1?.byStatus).toBeDefined()
+    );
+
+    // The WHOLE slot: a decoder that dropped `truncated` would present a
+    // capped bucket set as the entire picture, and one that dropped the null
+    // bucket would lose the rows whose column is empty.
+    expect(result.current.cellSlots.p1?.byStatus).toEqual({
+      ok: true,
+      result: {
+        op: "groupBy",
+        buckets: [
+          { value: "published", count: 4 },
+          { value: null, count: 1 },
+        ],
+        truncated: true,
+      },
+    });
+  });
+
+  it("refuses a bucket whose count is not a finite number", async () => {
+    // `1e400` is valid JSON and parses to `Infinity`, which would draw as a bar
+    // dwarfing every real bucket rather than as a card admitting it cannot
+    // answer.
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: true,
+          result: {
+            op: "groupBy",
+            buckets: [{ value: "published", count: Number.POSITIVE_INFINITY }],
+          },
+        },
+      ],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          {
+            placementId: "p1",
+            cellKey: "byStatus",
+            query: groupQuery("collection:posts"),
+          },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.cellSlots.p1?.byStatus?.ok).toBe(false)
+    );
   });
 });

@@ -361,6 +361,28 @@ export interface PlanRefusal {
 export type PlanResult<TFields> = CompositionPlan<TFields> | PlanRefusal;
 
 /**
+ * A plan that is guaranteed to have created something, or the cause it did not.
+ *
+ * {@link CompositionPlan.create} is optional because a composition action need
+ * not create anything — `planDetach` only edits the page — so the shared shape
+ * cannot promise a row. A planner whose whole purpose is to fill the library
+ * always does, and saying so in the type is what stops every caller writing a
+ * branch for a state its planner cannot reach: an impossible branch is one that
+ * can never be exercised, so nothing ever proves it does the right thing, and
+ * the first reader to simplify it has no way to tell whether it was defensive
+ * or load-bearing.
+ *
+ * It narrows nothing else, and it is applied per planner rather than to a group
+ * of them. Each planner's guarantee is its own — a `create` here, a `create` and
+ * `pageOps` for a convert, an `update` for a save-over — and one alias spanning
+ * them would assert whichever guarantee its name suggested for planners that
+ * were never checked against it.
+ */
+export type CreatePlanResult<TFields> =
+  | (CompositionPlan<TFields> & { readonly create: PlannedCreate<TFields> })
+  | PlanRefusal;
+
+/**
  * Where a saved selection is stored, in the caller's vocabulary.
  *
  * One type for all three library kinds rather than one per planner. A pattern,
@@ -424,7 +446,7 @@ export function planSaveAsPattern<TFields>(
   selectedIds: readonly string[],
   target: LibraryTarget<TFields>,
   nesting: NestingSource
-): PlanResult<TFields> {
+): CreatePlanResult<TFields> {
   const saved = plannedSave(document, selectedIds, nesting);
   if (saved.problem !== undefined) return saved;
 
@@ -472,6 +494,30 @@ function plannedSave(
   // host's cap rather than the default.
   limits: DocumentLimits = DEFAULT_LIMITS
 ): PlannedSave | PlanRefusal {
+  // The one thing the SOURCE has to be for the search to happen at all: a list
+  // of roots. `contiguousRun` walks `document.nodes` to locate the selection, so
+  // a document whose `nodes` is absent or is not a list fails there as a native
+  // `TypeError` rather than as the refusal this returns — and that difference
+  // reaches a caller. A route reports it as a server fault instead of a bad
+  // request, and the published preflight throws where it promised a verdict, so
+  // a toolbar asking whether a save is possible crashes instead of disabling a
+  // button.
+  //
+  // Deliberately NOT `documentRefusal`, which is what `planInsertPattern` asks
+  // of the document it EDITS. That one also judges the source's `formatVersion`
+  // and `kind`, and a save reads neither: `kind` is written here, so a page
+  // whose own kind is unreadable still yields a perfectly good pattern —
+  // {@link savedPatternDocument} says so, and refusing it would be asking about
+  // the origin rather than about the thing.
+  //
+  // Not `forestRefusal` either, which walks every entry. An insert applies ops
+  // across the whole forest, so a malformed node the selection never touched
+  // still throws on apply; a save applies nothing to the page, and refusing on
+  // rubbish elsewhere would stop an author rescuing the part of their page that
+  // is still good. Measured: a `null` beside good roots already answers rather
+  // than throwing.
+  if (!Array.isArray(document.nodes)) return { problem: "unusable-document" };
+
   const run = savableRun(document, selectedIds, nesting);
   if (run.problem !== undefined) return run;
 
@@ -683,6 +729,22 @@ function savedPatternDocument(
   // meet, and only some of what the page holds travels into it.
   const duplicate = duplicateDomIdRefusal(stored.nodes);
   if (duplicate !== undefined) return duplicate;
+
+  // The stored document against the caps it will be WRITTEN under. Asked of
+  // what is stored rather than of the page, like the questions either side of
+  // it: only some of what the page holds travels, so a selection lifted out of
+  // a document at its ceiling is usually well within one.
+  //
+  // Without this a plan succeeded and the write then failed. The blocks field
+  // validates what it is handed, so a pattern over the byte cap or deeper than
+  // the depth cap is refused there — after the author has named it, filled the
+  // form and pressed save. Refusing at plan time is the same verdict, arriving
+  // where they can still do something about it, and it is what lets the
+  // published preflight promise that a save it permits will not fail on size.
+  const storedSurvey = surveyDocument(stored, limits);
+  if (storedSurvey.tooLarge || overIndexBound(storedSurvey)) {
+    return { problem: "exceeds-limits" };
+  }
 
   // Asked of what is STORED, not of the page it came from. Only some of the
   // source envelope travels: `formatVersion` is carried, and a page holding one
@@ -2107,6 +2169,51 @@ export function patternRefusal(
     storedPatternRefusal(pattern) ??
     internalNestingRefusal(pattern.nodes, nesting)
   );
+}
+
+/**
+ * Whether this selection could be saved as a pattern, and why not.
+ *
+ * The counterpart to {@link patternRefusal}, published for the same reason and
+ * against the opposite mistake. That one stops a palette OFFERING a stored
+ * pattern the planner would reject; this one stops a surface offering to SAVE a
+ * selection the planner would reject — a button that accepts a click and then
+ * fails, which is the same defect on the write side.
+ *
+ * Asked of the PLANNER rather than restated. The ways a selection can be
+ * unsavable are not a short list a toolbar should keep its own copy of: a
+ * selection that is not one contiguous run, a block that may not be a document
+ * root, a node whose shape the op layer will not carry, a descendant nested
+ * somewhere the rules no longer allow, one DOM id on two of the run's own
+ * nodes, and a document that will not fit the byte cap. A surface enumerating
+ * those drifts the first time the planner learns a new way to say no, and it
+ * drifts SILENTLY — the button stays enabled and the save fails.
+ *
+ * Before this, the only way to ask was to call {@link planSaveAsPattern} with a
+ * `target` invented for the purpose, which is a collection name and a field set
+ * a caller asking "may I?" does not have yet.
+ *
+ * A THIN VIEW over the planner's own preflight rather than a second walk: the
+ * same `plannedSave` the two save planners call, so a question answered here
+ * and a save attempted afterwards cannot disagree. It therefore does the same
+ * work a save does, up to building the stored document — which is what makes it
+ * exact, and what makes it worth memoising on the selection rather than calling
+ * per render.
+ *
+ * It takes NO limits of its own, deliberately. {@link planSaveAsPattern} has
+ * none either — it plans under the defaults — so a preflight that accepted them
+ * would answer a question the planner never asks: a caller passing a lower
+ * `maxNodes` would see a save disabled that the planner then accepts, and a
+ * higher one the reverse. A preflight whose whole purpose is to agree with the
+ * planner must not take an input the planner cannot take.
+ */
+export function saveAsPatternRefusal(
+  document: BlockDocument,
+  selectedIds: readonly string[],
+  nesting: NestingSource
+): PlanRefusal | undefined {
+  const saved = plannedSave(document, selectedIds, nesting);
+  return saved.problem === undefined ? undefined : saved;
 }
 
 /**

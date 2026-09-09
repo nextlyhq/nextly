@@ -117,6 +117,8 @@ import type {
   CollectionSlug,
   CountArgs,
   CountResult,
+  GroupArgs,
+  GroupResult,
   CreateArgs,
   RowFromCollectionSlug,
   RowFromSingleSlug,
@@ -538,6 +540,16 @@ export class Nextly implements NextlyContext {
     return collectionsNs.count(this, args);
   }
 
+  /**
+   * How many documents carry each distinct value of one field.
+   *
+   * Answers over the rows a `count` with the same arguments would have
+   * counted, because both resolve that row set through one pipeline.
+   */
+  group(args: GroupArgs): Promise<GroupResult> {
+    return collectionsNs.group(this, args);
+  }
+
   /** Bulk-delete multiple documents by IDs (partial success pattern). */
   bulkDelete(args: BulkDeleteArgs): Promise<BulkOperationResult> {
     return collectionsNs.bulkDelete(this, args);
@@ -764,6 +776,7 @@ export const nextly = {
     getNextly().update(args),
   delete: (args: DeleteArgs) => getNextly().delete(args),
   count: (args: CountArgs) => getNextly().count(args),
+  group: (args: GroupArgs) => getNextly().group(args),
   bulkDelete: (args: BulkDeleteArgs) => getNextly().bulkDelete(args),
   duplicate: <TSlug extends CollectionSlug>(args: DuplicateArgs<TSlug>) =>
     getNextly().duplicate(args),

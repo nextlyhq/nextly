@@ -41,9 +41,11 @@ export type {
   UpdateArgs,
   DeleteArgs,
   CountArgs,
+  GroupArgs,
   BulkDeleteArgs,
   DuplicateArgs,
   CountResult,
+  GroupResult,
   DeleteResult,
   BulkOperationResult,
 } from "./collections";

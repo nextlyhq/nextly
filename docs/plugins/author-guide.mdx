@@ -46,11 +46,13 @@ Author with `definePlugin` from `@nextlyhq/plugin-sdk`:
 ```ts
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 
+type MyPluginOptions = { greeting?: string };
+
 export const myPlugin = (opts: MyPluginOptions = {}) =>
   definePlugin({
     name: "@acme/nextly-plugin-greetings",
     version: "0.1.0",
-    nextly: "^1.0.0", // core-compatibility range, boot-checked (may span majors)
+    nextly: ">=0.0.2-alpha.63", // core-compatibility range, boot-checked
     dependsOn: {}, // required plugin deps → version range
     enabled: true, // false skips behavior but keeps schema (D49)
     contributes: {
@@ -92,6 +94,8 @@ Where your package and core version together, say so directly instead:
 import { version } from "../package.json";
 
 definePlugin({
+  name: "@acme/nextly-plugin-greetings",
+  version: "0.1.0",
   // Released in lockstep with core, so a core at least as new as this build is
   // exactly the compatibility that is meant — and it stays true after every
   // release without being edited.

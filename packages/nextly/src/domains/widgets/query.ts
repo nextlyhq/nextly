@@ -45,8 +45,39 @@ export interface WidgetQuery {
   status?: "published" | "draft" | "all";
   select?: string[];
   sort?: string;
+  groupBy?: string;
   limit?: number;
 }
+
+/**
+ * A query as an AUTHOR declares it, with the op/key dependency enforced.
+ *
+ * `WidgetQuery` stays flat, and this narrows it at the position a person
+ * writes one. Written as an intersection per member rather than by turning
+ * `WidgetQuery` itself into a union: `keyof` over a union keeps only the keys
+ * every member shares, so `groupBy` would drop out of `keyof WidgetQuery` and
+ * silently shrink the exhaustive `Record<keyof WidgetQuery, ...>` tables that
+ * make each fixed-question source state a position on every field. Those
+ * tables failing to compile is how a new field gets considered at all, and a
+ * union would have removed that without any error.
+ *
+ * `groupBy?: never` on the other ops is what makes the wrong pairing a compile
+ * error rather than a value the validator refuses at request time. Runtime
+ * validation stays regardless: a request body is untyped, and this reaches
+ * only the authors who write TypeScript.
+ */
+export type WidgetQuerySpec =
+  | (WidgetQuery & { op: Exclude<WidgetOp, "groupBy">; groupBy?: never })
+  | (WidgetQuery & {
+      op: "groupBy";
+      groupBy: string;
+      // `select` and `sort` describe ROWS, and this op returns buckets. The
+      // validator refuses them, so admitting them here would compile a
+      // declaration whose every request fails -- an author learning at runtime
+      // what the type could have told them.
+      select?: never;
+      sort?: never;
+    });
 
 /**
  * Product code in `packages/nextly/**` throws `NextlyError`, never a bare
@@ -82,6 +113,7 @@ export interface RawWidgetQuery {
   status: unknown;
   select: unknown;
   sort: unknown;
+  groupBy: unknown;
   limit: unknown;
 }
 
@@ -105,6 +137,7 @@ export function readWidgetQuery(query: unknown): RawWidgetQuery {
     status: q.status,
     select: q.select,
     sort: q.sort,
+    groupBy: q.groupBy,
     limit: q.limit,
   };
 }
@@ -327,11 +360,25 @@ function assertGeoOperatorCountable(
   field: string,
   operator: string
 ): void {
-  if (op !== "count" || !GEO_OPERATORS.has(operator)) return;
+  // Keyed on the op that FETCHES rows rather than on a list of ops that do
+  // not, for the same reason this is keyed on `GEO_OPERATORS`: an aggregate
+  // added to the vocabulary returns no rows either, and naming the aggregates
+  // here would mean remembering to add it a second time. `groupBy` reached
+  // execution and was refused there while this only knew about `count` —
+  // accepted by the validator and failed in a batch slot, which is precisely
+  // what this guard exists to prevent.
+  if (op === "list" || !GEO_OPERATORS.has(operator)) return;
+  if (op === "count") {
+    fail(
+      `where operator "${operator}" on field "${field}" cannot be counted. ` +
+        `Geo predicates are evaluated over fetched rows, so they apply to a ` +
+        `list but not to a count`
+    );
+  }
   fail(
-    `where operator "${operator}" on field "${field}" cannot be counted. ` +
+    `where operator "${operator}" on field "${field}" cannot be aggregated. ` +
       `Geo predicates are evaluated over fetched rows, so they apply to a ` +
-      `list but not to a count`
+      `list but not to an aggregate`
   );
 }
 
@@ -550,6 +597,57 @@ function assertSortFieldDeclared(
   return sort;
 }
 
+/**
+ * Confirms the group key agrees with the op, and names a field the source
+ * declared.
+ *
+ * Op and key are judged TOGETHER rather than by two independent guards,
+ * because the failure worth closing is a key that validates and is then
+ * ignored. `groupBy` means something only to the `groupBy` op: carried
+ * alongside `count` it would pass a field check, ride along in the returned
+ * query and change no result, which reads back to the caller as a grouped
+ * count they asked for and did not get. A refusal names the mismatch instead.
+ *
+ * The empty direction is refused for the same reason. `op: "groupBy"` with no
+ * key has no bucket to group into, and leaving that for execution to discover
+ * moves the failure a long way from the thing that caused it.
+ *
+ * The key is checked against the same `declared` set `sort` and `select` are
+ * checked against, so one naming a field the source never published is refused
+ * here rather than reaching a compiler that would have to guess at its column.
+ */
+function assertGroupByAgreesWithOp(
+  source: WidgetSource,
+  groupBy: unknown,
+  declared: ReadonlySet<string>,
+  op: WidgetOp,
+  select: unknown,
+  sort: unknown
+): string | undefined {
+  if (op !== "groupBy") {
+    if (groupBy !== undefined) fail(`groupBy is not valid for op "${op}"`);
+    return undefined;
+  }
+  if (groupBy === undefined) fail('op "groupBy" requires a groupBy field');
+  // `select` and `sort` describe ROWS, and a grouped read returns buckets. The
+  // executor ignores both, so accepting them answers a different question than
+  // the one asked and says nothing about it — the same accepted-and-dropped
+  // shape this guard refuses a group key beside `count` for.
+  if (select !== undefined) {
+    fail(
+      'select is not valid for op "groupBy", which returns buckets and not rows'
+    );
+  }
+  if (sort !== undefined) {
+    fail('sort is not valid for op "groupBy"; buckets are ordered by size');
+  }
+  if (typeof groupBy !== "string") fail("groupBy must be a string");
+  if (!declared.has(groupBy)) {
+    fail(`groupBy references undeclared field "${groupBy}" on "${source.id}"`);
+  }
+  return groupBy;
+}
+
 /** Confirms `status`, when present, is one of the known values, and returns it. */
 function assertValidStatus(status: unknown): WidgetQuery["status"] | undefined {
   if (status === undefined) return undefined;
@@ -600,8 +698,8 @@ function clampLimit(limit: unknown): number {
  * The returned query is safe to compile: its source exists, its op is
  * supported, every field it names was declared by that source (at every
  * `where` nesting depth, and only via operators the query layer actually
- * understands, on conditions that are neither `null` nor empty), and its
- * limit is a bounded, finite integer.
+ * understands, on conditions that are neither `null` nor empty), its group
+ * key agrees with its op, and its limit is a bounded, finite integer.
  */
 export function validateWidgetQuery(query: unknown): WidgetQuery {
   const raw = readWidgetQuery(query);
@@ -637,6 +735,14 @@ export function validateReadWidgetQuery(
   assertSelectFieldsDeclared(source, select, declared);
   const sort = assertSortFieldDeclared(source, raw.sort, declared);
   const status = assertValidStatus(raw.status);
+  const groupBy = assertGroupByAgreesWithOp(
+    source,
+    raw.groupBy,
+    declared,
+    op,
+    select,
+    sort
+  );
 
   return {
     source: source.id,
@@ -645,6 +751,7 @@ export function validateReadWidgetQuery(
     ...(status ? { status } : {}),
     ...(select ? { select } : {}),
     ...(sort ? { sort } : {}),
+    ...(groupBy ? { groupBy } : {}),
     limit: clampLimit(raw.limit),
   };
 }

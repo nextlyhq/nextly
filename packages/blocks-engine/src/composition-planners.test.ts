@@ -17,6 +17,7 @@ import {
   planInsertPattern,
   planSaveAsComponent,
   planSaveAsPattern,
+  saveAsPatternRefusal,
   planUpdatePatternFromSelection,
 } from "./composition-planners";
 import type {
@@ -96,6 +97,139 @@ function marked(nodes: BlockNode[], mark: string): BlockNode {
   if (found === undefined) throw new Error(`no node marked ${mark}`);
   return found;
 }
+
+describe("whether a selection may be saved at all", () => {
+  it("answers NOTHING for a selection the planner would accept", () => {
+    // The positive control, and the one that matters most: a preflight that
+    // refused everything would satisfy every assertion below while disabling a
+    // button that should work.
+    const doc = page([node("a"), node("b"), node("c")]);
+
+    expect(saveAsPatternRefusal(doc, ["a", "b"], anyParent)).toBeUndefined();
+  });
+
+  it("refuses a selection that is not one contiguous run, and says so", () => {
+    // The reason a surface cannot keep its own copy of this list: it is not a
+    // short list, and each entry is a way a page that RENDERS can still hold a
+    // selection no pattern can be made from.
+    const doc = page([node("a"), node("b"), node("c")]);
+
+    const refusal = saveAsPatternRefusal(doc, ["a", "c"], anyParent);
+
+    expect(refusal?.problem).toBeDefined();
+  });
+
+  it("agrees with the PLANNER, which is the whole point of publishing it", () => {
+    // Asked both ways over the same selections. A preflight that answered
+    // differently from the planner would be a button enabled for a save that
+    // fails, or disabled for one that would have worked — and the drift would
+    // be silent either way.
+    const doc = page([node("a"), node("b"), node("c")]);
+    for (const selection of [["a"], ["a", "b"], ["a", "c"], ["b", "c"], []]) {
+      const refused =
+        saveAsPatternRefusal(doc, selection, anyParent) !== undefined;
+      const planned = planSaveAsPattern(doc, selection, target, anyParent);
+      expect(refused).toBe(planned.problem !== undefined);
+    }
+  });
+
+  it("refuses a selection whose stored document would be too LARGE", () => {
+    // The cap the field will apply, applied where the author can still act on
+    // it. Without this the plan succeeded and the WRITE failed — after they had
+    // named the pattern, filled the form and pressed save.
+    //
+    // Sized past the default byte cap on purpose, so nothing about the
+    // selection explains the refusal: it is one adjacent node, a perfectly good
+    // run.
+    const huge = page([
+      node("a", { props: { filler: "x".repeat(DEFAULT_LIMITS.maxBytes) } }),
+      node("b"),
+    ]);
+
+    expect(saveAsPatternRefusal(huge, ["a"], anyParent)).toBeDefined();
+    // The control: the same shape, small, is savable — so the refusal is the
+    // CAP talking rather than the selection.
+    expect(
+      saveAsPatternRefusal(page([node("a"), node("b")]), ["a"], anyParent)
+    ).toBeUndefined();
+  });
+
+  it.each([
+    ["an envelope with no nodes at all", { formatVersion: 1, kind: "page" }],
+    [
+      "nodes that are not a list",
+      { formatVersion: 1, kind: "page", nodes: "x" },
+    ],
+  ])("ANSWERS about %s rather than throwing", (_name, document) => {
+    // The preflight's whole promise is a verdict, and a caller that gets an
+    // exception instead has no verdict to act on: a toolbar asking whether the
+    // selected blocks can be saved would crash where it meant to disable a
+    // button, and a route would report a bad request as a server fault.
+    //
+    // These are not hypothetical shapes. A stored page reaches this unvalidated
+    // and a request body is whatever was posted, so the document arrives from
+    // outside either way.
+    //
+    // The ENVELOPE is what has to be asked about, and only the envelope: a
+    // `null` among otherwise good roots is measured to answer rather than
+    // throw, so refusing on the forest would refuse documents this already
+    // reads correctly.
+    const refusal = saveAsPatternRefusal(
+      document as unknown as BlockDocument,
+      ["a"],
+      anyParent
+    );
+
+    expect(refusal?.problem).toBe("unusable-document");
+  });
+
+  it("still answers about a document it CAN read, so the guard is not a blanket refusal", () => {
+    // The control. A guard that refused everything would satisfy every
+    // assertion above while making the verb permanently unavailable.
+    expect(
+      saveAsPatternRefusal(page([node("a")]), ["a"], anyParent)
+    ).toBeUndefined();
+  });
+
+  it("refuses a valid RUN whose stored document could not be saved", () => {
+    // The case that decides which preflight this is. `savableRun` alone asks
+    // only whether the selection is one contiguous, liftable run — it never
+    // builds the document, so a run that is perfectly well formed and whose
+    // pattern would blow the byte cap reads as savable. The button would enable
+    // and the save would then fail, which is the exact defect this exists to
+    // stop.
+    //
+    // Two adjacent nodes rendering ONE DOM id. The selection is a perfectly
+    // good run — contiguous, liftable, both valid roots — and the document it
+    // would store is not, because two nodes cannot answer to one id once the
+    // pattern is inserted somewhere.
+    const clashing = page([
+      node("a", { cssId: "hero" }),
+      node("b", { cssId: "hero" }),
+    ]);
+
+    expect(saveAsPatternRefusal(clashing, ["a", "b"], anyParent)).toBeDefined();
+    // The control: the SAME shape of selection over nodes that do not clash is
+    // savable — so the refusal above is the stored document talking, not the
+    // run.
+    const distinct = page([
+      node("a", { cssId: "hero" }),
+      node("b", { cssId: "pricing" }),
+    ]);
+    expect(
+      saveAsPatternRefusal(distinct, ["a", "b"], anyParent)
+    ).toBeUndefined();
+  });
+
+  it("asks without a target, which is what a caller has before it saves", () => {
+    // The gap this closes. Asking the planner meant inventing a collection name
+    // and a field set, which a surface deciding whether to OFFER the save does
+    // not have yet — so the only way to ask was to answer a different question.
+    const doc = page([node("a")]);
+
+    expect(() => saveAsPatternRefusal(doc, ["a"], anyParent)).not.toThrow();
+  });
+});
 
 describe("what a saved pattern is", () => {
   it("creates a pattern document in the collection the caller named", () => {
@@ -3800,33 +3934,77 @@ describe("a document whose branches share one object", () => {
     ]);
   }
 
-  it("is refused for its SIZE rather than walked", () => {
-    // Nineteen objects, half a million entries. The selection is one unrelated
-    // top-level node and was found immediately; what has to be bounded is the
-    // scan that goes looking for the scope it sits in.
-    const plan = planSaveAsPattern(pageWith(18), ["mine"], target, anyParent);
+  /**
+   * A DAG whose nodes COUNT how many times the walk asked them for children,
+   * and stop answering once the count passes `stopAfter`.
+   *
+   * The tripwire is what makes this test safe to keep. A regression here is an
+   * unbounded walk over 2^30 entries, and vitest's per-test timeout cannot
+   * interrupt synchronous JavaScript — `format-boundary.test.ts` documents the
+   * same limitation for the same reason — so a test that merely waited would
+   * hang the worker for hours where it should report in milliseconds. Past the
+   * cap these nodes report no children, the walk unwinds, and the count is the
+   * evidence.
+   */
+  function counted(
+    depth: number,
+    stopAfter: number
+  ): { root: BlockNode; reads: () => number } {
+    let reads = 0;
+    const watch = (node: BlockNode): BlockNode =>
+      new Proxy(node, {
+        get(held, key, receiver) {
+          if (key !== "slots") return Reflect.get(held, key, receiver);
+          reads += 1;
+          // Past the bound the node has nothing to offer, which ends the walk
+          // rather than letting it run to the end of an exponential document.
+          if (reads > stopAfter) return undefined;
+          return Reflect.get(held, key, receiver);
+        },
+      }) as BlockNode;
 
-    expect(plan.problem).toBe("exceeds-limits");
-  });
+    let built = watch(node("leaf"));
+    for (let i = 0; i < depth; i += 1) {
+      built = watch(node(`n${String(i)}`, {}, { a: [built], b: [built] }));
+    }
+    return { root: built, reads: () => reads };
+  }
 
-  it("costs the same at six levels deeper", () => {
-    // A RATIO between two runs in one process, never a wall-clock ceiling: a
-    // ceiling measures the machine, and the exponential version passed a
-    // generous one at small depths. Six more levels is 64x the entries, so
-    // anything proportional to the document is unmissable here — measured at
-    // 17x before the bound, and the walk stops at the cap either way now.
-    const time = (depth: number): number => {
-      const doc = pageWith(depth);
-      const start = performance.now();
-      planSaveAsPattern(doc, ["mine"], target, anyParent);
-      return performance.now() - start;
-    };
-    time(10);
+  /** One save against a counted DAG of this depth. */
+  function scanOf(depth: number): { problem: unknown; reads: number } {
+    const cap = DEFAULT_LIMITS.maxNodes;
+    const { root, reads } = counted(depth, cap);
+    const doc = page([node("mine", { props: { mark: "target" } }), root]);
+    const plan = planSaveAsPattern(doc, ["mine"], target, anyParent);
+    return { problem: plan.problem, reads: reads() };
+  }
 
-    const shallow = time(12);
-    const deep = time(18);
+  it("reads no more of the document than the cap allows, at any depth", () => {
+    // The selection is one unrelated top-level node, found immediately; what
+    // has to be bounded is the scan that goes looking for the scope it sits in.
+    //
+    // Asserted as a COUNT rather than as elapsed time. The bound made the old
+    // timing comparison meaningless — once both depths stop at the cap they do
+    // identical sub-millisecond work, so a ratio between them reported
+    // scheduler noise and went red on CI at 9.32 against a threshold of 8.
+    // What the bound actually promises is a number, and this is that number.
+    const cap = DEFAULT_LIMITS.maxNodes;
+    const shallow = scanOf(12);
+    const deep = scanOf(30);
 
-    expect(deep / Math.max(shallow, 0.05)).toBeLessThan(8);
+    expect(deep.problem).toBe("exceeds-limits");
+    // The counter OBSERVED the walk. Without this the test is satisfied by a
+    // probe that never counts: a mistyped key leaves both scans at zero, and
+    // `0 <= cap` and the equality below both hold while `problem` keeps coming
+    // from the production cap. The suite would then accept a dead tripwire —
+    // and the tripwire is what stops a later loss of the bound from hanging
+    // this test for hours instead of failing it. Measured: with this assertion
+    // removed, a mistyped key in the probe failed nothing at all.
+    expect(deep.reads).toBeGreaterThan(cap / 2);
+    expect(deep.reads).toBeLessThanOrEqual(cap);
+    // INDEPENDENT of depth, which is the whole property. Eighteen more levels
+    // is 2^18 times the document and must be the same amount of reading.
+    expect(deep.reads).toBe(shallow.reads);
   });
 
   it("refuses a NaN cap before walking, not after", () => {
@@ -3835,32 +4013,35 @@ describe("a document whose branches share one object", () => {
     // this bound exists to stop runs in full before anything rejects the
     // configuration. The published limit rule already refuses that.
     //
-    // Asserted as a RATIO between two depths, not as a throw: the configuration
-    // is rejected later in the component planner too, so `toThrow` alone passes
-    // just as well on the unbounded version — after it has done the work.
-    const spent = (depth: number): number => {
-      const doc = pageWith(depth);
-      const start = performance.now();
-      try {
-        planSaveAsComponent(
-          doc,
-          ["mine"],
-          componentTarget,
-          { properties: [] },
-          anyParent,
-          { ...DEFAULT_LIMITS, maxNodes: Number.NaN }
-        );
-      } catch {
-        // The refusal is the point; what this measures is when it arrives.
-      }
-      return performance.now() - start;
-    };
-    spent(10);
+    // ZERO reads is the assertion, and it is what `toThrow` could not give.
+    // The component planner rejects this configuration later anyway, so a throw
+    // says nothing about WHEN — it is equally true of a run that walked the
+    // whole document first. A count of zero says the document was never
+    // touched.
+    const cap = DEFAULT_LIMITS.maxNodes;
+    const { root, reads } = counted(30, cap);
+    const doc = page([node("mine", { props: { mark: "target" } }), root]);
 
-    const shallow = spent(12);
-    const deep = spent(18);
+    // The CONTROL, and this test needs one more than most: zero reads is the
+    // answer being asserted, so a probe that never counts gives it for free.
+    // A valid save over the same document proves the counter observes this
+    // walk before the count of zero is allowed to mean anything.
+    planSaveAsPattern(doc, ["mine"], target, anyParent);
+    expect(reads()).toBeGreaterThan(0);
+    const before = reads();
 
-    expect(deep / Math.max(shallow, 0.05)).toBeLessThan(8);
+    expect(() =>
+      planSaveAsComponent(
+        doc,
+        ["mine"],
+        componentTarget,
+        { properties: [] },
+        anyParent,
+        { ...DEFAULT_LIMITS, maxNodes: Number.NaN }
+      )
+    ).toThrow(RangeError);
+    // NOTHING was added by the refused call — the document was never touched.
+    expect(reads()).toBe(before);
   });
 
   it("still plans when the sharing is somewhere the save is not", () => {

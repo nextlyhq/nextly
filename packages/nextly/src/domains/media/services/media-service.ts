@@ -56,7 +56,7 @@ import { NextlyError } from "../../../errors";
 import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
 import { emitMediaEvent } from "../../../events/domain-events";
 import { normalizeDbTimestamp } from "../../../lib/date-formatting";
-import { toAbsoluteMediaUrl } from "../../../lib/media-variant";
+import { absolutizeMediaUrls } from "../../../lib/media-variant";
 import type { MediaService as LegacyMediaService } from "../../../services/media";
 import type {
   MediaFolderService as LegacyFolderService,
@@ -1243,8 +1243,26 @@ export class MediaService {
 
   /**
    * Map legacy media data to MediaFile type
+   *
+   * `sizes`, `focalX` and `focalY` are carried through rather than dropped. The
+   * row holds all three in every dialect, and dropping them meant the same
+   * media file described itself differently depending on how it was read: with
+   * variants when populated as a relationship on another collection, without
+   * them from `media.findByID()` and `GET /api/media/:id`.
+   *
+   * The URLs go through `absolutizeMediaUrls` rather than a second pass of
+   * `toAbsoluteMediaUrl` per field. That function is what the relationship path
+   * already uses, so the two answers cannot disagree about what an absolute
+   * media URL is, and it carries the part that is easy to get wrong by hand:
+   * SQLite stores `sizes` as TEXT and returns a JSON string, which it parses,
+   * so the shape a caller receives is the same on all three dialects.
    */
   private mapToMediaFile(data: MediaRow): MediaFile {
+    const { url, thumbnailUrl, sizes } = absolutizeMediaUrls({
+      url: data.url,
+      thumbnailUrl: data.thumbnailUrl,
+      sizes: data.sizes,
+    });
     return {
       id: String(data.id),
       filename: data.filename,
@@ -1254,8 +1272,11 @@ export class MediaService {
       width: data.width,
       height: data.height,
       duration: data.duration,
-      url: toAbsoluteMediaUrl(data.url),
-      thumbnailUrl: toAbsoluteMediaUrl(data.thumbnailUrl),
+      url,
+      thumbnailUrl,
+      sizes,
+      focalX: data.focalX,
+      focalY: data.focalY,
       altText: data.altText,
       caption: data.caption,
       tags: data.tags,

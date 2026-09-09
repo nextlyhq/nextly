@@ -190,6 +190,7 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   where: "refused",
   sort: "refused",
   status: "refused",
+  groupBy: "refused",
 };
 
 function refuseUnconsumed(query: WidgetQuery): void {

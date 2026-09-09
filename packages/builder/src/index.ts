@@ -204,6 +204,12 @@ export {
   registryBlockSource,
   registrySlotSource,
   type InsertTarget,
+  // The shape a host has to supply for the panel to offer saved patterns. The
+  // prop has existed since the tier landed and the type did not, so a host
+  // filling it had to infer the contract from the panel's props — including the
+  // two absences that are not interchangeable, `keywords` and `content`, each
+  // of which arrives as `null` from a stored row rather than missing.
+  type SavedPattern,
   type SlotSource,
 } from "./inserter";
 

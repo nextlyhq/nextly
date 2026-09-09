@@ -41,7 +41,10 @@ import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
+import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
+import { patternLibraryRoute } from "./library-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
+import { savePatternRoute } from "./save-pattern-route";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleSingle } from "./site-style-storage";
@@ -394,7 +397,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
   const configStyle = resolveSiteStyle(opts.siteStyle);
 
   return definePlugin({
-    name: "@nextlyhq/plugin-page-builder",
+    name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
     // The floor states the version carrying the APIs this plugin needs, not the
     // one it was first published against. Two of them: `blocks()` builds its
@@ -533,6 +536,21 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // validated against the same set the canvas draws with. With none
       // configured this is the empty set, which the engine treats permissively.
       fieldTypes: [blocksFieldType(siteBreakpoints(configStyle))],
+      // The one read the insert panel makes. A route rather than a collection
+      // read from the browser, because the index it serves has two sources —
+      // stored rows and, later, patterns a plugin declares in code — and only a
+      // server sees both. Measured besides: the admin's collection hooks are
+      // not exported from `@nextlyhq/plugin-sdk/admin`, which is the only
+      // surface this package may import from, so there is no browser-side
+      // collection read available to it at all.
+      //
+      // And the one write that fills it. Contributed beside the read rather
+      // than left to the collection API, because what a saved pattern IS is
+      // the planner's answer and the planner needs the server's block
+      // registry — the browser holds the core blocks and not the ones another
+      // plugin declared.
+      routes: [patternLibraryRoute(), savePatternRoute()],
+
       // No `publish` permission. One was declared here and nothing ever read
       // it: publishing a page is a status change on the entry, which
       // `update-pages` already covers, and no code path asked whether the user
