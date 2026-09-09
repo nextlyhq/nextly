@@ -1854,10 +1854,18 @@ export function usedOnlyAsValue(code, name, extension = "tsx") {
  */
 function constructorRoot(expression) {
   let at = expression;
+  // Every node here is transparent to the question "what has to be in scope":
+  // a property or element access reaches through its object, and parentheses,
+  // `as`, `satisfies`, a non-null `!` and an angle-bracket assertion all wrap an
+  // expression without changing which binding it needs.
   while (
     ts.isPropertyAccessExpression(at) ||
     ts.isElementAccessExpression(at) ||
-    ts.isParenthesizedExpression(at)
+    ts.isParenthesizedExpression(at) ||
+    ts.isAsExpression(at) ||
+    ts.isSatisfiesExpression(at) ||
+    ts.isNonNullExpression(at) ||
+    ts.isTypeAssertionExpression(at)
   ) {
     at = at.expression;
   }
@@ -1923,38 +1931,40 @@ export function misspelledExport(name, exported = workspaceExports()) {
     if (other === wanted) continue;
     if (!withinOneEdit(wanted, other)) continue;
     if (differsOnlyAtTheEnd(wanted, other)) continue;
-    if (sharedOpening(wanted, other) < SAME_WORD_OPENING) continue;
+    if (wanted.length < LONG_ENOUGH_TO_MISSPELL) continue;
     return true;
   }
   return false;
 }
 
 /**
- * How much of a name has to match before one edit makes it a misspelling.
+ * How long a name has to be before one edit makes it a misspelling.
  *
  * One edit is a wide net over short names, and the net was catching the reader.
- * Four-letter component names sit one substitution from something this
- * workspace exports at a startling rate: `Host` from `POST`, and `Cost`, `Past`,
- * `Cart`, `Fork` and `Last` from their own neighbours. Every one of those is a
- * name a reader would plausibly give a component, and all six were charged.
+ * Measured against this workspace's own export set, with the case and suffix
+ * exclusions already applied:
  *
- * A misspelling keeps the opening of the word it meant, because that is the
- * part already typed when the mistake happens: `Skelton` keeps `skel` and
- * `NextlyEror` keeps `nextlyer`. A collision does not: `host` and `post` share
- * nothing, `past` and `post` share one letter, `fork` and `form` three. Four is
- * where the two populations separate, and it also puts every four-letter name
- * out of reach, since matching four and differing by one more needs five.
+ * ```
+ * length 4   9 of 24 plausible component names collide
+ * length 5   1 of 65
+ * length 6+  0 of 20
+ * ```
+ *
+ * `Host` from `POST`, `Cost`, `Past`, `Cart`, `Fork`, `Last`, `Tile`, `Star`
+ * and `Tags` are all names a reader would give a component, and every one of
+ * them was charged. The population changes character between four and five, so
+ * that is where the bar sits.
+ *
+ * Length rather than a shared opening, which is what this first tried: a shared
+ * opening also discards a typo made in the first few characters, so
+ * `NNextlyError` read as the reader's. Length keeps those, because the reason
+ * short names collide is that one edit reaches most of the alphabet from them,
+ * not where in the word the edit falls.
+ *
+ * What remains is a five-letter name one edit from an export, `Watch` against
+ * `Match`, which is 1 in 65 here and genuinely indistinguishable from a typo.
  */
-const SAME_WORD_OPENING = 4;
-
-/** How many leading characters two names have in common. */
-function sharedOpening(a, b) {
-  let shared = 0;
-  while (shared < a.length && shared < b.length && a[shared] === b[shared]) {
-    shared += 1;
-  }
-  return shared;
-}
+const LONG_ENOUGH_TO_MISSPELL = 5;
 
 /** Whether one name is the other with a character added at the end. */
 function differsOnlyAtTheEnd(a, b) {
@@ -2344,6 +2354,27 @@ export const pageOf = line => {
  * against the whole set-aside list, which carries entries added before
  * classification.
  */
+/**
+ * The names each continuation has to be recompiled with, by the block it came
+ * from.
+ *
+ * Both spellings of a missing name, because a continuation is excused on the
+ * strength of being rebuilt. Reading only TS2304 here excused a shorthand
+ * continuation without ever recompiling it, so whatever the pasted declaration
+ * would have revealed stayed behind an unresolved `any` while the audit
+ * reported the block as handled.
+ */
+export function namesToRebuild(continuations) {
+  const byOrigin = new Map();
+  for (const line of continuations) {
+    const origin = line.split("  ")[0].split(":")[0];
+    const name =
+      line.match(MISSING_NAME)?.[1] ?? line.match(MISSING_SHORTHAND)?.[1];
+    if (name) byOrigin.set(origin, [...(byOrigin.get(origin) ?? []), name]);
+  }
+  return byOrigin;
+}
+
 export function unaccountedFor({
   total,
   real,
@@ -2419,12 +2450,7 @@ async function auditDocs() {
   // A continuation is only harmless if the block does nothing wrong with what
   // it inherited, and that cannot be known while the value is unresolved. Each
   // one is compiled again with the declarations it needs.
-  const byOrigin = new Map();
-  for (const line of continuations) {
-    const origin = line.split("  ")[0].split(":")[0];
-    const name = line.match(MISSING_NAME)?.[1];
-    if (name) byOrigin.set(origin, [...(byOrigin.get(origin) ?? []), name]);
-  }
+  const byOrigin = namesToRebuild(continuations);
   const rebuilt = [];
   // The names each rebuild was FOR, so a name that is still missing can be told
   // from an unrelated one the block simply gets wrong.

@@ -21,6 +21,7 @@ import {
   constructedInBlock,
   mentionIsReaderOwned,
   misspelledExport,
+  namesToRebuild,
   readerOwnedMention,
   usedOnlyAsValue,
   workspaceValueExports,
@@ -1475,6 +1476,17 @@ describe("a name this workspace does not export", () => {
     expect(
       constructedInBlock("const s = new AWS.deep.S3();", "AWS", "ts")
     ).toBe(true);
+    // Wrappers that change nothing about which binding has to be in scope.
+    expect(
+      constructedInBlock(
+        "const s = new (AWS.S3Client as new () => object)();",
+        "AWS",
+        "ts"
+      )
+    ).toBe(true);
+    expect(
+      constructedInBlock("const s = new AWS!.S3Client();", "AWS", "ts")
+    ).toBe(true);
     // The control: the qualifier is what has to be in scope, not the property.
     expect(
       constructedInBlock("const s = new AWS.S3Client();", "S3Client", "ts")
@@ -1523,13 +1535,22 @@ describe("a name this workspace does not export", () => {
     }
   });
 
-  it("still reads a name that keeps its opening as a misspelling", () => {
-    // The control for the test above: the rule has to stay able to say yes. A
-    // misspelling keeps the opening of the word it meant, which is the part
-    // already typed when the mistake happens.
+  it("still reads a long enough name as a misspelling", () => {
+    // The control for the test above: the rule has to stay able to say yes.
     const exported = new Set(["POST", "NextlyError", "Skeleton"]);
     expect(misspelledExport("NextlyEror", exported)).toBe(true);
     expect(misspelledExport("Skelton", exported)).toBe(true);
+  });
+
+  it("catches a typo made in the first characters", () => {
+    // Length is the discriminator rather than a shared opening, which this
+    // first tried. A shared opening also discards a mistake made at the start
+    // of the word, so `NNextlyError` read as a name the reader had declared.
+    const exported = new Set(["NextlyError"]);
+    expect(misspelledExport("NNextlyError", exported)).toBe(true);
+    expect(
+      readerOwnedMention("NNextlyError", "const e: NNextlyError = x;", "ts")
+    ).toBe(false);
   });
 
   it("does not read a plural or a capital as a misspelling", () => {
@@ -1574,6 +1595,20 @@ describe("a missing name in object shorthand", () => {
       lang: "ts",
     },
   ];
+
+  it("hands a shorthand name to the rebuild like any other", () => {
+    // A continuation is excused on the strength of being recompiled with the
+    // declaration it inherited. Collecting only TS2304 names for that rebuild
+    // excused a shorthand without ever recompiling it, so whatever the pasted
+    // declaration would have revealed stayed behind an unresolved `any`.
+    const collected = lines => [...namesToRebuild(lines).values()].flat();
+    expect(collected([shorthand("Page")])).toEqual(["Page"]);
+    // The control: the spelling this always collected still arrives, so the
+    // assertion above is the new branch and not the old one.
+    expect(
+      collected(["docs/y.mdx#1  #1:1  error TS2304: Cannot find name 'Page'."])
+    ).toEqual(["Page"]);
+  });
 
   it("is read the way the same name is read anywhere else", async () => {
     const { readerNames, real } = await classifyDocDiagnostics({
