@@ -71,12 +71,14 @@ import {
   usedCornerRadii,
   type CornerRadii,
 } from "./border-radii";
+import { BASE_BREAKPOINT } from "./breakpoints";
 import { CANVAS_ROOT_CLASS, nodeElement } from "./canvas";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import type { EditorState } from "./editor-state";
 import type { Rect, Scale } from "./geometry";
 import {
   canvasContentRect,
+  canvasPaintedScale,
   canvasRootFrom,
   clippedByAncestor,
   hasScrollbarGutter,
@@ -85,6 +87,8 @@ import {
   viewportPositioned,
   type RenderedScale,
 } from "./geometry-dom";
+import { paddingRespondsOutward } from "./padding-response";
+import { orientationOfElement, type SideOrientation } from "./side-orientation";
 import {
   applicableEdges,
   overlayEscape,
@@ -94,7 +98,13 @@ import {
   type EdgeApplicability,
   type EdgeLengths,
   type SpacingBand,
+  type SpacingSide,
 } from "./spacing-bands";
+import {
+  SpacingHandles,
+  type SpacingScrubContext,
+  type SpacingSubject,
+} from "./spacing-handles";
 
 export interface SpacingOverlayProps {
   /** The editor whose primary selection is measured. */
@@ -106,6 +116,17 @@ export interface SpacingOverlayProps {
    * the middle of changing, so every value on screen is about to be wrong.
    */
   hidden?: boolean;
+  /**
+   * The tier a handle writes to, and what the canvas compiled this page with.
+   *
+   * OPTIONAL, and its absence is not a neutral default. Omitted, a handle
+   * writes the base breakpoint of the resting state through an unscoped,
+   * default-prefixed preview — correct for an unscoped page at base, and wrong
+   * in a way the author can see for anything else: `scrubPreviewCss` refuses a
+   * non-base breakpoint it was given no set for, so the drag shows nothing
+   * moving. A host that draws tiers or scopes must pass this.
+   */
+  scrub?: SpacingScrubContext;
 }
 
 /**
@@ -396,12 +417,135 @@ function describable(
   return scale.describable;
 }
 
+/** The tier a handle writes to when the host names none. See `scrub`. */
+const RESTING_BASE: SpacingScrubContext = {
+  address: { state: "base", breakpoint: BASE_BREAKPOINT },
+};
+
+/**
+ * Whether two measurements of the block describe the same gesture inputs.
+ *
+ * Compared by VALUE so a re-measure that found nothing moved does not hand the
+ * handles a new object and restart every gesture they hold. `sameBands` already
+ * does this for the bands; a subject compared by identity would defeat it.
+ */
+/** The four sides, for comparisons that must cover all of them. */
+const SIDES: readonly SpacingSide[] = ["top", "right", "bottom", "left"];
+
+function sameEdges(one: EdgeLengths, other: EdgeLengths): boolean {
+  return (
+    one.top === other.top &&
+    one.right === other.right &&
+    one.bottom === other.bottom &&
+    one.left === other.left
+  );
+}
+
+function sameScales(
+  one: SpacingSubject["scales"],
+  other: SpacingSubject["scales"]
+): boolean {
+  return (
+    one.scale.x === other.scale.x &&
+    one.scale.y === other.scale.y &&
+    one.marginScale.x === other.marginScale.x &&
+    one.marginScale.y === other.marginScale.y
+  );
+}
+
+/**
+ * Both unread, or both reading the same way.
+ *
+ * Optional chaining rather than a null branch: an unread orientation compares
+ * equal to another unread one, which is right — neither draws a handle, so
+ * nothing about the gesture layer differs between them.
+ */
+function sameOrientation(
+  one: SideOrientation | undefined,
+  other: SideOrientation | undefined
+): boolean {
+  return (
+    one?.writingMode === other?.writingMode &&
+    one?.direction === other?.direction
+  );
+}
+
+function sameSubject(
+  one: SpacingSubject | null,
+  other: SpacingSubject | null
+): boolean {
+  if (one === null || other === null) return one === other;
+  return (
+    one.nodeId === other.nodeId &&
+    sameEdges(one.margin, other.margin) &&
+    sameEdges(one.padding, other.padding) &&
+    sameScales(one.scales, other.scales) &&
+    sameOrientation(one.orientation, other.orientation) &&
+    /*
+     * The probed answer is part of what a handle IS, so it belongs in this
+     * comparison. An edit can turn a block from content-sized to fixed-sized
+     * without changing a single measured length — the cache is re-probed and
+     * answers differently, and a comparison blind to it would keep the old
+     * subject: the handle stays on the edge that has stopped moving and the drag
+     * keeps the direction that has stopped being right, until some unrelated
+     * margin or scale change happens to force a replacement.
+     *
+     * NOT covered by a test of its own, and said here rather than left to be
+     * discovered. What `paddingOutward` DOES once it reaches the handles is
+     * covered — `spacing-handles.test.tsx` asserts both the edge it places the
+     * control on and the direction it drags in. What is untested is this
+     * propagation step: reaching it needs a measurement whose probe answers
+     * differently while every other length holds still, and every attempt to
+     * stage that in jsdom broke the measurement chain it was standing on. A
+     * test that fights its harness is worth less than a note that does not.
+     */
+    SIDES.every(side => one.paddingOutward[side] === other.paddingOutward[side])
+  );
+}
+
 export function SpacingOverlay({
   editor,
   hidden = false,
+  scrub = RESTING_BASE,
 }: SpacingOverlayProps): React.JSX.Element | null {
   const layer = React.useRef<HTMLDivElement | null>(null);
   const [bands, setBands] = React.useState<readonly SpacingBand[]>([]);
+  /*
+   * What the gesture layer needs about the measured block, taken in the SAME
+   * measurement the bands come from. Read separately it could disagree with
+   * them — a drag scaled by one reading against bands drawn from another.
+   */
+  const [subject, setSubject] = React.useState<SpacingSubject | null>(null);
+  /**
+   * Whether the handles are holding a gesture that has not been released.
+   *
+   * A preview can make its own block undescribable — a margin can push it
+   * partly behind an `overflow: hidden` ancestor, a padding can bring on a
+   * classic scrollbar — and the measurement that follows then legitimately has
+   * no bands to draw. Clearing the subject there unmounts the handles mid-drag:
+   * the listeners detach, the preview disappears, and the gesture ends without
+   * committing and without saying anything. The author sees the drag evaporate.
+   *
+   * So the SUBJECT survives while a gesture is live. The bands still go, which
+   * is honest — nothing is measurable to report — but the control the pointer
+   * is holding stays until it is let go.
+   */
+  const gestureLive = React.useRef(false);
+  /**
+   * Which padding edge responds, remembered per node and side.
+   *
+   * The probe writes to the rendered element, and the canvas watches its
+   * subtree for exactly that — so an unmemoised probe would answer, be observed,
+   * re-measure, and probe again forever. A cache HIT performs no mutation at
+   * all, which is what makes the loop terminate: the first pass probes, the
+   * observation it causes re-measures once, and that pass reads the cache and
+   * mutates nothing.
+   *
+   * Dropped whenever the document changes, because an edit is the thing that can
+   * turn an auto height into a fixed one. It is not keyed on geometry: a block
+   * can gain a definite size without changing size at all.
+   */
+  const responds = React.useRef(new Map<string, boolean>());
   /*
    * How far the layer may paint outside itself, in pixels.
    *
@@ -411,6 +555,30 @@ export function SpacingOverlay({
   const [escape, setEscape] = React.useState(0);
 
   const { document, selectedId } = editor;
+
+  /*
+   * The probe cache is dropped on every edit, because an edit is the thing that
+   * can turn an auto height into a fixed one. Not keyed on geometry: a block can
+   * gain a definite size without changing size at all.
+   */
+  React.useEffect(() => {
+    responds.current.clear();
+  }, [document]);
+
+  /*
+   * Handles are drawn only for a SINGLE selection.
+   *
+   * `selectedId` is the primary of the selection, and a handle commits to that
+   * node alone — so with six blocks outlined a drag would restyle one of them
+   * and say nothing about the other five. `StyleInspectorPanel` refuses its
+   * writable controls on the same reasoning, and a control on the canvas that
+   * did what the panel beside it declines would be the same partial edit
+   * reached by a route nobody thought to close.
+   *
+   * The BANDS stay. They report rather than write, and the primary's spacing is
+   * a true thing to report about a selection that includes it.
+   */
+  const singular = editor.selection.ids.length <= 1;
 
   /*
    * Measured before the browser paints, so the bands never appear over the
@@ -423,9 +591,15 @@ export function SpacingOverlay({
   const measure = React.useCallback(() => {
     const apply = (
       next: readonly SpacingBand[],
-      layerBox?: { width: number; height: number }
+      layerBox?: { width: number; height: number },
+      measured: SpacingSubject | null = null
     ): void => {
       setBands(current => (sameBands(current, next) ? current : next));
+      setSubject(current => {
+        // Never dropped out from under a live gesture. See `gestureLive`.
+        if (measured === null && gestureLive.current) return current;
+        return sameSubject(current, measured) ? current : measured;
+      });
       setEscape(
         next.length === 0 || layerBox === undefined
           ? 0
@@ -507,6 +681,42 @@ export function SpacingOverlay({
      * It fills the root, so the root's content rectangle IS the layer's, and
      * asking for it separately would be a second answer to one question.
      */
+    /*
+     * How much smaller than its layout the canvas is PAINTED, which is the unit
+     * the probe's movement will be seen in. Read once per measurement.
+     */
+    const rootPainted = canvasPaintedScale(root);
+
+    /** This node's answer for one side, probed once and then remembered. */
+    const outwardFor = (side: SpacingSide): boolean => {
+      const key = `${selectedId}\u0000${side}`;
+      const known = responds.current.get(key);
+      if (known !== undefined) return known;
+      const realm = block.ownerDocument.defaultView;
+      const answer =
+        realm !== null && block instanceof realm.HTMLElement
+          ? paddingRespondsOutward(
+              block,
+              side,
+              /*
+               * The scale the probe's movement will be SEEN at. `boxAcross`
+               * answers in viewport pixels and the canvas is painted through a
+               * transform, so ten CSS pixels of padding move the edge by ten
+               * times this on screen. Composed with the root's own painted
+               * scale, which `renderedScale` stops below on purpose: that
+               * exclusion is right for a band drawn inside the root and wrong
+               * for a rectangle read off the viewport.
+               */
+              (side === "top" || side === "bottom" ? scale.y : scale.x) *
+                (side === "top" || side === "bottom"
+                  ? rootPainted.y
+                  : rootPainted.x)
+            )
+          : false;
+      responds.current.set(key, answer);
+      return answer;
+    };
+
     const layerBox = canvasContentRect(root, root);
     apply(
       spacingBands({
@@ -525,13 +735,46 @@ export function SpacingOverlay({
         // is stated in the units the author declared it in.
         radii,
       }),
-      layerBox
+      layerBox,
+      {
+        nodeId: selectedId,
+        // The USED lengths, unscaled, which is what a handle starts a drag from
+        // and what the band beside it already reports.
+        margin: boxes.margin,
+        padding: boxes.padding,
+        scales: {
+          scale: scaledBy,
+          marginScale: { x: scale.ancestor.x, y: scale.ancestor.y },
+        },
+        /*
+         * Read from the drawn element, and `undefined` when it cannot be. That
+         * absence removes the handles rather than defaulting to left-to-right:
+         * see `side-orientation.ts` on why an unread element and a
+         * left-to-right one must not collapse into one answer.
+         */
+        orientation: orientationOfElement(block),
+        /*
+         * ASKED of the element, once per node and side. Which edge of a padding
+         * band moves depends on whether the block's size along that axis is
+         * decided by its content, and that is not something the stored styles
+         * can answer — see `padding-response.ts`.
+         */
+        paddingOutward: {
+          top: outwardFor("top"),
+          right: outwardFor("right"),
+          bottom: outwardFor("bottom"),
+          left: outwardFor("left"),
+        },
+      }
     );
   }, [selectedId]);
 
   React.useLayoutEffect(() => {
     if (hidden) {
       setBands(current => (current.length === 0 ? current : NO_BANDS));
+      // The subject goes with them. Left standing it would keep a handle's
+      // gesture alive against a measurement nothing is drawing.
+      setSubject(null);
       return;
     }
     measure();
@@ -576,14 +819,17 @@ export function SpacingOverlay({
        * Not marked as chrome, for the reason the drop indicator is not: it takes
        * no pointer events at all, so a press travels through to the block
        * underneath and resolves to that node rather than to the overlay drawn
-       * over it.
+       * over it. The HANDLES inside it are marked, because they do take one.
        *
-       * Hidden from assistive technology because the same values are in the
-       * inspector's Spacing section, with real labels and controls. Announcing
-       * up to eight numbers on every arrow-key move through the layer tree would
-       * bury that surface in exactly the readers it is for.
+       * `aria-hidden` sits on each BAND rather than here, and that placement is
+       * load-bearing. The bands are hidden for the same reason as ever — the
+       * same values are in the inspector with real labels, and announcing up to
+       * eight numbers on every arrow-key move through the layer tree would bury
+       * that surface in exactly the readers it is for. The handles are
+       * focusable, and a focusable element inside an `aria-hidden` subtree is
+       * reachable by keyboard while screen readers are told it is not there.
+       * One attribute on this element would have made every handle that.
        */
-      aria-hidden="true"
       /*
        * How far the clip may extend, measured rather than fixed. A band can
        * legitimately sit outside the canvas — a collapsed top margin does — and
@@ -600,11 +846,33 @@ export function SpacingOverlay({
           data-box={band.box}
           data-side={band.side}
           data-negative={band.negative ? "" : undefined}
+          // See the layer above: the report is hidden, the control is not.
+          aria-hidden="true"
           style={bandStyle(band)}
         >
           <span className="nx-spacing-overlay__value">{band.label}</span>
         </div>
       ))}
+      {subject === null || !singular ? null : (
+        <SpacingHandles
+          editor={editor}
+          bands={bands}
+          subject={subject}
+          context={scrub}
+          /*
+           * The measurement the preview needs, handed over as the callback the
+           * bands are already measured by. See `onPreviewChange`: the layer's
+           * own mutations are deliberately invisible to the style watcher, and
+           * the scrub preview lives in that layer.
+           */
+          onPreviewChange={measure}
+          /*
+           * So a measurement that finds nothing to draw cannot unmount the
+           * control the pointer is holding. See `gestureLive`.
+           */
+          onGestureChange={held => (gestureLive.current = held)}
+        />
+      )}
     </div>
   );
 }
