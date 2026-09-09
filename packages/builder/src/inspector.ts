@@ -93,10 +93,10 @@ export interface BlockHtml {
    * The element's `id`. `undefined` when the node does not carry the field at
    * all, which is NOT the same as carrying an empty one.
    *
-   * The renderer treats the field as present whenever it is a string — it
-   * writes `extra.id = cssId` on `cssId !== undefined` — so a stored `""`
-   * renders `id=""` and shadows any `id` in the attribute bag. Collapsing the
-   * two into `""` here left the panel unable to tell them apart, so every
+   * The rule treats the field as present whenever it is a string, so a stored
+   * `""` shadows any `id` in the attribute bag and the element renders no id
+   * at all. Collapsing the two into `""` here left the panel unable to tell
+   * them apart, so every
    * attempt to clear an empty-but-present field read as no change and the
    * field could never be removed. The distinction the document draws has to
    * survive the reading of it.

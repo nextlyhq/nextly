@@ -31,6 +31,10 @@ import {
   classUsageIndexCollection,
 } from "./collections/class-usage-index";
 import {
+  COMPONENT_USAGE_INDEX_SLUG,
+  componentUsageIndexCollection,
+} from "./collections/component-usage-index";
+import {
   COMPONENTS_SLUG,
   componentsCollection,
 } from "./collections/components";
@@ -475,6 +479,13 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         indexCollection:
           ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??
           CLASS_USAGE_INDEX_SLUG,
+        // Resolved the same way and for the same reason: an integrator may
+        // rename it, and a hook holding the declared name would write every row
+        // to a collection that does not exist and fail to recognise its own
+        // writes, so the wildcard would re-enter itself.
+        componentIndexCollection:
+          ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
+          COMPONENT_USAGE_INDEX_SLUG,
         // The registry record, projected. `getCollection` is declared to
         // return a shape that promises none of the properties this question
         // reads, while returning an object that carries all of them.
@@ -519,6 +530,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         componentsCollection(),
         layoutsCollection(),
         classUsageIndexCollection(),
+        componentUsageIndexCollection(),
       ],
       // The Site Style global: one versioned, access-controlled document the
       // stored style tier lives in. Registered whether or not the host stated

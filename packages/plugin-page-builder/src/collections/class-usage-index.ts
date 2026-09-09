@@ -62,7 +62,7 @@ export type ClassUsageScope = UsageScope;
 export type ClassUsageVariant = UsageVariant;
 
 /** One reference: this document, through this field, uses this class. */
-export interface ClassUsageRow extends UsageSubject {
+export type ClassUsageRow = UsageSubject & {
   /**
    * The named class's id, as stored in `node.classes`, or the marker id on a
    * marker row.
@@ -83,7 +83,7 @@ export interface ClassUsageRow extends UsageSubject {
    * usable class id and a document can genuinely reference one.
    */
   classId: string;
-}
+};
 
 /**
  * The index collection.

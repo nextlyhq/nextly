@@ -36,11 +36,18 @@ import {
   type BlocksFieldsCollection,
 } from "./class-usage-blocks-fields";
 import {
-  maintainClassUsage,
+  forgetAbsentDocuments,
+  maintainUsage,
   type ClassUsageIndexStore,
+  type ClassUsageMaintenanceReport,
 } from "./class-usage-maintenance";
-import type { ClassUsageSubject } from "./class-usage-reconcile";
+import {
+  classUsageIndex,
+  type ClassUsageSubject,
+} from "./class-usage-reconcile";
 import { classUsageSubjectsFor } from "./class-usage-subjects";
+import type { ClassUsageVariant } from "./collections/class-usage-index";
+import type { UsageIndex, UsageSubject } from "./usage-index";
 
 /**
  * How the caller obtains the document behind one subject.
@@ -80,7 +87,15 @@ export interface ClassUsageSubjectOutcome {
   removed: number;
   /** True when the document could not be read whole and a marker was written. */
   undetermined: boolean;
-  /** Absent on success. Present, and the subject is unchanged, on failure. */
+  /**
+   * Absent on success.
+   *
+   * Present when any index for this subject could not be brought into
+   * agreement with the document. The others may still have been, and
+   * `inserted` and `removed` count what actually landed — a failing index does
+   * not stop its siblings, so this is not a claim that the subject is
+   * unchanged.
+   */
   failure?: unknown;
   /** True when no document exists in this locale and variant. */
   absent: boolean;
@@ -103,6 +118,65 @@ export interface ClassUsageWriteReport {
   failures: ClassUsageSubjectOutcome[];
   /** Per-subject detail, in enumeration order. */
   outcomes: ClassUsageSubjectOutcome[];
+}
+
+/**
+ * One index and the store its rows live in.
+ *
+ * A LIST of these rather than one store, because a written document is read
+ * ONCE and every index derives from that read. Maintaining a second index by
+ * registering a second hook would re-read the collection config, re-resolve the
+ * draft split and re-read every locale and variant of the document on every
+ * save — the write amplification the design names in as many words.
+ */
+export interface UsageTarget {
+  maintain(args: {
+    subject: UsageSubject;
+    document: unknown;
+    limits: DocumentLimits;
+  }): Promise<ClassUsageMaintenanceReport>;
+  /**
+   * Remove this index's rows for documents a rebuild's walk never saw.
+   *
+   * A METHOD rather than an exposed store, because the sweep decodes rows
+   * through the index's own descriptor and one index's reader answers null for
+   * another's rows. Handing a caller the bare store let it sweep the component
+   * index through the class reader, which examined no rows at all and reported
+   * a clean pass having removed nothing — a sweep that cannot see its own rows
+   * fails silently and in the direction that keeps them.
+   *
+   * Behind the method the row type stays erased, exactly as `maintain` keeps
+   * it, so a list of targets can still hold indexes whose rows differ.
+   */
+  forgetAbsent(args: {
+    scope: "collection";
+    entity: string;
+    field: string;
+    locale: string;
+    variant: ClassUsageVariant;
+    visited: ReadonlySet<string>;
+    stillExists: (entityKey: string) => Promise<boolean>;
+  }): Promise<{ removed: number }>;
+}
+
+/**
+ * A target for one index against one store.
+ *
+ * The index's row type is captured here and does not escape. A list of
+ * `UsageTarget<TRow>` could not hold two indexes with different rows —
+ * `UsageIndex` is invariant in its row — and widening the list to the shared
+ * subject would make every member accept rows belonging to another index,
+ * which is precisely the confusion the reconciler's mismatch guard exists to
+ * catch. Erasing the row behind one method keeps both properties.
+ */
+export function usageTarget<TRow extends UsageSubject>(
+  index: UsageIndex<TRow>,
+  store: ClassUsageIndexStore
+): UsageTarget {
+  return {
+    maintain: args => maintainUsage(index, { ...args, store }),
+    forgetAbsent: args => forgetAbsentDocuments({ ...args, index, store }),
+  };
 }
 
 /**
@@ -130,6 +204,14 @@ export async function reconcileWrittenDocument(args: {
   locales: readonly string[];
   /** The bounds the rows are derived under. Required, never defaulted here. */
   limits: DocumentLimits;
+  /**
+   * Every index to maintain from this one read.
+   *
+   * Defaults to the class index alone, against `store`, which is what this
+   * function did before a second index existed — so a caller that knows about
+   * one keeps working, and its tests stay the oracle for that behaviour.
+   */
+  targets?: readonly UsageTarget[];
 }): Promise<ClassUsageWriteReport> {
   // No early return for an untracked collection, deliberately. `blocksFieldsOf`
   // answers `[]` for one, `classUsageSubjectsFor` answers `[]` for no fields,
@@ -145,10 +227,15 @@ export async function reconcileWrittenDocument(args: {
     hasDrafts: args.collection.hasDrafts,
   });
 
+  // Resolved once, here, rather than per subject: the default allocates a
+  // target and a caller that supplied its own should not have the list rebuilt
+  // for every locale and variant of the document.
+  const targets = args.targets ?? [usageTarget(classUsageIndex, args.store)];
+
   const outcomes: ClassUsageSubjectOutcome[] = [];
 
   for (const subject of subjects) {
-    outcomes.push(await reconcileOne(args, subject));
+    outcomes.push(await reconcileOne({ ...args, targets }, subject));
   }
 
   return {
@@ -169,11 +256,99 @@ export async function reconcileWrittenDocument(args: {
  * separating them would suggest a caller could respond to one differently,
  * which after the write has committed it cannot.
  */
+/**
+ * Maintain EVERY index from one read, whatever any single one of them does.
+ *
+ * A target that throws does not stop the ones after it. The content save has
+ * already committed, so a failure isolated to one derived store has no reason
+ * to leave the others stale as well — and a failure that PERSISTS would
+ * otherwise mean a sibling index never records anything at all: every save
+ * fails at the same target first, so the sibling stays empty, and an empty
+ * index answers "references nothing" for every document. That is the answer a
+ * delete check acts on.
+ *
+ * This is the rule `reconcileWrittenDocument` already applies ACROSS SUBJECTS,
+ * applied across the indexes of one subject for the same reason: stopping
+ * turns one recoverable disagreement into several, for no gain, since
+ * maintenance is idempotent and a rebuild repairs whatever did not land.
+ *
+ * The subject still FAILS when any target did. A caller cannot act on "one of
+ * your indexes is stale" differently from "this subject is stale", and the
+ * remedy is the same rebuild either way.
+ */
+/**
+ * The value that will be carried as a subject's failure.
+ *
+ * Never `undefined` when there was a failure, whatever was thrown. A rejection
+ * carries any value at all — `Promise.reject()` supplies none — and the field
+ * this feeds is read as "did this fail", so an undefined cause and no cause at
+ * all would be the same answer.
+ */
+function reportableFailure(failures: readonly unknown[]): unknown {
+  const named = failures.map(failure =>
+    failure === undefined
+      ? new Error("a usage index rejected without a reason")
+      : failure
+  );
+  return named.length === 1
+    ? named[0]
+    : new AggregateError(
+        named,
+        "more than one usage index failed for this subject"
+      );
+}
+
+async function maintainEvery(
+  targets: readonly UsageTarget[],
+  args: { subject: UsageSubject; document: unknown; limits: DocumentLimits }
+): Promise<{
+  inserted: number;
+  removed: number;
+  undetermined: boolean;
+  failure?: unknown;
+}> {
+  let inserted = 0;
+  let removed = 0;
+  let undetermined = false;
+  const failures: unknown[] = [];
+
+  for (const target of targets) {
+    try {
+      const report = await target.maintain(args);
+      inserted += report.inserted;
+      removed += report.removed;
+      undetermined = undetermined || report.undetermined;
+    } catch (failure) {
+      failures.push(failure);
+    }
+  }
+
+  if (failures.length === 0) return { inserted, removed, undetermined };
+  return {
+    inserted,
+    removed,
+    undetermined,
+    // A lone failure is reported AS ITSELF, so a consumer already reading this
+    // field gets the cause rather than a wrapper around it. Several are
+    // aggregated rather than reduced to the first, because separate targets
+    // fail for separate reasons and only one would ever be seen.
+    //
+    // Except when the thrown value IS `undefined`, which `Promise.reject()`
+    // and `throw undefined` both produce. Callers identify a failed subject by
+    // `failure !== undefined`, so passing that value through would report the
+    // subject as reconciled while its index stayed stale — the failure erased
+    // by the very field that exists to carry it. A stand-in error is
+    // substituted, because "a target rejected and said nothing" is still a
+    // failure and must read as one.
+    failure: reportableFailure(failures),
+  };
+}
+
 async function reconcileOne(
   args: {
-    store: ClassUsageIndexStore;
     read: ClassUsageDocumentReader;
     limits: DocumentLimits;
+    targets: readonly UsageTarget[];
   },
   subject: ClassUsageSubject
 ): Promise<ClassUsageSubjectOutcome> {
@@ -207,20 +382,14 @@ async function reconcileOne(
       };
     }
 
-    const report = await maintainClassUsage({
-      store: args.store,
+    // Every index derives from THIS read.
+    const maintained = await maintainEvery(args.targets, {
       subject,
       document,
       limits: args.limits,
     });
 
-    return {
-      subject,
-      inserted: report.inserted,
-      removed: report.removed,
-      undetermined: report.undetermined,
-      absent: false,
-    };
+    return { subject, ...maintained, absent: false };
   } catch (failure) {
     return {
       subject,

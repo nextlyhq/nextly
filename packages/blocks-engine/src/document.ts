@@ -1024,12 +1024,13 @@ export type ExposedPropertyType = (typeof EXPOSED_PROPERTY_TYPES)[number];
  * the bag first, lowercasing every key, and then overwrites with the modelled
  * field, so this mirrors that order exactly.
  *
- * Only a STRING `cssId` shadows, the empty string included. The renderer reads
- * it as `typeof node.cssId === "string" ? node.cssId : undefined` and
- * overwrites only when that is not `undefined` — so `cssId: ""` shadows and
- * emits `id=""`, while `cssId: null` is normalised away and the bag renders.
+ * Only a STRING `cssId` shadows, the empty string included — so `cssId: ""`
+ * stops the bag and emits nothing, while `cssId: null` is normalised away and
+ * the bag renders.
  *
- * An empty id is not an id: it takes nothing and only stops the bag.
+ * An empty id is not an id: it takes nothing and only stops the bag. The
+ * renderer ASKS this rather than deciding again, so the two cannot disagree
+ * about which spelling wins or about what an empty one means.
  *
  * Published because reading the two fields independently is wrong in both
  * directions, and every one of those readings was live somewhere:
@@ -1053,10 +1054,11 @@ export function renderedDomId(node: {
 /**
  * The `id` an attribute bag alone would render, if any.
  *
- * The LAST case variant wins, whatever it holds, empty included. The renderer
- * lowercases each key and assigns in turn, so a bag of `{ id: "hero", ID: "" }`
- * leaves the element with `id=""` — and skipping the empty one here keeps
- * `hero` and reports an id that does not render.
+ * The LAST case variant wins, whatever it holds, empty included. HTML attribute
+ * names are ASCII case-insensitive, so a bag of `{ id: "hero", ID: "" }` spells
+ * one attribute twice and the later one decides it — leaving an empty id, which
+ * {@link renderedDomId} then reports as no id. Skipping the empty one here
+ * would keep `hero` and name an id nothing renders.
  *
  * Separate from {@link renderedDomId} because the narrower question is a real
  * one: a surface asking whether an empty bag id would SHADOW something has to
