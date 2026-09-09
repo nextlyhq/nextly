@@ -559,6 +559,7 @@ export class CollectionService extends BaseService {
         collectionName,
         user: context.user,
         overrideAccess: context.overrideAccess,
+        context: context.context,
       },
       data
     );
@@ -607,6 +608,7 @@ export class CollectionService extends BaseService {
         collectionName,
         user: context.user,
         overrideAccess: context.overrideAccess,
+        context: context.context,
       },
       data
     );
@@ -636,6 +638,7 @@ export class CollectionService extends BaseService {
       collectionName,
       user: context.user,
       overrideAccess: context.overrideAccess,
+      context: context.context,
       page,
       limit,
       // D56: forward the rich-query options the facade previously dropped, so
@@ -688,6 +691,7 @@ export class CollectionService extends BaseService {
       collectionName,
       user: context.user,
       overrideAccess: context.overrideAccess,
+      context: context.context,
       where: options.where as WhereFilter | undefined,
       search: options.search,
     });
@@ -720,6 +724,7 @@ export class CollectionService extends BaseService {
       entryId,
       user: context.user,
       overrideAccess: context.overrideAccess,
+      context: context.context,
     });
 
     if (!result.success) {
@@ -762,6 +767,7 @@ export class CollectionService extends BaseService {
         entryId,
         user: context.user,
         overrideAccess: context.overrideAccess,
+        context: context.context,
       },
       data
     );
@@ -809,6 +815,7 @@ export class CollectionService extends BaseService {
       entryId,
       user: context.user,
       overrideAccess: context.overrideAccess,
+      context: context.context,
     });
 
     if (!result.success) {
@@ -885,6 +892,7 @@ export class CollectionService extends BaseService {
       {
         collectionName,
         user: context.user,
+        context: context.context,
       },
       data
     );
@@ -948,6 +956,7 @@ export class CollectionService extends BaseService {
         collectionName,
         entryId,
         user: context.user,
+        context: context.context,
       },
       data
     );
@@ -1015,6 +1024,7 @@ export class CollectionService extends BaseService {
       entryId,
       user: context.user,
       actor,
+      context: context.context,
     });
 
     // Collect before the success check, so a caller that commits despite a

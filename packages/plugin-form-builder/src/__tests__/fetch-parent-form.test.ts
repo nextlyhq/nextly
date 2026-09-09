@@ -34,8 +34,11 @@ describe("fetchParentForm", () => {
       nextlyWith(findEntryById)
     );
 
+    // Asks for the schema alone, so the form's `afterRead` hook can skip the
+    // submission count it would otherwise run on every write.
     expect(findEntryById).toHaveBeenCalledWith("forms", "form1", {
       as: "system",
+      context: { "formBuilder.schemaOnlyRead": true },
     });
     expect(form).toMatchObject({ id: "form1" });
   });
