@@ -3457,17 +3457,32 @@ export class CollectionQueryService extends BaseService {
       });
 
       const idCondition = eq(schema.id, entryId);
+      // The languages this read resolves through, and the companion those
+      // values live in. Resolved HERE, above the predicate, rather than beside
+      // the overlay further down: a stored rule may name a LOCALIZED field,
+      // whose column exists only on the companion, and the shared translator
+      // recognises such a field only when it is given this context. Without it
+      // the by-id path refuses a constraint the listing binds — the same rule
+      // answering 403 here and returning rows there, which is the divergence
+      // this service exists to not have.
+      //
+      // Derived once and reused by the overlay and the relationship expansion
+      // below, so the language cannot drift between them.
+      const { localeChain, companion } = await this.localeScope(params);
       // Translated through the shared builder, so a multi-member or
-      // non-`equals` predicate binds here exactly as it binds a listing. The
-      // by-id read has no localized query context — it selects one row by
-      // primary key rather than filtering on translatable columns — so a
-      // constraint naming a localized field is refused rather than dropped.
+      // non-`equals` predicate binds here exactly as it binds a listing, and a
+      // localized member becomes the same companion EXISTS.
       const accessCondition =
         this.accessConstraintCondition(
           params.collectionName,
           accessConstraint,
           schema,
-          null
+          this.buildLocalizedQueryContext(
+            companion,
+            localeChain,
+            schema,
+            statusFilter?.values
+          )
         ) ?? null;
       // An explicit `status: "draft"` view that opts into the working draft must
       // not filter the live row to draft-only: the split keeps the main row
@@ -3549,12 +3564,8 @@ export class CollectionQueryService extends BaseService {
         };
       }
 
-      // Resolved once and reused: relationship expansion below needs the same
-      // language, so deriving it twice would let the two drift.
-      const localeChain = this.resolveLocaleChain(
-        params.locale,
-        params.fallbackLocale
-      );
+      // `localeChain` and `companion` were resolved above the access predicate,
+      // which needs the same pair to judge a rule naming a localized field.
       // i18n M4: resolve localized fields from the companion `_locales` table for the
       // requested language (with fallback) BEFORE relationship expansion / hooks, so every
       // downstream consumer sees the translated values. No-op for non-localized collections.

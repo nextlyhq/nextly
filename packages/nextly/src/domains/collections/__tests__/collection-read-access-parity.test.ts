@@ -314,6 +314,92 @@ describe("read paths narrow by the same stored read rule", () => {
     });
   });
 
+  // ── A rule naming a LOCALIZED field ──────────────────────────────────────
+
+  describe("a custom read rule that names a localized field", () => {
+    /** The rule filters on `region`, which lives only on the companion. */
+    const LOCALIZED_CONSTRAINT = { region: { equals: "emea" } };
+
+    /**
+     * A localized collection: two locales and a companion carrying `region`.
+     *
+     * The column is deliberately absent from the main schema, because that is
+     * what makes this the case under test — the field is unknown to the table
+     * and knowable only through the companion context.
+     */
+    function buildLocalized() {
+      build(
+        { read: { type: "custom", functionPath: "./region-scope" } },
+        LOCALIZED_CONSTRAINT
+      );
+      const fileManager = (
+        service as unknown as {
+          queryService: { fileManager: { loadCompanionSchema: unknown } };
+        }
+      ).queryService.fileManager;
+      fileManager.loadCompanionSchema = vi.fn().mockResolvedValue({
+        table: { region: Symbol("dc_locales.region") },
+        companionTableName: "posts_locales",
+        localizedFields: [{ name: "region", column: "region" }],
+        hasStatus: false,
+        hasUpdatedAt: true,
+      });
+      const queryService = (
+        service as unknown as { queryService: { localization: unknown } }
+      ).queryService;
+      // The SANITIZED shape: every field present and `fallbackLocale` an
+      // array. A partial fixture throws inside locale resolution long before
+      // the predicate is built, and the read then answers 500 — which passes a
+      // "not 403" assertion while testing nothing.
+      queryService.localization = {
+        locales: [
+          { code: "en", label: "English", rtl: false, fallbackLocale: [] },
+          { code: "fr", label: "French", rtl: false, fallbackLocale: ["en"] },
+        ],
+        defaultLocale: "en",
+        fallback: true,
+      };
+    }
+
+    it("getEntry admits the row the listing admits", async () => {
+      buildLocalized();
+
+      const result = await service.getEntry({
+        collectionName: "posts",
+        entryId: "entry-1",
+        user,
+        locale: "en",
+      });
+
+      // Asserted POSITIVELY. `not.toBe(403)` is satisfied by a 500 as well,
+      // and a malformed fixture that throws inside locale resolution answers
+      // exactly that — the test would then pass while never reaching the
+      // predicate it exists to judge.
+      //
+      // Judged without the companion context the field lives in, the shared
+      // translator reports `region` as an unknown column and the read refuses.
+      // The listing binds the same member as a companion EXISTS, so a refusal
+      // here is the two paths answering differently for one rule.
+      expect(result.success).toBe(true);
+      expect(result.statusCode).toBe(200);
+    });
+
+    it("listEntries admits it too, which is the control", async () => {
+      buildLocalized();
+
+      const result = await service.listEntries({
+        collectionName: "posts",
+        user,
+        locale: "en",
+      });
+
+      // Establishes that this constraint IS bindable, so the assertion above
+      // reads as a divergence rather than as a rule nothing can express.
+      expect(result.success).toBe(true);
+      expect(result.statusCode).toBe(200);
+    });
+  });
+
   // ── A refusal reports the same status on every path ──────────────────────
 
   describe("an untranslatable constraint refuses with the same status", () => {
