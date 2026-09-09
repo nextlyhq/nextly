@@ -210,8 +210,6 @@
     "docs/plugins/auth.mdx": 3,
     "docs/plugins/author-guide.mdx": 2,
     "docs/plugins/distribution.mdx": 1,
-    "docs/plugins/form-builder.mdx": 2,
-    "docs/plugins/index.mdx": 2,
     "docs/plugins/lifecycle.mdx": 2,
     "docs/database/mysql.mdx": 3,
     "docs/guides/isr-caching.mdx": 1
@@ -261,25 +259,6 @@
     "docs/plugins/distribution.mdx": {
       "#0 error TS2304: Cannot find name 'myPlugin'.": 1
     },
-    "docs/plugins/form-builder.mdx": {
-      "#0 error TS2304: Cannot find name 'Media'.": 1,
-      "#20 error TS2304: Cannot find name 'Media'.": 1,
-      "reader-name #0 error TS2304: Cannot find name 'Posts'.": 1,
-      "reader-name #0 error TS2304: Cannot find name 'Users'.": 1,
-      "reader-name #20 error TS2304: Cannot find name 'Posts'.": 1,
-      "reader-name #20 error TS2304: Cannot find name 'Users'.": 1
-    },
-    "docs/plugins/index.mdx": {
-      "#0 error TS2304: Cannot find name 'Media'.": 1,
-      "#1 error TS2304: Cannot find name 'Media'.": 1,
-      "suppressed #3 error TS2339: Property 'id' does not exist on type '{}'.": 1,
-      "reader-file #4 error TS2307: Cannot find module './collections/my-collection' or its corresponding type declarations.": 1,
-      "reader-name #0 error TS2304: Cannot find name 'Posts'.": 1,
-      "reader-name #0 error TS2304: Cannot find name 'Users'.": 1,
-      "reader-name #1 error TS2304: Cannot find name 'Posts'.": 1,
-      "reader-name #1 error TS2304: Cannot find name 'Users'.": 1,
-      "reader-name #2 error TS2304: Cannot find name 'MyCollection'.": 1
-    },
     "docs/plugins/lifecycle.mdx": {
       "#1 error TS2304: Cannot find name 'a'.": 1,
       "#1 error TS2304: Cannot find name 'b'.": 1
@@ -303,6 +282,17 @@
     "docs/getting-started/index.mdx": {
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1
+    },
+    "docs/plugins/index.mdx": {
+      "suppressed #3 error TS2339: Property 'id' does not exist on type '{}'.": 1,
+      "reader-file #4 error TS2307: Cannot find module './collections/my-collection' or its corresponding type declarations.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'Posts'.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'Users'.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'Media'.": 1,
+      "reader-name #1 error TS2304: Cannot find name 'Posts'.": 1,
+      "reader-name #1 error TS2304: Cannot find name 'Users'.": 1,
+      "reader-name #1 error TS2304: Cannot find name 'Media'.": 1,
+      "reader-name #2 error TS2304: Cannot find name 'MyCollection'.": 1
     },
     "docs/guides/email.mdx": {
       "implicit-any #4 error TS7006: Parameter 'data' implicitly has an 'any' type.": 3,
@@ -348,6 +338,14 @@
     },
     "docs/plugins/testing.mdx": {
       "reader-file #0 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1
+    },
+    "docs/plugins/form-builder.mdx": {
+      "reader-name #0 error TS2304: Cannot find name 'Posts'.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'Users'.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'Media'.": 1,
+      "reader-name #20 error TS2304: Cannot find name 'Posts'.": 1,
+      "reader-name #20 error TS2304: Cannot find name 'Users'.": 1,
+      "reader-name #20 error TS2304: Cannot find name 'Media'.": 1
     }
   }
 }

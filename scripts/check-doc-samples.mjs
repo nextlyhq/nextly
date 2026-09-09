@@ -305,7 +305,8 @@ export const isModule = (code, extension = "tsx") => {
     if (
       ts.isCallExpression(node) &&
       (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(node.expression) && node.expression.text === "require"))
+        (ts.isIdentifier(node.expression) &&
+          node.expression.text === "require"))
     ) {
       loads = true;
       return;
@@ -753,7 +754,10 @@ export function deprecatedPropertiesIn(sourceFile, checker) {
           found.push({
             name,
             start: property.getStart(sourceFile),
-            note: (tag.text ?? []).map(part => part.text).join("").trim(),
+            note: (tag.text ?? [])
+              .map(part => part.text)
+              .join("")
+              .trim(),
           });
         }
       }
@@ -812,7 +816,10 @@ function applicableConstituents(constituents, literal, checker) {
     const name = writtenPropertyName(property);
     if (name === null) continue;
     const written = checker.getTypeAtLocation(property.initializer);
-    if (!written.isLiteral() && !(written.flags & ts.TypeFlags.BooleanLiteral)) {
+    if (
+      !written.isLiteral() &&
+      !(written.flags & ts.TypeFlags.BooleanLiteral)
+    ) {
       continue;
     }
     discriminants.push({ name, written });
@@ -1036,6 +1043,18 @@ export function exportsMapAnswers(exports, subpath) {
  * a continuation would hide a genuine typo or a missing import, which is one of
  * the things this audit exists to find.
  */
+/**
+ * The block a diagnostic came from, asked whether the name is the reader's.
+ *
+ * Falls back to the name alone when the block cannot be found, which keeps the
+ * finding rather than dropping it.
+ */
+export function mentionIsReaderOwned(name, file, index, samples) {
+  const sample = samples.find(s => s.file === file && s.index === index);
+  if (!sample) return readerOwnedName(name);
+  return readerOwnedMention(name, sample.code, extensionFor(sample));
+}
+
 export function declaredEarlier(name, file, index, samples) {
   return samples.some(
     s =>
@@ -1230,7 +1249,9 @@ export function parseSample(source, extension = "tsx") {
     `sample.${extension}`,
     source,
     ts.ScriptTarget.Latest,
-    false,
+    // Parents, because asking whether a mention sits in a type position means
+    // walking up from it. Still the one place a sample is parsed.
+    true,
     extension === "tsx" ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   );
 }
@@ -1545,24 +1566,119 @@ function workspaceManifest(pkg) {
  * Measured rather than assumed, which is the whole point of asking the exports:
  * a rule keyed on the shape alone would have silenced those two.
  *
- * From `src`, not from `dist`. Reading the built types made this answer depend
- * on whether a build had run, and CI runs the script suite BEFORE the build
- * step: the set came back empty there, every name read as the reader's, and the
- * unit tests failed on a clean checkout while passing on a laptop. The two
- * sources agree exactly, 2386 names either way, so nothing is given up by
- * asking the one that is always there.
+ * From `src`, never from `dist`, so the answer cannot depend on whether a build
+ * has run. CI runs the script suite BEFORE the build step, and reading the built
+ * types there returned an empty set: every name read as the reader's, and the
+ * unit tests failed on a clean checkout while passing on a laptop.
  *
  * EVERY typed entry a package declares, not only `"."`. A symbol published from
  * a subpath is still published: `@nextlyhq/builder` exports `BuilderShell` from
  * `./shell` and keeps it out of the root barrel, and reading the barrel alone
  * called it the reader's.
+ *
+ * An entry is found in one of two ways, because neither alone is enough.
+ * `dist/shell.d.ts` names `src/shell.ts` and that mirror covers most of them,
+ * but not `nextly/document-lock`, which is built from
+ * `src/domains/document-lock/contract.ts`. Guessing the source from the output
+ * name left six entries unresolved, and with them went `DocumentLockHolder`,
+ * `FieldTypeCatalogEntry` and `Hsv`: reader-owned on a clean checkout and ours
+ * after a build, which is the build-state dependence this was supposed to end.
+ *
+ * So the build's own configuration is asked as well, by PARSING it for the
+ * source paths it names. Parsed rather than imported, because most of these
+ * configs are TypeScript and this gate runs under plain `node`, and because a
+ * gate that must not consult the network should not be executing build scripts
+ * either. An import chain inside the package is followed, since `@nextlyhq/ui`
+ * declares which barrel each subpath is built from in a module beside its
+ * config rather than in the config.
  */
 const exportedNames = new Set();
+/**
+ * The subset that can supply a VALUE.
+ *
+ * TypeScript keeps two namespaces and a name can be in either. `Media` is in
+ * only one: `packages/nextly/src/types/media.ts` exports it as a type and
+ * `packages/admin/src/types/media.ts` as an interface, and nothing in the
+ * workspace exports a value by that name. So `collections: [Posts, Users,
+ * Media]` needs a value no import here can supply, which makes that `Media` the
+ * reader's own collection exactly as `Posts` is, while `const m: Media` is a
+ * defect a reader meets because the type is importable. Flattening the two
+ * namespaces into one set answered the first case wrongly.
+ */
+const exportedValues = new Set();
 
 /** `./dist/shell.d.ts` as its source, since that is what is always present. */
 function sourceCandidatesFor(typesPath) {
   const built = typesPath.replace(/^\.\//, "").match(/^dist\/(.+)\.d\.ts$/);
   return built ? [`src/${built[1]}.ts`, `src/${built[1]}.tsx`] : [];
+}
+
+/** A relative import specifier, as the files it could mean. */
+function localModuleCandidates(base) {
+  const withoutJs = base.replace(/\.js$/, "");
+  return [
+    `${withoutJs}.ts`,
+    `${withoutJs}.tsx`,
+    base,
+    `${withoutJs}.mjs`,
+    join(withoutJs, "index.ts"),
+  ];
+}
+
+/**
+ * The source files a package's build configuration names.
+ *
+ * Read by parsing, so nothing here runs a build script or needs a TypeScript
+ * loader to read a `.ts` config. Relative imports are followed within the
+ * package, because a config may keep its entry map in a module beside it.
+ */
+function buildConfigEntries(packageDir) {
+  let names;
+  try {
+    names = readdirSync(packageDir);
+  } catch {
+    return [];
+  }
+  const queue = names
+    .filter(name => /^tsup(\..+)?\.config\.[cm]?[jt]s$/.test(name))
+    .map(name => join(packageDir, name));
+  const seen = new Set();
+  const found = new Set();
+  while (queue.length > 0) {
+    const file = queue.pop();
+    if (seen.has(file) || !existsSync(file)) continue;
+    seen.add(file);
+    const source = ts.createSourceFile(
+      file,
+      readFileSync(file, "utf-8"),
+      ts.ScriptTarget.ES2022,
+      false,
+      ts.ScriptKind.TS
+    );
+    const visit = node => {
+      if (ts.isStringLiteral(node) && /^src\/.+\.tsx?$/.test(node.text)) {
+        const full = join(packageDir, node.text);
+        if (existsSync(full)) found.add(full);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    for (const statement of source.statements) {
+      if (!ts.isImportDeclaration(statement)) continue;
+      const specifier = statement.moduleSpecifier;
+      if (!ts.isStringLiteral(specifier)) continue;
+      if (!specifier.text.startsWith(".")) continue;
+      for (const candidate of localModuleCandidates(
+        join(dirname(file), specifier.text)
+      )) {
+        if (existsSync(candidate)) {
+          queue.push(candidate);
+          break;
+        }
+      }
+    }
+  }
+  return [...found];
 }
 
 /** Every typed entry a package declares, resolved to a file that exists. *
@@ -1577,7 +1693,8 @@ function typedEntriesOf(packageDir, manifest) {
   if (map && typeof map === "object") {
     for (const target of Object.values(map)) {
       if (!target || typeof target !== "object") continue;
-      const types = target.types ?? target.import?.types ?? target.default?.types;
+      const types =
+        target.types ?? target.import?.types ?? target.default?.types;
       if (typeof types === "string") declared.push(types);
     }
   }
@@ -1585,17 +1702,17 @@ function typedEntriesOf(packageDir, manifest) {
   if (typeof root === "string") declared.push(root);
   if (declared.length === 0) declared.push("dist/index.d.ts");
 
-  const resolved = [];
+  const resolved = new Set(buildConfigEntries(packageDir));
   for (const entry of new Set(declared)) {
-    for (const candidate of [...sourceCandidatesFor(entry), entry]) {
+    for (const candidate of sourceCandidatesFor(entry)) {
       const full = join(packageDir, candidate.replace(/^\.\//, ""));
       if (existsSync(full)) {
-        resolved.push(full);
+        resolved.add(full);
         break;
       }
     }
   }
-  return resolved;
+  return [...resolved];
 }
 
 function workspaceExports() {
@@ -1636,6 +1753,16 @@ function workspaceExports() {
     if (!symbol) continue;
     for (const exported of checker.getExportsOfModule(symbol)) {
       exportedNames.add(exported.getName());
+      // A re-export is an alias, and an alias carries no namespace of its own:
+      // asking the alias whether it is a value answers for the binding rather
+      // than for the thing bound.
+      const target =
+        exported.flags & ts.SymbolFlags.Alias
+          ? checker.getAliasedSymbol(exported)
+          : exported;
+      if (target.flags & ts.SymbolFlags.Value) {
+        exportedValues.add(exported.getName());
+      }
     }
   }
   return exportedNames;
@@ -1643,6 +1770,59 @@ function workspaceExports() {
 
 export const readerOwnedName = (name, exported = workspaceExports()) =>
   /^[A-Z][A-Za-z0-9]*$/.test(name) && !exported.has(name);
+
+/** The value half of {@link workspaceExports}, built by the same pass. */
+export function workspaceValueExports() {
+  workspaceExports();
+  return exportedValues;
+}
+
+/**
+ * Whether every mention of `name` in this block needs a value.
+ *
+ * Asked of the block rather than of the diagnostic's position, because a
+ * position has to survive the prelude a continuation fence is recompiled with,
+ * and a mention that moved is a wrong answer given confidently. A fence that
+ * uses the name in a type position anywhere keeps its finding, which is the
+ * loud direction: the alternative silences a reference a reader would meet.
+ */
+export function usedOnlyAsValue(code, name, extension = "tsx") {
+  let mentioned = false;
+  let asType = false;
+  const visit = node => {
+    if (ts.isIdentifier(node) && node.text === name) {
+      mentioned = true;
+      for (let at = node.parent; at; at = at.parent) {
+        if (ts.isTypeNode(at) || ts.isTypeQueryNode(at)) {
+          asType = true;
+          break;
+        }
+        if (ts.isExpression(at) || ts.isStatement(at)) break;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parseSample(code, extension));
+  return mentioned && !asType;
+}
+
+/**
+ * Whether a missing name belongs to the reader, for the way this block used it.
+ *
+ * The name alone cannot answer it: `Media` is exported as a type and never as a
+ * value, so it is the reader's in `collections: [Posts, Users, Media]` and ours
+ * in `const m: Media`.
+ */
+export function readerOwnedMention(name, code, extension) {
+  if (!/^[A-Z][A-Za-z0-9]*$/.test(name)) return false;
+  if (workspaceExports().has(name)) {
+    return (
+      !workspaceValueExports().has(name) &&
+      usedOnlyAsValue(code, name, extension)
+    );
+  }
+  return true;
+}
 
 export async function classifyDocDiagnostics({ diagnostics, samples }) {
   const uninstalled = [];
@@ -1716,7 +1896,8 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
       const [file, idx] = line.split("  ")[0].split("#");
       const index = Number.parseInt(idx, 10);
       if (declaredEarlier(name[1], file, index, samples)) continued.push(line);
-      else if (readerOwnedName(name[1])) readerNames.push(line);
+      else if (mentionIsReaderOwned(name[1], file, index, samples))
+        readerNames.push(line);
       else real.push(line);
       continue;
     }
@@ -2508,7 +2689,9 @@ export function compareToBaseline({
     };
     for (const [what, was] of Object.entries(baseline.coverage ?? {})) {
       if ((seen[what] ?? 0) < was) {
-        lost.push(`${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`);
+        lost.push(
+          `${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`
+        );
       }
       // A GAIN has to be recorded too, or it is not protected. Accepting one
       // silently meant a fence added today could be deleted tomorrow, returning
@@ -2516,7 +2699,9 @@ export function compareToBaseline({
       // ratchet that only resists decreases from a number nobody updates
       // protects the corpus as it was and nothing since.
       if ((seen[what] ?? 0) > was) {
-        gained.push(`${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`);
+        gained.push(
+          `${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`
+        );
       }
     }
   }
