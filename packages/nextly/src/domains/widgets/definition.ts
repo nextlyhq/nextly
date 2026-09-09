@@ -77,6 +77,16 @@ export const WIDGET_ARCHETYPES = [
   "stats",
   "table",
   "list",
+  // A categorical comparison, drawn as bars. Named for the SHAPE rather than
+  // for `groupBy`, the op behind it: an archetype is a way of drawing, and a
+  // name taken from the query would have to change if the same picture were
+  // ever drawn from a different one.
+  "bars",
+  // A count per interval, drawn as a line. This one DOES share its name with
+  // its op, and that is not the near-miss `stats` avoids: `metric`/`metrics`
+  // are two different pictures one keystroke apart, while an archetype and an
+  // op called `timeseries` are the same idea named once.
+  "timeseries",
   "text",
   "actions",
   "custom",
@@ -93,7 +103,13 @@ export type WidgetArchetype = (typeof WIDGET_ARCHETYPES)[number];
  * implementation; a narrower view is derived from this rather than computed
  * beside it.
  */
-export const DATA_ARCHETYPES = ["metric", "table", "list"] as const;
+export const DATA_ARCHETYPES = [
+  "metric",
+  "table",
+  "list",
+  "bars",
+  "timeseries",
+] as const;
 
 /**
  * Archetypes drawn from MANY queries, declared as `cells`.
@@ -147,6 +163,8 @@ const ARCHETYPE_RESULTS: ReadonlyMap<
   ["metric", new Set<WidgetOp>(["count"])],
   ["table", new Set<WidgetOp>(["list"])],
   ["list", new Set<WidgetOp>(["list"])],
+  ["bars", new Set<WidgetOp>(["groupBy"])],
+  ["timeseries", new Set<WidgetOp>(["timeseries"])],
 ]);
 
 /**
