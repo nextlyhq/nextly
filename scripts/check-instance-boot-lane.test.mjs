@@ -453,6 +453,45 @@ export default defineConfig({ test: { testTimeout: 30000, hookTimeout: 30000 } }
     ).toBe(true);
   });
 
+  it("does NOT accept the TypeScript `export =` form", () => {
+    // `isExportAssignment` matches both, and `export =` is the CommonJS form
+    // rather than the default export vitest loads.
+    expect(
+      statesBootBudget(
+        `export = { test: { testTimeout: 30000, hookTimeout: 30000 } };`
+      )
+    ).toBe(false);
+  });
+
+  it("does NOT accept a wrapper reached through a property access", () => {
+    // A property access says nothing about what the object is, so this is a
+    // function that has not been established to return its argument.
+    expect(
+      statesBootBudget(`export default anything.defineConfig({
+  test: { testTimeout: 30000, hookTimeout: 30000 },
+});`)
+    ).toBe(false);
+  });
+
+  it("does NOT accept a spread that can replace the test object", () => {
+    // `{ test: {...}, ...other }` hands vitest `other.test`, so the budgets
+    // read from the literal may not be the ones the suite runs under.
+    expect(
+      statesBootBudget(`export default defineConfig({
+  test: { testTimeout: 30000, hookTimeout: 30000 },
+  ...lowBudgetConfig,
+});`)
+    ).toBe(false);
+  });
+
+  it("does NOT accept a spread that can replace the budgets themselves", () => {
+    expect(
+      statesBootBudget(`export default defineConfig({
+  test: { testTimeout: 30000, hookTimeout: 30000, ...lowBudgetConfig },
+});`)
+    ).toBe(false);
+  });
+
   it("reads a config exported without the defineConfig wrapper", () => {
     // The positive control for the decoy case: it would pass on a predicate
     // that had simply stopped finding budgets anywhere.

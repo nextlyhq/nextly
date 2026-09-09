@@ -232,7 +232,14 @@ export function statesBootBudget(source) {
    * defaults. What is traced instead is the default export, through
    * `defineConfig(...)` if it is wrapped, down to its `test` property.
    */
-  const exported = parsed.statements.find(ts.isExportAssignment);
+  /*
+   * `export default x`, and not `export = x`. `isExportAssignment` matches both,
+   * and the second is the TypeScript CommonJS form, which is not the default
+   * export vitest loads.
+   */
+  const exported = parsed.statements.find(
+    statement => ts.isExportAssignment(statement) && !statement.isExportEquals
+  );
   if (!exported) return false;
 
   let config = exported.expression;
@@ -248,17 +255,27 @@ export function statesBootBudget(source) {
    * call this does not recognise is reported rather than guessed at.
    */
   if (ts.isCallExpression(config)) {
+    // A bare `defineConfig`, not `something.defineConfig`. A property access
+    // says nothing about what the object is, so a wrapper reached that way is a
+    // function this has not established returns its argument.
     const callee = config.expression;
-    const name = ts.isIdentifier(callee)
-      ? callee.text
-      : ts.isPropertyAccessExpression(callee)
-        ? callee.name.text
-        : undefined;
-    if (name !== "defineConfig") return false;
+    if (!ts.isIdentifier(callee) || callee.text !== "defineConfig") return false;
     if (config.arguments.length === 0) return false;
     config = config.arguments[0];
   }
   if (!ts.isObjectLiteralExpression(config)) return false;
+
+  /*
+   * 🔴 A spread can replace what was read. `{ test: {...}, ...other }` hands
+   * vitest `other.test`, and `{ testTimeout: 30000, ...other }` hands it
+   * `other.testTimeout`, so a budget read from the literal is a budget the
+   * suite may never run under. Resolving that means evaluating the spread,
+   * which a syntax read cannot do, so a config carrying one is reported rather
+   * than assumed adequate.
+   */
+  const hasSpread = object =>
+    object.properties.some(property => ts.isSpreadAssignment(property));
+  if (hasSpread(config)) return false;
 
   const test = config.properties.find(
     property =>
@@ -268,6 +285,8 @@ export function statesBootBudget(source) {
       ts.isObjectLiteralExpression(property.initializer)
   );
   if (!test) return false;
+
+  if (hasSpread(test.initializer)) return false;
 
   const budgets = new Map();
   for (const property of test.initializer.properties) {
