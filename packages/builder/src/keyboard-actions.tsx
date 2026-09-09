@@ -305,6 +305,18 @@ export interface BlockKeyboardActionsOptions {
    */
   onSaveAsPattern: () => void;
   /**
+   * Whether the author may create a pattern at all. Defaults to true.
+   *
+   * Supplied by the host for the same reason `onSaveAsPattern` is: the grant is
+   * held against the collection a pattern goes in, a site may have renamed it,
+   * and nothing here can know either. A builder that guessed would be guessing
+   * about somebody else's schema.
+   *
+   * Permissive while unknown — see `toolbarActions`, which explains why this one
+   * refusal defaults the opposite way to the rest.
+   */
+  mayCreatePattern?: boolean;
+  /**
    * Whether the bindings are live. Defaults to true.
    *
    * A host that mounts the canvas inside something modal turns them off rather
@@ -368,6 +380,7 @@ export interface BlockKeyboardActionsResult {
  * {@link BlockKeyboardActions} is the only supported way to reach the verbs.
  */
 export function useBlockKeyboardActions({
+  mayCreatePattern = true,
   editor,
   enabled = true,
   onEditText,
@@ -868,9 +881,16 @@ export function useBlockKeyboardActions({
         editor.document,
         editor.selectedId,
         editor.selection.ids,
-        nestingSource
+        nestingSource,
+        mayCreatePattern
       ),
-    [editor.document, editor.selectedId, editor.selection.ids, nestingSource]
+    [
+      editor.document,
+      editor.selectedId,
+      editor.selection.ids,
+      nestingSource,
+      mayCreatePattern,
+    ]
   );
 
   const actions = React.useMemo<BlockActions>(
@@ -920,6 +940,7 @@ export function BlockKeyboardActions({
   onEditText,
   nesting,
   onSaveAsPattern,
+  mayCreatePattern,
   children,
 }: BlockKeyboardActionsOptions & {
   readonly children?: React.ReactNode;
@@ -933,6 +954,7 @@ export function BlockKeyboardActions({
     editor,
     enabled,
     onSaveAsPattern,
+    ...(mayCreatePattern === undefined ? {} : { mayCreatePattern }),
     ...(onEditText === undefined ? {} : { onEditText }),
     ...(nesting === undefined ? {} : { nesting }),
   });

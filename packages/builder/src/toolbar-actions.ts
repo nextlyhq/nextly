@@ -146,10 +146,25 @@ function moveAction(
 function saveAction(
   document: BlockDocument,
   ids: readonly string[],
-  nesting: NestingSource
+  nesting: NestingSource,
+  mayCreate: boolean
 ): ToolbarAction {
-  const refusal = saveAsPatternRefusal(document, ids, nesting);
   const label = "Save as pattern";
+  // The GRANT first, and it is the one refusal not asked of the planner —
+  // because it is not about this selection. Every other reason a save is
+  // refused describes the blocks in hand, so a planner that learns a new one
+  // is still describing them; whether the author may create a pattern at all
+  // is true of the next selection too. Asked first so an author who cannot
+  // save is told that, rather than told why these particular blocks are
+  // unsuitable for a thing they could not have saved either way.
+  if (!mayCreate)
+    return {
+      id: "save-as-pattern",
+      label,
+      enabled: false,
+      reason: "You do not have permission to create patterns.",
+    };
+  const refusal = saveAsPatternRefusal(document, ids, nesting);
   if (refusal === undefined)
     return { id: "save-as-pattern", label, enabled: true };
   return {
@@ -183,7 +198,8 @@ function saveAction(
 function manyBlockActions(
   document: BlockDocument,
   ids: readonly string[],
-  nesting: NestingSource
+  nesting: NestingSource,
+  mayCreate: boolean
 ): ToolbarAction[] {
   const many = `Only one block at a time. ${ids.length} are selected.`;
   const deleteLock = ids
@@ -202,7 +218,7 @@ function manyBlockActions(
     // A lock never stops a duplication, for a set as for one block: the
     // originals stay where they are.
     { id: "duplicate", label: "Duplicate", enabled: true },
-    saveAction(document, ids, nesting),
+    saveAction(document, ids, nesting, mayCreate),
     deleteLock === undefined
       ? { id: "delete", label: "Delete", enabled: true }
       : {
@@ -243,7 +259,23 @@ export function toolbarActions(
    * it. Present as an option only so a test can supply a rule set without
    * registering blocks globally.
    */
-  nesting?: NestingSource
+  nesting?: NestingSource,
+  /**
+   * Whether the caller may create a pattern at all. Defaults to true.
+   *
+   * The HOST's answer, because it is the host's question: the grant is seeded
+   * against the collection a pattern goes in, a site may have renamed it, and
+   * nothing here knows either. The same reason `onSaveAsPattern` is supplied
+   * rather than performed here.
+   *
+   * PERMISSIVE by default, unlike every other refusal in this file. The others
+   * are computed from the document in hand and an absent answer means the
+   * question was not asked; this one arrives over the network, and "not yet"
+   * would dim the verb on every mount for every author. A wrong `true` costs
+   * the late refusal that already happens; a wrong `false` hides a feature the
+   * author has, and there is nothing on the canvas to explain it.
+   */
+  mayCreatePattern: boolean = true
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
@@ -252,7 +284,8 @@ export function toolbarActions(
 
   const rules = nesting ?? registryNestingSource();
   const ids = selectedIds ?? [selectedId];
-  if (ids.length > 1) return manyBlockActions(document, ids, rules);
+  if (ids.length > 1)
+    return manyBlockActions(document, ids, rules, mayCreatePattern);
 
   const moveLock = lockBlockingMove(document, selectedId);
   const deleteLock = lockBlockingDelete(document, selectedId);
@@ -293,7 +326,7 @@ export function toolbarActions(
       // reading the keyboard duplicate takes.
       enabled: blockDuplication(document, selectedId) !== null,
     },
-    saveAction(document, ids, rules),
+    saveAction(document, ids, rules, mayCreatePattern),
     deleteLock === undefined
       ? {
           id: "delete",

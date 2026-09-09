@@ -155,6 +155,7 @@ import { readSiteStyleRecord } from "../site-style-record";
 import { DocumentStatusPill } from "./DocumentStatusPill";
 import { pageRenderInputs, readDocumentLimits } from "./page-render-inputs";
 import { PageBuilderCard } from "./PageBuilderCard";
+import { useMayCreatePattern } from "./pattern-capability-client";
 import { usePatternLibrary } from "./pattern-library-client";
 import { SavePatternPrompt } from "./SavePatternPrompt";
 /* The save state, which the status pill cannot carry: it renders nothing on a
@@ -1852,6 +1853,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   // toolbar, the context menu and the palette all reach it — while everything
   // the form needs is mounted only while it is up. See `SavePatternPrompt`.
   const savePattern = useSavePatternVerb(editor, inline);
+  /*
+   * Whether this author may create a pattern at all, read EAGERLY here.
+   *
+   * Beside the verb it gates rather than inside it: the toolbar, the context
+   * menu and the command palette all offer the verb from one shared action
+   * list, so the answer has to exist before any of them draws — and asking in
+   * three places would be three requests answering one question.
+   */
+  const mayCreatePattern = useMayCreatePattern();
 
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
@@ -2746,6 +2756,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           editor={editor}
           onEditText={inline.begin}
           onSaveAsPattern={savePattern.open}
+          /*
+            Whether the author holds the grant the save is judged by, asked of
+            the server because only it knows the RESOLVED collection: a site may
+            rename it, and the browser knows the declared name alone. Passed
+            here rather than read inside the builder for the same reason
+            `onSaveAsPattern` is passed — the collection a pattern goes in is
+            this plugin's business, not the canvas's.
+          */
+          mayCreatePattern={mayCreatePattern}
         >
           {/*
             Inside the verbs provider, which is what lets the palette run
