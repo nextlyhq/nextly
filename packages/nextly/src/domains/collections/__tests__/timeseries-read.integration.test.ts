@@ -672,3 +672,61 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+describe.each(getConfiguredTestDialects())(
+  "a window that reaches before the epoch on %s",
+  dialect => {
+    it("still counts the recent rows", async () => {
+      // 366 yearly intervals is the DOCUMENTED maximum, and in 2026 that window
+      // starts in 1661. On MySQL the lower bound is rendered with
+      // `from_unixtime`, which answers NULL for a negative epoch -- and
+      // `column >= NULL` matches nothing, so the whole series reported zeros
+      // while rows existed. Measured: `from_unixtime(-9750000000)` is NULL and
+      // a probe table holding one row returns 0 for that predicate.
+      const h = await boot(dialect, [
+        { occurredAt: daysAgo(0) },
+        { occurredAt: daysAgo(0) },
+      ]);
+
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        now: clock,
+        dateField: "occurredAt",
+        interval: "year",
+        intervals: 366,
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.data?.points).toHaveLength(366);
+      const total = (res.data?.points ?? []).reduce((s, p) => s + p.count, 0);
+      expect(total).toBe(2);
+      // In the most recent year, which is where both rows were written.
+      expect(res.data?.points.at(-1)?.count).toBe(2);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a malformed date field on %s",
+  dialect => {
+    it("is refused by name rather than as a server fault", async () => {
+      // The public Direct API is callable from JavaScript, where the parameter
+      // type binds nothing. A non-string reached `toSnakeCase`, whose
+      // `.replace` threw a raw TypeError that the service caught as an
+      // unclassified 500 -- unlike every other malformed argument, which gets a
+      // named refusal.
+      const h = await boot(dialect, [{ occurredAt: daysAgo(0) }]);
+
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        now: clock,
+        dateField: 123 as unknown as string,
+        interval: "day",
+      });
+
+      expect(res.success).toBe(false);
+      expect(res.statusCode).toBe(400);
+      expect(JSON.stringify(res)).toContain("FIELD_NOT_GROUPABLE");
+    });
+  }
+);

@@ -57,6 +57,39 @@ describe("init - Nextly API", () => {
       expect(typeof nextly.shutdown).toBe("function");
     });
 
+    it("carries every collection read the Direct API offers", async () => {
+      // DERIVED from the lazy singleton rather than listed here. The instance
+      // is assembled by hand-binding one method at a time, so a read added to
+      // the Direct API is silently absent from the DOCUMENTED path until
+      // somebody notices -- which is what happened to `group`, missing since it
+      // shipped, and then to `timeseries`. Both were callable through the lazy
+      // `nextly` object and `undefined` through `getNextly({ config })`, so the
+      // recommended spelling was the broken one.
+      //
+      // Comparing the two surfaces means the next omission fails here instead
+      // of reaching a consumer.
+      const instance = await getNextly(testOptions());
+      const { nextly: lazy } = await import("../direct-api/nextly");
+
+      const READS = [
+        "find",
+        "findByID",
+        "count",
+        "group",
+        "timeseries",
+      ] as const;
+      for (const name of READS) {
+        expect(
+          typeof (lazy as unknown as Record<string, unknown>)[name],
+          `the lazy object is missing ${name}, so this test cannot judge the instance`
+        ).toBe("function");
+        expect(
+          typeof (instance as unknown as Record<string, unknown>)[name],
+          `getNextly({ config }) is missing ${name}`
+        ).toBe("function");
+      }
+    });
+
     it("should return the same instance on subsequent calls (singleton)", async () => {
       const nextly1 = await getNextly(testOptions());
       const nextly2 = await getNextly(testOptions());
@@ -154,6 +187,13 @@ describe("init - Nextly API", () => {
     // rather than as a shape diff against whatever the code still builds.
     // The compiler enforces the same list on the annotated literal; this
     // pins it on the object the process actually hands out.
+    // A hand-written list, and therefore NOT what catches a missing method:
+    // `group` was absent from the instance and from this list at the same time,
+    // so both sides agreed and the omission shipped. What discriminates is the
+    // test above, which compares the instance against the Direct API's own
+    // surface rather than against a second copy of the same belief. This list
+    // still earns its place for the FALLBACK comparison, where the question is
+    // whether two constructions match.
     const PUBLIC_MEMBERS = [
       "access",
       "adapter",
@@ -174,6 +214,7 @@ describe("init - Nextly API", () => {
       "findSingles",
       "forgotPassword",
       "forms",
+      "group",
       "jobs",
       "login",
       "logout",
@@ -188,6 +229,7 @@ describe("init - Nextly API", () => {
       "roles",
       "shutdown",
       "storage",
+      "timeseries",
       "update",
       "updateMe",
       "updateSingle",

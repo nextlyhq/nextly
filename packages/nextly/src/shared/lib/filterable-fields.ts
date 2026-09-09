@@ -272,6 +272,27 @@ export function assertSortableField(
  * function of the ROW, there is no row at query time, and a precondition that
  * cannot decide fails closed.
  */
+/**
+ * Whether an UNTRUSTED caller could ever group by this field.
+ *
+ * The same two questions `assertGroupableField` asks, through the same
+ * helpers, in the shape a describer needs rather than a gate: a source deciding
+ * what to advertise cannot use an assertion without catching its own refusal.
+ *
+ * Answers for the untrusted case on purpose. A widget executes with
+ * `overrideAccess: false`, so a field this returns `false` for is one every
+ * dashboard request would be refused -- advertising it makes a card that fails
+ * on every load, with nothing pointing at the declaration that caused it.
+ */
+export function isGroupableFieldName(
+  kind: EntityKind,
+  slug: string,
+  name: string
+): boolean {
+  if (transformedFields(kind, slug, [name]).length > 0) return false;
+  return protectedFields(kind, slug, [name]).length === 0;
+}
+
 export function assertGroupableField(
   kind: EntityKind,
   slug: string,
@@ -279,6 +300,22 @@ export function assertGroupableField(
   opts: { overrideAccess?: boolean; frameworkFilter?: boolean } = {}
 ): void {
   if (!groupBy) return;
+  // Guarded HERE because this is the first thing to touch the raw value, and
+  // `.split` on a non-string throws a raw `TypeError` that the calling service
+  // catches as an unclassified 500 -- unlike every other malformed argument,
+  // which gets a named refusal. The public Direct API is callable from
+  // JavaScript, where the parameter type binds nothing.
+  if (typeof groupBy !== "string") {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "groupBy",
+          code: "FIELD_NOT_GROUPABLE",
+          message: "The field to group by must be given as a string.",
+        },
+      ],
+    });
+  }
   // Nested paths address the field that OWNS the rule, as `where` does.
   const name = groupBy.split(".")[0];
 

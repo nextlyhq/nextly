@@ -385,6 +385,67 @@ function assertUsableWindowAnchor(now: Date | undefined): void {
   });
 }
 
+/**
+ * How many rows the database grouped into each bucket, keyed by its label.
+ *
+ * A row whose bucket is not text is dropped rather than coerced: every dialect
+ * renders the bucket as a fixed-width string, so anything else means the
+ * expression did not run as written and a coerced key would silently match no
+ * generated interval.
+ */
+function countedByBucket(
+  rows: Array<{ bucket: unknown; total: number | string | null }>
+): Map<string, number> {
+  const counted = new Map<string, number>();
+  for (const row of rows) {
+    if (typeof row.bucket === "string") {
+      counted.set(row.bucket, Number(row.total ?? 0));
+    }
+  }
+  return counted;
+}
+
+/**
+ * The comparisons that bound a timeseries scan.
+ *
+ * Both ends compare the COLUMN rather than the bucketing expression, so an
+ * index over the date can serve them; no index covers a computed value. A bound
+ * the dialect cannot represent is OMITTED: on MySQL an out-of-range operand
+ * renders as NULL, and `column >= NULL` matches nothing, so the predicate meant
+ * to bound the scan would empty the answer. Omitting it is sound because the
+ * column cannot store an instant outside that range.
+ */
+function windowOperands(
+  window: Date[],
+  interval: TimeseriesInterval,
+  dialect: SupportedDialect
+) {
+  return {
+    from: timeseriesBoundOperand(window[0], dialect),
+    to: timeseriesBoundOperand(
+      intervalAfter(window[window.length - 1], interval),
+      dialect
+    ),
+  };
+}
+
+/**
+ * The refusals a timeline makes before the read hooks run.
+ *
+ * Grouped into one step because they share a reason as well as a position:
+ * each rejects a request that was never going to be answered, and
+ * `beforeOperation` and `beforeRead` are ordinary user code that writes audit
+ * rows and spends rate-limit budget. They sit after collection authorization,
+ * so an untrusted caller naming a bad interval gets the access refusal rather
+ * than a detailed validation response that confirms the collection exists.
+ */
+function assertTimelinePreconditions(params: FilteredReadParams): void {
+  assertUsableWindowAnchor(params.now);
+  if (params.requireBucketableInterval === true) {
+    assertBucketableInterval(params.interval);
+  }
+}
+
 /** The interval, refused unless an expression exists for it. */
 function assertBucketableInterval(value: unknown): TimeseriesInterval {
   if (isTimeseriesInterval(value)) return value;
@@ -492,6 +553,16 @@ interface FilteredReadParams {
    * the read hooks run, rather than after.
    */
   now?: Date;
+  /**
+   * The interval a timeseries buckets by, when this read is one.
+   *
+   * Carried on the shared params so the plan can refuse an unusable one after
+   * collection authorization and before the read hooks, rather than before
+   * either.
+   */
+  interval?: unknown;
+  /** Whether the plan must refuse an interval it has no expression for. */
+  requireBucketableInterval?: boolean;
   /**
    * Refuse the group key unless the column it names stores a date.
    *
@@ -3304,7 +3375,7 @@ export class CollectionQueryService extends BaseService {
     // rendered from the author's declaration -- a decimal's scale, which the
     // adapters otherwise disagree about -- rather than from whatever the driver
     // happened to hand back.
-    assertUsableWindowAnchor(params.now);
+    assertTimelinePreconditions(params);
 
     const groupDescriptor = this.settledGroupDescriptor(params, groupKey);
 
@@ -3585,24 +3656,49 @@ export class CollectionQueryService extends BaseService {
     }
   ): Promise<CollectionServiceResult<TimeseriesPoints>> {
     try {
-      const interval = assertBucketableInterval(params.interval);
       const count = boundedIntervalCount(params.intervals);
+
+      // ONE clock for the whole read. `releaseScope` takes its own `new Date()`
+      // while the plan resolves, and the window used to take a second one
+      // afterwards -- so a scheduled release or a bucket boundary passing
+      // between them left the labels describing a later window than the row
+      // filter admitted. Captured once here and forwarded as `releaseNow` too,
+      // which is the same instant a nested count already resolves against.
+      const anchor = params.now ?? new Date();
 
       // The date key travels as `groupBy`, so every refusal a grouped read
       // already makes applies unchanged: a field carrying a read rule, any
       // spelling of it, the owner column, a key naming no column.
+      //
+      // The interval is judged INSIDE the plan, after collection
+      // authorization: refused here, an untrusted caller naming a bad interval
+      // would get a detailed validation response for a collection the same
+      // request with a good interval answers with an access refusal -- which
+      // tells them the collection exists.
       const plan = await this.resolveReadPlan<TimeseriesPoints>({
         ...params,
         groupBy: params.dateField,
         requireTimestampGroupKey: true,
+        requireBucketableInterval: true,
+        now: anchor,
+        releaseNow: params.releaseNow ?? anchor,
       });
       if (!plan.allowed) return plan.denied;
       const { schema, whereConditions } = plan;
       const column = plan.groupColumn;
 
-      const window = intervalWindow(params.now ?? new Date(), interval, count);
+      const interval = assertBucketableInterval(params.interval);
+      const window = intervalWindow(anchor, interval, count);
       const dialect = this.groupDialect();
       const bucket = timeseriesBucketExpression(column, interval, dialect);
+
+      // Built here, where the column keeps the type the schema gave it, so the
+      // comparison needs no cast the compiler cannot check.
+      const { from, to } = windowOperands(window, interval, dialect);
+      const bounds = [
+        ...(from === undefined ? [] : [gte(column, from)]),
+        ...(to === undefined ? [] : [lt(column, to)]),
+      ];
 
       const rows = await this.db
         .select({ bucket, total: sql<number>`count(*)` })
@@ -3619,19 +3715,13 @@ export class CollectionQueryService extends BaseService {
         //
         // Neither bound can change the answer: the points are built from the
         // window, and a bucket outside it is never looked up.
-        .where(
-          and(
-            ...whereConditions,
-            gte(column, timeseriesBoundOperand(window[0], dialect)),
-            lt(
-              column,
-              timeseriesBoundOperand(
-                intervalAfter(window[window.length - 1], interval),
-                dialect
-              )
-            )
-          )
-        )
+        // A bound the dialect cannot represent is OMITTED rather than
+        // rendered. On MySQL an out-of-range operand becomes NULL, and
+        // `column >= NULL` matches nothing -- so a predicate meant to bound the
+        // scan would empty the answer instead. Omitting it is sound: the column
+        // cannot store an instant outside that range, so the bound excludes no
+        // row that could exist.
+        .where(and(...whereConditions, ...bounds))
         // The SAME expression in the SELECT and the GROUP BY. MySQL's
         // `only_full_group_by` refuses a `GROUP BY` that differs from the
         // selected expression, so these cannot be spelled apart.
@@ -3641,12 +3731,7 @@ export class CollectionQueryService extends BaseService {
         // rows arrive in cannot reach the result.
         .groupBy(bucket);
 
-      const counted = new Map<string, number>();
-      for (const row of rows) {
-        if (typeof row.bucket === "string") {
-          counted.set(row.bucket, Number(row.total ?? 0));
-        }
-      }
+      const counted = countedByBucket(rows);
 
       return {
         success: true,

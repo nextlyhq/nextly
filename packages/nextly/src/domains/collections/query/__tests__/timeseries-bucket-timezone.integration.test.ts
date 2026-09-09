@@ -21,6 +21,8 @@ import {
   TIMESERIES_INTERVALS,
   type TimeseriesInterval,
 } from "../timeseries-interval";
+import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import { getColumnDescriptor } from "../../../schema/services/field-column-descriptor";
 import {
   timeseriesBoundOperand,
   timeseriesBucketExpression,
@@ -85,8 +87,23 @@ describeOrSkip("a MySQL timeseries bucket, across server time zones", () => {
     const { createConnection } = await import("mysql2/promise");
     connection = (await createConnection(URL as string)) as unknown as Conn;
     await connection.query(`DROP TABLE IF EXISTS ${TABLE}`);
+    // The column type is DERIVED from the canonical field-to-column mapping,
+    // not written here. Hard-coding `TIMESTAMP` would let this probe go on
+    // certifying an expression after the mapping changed underneath it --
+    // exercising a shape real collection columns no longer have.
+    const descriptor = getColumnDescriptor(
+      { name: "c", type: "date" } as FieldDefinition,
+      "mysql",
+      "collection"
+    );
+    // The expression under test is only meaningful over a timestamp column, so
+    // a mapping that stopped producing one must fail here rather than quietly
+    // change what is being certified.
+    expect(descriptor?.kind).toBe("timestamp");
+    const columnType = descriptor?.dialectType;
+    expect(columnType).toBeTruthy();
     await connection.query(
-      `CREATE TABLE ${TABLE} (label VARCHAR(16), c TIMESTAMP)`
+      `CREATE TABLE ${TABLE} (label VARCHAR(16), c ${String(columnType)})`
     );
     // Written at UTC so every stored instant is unambiguous.
     await connection.query(`SET time_zone = '+00:00'`);

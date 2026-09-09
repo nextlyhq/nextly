@@ -27,6 +27,10 @@ import type {
   CollectionSlug,
   CountArgs,
   CountResult,
+  GroupArgs,
+  GroupResult,
+  TimeseriesArgs,
+  TimeseriesResult,
   CreateArgs,
   CreateEmailProviderArgs,
   CreateEmailTemplateArgs,
@@ -225,6 +229,33 @@ export interface Nextly {
    * ```
    */
   count: (args: CountArgs) => Promise<CountResult>;
+
+  /**
+   * Count documents per distinct value of one field.
+   *
+   * @example
+   * ```typescript
+   * const { buckets } = await nextly.group({
+   *   collection: 'orders',
+   *   groupBy: 'region',
+   * });
+   * ```
+   */
+  group: (args: GroupArgs) => Promise<GroupResult>;
+
+  /**
+   * Count documents per interval of a recent window.
+   *
+   * @example
+   * ```typescript
+   * const { points } = await nextly.timeseries({
+   *   collection: 'orders',
+   *   dateField: 'createdAt',
+   *   interval: 'day',
+   * });
+   * ```
+   */
+  timeseries: (args: TimeseriesArgs) => Promise<TimeseriesResult>;
 
   /**
    * Bulk delete multiple documents by IDs.

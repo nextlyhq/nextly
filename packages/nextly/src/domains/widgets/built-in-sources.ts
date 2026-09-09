@@ -9,6 +9,7 @@
  */
 
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import { isGroupableFieldName } from "../../shared/lib/filterable-fields";
 import { entryTitleField } from "../collections/entry-title";
 import { classifyFieldKind } from "../schema/services/field-column-descriptor";
 
@@ -319,6 +320,30 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
     ...declared,
     ...systemFields.filter(field => !seen.has(field.name)),
   ];
+
+  // Asked of the SAME guard the read asks, rather than re-deriving what a read
+  // rule means. This runs server-side, so it can reach the field registry the
+  // validator cannot -- and the answer is MARKED on the field so the validator
+  // reads a description instead of re-deciding.
+  //
+  // A system column carries no field-level rule, so it is bucketable without
+  // consulting the registry. A localized date is not: its values live in the
+  // `_locales` companion, which the read has no column for here.
+  const canBucket = (field: WidgetSourceField): boolean =>
+    field.localized !== true &&
+    (!seen.has(field.name) ||
+      isGroupableFieldName("collection", collection.slug, field.name));
+  // Only the REFUSALS are marked. A date the read would reject is stated as
+  // such; everything else is left alone, so a source built anywhere else keeps
+  // whatever it declared.
+  const marked = fields.map(field =>
+    field.type === "date" && !canBucket(field)
+      ? { ...field, bucketable: false }
+      : field
+  );
+  const bucketableDates = marked.filter(
+    field => field.type === "date" && field.bucketable !== false
+  );
   // Through the shared rule, with BOTH halves: the author's nomination and the
   // names it must exist in. Resolved once here so no consumer has to ask again
   // with only one of them.
@@ -374,8 +399,17 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
     // An op the executor implements but no source DECLARES is unreachable:
     // validation refuses it before execution, so the branch is dead and the
     // advertised op cannot be used.
-    supports: ["count", "list", "groupBy", "timeseries"],
-    fields,
+    // `timeseries` is offered only when this source exposes a date the read
+    // would actually accept. A collection with `timestamps: false` and no
+    // usable date field has no valid timeseries query at all, and a date
+    // carrying a read rule is refused by `assertGroupableField` on every
+    // dashboard request -- widgets execute with `overrideAccess: false`. Either
+    // way, advertising the op makes a card that fails on every load.
+    supports:
+      bucketableDates.length > 0
+        ? ["count", "list", "groupBy", "timeseries"]
+        : ["count", "list", "groupBy"],
+    fields: marked,
   };
 }
 
