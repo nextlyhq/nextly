@@ -512,3 +512,117 @@ describe("which collection a generated card is about", () => {
     ).toBeUndefined();
   });
 });
+
+describe("the cards that draw a picture", () => {
+  const charting = (patch: Partial<WidgetSource> = {}): WidgetSource =>
+    source({
+      supports: ["count", "list", "groupBy", "timeseries"],
+      fields: [
+        { name: "id", type: "string" },
+        { name: "title", type: "string" },
+        { name: "createdAt", type: "date" },
+        { name: "updatedAt", type: "date" },
+      ],
+      ...patch,
+    });
+
+  it("derives a timeline over the date the collection actually has", () => {
+    const timeline = collectionWidgets([charting()]).find(
+      w => w.archetype === "timeseries"
+    );
+    expect(timeline?.id).toBe("collection/posts-timeline");
+    expect(timeline?.query).toMatchObject({
+      op: "timeseries",
+      dateField: "createdAt",
+      interval: "day",
+      // Drafts included, so the curve agrees with the collection's own list.
+      status: "all",
+    });
+  });
+
+  it("prefers createdAt over a date the author happened to declare first", () => {
+    // "When did these arrive" is the question a timeline is asked. A declared
+    // date could be an event, an expiry or a reminder, whose curve says nothing
+    // about the collection's cadence.
+    const timeline = collectionWidgets([
+      charting({
+        fields: [
+          { name: "id", type: "string" },
+          { name: "eventOn", type: "date" },
+          { name: "createdAt", type: "date" },
+        ],
+      }),
+    ]).find(w => w.archetype === "timeseries");
+    expect(timeline?.query).toMatchObject({ dateField: "createdAt" });
+  });
+
+  it("still draws a timeline for a collection with no timestamps", () => {
+    // `timestamps: false` means no created_at column at all. The card falls
+    // back to whatever date IS declared rather than being withheld.
+    const timeline = collectionWidgets([
+      charting({
+        fields: [
+          { name: "id", type: "string" },
+          { name: "eventOn", type: "date" },
+        ],
+      }),
+    ]).find(w => w.archetype === "timeseries");
+    expect(timeline?.query).toMatchObject({ dateField: "eventOn" });
+  });
+
+  it("gives NO timeline when every date is one the read cannot bucket", () => {
+    // 🔴 A localized date is still a date, so a check reading only `type` mints
+    // a card whose query the read then refuses -- an error on every load rather
+    // than a card that was never offered. The source's own marking is asked.
+    const widgets = collectionWidgets([
+      charting({
+        fields: [
+          { name: "id", type: "string" },
+          { name: "translatedAt", type: "date", bucketable: false },
+        ],
+      }),
+    ]);
+    expect(widgets.map(w => w.archetype)).not.toContain("timeseries");
+  });
+
+  it("gives NO timeline to a source that does not answer timeseries", () => {
+    const widgets = collectionWidgets([
+      charting({ supports: ["count", "list"] }),
+    ]);
+    expect(widgets.map(w => w.archetype)).not.toContain("timeseries");
+  });
+
+  it("breaks down by status ONLY where the collection has one", () => {
+    const without = collectionWidgets([charting()]).map(w => w.archetype);
+    expect(without).not.toContain("bars");
+
+    const breakdown = collectionWidgets([
+      charting({
+        fields: [
+          { name: "id", type: "string" },
+          { name: "status", type: "string" },
+          { name: "createdAt", type: "date" },
+        ],
+      }),
+    ]).find(w => w.archetype === "bars");
+    expect(breakdown?.id).toBe("collection/posts-breakdown");
+    expect(breakdown?.query).toMatchObject({
+      op: "groupBy",
+      groupBy: "status",
+      status: "all",
+    });
+  });
+
+  it("gives NO breakdown to a source that does not answer groupBy", () => {
+    const widgets = collectionWidgets([
+      charting({
+        supports: ["count", "list"],
+        fields: [
+          { name: "id", type: "string" },
+          { name: "status", type: "string" },
+        ],
+      }),
+    ]);
+    expect(widgets.map(w => w.archetype)).not.toContain("bars");
+  });
+});
