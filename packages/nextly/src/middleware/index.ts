@@ -13,6 +13,7 @@ export {
   createRateLimitHeaders,
   getDefaultStore,
   resetDefaultStore,
+  resolveRateLimitStore,
   InMemoryRateLimitStore,
   type RateLimitConfig,
   type RateLimitStore,

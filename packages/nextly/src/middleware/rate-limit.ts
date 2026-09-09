@@ -27,6 +27,7 @@
  * ```
  */
 
+import { container } from "../di/container";
 import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
 
 // ============================================================================
@@ -608,6 +609,34 @@ export function getDefaultStore(): InMemoryRateLimitStore {
     _defaultStore = new InMemoryRateLimitStore();
   }
   return _defaultStore;
+}
+
+/**
+ * The rate-limit store this deployment is using.
+ *
+ * @public
+ *
+ * One store, three consumers: the REST limiter, the auth limiter, and any
+ * plugin that limits something of its own. A consumer that reaches for its own
+ * store instead counts in isolation, and on a deployment that spans processes
+ * the effective limit becomes `configured x instances` -- a number the operator
+ * never chose and cannot see. Configure `rateLimit.store` once, in
+ * `nextly.config.ts`, and every limiter shares the window.
+ *
+ * Falls back to the in-memory default when nothing is configured, which is
+ * correct for a single process and wrong for several. That is the same default
+ * the REST and auth limiters take, so the three agree about what they are
+ * counting whether or not a store is configured.
+ */
+export function resolveRateLimitStore(): RateLimitStore {
+  try {
+    const config = container.has("config")
+      ? container.get<{ rateLimit?: { store?: RateLimitStore } }>("config")
+      : undefined;
+    return config?.rateLimit?.store ?? getDefaultStore();
+  } catch {
+    return getDefaultStore();
+  }
 }
 
 /**

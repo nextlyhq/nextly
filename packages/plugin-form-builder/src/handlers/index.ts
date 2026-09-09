@@ -21,10 +21,6 @@ export {
 // Spam detection utilities
 export {
   checkSpam,
-  cleanupRateLimitStore,
-  getRateLimitStoreSize,
-  clearRateLimitStore,
-  isRateLimited,
   type SpamCheckConfig,
   type SpamCheckOptions,
   type SpamCheckResult,

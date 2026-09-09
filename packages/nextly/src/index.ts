@@ -871,11 +871,20 @@ export {
   createRateLimiter,
   createRateLimitHeaders,
   InMemoryRateLimitStore,
+  resolveRateLimitStore,
   type RateLimitConfig,
   type RateLimitStore,
   type RateLimitResult,
   type RateLimitRecord,
 } from "./middleware";
+
+// The limiter a caller drives directly, over the same store the middleware
+// uses. Exported so a plugin limiting something of its own counts in the same
+// window as the REST and auth limiters rather than in one of its own.
+export {
+  RateLimiter,
+  type RateLimitCheckResult,
+} from "./auth/middleware/rate-limiter";
 
 // Security middleware types
 export { type SecurityHeadersConfig, type CorsConfig } from "./middleware";
