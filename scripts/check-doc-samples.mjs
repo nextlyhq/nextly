@@ -1046,12 +1046,14 @@ export function exportsMapAnswers(exports, subpath) {
 /**
  * The block a diagnostic came from, asked whether the name is the reader's.
  *
- * Falls back to the name alone when the block cannot be found, which keeps the
- * finding rather than dropping it.
+ * A diagnostic whose block cannot be found keeps its finding. Two of the three
+ * tests need the block to answer, so falling back to the name alone was the
+ * PERMISSIVE direction, not the strict one it was described as: a constructed
+ * name and a misspelled export would both have been set aside there.
  */
 export function mentionIsReaderOwned(name, file, index, samples) {
   const sample = samples.find(s => s.file === file && s.index === index);
-  if (!sample) return readerOwnedName(name);
+  if (!sample) return false;
   return readerOwnedMention(name, sample.code, extensionFor(sample));
 }
 

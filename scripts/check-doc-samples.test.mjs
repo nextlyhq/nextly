@@ -18,6 +18,7 @@ import {
   pageOf,
   readerOwnedName,
   constructedInBlock,
+  mentionIsReaderOwned,
   misspelledExport,
   readerOwnedMention,
   usedOnlyAsValue,
@@ -1509,6 +1510,27 @@ describe("a name this workspace does not export", () => {
     // would leave them reading the workspace and passing for the wrong reason.
     expect(misspelledExport("Zzy", new Set(["Zzz"]))).toBe(true);
     expect(misspelledExport("NextlyEror", new Set())).toBe(false);
+  });
+});
+
+describe("a diagnostic whose block cannot be found", () => {
+  it("keeps its finding rather than reading the name alone", () => {
+    // Two of the three tests need the block, so answering from the name alone
+    // was the permissive direction: a constructed name and a misspelled export
+    // would both have been set aside there.
+    expect(mentionIsReaderOwned("Posts", "docs/nope.mdx", 0, [])).toBe(false);
+    // The control: with the block present the same name is the reader's, so
+    // the line above is the fallback answering and not the rule.
+    expect(
+      mentionIsReaderOwned("Posts", "docs/a.mdx", 0, [
+        {
+          file: "docs/a.mdx",
+          index: 0,
+          code: "const c = [Posts];",
+          lang: "ts",
+        },
+      ])
+    ).toBe(true);
   });
 });
 
