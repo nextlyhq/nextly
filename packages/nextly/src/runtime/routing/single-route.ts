@@ -48,7 +48,7 @@ export type SingleDocument = Record<string, unknown>;
  * The booted-Nextly surface these helpers need.
  *
  * Typed structurally rather than as the Direct API class so BOTH the internal
- * singleton and the public instance returned by `await requireNextly(config)`
+ * singleton and the public instance returned by `await getNextly({ config })`
  * satisfy it — the public interface does not expose the Direct API's internal
  * handlers.
  */
@@ -169,7 +169,8 @@ export interface SingleRouteConfig<TNode> {
   /**
    * A booted Nextly instance. Defaults to the runtime singleton, which requires
    * services to be registered — pass one explicitly (the value from
-   * `await requireNextly(config)`) from a frontend that boots the config itself,
+   * `await getNextly({ config })` from `nextly`) from a frontend that boots the
+   * config itself,
    * because a public page can be the first request a cold server handles.
    */
   nextly?: NextlySingleReader;

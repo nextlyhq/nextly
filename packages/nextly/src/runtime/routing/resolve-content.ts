@@ -28,7 +28,7 @@ export type ContentEntry = Record<string, unknown>;
  * The booted-Nextly surface these helpers need: a `find` reader, plus
  * `findByID` for the working-draft overlay. Typed structurally (not as the
  * Direct API class) so BOTH the internal singleton and the public instance
- * returned by `await requireNextly(config)` satisfy it — the public interface does
+ * returned by `await getNextly({ config })` satisfy it — the public interface does
  * not expose the Direct API's internal handlers.
  */
 export type NextlyContentReader = Pick<Nextly, "find" | "findByID">;
@@ -38,7 +38,8 @@ interface ResolveContentOptionsBase {
   /**
    * A booted Nextly instance. Defaults to the runtime singleton (`requireNextly()`),
    * which requires services to be registered — pass one explicitly (e.g. the
-   * value from `await requireNextly(config)`) from a frontend read path that boots
+   * value from `await getNextly({ config })` from `nextly`) from a frontend read
+   * path that boots
    * the config itself.
    */
   nextly?: NextlyContentReader;
