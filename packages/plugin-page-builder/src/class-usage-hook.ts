@@ -33,12 +33,14 @@ import type { HookContext } from "nextly";
 
 import { blocksFieldsOf } from "./class-usage-blocks-fields";
 import { forgetDeletedDocument } from "./class-usage-maintenance";
+import { classUsageIndex } from "./class-usage-reconcile";
 import {
   classUsageDocumentReader,
   classUsageIndexStore,
   type ClassUsageDirectApi,
 } from "./class-usage-runtime";
-import { reconcileWrittenDocument } from "./class-usage-write";
+import { reconcileWrittenDocument, usageTarget } from "./class-usage-write";
+import { componentUsageIndex } from "./component-usage";
 import { requestContextFor, writeTargetOf } from "./write-target";
 
 /**
@@ -112,8 +114,17 @@ export interface DraftSplitResolver {
  */
 export function registerClassUsageMaintenance(args: {
   ctx: ClassUsagePluginContext;
-  /** The collection whose rows this maintains. */
+  /** The collection the CLASS index's rows live in. */
   indexCollection: string;
+  /**
+   * The collection the COMPONENT index's rows live in.
+   *
+   * A second index, not a second hook. One registration reads the written
+   * collection's configuration, resolves its draft split and reads each locale
+   * and variant of the document ONCE, and every index derives from that read —
+   * where a second wildcard registration would repeat all of it on every save.
+   */
+  componentIndexCollection: string;
   /** Resolves whether a collection keeps a working draft beside its published row. */
   draftSplit: DraftSplitResolver;
   /** The site's configured locales, read per call. */
@@ -188,17 +199,27 @@ async function forget(
   context: UnknownRecord
 ): Promise<void> {
   const target = writeTargetOf<ClassUsageDirectApi>(context, {
-    excluded: [args.indexCollection],
+    // BOTH, because the hook is on the wildcard: a write to either index would
+    // otherwise re-enter this handler and maintain an index against its own
+    // bookkeeping rows.
+    excluded: [args.indexCollection, args.componentIndexCollection],
   });
   if (target === null) return;
 
   try {
-    await forgetDeletedDocument({
-      store: classUsageIndexStore(target.nextly, args.indexCollection),
-      scope: "collection",
-      entity: target.slug,
-      entityKey: target.documentId,
-    });
+    // Every index, because a document's rows survive it in each of them and
+    // nothing later reconciles rows naming a document that no longer exists.
+    for (const indexCollection of [
+      args.indexCollection,
+      args.componentIndexCollection,
+    ]) {
+      await forgetDeletedDocument({
+        store: classUsageIndexStore(target.nextly, indexCollection),
+        scope: "collection",
+        entity: target.slug,
+        entityKey: target.documentId,
+      });
+    }
   } catch (failure) {
     // Raised for the same reason maintenance raises: `after*` is a side-effect
     // phase whose throw the registry converts into a warning the caller
@@ -233,7 +254,10 @@ async function planMaintenance(
   context: UnknownRecord
 ): Promise<Parameters<typeof reconcileWrittenDocument>[0] | null> {
   const target = writeTargetOf<ClassUsageDirectApi>(context, {
-    excluded: [args.indexCollection],
+    // BOTH, because the hook is on the wildcard: a write to either index would
+    // otherwise re-enter this handler and maintain an index against its own
+    // bookkeeping rows.
+    excluded: [args.indexCollection, args.componentIndexCollection],
   });
   if (target === null) return null;
 
@@ -248,6 +272,16 @@ async function planMaintenance(
 
   return {
     store: classUsageIndexStore(target.nextly, args.indexCollection),
+    targets: [
+      usageTarget(
+        classUsageIndex,
+        classUsageIndexStore(target.nextly, args.indexCollection)
+      ),
+      usageTarget(
+        componentUsageIndex,
+        classUsageIndexStore(target.nextly, args.componentIndexCollection)
+      ),
+    ],
     read: classUsageDocumentReader(target.nextly),
     collection: {
       slug: target.slug,

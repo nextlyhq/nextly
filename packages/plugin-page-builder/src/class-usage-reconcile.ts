@@ -181,7 +181,8 @@ export function deriveClassUsageRows(
  * marker becomes indistinguishable from a reference nobody noticed was legal.
  */
 export const classUsageIndex: UsageIndex<ClassUsageRow> = {
-  referenceColumn: "classId",
+  readOwn: item =>
+    typeof item.classId === "string" ? { classId: item.classId } : null,
   referenceOf: row => row.classId,
   rowFor: (subject, referenceId) => ({ ...subject, classId: referenceId }),
   markerFor: subject => ({ ...subject, classId: UNDETERMINED_CLASS_ID }),

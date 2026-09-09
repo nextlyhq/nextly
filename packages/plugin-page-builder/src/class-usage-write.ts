@@ -36,11 +36,16 @@ import {
   type BlocksFieldsCollection,
 } from "./class-usage-blocks-fields";
 import {
-  maintainClassUsage,
+  maintainUsage,
   type ClassUsageIndexStore,
+  type ClassUsageMaintenanceReport,
 } from "./class-usage-maintenance";
-import type { ClassUsageSubject } from "./class-usage-reconcile";
+import {
+  classUsageIndex,
+  type ClassUsageSubject,
+} from "./class-usage-reconcile";
 import { classUsageSubjectsFor } from "./class-usage-subjects";
+import type { UsageIndex, UsageSubject } from "./usage-index";
 
 /**
  * How the caller obtains the document behind one subject.
@@ -120,6 +125,42 @@ export interface ClassUsageWriteReport {
  * into several for no gain, since reconciliation is idempotent and a rerun
  * repairs whatever this pass could not.
  */
+/**
+ * One index and the store its rows live in.
+ *
+ * A LIST of these rather than one store, because a written document is read
+ * ONCE and every index derives from that read. Maintaining a second index by
+ * registering a second hook would re-read the collection config, re-resolve the
+ * draft split and re-read every locale and variant of the document on every
+ * save — the write amplification the design names in as many words.
+ */
+export interface UsageTarget {
+  maintain(args: {
+    subject: UsageSubject;
+    document: unknown;
+    limits: DocumentLimits;
+  }): Promise<ClassUsageMaintenanceReport>;
+}
+
+/**
+ * A target for one index against one store.
+ *
+ * The index's row type is captured here and does not escape. A list of
+ * `UsageTarget<TRow>` could not hold two indexes with different rows —
+ * `UsageIndex` is invariant in its row — and widening the list to the shared
+ * subject would make every member accept rows belonging to another index,
+ * which is precisely the confusion the reconciler's mismatch guard exists to
+ * catch. Erasing the row behind one method keeps both properties.
+ */
+export function usageTarget<TRow extends UsageSubject>(
+  index: UsageIndex<TRow>,
+  store: ClassUsageIndexStore
+): UsageTarget {
+  return {
+    maintain: args => maintainUsage(index, { ...args, store }),
+  };
+}
+
 export async function reconcileWrittenDocument(args: {
   store: ClassUsageIndexStore;
   read: ClassUsageDocumentReader;
@@ -130,6 +171,14 @@ export async function reconcileWrittenDocument(args: {
   locales: readonly string[];
   /** The bounds the rows are derived under. Required, never defaulted here. */
   limits: DocumentLimits;
+  /**
+   * Every index to maintain from this one read.
+   *
+   * Defaults to the class index alone, against `store`, which is what this
+   * function did before a second index existed — so a caller that knows about
+   * one keeps working, and its tests stay the oracle for that behaviour.
+   */
+  targets?: readonly UsageTarget[];
 }): Promise<ClassUsageWriteReport> {
   // No early return for an untracked collection, deliberately. `blocksFieldsOf`
   // answers `[]` for one, `classUsageSubjectsFor` answers `[]` for no fields,
@@ -145,10 +194,15 @@ export async function reconcileWrittenDocument(args: {
     hasDrafts: args.collection.hasDrafts,
   });
 
+  // Resolved once, here, rather than per subject: the default allocates a
+  // target and a caller that supplied its own should not have the list rebuilt
+  // for every locale and variant of the document.
+  const targets = args.targets ?? [usageTarget(classUsageIndex, args.store)];
+
   const outcomes: ClassUsageSubjectOutcome[] = [];
 
   for (const subject of subjects) {
-    outcomes.push(await reconcileOne(args, subject));
+    outcomes.push(await reconcileOne({ ...args, targets }, subject));
   }
 
   return {
@@ -171,9 +225,9 @@ export async function reconcileWrittenDocument(args: {
  */
 async function reconcileOne(
   args: {
-    store: ClassUsageIndexStore;
     read: ClassUsageDocumentReader;
     limits: DocumentLimits;
+    targets: readonly UsageTarget[];
   },
   subject: ClassUsageSubject
 ): Promise<ClassUsageSubjectOutcome> {
@@ -207,20 +261,25 @@ async function reconcileOne(
       };
     }
 
-    const report = await maintainClassUsage({
-      store: args.store,
-      subject,
-      document,
-      limits: args.limits,
-    });
+    // Every index derives from THIS read. A failure in one is the subject's
+    // failure — the catch below turns it into a reported outcome — because a
+    // caller cannot act on "one of your indexes is stale" any differently, and
+    // the hook's remedy, a rebuild, repairs both.
+    let inserted = 0;
+    let removed = 0;
+    let undetermined = false;
+    for (const target of args.targets) {
+      const report = await target.maintain({
+        subject,
+        document,
+        limits: args.limits,
+      });
+      inserted += report.inserted;
+      removed += report.removed;
+      undetermined = undetermined || report.undetermined;
+    }
 
-    return {
-      subject,
-      inserted: report.inserted,
-      removed: report.removed,
-      undetermined: report.undetermined,
-      absent: false,
-    };
+    return { subject, inserted, removed, undetermined, absent: false };
   } catch (failure) {
     return {
       subject,
