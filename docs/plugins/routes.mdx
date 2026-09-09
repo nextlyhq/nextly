@@ -44,6 +44,7 @@ plugin `ctx` (services/db/events/logger/self/…) **plus** per-request fields:
 | Field | Meaning |
 |---|---|
 | `ctx.user` | The authenticated `AuthUser`, or `null` for a `public` route reached without a session. |
+| `ctx.authenticatedScope` | The caller's own grants when they arrived on an API key; `undefined` for a session or a `public` route. |
 | `ctx.params` | Path parameters captured from `:param` segments. |
 
 Return a standard web `Response`. A thrown error is isolated into a JSON error response
@@ -70,7 +71,27 @@ Return a standard web `Response`. A thrown error is isolated into a JSON error r
 
 Pair `public: true` with `{ as: "system" }` service calls only for genuinely public,
 derived data. For user data, keep the route authenticated and call services with
-`{ as: "user", user: ctx.user ?? undefined }`.
+`{ as: "user", user, authenticatedScope }`.
+
+### Forward the scope, not just the user
+
+`ctx.user` names the ACCOUNT. When the request arrived on an API key that account is
+the key's **owner**, so a service asked to judge `user.id` alone resolves the owner's
+roles — and a key scoped to read is then allowed to do whatever its owner can. Pass
+`ctx.authenticatedScope` alongside it and the key is judged on its own grants:
+
+```ts
+const posts = await ctx.services.collections.listEntries("posts", {}, {
+  as: "user",
+  user: ctx.user ?? undefined,
+  // Without this a read-only key minted by an administrator is authorized as
+  // that administrator.
+  authenticatedScope: ctx.authenticatedScope,
+});
+```
+
+A session caller carries no scope, so passing it changes nothing for them — it is
+`undefined`, and they resolve exactly as they always have.
 
 ## Middleware (D27)
 

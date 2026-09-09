@@ -79,7 +79,12 @@ interface PluginContext {
 
 ```ts
 // Acts as the current user (RBAC enforced):
-await ctx.services.collections.listEntries(slug, {}, { as: "user", user: ctx.user });
+await ctx.services.collections.listEntries(slug, {}, {
+  as: "user",
+  user: ctx.user ?? undefined,
+  // Judges an API key on ITS grants, not its owner's roles.
+  authenticatedScope: ctx.authenticatedScope,
+});
 // Privileged work — explicit, visible elevation:
 const { item, warnings } = await ctx.services.collections.createEntry(slug, data, { as: "system" });
 ```
