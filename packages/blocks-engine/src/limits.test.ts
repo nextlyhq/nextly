@@ -6,7 +6,7 @@ import {
   documentBytes,
   ForestTooLargeError,
   MAX_NODES,
-  MAX_WALKABLE_ENTRIES,
+  MAX_VALUE_PARTS,
   treeDepth,
 } from "./limits";
 
@@ -61,10 +61,11 @@ const page = (nodes: BlockNode[]): BlockDocument =>
   ({ formatVersion: 1, kind: "page", nodes }) as BlockDocument;
 
 describe("a forest whose entries outrun its objects", () => {
-  // 21 objects walk 2,097,151 entries, which is past the bound. 18 objects walk
-  // 262,143, which is not — so the pair separates "refuses what it must" from
-  // "refuses everything", and neither test is evidence without the other.
-  const OVER = 21;
+  // 23 objects walk 8,388,607 entries, which is past the shared ceiling of
+  // 4,194,304. 18 objects walk 524,287, which is not — so the pair separates
+  // "refuses what it must" from "refuses everything", and neither test is
+  // evidence without the other.
+  const OVER = 23;
   const UNDER = 18;
 
   it("refuses to COUNT one, rather than answering from a partial walk", () => {
@@ -188,10 +189,16 @@ describe("a forest whose entries outrun its objects", () => {
   });
 
   it("leaves an ordinary document alone, bound nowhere near it", () => {
-    // The bound is a MACHINE one and must never fire on anything a product cap
-    // would have allowed, so it is asserted against the product cap rather than
-    // against a number chosen to agree with it.
-    expect(MAX_WALKABLE_ENTRIES).toBeGreaterThan(MAX_NODES * 100);
+    /*
+     * The bound is a MACHINE one and must never fire on anything a product cap
+     * would have allowed, so it is asserted against the product cap rather than
+     * against a number chosen to agree with it.
+     *
+     * It is also the SAME ceiling the op layer's preflight refuses at, which is
+     * what stops a dry run accepting a document the apply then rejects. A second
+     * number here, however well chosen, reintroduces that disagreement.
+     */
+    expect(MAX_VALUE_PARTS).toBeGreaterThan(MAX_NODES * 100);
     const ordinary = chain(50);
     expect(countNodes(ordinary)).toBe(51);
     expect(treeDepth(ordinary)).toBe(51);
