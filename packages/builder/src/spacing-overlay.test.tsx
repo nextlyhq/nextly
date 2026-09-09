@@ -367,14 +367,35 @@ describe("which block it answers for", () => {
 });
 
 describe("accessibility", () => {
-  it("is hidden from assistive technology", () => {
+  it("hides every BAND from assistive technology", () => {
     // The values are in the inspector's Spacing section with real labels and
     // controls. Announcing up to eight numbers on every selection change would
     // bury that surface in the readers it exists for.
+    stubComputedStyle({ a: { marginTop: "16px", paddingLeft: "8px" } });
+    const { container } = mount(editorOf("a"));
+    const bands = Array.from(
+      container.querySelectorAll(".nx-spacing-overlay__band")
+    );
+    expect(bands.length).toBe(2);
+    for (const band of bands) {
+      expect(band.getAttribute("aria-hidden")).toBe("true");
+    }
+  });
+
+  /*
+   * The attribute sits on each band rather than on the layer, and that is the
+   * property rather than a detail of where it is written. The layer also holds
+   * the drag handles, which are focusable; inside an `aria-hidden` subtree they
+   * would be reachable by keyboard while a screen reader is told they are not
+   * there, which is a defect in every audit tool there is. One attribute on the
+   * layer would have made every handle that, silently.
+   */
+  it("does not hide the LAYER, which is where the focusable handles live", () => {
     stubComputedStyle({ a: { marginTop: "16px" } });
     const { container } = mount(editorOf("a"));
     const layer = container.querySelector(".nx-spacing-overlay");
-    expect(layer?.getAttribute("aria-hidden")).toBe("true");
+    expect(layer).not.toBeNull();
+    expect(layer?.closest("[aria-hidden='true']")).toBeNull();
   });
 });
 

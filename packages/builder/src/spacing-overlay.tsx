@@ -71,6 +71,7 @@ import {
   usedCornerRadii,
   type CornerRadii,
 } from "./border-radii";
+import { BASE_BREAKPOINT } from "./breakpoints";
 import { CANVAS_ROOT_CLASS, nodeElement } from "./canvas";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import type { EditorState } from "./editor-state";
@@ -85,6 +86,7 @@ import {
   viewportPositioned,
   type RenderedScale,
 } from "./geometry-dom";
+import { orientationOfElement, type SideOrientation } from "./side-orientation";
 import {
   applicableEdges,
   overlayEscape,
@@ -95,6 +97,11 @@ import {
   type EdgeLengths,
   type SpacingBand,
 } from "./spacing-bands";
+import {
+  SpacingHandles,
+  type SpacingScrubContext,
+  type SpacingSubject,
+} from "./spacing-handles";
 
 export interface SpacingOverlayProps {
   /** The editor whose primary selection is measured. */
@@ -106,6 +113,17 @@ export interface SpacingOverlayProps {
    * the middle of changing, so every value on screen is about to be wrong.
    */
   hidden?: boolean;
+  /**
+   * The tier a handle writes to, and what the canvas compiled this page with.
+   *
+   * OPTIONAL, and its absence is not a neutral default. Omitted, a handle
+   * writes the base breakpoint of the resting state through an unscoped,
+   * default-prefixed preview — correct for an unscoped page at base, and wrong
+   * in a way the author can see for anything else: `scrubPreviewCss` refuses a
+   * non-base breakpoint it was given no set for, so the drag shows nothing
+   * moving. A host that draws tiers or scopes must pass this.
+   */
+  scrub?: SpacingScrubContext;
 }
 
 /**
@@ -396,12 +414,83 @@ function describable(
   return scale.describable;
 }
 
+/** The tier a handle writes to when the host names none. See `scrub`. */
+const RESTING_BASE: SpacingScrubContext = {
+  address: { state: "base", breakpoint: BASE_BREAKPOINT },
+};
+
+/**
+ * Whether two measurements of the block describe the same gesture inputs.
+ *
+ * Compared by VALUE so a re-measure that found nothing moved does not hand the
+ * handles a new object and restart every gesture they hold. `sameBands` already
+ * does this for the bands; a subject compared by identity would defeat it.
+ */
+function sameEdges(one: EdgeLengths, other: EdgeLengths): boolean {
+  return (
+    one.top === other.top &&
+    one.right === other.right &&
+    one.bottom === other.bottom &&
+    one.left === other.left
+  );
+}
+
+function sameScales(
+  one: SpacingSubject["scales"],
+  other: SpacingSubject["scales"]
+): boolean {
+  return (
+    one.scale.x === other.scale.x &&
+    one.scale.y === other.scale.y &&
+    one.marginScale.x === other.marginScale.x &&
+    one.marginScale.y === other.marginScale.y
+  );
+}
+
+/**
+ * Both unread, or both reading the same way.
+ *
+ * Optional chaining rather than a null branch: an unread orientation compares
+ * equal to another unread one, which is right — neither draws a handle, so
+ * nothing about the gesture layer differs between them.
+ */
+function sameOrientation(
+  one: SideOrientation | undefined,
+  other: SideOrientation | undefined
+): boolean {
+  return (
+    one?.writingMode === other?.writingMode &&
+    one?.direction === other?.direction
+  );
+}
+
+function sameSubject(
+  one: SpacingSubject | null,
+  other: SpacingSubject | null
+): boolean {
+  if (one === null || other === null) return one === other;
+  return (
+    one.nodeId === other.nodeId &&
+    sameEdges(one.margin, other.margin) &&
+    sameEdges(one.padding, other.padding) &&
+    sameScales(one.scales, other.scales) &&
+    sameOrientation(one.orientation, other.orientation)
+  );
+}
+
 export function SpacingOverlay({
   editor,
   hidden = false,
+  scrub = RESTING_BASE,
 }: SpacingOverlayProps): React.JSX.Element | null {
   const layer = React.useRef<HTMLDivElement | null>(null);
   const [bands, setBands] = React.useState<readonly SpacingBand[]>([]);
+  /*
+   * What the gesture layer needs about the measured block, taken in the SAME
+   * measurement the bands come from. Read separately it could disagree with
+   * them — a drag scaled by one reading against bands drawn from another.
+   */
+  const [subject, setSubject] = React.useState<SpacingSubject | null>(null);
   /*
    * How far the layer may paint outside itself, in pixels.
    *
@@ -423,9 +512,13 @@ export function SpacingOverlay({
   const measure = React.useCallback(() => {
     const apply = (
       next: readonly SpacingBand[],
-      layerBox?: { width: number; height: number }
+      layerBox?: { width: number; height: number },
+      measured: SpacingSubject | null = null
     ): void => {
       setBands(current => (sameBands(current, next) ? current : next));
+      setSubject(current =>
+        sameSubject(current, measured) ? current : measured
+      );
       setEscape(
         next.length === 0 || layerBox === undefined
           ? 0
@@ -525,13 +618,34 @@ export function SpacingOverlay({
         // is stated in the units the author declared it in.
         radii,
       }),
-      layerBox
+      layerBox,
+      {
+        nodeId: selectedId,
+        // The USED lengths, unscaled, which is what a handle starts a drag from
+        // and what the band beside it already reports.
+        margin: boxes.margin,
+        padding: boxes.padding,
+        scales: {
+          scale: scaledBy,
+          marginScale: { x: scale.ancestor.x, y: scale.ancestor.y },
+        },
+        /*
+         * Read from the drawn element, and `undefined` when it cannot be. That
+         * absence removes the handles rather than defaulting to left-to-right:
+         * see `side-orientation.ts` on why an unread element and a
+         * left-to-right one must not collapse into one answer.
+         */
+        orientation: orientationOfElement(block),
+      }
     );
   }, [selectedId]);
 
   React.useLayoutEffect(() => {
     if (hidden) {
       setBands(current => (current.length === 0 ? current : NO_BANDS));
+      // The subject goes with them. Left standing it would keep a handle's
+      // gesture alive against a measurement nothing is drawing.
+      setSubject(null);
       return;
     }
     measure();
@@ -576,14 +690,17 @@ export function SpacingOverlay({
        * Not marked as chrome, for the reason the drop indicator is not: it takes
        * no pointer events at all, so a press travels through to the block
        * underneath and resolves to that node rather than to the overlay drawn
-       * over it.
+       * over it. The HANDLES inside it are marked, because they do take one.
        *
-       * Hidden from assistive technology because the same values are in the
-       * inspector's Spacing section, with real labels and controls. Announcing
-       * up to eight numbers on every arrow-key move through the layer tree would
-       * bury that surface in exactly the readers it is for.
+       * `aria-hidden` sits on each BAND rather than here, and that placement is
+       * load-bearing. The bands are hidden for the same reason as ever — the
+       * same values are in the inspector with real labels, and announcing up to
+       * eight numbers on every arrow-key move through the layer tree would bury
+       * that surface in exactly the readers it is for. The handles are
+       * focusable, and a focusable element inside an `aria-hidden` subtree is
+       * reachable by keyboard while screen readers are told it is not there.
+       * One attribute on this element would have made every handle that.
        */
-      aria-hidden="true"
       /*
        * How far the clip may extend, measured rather than fixed. A band can
        * legitimately sit outside the canvas — a collapsed top margin does — and
@@ -600,11 +717,21 @@ export function SpacingOverlay({
           data-box={band.box}
           data-side={band.side}
           data-negative={band.negative ? "" : undefined}
+          // See the layer above: the report is hidden, the control is not.
+          aria-hidden="true"
           style={bandStyle(band)}
         >
           <span className="nx-spacing-overlay__value">{band.label}</span>
         </div>
       ))}
+      {subject === null ? null : (
+        <SpacingHandles
+          editor={editor}
+          bands={bands}
+          subject={subject}
+          context={scrub}
+        />
+      )}
     </div>
   );
 }

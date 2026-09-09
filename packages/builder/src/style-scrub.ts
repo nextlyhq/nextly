@@ -58,8 +58,13 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { BASE_BREAKPOINT } from "./breakpoints";
-import type { StyleAddress, StylePolicy, StyleWrite } from "./style-values";
-import { styleValueAtPath, styleWriteOp } from "./style-values";
+import type {
+  StyleAddress,
+  StylePolicy,
+  StyleWrite,
+  StyleWriteRequest,
+} from "./style-values";
+import { styleValueAtPath, styleWriteOp, styleWriteOps } from "./style-values";
 
 /** The node a scrub is previewing against. */
 export interface ScrubTarget {
@@ -463,4 +468,37 @@ export function scrubCommitOp(
     value,
     target.policy
   );
+}
+
+/**
+ * The single op that ends a scrub touching SEVERAL addresses at once.
+ *
+ * A gesture that moves more than one side — every side of a margin, or a pair
+ * across from each other — is still ONE thing the author did, so it has to cost
+ * one entry in the history. `styleWriteOps` is what makes that true at the
+ * value layer rather than at each caller: it folds the writes so the envelope
+ * carries all of them, where repeated `scrubCommitOp` calls would each build a
+ * complete envelope from the same starting styles and the last would silently
+ * drop the rest.
+ *
+ * The breakpoint is decided ONCE, from the target, and every write is required
+ * to share it. They come from one gesture at one tier by construction — the
+ * addresses differ only in their side — so a mixed list is a caller mistake
+ * rather than a case to serve, and committing a value at a tier the compiler
+ * writes no rule for is the failure this refusal exists to prevent.
+ *
+ * @param target - the node and tier being scrubbed
+ * @param styles - that node's styles before the gesture
+ * @param writes - the addresses and values the gesture settled on
+ * @returns one op for all of them, or the reasons the first refusal gives
+ */
+export function scrubCommitOps(
+  target: ScrubTarget,
+  styles: Parameters<typeof styleWriteOps>[1],
+  writes: readonly StyleWriteRequest[]
+): StyleWrite {
+  if (atRuleFor(target) === null) {
+    return { ok: false, issues: [] };
+  }
+  return styleWriteOps(target.nodeId, styles, writes, target.policy);
 }

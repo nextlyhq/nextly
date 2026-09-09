@@ -442,9 +442,11 @@ export {
   styleClearOp,
   styleValueAtPath,
   styleWriteOp,
+  styleWriteOps,
   type StyleAddress,
   type StylePolicy,
   type StyleWrite,
+  type StyleWriteRequest,
 } from "./style-values";
 
 /**
