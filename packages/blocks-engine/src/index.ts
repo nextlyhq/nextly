@@ -102,17 +102,14 @@ export {
   countNodes,
   treeDepth,
   documentBytes,
-  // Published because the three readers above now REFUSE a forest they cannot
-  // afford to measure, and a caller that wants to report that rather than let
-  // it escape has to be able to name it.
+  // Published because the three readers above now REFUSE a structure they
+  // cannot afford to walk, and a caller that wants to report that rather than
+  // let it escape has to be able to name it and to say what it exceeded.
   //
-  // BOTH bounds travel with it, because they are different units and a caller
-  // cannot tell from the error which it hit: `countNodes` and `treeDepth` count
-  // forest ENTRIES, while `documentBytes` counts the VALUES the serializer
-  // visits — six per node on a measured document, so the two numbers are not
-  // comparable and neither can stand in for the other.
-  MAX_WALKABLE_ENTRIES,
-  MAX_SERIALIZED_VALUES,
+  // ONE ceiling, which is the point: the op layer's preflight already refused a
+  // value with more parts than this, so a second number here would let a dry run
+  // accept what the apply then refuses.
+  MAX_VALUE_PARTS,
   ForestTooLargeError,
 } from "./limits";
 export type { DocumentLimits } from "./limits";
