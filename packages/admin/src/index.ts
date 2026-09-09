@@ -80,6 +80,18 @@ export {
   type ValidationIssue,
 } from "./lib/api/parseApiError";
 
+// Reporting a write that committed while something after it did not. A
+// post-commit hook cannot un-save the row, so the server answers success and
+// carries the failure alongside — and the three shapes that answer needs
+// (success, advisory, partial failure) are easy to collapse into one. Published
+// so a plugin's own writes report them the way the admin's do rather than
+// inventing a fourth phrasing.
+export {
+  toastMutationResult,
+  type HookWarning,
+  type MutationResult,
+} from "./lib/mutation-warnings";
+
 // Media hooks
 export {
   useMedia,

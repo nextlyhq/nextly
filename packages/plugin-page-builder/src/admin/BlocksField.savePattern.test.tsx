@@ -33,8 +33,11 @@ let offeredVerb: (() => void) | undefined;
 /** What the route reports failed AFTER the row committed, for the test in hand. */
 let saveWarnings: unknown[] = [];
 
-/** What the panel was told out loud. */
-const announced: string[] = [];
+/** What the canonical warning presenter was handed. */
+const reported: {
+  message: string;
+  warnings: readonly { severity: string }[];
+}[] = [];
 
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
@@ -117,6 +120,19 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useSuppressAdminChrome: () => {},
   useDocumentStatus: () => null,
   validationIssues: () => [],
+  /*
+   * The admin's canonical mutation-warning toast, which the form reports a
+   * committed-but-partly-failed save through. Recorded rather than stubbed to
+   * nothing: what it is CALLED with is the assertion — the array carries
+   * failures and advisories, and one message for both would report a
+   * successful notice as a failure.
+   */
+  toastMutationResult: (
+    message: string,
+    warnings: readonly { severity: string }[] | undefined
+  ) => {
+    reported.push({ message, warnings: warnings ?? [] });
+  },
   useSingleDocument: () => ({ data: undefined, isPending: false, error: null }),
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
@@ -136,25 +152,10 @@ function openEditor(): void {
   fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 }
 
-vi.mock("@nextlyhq/ui", async importOriginal => {
-  // Spread rather than replaced: the form below draws real components from
-  // here, so a closed literal would blank them.
-  const real = await importOriginal<Record<string, unknown>>();
-  return {
-    ...real,
-    toast: {
-      warning: (message: string) => announced.push(message),
-      error: (message: string) => announced.push(message),
-      success: () => {},
-      info: () => {},
-    },
-  };
-});
-
 beforeEach(() => {
   offeredVerb = undefined;
   saveWarnings = [];
-  announced.length = 0;
+  reported.length = 0;
 });
 
 afterEach(cleanup);
@@ -225,33 +226,48 @@ describe("a save that committed and then partly failed", () => {
     );
   }
 
-  it("says so, rather than presenting a partial success as a clean one", async () => {
-    // A post-commit hook cannot un-write the row — an unindexed pattern, a
-    // webhook that did not fire — so failing the form would tell the author
-    // their pattern is not there when it is. Saying it out loud is the only
-    // remedy a durable row leaves.
+  it("hands every warning to the canonical presenter, keeping its severity", async () => {
+    /*
+     * A post-commit hook cannot un-write the row, so failing the form would
+     * tell the author their pattern is not there when it is. What happened is
+     * reported beside the success instead.
+     *
+     * Through the admin's own presenter, and asserted as what it was HANDED: a
+     * failure and an advisory are different outcomes, and one sentence for both
+     * reports a successful notice as something that went wrong.
+     */
     saveWarnings = [
       {
         severity: "failure",
         phase: "afterChange",
-        key: "patterns",
-        message: "x",
+        collection: "patterns",
+        code: "INTERNAL_ERROR",
+        message: "The index was not updated.",
+      },
+      {
+        severity: "notice",
+        phase: "afterChange",
+        collection: "patterns",
+        code: "INFO",
+        message: "A draft release is pending.",
       },
     ];
     openEditor();
 
     await saveAs("Hero");
 
-    expect(announced.join(" ")).toMatch(/did not finish/i);
+    expect(reported).toHaveLength(1);
+    expect(reported[0]?.warnings).toEqual(saveWarnings);
   });
 
-  it("says nothing when every follow-up step finished", async () => {
-    // The control. Without it a form that warned unconditionally would satisfy
-    // the case above and cry wolf on every ordinary save.
+  it("still reports a clean save, so the presenter decides how to say it", async () => {
+    // The control, and the division of labour: this form always reports, and
+    // what "no warnings" reads like is the presenter's business rather than a
+    // second decision here.
     openEditor();
 
     await saveAs("Hero");
 
-    expect(announced).toEqual([]);
+    expect(reported).toEqual([{ message: "Pattern saved", warnings: [] }]);
   });
 });

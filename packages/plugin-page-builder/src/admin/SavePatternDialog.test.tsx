@@ -430,3 +430,90 @@ describe("fitting a short viewport", () => {
     ).toBe(false);
   });
 });
+
+describe("reaching the save without the mouse", () => {
+  it("submits on Enter from a single-line field", () => {
+    /*
+     * The hold that keeps the canvas out of reach takes Enter with it: the
+     * shortcut manager gives that key to a field only where the field OWNS it —
+     * a textarea uses it for a newline — so in a single-line input a blocking
+     * layer swallows it. Without this the form loses the keyboard path `submit`
+     * exists to support.
+     */
+    const { onSave } = mount();
+    fillRequired("Hero");
+
+    fireEvent.keyDown(screen.getByLabelText("Name"), {
+      key: "Enter",
+      bubbles: true,
+    });
+
+    expect(onSave).toHaveBeenCalled();
+  });
+
+  it("leaves Enter alone in the description, which uses it for a newline", () => {
+    // The control, and the reason the rule asks what the target OWNS rather
+    // than naming the fields: a textarea submitting on Enter cannot be given a
+    // second line.
+    const { onSave } = mount();
+    fillRequired("Hero");
+
+    fireEvent.keyDown(screen.getByLabelText(/Description/), {
+      key: "Enter",
+      bubbles: true,
+    });
+
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("does not turn a press on Cancel into a save", () => {
+    // A button owns its own Enter. Submitting the form here would make the
+    // keyboard path to Cancel do the opposite of what it says.
+    const { onSave } = mount();
+    fillRequired("Hero");
+
+    fireEvent.keyDown(screen.getByRole("button", { name: /cancel/i }), {
+      key: "Enter",
+      bubbles: true,
+    });
+
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to whatever opened it", async () => {
+    /*
+     * Radix restores focus to the TRIGGER, and this dialog has none: it is
+     * opened from the toolbar, the context menu or the palette. Without a
+     * fallback, focus lands on the body and a keyboard author is returned to
+     * the top of the page.
+     *
+     * Driven through a real close rather than a spy, because the restore runs
+     * as Radix UNMOUNTS the content — a controlled dialog whose `open` never
+     * changes never reaches it, and a test that only pressed Cancel would pass
+     * while the restore did nothing.
+     */
+    const opener = window.document.createElement("button");
+    opener.textContent = "Save as pattern";
+    window.document.body.append(opener);
+    opener.focus();
+
+    function Host(): React.JSX.Element {
+      const [open, setOpen] = React.useState(true);
+      return inScope(
+        <SavePatternDialog
+          open={open}
+          onOpenChange={setOpen}
+          subject="3 blocks"
+          onSave={vi.fn(async () => true)}
+        />
+      );
+    }
+    render(<Host />);
+    expect(window.document.activeElement).not.toBe(opener);
+
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+    await vi.waitFor(() => expect(window.document.activeElement).toBe(opener));
+    opener.remove();
+  });
+});

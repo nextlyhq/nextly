@@ -28,7 +28,7 @@
  */
 import { findNode, type BlockDocument } from "@nextlyhq/blocks-engine";
 import { layerLabel } from "@nextlyhq/builder";
-import { toast } from "@nextlyhq/ui";
+import { toastMutationResult } from "@nextlyhq/plugin-sdk/admin";
 import * as React from "react";
 
 import { usePatternLibrary } from "./pattern-library-client";
@@ -117,16 +117,20 @@ function SavePatternForm({
   }));
 
   /*
-   * A save that COMMITTED but reported failures afterwards is still a save.
+   * A save that COMMITTED is still a save, whatever ran after it.
    *
    * A post-commit hook cannot un-write the row — an unindexed pattern, a
-   * webhook that did not fire, a cache nobody purged — so failing the form
-   * would tell the author their pattern is not there when it is, and invite
-   * them to write it twice. The form closes and the partial failure is said out
-   * loud instead, which is the only remedy a durable row leaves.
+   * webhook that did not fire — so failing the form would tell the author their
+   * pattern is not there when it is, and invite them to write it twice. The
+   * form closes and what happened is reported beside it.
    *
-   * Through the admin's own toast, so this reads the way every other partial
-   * write in the panel reads rather than inventing a second voice for it.
+   * Through the admin's OWN presenter rather than a sentence of this module's.
+   * The array carries two different things: `severity: "failure"` is something
+   * that did not happen, and `"notice"` is something an author should merely
+   * know — and one message for both reports a successful advisory as a failure
+   * while throwing away the public message that says what it was. That split,
+   * and the detail beside it, is what `toastMutationResult` already owns for
+   * every write the admin makes.
    */
   const storing = React.useCallback(
     async (fields: Parameters<typeof writer.save>[2]) => {
@@ -136,12 +140,7 @@ function SavePatternForm({
         fields
       );
       if (answered === undefined) return false;
-      const warnings = answered.warnings ?? [];
-      if (warnings.length > 0) {
-        toast.warning(
-          `Pattern saved, but ${warnings.length === 1 ? "one follow-up step" : `${warnings.length} follow-up steps`} did not finish.`
-        );
-      }
+      toastMutationResult("Pattern saved", answered.warnings);
       return true;
     },
     // `saving` is in here even though it never changes: a snapshot taken once

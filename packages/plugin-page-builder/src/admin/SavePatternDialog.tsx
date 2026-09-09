@@ -30,7 +30,7 @@
  *
  * @module admin/SavePatternDialog
  */
-import { useModalKeyboardHold } from "@nextlyhq/builder";
+import { useModalKeyboardHold } from "@nextlyhq/builder/shell";
 import {
   Alert,
   AlertDescription,
@@ -229,6 +229,57 @@ export function SavePatternDialog({
   // radio or a button is exactly when a bare keystroke is a canvas verb.
   useModalKeyboardHold("save-pattern-dialog", open);
 
+  /*
+   * Enter submits, which the hold above would otherwise take away.
+   *
+   * The shortcut manager gives Enter to a field only where the field OWNS it —
+   * a textarea or a contenteditable, which use it for a newline. In a
+   * single-line input Enter is application behaviour, so a blocking layer
+   * swallows it, and the form loses the keyboard path `submit` was written to
+   * support: an author who fills this in and presses Enter never reaches the
+   * button.
+   *
+   * Handled on the FORM rather than per input, and by asking whether the target
+   * owns the key rather than naming the two fields — so a field added later
+   * behaves the way its kind implies rather than the way this list remembered.
+   *
+   * React delivers this before the manager sees the event: its listener is on
+   * the root container, which is inside `document`, so the bubble reaches it
+   * first. What the manager does afterwards is too late to matter.
+   */
+  const submitOnEnter = (event: React.KeyboardEvent<HTMLFormElement>): void => {
+    if (event.key !== "Enter" || event.defaultPrevented) return;
+    const target = event.target;
+    if (
+      target instanceof HTMLTextAreaElement ||
+      (target instanceof HTMLElement && target.isContentEditable)
+    ) {
+      return;
+    }
+    // A press on a button is that button's own, and submitting here would turn
+    // Cancel into a save.
+    if (target instanceof HTMLButtonElement) return;
+    event.preventDefault();
+    event.currentTarget.requestSubmit();
+  };
+
+  /*
+   * Where focus goes when this closes.
+   *
+   * Radix restores focus to the TRIGGER, and this dialog has none — it is
+   * opened from the toolbar, the context menu or the palette, which are three
+   * different controls and two of them have unmounted by the time it closes. So
+   * the fallback is the element that had focus when the form opened, captured
+   * here and used only while it is still connected: otherwise focus lands on
+   * the body and a keyboard author is returned to the top of the page.
+   */
+  const openedFrom = React.useRef<HTMLElement | null>(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const active = window.document.activeElement;
+    openedFrom.current = active instanceof HTMLElement ? active : null;
+  }, [open]);
+
   const listId = React.useId();
 
   return (
@@ -251,9 +302,18 @@ export function SavePatternDialog({
           correcting, ends up off-screen with no way to reach it. The BODY
           scrolls rather than the whole dialog, which keeps Save and Cancel in
           view while the fields move. */}
-      <DialogContent className="flex max-h-[85vh] flex-col">
+      <DialogContent
+        className="flex max-h-[85vh] flex-col"
+        onCloseAutoFocus={event => {
+          const origin = openedFrom.current;
+          if (origin === null || !origin.isConnected) return;
+          event.preventDefault();
+          origin.focus();
+        }}
+      >
         <form
           onSubmit={event => void submit(event)}
+          onKeyDown={submitOnEnter}
           className="flex min-h-0 flex-col"
         >
           <DialogHeader>

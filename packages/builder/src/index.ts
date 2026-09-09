@@ -372,17 +372,6 @@ export {
 export { compositionRefusalReason, isPlanProblem } from "./composition-refusal";
 
 /**
- * @experimental Hold the editor's shortcuts while something modal is over it.
- *
- * From this entry because a modal the editor raises is not always the editor's
- * own: a host draws the form its verbs open, and a focus trap does nothing
- * about shortcuts — the canvas's bindings sit on the document, so Delete and
- * Alt+Arrow reach the page behind the dialog. Without this a host would either
- * rebuild the depth rules or leave the canvas live underneath its own modal.
- */
-export { useModalKeyboardHold } from "./modal-keyboard-hold";
-
-/**
  * @experimental Who owns Escape while the editor is on screen.
  *
  * From this entry because the rule is a plain function over the DOM and a

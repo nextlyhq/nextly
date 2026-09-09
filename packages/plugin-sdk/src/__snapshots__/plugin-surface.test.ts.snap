@@ -130,6 +130,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "registerComponents (value)",
   "registerKnownPlugin (value)",
   "registerRowAction (value)",
+  "toastMutationResult (value)",
   "transformColumns (value)",
   "useDocumentCheckpoint (value)",
   "useDocumentIdentity (value)",
