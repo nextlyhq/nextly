@@ -55,9 +55,13 @@ expectTypeOf<PluginRouteContext>().toHaveProperty("authenticatedScope");
 expectTypeOf<PluginRouteContext["authenticatedScope"]>().toEqualTypeOf<
   AuthenticatedScope | undefined
 >();
+// READONLY, deliberately. Editing `permissions` in place cannot narrow the
+// scope — the rule spelling is derived from `grants` and would keep the grant
+// that was just dropped — so the type refuses the edit and `narrowScope` is the
+// way to do it. A mutable array here would compile the mistake.
 expectTypeOf<
   NonNullable<PluginRouteContext["authenticatedScope"]>["permissions"]
->().toEqualTypeOf<string[]>();
+>().toEqualTypeOf<readonly string[]>();
 
 // ADDITIVE. A route written before this field existed still type-checks, so
 // the change cannot have made it required. `toEqualTypeOf` above would pass on

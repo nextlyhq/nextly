@@ -71,7 +71,9 @@ export function readAccessCaller(caller: ReadCaller): ReadAccessCaller {
     // A session caller carries none here on purpose: its grants are resolved
     // from the database by `checkAccess`. Handing it the key vocabulary would
     // answer "denied" for every check.
-    permissions: isApiKey ? (caller.authenticatedScope?.permissions ?? []) : [],
+    permissions: isApiKey
+      ? [...(caller.authenticatedScope?.permissions ?? [])]
+      : [],
     roles: caller.user.roles ?? [],
   };
 }
