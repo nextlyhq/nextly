@@ -45,6 +45,7 @@ import {
   compilePageCss,
   compileStyleValues,
   escapeIdentifier,
+  MAX_SCOPE_LENGTH,
   nodeClassName,
   PAGE_ROOT_SELECTOR,
   previewContainerName,
@@ -351,7 +352,19 @@ function atRuleFor(target: ScrubTarget): string | null {
  * NOT split a class, so rejecting them would drop a scope the compiler kept.
  */
 function rootSelector(scope: string | undefined): string {
-  if (scope === undefined || scope === "" || /[ \t\n\f\r]/.test(scope)) {
+  if (
+    scope === undefined ||
+    scope === "" ||
+    /[ \t\n\f\r]/.test(scope) ||
+    /*
+     * The compiler's OWN cap, imported rather than restated. A scope prefixes
+     * every rule the page emits, so it refuses an oversized one and writes the
+     * sheet unscoped — and a preview that scoped itself anyway would sit one
+     * class below a rule anchored at the bare root, matching nothing. The drag
+     * would look frozen and the value would appear on release.
+     */
+    scope.length > MAX_SCOPE_LENGTH
+  ) {
     return PAGE_ROOT_SELECTOR;
   }
   return `${PAGE_ROOT_SELECTOR}.${escapeIdentifier(scope)}`;

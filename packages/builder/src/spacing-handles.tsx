@@ -89,7 +89,11 @@ import {
   scrubPreviewCss,
   type ScrubTarget,
 } from "./style-scrub";
-import { readStyleValue, type StyleAddress } from "./style-values";
+import {
+  readStyleValue,
+  type StyleAddress,
+  type StyleWrite,
+} from "./style-values";
 
 /** Everything about the measured block a gesture needs, taken once. */
 export interface SpacingSubject {
@@ -168,8 +172,75 @@ interface Gesture {
   shown: SpacingModifiers;
 }
 
-/** Where a handle's strip sits on its band. */
-function handleRect(band: SpacingBand): Rect {
+/**
+ * A band that has been measured away, at the edge it collapsed to.
+ *
+ * `spacingBands` omits a side reporting `0`, and the band is only missing
+ * because the drag took it there — so the honest picture is not the geometry it
+ * had when the gesture began. Kept at its starting rectangle the handle sits
+ * wherever the old value put it, which for a large padding is visibly far from
+ * the pointer, and reports that old number to assistive technology for the rest
+ * of the drag.
+ *
+ * The FIXED edge is the one that does not move: a band collapses onto it. Which
+ * that is follows from the same table `handleRect` uses, read the other way
+ * round.
+ */
+function collapsed(band: SpacingBand): SpacingBand {
+  const { rect, side, box, negative } = band;
+  const far = side === "bottom" || side === "right";
+  const atMax = far === (box === "margin" && !negative);
+  const vertical = side === "top" || side === "bottom";
+  // The moving edge has met the fixed one, so the band has no extent left.
+  const anchored = atMax
+    ? { ...rect, ...(vertical ? { height: 0 } : { width: 0 }) }
+    : {
+        ...rect,
+        ...(vertical
+          ? { y: rect.y + rect.height, height: 0 }
+          : { x: rect.x + rect.width, width: 0 }),
+      };
+  return { ...band, rect: anchored, label: "0" };
+}
+
+/**
+ * Apply a settled write, answering with the reason it did not land.
+ *
+ * The two `null`s here mean opposite things and only one of them is a refusal.
+ * From the VALUE layer, `op: null` says the document already holds this — the
+ * ordinary end of a drag that came back to where it started. From
+ * `editor.apply`, `null` says the op was REJECTED, a document limit being the
+ * likely cause, and nothing moved. Announcing the new value there tells a
+ * screen-reader user an edit landed while the canvas snaps back to what it was.
+ */
+function applied(editor: EditorState, result: StyleWrite): string | undefined {
+  if (!result.ok) {
+    return (
+      result.issues[0]?.message ?? "That spacing value cannot be used here."
+    );
+  }
+  if (result.op === null) return undefined;
+  return editor.apply(result.op) === null
+    ? "That spacing change was not applied."
+    : undefined;
+}
+
+/** Whether two bands would put their handles on the very same pixels. */
+function sameEdge(one: SpacingBand, other: SpacingBand): boolean {
+  if (one.side !== other.side) return false;
+  const a = handleRect(one);
+  const b = handleRect(other);
+  return a.x === b.x && a.y === b.y;
+}
+
+/**
+ * Where a handle's strip sits on its band.
+ *
+ * `nudged` shifts it clear of another handle occupying the same pixels, by one
+ * thickness INTO the band — never out of it, so the control stays over the
+ * space it edits.
+ */
+function handleRect(band: SpacingBand, nudged = false): Rect {
   const { rect, side, box, negative } = band;
   const far = side === "bottom" || side === "right";
   /*
@@ -185,12 +256,24 @@ function handleRect(band: SpacingBand): Rect {
   const outward = box === "margin" && !negative;
   const atMax = far === outward;
   const half = HANDLE_PX / 2;
+  // Into the band, which is the direction away from its moving edge.
+  const shift = nudged ? (atMax ? -HANDLE_PX : HANDLE_PX) : 0;
   if (side === "top" || side === "bottom") {
     const edge = atMax ? rect.y + rect.height : rect.y;
-    return { x: rect.x, y: edge - half, width: rect.width, height: HANDLE_PX };
+    return {
+      x: rect.x,
+      y: edge - half + shift,
+      width: rect.width,
+      height: HANDLE_PX,
+    };
   }
   const edge = atMax ? rect.x + rect.width : rect.x;
-  return { x: edge - half, y: rect.y, width: HANDLE_PX, height: rect.height };
+  return {
+    x: edge - half + shift,
+    y: rect.y,
+    width: HANDLE_PX,
+    height: rect.height,
+  };
 }
 
 /** The words an author reads for one side of one box. */
@@ -296,9 +379,10 @@ export function SpacingHandles({
    * un-does whatever happened in between. The canvas keeps a `latest` ref for
    * the same reason.
    */
-  const latest = React.useRef<{ styles: BlockNode["styles"] }>({
-    styles: undefined,
-  });
+  const latest = React.useRef<{
+    styles: BlockNode["styles"];
+    nodeId: string;
+  }>({ styles: undefined, nodeId: "" });
   const [preview, setPreview] = React.useState<string | null>(null);
   /**
    * The band a gesture is holding, kept alive for the gesture's lifetime.
@@ -367,6 +451,7 @@ export function SpacingHandles({
   // Refreshed on every render, so a listener from an earlier one reads today's
   // document rather than the one the gesture began in.
   latest.current.styles = node?.styles;
+  latest.current.nodeId = nodeId;
 
   const targetFor = React.useCallback(
     (address: StyleAddress): ScrubTarget | undefined =>
@@ -499,6 +584,17 @@ export function SpacingHandles({
       if (first === undefined) return;
       const target = targetFor(first.address);
       if (target === undefined) return;
+      /*
+       * The gesture must still be about the block it started on.
+       *
+       * This component is not keyed on the node, so selecting another block
+       * mid-drag — from the Layers panel, say — re-renders it in place with a
+       * new subject while the listeners installed at the press keep running.
+       * The styles read above would then be the NEW block's whole envelope, and
+       * the op names the OLD one: releasing would copy one block's styling over
+       * another's. A gesture whose subject moved is abandoned, not committed.
+       */
+      if (latest.current.nodeId !== nodeId) return;
       const result = scrubCommitOps(
         target,
         /*
@@ -514,21 +610,12 @@ export function SpacingHandles({
         latest.current.styles,
         writes.map(write => ({ address: write.address, value: write.value }))
       );
-      if (!result.ok) {
-        setMessage(
-          result.issues[0]?.message ?? "That spacing value cannot be used here."
-        );
-        return;
-      }
-      // `null` is the value layer saying the document already holds this, which
-      // is an ordinary end to a drag that came back to where it started.
-      if (result.op !== null) editor.apply(result.op);
-      setMessage(committedMessage(band, writes));
+      setMessage(applied(editor, result) ?? committedMessage(band, writes));
     },
     // `node.styles` is deliberately absent: the commit reads the LATEST styles
     // through a ref, so rebuilding this callback per edit would only replace the
     // listeners of a gesture already in flight.
-    [editor, targetFor, valuesFor]
+    [editor, nodeId, targetFor, valuesFor]
   );
 
   /** Draw the gesture's result without touching the document. */
@@ -863,7 +950,7 @@ export function SpacingHandles({
     held === null ||
     bands.some(band => band.box === held.box && band.side === held.side)
       ? bands
-      : [...bands, held];
+      : [...bands, collapsed(held)];
 
   if (orientation === undefined || nodeClass === undefined) {
     /*
@@ -877,7 +964,7 @@ export function SpacingHandles({
 
   return (
     <>
-      {drawn.map(band => {
+      {drawn.map((band, index) => {
         /*
          * No handle where the block's author did not offer the property. The
          * band still draws — it reports what the page renders, which is true
@@ -885,7 +972,23 @@ export function SpacingHandles({
          * declaration the Style panel honours.
          */
         if (!writable.has(band.box)) return null;
-        const rect = handleRect(band);
+        /*
+         * Nudged aside where two handles would land on the same pixels.
+         *
+         * A negative margin's band is laid inside the border edge, exactly where
+         * padding's is — so `margin-top: -16px` with `padding-top: 16px` gives
+         * two bands with identical rectangles and therefore two identical
+         * handles. Same stacking, and padding is drawn later, so it takes every
+         * press and the margin's control is advertised and unreachable.
+         *
+         * The EARLIER band moves, by its own thickness, into the band both of
+         * them occupy. Both strips then take pointer events and neither leaves
+         * the space it describes.
+         */
+        const rect = handleRect(
+          band,
+          drawn.slice(index + 1).some(later => sameEdge(band, later))
+        );
         return (
           <div
             key={`${band.box}-${band.side}`}

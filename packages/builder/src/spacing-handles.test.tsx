@@ -241,6 +241,54 @@ function HarnessWithPreviewSpy({
   );
 }
 
+/** A harness whose editor refuses every op, as a document limit would. */
+function RefusingHarness({
+  bands,
+}: {
+  bands: readonly SpacingBand[];
+}): React.JSX.Element {
+  const editor = useEditorState({ initialDocument: documentWith() });
+  live = editor;
+  const refusing = React.useMemo(
+    () => ({ ...editor, apply: () => null }) as EditorState,
+    [editor]
+  );
+  return (
+    <SpacingHandles
+      editor={refusing}
+      bands={bands}
+      subject={subjectWith()}
+      context={BASE}
+    />
+  );
+}
+
+/** A harness that can change which node the handles are about, mid-gesture. */
+function TwoNodeHarness({ selected }: { selected: string }): React.JSX.Element {
+  const initial = React.useMemo(
+    () =>
+      ({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          { id: "a", type: "acme/spaced", version: 1, props: {} },
+          { id: "b", type: "acme/spaced", version: 1, props: {} },
+        ],
+      }) as unknown as BlockDocument,
+    []
+  );
+  const editor = useEditorState({ initialDocument: initial });
+  live = editor;
+  return (
+    <SpacingHandles
+      editor={editor}
+      bands={[band("margin", "top", "10")]}
+      subject={subjectWith({ nodeId: selected })}
+      context={BASE}
+    />
+  );
+}
+
 /** One handle, addressed the way assistive technology finds it. */
 function handle(label: string): HTMLElement {
   return screen.getByRole("spinbutton", { name: label });
@@ -526,10 +574,16 @@ describe("the keyboard path", () => {
     expect(dragged).toBe("20px");
   });
 
-  it("runs the padding key the same way the padding drag runs", () => {
+  /*
+   * Up increases a top padding even though DRAGGING it upward decreases it.
+   * These are spinbuttons, and the role's own keys have to mean more and less
+   * consistently; the spatial reading survives on the horizontal bands, where
+   * it agrees with the numeric one.
+   */
+  it("makes Up increase a padding, whichever way its handle is dragged", () => {
     mount([band("padding", "top", "4")]);
     act(() => {
-      fireEvent.keyDown(handle("top padding"), { key: "ArrowDown" });
+      fireEvent.keyDown(handle("top padding"), { key: "ArrowUp" });
     });
     expect(stored("padding", "blockStart")).toBe("5px");
   });
@@ -1145,9 +1199,18 @@ describe("a gesture that outlives its own band", () => {
         initial={documentWith()}
       />
     );
-    expect(
-      screen.queryByRole("spinbutton", { name: "top padding" })
-    ).not.toBeNull();
+    const kept = screen.queryByRole("spinbutton", { name: "top padding" });
+    expect(kept).not.toBeNull();
+    /*
+     * At the edge it collapsed TO, not the one it started from. The band is
+     * missing precisely because the drag took it to zero, so its old rectangle
+     * describes a value that no longer exists — for a large padding the handle
+     * would sit visibly far from the pointer while reporting the old number to
+     * assistive technology for the rest of the gesture.
+     */
+    expect(kept?.getAttribute("aria-valuenow")).toBe("0");
+    // The band spans y=0..10 and grows downward, so collapsed it sits at y=0.
+    expect(kept?.style.top).toBe("-4.5px");
 
     // And the gesture still finishes.
     act(() => {
@@ -1255,6 +1318,99 @@ describe("a document that moves while the pointer is down", () => {
     expect(stored("margin", "blockStart")).toBe("30px");
     // The mid-gesture edit survives rather than being erased by a stale patch.
     expect(stored("margin", "inlineEnd")).toBe("7px");
+  });
+});
+
+describe("two handles that would land on the same pixels", () => {
+  /*
+   * A negative margin's band is laid inside the border edge, where padding's
+   * band is too — so `margin-top: -16px` beside `padding-top: 16px` produces two
+   * identical rectangles. Same stacking, padding drawn later: it takes every
+   * press, and the margin's handle is advertised and unreachable by pointer.
+   */
+  it("separates a negative margin's handle from a coincident padding one", () => {
+    const rect = { x: 0, y: 100, width: 50, height: 16 };
+    mount([
+      { box: "margin", side: "top", rect, label: "-16", negative: true },
+      { box: "padding", side: "top", rect, label: "16", negative: false },
+    ]);
+    const marginTop = handle("top margin").style.top;
+    const paddingTop = handle("top padding").style.top;
+    expect(marginTop).not.toBe(paddingTop);
+  });
+
+  it("leaves handles that do not coincide where they were", () => {
+    mount([
+      {
+        box: "margin",
+        side: "top",
+        rect: { x: 0, y: 80, width: 50, height: 20 },
+        label: "20",
+        negative: false,
+      },
+      {
+        box: "padding",
+        side: "top",
+        rect: { x: 0, y: 100, width: 50, height: 16 },
+        label: "16",
+        negative: false,
+      },
+    ]);
+    // The margin's own outer edge, untouched: 80 - 4.5.
+    expect(handle("top margin").style.top).toBe("75.5px");
+  });
+});
+
+describe("an edit the editor will not take", () => {
+  /*
+   * `editor.apply` answers `null` when the op is refused — a document limit, for
+   * instance. Announcing the new value there tells a screen-reader user an edit
+   * landed while the canvas snaps back to what it was.
+   */
+  it("reports a refusal rather than announcing the value", () => {
+    render(<RefusingHarness bands={[band("margin", "top", "10")]} />);
+    drag(handle("top margin"), [{ x: 0, y: -20 }]);
+
+    expect(stored("margin", "blockStart")).toBeUndefined();
+    expect(screen.getByRole("status").textContent).toMatch(/not applied/i);
+  });
+});
+
+describe("a gesture whose subject changes underneath it", () => {
+  /*
+   * The component is not keyed on the node, so selecting another block mid-drag
+   * re-renders it in place while the listeners installed at the press keep
+   * running. The styles read at release would then be the NEW block's whole
+   * envelope inside an op naming the OLD one — one block's styling copied over
+   * another's.
+   */
+  it("abandons the gesture rather than committing across blocks", () => {
+    const { rerender } = render(<TwoNodeHarness selected="a" />);
+    act(() => {
+      fireEvent.pointerDown(handle("top margin"), {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    act(() => {
+      fireEvent.pointerMove(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+    rerender(<TwoNodeHarness selected="b" />);
+    act(() => {
+      fireEvent.pointerUp(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+
+    expect(live?.undoDepth).toBe(0);
   });
 });
 

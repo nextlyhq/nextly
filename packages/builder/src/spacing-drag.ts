@@ -451,6 +451,24 @@ export function spacingKeyDelta(
   if (key === "PageUp") return SPACING_PAGE_PX;
   if (key === "PageDown") return -SPACING_PAGE_PX;
   /*
+   * Up MEANS MORE on every handle, and Down means less.
+   *
+   * The handles are spinbuttons, and Up and Down are that role's own keys: a
+   * screen-reader user told they have an adjustable number expects them to work
+   * the same way on all eight, whichever edge is focused. Read spatially they
+   * would do nothing on a left or right handle at all, and would run backwards
+   * on a bottom margin and a top padding — where moving DOWN is what grows the
+   * value.
+   *
+   * The spatial reading survives beside it, on the axis each band actually runs
+   * along, because a pointer user reaches for the arrow that points the way the
+   * edge moves. The two only disagree where a numeric answer exists, and there
+   * the numeric one wins: a vertical band takes its meaning from this table,
+   * and a horizontal band keeps Left and Right as travel.
+   */
+  if (key === "ArrowUp") return SPACING_STEP_PX;
+  if (key === "ArrowDown") return -SPACING_STEP_PX;
+  /*
    * A `Map` rather than an object literal, and it is not defensive dressing:
    * `KeyboardEvent.key` is an arbitrary string, and an object lookup answers
    * `constructor` with a function. Measured before this changed — a

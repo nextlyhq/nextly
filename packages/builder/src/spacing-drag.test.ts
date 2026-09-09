@@ -375,31 +375,51 @@ describe("spacingKeyDelta", () => {
    * disagreement is invisible until someone compares the two paths by hand —
    * which is exactly what WCAG 2.5.7 makes load-bearing here.
    */
-  it("grows a margin the way dragging its handle outward does", () => {
-    expect(spacingKeyDelta("ArrowUp", "margin", "top")).toBe(1);
-    expect(spacingKeyDelta("ArrowDown", "margin", "top")).toBe(-1);
-    expect(spacingKeyDelta("ArrowDown", "margin", "bottom")).toBe(1);
-    expect(spacingKeyDelta("ArrowLeft", "margin", "left")).toBe(1);
-    expect(spacingKeyDelta("ArrowRight", "margin", "right")).toBe(1);
-  });
-
-  it("grows a padding the opposite way, as its handle moves inward", () => {
-    expect(spacingKeyDelta("ArrowDown", "padding", "top")).toBe(1);
-    expect(spacingKeyDelta("ArrowUp", "padding", "bottom")).toBe(1);
-    expect(spacingKeyDelta("ArrowRight", "padding", "left")).toBe(1);
-  });
-
-  it("agrees with the pointer for the same movement", () => {
+  /*
+   * Up means MORE on every handle, and Down means less.
+   *
+   * These are a spinbutton's own keys, and the role promises they behave the
+   * same way whichever instance has focus. Read spatially they would do nothing
+   * at all on a left or right handle, and would run backwards on a bottom
+   * margin and a top padding — the two edges that grow by moving DOWN.
+   */
+  it("makes Up increase and Down decrease on every handle", () => {
     for (const box of ["margin", "padding"] as const) {
       for (const side of SIDES) {
-        const vertical = side === "top" || side === "bottom";
-        const key = vertical ? "ArrowUp" : "ArrowLeft";
-        const move = vertical ? { dx: 0, dy: -1 } : { dx: -1, dy: 0 };
-        expect(spacingKeyDelta(key, box, side), `${box} ${side}`).toBe(
-          spacingDelta(box, side, move, UNSCALED)
+        expect(spacingKeyDelta("ArrowUp", box, side), `${box} ${side}`).toBe(1);
+        expect(spacingKeyDelta("ArrowDown", box, side), `${box} ${side}`).toBe(
+          -1
         );
       }
     }
+  });
+
+  /*
+   * Left and Right stay SPATIAL, and only on the axis a band runs along. On a
+   * horizontal band the two readings agree — the arrow pointing the way the
+   * edge moves is the one that increases — so nothing has to choose between
+   * them there. On a vertical band they would contradict the numeric reading
+   * above, and the numeric one wins because the role promised it.
+   */
+  it("keeps Left and Right as travel along a horizontal band", () => {
+    for (const box of ["margin", "padding"] as const) {
+      for (const side of ["left", "right"] as const) {
+        for (const key of ["ArrowLeft", "ArrowRight"] as const) {
+          const move =
+            key === "ArrowLeft" ? { dx: -1, dy: 0 } : { dx: 1, dy: 0 };
+          expect(spacingKeyDelta(key, box, side), `${key} ${box} ${side}`).toBe(
+            spacingDelta(box, side, move, UNSCALED)
+          );
+        }
+      }
+    }
+  });
+
+  it("grows a horizontal band with the arrow its edge moves toward", () => {
+    expect(spacingKeyDelta("ArrowLeft", "margin", "left")).toBe(1);
+    expect(spacingKeyDelta("ArrowRight", "margin", "right")).toBe(1);
+    expect(spacingKeyDelta("ArrowRight", "padding", "left")).toBe(1);
+    expect(spacingKeyDelta("ArrowLeft", "padding", "right")).toBe(1);
   });
 
   /*
@@ -413,9 +433,9 @@ describe("spacingKeyDelta", () => {
     }
   });
 
-  it("ignores an arrow across the band's own axis", () => {
+  it("ignores a horizontal arrow on a vertical band", () => {
     expect(spacingKeyDelta("ArrowLeft", "margin", "top")).toBeUndefined();
-    expect(spacingKeyDelta("ArrowUp", "margin", "left")).toBeUndefined();
+    expect(spacingKeyDelta("ArrowRight", "padding", "bottom")).toBeUndefined();
   });
 
   it("ignores a key this control does not answer to", () => {

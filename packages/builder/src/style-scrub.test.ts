@@ -1,6 +1,7 @@
 import {
   compilePageCss,
   escapeIdentifier,
+  MAX_SCOPE_LENGTH,
   nodeClassName,
   PAGE_ROOT_SELECTOR,
   PREVIEW_VIEWPORT_CONTAINER,
@@ -482,6 +483,35 @@ describe("a scope the compiler refuses", () => {
       if (!preview.ok) return;
       expect(preview.css.split("{")[0].trim()).toBe(compiledWith(scope));
     }
+  });
+
+  /*
+   * Length is the other way the compiler refuses a scope, and it is the one a
+   * preview cannot see by looking at the characters. A scope prefixes every rule
+   * the page emits, so an oversized one is dropped and the sheet is written
+   * unscoped — a preview that scoped itself anyway would sit one class below the
+   * rule it must outrank and match nothing at all.
+   *
+   * Asserted at the BOUNDARY, both sides. A test that only refused the long one
+   * would pass on an implementation that had stopped scoping altogether, which
+   * is the same defect pointing the other way.
+   */
+  it("drops an oversized scope exactly where the compiler drops it", () => {
+    const atCap = "s".repeat(MAX_SCOPE_LENGTH);
+    const overCap = "s".repeat(MAX_SCOPE_LENGTH + 1);
+
+    for (const scope of [atCap, overCap]) {
+      const preview = scrubPreviewCss({ ...TARGET, scope }, "32px");
+      expect(preview.ok, scope.length.toString()).toBe(true);
+      if (!preview.ok) return;
+      expect(preview.css.split("{")[0].trim(), scope.length.toString()).toBe(
+        compiledWith(scope)
+      );
+    }
+
+    // And the two answers genuinely differ, so the comparison above is doing
+    // work rather than agreeing about an unscoped selector twice.
+    expect(compiledWith(atCap)).not.toBe(compiledWith(overCap));
   });
 
   it("still scopes a scope the compiler accepts", () => {
