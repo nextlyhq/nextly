@@ -163,7 +163,7 @@ async function runTimeseries(
   // that assumption from becoming an unchecked cast.
   const dateField = query.dateField ?? "";
   const interval = query.interval ?? "day";
-  const result = await getNextly().timeseries({
+  const result = await requireNextly().timeseries({
     collection,
     dateField,
     interval,
