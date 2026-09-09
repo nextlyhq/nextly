@@ -33,6 +33,47 @@ import { bucketFormat, type TimeseriesInterval } from "./timeseries-interval";
  * takes when it decodes one. Converting would move a row recorded either side
  * of midnight into the adjacent day's bucket.
  */
+/**
+ * The value a window bound is compared against, spelled so the comparison means
+ * the same instant whatever zone the server runs in.
+ *
+ * PostgreSQL and SQLite need nothing: a `timestamp` carries no zone and SQLite
+ * stores epoch seconds, so the driver's own mapping is already absolute.
+ *
+ * MySQL does. It interprets a datetime operand compared against a `TIMESTAMP`
+ * in the SESSION time zone, so a bound meaning UTC midnight is read as 08:00Z
+ * on a server at -08:00 and the first eight hours of the oldest interval are
+ * dropped -- while the bucket expression beside it is UTC-normalised, so the
+ * filter and the buckets would cover different windows. Measured: a row stored
+ * at 2026-03-04T03:00:00Z matches `c >= '2026-03-04 00:00:00'` at +00:00 and
+ * does NOT match it at -08:00.
+ *
+ * `from_unixtime` renders the absolute instant in whatever the session zone is,
+ * which is the same zone the column is compared in, so the two agree. It is a
+ * constant expression, so an index over the date still serves the comparison --
+ * confirmed with `EXPLAIN`, which keeps the key. Wrapping the COLUMN in
+ * `unix_timestamp` would be equally correct and would lose the index.
+ */
+export function timeseriesBoundOperand(
+  instant: Date,
+  dialect: SupportedDialect
+): Date | SQL {
+  if (dialect !== "mysql") return instant;
+  const epochSeconds = Math.floor(instant.getTime() / 1000);
+  if (!Number.isFinite(epochSeconds)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "interval",
+          code: "TIMESERIES_WINDOW_INVALID",
+          message: "A timeseries window bound must be a real instant.",
+        },
+      ],
+    });
+  }
+  return sql`from_unixtime(${epochSeconds})`;
+}
+
 export function timeseriesBucketExpression(
   column: unknown,
   interval: TimeseriesInterval,

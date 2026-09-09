@@ -214,7 +214,11 @@ function retainedDeclarations<T extends { name: string; type: string }>(
 }
 
 function exposedFields(
-  fields: Array<{ name: string; type: string; label?: string }>
+  // DERIVED from the input contract rather than spelled again. This shape was
+  // written out a third time here, narrower than the one the caller passes, so
+  // a property added to the contract reached this function and was invisible
+  // to it -- which is how `localized` was dropped on the way to the source.
+  fields: WidgetSourceCollection["fields"]
 ): WidgetSourceField[] {
   // The label travels with the field. This function REBUILDS each entry rather
   // than passing it through -- `type` is mapped into the source vocabulary
@@ -223,6 +227,10 @@ function exposedFields(
   return retainedDeclarations(fields).map(field => ({
     name: field.name,
     type: toSourceType(field),
+    // Carried because the coarse `type` cannot express it: a localized date is
+    // still a date, and a validator reading only the type would approve a
+    // timeline the read then refuses.
+    ...(field.localized === true && { localized: true }),
     ...(field.label !== undefined && { label: field.label }),
   }));
 }
@@ -236,6 +244,13 @@ export interface WidgetSourceCollection {
     label?: string;
     /** Whether the field stores an ARRAY. A scalar type may still be one. */
     hasMany?: boolean;
+    /**
+     * Whether the field's values are stored per locale.
+     *
+     * Declared here rather than read through a cast, so a caller that drops it
+     * is a compile error instead of a flag that silently never arrives.
+     */
+    localized?: boolean;
   }>;
   /**
    * What a human calls this collection — the registry's plural label.

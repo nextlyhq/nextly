@@ -21,7 +21,10 @@ import {
   TIMESERIES_INTERVALS,
   type TimeseriesInterval,
 } from "../timeseries-interval";
-import { timeseriesBucketExpression } from "../timeseries-bucket";
+import {
+  timeseriesBoundOperand,
+  timeseriesBucketExpression,
+} from "../timeseries-bucket";
 
 const URL = process.env.TEST_MYSQL_URL;
 const TABLE = "tz_bucket_probe";
@@ -115,6 +118,50 @@ describeOrSkip("a MySQL timeseries bucket, across server time zones", () => {
       expect(behind).toBe(utc);
     }
   );
+
+  it("selects the same rows for a window bound at every session zone", async () => {
+    // The other half of the zone question. The bucket expression decides which
+    // point a row lands in; the WHERE bound decides whether the row is read at
+    // all, and MySQL interprets a datetime operand compared against a
+    // `TIMESTAMP` in the session zone. Measured: a row stored at
+    // 2026-03-04T03:00:00Z matches `c >= '2026-03-04 00:00:00'` at +00:00 and
+    // does NOT match it at -08:00, so the first eight hours of the oldest
+    // interval would be dropped while the bucket beside it is UTC-normalised.
+    if (!connection) throw new Error("no connection");
+    const bound = new Date("2026-03-04T00:00:00.000Z");
+    const operand = timeseriesBoundOperand(bound, "mysql");
+    const { sql: text, params } = new MySqlDialect().sqlToQuery(
+      sql`SELECT COUNT(*) AS n FROM ${sql.raw(TABLE)} WHERE label = 'day' AND c >= ${operand}`
+    );
+
+    const counts: number[] = [];
+    for (const zone of ["+00:00", "-08:00", "+05:30"]) {
+      await connection.query(`SET time_zone = '${zone}'`);
+      const inlined = params.reduce<string>(
+        (statement, value) => statement.replace("?", String(value)),
+        text
+      );
+      const [rows] = await connection.query(inlined);
+      counts.push(Number((rows as Array<{ n: number }>)[0]?.n ?? -1));
+    }
+
+    // The `day` row is 2026-03-04 23:30:00Z, which is after the bound in every
+    // zone once the operand is absolute.
+    expect(counts).toEqual([1, 1, 1]);
+  });
+
+  it("would have dropped rows at a negative offset without the absolute bound", async () => {
+    // The must-differ control: the naive bound is a wall-clock literal, and at
+    // -08:00 it excludes a row that is genuinely inside the window.
+    if (!connection) throw new Error("no connection");
+    await connection.query(`SET time_zone = '-08:00'`);
+    const [rows] = await connection.query(
+      `SELECT COUNT(*) AS n FROM ${TABLE} WHERE label = 'day' AND c >= '2026-03-05 00:00:00'`
+    );
+    // 2026-03-04 23:30:00Z reads as 15:30 on 2026-03-04 at -08:00, so a naive
+    // bound of 2026-03-05 00:00:00 excludes it while the absolute one keeps it.
+    expect(Number((rows as Array<{ n: number }>)[0]?.n)).toBe(0);
+  });
 
   it.each(TIMESERIES_INTERVALS)(
     "would have got the %s bucket wrong without the normalisation",

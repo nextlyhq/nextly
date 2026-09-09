@@ -1076,3 +1076,52 @@ describe("validateWidgetQuery, a timeline key must name a date", () => {
     });
   });
 });
+
+describe("validateWidgetQuery, a localized date key", () => {
+  beforeEach(() => {
+    registerSource({
+      id: "collection:i18n",
+      label: "Localized",
+      kind: "collection",
+      supports: ["count", "timeseries"],
+      fields: [
+        { name: "publishedAt", type: "date" },
+        // Its values live in the `_locales` companion, so the read cannot
+        // bucket them. The coarse type says "date" either way.
+        { name: "translatedAt", type: "date", localized: true },
+      ],
+    });
+  });
+
+  it("refuses a localized date, which the coarse type cannot express", () => {
+    // Approved here, it would register a widget that the read refuses on every
+    // load, with nothing pointing at the declaration that caused it.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:i18n",
+        op: "timeseries",
+        dateField: "translatedAt",
+        interval: "day",
+      })
+    ).toThrow(/is localized, so its values are stored per locale/);
+  });
+
+  it("still accepts a date that is not localized", () => {
+    // The control: a guard that refused every date field would satisfy the
+    // assertion above while making the op unusable.
+    expect(
+      validateWidgetQuery({
+        source: "collection:i18n",
+        op: "timeseries",
+        dateField: "publishedAt",
+        interval: "day",
+      })
+    ).toEqual({
+      source: "collection:i18n",
+      op: "timeseries",
+      dateField: "publishedAt",
+      interval: "day",
+      limit: 5,
+    });
+  });
+});

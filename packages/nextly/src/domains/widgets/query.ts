@@ -711,9 +711,17 @@ function assertDateFieldBucketable(
       `dateField references undeclared field "${dateField}" on "${source.id}"`
     );
   }
-  const declaredType = source.fields.find(
-    field => field.name === dateField
-  )?.type;
+  const declaredField = source.fields.find(field => field.name === dateField);
+  // A localized field's values live in the `_locales` companion, so the read
+  // cannot bucket them. Refused HERE as well, because the coarse type says
+  // "date" either way and approving it would register a widget that fails on
+  // every load with nothing pointing at the declaration that caused it.
+  if (declaredField?.localized === true) {
+    fail(
+      `dateField "${dateField}" on "${source.id}" is localized, so its values are stored per locale and cannot be placed on a timeline`
+    );
+  }
+  const declaredType = declaredField?.type;
   if (declaredType !== "date") {
     fail(
       `dateField "${dateField}" on "${source.id}" is a ${String(declaredType)} field; a timeseries needs a date`

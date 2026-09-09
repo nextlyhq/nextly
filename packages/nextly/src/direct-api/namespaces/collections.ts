@@ -500,6 +500,7 @@ export async function timeseries(
     fallbackLocale: config.fallbackLocale,
     context: config.context,
     ...(args.intervals === undefined ? {} : { intervals: args.intervals }),
+    ...(args.now === undefined ? {} : { now: args.now }),
   });
 
   if (!result.success) {

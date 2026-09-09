@@ -9,7 +9,7 @@
  * expressions and read as coverage for all of them.
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { registerHook, unregisterHook } from "../../../hooks";
 import type { HookHandler } from "../../../hooks/types";
@@ -92,9 +92,29 @@ async function boot(
   return h;
 }
 
+/**
+ * ONE instant per test, shared by the fixtures and the window they are read
+ * against.
+ *
+ * Two reads of the system clock either side of a fixture write can straddle
+ * UTC midnight -- `boot` creates tables and inserts rows, so the gap is
+ * seconds, not microseconds. Every row would then move one bucket left while
+ * the positional assertions below still expect fixed offsets. Settling both
+ * against one captured instant removes the race rather than narrowing it.
+ */
+let clock = new Date();
+beforeEach(() => {
+  clock = new Date();
+});
+
 /** Rows placed a whole number of days back, so their bucket is index-addressable. */
 function daysAgo(days: number): Date {
-  return new Date(Date.now() - days * DAY_MS);
+  return new Date(clock.getTime() - days * DAY_MS);
+}
+
+/** The same anchor the fixtures used, handed to the read as its window end. */
+function hoursAgo(hours: number): Date {
+  return new Date(clock.getTime() - hours * HOUR_MS);
 }
 
 describe.each(getConfiguredTestDialects())("a timeseries on %s", dialect => {
@@ -103,6 +123,7 @@ describe.each(getConfiguredTestDialects())("a timeseries on %s", dialect => {
 
     const res = await h.timeseriesEntries({
       collectionName: EVENTS,
+      now: clock,
       dateField: "occurredAt",
       interval: "day",
       intervals: 5,
@@ -127,6 +148,7 @@ describe.each(getConfiguredTestDialects())("a timeseries on %s", dialect => {
 
     const res = await h.timeseriesEntries({
       collectionName: EVENTS,
+      now: clock,
       dateField: "occurredAt",
       interval: "day",
       intervals: 5,
@@ -148,6 +170,7 @@ describe.each(getConfiguredTestDialects())("a timeseries on %s", dialect => {
 
     const res = await h.timeseriesEntries({
       collectionName: EVENTS,
+      now: clock,
       dateField: "occurredAt",
       interval: "day",
       intervals: 4,
@@ -173,6 +196,7 @@ describe.each(getConfiguredTestDialects())("a timeseries on %s", dialect => {
 
     const res = await h.timeseriesEntries({
       collectionName: EVENTS,
+      now: clock,
       dateField: "occurredAt",
       interval: "day",
       intervals: 3,
@@ -185,12 +209,13 @@ describe.each(getConfiguredTestDialects())("a timeseries on %s", dialect => {
 
   it("buckets by the hour without carrying the row's own minute", async () => {
     const h = await boot(dialect, [
-      { occurredAt: new Date(Date.now() - 2 * HOUR_MS) },
-      { occurredAt: new Date(Date.now() - 2 * HOUR_MS - 60 * 1000) },
+      { occurredAt: hoursAgo(2) },
+      { occurredAt: new Date(hoursAgo(2).getTime() - 60 * 1000) },
     ]);
 
     const res = await h.timeseriesEntries({
       collectionName: EVENTS,
+      now: clock,
       dateField: "occurredAt",
       interval: "hour",
       intervals: 6,
@@ -211,6 +236,7 @@ describe.each(getConfiguredTestDialects())("a timeseries on %s", dialect => {
 
     const res = await h.timeseriesEntries({
       collectionName: EVENTS,
+      now: clock,
       dateField: "occurredAt",
       interval: "day",
       intervals: 3,
@@ -235,6 +261,7 @@ describe.each(getConfiguredTestDialects())("a timeseries on %s", dialect => {
     const counted = await h.countEntries({ collectionName: EVENTS, where });
     const series = await h.timeseriesEntries({
       collectionName: EVENTS,
+      now: clock,
       dateField: "occurredAt",
       interval: "day",
       intervals: 7,
@@ -256,6 +283,7 @@ describe.each(getConfiguredTestDialects())("a timeseries on %s", dialect => {
 
     const res = await h.timeseriesEntries({
       collectionName: EVENTS,
+      now: clock,
       dateField: "label",
       interval: "day",
     });
@@ -272,6 +300,7 @@ describe.each(getConfiguredTestDialects())("a timeseries on %s", dialect => {
 
     const res = await h.timeseriesEntries({
       collectionName: EVENTS,
+      now: clock,
       dateField: "closedAt",
       interval: "day",
     });
@@ -285,6 +314,7 @@ describe.each(getConfiguredTestDialects())("a timeseries on %s", dialect => {
 
     const res = await h.timeseriesEntries({
       collectionName: EVENTS,
+      now: clock,
       dateField: "occurredAt",
       interval: "fortnight",
     });
@@ -298,6 +328,7 @@ describe.each(getConfiguredTestDialects())("a timeseries on %s", dialect => {
 
     const res = await h.timeseriesEntries({
       collectionName: EVENTS,
+      now: clock,
       dateField: "occurredAt",
       interval: "day",
       intervals: 100000,
@@ -312,6 +343,7 @@ describe.each(getConfiguredTestDialects())("a timeseries on %s", dialect => {
 
     const res = await h.timeseriesEntries({
       collectionName: EVENTS,
+      now: clock,
       dateField: "occurredAt",
       interval: "day",
       intervals: Number.NaN,
@@ -365,6 +397,7 @@ describe.each(getConfiguredTestDialects())(
 
       const res = await h.timeseriesEntries({
         collectionName: EVENTS,
+        now: clock,
         dateField: "createdAt",
         interval: "day",
         intervals: 3,
@@ -381,6 +414,7 @@ describe.each(getConfiguredTestDialects())(
 
       const res = await h.timeseriesEntries({
         collectionName: EVENTS,
+        now: clock,
         dateField: "created_at",
         interval: "day",
         intervals: 2,
@@ -411,6 +445,7 @@ describe.each(getConfiguredTestDialects())(
       try {
         const res = await h.timeseriesEntries({
           collectionName: EVENTS,
+          now: clock,
           dateField: "label",
           interval: "day",
         });
@@ -437,6 +472,7 @@ describe.each(getConfiguredTestDialects())(
       try {
         const res = await h.timeseriesEntries({
           collectionName: EVENTS,
+          now: clock,
           dateField: "occurredAt",
           interval: "day",
           intervals: 2,
@@ -458,11 +494,12 @@ describe.each(getConfiguredTestDialects())(
       // most recent point.
       const h = await boot(dialect, [
         { occurredAt: daysAgo(0) },
-        { occurredAt: new Date(Date.now() + 5 * DAY_MS) },
+        { occurredAt: daysAgo(-5) },
       ]);
 
       const res = await h.timeseriesEntries({
         collectionName: EVENTS,
+        now: clock,
         dateField: "occurredAt",
         interval: "day",
         intervals: 3,
@@ -514,6 +551,7 @@ describe.each(getConfiguredTestDialects())(
 
       const res = await h.timeseriesEntries({
         collectionName: EVENTS,
+        now: clock,
         dateField: "translatedAt",
         interval: "day",
       });
@@ -532,6 +570,7 @@ describe.each(getConfiguredTestDialects())(
 
       const res = await h.timeseriesEntries({
         collectionName: EVENTS,
+        now: clock,
         dateField: "noSuchField",
         interval: "day",
       });
@@ -540,6 +579,39 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.stringify(res)).toContain(
         "is not a column on this collection"
       );
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a window anchored to a given instant on %s",
+  dialect => {
+    it("ends at the interval the caller named, not at the read's own clock", async () => {
+      // The window end is the caller's, so a report can be asked for as of a
+      // period end rather than as of whenever it happened to run. It is also
+      // what makes the positional assertions in this file deterministic: the
+      // fixtures and the window are settled against ONE instant.
+      const h = await boot(dialect, [{ occurredAt: daysAgo(0) }]);
+
+      const asOf = new Date("2026-03-04T05:06:07.000Z");
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        now: asOf,
+        dateField: "occurredAt",
+        interval: "day",
+        intervals: 3,
+      });
+
+      expect(res.success).toBe(true);
+      expect((res.data?.points ?? []).map(p => p.start)).toEqual([
+        "2026-03-02T00:00:00.000Z",
+        "2026-03-03T00:00:00.000Z",
+        "2026-03-04T00:00:00.000Z",
+      ]);
+      // The row written "today" is far outside that window, so every point is
+      // empty -- which is also the control that the anchor was honoured rather
+      // than ignored in favour of the system clock.
+      expect((res.data?.points ?? []).every(p => p.count === 0)).toBe(true);
     });
   }
 );

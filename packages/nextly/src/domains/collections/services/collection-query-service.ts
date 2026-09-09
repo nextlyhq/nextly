@@ -155,7 +155,10 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
-import { timeseriesBucketExpression } from "../query/timeseries-bucket";
+import {
+  timeseriesBoundOperand,
+  timeseriesBucketExpression,
+} from "../query/timeseries-bucket";
 import {
   bucketStartToDbText,
   intervalAfter,
@@ -3492,6 +3495,20 @@ export class CollectionQueryService extends BaseService {
       dateField: string;
       interval: TimeseriesInterval;
       intervals?: number;
+      /**
+       * The instant the window ends at, defaulting to now.
+       *
+       * Taken from the caller for the reason `releaseNow` is: a window and the
+       * rows it describes have to be settled against ONE clock. Two reads of
+       * the system clock either side of a fixture write can straddle midnight,
+       * which moves every point one interval and is a real intermittent
+       * failure rather than a hypothetical one.
+       *
+       * It is also the honest way to ask for a window that is not "now" -- a
+       * report as of a period end, rather than as of whenever it happened to
+       * run.
+       */
+      now?: Date;
     }
   ): Promise<CollectionServiceResult<TimeseriesPoints>> {
     try {
@@ -3510,12 +3527,9 @@ export class CollectionQueryService extends BaseService {
       const { schema, whereConditions } = plan;
       const column = plan.groupColumn;
 
-      const window = intervalWindow(new Date(), interval, count);
-      const bucket = timeseriesBucketExpression(
-        column,
-        interval,
-        this.groupDialect()
-      );
+      const window = intervalWindow(params.now ?? new Date(), interval, count);
+      const dialect = this.groupDialect();
+      const bucket = timeseriesBucketExpression(column, interval, dialect);
 
       const rows = await this.db
         .select({ bucket, total: sql<number>`count(*)` })
@@ -3535,8 +3549,14 @@ export class CollectionQueryService extends BaseService {
         .where(
           and(
             ...whereConditions,
-            gte(column, window[0]),
-            lt(column, intervalAfter(window[window.length - 1], interval))
+            gte(column, timeseriesBoundOperand(window[0], dialect)),
+            lt(
+              column,
+              timeseriesBoundOperand(
+                intervalAfter(window[window.length - 1], interval),
+                dialect
+              )
+            )
           )
         )
         // The SAME expression in the SELECT and the GROUP BY. MySQL's

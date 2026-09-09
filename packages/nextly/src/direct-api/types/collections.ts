@@ -500,6 +500,14 @@ export interface TimeseriesArgs<TSlug extends CollectionSlug = CollectionSlug>
    * produce a short chart.
    */
   intervals?: number;
+
+  /**
+   * The instant the window ends at, defaulting to now.
+   *
+   * Pass one to ask for a window as of a period end — a report for last month,
+   * rather than for whenever the report happened to run.
+   */
+  now?: Date;
 }
 
 /**

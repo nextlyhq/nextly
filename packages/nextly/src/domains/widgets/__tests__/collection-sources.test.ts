@@ -24,7 +24,13 @@ import {
 
 type Row = {
   slug: string;
-  fields: Array<{ name: string; type: string; label?: string }>;
+  fields: Array<{
+    name: string;
+    type: string;
+    label?: string;
+    /** A registry row can carry this; the source builder reads it. */
+    localized?: boolean;
+  }>;
   timestamps?: boolean;
   status?: boolean;
   labels?: unknown;
@@ -103,6 +109,35 @@ describe("refreshCollectionSources", () => {
     const source = getSource("collection:reports");
     expect(source?.kind).toBe("collection");
     expect(source?.fields.map(f => f.name)).toContain("title");
+  });
+
+  it("carries a field's localization from the registry onto the source", async () => {
+    // Through the WHOLE path -- registry, `readableFields`, `exposedFields` --
+    // because that is where the flag was being dropped. A test that hands a
+    // pre-built field to the source builder skips the step that lost it.
+    //
+    // The coarse source type cannot express this: a localized date is still a
+    // date, so a validator reading only the type approves a timeline the read
+    // then refuses, leaving a widget that fails on every load.
+    registryHolds([
+      {
+        slug: "reports",
+        fields: [
+          { name: "publishedAt", type: "date" },
+          { name: "translatedAt", type: "date", localized: true },
+        ],
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    const fields = getSource("collection:reports")?.fields ?? [];
+    const byName = new Map(fields.map(f => [f.name, f]));
+    expect(byName.get("translatedAt")?.localized).toBe(true);
+    // The control: an ordinary date must NOT be marked, or the flag would
+    // refuse every timeline rather than the localized ones.
+    expect(byName.get("publishedAt")?.localized).toBeUndefined();
+    expect(byName.get("publishedAt")?.type).toBe("date");
   });
 
   it("carries a field's human label onto the source", async () => {

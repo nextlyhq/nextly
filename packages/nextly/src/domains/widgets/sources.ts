@@ -43,6 +43,17 @@ export interface WidgetSourceField {
   name: string;
   type: WidgetSourceFieldType;
   /**
+   * Whether this field's values are stored per locale.
+   *
+   * A localized field lives in the `_locales` companion rather than on the
+   * collection's own table, so it can be SELECTED by a list but cannot be
+   * grouped or bucketed. The coarse `type` cannot express that -- a localized
+   * date is still a date -- so a validator reading only the type approves a
+   * timeline over it and the read then refuses it, leaving a widget that fails
+   * on every load.
+   */
+  localized?: boolean;
+  /**
    * What a human calls this field, when the source knows.
    *
    * A widget that draws a TABLE needs a column heading, and the only honest

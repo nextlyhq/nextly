@@ -23,6 +23,31 @@ describe("built-in sources", () => {
     expect(source?.supports).toContain("list");
   });
 
+  it("carries a field's localization onto the source", () => {
+    // The coarse source type cannot express it -- a localized date is still a
+    // date -- so without the flag a validator reading only the type approves a
+    // timeline the read then refuses, leaving a widget that fails on every
+    // load. The flag is what lets the refusal happen at the declaration.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [
+          { name: "publishedAt", type: "date" },
+          { name: "translatedAt", type: "date", localized: true },
+        ],
+        timestamps: true,
+      },
+    ]);
+
+    const fields = getSource("collection:posts")?.fields ?? [];
+    const byName = new Map(fields.map(f => [f.name, f]));
+    expect(byName.get("translatedAt")?.localized).toBe(true);
+    // The control: an ordinary date must NOT be marked, or the flag would
+    // refuse every timeline rather than the localized ones.
+    expect(byName.get("publishedAt")?.localized).toBeUndefined();
+    expect(byName.get("publishedAt")?.type).toBe("date");
+  });
+
   it("declares every aggregate op a collection read can answer", () => {
     // An op the executor implements but no source DECLARES is unreachable:
     // validation refuses it before execution, so the branch is dead code and
