@@ -98,6 +98,29 @@ describe("where a plugin route answers", () => {
     ).toThrow();
   });
 
+  it("collides two patterns that overlap while sharing neither text nor shape", () => {
+    // `/x/:id/end` and `/x/fixed/:tail` both answer `/x/fixed/end`, and both
+    // carry two literals, so the matcher's tie-break has nothing to choose on
+    // and registration order decides. A hash of either path cannot see this:
+    // they differ as strings AND as shapes.
+    expect(() =>
+      collectPluginRoutes([
+        {
+          name: "@acme/one",
+          contributes: {
+            routes: [route({ mount: "root", path: "/x/:id/end" })],
+          },
+        },
+        {
+          name: "@acme/two",
+          contributes: {
+            routes: [route({ mount: "root", path: "/x/fixed/:tail" })],
+          },
+        },
+      ] as never)
+    ).toThrow();
+  });
+
   it("does NOT collide a literal with a capture", () => {
     // The control on the rule above, and the reason it is keyed on shape rather
     // than on "contains a capture": `/items/count` beside `/items/:id` is an

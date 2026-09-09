@@ -2,6 +2,7 @@ import type { PluginDefinition } from "../plugin-context";
 
 import { routeCollisionError, routeInvalidPathError } from "./route-error";
 import { pluginRouteFullPath } from "./route-path";
+import { literalCount, patternsOverlap, splitPath } from "./route-pattern";
 import type { PluginRoute } from "./route-types";
 
 /** A route collected from a plugin, namespaced and ready to register. */
@@ -16,20 +17,6 @@ export interface CollectedRoute {
 }
 
 /**
- * A path reduced to what decides whether two patterns answer the same URL.
- *
- * Every capture becomes one placeholder, so the NAME of a parameter stops
- * mattering: two routes that differ only there are indistinguishable at
- * request time and one of them would never be reached.
- */
-function collisionShape(fullPath: string): string {
-  return fullPath
-    .split("/")
-    .map(segment => (segment.startsWith(":") ? ":" : segment))
-    .join("/");
-}
-
-/**
  * Pure fold of every ENABLED plugin's `contributes.routes` into namespaced,
  * collision-checked routes. Disabled plugins (`enabled: false`) skip
  * behavior — including routes — while their schema is still applied.
@@ -41,8 +28,14 @@ export function collectPluginRoutes(
   plugins: PluginDefinition[]
 ): CollectedRoute[] {
   const collected: CollectedRoute[] = [];
-  // Tracks the first owner of each (method, fullPath) for collision reporting.
-  const seen = new Map<string, string>();
+  // Every pattern collected so far, kept whole rather than hashed, because
+  // overlap is a comparison between two patterns and not a property of one.
+  const seen: Array<{
+    method: PluginRoute["method"];
+    segments: string[];
+    literals: number;
+    owner: string;
+  }> = [];
 
   for (const plugin of plugins) {
     if (plugin.enabled === false) continue;
@@ -58,20 +51,36 @@ export function collectPluginRoutes(
         route.path,
         route.mount
       );
-      // Keyed on the SHAPE, not the text. `/hooks/:id` and `/hooks/:slug` are
-      // different strings and the same URL, so an exact-string key let two
-      // plugins claim one address and left the winner to registration order.
-      // A literal still differs from a capture: `/items/count` beside
-      // `/items/:id` is an ordinary pair, and the matcher prefers the literal.
-      const key = `${route.method} ${collisionShape(fullPath)}`;
-      const existingOwner = seen.get(key);
-      if (existingOwner !== undefined) {
+      // Compared against every route already collected, using the matcher's own
+      // overlap rule. A hash of the path cannot express this: `/x/:id/end` and
+      // `/x/fixed/:tail` share neither text nor shape and both answer
+      // `/x/fixed/end`.
+      //
+      // Overlapping alone is not a collision. `/items/count` beside
+      // `/items/:id` overlaps and is an ordinary pair, because the matcher
+      // prefers the pattern with more literals. It is a collision when they
+      // overlap AND carry the same number of literals, which is exactly when
+      // the tie-break has nothing to choose on and registration order decides.
+      const segments = splitPath(fullPath);
+      const literals = literalCount(segments);
+      const clash = seen.find(
+        other =>
+          other.method === route.method &&
+          other.literals === literals &&
+          patternsOverlap(other.segments, segments)
+      );
+      if (clash !== undefined) {
         throw routeCollisionError(route.method, fullPath, [
-          existingOwner,
+          clash.owner,
           plugin.name,
         ]);
       }
-      seen.set(key, plugin.name);
+      seen.push({
+        method: route.method,
+        segments,
+        literals,
+        owner: plugin.name,
+      });
       collected.push({
         pluginName: plugin.name,
         method: route.method,

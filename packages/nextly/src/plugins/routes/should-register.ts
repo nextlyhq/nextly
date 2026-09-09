@@ -1,5 +1,5 @@
 /**
- * Whether the plugin registry has to be filled before it can be asked.
+ * Whether THIS request could reach a plugin route that is not registered yet.
  *
  * Plugin routes are registered during service initialisation, and that is lazy.
  * An app wired through `createDynamicHandlers({ config })` has an empty registry
@@ -7,31 +7,47 @@
  * else happens to boot the app, and a serverless worker repeats that on every
  * cold start.
  *
- * Booting unconditionally is the wrong cure: a request to a path nothing serves
- * would connect the database and run startup work before being refused, which
- * hands an unauthenticated caller a cold start it could not otherwise cause.
+ * Booting because the app HAS routes is the wrong test. A cold request to
+ * `/api/garbage` would then run database and plugin startup before answering
+ * 400, so anonymous scanning could force that work on demand. The question has
+ * to be about this request: does some declared, enabled route match the method
+ * and path in front of us?
  *
- * So the answer is yes only when there is something to boot FOR, which the
- * stored config already says. Pure, and separate from the boot it gates, so the
- * decision can be checked without one.
+ * Answered from the config alone, using the matcher's own grammar, so no boot
+ * is needed to decide whether to boot.
  *
  * @module plugins/routes/should-register
  */
 
+import { pluginRouteFullPath } from "./route-path";
+import { matchPattern, splitPath } from "./route-pattern";
+import type { PluginRoute } from "./route-types";
+
 /** The part of a plugin definition this reads. */
 interface RouteContributor {
-  contributes?: { routes?: unknown[] };
+  name: string;
+  enabled?: boolean;
+  contributes?: { routes?: PluginRoute[] };
 }
 
 export function shouldRegisterPluginRoutes(
   registeredCount: number,
-  plugins: readonly RouteContributor[] | undefined
+  plugins: readonly RouteContributor[] | undefined,
+  method: string,
+  path: string
 ): boolean {
   // Already filled: every request after the first, which is nearly all of them.
   if (registeredCount > 0) return false;
-  // Nothing to fill it with. An app contributing no routes never boots on an
-  // unknown path, which is the case the surrounding code is careful about.
-  return (plugins ?? []).some(
-    plugin => (plugin.contributes?.routes?.length ?? 0) > 0
-  );
+
+  const pathSegments = splitPath(path);
+  return (plugins ?? []).some(plugin => {
+    // A disabled plugin contributes no behaviour, routes included, so booting
+    // for one of its paths would boot for a route that will never answer.
+    if (plugin.enabled === false) return false;
+    return (plugin.contributes?.routes ?? []).some(route => {
+      if (route.method !== method) return false;
+      const full = pluginRouteFullPath(plugin.name, route.path, route.mount);
+      return matchPattern(splitPath(full), pathSegments) !== null;
+    });
+  });
 }

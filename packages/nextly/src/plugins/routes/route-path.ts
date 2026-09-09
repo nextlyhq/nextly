@@ -18,12 +18,12 @@
  * @module plugins/routes/route-path
  */
 
-import type { PluginRoute } from "./route-types";
+import type { PluginRouteMount } from "./route-types";
 
 export function pluginRouteFullPath(
   pluginName: string,
   routePath: string,
-  mount: PluginRoute["mount"] = "plugin"
+  mount: PluginRouteMount = "plugin"
 ): string {
   // A root route answers at the address it declares. It is still collected and
   // collision-checked like any other, and the dispatcher consults it only after

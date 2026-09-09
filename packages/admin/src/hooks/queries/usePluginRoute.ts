@@ -43,7 +43,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { pluginRouteFullPath } from "nextly/config";
+import { pluginRouteFullPath, type PluginRouteMount } from "nextly/config";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 
@@ -102,7 +102,7 @@ export interface PluginRouteRequest {
    * unserved path answers with nothing and reads as an empty result, which is
    * the mistake this argument exists to make impossible to fall into silently.
    */
-  mount?: "plugin" | "root";
+  mount?: PluginRouteMount;
 }
 
 /**

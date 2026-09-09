@@ -1,6 +1,7 @@
 import type { PluginContext } from "../plugin-context";
 
 import { pluginRouteFullPath } from "./route-path";
+import { literalCount, matchPattern, splitPath } from "./route-pattern";
 import type { PluginRoute, RouteMethod } from "./route-types";
 
 /**
@@ -27,10 +28,6 @@ export interface RouteMatch {
   route: PluginRoute;
   baseCtx: PluginContext;
   params: Record<string, string>;
-}
-
-function splitPath(path: string): string[] {
-  return path.split("/").filter(Boolean);
 }
 
 /**
@@ -60,19 +57,6 @@ export class PluginRouteRegistry {
   }
 
   /**
-   * How many segments of a pattern are literal rather than captures.
-   *
-   * The tie-break when more than one pattern matches. `/items/count` and
-   * `/items/:id` both answer `/items/count`, and without a rule the winner is
-   * whichever plugin registered first, which is registration order dressed up
-   * as routing. Preferring literals is what every router does, and it makes
-   * the pair unambiguous instead of merely ordered.
-   */
-  private static literalCount(segments: string[]): number {
-    return segments.filter(seg => !seg.startsWith(":")).length;
-  }
-
-  /**
    * Match an incoming (method, path) against registered routes of one mount.
    *
    * The mount is a REQUIRED argument rather than a search across both, because
@@ -91,20 +75,13 @@ export class PluginRouteRegistry {
     for (const entry of this.routes) {
       if (entry.mount !== mount) continue;
       if (entry.method !== method) continue;
-      if (entry.segments.length !== pathSegments.length) continue;
-      const params: Record<string, string> = {};
-      let matched = true;
-      for (let i = 0; i < entry.segments.length; i++) {
-        const seg = entry.segments[i];
-        if (seg.startsWith(":")) {
-          params[seg.slice(1)] = pathSegments[i];
-        } else if (seg !== pathSegments[i]) {
-          matched = false;
-          break;
-        }
-      }
-      if (!matched) continue;
-      const literals = PluginRouteRegistry.literalCount(entry.segments);
+      const params = matchPattern(entry.segments, pathSegments);
+      if (params === null) continue;
+      // The tie-break when more than one pattern matches: the most literal
+      // wins. `/items/count` and `/items/:id` both answer `/items/count`, and
+      // without a rule the winner is whichever plugin registered first, which
+      // is registration order dressed up as routing.
+      const literals = literalCount(entry.segments);
       // Kept rather than returned: a later pattern may be more specific, and
       // returning the first match is what made registration order the rule.
       if (best === null || literals > best.literals) {

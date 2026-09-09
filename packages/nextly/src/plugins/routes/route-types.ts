@@ -114,6 +114,16 @@ export type Middleware = (
 ) => Promise<Response>;
 
 /**
+ * @public Where a plugin route answers.
+ *
+ * Named rather than spelled inline, because the server contract and the admin
+ * clients that call it have to agree. Two copies of the union compile happily
+ * while disagreeing, so a plugin could declare a mount the client rejects and
+ * nothing would connect the two definitions.
+ */
+export type PluginRouteMount = "plugin" | "root";
+
+/**
  * @public A single HTTP route contributed by a plugin. Mounted at
  * `/api/plugins/<plugin-name><path>` under the existing catch-all and secure by
  * default (auth + RBAC) unless `public: true`.
@@ -146,5 +156,5 @@ export interface PluginRoute {
    * CAN claim is anything core does not serve, which is what lets a plugin take
    * over an endpoint core has stopped shipping without the URL changing.
    */
-  mount?: "plugin" | "root";
+  mount?: PluginRouteMount;
 }

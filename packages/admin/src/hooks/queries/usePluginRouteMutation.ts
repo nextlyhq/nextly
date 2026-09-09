@@ -18,6 +18,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   pluginRouteFullPath,
   type JsonValue,
+  type PluginRouteMount,
   type RouteMethod,
 } from "nextly/config";
 import { useCallback, useRef, useState } from "react";
@@ -71,7 +72,7 @@ export interface PluginRouteWrite {
    * See {@link PluginRouteRequest.mount}. A write aimed at the wrong mount
    * requests a path nothing serves, which fails rather than writing elsewhere.
    */
-  readonly mount?: "plugin" | "root";
+  readonly mount?: PluginRouteMount;
 }
 
 /**
@@ -85,7 +86,7 @@ export interface PluginRouteWrite {
  */
 export type PluginRouteInvalidation =
   | string
-  | { readonly path: string; readonly mount?: "plugin" | "root" };
+  | { readonly path: string; readonly mount?: PluginRouteMount };
 
 /** What a write reports back while and after it runs. */
 export interface PluginRouteWriter<TBody, TResult extends object | null> {

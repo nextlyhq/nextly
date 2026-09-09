@@ -1045,12 +1045,17 @@ async function resolveAuthorization(
  * DOES contribute routes has to boot to serve them, and a public one has to
  * boot for an unauthenticated caller by definition.
  */
-async function ensurePluginRoutesRegistered(): Promise<void> {
+async function ensurePluginRoutesRegistered(
+  httpMethod: string,
+  requestPath: string
+): Promise<void> {
   const registry = getPluginRouteRegistry();
   if (
     !shouldRegisterPluginRoutes(
       registry.list().length,
-      getHandlerConfig()?.plugins
+      getHandlerConfig()?.plugins,
+      httpMethod,
+      requestPath
     )
   ) {
     return;
@@ -1072,7 +1077,7 @@ async function handleServiceRequest(
   // router (which would 400 on these paths). The verb wrappers' withSecurity()
   // already applies CORS/rate-limit/headers around this.
   const requestPath = "/" + params.join("/");
-  await ensurePluginRoutesRegistered();
+  await ensurePluginRoutesRegistered(httpMethod, requestPath);
   const pluginRouteMatch = getPluginRouteRegistry().match(
     httpMethod,
     requestPath,
