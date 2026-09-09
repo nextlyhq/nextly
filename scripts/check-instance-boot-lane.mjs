@@ -207,6 +207,36 @@ export function isTemplate(path) {
 export const BOOT_BUDGET_MS = 30_000;
 
 /**
+ * The local names bound to `defineConfig` by an import from `vitest/config`.
+ *
+ * A set rather than a name, because `import { defineConfig as define }` is the
+ * same function under another label, and because a file importing nothing binds
+ * none: a call in that file is a local helper whatever it is called.
+ */
+export function vitestDefineConfigBindings(parsed) {
+  const bound = new Set();
+
+  for (const statement of parsed.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    if (!ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    if (statement.moduleSpecifier.text !== "vitest/config") continue;
+
+    const clause = statement.importClause;
+    if (!clause || clause.isTypeOnly) continue;
+    const bindings = clause.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+
+    for (const element of bindings.elements) {
+      if (element.isTypeOnly) continue;
+      const imported = element.propertyName ?? element.name;
+      if (imported.text === "defineConfig") bound.add(element.name.text);
+    }
+  }
+
+  return bound;
+}
+
+/**
  * Whether a config states timeouts a boot can finish inside.
  *
  * Read off the parsed config rather than matched in the text, for the same
@@ -255,11 +285,16 @@ export function statesBootBudget(source) {
    * call this does not recognise is reported rather than guessed at.
    */
   if (ts.isCallExpression(config)) {
-    // A bare `defineConfig`, not `something.defineConfig`. A property access
-    // says nothing about what the object is, so a wrapper reached that way is a
-    // function this has not established returns its argument.
+    /*
+     * The binding is resolved, not just the name. A property access says nothing
+     * about what the object is, and a local function named `defineConfig` is not
+     * vitest's: one that returned one-second timeouts while receiving a literal
+     * with thirty would read as adequate. Only the identifier this file imported
+     * from `vitest/config` is known to return its argument unchanged.
+     */
     const callee = config.expression;
-    if (!ts.isIdentifier(callee) || callee.text !== "defineConfig") return false;
+    if (!ts.isIdentifier(callee)) return false;
+    if (!vitestDefineConfigBindings(parsed).has(callee.text)) return false;
     if (config.arguments.length === 0) return false;
     config = config.arguments[0];
   }

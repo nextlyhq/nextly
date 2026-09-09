@@ -463,6 +463,26 @@ export default defineConfig({ test: { testTimeout: 30000, hookTimeout: 30000 } }
     ).toBe(false);
   });
 
+  it("does NOT accept a local function that merely shares the name", () => {
+    // A helper called `defineConfig` is not vitest's. One returning one-second
+    // timeouts while receiving a literal with thirty would read as adequate.
+    expect(
+      statesBootBudget(`const defineConfig = () => ({
+  test: { testTimeout: 1000, hookTimeout: 1000 },
+});
+export default defineConfig({ test: { testTimeout: 30000, hookTimeout: 30000 } });`)
+    ).toBe(false);
+  });
+
+  it("accepts the vitest binding under an alias, which is the same function", () => {
+    // The control: the case above would pass on a rule that had stopped
+    // unwrapping any call at all.
+    expect(
+      statesBootBudget(`import { defineConfig as define } from "vitest/config";
+export default define({ test: { testTimeout: 30000, hookTimeout: 30000 } });`)
+    ).toBe(true);
+  });
+
   it("does NOT accept a wrapper reached through a property access", () => {
     // A property access says nothing about what the object is, so this is a
     // function that has not been established to return its argument.
