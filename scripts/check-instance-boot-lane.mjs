@@ -27,9 +27,11 @@
  * `@nextlyhq/plugin-sdk/testing`, and seven relative paths that differ only by
  * depth - so a specifier list would be a list of the ways a directory can be
  * reached, and a file one level deeper would fall out of the scan. A namespace
- * import hides the binding from the import clause, so the property access
- * `<ns>.createTestNextly` counts as well, and for the same reason: it is a fact
- * about the name rather than about where the name came from.
+ * import hides the binding from the import clause, so a property access through
+ * an identifier a `NamespaceImport` introduced counts as well. The receiver is
+ * checked rather than the property name alone: a suite's own fixture exposing
+ * that name boots nothing, and reporting it would be a check firing on a
+ * correct file.
  *
  * ⚠️ Being named for the lane is half of being in it. A package that declares
  * no `test:integration` runs nothing matching the suffix, so a correctly named
@@ -114,25 +116,44 @@ export function importsBootHelper(source, fileName = "test.ts") {
   /*
    * A namespace import hides the binding from the import clause: `import * as
    * testing from "..."` names only `testing`, and the helper is reached later
-   * as `testing.createTestNextly()`. Deciding that from the import alone would
-   * need a list of the modules the helper can live in, which is the specifier
-   * list this deliberately does not keep. The property access is the fact
-   * instead, and it is one the compiler reports, so a comment or a string
-   * spelling the same thing is still not a boot.
+   * as `testing.createTestNextly()`.
+   *
+   * 🔴 The RECEIVER is checked, not just the property name. Accepting any
+   * `<anything>.createTestNextly` would report a suite whose own fixture or mock
+   * happens to expose that name - `fixture.createTestNextly()` boots nothing -
+   * and a check that demands an integration rename for a correct file is one
+   * that gets turned off. Only identifiers a `NamespaceImport` actually
+   * introduced count, so the receiver has to be a module this file imported.
    */
-  let reachedThroughNamespace = false;
-  const findPropertyAccess = node => {
-    if (
-      ts.isPropertyAccessExpression(node) &&
-      node.name.text === BOOT_BINDING
-    ) {
-      reachedThroughNamespace = true;
-      return;
+  const namespaces = new Set();
+  for (const statement of parsed.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const clause = statement.importClause;
+    if (!clause || clause.isTypeOnly) continue;
+    const bindings = clause.namedBindings;
+    if (bindings && ts.isNamespaceImport(bindings)) {
+      namespaces.add(bindings.name.text);
     }
-    ts.forEachChild(node, findPropertyAccess);
-  };
-  ts.forEachChild(parsed, findPropertyAccess);
-  if (reachedThroughNamespace) return true;
+  }
+
+  if (namespaces.size > 0) {
+    let reachedThroughNamespace = false;
+    const findPropertyAccess = node => {
+      if (reachedThroughNamespace) return;
+      if (
+        ts.isPropertyAccessExpression(node) &&
+        node.name.text === BOOT_BINDING &&
+        ts.isIdentifier(node.expression) &&
+        namespaces.has(node.expression.text)
+      ) {
+        reachedThroughNamespace = true;
+        return;
+      }
+      ts.forEachChild(node, findPropertyAccess);
+    };
+    ts.forEachChild(parsed, findPropertyAccess);
+    if (reachedThroughNamespace) return true;
+  }
 
   for (const statement of parsed.statements) {
     if (!ts.isImportDeclaration(statement)) continue;

@@ -113,6 +113,34 @@ const app = await testing.createTestNextly({});`)
     ).toBe(true);
   });
 
+  it("does NOT see a local object that happens to expose the name", () => {
+    // The false positive the receiver check exists to prevent. A fixture or a
+    // mock exposing `createTestNextly` boots nothing, and demanding an
+    // integration rename for it would be the check firing on a correct file.
+    expect(
+      importsBootHelper(`import { describe } from "vitest";
+const fixture = { createTestNextly: () => ({}) };
+const app = fixture.createTestNextly();`)
+    ).toBe(false);
+  });
+
+  it("does NOT see a namespace it never imported", () => {
+    expect(
+      importsBootHelper(`import * as other from "./helpers";
+const app = fixture.createTestNextly();`)
+    ).toBe(false);
+  });
+
+  it("sees it through the namespace that WAS imported, beside one that was not", () => {
+    // The positive control for the two negatives above: they would both pass on
+    // a predicate that stopped recognising namespace boots entirely.
+    expect(
+      importsBootHelper(`import * as testing from "nextly/testing";
+const decoy = { createTestNextly: () => ({}) };
+const app = await testing.createTestNextly({});`)
+    ).toBe(true);
+  });
+
   it("does NOT see a property access spelled inside a comment", () => {
     // The control for the case above: it must still be the compiler deciding,
     // not a substring of the source.
