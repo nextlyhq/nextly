@@ -18,6 +18,7 @@
  *
  * @module block-toolbar.test
  */
+import type { NestingSource } from "@nextlyhq/blocks-engine";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -115,10 +116,18 @@ function editorSpy(
  * without rendered blocks tests a permanently hidden toolbar — which is how the
  * first draft of these cases came back unable to find a single button.
  */
-function tree(editor: EditorState, props: { hidden?: boolean }) {
+function tree(
+  editor: EditorState,
+  props: { hidden?: boolean },
+  nesting?: NestingSource
+) {
   return (
     <ShortcutProvider>
-      <BlockKeyboardActions onSaveAsPattern={() => undefined} editor={editor}>
+      <BlockKeyboardActions
+        onSaveAsPattern={() => undefined}
+        editor={editor}
+        {...(nesting === undefined ? {} : { nesting })}
+      >
         <Canvas
           document={editor.document}
           siteStyles={{ css: "", classes: {} } as never}
@@ -131,8 +140,12 @@ function tree(editor: EditorState, props: { hidden?: boolean }) {
   );
 }
 
-function mount(editor: EditorState, props: { hidden?: boolean } = {}) {
-  const result = render(tree(editor, props));
+function mount(
+  editor: EditorState,
+  props: { hidden?: boolean } = {},
+  nesting?: NestingSource
+) {
+  const result = render(tree(editor, props, nesting));
   return {
     ...result,
     /** Re-render with the selection moved, as a verb that changes it does. */
@@ -421,5 +434,47 @@ describe("a press on the toolbar and the canvas's own click handling", () => {
     // With the gesture, which the canvas now reports alongside the id: a plain
     // click on background is a "replace" with nothing to replace it with.
     expect(editor.select).toHaveBeenCalledWith(null, "replace");
+  });
+});
+
+describe("the rules the bar judges a save by", () => {
+  it("asks the HOST's nesting source, not the registry", () => {
+    /*
+     * A host may supply its own rules to `BlockKeyboardActions` instead of
+     * registering them globally, and until this the keyboard enforced them
+     * while the bar consulted the registry. One selection could then be offered
+     * here and refused by the save it opens.
+     *
+     * The rules below forbid this block at a document root, which is what a
+     * saved pattern's blocks become — so a bar reading them refuses the save,
+     * and one reading the registry does not.
+     */
+    register();
+    const rootIsForbidden: NestingSource = {
+      parentsOf: type => (type === "acme/leaf" ? ["acme/box"] : undefined),
+    };
+
+    mount(editorSpy(pair(), "a"), {}, rootIsForbidden);
+
+    // `aria-disabled`, not the attribute: this bar keeps an unavailable verb in
+    // the tab sequence deliberately, so the reason is reachable. Asserting
+    // `disabled` checks something this component never sets, and passes either
+    // way — which is how the first version of this case read as green.
+    const save = screen.getByLabelText("Save as pattern");
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(save.getAttribute("title")).toContain("belongs inside");
+  });
+
+  it("offers the save under the registry's own rules", () => {
+    // The control, and the reason the case above is about the SOURCE rather
+    // than about saving being broken: the same selection, with nothing
+    // supplied, is savable.
+    register();
+
+    mount(editorSpy(pair(), "a"));
+
+    const save = screen.getByLabelText("Save as pattern");
+    expect(save.getAttribute("aria-disabled")).toBeNull();
+    expect(save.getAttribute("title")).toBe("Save as pattern");
   });
 });

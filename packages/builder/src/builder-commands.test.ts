@@ -195,3 +195,88 @@ describe("every verb the bar offers can actually be run", () => {
     expect(new Set(signatures.values()).size).toBe(signatures.size);
   });
 });
+
+describe("the palette asks the question the toolbar asks", () => {
+  const anyParent = { parentsOf: () => undefined };
+
+  it("judges a SET by the whole selection, not by the primary block", () => {
+    // `a` and `c` share a parent with `b` between them. Asked about `a` alone
+    // the selection looks perfectly savable, so the palette offered a command
+    // the toolbar showed as unavailable — and running it posted the whole
+    // selection, which the server refused.
+    const document = documentOf([node("a"), node("b"), node("c")]);
+
+    const offered = builderCommands({
+      document,
+      selectedId: "a",
+      selectedIds: ["a", "c"],
+      nesting: anyParent,
+      verbs: verbs(),
+      undo: vi.fn(),
+      redo: vi.fn(),
+      canUndo: false,
+      canRedo: false,
+    }).map(command => command.id);
+
+    expect(offered).not.toContain("block.save-as-pattern");
+  });
+
+  it("offers it for a set that IS savable, so the refusal is the rule talking", () => {
+    // The control. Without it the case above passes against a palette that
+    // never offers the command at all.
+    const document = documentOf([node("a"), node("b"), node("c")]);
+
+    const offered = builderCommands({
+      document,
+      selectedId: "a",
+      selectedIds: ["a", "b"],
+      nesting: anyParent,
+      verbs: verbs(),
+      undo: vi.fn(),
+      redo: vi.fn(),
+      canUndo: false,
+      canRedo: false,
+    }).map(command => command.id);
+
+    expect(offered).toContain("block.save-as-pattern");
+  });
+
+  it("agrees with the toolbar on every selection put to both", () => {
+    // The property, rather than two cases of it. Availability is DERIVED from
+    // `toolbarActions` precisely so the two cannot disagree, and asking it a
+    // narrower question than the bar asks is how they came to.
+    const document = documentOf([node("a"), node("b"), node("c")]);
+    const selections = [["a"], ["a", "b"], ["a", "c"], ["b", "c"]];
+
+    const compared = selections.map(ids => ({
+      ids,
+      palette: builderCommands({
+        document,
+        selectedId: ids[0] ?? null,
+        selectedIds: ids,
+        nesting: anyParent,
+        verbs: verbs(),
+        undo: vi.fn(),
+        redo: vi.fn(),
+        canUndo: false,
+        canRedo: false,
+      })
+        .map(command => command.id)
+        .includes("block.save-as-pattern"),
+      bar: toolbarActions(document, ids[0] ?? null, ids, anyParent).some(
+        action => action.id === "save-as-pattern" && action.enabled
+      ),
+    }));
+
+    // Both outcomes occur, so neither an always-offering palette nor a
+    // never-offering one could satisfy this.
+    expect(compared.some(c => c.palette)).toBe(true);
+    expect(compared.some(c => !c.palette)).toBe(true);
+    for (const c of compared) {
+      expect({ ids: c.ids, offered: c.palette }).toEqual({
+        ids: c.ids,
+        offered: c.bar,
+      });
+    }
+  });
+});

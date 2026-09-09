@@ -183,6 +183,41 @@ export interface BlockActions {
 const BlockActionsContext = React.createContext<BlockActions | null>(null);
 
 /**
+ * The nesting rules the editor is judging placements by, for surfaces below it.
+ *
+ * A SECOND context rather than a field on {@link BlockActions}, because the two
+ * are different kinds of thing: those are verbs to run, this is a rule source to
+ * ask. Folding it in would make every consumer of the verbs re-render when a
+ * host swapped its rules, and would put a non-verb in a type whose name promises
+ * verbs.
+ *
+ * `null` means no provider, which {@link useNestingSource} answers with the
+ * registry — the same default every surface here already applies.
+ */
+const NestingContext = React.createContext<NestingSource | null>(null);
+
+/**
+ * The nesting rules to judge a placement by, from the nearest provider.
+ *
+ * Falls back to the registry, which is what the canvas, the insert panel and the
+ * keyboard route all default to — so a surface outside a provider answers the
+ * way it did before this existed.
+ *
+ * It exists because a host MAY supply its own rules, and until this a surface
+ * had no way to reach them: `BlockKeyboardActions` took a `nesting` option and
+ * kept it, so the keyboard enforced the host's rules while the toolbar and the
+ * context menu consulted the registry. One selection could then be offered on
+ * one surface and refused on another, for the same document.
+ */
+export function useNestingSource(): NestingSource {
+  const supplied = React.useContext(NestingContext);
+  // Memoised on the supplied value so a surface that depends on the identity —
+  // `toolbarActions` is called inside a memo keyed on its arguments — is not
+  // handed a new object every render.
+  return React.useMemo(() => supplied ?? registryNestingSource(), [supplied]);
+}
+
+/**
  * The verbs from the nearest {@link BlockKeyboardActions}.
  *
  * Throws when there is none. A toolbar without them would render its buttons
@@ -257,6 +292,14 @@ export interface BlockKeyboardActionsResult {
   readonly announcement: string;
   /** The same verbs the keystrokes run, for a pointer surface to press. */
   readonly actions: BlockActions;
+  /**
+   * The rules this resolved placements by: the host's, or the registry.
+   *
+   * Returned so the provider can publish the SAME source it enforced, rather
+   * than every surface below resolving the default again and a host-supplied
+   * one reaching only the keyboard.
+   */
+  readonly nesting: NestingSource;
 }
 
 /**
@@ -748,7 +791,7 @@ export function useBlockKeyboardActions({
     ]
   );
 
-  return { announcement, actions };
+  return { announcement, actions, nesting: nestingSource };
 }
 
 /**
@@ -777,7 +820,11 @@ export function BlockKeyboardActions({
 }: BlockKeyboardActionsOptions & {
   readonly children?: React.ReactNode;
 }): React.JSX.Element {
-  const { announcement, actions } = useBlockKeyboardActions({
+  const {
+    announcement,
+    actions,
+    nesting: rules,
+  } = useBlockKeyboardActions({
     editor,
     enabled,
     onSaveAsPattern,
@@ -794,11 +841,13 @@ export function BlockKeyboardActions({
   // text is frequently not announced at all, because the assistive technology
   // has nothing it was already watching.
   return (
-    <BlockActionsContext.Provider value={actions}>
-      <p aria-live="polite" role="status" className="nx-sr-only">
-        {announcement}
-      </p>
-      {children}
-    </BlockActionsContext.Provider>
+    <NestingContext.Provider value={rules}>
+      <BlockActionsContext.Provider value={actions}>
+        <p aria-live="polite" role="status" className="nx-sr-only">
+          {announcement}
+        </p>
+        {children}
+      </BlockActionsContext.Provider>
+    </NestingContext.Provider>
   );
 }

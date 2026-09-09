@@ -25,7 +25,7 @@
  * @module builder-commands
  */
 
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import type { BlockDocument, NestingSource } from "@nextlyhq/blocks-engine";
 
 import type { BuilderCommand } from "./command-palette";
 import { toolbarActions, type ToolbarActionId } from "./toolbar-actions";
@@ -58,6 +58,25 @@ export interface CommandVerbs {
 export interface BuilderCommandsInput {
   readonly document: BlockDocument;
   readonly selectedId: string | null;
+  /**
+   * Every selected id, defaulting to the primary alone.
+   *
+   * Threaded because availability is DERIVED from `toolbarActions`, and some of
+   * what that decides is a property of the whole selection rather than of the
+   * block the bar is drawn against. Asked about the primary alone, this palette
+   * offered `Save block as pattern` for two blocks with a third between them —
+   * a command the toolbar showed as unavailable, which then posted the whole
+   * selection and was refused by the server.
+   */
+  readonly selectedIds?: readonly string[];
+  /**
+   * The nesting rules to judge a selection by, defaulting to the registry.
+   *
+   * Present for the reason the ids are: the toolbar and the context menu ask
+   * the host's own rules, and a palette resolving the default instead would
+   * offer what they refuse.
+   */
+  readonly nesting?: NestingSource;
   readonly verbs: CommandVerbs;
   readonly undo: () => void;
   readonly redo: () => void;
@@ -153,6 +172,8 @@ export function blockActionRunners(
 export function builderCommands({
   document,
   selectedId,
+  selectedIds,
+  nesting,
   verbs,
   undo,
   redo,
@@ -162,7 +183,12 @@ export function builderCommands({
 }: BuilderCommandsInput): BuilderCommand[] {
   const run = blockActionRunners(verbs);
 
-  const blockCommands = toolbarActions(document, selectedId)
+  const blockCommands = toolbarActions(
+    document,
+    selectedId,
+    selectedIds,
+    nesting
+  )
     .filter(action => action.enabled)
     .map(action => {
       const copy = BLOCK_COMMAND_COPY[action.id];

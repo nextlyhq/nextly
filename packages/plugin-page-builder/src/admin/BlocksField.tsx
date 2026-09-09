@@ -1770,9 +1770,29 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   // itself, because the verb that raises it belongs to the shared chain — the
   // toolbar, the context menu and the palette all reach it — while everything
   // the form needs is mounted only while it is up. See `SavePatternPrompt`.
-  const [savingPattern, setSavingPattern] = useState(false);
-  const openSavePattern = useCallback(() => setSavingPattern(true), []);
-  const closeSavePattern = useCallback(() => setSavingPattern(false), []);
+  const [savingPattern, setSavingPattern] = useState<BlockDocument | null>(
+    null
+  );
+  /*
+   * An open inline passage is COMMITTED first, and its document is what the
+   * form saves.
+   *
+   * A rich-text editor holds the author's words itself while they type — the
+   * canvas keeps the caret still — so `editor.document` during an open passage
+   * is the one from before it. A form snapshotting that stores a pattern
+   * missing the words on screen, silently, which is the same reason leaving the
+   * editor commits first.
+   *
+   * A REFUSED commit declines to open the form at all, for the reason the exit
+   * gesture declines to close: the words are in the passage and nowhere else,
+   * and the author has been told what happened.
+   */
+  const openSavePattern = useCallback(() => {
+    const finished = finishInlineEdit(inline, editor.document);
+    if (!finished.mayClose) return;
+    setSavingPattern(finished.document);
+  }, [editor.document, inline]);
+  const closeSavePattern = useCallback(() => setSavingPattern(null), []);
 
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
@@ -2822,8 +2842,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             from the palette, the context menu or a keystroke.
           */}
           <SavePatternPrompt
-            open={savingPattern}
-            editor={editor}
+            document={savingPattern}
+            selectedIds={editor.selection.ids}
             onClose={closeSavePattern}
           />
         </BlockKeyboardActions>

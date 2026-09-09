@@ -20,12 +20,20 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     (error: unknown, fallback: string) =>
       (error as Error | null)?.message || fallback
   ),
+  // Present because the mock REPLACES the module: the subject reads the
+  // planner's cause off a refusal through this, so omitting it is a missing
+  // export rather than an unused stub. Answers with nothing by default, which
+  // is every failure that is not a validation refusal.
+  validationIssues: vi.fn(() => []),
 }));
 
 import {
   apiErrorMessage,
   usePluginRouteMutation,
+  validationIssues,
 } from "@nextlyhq/plugin-sdk/admin";
+
+import { compositionRefusalReason } from "@nextlyhq/builder";
 
 import {
   LIBRARY_ROUTE_PATH,
@@ -174,5 +182,51 @@ describe("what the save reports back", () => {
     const { result } = renderHook(() => useSavePattern());
 
     expect(result.current.error).toBeUndefined();
+  });
+});
+
+describe("a refusal the two registries disagreed about", () => {
+  /** A refusal as the route sends one: the planner's cause as the machine code. */
+  function refusedWith(problem: string) {
+    vi.mocked(validationIssues).mockReturnValue([
+      {
+        path: "selectedIds",
+        code: problem,
+        message: "The selection cannot be saved as a pattern.",
+      },
+    ]);
+    return refusing(new Error("The selection cannot be saved as a pattern."));
+  }
+
+  it("phrases the PLANNER's cause with the shared vocabulary", () => {
+    // This case means the browser found the selection savable and the server —
+    // which also knows every block another plugin declared — did not. The
+    // route's own message is deliberately generic, because the server is not
+    // the surface that phrases refusals; the cause travels so that this side
+    // can.
+    refusedWith("gap");
+
+    const { result } = renderHook(() => useSavePattern());
+
+    expect(result.current.error).toBe(
+      compositionRefusalReason({ problem: "gap" })
+    );
+    // And NOT the route's generic sentence, which is what a client discarding
+    // the cause would show.
+    expect(result.current.error).not.toBe(
+      "The selection cannot be saved as a pattern."
+    );
+  });
+
+  it("falls back to the admin's extractor for a cause it does not know", () => {
+    // A duplicate name, a permission, a transport failure — none of them is a
+    // planner cause, and none has a remedy this vocabulary could phrase.
+    refusedWith("DUPLICATE");
+
+    const { result } = renderHook(() => useSavePattern());
+
+    expect(result.current.error).toBe(
+      "The selection cannot be saved as a pattern."
+    );
   });
 });

@@ -203,7 +203,19 @@ export function SavePatternDialog({
   const listId = React.useId();
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={next => {
+        // A dismissal DURING the write is ignored. Escape, the close button, a
+        // click outside and Cancel all reach here, and none of them cancels the
+        // request: the row would still be created while the author believed
+        // they had stopped it, and reopening would let them submit a second.
+        // Refusing to close is the honest answer, and the button already says
+        // "Saving…".
+        if (saving) return;
+        onOpenChange(next);
+      }}
+    >
       <DialogContent>
         <form onSubmit={event => void submit(event)}>
           <DialogHeader>
@@ -233,11 +245,28 @@ export function SavePatternDialog({
                   and a picker that has to be opened hides the sentences behind
                   a click — an author choosing "Page" without reading its line
                   files the pattern where they will not look for it. */}
-              <legend className="p-0 text-sm font-medium">
+              {/* The legend NAMES the group as well as heading the fieldset:
+                  a Radix radio group is a `role="radiogroup"` div rather than a
+                  native fieldset child, so it is not named by the legend on its
+                  own and reaches a screen reader unlabelled. */}
+              <legend
+                id="nx-save-pattern-granularity-legend"
+                className="p-0 text-sm font-medium"
+              >
                 How much of a page is this?
               </legend>
               <RadioGroup
                 value={granularity}
+                // NAMED, which `required` needs to mean anything. Radix mirrors
+                // each item into a hidden native radio, and radios with no
+                // `name` are not one group — so each is independently required
+                // and choosing one satisfies none of the others. Measured: the
+                // form reports invalid with a choice made, and a browser
+                // refuses to submit it.
+                name="granularity"
+                required
+                aria-required
+                aria-labelledby="nx-save-pattern-granularity-legend"
                 onValueChange={value =>
                   setGranularity(value as PatternGranularity)
                 }
@@ -325,6 +354,9 @@ export function SavePatternDialog({
             <Button
               type="button"
               variant="ghost"
+              // Disabled rather than silently inert while the write runs, so
+              // the control says what it will do rather than ignoring a press.
+              disabled={saving}
               onClick={() => onOpenChange(false)}
             >
               Cancel

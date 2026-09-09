@@ -228,3 +228,107 @@ describe("what the form sends, and what it does afterwards", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });
+
+describe("while the write is in flight", () => {
+  /** A save that never settles, so the in-flight state can be observed. */
+  function neverSettles() {
+    return vi.fn(() => new Promise<boolean>(() => {}));
+  }
+
+  it("refuses every way of dismissing the form", async () => {
+    // None of these cancels the request. The row would still be created while
+    // the author believed they had stopped it — and reopening would let them
+    // submit a second.
+    const onOpenChange = vi.fn();
+    render(
+      <SavePatternDialog
+        open
+        onOpenChange={onOpenChange}
+        subject="3 blocks"
+        onSave={neverSettles()}
+      />
+    );
+    fillRequired();
+    fireEvent.click(screen.getByRole("button", { name: /save pattern/i }));
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: /saving/i })).toBeTruthy()
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("says so on the button, rather than ignoring a press in silence", async () => {
+    render(
+      <SavePatternDialog
+        open
+        onOpenChange={vi.fn()}
+        subject="3 blocks"
+        onSave={neverSettles()}
+      />
+    );
+    fillRequired();
+    fireEvent.click(screen.getByRole("button", { name: /save pattern/i }));
+
+    await vi.waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /saving/i }).hasAttribute("disabled")
+      ).toBe(true);
+      expect(
+        screen.getByRole("button", { name: /cancel/i }).hasAttribute("disabled")
+      ).toBe(true);
+    });
+  });
+
+  it("closes normally when nothing is in flight", () => {
+    // The control. Without it a dialog that never closed would satisfy both
+    // cases above.
+    const onOpenChange = vi.fn();
+    render(
+      <SavePatternDialog
+        open
+        onOpenChange={onOpenChange}
+        subject="3 blocks"
+        onSave={vi.fn(async () => true)}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("what the granularity group tells assistive technology", () => {
+  it("is a NAMED required group, so a choice satisfies the requirement", () => {
+    // `required` without a name is not one requirement but four: Radix mirrors
+    // each item into a hidden native radio, and radios sharing no `name` are
+    // not a group — so choosing one leaves the others unsatisfied and the form
+    // cannot submit. Measured before the name was added: `checkValidity()` came
+    // back false with a choice made.
+    mount();
+    fillRequired();
+
+    const form = screen
+      .getByRole("button", { name: /save pattern/i })
+      .closest("form");
+
+    expect(form?.checkValidity()).toBe(true);
+  });
+
+  it("announces itself as required and named", () => {
+    mount();
+
+    // Found BY its accessible name, which is the assertion: a group the legend
+    // does not name is not found here at all. A Radix radio group is a div
+    // rather than a native fieldset child, so the legend does not name it on
+    // its own and it would reach a screen reader unlabelled.
+    const group = screen.getByRole("radiogroup", {
+      name: "How much of a page is this?",
+    });
+
+    expect(group.getAttribute("aria-required")).toBe("true");
+  });
+});

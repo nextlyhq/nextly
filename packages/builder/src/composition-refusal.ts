@@ -32,6 +32,8 @@
 
 import type { PlanProblem, PlanRefusal } from "@nextlyhq/blocks-engine";
 
+import { asPermittedList, permittedLabel } from "./permitted-prose";
+
 /**
  * The sentence for each cause, with no subject and no block name.
  *
@@ -92,24 +94,32 @@ const REFUSAL_COPY: Record<PlanProblem, string> = {
  * naming the containers tells them where. The refusal carries the set rather
  * than leaving it to be looked up again — `NestingVerdict` says why — so this
  * never asks the rule source a second question.
+ *
+ * Through the SAME prose the drag refusal uses. The set holds registry
+ * specifiers, and a namespace wildcard is not a block name: read naively,
+ * `core/*` announces that a block "belongs inside *".
  */
 export function compositionRefusalReason(refusal: PlanRefusal): string {
   const sentence = REFUSAL_COPY[refusal.problem];
-  const permitted = refusal.permitted ?? [];
+  const permitted = (refusal.permitted ?? []).map(permittedLabel);
   if (permitted.length === 0) return sentence;
-  return `${sentence} It belongs inside ${listOf(permitted)}.`;
+  // "or", because these are containers an author picks BETWEEN — the same
+  // reading the drag refusal takes of the same list.
+  return `${sentence} It belongs inside ${asPermittedList(permitted, "or")}.`;
 }
 
 /**
- * "a Row", or "a Row or a Column", or "a Row, a Column or a Grid".
+ * Whether a string is a cause this vocabulary knows.
  *
- * Spelled as a sentence rather than joined with commas, because this lands
- * mid-sentence in a tooltip an author reads rather than in a log.
+ * Derived from the copy map, which is total over {@link PlanProblem}, so this
+ * recognises exactly the causes a sentence exists for and cannot drift from
+ * them. It exists because a cause can arrive from OUTSIDE the process: a save
+ * refused by the server carries its `PlanProblem` on the wire, and the surface
+ * that has to phrase it is holding a string rather than a typed union.
  */
-function listOf(names: readonly string[]): string {
-  const [first, ...rest] = names;
-  if (first === undefined) return "another block";
-  const last = rest.at(-1);
-  if (last === undefined) return first;
-  return `${[first, ...rest.slice(0, -1)].join(", ")} or ${last}`;
+export function isPlanProblem(value: unknown): value is PlanProblem {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(REFUSAL_COPY, value)
+  );
 }

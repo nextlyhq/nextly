@@ -369,7 +369,7 @@ export {
  * phrasing of one cause is how an author is told two different things about one
  * refusal.
  */
-export { compositionRefusalReason } from "./composition-refusal";
+export { compositionRefusalReason, isPlanProblem } from "./composition-refusal";
 
 /**
  * @experimental Who owns Escape while the editor is on screen.

@@ -34,6 +34,12 @@ const errors: string[] = [];
 /** The value the field has written back to the form. */
 let saved: unknown;
 
+/** How many times the inline passage has been asked to commit. */
+let commits = 0;
+
+/** The save-as-pattern verb the editor published, so a test can run it. */
+let offeredSaveVerb: (() => void) | undefined;
+
 vi.mock("@nextlyhq/ui", async importOriginal => {
   // Spread rather than replaced: the shell below is the REAL module and draws
   // real components from here, so a closed literal would blank them.
@@ -82,7 +88,22 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BreakpointSwitcher: nothing,
     InspectorPanel: nothing,
     Canvas: nothing,
-    BlockKeyboardActions: passthrough,
+    /*
+     * Records the save-as-pattern verb as well as passing children through. The
+     * verb is published to the toolbar, the context menu and the palette alike,
+     * so capturing it here is capturing what all three would run — and running
+     * it is the only way to observe what the editor does with an open passage.
+     */
+    BlockKeyboardActions: ({
+      children,
+      onSaveAsPattern,
+    }: {
+      children?: React.ReactNode;
+      onSaveAsPattern?: () => void;
+    }): React.JSX.Element => {
+      offeredSaveVerb = onSaveAsPattern;
+      return <>{children}</>;
+    },
     /*
      * Passed THROUGH, not stubbed to nothing: the canvas renders inside it, so
      * a stub would take the recorder below out of the tree along with it. The
@@ -148,6 +169,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       editingRich: null,
       begin: () => false,
       commit: () => {
+        commits += 1;
         onFinished?.(outcome);
         return outcome;
       },
@@ -173,7 +195,27 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     error: null,
     refetch: () => {},
   }),
-  useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
+  /*
+   * The save form's write and the two helpers that phrase its refusals. Never
+   * exercised by these cases — they stop at whether the form opens — but the
+   * modules the form imports resolve them at load, so omitting one is a missing
+   * export rather than an unused stub.
+   */
+  usePluginRouteMutation: () => ({
+    write: async () => ({ message: "Pattern created.", item: { id: "p1" } }),
+    pending: false,
+    error: null,
+  }),
+  apiErrorMessage: (_error: unknown, fallback: string) => fallback,
+  validationIssues: () => [],
+  /*
+   * `schedule` is what the editor actually calls; `record`/`clear` were a shape
+   * this mock invented and nothing has. It went unnoticed because the call sits
+   * behind "the document changed since it opened", which no case here had
+   * reached — so the stub answered every question it was asked and none of the
+   * ones it would be.
+   */
+  useDocumentCheckpoint: () => ({ schedule: () => {} }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
@@ -229,6 +271,8 @@ beforeEach(() => {
   outcome = { status: "unchanged" };
   errors.length = 0;
   saved = undefined;
+  commits = 0;
+  offeredSaveVerb = undefined;
 });
 
 afterEach(() => {
@@ -382,5 +426,50 @@ describe("the save shortcut with an inline edit that could not be written", () =
 
     expect(saved).toMatchObject({ kind: "page" });
     expect(errors).toEqual([]);
+  });
+});
+
+describe("saving a pattern while a passage is still open", () => {
+  it("commits the passage FIRST, so the words on screen are the words stored", () => {
+    // A rich-text editor holds the author's text itself while they type — the
+    // canvas keeps the caret still — so the document the editor holds during an
+    // open passage is the one from before it. A form snapshotting that stores a
+    // pattern missing what is on screen, silently.
+    openEditor();
+
+    React.act(() => {
+      offeredSaveVerb?.();
+    });
+
+    expect(commits).toBe(1);
+  });
+
+  it("declines to open the form when the commit was REFUSED", () => {
+    // The same rule leaving the editor follows, and for the same reason: the
+    // words are in the passage and nowhere else. Opening a modal over them
+    // invites the author to save a pattern without the text they just wrote,
+    // and to walk away from the passage while they are at it.
+    outcome = { status: "refused", reason: "Too large." };
+    openEditor();
+
+    React.act(() => {
+      offeredSaveVerb?.();
+    });
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opens it when the commit went through", () => {
+    // The control. Without it the case above passes against an editor whose
+    // save verb never opens anything.
+    openEditor();
+
+    React.act(() => {
+      offeredSaveVerb?.();
+    });
+
+    expect(
+      screen.getByRole("heading", { name: /save as pattern/i })
+    ).toBeTruthy();
   });
 });

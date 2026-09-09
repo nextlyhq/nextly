@@ -124,7 +124,7 @@ import * as React from "react";
 import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, contextMenuTargetOf } from "./canvas";
 import type { EditorState } from "./editor-state";
-import { useBlockActionsContext } from "./keyboard-actions";
+import { useBlockActionsContext, useNestingSource } from "./keyboard-actions";
 import { toolbarActions } from "./toolbar-actions";
 
 /**
@@ -158,9 +158,12 @@ export function BlockContextMenu({
    * `EditorCommandPalette` gives: `editor` itself is a fresh object every
    * render, so depending on it would rebuild this on every frame of a drag.
    */
+  // The HOST's rules where it supplied any, so this menu and the bar cannot
+  // disagree about whether a selection can be saved.
+  const nesting = useNestingSource();
   const actions = React.useMemo(
-    () => toolbarActions(document, selectedId, selectedIds),
-    [document, selectedId, selectedIds]
+    () => toolbarActions(document, selectedId, selectedIds, nesting),
+    [document, selectedId, selectedIds, nesting]
   );
   const run = React.useMemo(() => blockActionRunners(verbs), [verbs]);
 

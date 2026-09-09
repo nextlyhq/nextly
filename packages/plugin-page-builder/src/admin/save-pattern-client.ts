@@ -26,9 +26,11 @@
  * @module admin/save-pattern-client
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import { compositionRefusalReason, isPlanProblem } from "@nextlyhq/builder";
 import {
   apiErrorMessage,
   usePluginRouteMutation,
+  validationIssues,
 } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback } from "react";
 
@@ -65,11 +67,8 @@ export interface SavePatternWriter {
   /**
    * Why the last save failed, phrased for an author, or `undefined`.
    *
-   * Through the admin's own `apiErrorMessage`, so a refusal reads the way every
-   * other failed write in this panel reads: the per-field reasons when the
-   * server sent any, and the top-level message when it did not. A plugin
-   * assembling its own would show "Validation failed." — true, and silent about
-   * which field.
+   * A PLANNER refusal is phrased by the shared vocabulary, and everything else
+   * by the admin's own extractor. See {@link refusalMessage}.
    */
   readonly error: string | undefined;
 }
@@ -82,6 +81,38 @@ export interface SavePatternWriter {
  * because "Failed to fetch" describes the program rather than what to do.
  */
 const UNEXPLAINED = "The pattern could not be saved. Try again.";
+
+/**
+ * What to show an author for a failed save.
+ *
+ * A save can be refused for two quite different kinds of reason, and only one of
+ * them has a remedy this side already knows how to phrase.
+ *
+ * **A planner refusal** carries its cause on the wire — the route sends the
+ * `PlanProblem` verbatim as the machine code — and `compositionRefusalReason`
+ * is the one place that turns a cause into a sentence an author can act on. It
+ * is worth reaching for precisely because this case means the two registries
+ * DISAGREED: the browser found the selection savable and the server, which also
+ * knows every block another plugin declared, did not. The generic message the
+ * route sends is deliberately generic, because the server is not the surface
+ * that phrases refusals.
+ *
+ * **Anything else** — a permission, a duplicate name, a transport failure — goes
+ * through the admin's own extractor, which leads with the per-field reasons when
+ * the server sent any. A plugin assembling that itself would show "Validation
+ * failed.", which is true and silent about which field.
+ */
+function refusalMessage(error: Error): string {
+  for (const issue of validationIssues(error)) {
+    // Narrowed inside the loop rather than found and re-tested: the guard is
+    // what turns the wire's `string | undefined` into a cause, and re-asking it
+    // afterwards would be a second answer to the same question.
+    if (isPlanProblem(issue.code)) {
+      return compositionRefusalReason({ problem: issue.code });
+    }
+  }
+  return apiErrorMessage(error, UNEXPLAINED);
+}
 
 /** Write to this plugin's save-as-pattern route. */
 export function useSavePattern(): SavePatternWriter {
@@ -108,6 +139,6 @@ export function useSavePattern(): SavePatternWriter {
   return {
     save,
     saving: pending,
-    error: error === null ? undefined : apiErrorMessage(error, UNEXPLAINED),
+    error: error === null ? undefined : refusalMessage(error),
   };
 }

@@ -58,7 +58,7 @@ import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
 import { canvasContentRect } from "./geometry-dom";
-import { useBlockActionsContext } from "./keyboard-actions";
+import { useBlockActionsContext, useNestingSource } from "./keyboard-actions";
 import {
   toolbarActions,
   toolbarPlacement,
@@ -105,9 +105,13 @@ export function BlockToolbar({
 
   const { document, selectedId } = editor;
   const selectedIds = editor.selection.ids;
+  // The HOST's rules where it supplied any, which is what the keyboard route
+  // already enforced. Resolving the registry here instead let one selection be
+  // offered on this bar and refused by the save it opens.
+  const nesting = useNestingSource();
   const actions = React.useMemo(
-    () => toolbarActions(document, selectedId, selectedIds),
-    [document, selectedId, selectedIds]
+    () => toolbarActions(document, selectedId, selectedIds, nesting),
+    [document, selectedId, selectedIds, nesting]
   );
 
   /*

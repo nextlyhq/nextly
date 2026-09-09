@@ -24,7 +24,7 @@ import * as React from "react";
 import { builderCommands } from "./builder-commands";
 import { CommandPalette } from "./command-palette";
 import type { EditorState } from "./editor-state";
-import { useBlockActionsContext } from "./keyboard-actions";
+import { useBlockActionsContext, useNestingSource } from "./keyboard-actions";
 
 export interface EditorCommandPaletteProps {
   /** The editor whose state the commands read and change. */
@@ -45,6 +45,7 @@ export function EditorCommandPalette({
   onExit,
 }: EditorCommandPaletteProps): React.JSX.Element {
   const verbs = useBlockActionsContext();
+  const nesting = useNestingSource();
 
   /*
    * Rebuilt when what it OFFERS could have changed, which is the document, the
@@ -61,6 +62,12 @@ export function EditorCommandPalette({
       builderCommands({
         document: editor.document,
         selectedId: editor.selectedId,
+        // The WHOLE selection and the host's own rules, so a row this offers is
+        // one the toolbar offers. Availability is derived from `toolbarActions`
+        // precisely so the two cannot disagree, and asking it a narrower
+        // question than the bar asks defeats that.
+        selectedIds: editor.selection.ids,
+        nesting,
         verbs,
         undo: editor.undo,
         redo: editor.redo,
@@ -71,6 +78,8 @@ export function EditorCommandPalette({
     [
       editor.document,
       editor.selectedId,
+      editor.selection.ids,
+      nesting,
       editor.undo,
       editor.redo,
       editor.canUndo,
