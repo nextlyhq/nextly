@@ -1,0 +1,54 @@
+/**
+ * Pinning the caller's own authorization scope to one plugin-route request.
+ *
+ * `ctx.authenticatedScope` makes the key's grants AVAILABLE to a handler, and
+ * availability is not enough: every first-party route already written composes
+ * `{ as: "user", user: ctx.user }` by hand, so an opt-in field leaves each of
+ * them authorizing an API key as its owner exactly as before, and every route
+ * written next has to remember. That is a check that looks for crossings where
+ * a boundary belongs.
+ *
+ * So the dispatcher pins the scope for the length of the request instead, and
+ * `resolveServiceOpts` reads it when the caller did not pass one. A handler
+ * that names the scope explicitly still wins — the ambient value is a floor,
+ * not an override — which keeps a route free to narrow it and keeps the
+ * existing explicit call sites meaning what they say.
+ *
+ * `AsyncLocalStorage` rather than a mutable module variable: plugin routes are
+ * served concurrently, and a shared variable would hand one request's scope to
+ * another. The same reason `field-type-scope.ts` uses it to pin a registry.
+ *
+ * @module plugins/routes/caller-scope
+ */
+
+import { AsyncLocalStorage } from "node:async_hooks";
+
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+
+const callerScope = new AsyncLocalStorage<AuthenticatedScope>();
+
+/**
+ * Run `operation` with `scope` as the caller scope every service call inside it
+ * inherits.
+ *
+ * A session caller passes `undefined` and nothing is pinned, so the store stays
+ * empty and `currentCallerScope()` answers `undefined` — which is what a
+ * session must resolve as, since a scope it does not have would narrow it.
+ */
+export function runWithCallerScope<T>(
+  scope: AuthenticatedScope | undefined,
+  operation: () => T
+): T {
+  if (!scope) return operation();
+  return callerScope.run(scope, operation);
+}
+
+/**
+ * The scope pinned for the request currently running, if any.
+ *
+ * Returns `undefined` outside a plugin route — a job, the CLI, a direct service
+ * call — so nothing acquires a scope it was not given.
+ */
+export function currentCallerScope(): AuthenticatedScope | undefined {
+  return callerScope.getStore();
+}

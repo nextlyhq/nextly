@@ -188,6 +188,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "AuthOutcome (type)",
   "AuthStrategy (type)",
   "AuthUser (type)",
+  "AuthenticatedScope (type)",
   "AuthorableFieldConfig (type)",
   "AuthoredDraftSplitCollection (type)",
   "BatchOperationResult (type)",

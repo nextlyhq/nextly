@@ -123,3 +123,79 @@ describe("secure-by-default plugin route dispatch", () => {
     expect(reqAuth).not.toHaveBeenCalled(); // requirePermission covers auth
   });
 });
+
+/**
+ * `ctx.user` names the ACCOUNT, which for an API-key request is the key's
+ * OWNER. A service asked to judge `user.id` therefore resolves the owner's
+ * roles, so a viewer-scoped key minted by a super-admin was authorized as a
+ * super-admin. The key's own grants have to arrive alongside the account, and
+ * this is the seam that either carries them or drops them.
+ */
+describe("plugin route dispatch — the caller's own scope", () => {
+  /** Returns the scope rather than the user, so the assertion is about it. */
+  function scopeRoute(): PluginRoute {
+    return route({
+      handler: (_req, ctx) => {
+        handlerCalls++;
+        return Response.json({ scope: ctx.authenticatedScope ?? null });
+      },
+    });
+  }
+
+  it("carries an API key's own grants into the route context", async () => {
+    reqAuth.mockResolvedValue({
+      ...okAuth,
+      authMethod: "api-key",
+      apiKeyId: "key-1",
+      // The KEY's resolved scope. Narrower than its owner's, which is the
+      // whole point: `read-posts` alone must not authorize a write.
+      permissions: ["read-posts"],
+      roles: ["viewer"],
+    } as never);
+
+    const res = await runPluginRoute(req(), match(scopeRoute()));
+    expect(res.status).toBe(200);
+    // Roles travel with the permissions. A code-defined rule may decide on a
+    // role — `create: ({ roles }) => roles.includes("editor")` — and judging a
+    // role-based key on the OWNER's roles is the same defect in the direction
+    // that denies.
+    expect(await res.json()).toEqual({
+      scope: {
+        actorType: "apiKey",
+        permissions: ["read-posts"],
+        roles: ["viewer"],
+      },
+    });
+  });
+
+  it("gives a session caller no key scope, so it resolves the normal way", async () => {
+    // The control. Without it a field hardcoded to a constant satisfies the
+    // assertion above, and the session path — which must keep its super-admin
+    // bypass — would be silently reclassified as a scoped key.
+    reqAuth.mockResolvedValue({
+      ...okAuth,
+      authMethod: "session",
+      permissions: ["read-posts"],
+      roles: ["viewer"],
+    } as never);
+
+    const res = await runPluginRoute(req(), match(scopeRoute()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ scope: null });
+  });
+
+  it("gives a public route no scope, having never authenticated", async () => {
+    const res = await runPluginRoute(
+      req(),
+      match(
+        route({
+          public: true,
+          handler: (_r, ctx) =>
+            Response.json({ scope: ctx.authenticatedScope ?? null }),
+        })
+      )
+    );
+    expect(await res.json()).toEqual({ scope: null });
+    expect(reqAuth).not.toHaveBeenCalled();
+  });
+});
