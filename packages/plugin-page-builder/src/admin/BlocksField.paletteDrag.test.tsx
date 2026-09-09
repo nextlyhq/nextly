@@ -23,6 +23,7 @@ import * as React from "react";
 import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
+import { CAPABILITY_ROUTE_PATH, LIBRARY_ROUTE_PATH } from "../library-contract";
 
 /**
  * What the library route answers, for the one case that cares.
@@ -32,6 +33,9 @@ import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
  */
 let libraryAnswer: { items: unknown[]; meta: unknown } | undefined;
 
+/** What the capability route answers. Mutable so a case can withhold the grant. */
+let capabilityAnswer: { mayCreate: boolean } | undefined;
+
 /**
  * Which panel the shell stub asks for.
  *
@@ -40,8 +44,22 @@ let libraryAnswer: { items: unknown[]; meta: unknown } | undefined;
  */
 let shownPanel = "insert";
 
-/** How many times anything asked for a plugin route. */
+/** How many times the LIBRARY was asked for. */
 let routeReads = 0;
+
+/** How many times the capability route was asked for. */
+let capabilityReads = 0;
+
+/**
+ * The paths the mock discriminates on, hoisted so the factory below can see
+ * them, and CHECKED against the real contract in a test — a literal here that
+ * drifted from the route would silently stop counting, and both assertions
+ * about laziness would then pass against a mock answering nothing.
+ */
+const paths = vi.hoisted(() => ({
+  library: "/library",
+  capability: "/capability",
+}));
 
 /** Props the recorders captured on the most recent render. */
 const seen: {
@@ -220,16 +238,28 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // The library read. Mutable so one case can put a pattern in it: what the
   // panel is GIVEN is this file's subject, and the tier was unreachable for as
   // long as the answer never reached the prop.
-  usePluginRoute: () => ({
-    ...(() => {
-      routeReads += 1;
-      return {};
-    })(),
-    data: libraryAnswer,
-    pending: false,
-    error: null,
-    refetch: () => {},
-  }),
+  // Discriminated BY PATH. The editor now makes two different reads — the
+  // library when the insert panel opens, and the capability eagerly on mount —
+  // and a mock that counted both as one made "does not read the library" fail
+  // for a read of something else entirely.
+  usePluginRoute: (args: { path: string }) => {
+    if (args.path === paths.capability) {
+      capabilityReads += 1;
+      return {
+        data: capabilityAnswer,
+        pending: false,
+        error: null,
+        refetch: () => {},
+      };
+    }
+    routeReads += 1;
+    return {
+      data: libraryAnswer,
+      pending: false,
+      error: null,
+      refetch: () => {},
+    };
+  },
   useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
@@ -285,6 +315,8 @@ afterEach(() => {
   libraryAnswer = undefined;
   shownPanel = "insert";
   routeReads = 0;
+  capabilityReads = 0;
+  capabilityAnswer = { mayCreate: true };
 });
 
 describe("what makes a palette drag reachable at all", () => {
@@ -408,6 +440,25 @@ describe("what makes the saved pattern tier reachable at all", () => {
 });
 
 describe("what the editor reads before anyone asks for it", () => {
+  it("discriminates the two routes by the paths the plugin actually declares", () => {
+    // The control for both assertions below. If either literal drifted from the
+    // contract the mock would answer the wrong shape for both reads, and a
+    // counter that never incremented would report perfect laziness.
+    expect(paths.library).toBe(LIBRARY_ROUTE_PATH);
+    expect(paths.capability).toBe(CAPABILITY_ROUTE_PATH);
+  });
+
+  it("asks what the author may do EAGERLY, before any panel is opened", () => {
+    // The verb it gates is drawn by the toolbar, the context menu and the
+    // palette, all of which exist before the insert panel does — so an answer
+    // deferred to the panel arrives after the control it describes.
+    shownPanel = "layers";
+
+    openEditor();
+
+    expect(capabilityReads).toBeGreaterThan(0);
+  });
+
   it("does not read the library while another panel is open", () => {
     // Reading in the editor's own body fetched every saved pattern document on
     // every editor mount — for authors who open Layers, or Tokens, or no panel
