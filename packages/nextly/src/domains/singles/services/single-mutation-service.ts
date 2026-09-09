@@ -28,6 +28,7 @@ import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
+import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { keysToSnakeCase, toSnakeCase } from "../../../lib/case-conversion";
 import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
 import {
@@ -525,6 +526,9 @@ export class SingleMutationService extends BaseService {
 
       // 3. Build shared context for hooks (seed with caller-provided context)
       const sharedContext: Record<string, unknown> = { ...options.context };
+      // Resolved once for the whole operation, so every hook phase is told the
+      // same thing about the caller.
+      const requestFacts = resolveRequestFacts(options.request);
       const hookCollection = getSingleHookCollection(slug);
 
       // 4. Execute beforeOperation hook
@@ -538,6 +542,7 @@ export class SingleMutationService extends BaseService {
           user: options.user ?? undefined,
           context: sharedContext,
           req: {
+            ...requestFacts,
             nextly: resolveNextlyForHooks(),
           },
         });
@@ -555,6 +560,7 @@ export class SingleMutationService extends BaseService {
           originalData: existingDeserialized,
           user: options.user ?? undefined,
           context: sharedContext,
+          req: requestFacts,
         });
         const modifiedData = await this.hookRegistry.execute(
           "beforeUpdate",
@@ -673,6 +679,7 @@ export class SingleMutationService extends BaseService {
             originalData: existingDeserialized,
             user: options.user ?? undefined,
             context: sharedContext,
+            req: requestFacts,
           })
         );
         if (beforeChangeResult !== undefined) {
@@ -2731,6 +2738,7 @@ export class SingleMutationService extends BaseService {
           originalData: existingDeserialized,
           user: options.user ?? undefined,
           context: sharedContext,
+          req: requestFacts,
         });
         const transformedData = await this.hookRegistry.execute(
           "afterUpdate",

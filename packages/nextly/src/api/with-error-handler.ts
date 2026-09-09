@@ -20,6 +20,7 @@ import { createRequire } from "node:module";
 
 import { isDbError } from "../database/errors";
 import { NextlyError } from "../errors/nextly-error";
+import { runWithRequestScope } from "../hooks/request-scope";
 import {
   currentFlattenedErrors,
   logFlattenedErrors,
@@ -107,7 +108,11 @@ export function withErrorHandler<TArgs extends unknown[]>(
       // that request's scope as well and the failure still reaches both.
       ({ result: response } = await withSideEffectWarnings(async () => {
         try {
-          return await handler(...args);
+          // Pins the request for everything this handler reaches, so a hook
+          // several layers down is told about the caller without every layer
+          // between having to forward it. An operation handed one explicitly
+          // still uses that one.
+          return await runWithRequestScope(req, () => handler(...args));
         } finally {
           // Captured, not logged, and inside the scope because it closes when
           // this returns. In a `finally` because a request that flattened an

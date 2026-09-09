@@ -880,6 +880,7 @@ export class CollectionService extends BaseService {
         collectionName,
         user: context.user,
         context: context.context,
+        request: context.request,
       },
       data
     );
@@ -944,6 +945,7 @@ export class CollectionService extends BaseService {
         entryId,
         user: context.user,
         context: context.context,
+        request: context.request,
       },
       data
     );
@@ -1012,6 +1014,7 @@ export class CollectionService extends BaseService {
       user: context.user,
       actor,
       context: context.context,
+      request: context.request,
     });
 
     // Collect before the success check, so a caller that commits despite a

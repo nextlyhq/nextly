@@ -10,7 +10,7 @@
 
 import type { Nextly } from "../direct-api/nextly";
 
-import type { HookContext } from "./types";
+import type { HookContext, HookHttpFacts } from "./types";
 
 /**
  * Options for building a hook context
@@ -64,6 +64,11 @@ export interface BuildContextOptions<T = any> {
     headers?: Record<string, string>;
     query?: Record<string, unknown>;
     nextly?: Nextly;
+    /**
+     * What the core resolved about the HTTP request behind this operation, or
+     * absent when none produced it. See {@link HookContext.req}.
+     */
+    http?: HookHttpFacts;
   };
 
   /**
@@ -220,6 +225,10 @@ export function cloneContext<T>(context: HookContext<T>): HookContext<T> {
           headers: context.req.headers ? { ...context.req.headers } : undefined,
           query: context.req.query ? { ...context.req.query } : undefined,
           nextly: context.req.nextly, // Preserve singleton reference (not cloned)
+          // Shared rather than cloned, because the resolver freezes it: every
+          // hook reads one immutable answer, so no hook can rewrite the client
+          // address a later hook is judged against.
+          http: context.req.http,
         }
       : undefined,
   };
