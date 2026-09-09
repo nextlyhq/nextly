@@ -23,16 +23,59 @@ import { codeAccessAllows, getRBACService } from "./entity-read-access";
 import type { RequestActorType } from "./request-actor";
 
 /**
+ * One permission the caller holds, as the row it was resolved from.
+ *
+ * A permission is written two ways in this codebase, both deliberately: the
+ * STORED slug (`read-posts`), which the database, the admin's permission matrix
+ * and a route's `requiredPermission` all use; and the RULE spelling
+ * (`posts:read`), which `AccessFunction` documents as what a code-defined
+ * access rule receives and which `listEffectivePermissions` produces for a
+ * session caller.
+ *
+ * The row carries what both are made of, so both are DERIVED from it rather
+ * than stored beside each other. Storing them side by side is what let a
+ * handler narrow one and leave the other holding the grant it had just given
+ * up — the field gate reads the rule spelling and has no coarse check standing
+ * in front of it, so the narrowing was silently undone.
+ *
+ * The slug cannot be recomputed from the other two: `RolePermissionService`
+ * supports a deliberately custom one (`manage-api-keys`, on action `update`),
+ * so it is carried rather than derived.
+ */
+export interface GrantedPermission {
+  /** As stored. What a coarse grant check and `requiredPermission` compare. */
+  readonly slug: string;
+  readonly action: string;
+  readonly resource: string;
+}
+
+/**
  * The authenticated caller's scope, as a service access check needs it.
  *
- * `permissions` are the API key's OWN scoped grants in `{action}-{resource}`
- * form (the same format the route stamps and `canReadEntity` consumes), e.g.
- * `publish-posts`. Only meaningful when `actorType` is `apiKey`; a session or
- * system caller carries none here and resolves its grants the normal way.
+ * Only meaningful when `actorType` is `apiKey`; a session or system caller
+ * carries none here and resolves its grants the normal way.
+ *
+ * Build one with {@link apiKeyScope} and narrow it with {@link narrowScope}.
+ * Both freeze what they return, so a scope cannot be edited in place — the two
+ * spellings would then disagree, and only one of them guards any given gate.
  */
 export interface AuthenticatedScope {
   actorType: RequestActorType;
-  permissions: string[];
+  /**
+   * The caller's grants in the STORED spelling (`read-posts`).
+   *
+   * DERIVED from {@link grants} when one is present. Kept as its own field
+   * because it is what a plugin reads and what every coarse check compares
+   * against, and because a scope resolved from an already-authorized caller has
+   * the slugs without the rows behind them.
+   */
+  readonly permissions: readonly string[];
+  /**
+   * The rows the grants came from — the single source both spellings derive
+   * from. Absent on a scope built from a caller whose grants were already
+   * resolved to slugs; {@link ruleFacingPermissions} says what that costs.
+   */
+  readonly grants?: readonly GrantedPermission[];
   /**
    * The key's OWN resolved role slugs, when authentication resolved them.
    *
@@ -40,14 +83,111 @@ export interface AuthenticatedScope {
    * `create: ({ roles }) => roles.includes("editor")` — and the user object
    * reaching that rule names the key's OWNER. Judging a role-based key on the
    * owner's roles is the same defect as judging it on the owner's permissions,
-   * in the direction that DENIES: a key assigned the editor role is refused
-   * because the roles it was checked against were never its own.
-   *
-   * Optional because the read paths that construct a scope from an
-   * already-resolved caller carry roles on the user instead; `apiKeyWriteAllowed`
-   * prefers this and falls back to that, so neither path loses them.
+   * in the direction that DENIES.
    */
-  roles?: string[];
+  readonly roles?: readonly string[];
+}
+
+/** Freeze a scope and the arrays inside it, so no gate can be desynced. */
+function freezeScope(scope: AuthenticatedScope): AuthenticatedScope {
+  Object.freeze(scope.permissions);
+  if (scope.grants) Object.freeze(scope.grants);
+  if (scope.roles) Object.freeze(scope.roles);
+  return Object.freeze(scope);
+}
+
+/**
+ * The scope for a request that arrived on an API key.
+ *
+ * The one place a key's scope is built, so `permissions` is always the
+ * projection of `grants` rather than a second list that agreed with it once.
+ */
+export function apiKeyScope(
+  grants: readonly GrantedPermission[],
+  roles?: readonly string[]
+): AuthenticatedScope {
+  return freezeScope({
+    actorType: "apiKey",
+    permissions: grants.map(grant => grant.slug),
+    grants: [...grants],
+    // OMITTED when the caller has none, never `[]`. `apiKeyWriteAllowed` reads
+    // `scope.roles ?? user.roles`, and an empty array is not nullish — so
+    // fabricating one here would shadow the caller's own roles and deny every
+    // rule that asks for one.
+    ...(roles ? { roles: [...roles] } : {}),
+  });
+}
+
+/**
+ * The scope for an authenticated caller, from whatever that caller carries.
+ *
+ * The one place the choice between the two constructions is made, so no call
+ * site has to remember which it holds. A caller resolved through
+ * `requireAuthentication` carries the rows; one whose grants were already
+ * reduced to slugs — a mocked context, a path that stamped them somewhere and
+ * read them back — carries only those, and gets a scope that says so rather
+ * than an empty one.
+ */
+export function apiKeyScopeFrom(caller: {
+  grants?: readonly GrantedPermission[];
+  permissions?: readonly string[];
+  // Optional even though `AuthContext` declares it required: a context built
+  // by hand — a mock, a replayed request, an endpoint assembling one from
+  // parts — omits it, and this runs on the authorization path where throwing
+  // turns a missing field into a 500 on every request that shape reaches.
+  // An absent role list is the same as an empty one to every reader.
+  roles?: readonly string[];
+}): AuthenticatedScope {
+  if (caller.grants) return apiKeyScope(caller.grants, caller.roles);
+  // No rows, so `grants` is left ABSENT rather than empty: absent means "this
+  // scope never had them", which `ruleFacingPermissions` answers honestly, and
+  // an empty array would mean "this key holds nothing" and deny everything.
+  return freezeScope({
+    actorType: "apiKey",
+    permissions: [...(caller.permissions ?? [])],
+    ...(caller.roles ? { roles: [...caller.roles] } : {}),
+  });
+}
+
+/**
+ * A copy of `scope` holding only the grants `keep` accepts.
+ *
+ * How a route restricts itself further before a sensitive call. Both spellings
+ * are re-derived from the surviving rows, so a grant dropped here is dropped at
+ * every gate — the collection check, the field rules, and anything added later.
+ * Editing `scope.permissions` in place cannot do that and is refused: the array
+ * is frozen.
+ */
+export function narrowScope(
+  scope: AuthenticatedScope,
+  keep: (grant: GrantedPermission) => boolean
+): AuthenticatedScope {
+  if (!scope.grants) {
+    // No rows to filter, so the slugs are all there is. Narrow those, and leave
+    // the rule spelling to `ruleFacingPermissions`, which will read them too.
+    return freezeScope({
+      ...scope,
+      permissions: scope.permissions.filter(slug =>
+        keep({ slug, action: "", resource: "" })
+      ),
+    });
+  }
+  return apiKeyScope(scope.grants.filter(keep), scope.roles);
+}
+
+/**
+ * The caller's grants in the spelling a code-defined access rule receives.
+ *
+ * Derived from the rows, so it cannot disagree with `permissions`.
+ *
+ * When the scope carries no rows the stored slugs are returned unchanged. That
+ * is the honest answer rather than a good one: such a scope never had the parts
+ * a rule spelling is composed of, and splitting a slug on its hyphen would
+ * invent a resource no permission row names.
+ */
+export function ruleFacingPermissions(scope: AuthenticatedScope): string[] {
+  if (!scope.grants) return [...scope.permissions];
+  return scope.grants.map(grant => `${grant.resource}:${grant.action}`);
 }
 
 /**
@@ -104,12 +244,15 @@ export async function apiKeyWriteAllowed(
   return codeAccessAllows(codeAccess, operation, resource, {
     userId: user.id,
     authMethod: "api-key",
-    permissions: scope.permissions,
+    // The rule-facing spelling, derived from the same rows the coarse check
+    // above compared against. A rule reads `resource:action`, and handing it
+    // the stored form denies every documented permission predicate.
+    permissions: ruleFacingPermissions(scope),
     // The KEY's roles when it carries them. `user` names the owner, so its
     // roles are the owner's — the very thing this function exists not to judge
     // on. The read paths resolve the key's roles onto the user before calling
     // here, which is why that remains the fallback rather than an error.
-    roles: scope.roles ?? user.roles ?? [],
+    roles: [...(scope.roles ?? user.roles ?? [])],
   });
 }
 

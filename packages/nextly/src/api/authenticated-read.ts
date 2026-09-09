@@ -15,6 +15,7 @@
  * @module api/authenticated-read
  */
 
+import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
@@ -117,10 +118,7 @@ export async function readCaller(auth: AuthContext): Promise<ReadCaller> {
     // pattern to `find()`'s `actor` for the same reason.
     ...(auth.authMethod === "api-key"
       ? ({
-          authenticatedScope: {
-            actorType: "apiKey" as const,
-            permissions: auth.permissions,
-          },
+          authenticatedScope: apiKeyScopeFrom(auth),
         } satisfies Required<Pick<ReadCaller, "authenticatedScope">>)
       : {}),
   };

@@ -25,6 +25,7 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
+import { patternCapabilityRoute } from "./capability-route";
 import { registerClassUsageMaintenance } from "./class-usage-hook";
 import {
   CLASS_USAGE_INDEX_SLUG,
@@ -577,7 +578,11 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // the planner's answer and the planner needs the server's block
       // registry — the browser holds the core blocks and not the ones another
       // plugin declared.
-      routes: [patternLibraryRoute(), savePatternRoute()],
+      routes: [
+        patternLibraryRoute(),
+        savePatternRoute(),
+        patternCapabilityRoute(),
+      ],
 
       // No `publish` permission. One was declared here and nothing ever read
       // it: publishing a page is a status change on the entry, which

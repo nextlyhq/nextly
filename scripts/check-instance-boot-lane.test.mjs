@@ -9,7 +9,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BOOT_BUDGET_MS,
   BOOT_BINDING,
+  isTemplate,
+  statesBootBudget,
   integrationName,
   INTEGRATION_SUFFIX,
   UNIT_LANE_SUFFIXES,
@@ -337,5 +340,84 @@ describe("the population it judges", () => {
 
   it("uses the binding the repository actually imports", () => {
     expect(BOOT_BINDING).toBe("createTestNextly");
+  });
+});
+
+describe("a scaffolded template, which has only one lane", () => {
+  const BOOT = `import { createTestNextly } from "@nextlyhq/plugin-sdk/testing";`;
+  const budget = (t, h) =>
+    `import { defineConfig } from "vitest/config";
+export default defineConfig({ test: { testTimeout: ${t}, hookTimeout: ${h} } });`;
+
+  it("knows a template from a package", () => {
+    expect(isTemplate("templates/plugin/src/plugin.test.ts")).toBe(true);
+    expect(isTemplate("packages/nextly/src/x.test.ts")).toBe(false);
+  });
+
+  it("accepts a booting template whose config states both budgets", () => {
+    const files = {
+      "templates/plugin/vitest.config.ts": budget(30_000, 30_000),
+      "templates/plugin/src/plugin.test.ts": BOOT,
+    };
+    const { covered, underBudget, misrouted } = classify(
+      ["templates/plugin/src/plugin.test.ts"],
+      reader(files)
+    );
+
+    expect(covered).toEqual(["templates/plugin/src/plugin.test.ts"]);
+    expect(underBudget).toEqual([]);
+    // It is NOT reported as misrouted. Demanding the integration suffix here
+    // would demand a second config and script in a project shipping one test.
+    expect(misrouted).toEqual([]);
+  });
+
+  it("reports a booting template whose config states no budget", () => {
+    // The shape that shipped: vitest's defaults are 5s for a case and 10s for a
+    // hook, and the boot runs in `beforeEach`.
+    const files = {
+      "templates/plugin/vitest.config.ts":
+        `import { defineConfig } from "vitest/config";
+export default defineConfig({ test: { include: ["src/**/*.test.ts"] } });`,
+      "templates/plugin/src/plugin.test.ts": BOOT,
+    };
+    const { underBudget, covered } = classify(
+      ["templates/plugin/src/plugin.test.ts"],
+      reader(files)
+    );
+
+    expect(underBudget).toHaveLength(1);
+    expect(underBudget[0].path).toBe("templates/plugin/src/plugin.test.ts");
+    expect(covered).toEqual([]);
+  });
+
+  it("requires BOTH budgets, because the boot and the case are governed separately", () => {
+    expect(statesBootBudget(budget(30_000, 30_000))).toBe(true);
+    expect(statesBootBudget(budget(30_000, 5_000))).toBe(false);
+    expect(statesBootBudget(budget(1_000, 30_000))).toBe(false);
+  });
+
+  it("does not accept a budget that only appears in a comment", () => {
+    // Same reason the imports are parsed: a number explaining the defaults is
+    // not a number vitest will use.
+    expect(
+      statesBootBudget(`import { defineConfig } from "vitest/config";
+// testTimeout: 30000 and hookTimeout: 30000 would be needed for a boot
+export default defineConfig({ test: {} });`)
+    ).toBe(false);
+  });
+
+  it("reports a booting template with no vitest config at all", () => {
+    const files = { "templates/plugin/src/plugin.test.ts": BOOT };
+    const { underBudget } = classify(
+      ["templates/plugin/src/plugin.test.ts"],
+      reader(files)
+    );
+
+    expect(underBudget).toHaveLength(1);
+    expect(underBudget[0].reason).toContain("no vitest config");
+  });
+
+  it("uses a budget the monorepo's own integration lane agrees with", () => {
+    expect(BOOT_BUDGET_MS).toBe(30_000);
   });
 });

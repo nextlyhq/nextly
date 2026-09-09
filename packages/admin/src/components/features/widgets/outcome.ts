@@ -32,10 +32,12 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { actionsBody } from "./archetypes/actions";
+import { barsAccepts, barsBody } from "./archetypes/bars";
 import { listAccepts, listBody } from "./archetypes/list";
 import { metricAccepts, metricBody } from "./archetypes/metric";
 import { statsAccepts, statsBody } from "./archetypes/stats";
 import { tableAccepts, tableBody } from "./archetypes/table";
+import { timeseriesAccepts, timeseriesBody } from "./archetypes/timeseries";
 import type {
   ArchetypeOutcome,
   ArchetypeRenderer,
@@ -54,6 +56,8 @@ const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeRenderer>> = {
   metric: { accepts: metricAccepts, body: metricBody },
   list: { accepts: listAccepts, body: listBody },
   table: { accepts: tableAccepts, body: tableBody },
+  bars: { accepts: barsAccepts, body: barsBody },
+  timeseries: { accepts: timeseriesAccepts, body: timeseriesBody },
   actions: { declared: actionsBody },
   stats: { accepts: statsAccepts, cells: statsBody },
 };

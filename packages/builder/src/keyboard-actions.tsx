@@ -46,7 +46,11 @@ import {
   selectionDuplication,
   selectionMove,
 } from "./selection-ops";
-import { toolbarActions, type ToolbarAction } from "./toolbar-actions";
+import {
+  SAVE_PATTERN_GRANT_REFUSAL,
+  toolbarActions,
+  type ToolbarAction,
+} from "./toolbar-actions";
 
 /**
  * The bindings, and why these keys.
@@ -305,6 +309,18 @@ export interface BlockKeyboardActionsOptions {
    */
   onSaveAsPattern: () => void;
   /**
+   * Whether the author may create a pattern at all. Defaults to true.
+   *
+   * Supplied by the host for the same reason `onSaveAsPattern` is: the grant is
+   * held against the collection a pattern goes in, a site may have renamed it,
+   * and nothing here can know either. A builder that guessed would be guessing
+   * about somebody else's schema.
+   *
+   * Permissive while unknown — see `toolbarActions`, which explains why this one
+   * refusal defaults the opposite way to the rest.
+   */
+  mayCreatePattern?: boolean;
+  /**
    * Whether the bindings are live. Defaults to true.
    *
    * A host that mounts the canvas inside something modal turns them off rather
@@ -368,6 +384,7 @@ export interface BlockKeyboardActionsResult {
  * {@link BlockKeyboardActions} is the only supported way to reach the verbs.
  */
 export function useBlockKeyboardActions({
+  mayCreatePattern = true,
   editor,
   enabled = true,
   onEditText,
@@ -837,6 +854,17 @@ export function useBlockKeyboardActions({
    * over a selection that cannot be saved.
    */
   const saveSelectionAsPattern = React.useCallback(() => {
+    // The GRANT before the planner, matching the order the action list uses:
+    // an author who may not save at all is owed that reason rather than a
+    // critique of the blocks they chose. Checked HERE and not only there
+    // because the toolbar keeps an unavailable verb focusable and still calls
+    // this runner — so a refusal that lived only in the description would dim
+    // the control and open the form anyway, for exactly the authors this
+    // exists to stop.
+    if (!mayCreatePattern) {
+      announce(SAVE_PATTERN_GRANT_REFUSAL);
+      return;
+    }
     const refusal = saveAsPatternRefusal(
       editor.document,
       editor.selection.ids,
@@ -848,6 +876,7 @@ export function useBlockKeyboardActions({
     }
     onSaveAsPattern();
   }, [
+    mayCreatePattern,
     editor.document,
     editor.selection.ids,
     nestingSource,
@@ -868,9 +897,16 @@ export function useBlockKeyboardActions({
         editor.document,
         editor.selectedId,
         editor.selection.ids,
-        nestingSource
+        nestingSource,
+        mayCreatePattern
       ),
-    [editor.document, editor.selectedId, editor.selection.ids, nestingSource]
+    [
+      editor.document,
+      editor.selectedId,
+      editor.selection.ids,
+      nestingSource,
+      mayCreatePattern,
+    ]
   );
 
   const actions = React.useMemo<BlockActions>(
@@ -920,6 +956,7 @@ export function BlockKeyboardActions({
   onEditText,
   nesting,
   onSaveAsPattern,
+  mayCreatePattern,
   children,
 }: BlockKeyboardActionsOptions & {
   readonly children?: React.ReactNode;
@@ -933,6 +970,7 @@ export function BlockKeyboardActions({
     editor,
     enabled,
     onSaveAsPattern,
+    ...(mayCreatePattern === undefined ? {} : { mayCreatePattern }),
     ...(onEditText === undefined ? {} : { onEditText }),
     ...(nesting === undefined ? {} : { nesting }),
   });

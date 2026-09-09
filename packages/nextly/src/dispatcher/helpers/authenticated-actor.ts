@@ -1,4 +1,5 @@
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import { currentCallerScope } from "../../auth/caller-scope";
 import type { RequestActor, RequestActorType } from "../../auth/request-actor";
 import type { Params } from "../types";
 
@@ -38,6 +39,20 @@ export function readAuthenticatedActor(p: Params): RequestActor | undefined {
 export function readAuthenticatedScope(
   p: Params
 ): AuthenticatedScope | undefined {
+  // The scope the request was authenticated with, whole. The route handler pins
+  // it for the length of the dispatch, so this is the same object every other
+  // gate sees rather than the reconstruction below.
+  //
+  // The reconstruction is kept for callers that reach the dispatcher without
+  // that pin — a direct dispatch, a test driving `Params` by hand — and it is
+  // LOSSY by construction: route params are strings, so it recovers the stored
+  // permission slugs and neither the caller's roles nor the rows the
+  // `resource:action` spelling is derived from. A rule reading either of those
+  // is answered wrongly from it, which is why the pin is preferred and not
+  // merely a fallback for it.
+  const pinned = currentCallerScope();
+  if (pinned) return pinned;
+
   const type = p._authenticatedActorType;
   if (!type || !isActorType(type)) return undefined;
 

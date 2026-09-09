@@ -21,6 +21,7 @@
  * @module api/releases
  */
 
+import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
@@ -761,9 +762,7 @@ export async function handleReleaseRequest(
         userId: auth.userId,
         overrideAccess: false,
         authenticatedScope:
-          auth.authMethod === "api-key"
-            ? { actorType: "apiKey", permissions: auth.permissions }
-            : undefined,
+          auth.authMethod === "api-key" ? apiKeyScopeFrom(auth) : undefined,
         // The authenticated role set. `apiKeyWriteAllowed` evaluates
         // code-defined publish rules against it, so dropping it makes every
         // rule see `roles: []` — a role-positive rule then rejects a valid key,

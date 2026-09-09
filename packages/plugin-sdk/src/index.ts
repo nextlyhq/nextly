@@ -278,11 +278,19 @@ export type {
   Middleware,
   RouteMethod,
   AuthenticatedScope,
+  GrantedPermission,
   // A route gating on one of the plugin's OWN collections gives a function
   // rather than a slug, because the host can rename those. See `PluginRoute`.
   PluginRoutePermissionResolver,
   PluginRoutePermissionScope,
 } from "nextly";
+
+// A VALUE, so it cannot ride in the type-only block above. `narrowScope` is the
+// only correct way for a route to restrict its own scope before a call: the
+// scope's arrays are frozen, and the two spellings a permission is written in
+// are derived from one row list, so an edit that reached only one of them would
+// leave the field gate holding a grant the route had given up.
+export { narrowScope } from "nextly";
 
 /**
  * Admin UI contributions (P5, D19–D23) — `contributes.admin` author surface.

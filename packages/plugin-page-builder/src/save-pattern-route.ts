@@ -90,7 +90,16 @@ import {
  * See the module docblock: the default is `draft`, and a draft pattern is not
  * offered, so leaving it would save a pattern the author cannot find.
  */
-const SAVED_PATTERN_STATUS = "published";
+/**
+ * The status a saved pattern is created with.
+ *
+ * EXPORTED so `capability-route` can derive which permissions this write needs
+ * from the write itself. The status decides that — core requires the publish
+ * grant on top of create when the persisted status is `published` — so a
+ * capability answer that named `create` alone would say yes to an author the
+ * save then refuses, which is the defect it exists to prevent.
+ */
+export const SAVED_PATTERN_STATUS = "published";
 
 /**
  * The field the collection stores the tree under.
