@@ -31,6 +31,7 @@
  * @module plugins/routes/route-permission
  */
 
+import { NextlyError } from "../../errors/nextly-error";
 import { permissionSlug } from "../../schemas/_zod/rbac";
 import type { PluginSelf } from "../self";
 
@@ -91,7 +92,16 @@ export function routePermissionScope(
     map: Record<string, string>,
     declaredSlug: string,
     action: string
-  ): string => permissionSlug(action, map[declaredSlug] ?? declaredSlug);
+  ): string =>
+    // `Object.hasOwn` even though `resolvePluginSelf` now builds these maps with
+    // a null prototype. A `PluginSelf` assembled by hand — a test, a harness, a
+    // caller that predates that change — is an ordinary object, and this runs on
+    // the authorization path, where inheriting `Object` for a plugin that owns a
+    // collection named `constructor` produces a permission naming no resource.
+    permissionSlug(
+      action,
+      Object.hasOwn(map, declaredSlug) ? map[declaredSlug] : declaredSlug
+    );
 
   return {
     plugin: self.name,
@@ -113,6 +123,29 @@ export function resolveRoutePermission(
   self: PluginSelf
 ): string | undefined {
   if (required === undefined) return undefined;
-  if (typeof required !== "function") return required;
-  return required(routePermissionScope(self));
+  const slug =
+    typeof required === "function"
+      ? required(routePermissionScope(self))
+      : required;
+  // An EMPTY slug is the same hole a throw would be, arriving quietly. The
+  // dispatcher reads the answer for truthiness — `undefined` means "this route
+  // requires no permission" — so a resolver returning `""`, or a route
+  // declaring it, would drop the permission check and admit every authenticated
+  // caller. Refusing here sends it down the same path a throw takes.
+  if (typeof slug !== "string" || slug.trim() === "") {
+    // The constructor rather than `NextlyError.internal`, which takes no
+    // `logMessage` — and the message is the whole value here, since a plugin
+    // author reading a generic 500 has nothing to act on.
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: "An unexpected error occurred.",
+      logMessage:
+        "a route's requiredPermission resolved to an empty permission slug",
+      logContext: {
+        reason: "plugin-route-permission-empty",
+        plugin: self.name,
+      },
+    });
+  }
+  return slug;
 }

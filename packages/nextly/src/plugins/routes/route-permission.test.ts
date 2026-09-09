@@ -11,6 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../errors/nextly-error";
 import { permissionSlug } from "../../schemas/_zod/rbac";
 import type { PluginSelf } from "../self";
 
@@ -83,6 +84,36 @@ describe("a route's required permission", () => {
     expect(resolveRoutePermission(scope => scope.plugin, renamed)).toBe(
       "@acme/builder"
     );
+  });
+
+  it("does not inherit a slug for a collection named after an Object member", () => {
+    // A plugin may legitimately own a collection called `constructor`, and a
+    // plain lookup answers with the inherited FUNCTION rather than undefined —
+    // so `??` never fires and the permission names
+    // `function Object() { [native code] }`. Built here as an ordinary object
+    // on purpose: `resolvePluginSelf` now returns null-prototype maps, and this
+    // asserts the composer is safe against the ones it does not build.
+    const handBuilt: PluginSelf = {
+      name: "@acme/builder",
+      collections: { patterns: "patterns" },
+      singles: {},
+    };
+    const scope = routePermissionScope(handBuilt);
+    expect(scope.collection("constructor", "read")).toBe("read-constructor");
+    expect(scope.single("toString", "update")).toBe("update-toString");
+  });
+
+  it("refuses an empty slug rather than reporting no permission", () => {
+    // The quiet twin of a throw. The dispatcher reads the answer for
+    // truthiness, and `undefined` means "this route requires no permission" —
+    // so an empty string would drop the check and admit every authenticated
+    // caller. Both the resolver form and the declared form.
+    // Asserted as a `NextlyError` rather than on the message text: the message
+    // is a log line and not a contract, while the TYPE is what stops the API
+    // layer reporting a plugin misconfiguration as a bare 500.
+    for (const empty of [() => "", () => "   ", ""] as const) {
+      expect(() => resolveRoutePermission(empty, renamed)).toThrow(NextlyError);
+    }
   });
 
   it("lets a throwing resolver throw, so the caller can refuse", () => {

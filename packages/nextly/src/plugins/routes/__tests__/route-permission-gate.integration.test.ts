@@ -56,6 +56,15 @@ const gatedPlugin = definePlugin({
       },
       {
         method: "POST",
+        path: "/empty",
+        // The quiet failure: a resolver that answers with nothing. It must
+        // refuse exactly as a throw does — an empty slug is falsy, and falsy
+        // is how the dispatcher spells "this route needs no permission".
+        requiredPermission: () => "",
+        handler: () => Response.json({ reached: true }),
+      },
+      {
+        method: "POST",
         path: "/broken",
         // A resolver that cannot answer. The route must become uncallable, not
         // ungated.
@@ -69,7 +78,7 @@ const gatedPlugin = definePlugin({
 });
 
 function post(
-  sub: "write" | "read" | "broken",
+  sub: "write" | "read" | "empty" | "broken",
   headers: Record<string, string>
 ): Promise<Response> {
   const handlers = createDynamicHandlers();
@@ -203,6 +212,22 @@ describe("a route gated by a computed permission", () => {
         "permission — the gate opening the door it was written to close."
     ).not.toBe(true);
     expect(res.status, "a gate that cannot be computed refuses").toBe(403);
+  });
+
+  it("refuses an EMPTY computed permission, rather than opening the route", async () => {
+    const key = await readOnlyKey();
+
+    const res = await post("empty", { authorization: `Bearer ${key}` });
+    const body = (await res.json()) as { reached?: boolean };
+
+    expect(
+      body.reached,
+      'a resolver returning `""` let the request through. An empty slug is ' +
+        "falsy, and falsy is how this dispatcher spells `no permission " +
+        "required` — so the gate reported the route as ungated instead of " +
+        "refusing, which is the failure opening the door."
+    ).not.toBe(true);
+    expect(res.status).toBe(403);
   });
 
   it("still refuses an unauthenticated caller", async () => {

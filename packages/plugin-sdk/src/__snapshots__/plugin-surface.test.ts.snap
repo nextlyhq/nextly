@@ -177,8 +177,6 @@ exports[`plugin-sdk public export surface > \`./widgets\` surface is unchanged 1
 
 exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1`] = `
 [
-  "// A route gating on one of the plugin's OWN collections gives a function
-  // rather than a slug (type)",
   "Action (type)",
   "AddressableField (type)",
   "AddressableFieldsOptions (type)",
@@ -287,6 +285,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginRouteCaller (type)",
   "PluginRouteContext (type)",
   "PluginRouteHandler (type)",
+  "PluginRoutePermissionResolver (type)",
   "PluginRoutePermissionScope (type)",
   "PluginSingleRecord (type)",
   "PluginSinglesResult (type)",
@@ -330,8 +329,6 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "WidgetSourceFieldType (type)",
   "WidgetSourceKind (type)",
   "addressableFields (value)",
-  "because the host can rename those. See \`PluginRoute\`.
-  PluginRoutePermissionResolver (type)",
   "checkbox (value)",
   "collectionDraftSplit (value)",
   "defineEmailProvider (value)",

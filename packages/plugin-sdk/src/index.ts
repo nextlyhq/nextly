@@ -270,6 +270,13 @@ export type {
 // and a grant that widens to `unknown` stops being checkable. Kept OUT of the
 // braces because `plugin-surface.test.ts` parses the export list textually and
 // reads a comment inside it as an export name.
+// `PluginRoutePermissionResolver` / `PluginRoutePermissionScope`: a route
+// gating on one of the plugin's OWN collections gives a function rather than a
+// slug, because the host can rename those. See `PluginRoute`.
+//
+// ABOVE the braces, never inside them: `plugin-surface.test.ts` splits this
+// block on commas without stripping comments, so an inline note is recorded as
+// an export name and the real one is not.
 export type {
   PluginRoute,
   PluginRouteCaller,
@@ -279,8 +286,6 @@ export type {
   RouteMethod,
   AuthenticatedScope,
   GrantedPermission,
-  // A route gating on one of the plugin's OWN collections gives a function
-  // rather than a slug, because the host can rename those. See `PluginRoute`.
   PluginRoutePermissionResolver,
   PluginRoutePermissionScope,
 } from "nextly";
