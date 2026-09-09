@@ -21,6 +21,7 @@ import {
   constructedInBlock,
   mentionIsReaderOwned,
   misspelledExport,
+  nameIn,
   namesToRebuild,
   readerOwnedMention,
   usedOnlyAsValue,
@@ -1595,6 +1596,25 @@ describe("a missing name in object shorthand", () => {
       lang: "ts",
     },
   ];
+
+  it("answers for both spellings, everywhere the answer is needed", () => {
+    // One place, because three asked the same question and they drifted: the
+    // classifier learned the shorthand first, then the rebuild, while the
+    // survivor pass still read TS2304 alone. A rebased shorthand was dropped as
+    // already-reported and its continuation stayed excused without ever having
+    // been recompiled.
+    expect(
+      nameIn("docs/x.mdx#0  #0:1  error TS2304: Cannot find name 'Page'.")
+    ).toBe("Page");
+    expect(nameIn(shorthand("Page"))).toBe("Page");
+    // The control: a diagnostic about something else names nothing missing, so
+    // the two above are the pattern matching rather than the string.
+    expect(
+      nameIn(
+        "docs/x.mdx#0  #0:1  error TS2322: Type 'a' is not assignable to type 'b'."
+      )
+    ).toBeUndefined();
+  });
 
   it("hands a shorthand name to the rebuild like any other", () => {
     // A continuation is excused on the strength of being recompiled with the
