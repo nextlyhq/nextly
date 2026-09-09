@@ -45,6 +45,21 @@ plugin `ctx` (services/db/events/logger/self/…) **plus** per-request fields:
 |---|---|
 | `ctx.user` | The authenticated `AuthUser`, or `null` for a `public` route reached without a session. |
 | `ctx.authenticatedScope` | The caller's own grants when they arrived on an API key; `undefined` for a session or a `public` route. |
+
+### The two spellings of a permission
+
+`ctx.authenticatedScope` carries the same grants twice, because a permission is
+written two ways and both are correct:
+
+| Field | Spelling | Where it is used |
+|---|---|---|
+| `permissions` | `read-posts` | The stored slug — the database, the admin's permission matrix, and `requiredPermission` on a route. |
+| `rulePermissions` | `posts:read` | What a code-defined `access` rule receives, on a collection, a Single or a field. |
+
+Both are built from the same permission row, so they always name the same set.
+Read `permissions` when you are comparing against a slug; read `rulePermissions`
+when you are reproducing what an `access` rule would see.
+
 | `ctx.params` | Path parameters captured from `:param` segments. |
 
 Return a standard web `Response`. A thrown error is isolated into a JSON error response

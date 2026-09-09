@@ -2,6 +2,7 @@ import { buildErrorResponse } from "../../api/error-response";
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { applySessionCacheHeaders } from "../../api/response-shapes";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import { runWithCallerScope } from "../../auth/caller-scope";
 import {
   isErrorResponse,
   requireAuthentication,
@@ -13,7 +14,6 @@ import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
 
-import { runWithCallerScope } from "./caller-scope";
 import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
 import type { RouteMatch } from "./route-registry";
@@ -93,6 +93,7 @@ async function resolvePluginRouteAuth(
       ? {
           actorType: "apiKey" as const,
           permissions: authResult.permissions,
+          rulePermissions: authResult.rulePermissions,
           roles: authResult.roles,
         }
       : undefined;

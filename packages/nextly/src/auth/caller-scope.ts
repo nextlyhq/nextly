@@ -1,5 +1,5 @@
 /**
- * Pinning the caller's own authorization scope to one plugin-route request.
+ * Pinning the caller's own authorization scope for the length of one request.
  *
  * `ctx.authenticatedScope` makes the key's grants AVAILABLE to a handler, and
  * availability is not enough: every first-party route already written composes
@@ -18,12 +18,12 @@
  * served concurrently, and a shared variable would hand one request's scope to
  * another. The same reason `field-type-scope.ts` uses it to pin a registry.
  *
- * @module plugins/routes/caller-scope
+ * @module auth/caller-scope
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import type { AuthenticatedScope } from "./authenticated-scope";
 
 const callerScope = new AsyncLocalStorage<AuthenticatedScope>();
 
@@ -46,8 +46,10 @@ export function runWithCallerScope<T>(
 /**
  * The scope pinned for the request currently running, if any.
  *
- * Returns `undefined` outside a plugin route — a job, the CLI, a direct service
- * call — so nothing acquires a scope it was not given.
+ * Returns `undefined` where nothing pinned one — a job, the CLI, a direct
+ * service call, or a transport that does not yet pin — so nothing acquires a
+ * scope it was not given, and a caller that reads this falls back to resolving
+ * grants from the account as it always did.
  */
 export function currentCallerScope(): AuthenticatedScope | undefined {
   return callerScope.getStore();

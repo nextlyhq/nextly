@@ -34,6 +34,28 @@ export interface AuthenticatedScope {
   actorType: RequestActorType;
   permissions: string[];
   /**
+   * The same grants as `permissions`, spelled the way a code-defined access
+   * rule reads them — `resource:action`, e.g. `posts:read`.
+   *
+   * `permissions` above is the STORED spelling (`read-posts`), which is what
+   * the coarse grant check tests and what the admin's matrix shows. A rule
+   * receives the other one: `AccessFunction` in
+   * `collections/fields/types/base` states `resource:action` as its contract,
+   * and `listEffectivePermissions` produces it for a session caller. Passing
+   * the stored spelling into a rule makes the documented
+   * `({ permissions }) => permissions.includes("posts:create")` deny an API key
+   * while allowing the identical session caller.
+   *
+   * Both are projected from one permission row rather than converted from each
+   * other; a stored slug may be deliberately custom (`manage-api-keys`) and
+   * cannot be decomposed back into an action and a resource.
+   *
+   * Optional because a scope built from an already-resolved caller carries only
+   * what that caller had; `apiKeyWriteAllowed` falls back to `permissions` so
+   * such a path is no worse off than before.
+   */
+  rulePermissions?: string[];
+  /**
    * The key's OWN resolved role slugs, when authentication resolved them.
    *
    * A code-defined rule may decide on a role rather than a permission —
@@ -104,7 +126,10 @@ export async function apiKeyWriteAllowed(
   return codeAccessAllows(codeAccess, operation, resource, {
     userId: user.id,
     authMethod: "api-key",
-    permissions: scope.permissions,
+    // The rule-facing spelling when the scope carries it. The coarse check
+    // above tests the stored slugs; a rule reads `resource:action`, and handing
+    // it the stored form denies every documented permission predicate.
+    permissions: scope.rulePermissions ?? scope.permissions,
     // The KEY's roles when it carries them. `user` names the owner, so its
     // roles are the owner's — the very thing this function exists not to judge
     // on. The read paths resolve the key's roles onto the user before calling

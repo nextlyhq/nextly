@@ -1,4 +1,5 @@
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
+import { currentCallerScope } from "../auth/caller-scope";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
 import { NextlyError } from "../errors/nextly-error";
@@ -9,8 +10,6 @@ import type {
 } from "../services/collections/collection-service";
 import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
-
-import { currentCallerScope } from "./routes/caller-scope";
 
 /**
  * @public Elevation options for the managed `ctx.services` path.

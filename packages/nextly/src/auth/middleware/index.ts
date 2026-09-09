@@ -152,6 +152,12 @@ export interface AuthContext {
   userName?: string;
   userEmail?: string;
   permissions: string[];
+  /**
+   * The same grants as `permissions`, spelled `resource:action` for a
+   * code-defined access rule. Present only for `api-key`; a session caller
+   * resolves its own via `listEffectivePermissions` when a rule asks.
+   */
+  rulePermissions?: string[];
   roles: string[];
   authMethod: "session" | "api-key";
   /**
@@ -242,10 +248,14 @@ async function apiKeyRateLimitRefusal(
  * // valid key — apiKeyResult.userId, apiKeyResult.permissions, and apiKeyResult.roles are populated
  * ```
  */
-export async function requireApiKeyAuth(
-  req: Request
-): Promise<
-  | { userId: string; permissions: string[]; roles: string[]; apiKeyId: string }
+export async function requireApiKeyAuth(req: Request): Promise<
+  | {
+      userId: string;
+      permissions: string[];
+      rulePermissions: string[];
+      roles: string[];
+      apiKeyId: string;
+    }
   | ErrorResponse
   | null
 > {
@@ -289,8 +299,8 @@ export async function requireApiKeyAuth(
   if (overLimit) return overLimit;
 
   // 5. Resolve effective permissions and roles for this token type
-  const [permissions, roles] = await Promise.all([
-    apiKeyService.resolveApiKeyPermissions(
+  const [grants, roles] = await Promise.all([
+    apiKeyService.resolveApiKeyGrants(
       keyAuth.tokenType,
       keyAuth.roleId,
       keyAuth.userId,
@@ -305,7 +315,13 @@ export async function requireApiKeyAuth(
 
   // The key's own id travels with the result so a write can be attributed to
   // the specific key, not just to the user that owns it.
-  return { userId: keyAuth.userId, permissions, roles, apiKeyId: keyAuth.id };
+  return {
+    userId: keyAuth.userId,
+    permissions: grants.slugs,
+    rulePermissions: grants.rulePermissions,
+    roles,
+    apiKeyId: keyAuth.id,
+  };
 }
 
 /**
@@ -398,6 +414,7 @@ export async function requireAuthentication(
   return {
     userId: apiKeyResult.userId,
     permissions: apiKeyResult.permissions,
+    rulePermissions: apiKeyResult.rulePermissions,
     roles: apiKeyResult.roles,
     authMethod: "api-key",
     apiKeyId: apiKeyResult.apiKeyId,
