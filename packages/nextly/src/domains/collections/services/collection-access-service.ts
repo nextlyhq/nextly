@@ -490,7 +490,21 @@ export class CollectionAccessService extends BaseService {
     // grant, so the session super-admin bypass does not lift the owner predicate
     // for a super-admin-owned key — mirrors checkCollectionAccess and
     // getOwnerConstraint. Undefined for session/system callers.
-    authenticatedScope?: AuthenticatedScope
+    authenticatedScope?: AuthenticatedScope,
+    /**
+     * The document this read is about, when the read names one.
+     *
+     * A `CustomAccessFunction` receives the id and may decide from it, so the
+     * id is part of the question rather than a detail of one caller. A read by
+     * id that passes it to the coarse gate and withholds it here asks the same
+     * rule about two different subjects and then has to reconcile two answers:
+     * a rule allowing exactly one document permits the gate and denies the
+     * predicate, and the denial below is raised rather than returned.
+     *
+     * Absent for a listing or an aggregate, which are genuinely about no single
+     * document — the rule sees `undefined` there because that is the truth.
+     */
+    entryId?: string
   ): Promise<Record<string, unknown> | null> {
     // Super-admin reads are unfiltered too, matching the write-side bypass so
     // "super-admins bypass stored rules on every transport" holds for reads —
@@ -537,7 +551,7 @@ export class CollectionAccessService extends BaseService {
       accessRules,
       "read",
       requestContext,
-      undefined,
+      entryId,
       undefined,
       // Collection owner-only reads filter on the `created_by` system column.
       DEFAULT_OWNER_FIELD

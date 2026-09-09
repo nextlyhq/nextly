@@ -14,7 +14,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, and, or, like, ilike, sql, asc, desc } from "drizzle-orm";
+import {
+  eq,
+  and,
+  or,
+  like,
+  ilike,
+  sql,
+  asc,
+  desc,
+  type SQLWrapper,
+} from "drizzle-orm";
 
 import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
@@ -334,6 +344,17 @@ interface FilteredReadParams {
   /** When true, bypass all access control checks */
   overrideAccess?: boolean;
   /**
+   * Enforce FIELD-level read rules even on a read that is otherwise trusted.
+   *
+   * Carried on the aggregate surface for the same reason the row scope is: the
+   * search narrowing drops searchable fields the caller may not read, and an
+   * aggregate resolved without this trusts every one of them. The page would
+   * then match on a narrowed set of fields while the total beside it matched on
+   * all of them — and `search=<guess>` against a withheld field becomes a
+   * probe whose answer is the count.
+   */
+  enforceFieldAccess?: boolean;
+  /**
    * This `where` was built by the framework from a route it was asked to
    * render, not received from a request.
    *
@@ -595,6 +616,18 @@ function toBuckets(
     count: Number(row.total ?? 0),
   }));
 }
+
+/**
+ * A Drizzle table as this service reads it: columns addressed by name.
+ *
+ * Narrower than `any` on purpose. The helpers below index this to build
+ * conditions, so `any` would drop checking from every one of those lookups and
+ * from the values handed to the query builder — which is what the repository
+ * prohibits rather than the dynamism itself. The value is genuinely dynamic
+ * (the table is built from user schema at runtime) and genuinely a column map,
+ * and this says exactly that.
+ */
+type DynamicSchema = Record<string, SQLWrapper | undefined>;
 
 export class CollectionQueryService extends BaseService {
   constructor(
@@ -1217,8 +1250,7 @@ export class CollectionQueryService extends BaseService {
   private buildLocalizedQueryContext(
     companion: CompanionSchema | null,
     localeChain: string[] | null,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
-    schema: any,
+    schema: DynamicSchema,
     statusFilterValues?: readonly string[] | null
   ): LocalizedQueryContext | null {
     if (!companion || !localeChain || localeChain.length === 0) return null;
@@ -1287,6 +1319,12 @@ export class CollectionQueryService extends BaseService {
     overrideAccess?: boolean;
     authenticatedScope?: AuthenticatedScope;
     status?: StatusOption;
+    /**
+     * The document a by-id read names, forwarded so a custom rule deciding FROM
+     * the id is asked about the same document the coarse gate judged. A listing
+     * or an aggregate leaves it absent, which is the honest answer there.
+     */
+    entryId?: string;
   }): Promise<{
     accessConstraint: Record<string, unknown> | null;
     statusFilter: ReturnType<typeof resolveStatusFilter>;
@@ -1299,7 +1337,8 @@ export class CollectionQueryService extends BaseService {
       // Scope the owner filter too: without this a super-admin-owned scoped key
       // takes the session bypass and reads past its own grant, the predicate
       // having been lifted before it ever reached SQL.
-      params.authenticatedScope
+      params.authenticatedScope,
+      params.entryId
     );
 
     // `resolveStatusFilter` returns null when the collection has no status
@@ -1331,8 +1370,7 @@ export class CollectionQueryService extends BaseService {
     search?: string;
     overrideAccess?: boolean;
     enforceFieldAccess?: boolean;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
-    schema: any;
+    schema: DynamicSchema;
     localizedCtx: LocalizedQueryContext | null;
   }): Promise<ReturnType<typeof and> | undefined> {
     if (!params.search) return undefined;
@@ -1389,8 +1427,7 @@ export class CollectionQueryService extends BaseService {
     collectionName: string;
     /** The filter with the language and geo keys already removed. */
     where: WhereFilter | undefined;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
-    schema: any;
+    schema: DynamicSchema;
     localizedCtx: LocalizedQueryContext | null;
     resolvedComponentTables?: Map<string, string>;
     resolvedComponentTypeColumns?: Map<string, string>;
@@ -1510,8 +1547,7 @@ export class CollectionQueryService extends BaseService {
     /** The user access is judged for — absent when the read is trusted. */
     accessUser?: UserContext;
     authenticatedScope?: AuthenticatedScope;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
-    schema: any;
+    schema: DynamicSchema;
     companion: CompanionSchema | null;
     localeChain: string[] | null;
     /**
@@ -1969,8 +2005,7 @@ export class CollectionQueryService extends BaseService {
   private accessConstraintCondition(
     collectionName: string,
     accessConstraint: Record<string, unknown> | null,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
-    schema: any,
+    schema: DynamicSchema,
     localizedCtx: LocalizedQueryContext | null
   ): ReturnType<typeof and> | undefined {
     if (!accessConstraint) return undefined;
@@ -2570,6 +2605,10 @@ export class CollectionQueryService extends BaseService {
             // totalPages then hides the tail of its own result set.
             status: params.status,
             overrideAccess: params.overrideAccess,
+            // Forwarded for the same reason `overrideAccess` is: the total has
+            // to answer under the field trust the page answered under, or the
+            // count matches on searchable fields the rows were narrowed by.
+            enforceFieldAccess: params.enforceFieldAccess,
             frameworkFilter: true,
             // Not a caller, and not a second boundary. This count is THIS
             // read's own continuation: the caller's filter was judged at the
@@ -2910,7 +2949,7 @@ export class CollectionQueryService extends BaseService {
    */
   private async validatedGroupKey(
     params: FilteredReadParams,
-    schema: Record<string, unknown>
+    schema: DynamicSchema
   ): Promise<string | undefined> {
     const groupBy = params.groupBy;
     if (groupBy === undefined) return undefined;
@@ -3025,6 +3064,9 @@ export class CollectionQueryService extends BaseService {
       search: params.search,
       status: params.status,
       overrideAccess: params.overrideAccess,
+      // The same field trust the page resolved under, so the search narrows
+      // this aggregate by the fields it narrowed the rows by.
+      enforceFieldAccess: params.enforceFieldAccess,
       accessUser,
       authenticatedScope: params.authenticatedScope,
       schema,
@@ -3408,6 +3450,10 @@ export class CollectionQueryService extends BaseService {
         overrideAccess: params.overrideAccess,
         authenticatedScope: params.authenticatedScope,
         status: params.status,
+        // The SETTLED id, the one the gate above was given. A custom rule may
+        // decide from it, so resolving the predicate without it asks that rule
+        // about a different subject than the gate did.
+        entryId,
       });
 
       const idCondition = eq(schema.id, entryId);

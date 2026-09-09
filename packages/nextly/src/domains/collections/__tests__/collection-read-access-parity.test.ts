@@ -142,6 +142,29 @@ describe("read paths narrow by the same stored read rule", () => {
     return columnsIn(calls.map((c: unknown[]) => c[0]));
   }
 
+  /**
+   * Every predicate a read built, in the order it built them.
+   *
+   * `createMockDb` hands every `select()` the same chain, so a list read
+   * records the page and the total it takes for `totalDocs` here in that order,
+   * and {@link filteredColumns} returns their UNION. That union cannot answer
+   * the question this suite exists for: an implementation that dropped the
+   * predicate from the page and kept it on the count returns the rows the rule
+   * withholds and still satisfies it.
+   *
+   * Reading `calls[0]` alone is NOT the fix, and the reason is worth keeping.
+   * A page with no surviving conditions builds no `WHERE` at all, so it records
+   * NOTHING and `calls[0]` is then the count's own predicate — the unfiltered
+   * page reads as filtered, which is the same false pass one level down.
+   * Measured: dropping the access predicate from the page takes this from two
+   * calls to one, both of them carrying the rule's columns.
+   *
+   * So a caller asserts the COUNT of predicates as well as their contents.
+   */
+  function whereCalls(): unknown[] {
+    return mockDb._selectChain.where.mock.calls.map((c: unknown[]) => c[0]);
+  }
+
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -178,12 +201,21 @@ describe("read paths narrow by the same stored read rule", () => {
       );
     });
 
-    it("listEntries filters by every column the rule named", async () => {
+    it("listEntries filters the PAGE by every column the rule named", async () => {
       await service.listEntries({ collectionName: "posts", user });
 
-      const columns = filteredColumns();
-      expect(columns).toContain(schema.tenant_id);
-      expect(columns).toContain(schema.price);
+      // Two predicates: the page, then the total it takes for `totalDocs`.
+      // Asserted because a page that filters on nothing builds no `WHERE` and
+      // silently leaves the count's predicate as `calls[0]` — the rows reaching
+      // the caller would be unfiltered while this still read as filtered.
+      const built = whereCalls();
+      expect(built).toHaveLength(2);
+
+      // The PAGE's own predicate. The rows are what reach the caller, so a
+      // constraint present only on the total still returns every withheld row.
+      const pageColumns = columnsIn([built[0]]);
+      expect(pageColumns).toContain(schema.tenant_id);
+      expect(pageColumns).toContain(schema.price);
     });
 
     it("getEntry filters by every column the rule named", async () => {
@@ -208,6 +240,119 @@ describe("read paths narrow by the same stored read rule", () => {
       const columns = filteredColumns();
       expect(columns).toContain(schema.tenant_id);
       expect(columns).toContain(schema.price);
+    });
+  });
+
+  // ── A rule that decides FROM the document id ─────────────────────────────
+
+  describe("a custom read rule that reads the document id", () => {
+    /**
+     * The rule answers only when it is told which document is being judged.
+     *
+     * `CustomAccessFunction` receives the id, so a rule may legitimately decide
+     * from it. That makes the id part of the QUESTION rather than a detail of
+     * one caller: a read by id that asks the coarse gate with the id and then
+     * resolves its row predicate without it has asked two different questions
+     * and has to reconcile two different answers.
+     */
+    function buildIdDependent() {
+      build(
+        { read: { type: "custom", functionPath: "./permitted-id" } },
+        TENANT_CONSTRAINT
+      );
+      const accessControlService = (
+        service as unknown as {
+          accessService: { accessControlService: { evaluateAccess: unknown } };
+        }
+      ).accessService.accessControlService;
+      accessControlService.evaluateAccess = vi
+        .fn()
+        .mockImplementation((...args: unknown[]) => {
+          // Signature: (rules, operation, context, documentId, document, ownerField)
+          const documentId = args[3];
+          return Promise.resolve(
+            documentId === "entry-1"
+              ? { allowed: true, query: TENANT_CONSTRAINT }
+              : { allowed: false, reason: "not the permitted document" }
+          );
+        });
+      return accessControlService as {
+        evaluateAccess: { mock: { calls: unknown[][] } };
+      };
+    }
+
+    it("getEntry resolves the predicate with the id it was given", async () => {
+      buildIdDependent();
+
+      const result = await service.getEntry({
+        collectionName: "posts",
+        entryId: "entry-1",
+        user,
+      });
+
+      // The rule ALLOWS this document. Resolving the predicate without the id
+      // re-asks the same rule about no document at all, which it denies — and
+      // the denial is raised, so an authorized read fails.
+      expect(result.success).toBe(true);
+    });
+
+    it("asks the rule about the document under read, on every evaluation", async () => {
+      const acs = buildIdDependent();
+
+      await service.getEntry({
+        collectionName: "posts",
+        entryId: "entry-1",
+        user,
+      });
+
+      // Asserted over the calls the service actually made rather than over the
+      // outcome: an implementation that reached the right answer while asking
+      // about `undefined` somewhere is the state this guards against.
+      const ids = acs.evaluateAccess.mock.calls.map(c => c[3]);
+      expect(ids.length).toBeGreaterThan(0);
+      expect(ids.every(id => id === "entry-1")).toBe(true);
+    });
+  });
+
+  // ── A refusal reports the same status on every path ──────────────────────
+
+  describe("an untranslatable constraint refuses with the same status", () => {
+    /** Names a column the schema does not carry, so it cannot be expressed. */
+    const UNTRANSLATABLE = { secret_col: { equals: "x" } };
+
+    it("getEntry answers 403, not a server fault", async () => {
+      build(
+        { read: { type: "custom", functionPath: "./tenant-scope" } },
+        UNTRANSLATABLE
+      );
+
+      const result = await service.getEntry({
+        collectionName: "posts",
+        entryId: "entry-1",
+        user,
+      });
+
+      expect(result.success).toBe(false);
+      // The by-id path refuses through the same helper the listing uses, so it
+      // owes the caller the same answer. Reporting a rule refusal as 500 tells
+      // a client to retry something that will never succeed.
+      expect(result.statusCode).toBe(403);
+    });
+
+    it("listEntries answers 403 for the same rule", async () => {
+      build(
+        { read: { type: "custom", functionPath: "./tenant-scope" } },
+        UNTRANSLATABLE
+      );
+
+      const result = await service.listEntries({
+        collectionName: "posts",
+        user,
+      });
+
+      // The control: the status the by-id path has to match.
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(403);
     });
   });
 
