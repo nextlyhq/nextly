@@ -13,7 +13,7 @@
 import { useEffect } from "react";
 import { describe, it, expect, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { fireEvent, render, screen } from "@admin/__tests__/utils";
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
 
@@ -91,6 +91,32 @@ describe("EntryForm — a version has to be on screen before it can be acted on"
     ).toBeEnabled();
   });
 
+  it("prevents the native form submit while a version is being read", () => {
+    // The banner's restore button has no type attribute, so it submits the
+    // entry form natively. The submit must be prevented even when the write
+    // gate refuses to run the save — an unprevented submit reloads the page
+    // and drops the reader's history state.
+    renderViewing({
+      versionNo: 7,
+      snapshot: { title: "as it was" },
+      locale: null,
+      isLoading: false,
+      error: null,
+    });
+
+    const form = document.querySelector("form");
+    expect(form, "the editor renders a form").not.toBeNull();
+    // React delegates at the root container, so the flag is read after the
+    // dispatch has finished rather than inside a listener that may run
+    // before React's own handler.
+    let submitted: SubmitEvent | undefined;
+    form?.addEventListener("submit", event => {
+      submitted = event;
+    });
+    fireEvent.submit(form as HTMLFormElement);
+
+    expect(submitted?.defaultPrevented).toBe(true);
+  });
   it("holds both back when the read has not returned, though nothing is loading or failed", () => {
     renderViewing({
       versionNo: 7,

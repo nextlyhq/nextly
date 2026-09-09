@@ -607,8 +607,14 @@ export function EntryForm({
    * a past version is part of the same claim: the handlers below act on the
    * live document, which is not what is on screen.
    */
-  const handleSubmit: typeof submitEntry = (event, intent) =>
-    writesHeld ? Promise.resolve() : submitEntry(event, intent);
+  const handleSubmit: typeof submitEntry = (event, intent) => {
+    // The native submit is ALWAYS prevented, before any gate: this handler
+    // is the entry form's onSubmit, and returning without preventing the
+    // default lets the browser submit the form natively — reloading the page
+    // and dropping the reader's history state.
+    event?.preventDefault();
+    return writesHeld ? Promise.resolve() : submitEntry(event, intent);
+  };
   const handleDelete = () => {
     if (!writesHeld) deleteEntry();
   };
