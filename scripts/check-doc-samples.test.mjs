@@ -1375,9 +1375,16 @@ describe("the workspace's own exported names", () => {
       // `Media` is exported as a type by `nextly` and as an interface by
       // `@nextlyhq/admin`, and by nothing as a value.
       expect(workspaceValueExports().has("Media")).toBe(false);
-      // The control: the same set answers yes for a real component, so the
-      // check above is a namespace distinction rather than an empty set.
+      // Declared type-only over a target that IS a value.
+      // `export type { QueryClient } from "./types/query"` points at TanStack's
+      // runtime class, so resolving the alias and stopping there called it a
+      // value that `@nextlyhq/admin` cannot actually supply.
+      expect(workspaceValueExports().has("QueryClient")).toBe(false);
+      // The control: the same set answers yes for a real component and for a
+      // value published from a subpath, so the two checks above are a namespace
+      // distinction rather than an empty set.
       expect(workspaceValueExports().has("Skeleton")).toBe(true);
+      expect(workspaceValueExports().has("BuilderShell")).toBe(true);
     },
     BUILDS_THE_PROGRAM
   );

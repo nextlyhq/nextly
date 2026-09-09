@@ -1715,6 +1715,21 @@ function typedEntriesOf(packageDir, manifest) {
   return [...resolved];
 }
 
+/**
+ * Whether an export is declared type-only, whatever it points at.
+ *
+ * Both spellings say it: `export type { X }` marks the declaration and
+ * `export { type X }` marks the specifier. A symbol exported by several
+ * specifiers is type-only only when every one of them is.
+ */
+function exportedAsTypeOnly(symbol) {
+  const specifiers = (symbol.declarations ?? []).filter(ts.isExportSpecifier);
+  if (specifiers.length === 0) return false;
+  return specifiers.every(
+    specifier => specifier.isTypeOnly || specifier.parent.parent.isTypeOnly
+  );
+}
+
 function workspaceExports() {
   if (exportedNames.size > 0) return exportedNames;
   const entries = [];
@@ -1754,8 +1769,15 @@ function workspaceExports() {
     for (const exported of checker.getExportsOfModule(symbol)) {
       exportedNames.add(exported.getName());
       // A re-export is an alias, and an alias carries no namespace of its own:
-      // asking the alias whether it is a value answers for the binding rather
-      // than for the thing bound.
+      // asking the alias whether it is a value answers for the thing bound
+      // rather than for the binding. Both questions matter, and in this order.
+      //
+      // `export type { QueryClient } from "./types/query"` points at TanStack's
+      // runtime class, so the target is a value while the export is not: an
+      // importer of `@nextlyhq/admin` cannot get that class from it. Reading
+      // only the target put `QueryClient` among the values and kept `new
+      // QueryClient()` reported as a name the workspace could have supplied.
+      if (exportedAsTypeOnly(exported)) continue;
       const target =
         exported.flags & ts.SymbolFlags.Alias
           ? checker.getAliasedSymbol(exported)
