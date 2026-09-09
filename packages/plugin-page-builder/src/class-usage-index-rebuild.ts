@@ -163,6 +163,30 @@ export interface ClassUsageRebuildReport {
    * scanned document answered, and one of these did not.
    */
   undetermined: number;
+  /**
+   * Documents for which at least one index could not be brought into agreement.
+   *
+   * Separate from `undetermined`, which is a document this walk could not read
+   * WHOLE. Both make a count untrustworthy and they have different causes and
+   * different remedies, so folding them together would report an unavailable
+   * index store as a collection full of unreadable documents.
+   */
+  unrepaired: number;
+  /**
+   * The first failure this rebuild met, or absent when it met none.
+   *
+   * PRESENT means the rebuild did not repair everything it walked, so the index
+   * must not be read as exact until one returns without it. `unrepaired` gives
+   * the scale; a sweep that could not run leaves orphan rows behind without
+   * moving that count at all, which is why this field rather than the count is
+   * the one to check.
+   *
+   * The FIRST rather than every one: a store that is unavailable fails
+   * identically for every document it is asked about, so keeping them all would
+   * grow with the collection while saying one thing many times. A caller needs
+   * one cause to act on and a number for how far it spread.
+   */
+  failure?: unknown;
 }
 
 /** Whether a stored item is something a document can be read out of. */
@@ -179,6 +203,8 @@ interface PageTally {
   scanned: number;
   repaired: number;
   undetermined: number;
+  unrepaired: number;
+  failure?: unknown;
 }
 
 /**
@@ -203,7 +229,7 @@ async function repairOneDocument(
     limits: DocumentLimits;
   },
   item: { id: string } & Record<string, unknown>
-): Promise<{ changed: boolean; unread: boolean }> {
+): Promise<{ changed: boolean; unread: boolean; failure?: unknown }> {
   const subject = {
     scope: "collection" as const,
     entity: args.collection,
@@ -215,16 +241,31 @@ async function repairOneDocument(
 
   let changed = false;
   let unread = false;
+  let failure: unknown;
   for (const target of args.targets) {
-    const report = await target.maintain({
-      subject,
-      document: item[args.field],
-      limits: args.limits,
-    });
-    if (report.undetermined) unread = true;
-    if (report.inserted > 0 || report.removed > 0) changed = true;
+    // Each index on its own. A rejection here used to leave the walk entirely,
+    // so one unavailable store abandoned the repair of every OTHER index and
+    // every document after this one — turning the routine that exists to fix a
+    // stale index into one that stops at the first sign that it is stale.
+    //
+    // Continuing is safe for the sweep that follows: this document is marked
+    // visited before the repair is attempted, so its rows are never mistaken
+    // for a deleted document's and removed.
+    try {
+      const report = await target.maintain({
+        subject,
+        document: item[args.field],
+        limits: args.limits,
+      });
+      if (report.undetermined) unread = true;
+      if (report.inserted > 0 || report.removed > 0) changed = true;
+    } catch (thrown) {
+      failure ??= thrown;
+    }
   }
-  return { changed, unread };
+  return failure === undefined
+    ? { changed, unread }
+    : { changed, unread, failure };
 }
 
 /**
@@ -250,6 +291,8 @@ async function rebuildOnePage(
   let scanned = 0;
   let repaired = 0;
   let undetermined = 0;
+  let unrepaired = 0;
+  let failure: unknown;
 
   for (const item of items) {
     if (!isStoredDocument(item)) continue;
@@ -258,6 +301,10 @@ async function rebuildOnePage(
 
     const outcome = await repairOneDocument(args, item);
 
+    if (outcome.failure !== undefined) {
+      unrepaired += 1;
+      failure ??= outcome.failure;
+    }
     if (outcome.unread) undetermined += 1;
     // Repaired means the rows CHANGED, which is a different question from
     // whether the document was read. A document already in agreement issues no
@@ -265,7 +312,9 @@ async function rebuildOnePage(
     if (outcome.changed) repaired += 1;
   }
 
-  return { scanned, repaired, undetermined };
+  return failure === undefined
+    ? { scanned, repaired, undetermined, unrepaired }
+    : { scanned, repaired, undetermined, unrepaired, failure };
 }
 
 /**
@@ -360,6 +409,8 @@ export async function rebuildUsageIndexes(args: {
   let scanned = 0;
   let repaired = 0;
   let undetermined = 0;
+  let unrepaired = 0;
+  let failure: unknown;
   // Collected during the SAME walk that reconciles, rather than by reading the
   // documents again. Two reads would let a document created between them be
   // read as absent, and lose rows it should keep.
@@ -393,6 +444,8 @@ export async function rebuildUsageIndexes(args: {
       scanned += tally.scanned;
       repaired += tally.repaired;
       undetermined += tally.undetermined;
+      unrepaired += tally.unrepaired;
+      failure ??= tally.failure;
     },
   });
 
@@ -404,34 +457,55 @@ export async function rebuildUsageIndexes(args: {
   // and nothing later reconciles a row whose document is gone.
   let removed = 0;
   for (const target of resolvedTargets) {
-    const swept = await forgetAbsentDocuments({
-      store: target.store,
-      scope: "collection",
-      entity: args.collection,
-      field: args.field,
-      locale: args.locale,
-      variant: args.variant,
-      visited,
-      // Asked only about a document the walk did not see, so a stable collection
-      // costs nothing. A row survives unless the document is confirmed GONE —
-      // failing towards keeping a row, because a kept stale row over-counts and
-      // blocks a delete, while a wrongly removed one under-counts and permits
-      // deleting a class the live document still renders.
-      stillExists: id =>
-        args.documents.exists({
-          collection: args.collection,
-          id,
-          // The subject's own coordinates, not the document's id alone. A row is
-          // filed under all of them, so the question that decides whether to
-          // remove it has to be asked in all of them.
-          locale: args.locale,
-          variant: args.variant,
-        }),
-    });
-    removed += swept.removed;
+    // Each index's sweep on its own, for the reason the repair loop above is:
+    // one store that cannot answer would otherwise leave every OTHER index
+    // holding rows for documents that no longer exist, and nothing later
+    // reconciles a row whose document is gone.
+    try {
+      const swept = await forgetAbsentDocuments({
+        store: target.store,
+        scope: "collection",
+        entity: args.collection,
+        field: args.field,
+        locale: args.locale,
+        variant: args.variant,
+        visited,
+        // Asked only about a document the walk did not see, so a stable collection
+        // costs nothing. A row survives unless the document is confirmed GONE —
+        // failing towards keeping a row, because a kept stale row over-counts and
+        // blocks a delete, while a wrongly removed one under-counts and permits
+        // deleting a class the live document still renders.
+        stillExists: id =>
+          args.documents.exists({
+            collection: args.collection,
+            id,
+            // The subject's own coordinates, not the document's id alone. A row
+            // is filed under all of them, so the question that decides whether
+            // to remove it has to be asked in all of them.
+            locale: args.locale,
+            variant: args.variant,
+          }),
+      });
+      removed += swept.removed;
+    } catch (thrown) {
+      // Not counted in `unrepaired`, which counts DOCUMENTS. A sweep failure
+      // leaves orphan rows rather than a document unreconciled, which is why
+      // `failure` and not the count is the field that says a rebuild was
+      // incomplete.
+      failure ??= thrown;
+    }
   }
 
-  return { scanned, repaired, undetermined, orphansRemoved: removed };
+  return failure === undefined
+    ? { scanned, repaired, undetermined, unrepaired, orphansRemoved: removed }
+    : {
+        scanned,
+        repaired,
+        undetermined,
+        unrepaired,
+        orphansRemoved: removed,
+        failure,
+      };
 }
 
 /**

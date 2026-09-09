@@ -106,6 +106,7 @@ describe("rebuilding the class-usage index", () => {
       scanned: 2,
       repaired: 2,
       undetermined: 0,
+      unrepaired: 0,
       orphansRemoved: 0,
     });
     expect(index.calls).toEqual([
@@ -174,6 +175,7 @@ describe("rebuilding the class-usage index", () => {
       scanned: 1,
       repaired: 0,
       undetermined: 0,
+      unrepaired: 0,
       orphansRemoved: 0,
     });
     expect(index.calls).toEqual([]);
@@ -212,6 +214,7 @@ describe("rebuilding the class-usage index", () => {
       scanned: 1,
       repaired: 1,
       undetermined: 1,
+      unrepaired: 0,
       orphansRemoved: 0,
     });
   });
@@ -242,6 +245,7 @@ describe("rebuilding the class-usage index", () => {
       scanned: 1,
       repaired: 1,
       undetermined: 0,
+      unrepaired: 0,
       orphansRemoved: 0,
     });
     expect(index.calls).toEqual(["create:published:page-1:hero"]);
@@ -440,6 +444,7 @@ describe("rows whose document no longer exists", () => {
       scanned: 1,
       repaired: 0,
       undetermined: 0,
+      unrepaired: 0,
       orphansRemoved: 1,
     });
     expect(calls).toEqual(["delete:r9"]);
@@ -659,6 +664,126 @@ describe("repairing every index a site maintains", () => {
     };
     return { store, written };
   }
+
+  /** A store that cannot answer at all, as an unavailable index table reads. */
+  function unavailableStore(message: string): ClassUsageIndexStore {
+    return {
+      find: async () => {
+        throw new Error(message);
+      },
+      create: async () => ({}),
+      delete: async () => ({}),
+    };
+  }
+
+  /**
+   * A page carrying a reference for BOTH indexes.
+   *
+   * A class alone would leave the component index with nothing to derive, so a
+   * test asserting the sibling was repaired would fail on a fixture that never
+   * gave it anything to write rather than on the behaviour it names.
+   */
+  const onePage = (id: string, klass: string) => ({
+    id,
+    content: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "core/text", version: 1, props: {}, classes: [klass] },
+        {
+          id: `${id}-i`,
+          type: "nextly/component-instance",
+          version: 1,
+          props: { componentId: "header" },
+        },
+      ],
+    },
+  });
+
+  it("repairs the OTHER indexes when one of them cannot be reached", async () => {
+    // The rebuild is the remedy for a stale index, so abandoning the walk at
+    // the first store that cannot answer means the repair path fails in
+    // exactly the circumstances it exists for — and it abandoned every
+    // remaining DOCUMENT too, not merely the failing index.
+    const docs = documentStore([onePage("page-1", "hero")]);
+    const healthy = recordingStore();
+
+    const report = await rebuildPageBuilderUsageIndexes({
+      limits: DEFAULT_LIMITS,
+      documents: docs.store,
+      classIndex: unavailableStore("class index unavailable"),
+      componentIndex: healthy.store,
+      collection: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    expect({
+      // The sibling was repaired anyway, which is the property.
+      sibling: healthy.written.length > 0,
+      // And the report SAYS it was not a whole repair, rather than reading as
+      // a clean rebuild that happened to write less.
+      unrepaired: report.unrepaired,
+      cause: (report.failure as Error).message,
+      scanned: report.scanned,
+    }).toEqual({
+      sibling: true,
+      unrepaired: 1,
+      cause: "class index unavailable",
+      scanned: 1,
+    });
+  });
+
+  it("walks the documents AFTER one that could not be repaired", async () => {
+    // The costly half of aborting: every later document keeps rows that
+    // disagree with it, and the later ones are the ones nobody knows to check.
+    const docs = documentStore([
+      onePage("page-1", "hero"),
+      onePage("page-2", "banner"),
+    ]);
+    const healthy = recordingStore();
+
+    const report = await rebuildPageBuilderUsageIndexes({
+      limits: DEFAULT_LIMITS,
+      documents: docs.store,
+      classIndex: unavailableStore("class index unavailable"),
+      componentIndex: healthy.store,
+      collection: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    expect({ scanned: report.scanned, unrepaired: report.unrepaired }).toEqual({
+      scanned: 2,
+      unrepaired: 2,
+    });
+  });
+
+  it("reports a rebuild that repaired everything as carrying NO failure", async () => {
+    // The control. Without it, a report that always carried a failure would
+    // satisfy both assertions above.
+    const docs = documentStore([onePage("page-1", "hero")]);
+    const classes = recordingStore();
+    const components = recordingStore();
+
+    const report = await rebuildPageBuilderUsageIndexes({
+      limits: DEFAULT_LIMITS,
+      documents: docs.store,
+      classIndex: classes.store,
+      componentIndex: components.store,
+      collection: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    expect({
+      failure: report.failure,
+      unrepaired: report.unrepaired,
+    }).toEqual({ failure: undefined, unrepaired: 0 });
+  });
 
   it("fills BOTH indexes from one walk, through the entry point a host can reach", async () => {
     // The upgrade case, and the reason this entry point exists. An installation
