@@ -122,6 +122,29 @@ export type HookContextPhase = Exclude<HookType, "beforeOperation">;
 export type HookOwner = "code" | "app" | `plugin:${string}`;
 
 /**
+ * Facts about the HTTP request behind an operation, resolved by the core.
+ *
+ * Handed to hooks as {@link HookContext.req}`.http`. Its presence answers the
+ * question a request-scoped rule has to ask first: was there a request at all?
+ */
+export interface HookHttpFacts {
+  /**
+   * The client address, resolved under the deployment's proxy-trust settings
+   * (`security.trustProxy` and `TRUSTED_PROXY_IPS`).
+   *
+   * `null` when no address can be trusted -- proxy headers are off, or every
+   * hop in the chain is a proxy this deployment already trusts. Null is not a
+   * bucket: keying a rate limit on it would put every unidentifiable client in
+   * one, so a rule that cannot identify a client should decide what to do about
+   * that rather than treat them all as the same one.
+   */
+  ip: string | null;
+
+  /** The request method, uppercased by the platform (`POST`, `PATCH`). */
+  method: string;
+}
+
+/**
  * Context object passed to hook handlers containing operation metadata.
  *
  * The context provides all information needed for hooks to make decisions:
@@ -278,6 +301,19 @@ export interface HookContext<T = any> {
     /** HTTP query parameters */
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- query params have arbitrary shapes
     query?: Record<string, any>;
+    /**
+     * What the core resolved about the HTTP request behind this operation.
+     *
+     * Absent when no request produced it: a seed script, a scheduled job, an
+     * import. That absence is the point. A rule scoped to a visitor -- a rate
+     * limit, a honeypot, a captcha -- reads it to tell a browser from a trusted
+     * server, and applies only when this is here. A server importing ten
+     * thousand rows is not rate-limited by its own importer.
+     *
+     * Resolved rather than raw, because `x-forwarded-for` is forgeable by
+     * whoever sends it. See {@link HookHttpFacts.ip}.
+     */
+    http?: HookHttpFacts;
     /**
      * Nextly Direct API instance.
      *

@@ -26,6 +26,10 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
+import {
+  resolveRequestFacts,
+  type ResolvedRequestFacts,
+} from "../../../hooks/request-facts";
 import { toCamelCase, toSnakeCase } from "../../../lib/case-conversion";
 import { statusCondition } from "../../../lib/status-condition";
 import {
@@ -570,6 +574,8 @@ interface FilteredReadParams {
   resolvedComponentTypeColumns?: Map<string, string>;
   /** Arbitrary data passed to hooks via context */
   context?: Record<string, unknown>;
+  /** The HTTP request behind this operation, when one produced it. */
+  request?: Request;
   /**
    * The field whose distinct values become buckets.
    *
@@ -1369,6 +1375,8 @@ export class CollectionQueryService extends BaseService {
     where: WhereFilter | undefined;
     user?: UserContext;
     sharedContext: Record<string, unknown>;
+    /** What the core resolved about the request behind this read. */
+    requestFacts: ResolvedRequestFacts;
   }): Promise<WhereFilter | undefined> {
     // Already inside this collection's read hooks: the call came from one of
     // its own handlers, so it uses the filter it was given and runs nothing.
@@ -1419,6 +1427,7 @@ export class CollectionQueryService extends BaseService {
             data: afterBeforeOperation ?? {},
             user: params.user,
             context: params.sharedContext,
+            req: params.requestFacts,
           })
         );
 
@@ -1446,6 +1455,8 @@ export class CollectionQueryService extends BaseService {
     entryId: string;
     user?: UserContext;
     sharedContext: Record<string, unknown>;
+    /** What the core resolved about the request behind this read. */
+    requestFacts: ResolvedRequestFacts;
   }): Promise<string> {
     if (CollectionQueryService.readHooksActiveFor(params.collectionName)) {
       return params.entryId;
@@ -1475,6 +1486,7 @@ export class CollectionQueryService extends BaseService {
             data: { entryId: resolvedId },
             user: params.user,
             context: params.sharedContext,
+            req: params.requestFacts,
           })
         );
 
@@ -1740,6 +1752,8 @@ export class CollectionQueryService extends BaseService {
     translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     try {
       // Determine the effective user for access control
@@ -1784,6 +1798,9 @@ export class CollectionQueryService extends BaseService {
       // Shared context between all hooks in this request
       // Seed with caller's context if provided (e.g., from Direct API)
       const sharedContext: Record<string, unknown> = { ...params.context };
+      // Resolved once for the whole read, so every hook phase is told the same
+      // thing about the caller and none of them re-reads a header.
+      const requestFacts = resolveRequestFacts(params.request);
 
       // BEFORE the hooks, deliberately. `resolveReadWhere` hands them the
       // caller's own object, and a hook that narrows it IN PLACE -- adding a
@@ -1801,6 +1818,7 @@ export class CollectionQueryService extends BaseService {
         where: params.where,
         user: params.user,
         sharedContext,
+        requestFacts,
       });
 
       // D63 seam: let plugins transform the structured list-query `where`.
@@ -2545,6 +2563,7 @@ export class CollectionQueryService extends BaseService {
         data: expandedEntries,
         user: params.user,
         context: sharedContext,
+        req: requestFacts,
       });
 
       const transformedData = await this.hookService.hookRegistry.execute(
@@ -2571,15 +2590,16 @@ export class CollectionQueryService extends BaseService {
         await this.hookService.storedHookExecutor.execute(
           "afterRead",
           storedHooks,
-          this.hookService.buildPrebuiltHookContext(
-            params.collectionName,
-            "read",
-            dataAfterCodeHooks,
+          this.hookService.buildPrebuiltHookContext({
+            collection: params.collectionName,
+            operation: "read",
+            data: dataAfterCodeHooks,
             // eslint-disable-next-line @typescript-eslint/require-await
-            async () => false,
-            params.user,
-            sharedContext
-          )
+            queryDatabase: async () => false,
+            user: params.user,
+            sharedContext,
+            req: requestFacts,
+          })
         );
       let finalData = (storedAfterResult.data ??
         dataAfterCodeHooks) as unknown[];
@@ -3112,6 +3132,7 @@ export class CollectionQueryService extends BaseService {
       where: params.where,
       user: params.user,
       sharedContext: { ...params.context },
+      requestFacts: resolveRequestFacts(params.request),
     });
   }
 
@@ -3803,6 +3824,8 @@ export class CollectionQueryService extends BaseService {
     translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /**
      * Set by a route whose middleware already authenticated AND authorized the
      * caller (mirrors listEntries). It skips only the redundant RBAC re-check,
@@ -3856,6 +3879,9 @@ export class CollectionQueryService extends BaseService {
 
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = { ...params.context };
+      // Resolved once for the whole read, so every hook phase is told the same
+      // thing about the caller and none of them re-reads a header.
+      const requestFacts = resolveRequestFacts(params.request);
 
       // `beforeOperation` runs first and may rewrite the id, then `beforeRead`
       // sees the id it settled on.
@@ -3864,6 +3890,7 @@ export class CollectionQueryService extends BaseService {
         entryId: params.entryId,
         user: params.user,
         sharedContext,
+        requestFacts,
       });
 
       // When read access is `owner-only`, fold the ownership
@@ -4430,6 +4457,7 @@ export class CollectionQueryService extends BaseService {
         data: expandedEntry,
         user: params.user,
         context: sharedContext,
+        req: requestFacts,
       });
 
       const transformedData = await this.hookService.hookRegistry.execute(
@@ -4454,15 +4482,16 @@ export class CollectionQueryService extends BaseService {
         await this.hookService.storedHookExecutor.execute(
           "afterRead",
           storedHooks,
-          this.hookService.buildPrebuiltHookContext(
-            params.collectionName,
-            "read",
-            dataAfterCodeHooks,
+          this.hookService.buildPrebuiltHookContext({
+            collection: params.collectionName,
+            operation: "read",
+            data: dataAfterCodeHooks,
             // eslint-disable-next-line @typescript-eslint/require-await
-            async () => false,
-            params.user,
-            sharedContext
-          )
+            queryDatabase: async () => false,
+            user: params.user,
+            sharedContext,
+            req: requestFacts,
+          })
         );
       let finalData = (storedAfterResult.data ?? dataAfterCodeHooks) as Record<
         string,

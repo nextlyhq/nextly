@@ -253,7 +253,13 @@ export class ServiceDispatcher {
       case "auth":
         return dispatchAuth(this.container, method, p, body);
       case "collections":
-        return dispatchCollections(this.container, method, p, body);
+        return dispatchCollections(
+          this.container,
+          method,
+          p,
+          body,
+          request.request
+        );
       case "rbac":
         return dispatchRbac(this.container, method, p, body);
       case "singles":

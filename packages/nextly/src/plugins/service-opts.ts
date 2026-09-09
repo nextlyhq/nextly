@@ -35,6 +35,20 @@ export interface ServiceOpts {
    * hook. A hook decides for itself what to do with what it is told.
    */
   context?: Record<string, unknown>;
+
+  /**
+   * The HTTP request this operation is serving, when the plugin is serving one.
+   *
+   * A plugin handling its own route passes the request it was given, and the
+   * core resolves it into the facts hooks read as `ctx.req`: the headers, and a
+   * client address judged against the deployment's proxy-trust settings. A
+   * plugin doing background work leaves it out, and a hook scoped to a visitor
+   * then knows to stand down.
+   *
+   * The request rather than an address, for the same reason core takes the
+   * request: a caller does not get to name its own client.
+   */
+  request?: Request;
 }
 
 /** Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`. */
@@ -42,8 +56,9 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   user?: RequestContext["user"];
   overrideAccess: boolean;
   context?: Record<string, unknown>;
+  request?: Request;
 } {
-  const { as, user, context } = opts;
+  const { as, user, context, request } = opts;
   const wantsUser = as === "user" || (as === undefined && user !== undefined);
   if (wantsUser) {
     if (!user) {
@@ -59,9 +74,10 @@ export function resolveServiceOpts(opts: ServiceOpts): {
       overrideAccess: false,
       user: { id: user.id, email: user.email, role: "", permissions: [] },
       context,
+      request,
     };
   }
-  return { overrideAccess: true, context };
+  return { overrideAccess: true, context, request };
 }
 
 /**
@@ -185,6 +201,7 @@ export function wrapCollectionsForPlugin(
           user: resolved.user,
           overrideAccess: resolved.overrideAccess,
           context: resolved.context,
+          request: resolved.request,
         };
         const call = () =>
           (fn as (...a: unknown[]) => Promise<unknown>).apply(target, next);
