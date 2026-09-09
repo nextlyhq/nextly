@@ -10,7 +10,11 @@
 
 import { createRequire } from "node:module";
 
-import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  NextlyError,
+  type PluginDefinition,
+} from "@nextlyhq/plugin-sdk";
 import type { CollectionConfig } from "nextly";
 // Author against the SDK — the stable, experimental plugin boundary.
 
@@ -21,7 +25,14 @@ import {
   asSubmissionDocument,
   asSubmissionDocuments,
 } from "./document-shapes";
+import {
+  sameSubmittedPayload,
+  submissionMarks,
+  type SubmissionOriginMarks,
+  prepareSubmission,
+} from "./handlers/prepare-submission";
 import type {
+  AnyFormField,
   BeforeEmailFilterContext,
   FormNotification,
   FormBuilderPluginOptions,
@@ -492,6 +503,45 @@ export function formBuilder(
         );
       }
 
+      // Every submission is brought to the form's own shape here, whatever
+      // created it. Registered directly on the registry, like the two below, so
+      // it runs for every API surface that writes one: the plugin's HTTP
+      // handler, `nextly.forms.submit()`, and an admin creating a row by hand.
+      //
+      // The Direct API did none of this. A submission arriving that way was
+      // stored with whatever keys the caller sent, values that never met the
+      // form's schema, and markup intact, while the same submission over HTTP
+      // was transformed, validated and sanitized. Putting the rule at the write
+      // seam rather than in the second caller is what stops a third one
+      // inheriting the gap.
+      // The forms slug, resolved the way the submissions one above is. A host
+      // that renames a contributed collection takes the declared slug out of
+      // the registry, so reading the parent form by `formOverrides.slug` finds
+      // nothing, and this hook would then refuse every submission on a renamed
+      // install. Resolved once here and used by both readers.
+      const declaredFormsSlug = resolvedConfig.formOverrides.slug;
+      const formsSlug =
+        nextly.self.collections[declaredFormsSlug] ?? declaredFormsSlug;
+
+      // `beforeChange` rather than `beforeCreate`: it is the last
+      // COLLECTION-level mutating phase before the insert. Core runs stored
+      // `beforeCreate` hooks after the code-registered ones, so a host hook
+      // could put undeclared keys or markup back into a payload a
+      // `beforeCreate` check had just passed.
+      //
+      // Field-level `beforeChange` hooks run after this one and are handed the
+      // whole record, so a host that registers one on this collection can still
+      // reshape `data` afterwards. No collection phase follows them to register
+      // on, and core's own sanitizer sits earlier still, on `beforeCreate`.
+      // This is the latest point a plugin can check from, which is not the same
+      // as a point nothing can follow.
+      nextly.hooks.on(
+        "beforeChange",
+        submissionSlug,
+        async (context: unknown) =>
+          prepareSubmissionForWrite(context, formsSlug, nextly)
+      );
+
       // Register afterCreate hook for email notifications
       nextly.hooks.on(
         "afterCreate",
@@ -505,6 +555,9 @@ export function formBuilder(
       // submitted must leave a visible trace. Registered directly on the
       // registry (like the notification hook) so it runs for every API
       // surface that updates a submission.
+      // Reads the patch as it arrived. Core runs this phase before
+      // `beforeChange`, so the payload the write seam adds to a status-only
+      // patch is not here yet and cannot be mistaken for an admin's edit.
       nextly.hooks.on("beforeUpdate", submissionSlug, (context: unknown) => {
         const ctx = context as {
           data?: Record<string, unknown>;
@@ -519,9 +572,6 @@ export function formBuilder(
 
       // Inject a real submissionCount into form reads (spam excluded — the
       // number answers "how many people submitted", not "how many bots").
-      const declaredFormsSlug = resolvedConfig.formOverrides.slug;
-      const formsSlug =
-        nextly.self.collections[declaredFormsSlug] ?? declaredFormsSlug;
       nextly.hooks.on("afterRead", formsSlug, async (context: unknown) => {
         const data = (context as { data?: unknown }).data;
         // afterRead fires for single reads (one record) and list reads
@@ -784,6 +834,239 @@ export function buildNotificationEmails(input: {
 /**
  * Send email notifications after a form submission is created.
  */
+/**
+ * Bring an incoming submission to the shape its form declares.
+ *
+ * Runs on `beforeCreate` for the submissions collection, so it sees every write
+ * rather than every caller. The cost is one read of the parent form per
+ * submission: the HTTP handler has already loaded it and cannot hand it over,
+ * because a hook receives the row and not the request. Submissions are written
+ * one visitor at a time and the read is by primary key, which is the cheaper
+ * side of the trade against a rule two callers have to remember.
+ *
+ * Refuses rather than storing when it cannot judge. A form it cannot read, or
+ * one whose `fields` is not a list, leaves nothing to transform against, and
+ * transforming against an empty list would project the submission down to `{}`
+ * and store a row that says the visitor sent nothing. Silently emptying someone's
+ * submission is worse than declining it.
+ *
+ * A row that names no form is passed through untouched. `form` is `required` on
+ * the collection, so it is already refused a step later, and rejecting it here
+ * would answer a question this hook was not asked.
+ */
+/**
+ * The parent form's id, however the row spells the relationship.
+ *
+ * A relationship arrives as an id string from a write and as a populated object
+ * from a read, and both hooks on this collection have to cope with either.
+ * Stated once so they cannot come to disagree about what counts as a reference.
+ */
+function parentFormId(submission: Record<string, unknown>): string | null {
+  const raw = submission.form;
+  if (typeof raw === "string") return raw;
+  if (raw && typeof raw === "object") {
+    const maybeId = (raw as { id?: unknown }).id;
+    if (typeof maybeId === "string") return maybeId;
+  }
+  return null;
+}
+
+/**
+ * The submitted payload, as an object, or a refusal.
+ *
+ * `data` arrives as an object from every caller in this repository. A string is
+ * read as the JSON a dialect stores rather than assumed to be one field's
+ * value, and anything else is refused: that column is `required`, so an omitted
+ * payload is meant to be refused, and substituting `{}` satisfied the check on
+ * the way past. A form whose fields are all optional then accepted the empty
+ * object and the row was stored.
+ */
+function submittedPayload(raw: unknown): Record<string, unknown> {
+  if (typeof raw === "string") {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Falls through to the refusal below.
+    }
+  } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "data",
+        code: "INVALID",
+        message: "Submission data must be an object.",
+      },
+    ],
+  });
+}
+
+/**
+ * Whether an update has to be brought back to the form's shape.
+ *
+ * Two kinds of update do, and one does not.
+ *
+ * A patch that replaces `data` is replacing what the visitor sent, so it is
+ * checked exactly as the create was. Exempting every update meant a caller who
+ * may edit a submission could put undeclared keys, values the form's schema
+ * rejects and markup into the row a moment after the create had refused to
+ * accept them.
+ *
+ * A patch that touches `form` moves the row under a different schema, and the
+ * payload it already holds is what has to satisfy that one. Such a patch
+ * carries no `data` of its own, so a rule keyed on `data` alone let a caller
+ * move a submission onto any form and leave behind a payload the form it now
+ * belongs to rejects.
+ *
+ * A patch that takes the row out of spam is the third. An evidence row was
+ * stored WITHOUT being validated, deliberately, so that a false positive stays
+ * reviewable. The admin's "Not spam" action sends only a status, and letting it
+ * through unchecked turned a payload the form rejects into an ordinary counted
+ * submission. Leaving spam is the moment that payload has to satisfy the form,
+ * and a row that cannot has to be corrected in the same update.
+ *
+ * An update that does none of these leaves nothing to check: an admin changing
+ * a status between two non-spam values sends only that, and preparing an absent
+ * payload would store an empty submission over a real one. The last two are
+ * left alone for the same reason when the stored row did not reach this hook,
+ * since there is then no payload to judge.
+ */
+function updateNeedsChecking(
+  submission: Record<string, unknown>,
+  stored: Record<string, unknown> | undefined
+): boolean {
+  if (submission.data !== undefined) return true;
+  // Everything below judges the STORED payload, so there has to be one.
+  if (stored?.data === undefined) return false;
+  if (submission.form !== undefined) return true;
+  return (
+    stored.status === "spam" &&
+    submission.status !== undefined &&
+    submission.status !== "spam"
+  );
+}
+
+export async function prepareSubmissionForWrite(
+  context: unknown,
+  formsSlug: string,
+  nextly: NextlyInstance
+): Promise<Record<string, unknown> | undefined> {
+  const ctx = context as {
+    data?: Record<string, unknown>;
+    operation?: string;
+    originalData?: Record<string, unknown>;
+    user?: { id?: string };
+  };
+  const submission = ctx.data;
+  if (!submission || typeof submission !== "object") return ctx.data;
+  const stored = ctx.originalData;
+
+  // A patch need not repeat the relationship, so the stored row is what says
+  // which form this payload has to match.
+  const formId =
+    parentFormId(submission) ?? (stored ? parentFormId(stored) : null);
+  if (!formId) return ctx.data;
+
+  if (ctx.operation !== "create" && !updateNeedsChecking(submission, stored)) {
+    return ctx.data;
+  }
+
+  const incoming = submittedPayload(
+    submission.data !== undefined ? submission.data : stored?.data
+  );
+
+  // Read off the row itself, so it describes this write and no other.
+  const marks = submissionMarks(submission);
+
+  const fields = await fieldsToCheckAgainst(marks, formsSlug, formId, nextly);
+
+  // Content spam keeps its evidence. The handler stores a honeypot or reCAPTCHA
+  // hit flagged rather than dropping it, so a false positive stays recoverable,
+  // and requiring it to be valid would throw away the thing being reviewed. It
+  // is still transformed and sanitized.
+  // Leniency is a fact about the CALL, not about the row. Reading it off
+  // `status` made it caller-controlled: the collection grants public create and
+  // nothing restricts that field, so anyone could post `status: "spam"` and
+  // switch validation off for their own row.
+  const prepared = prepareSubmission({
+    data: incoming,
+    fields,
+    validate: marks?.keepAsEvidence !== true,
+  });
+
+  if (prepared.validationErrors) {
+    throw NextlyError.validation({
+      errors: Object.entries(prepared.validationErrors).map(
+        ([path, message]) => ({ path, code: "INVALID", message })
+      ),
+    });
+  }
+
+  ctx.data = { ...submission, data: prepared.data };
+  if (ctx.operation !== "create" && submission.data === undefined) {
+    stampDerivedEdit(ctx.data, ctx.user, incoming, prepared.data);
+  }
+  return ctx.data;
+}
+
+/**
+ * The fields a submission has to satisfy.
+ *
+ * The handler that already read this form hands it over rather than have the
+ * write read it a second time. That read is not free: `findEntryById` runs the
+ * forms collection's `afterRead` hooks, and this plugin registers one that
+ * COUNTs the form's submissions, so a write was paying for a count of every
+ * write before it. Only ever the form this row names, because the id has to
+ * match.
+ */
+async function fieldsToCheckAgainst(
+  marks: SubmissionOriginMarks | undefined,
+  formsSlug: string,
+  formId: string,
+  nextly: NextlyInstance
+): Promise<AnyFormField[]> {
+  const handedOver = marks?.form?.id === formId ? marks.form : null;
+  const form = handedOver ?? (await fetchParentForm(formsSlug, formId, nextly));
+  if (!form || !Array.isArray(form.fields)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "form",
+          code: "INVALID",
+          message:
+            "The form this submission belongs to could not be read, so the submission could not be checked against it.",
+        },
+      ],
+    });
+  }
+  return form.fields as AnyFormField[];
+}
+
+/**
+ * Record a payload change this hook derived, since nothing else will.
+ *
+ * A patch that did not carry a payload but changed one is still an edit of what
+ * the visitor sent: moving a submission to another form re-projects its answers
+ * onto that form's fields and can drop one it does not declare. The stamp on
+ * `beforeUpdate` has already run by then and only marks a patch that arrived
+ * with `data`, so without this the stored answers change with nothing in the
+ * row saying who changed them.
+ */
+function stampDerivedEdit(
+  row: Record<string, unknown>,
+  user: { id?: string } | undefined,
+  before: Record<string, unknown>,
+  after: Record<string, unknown>
+): void {
+  if (sameSubmittedPayload(before, after)) return;
+  row.editedAt = new Date();
+  row.editedBy = user?.id ?? null;
+}
+
 async function handleSubmissionCreated(
   context: unknown,
   config: ResolvedFormBuilderConfig,
@@ -800,18 +1083,16 @@ async function handleSubmissionCreated(
   // every bot hit would trigger the form's notification rules.
   if (submission.status === "spam") return;
 
-  const rawFormId = submission.form;
-  let formId: string | null = null;
-  if (typeof rawFormId === "string") {
-    formId = rawFormId;
-  } else if (rawFormId && typeof rawFormId === "object") {
-    const maybeId = (rawFormId as { id?: unknown }).id;
-    if (typeof maybeId === "string") formId = maybeId;
-  }
+  const formId = parentFormId(submission);
   if (!formId) return;
 
   // Fetch the parent form
-  const form = await fetchParentForm(config, formId, nextly);
+  const declaredFormsSlug = config.formOverrides.slug;
+  const form = await fetchParentForm(
+    nextly.self.collections[declaredFormsSlug] ?? declaredFormsSlug,
+    formId,
+    nextly
+  );
   if (!form) return;
 
   const notifications = Array.isArray(form.notifications)
@@ -909,7 +1190,7 @@ async function handleSubmissionCreated(
  * Fetch the parent form document for a submission.
  */
 export async function fetchParentForm(
-  config: ResolvedFormBuilderConfig,
+  formsSlug: string,
   formId: string,
   nextly: NextlyInstance
 ): Promise<Record<string, unknown> | null> {
@@ -917,14 +1198,41 @@ export async function fetchParentForm(
     // D35/D56: read the parent form through the secure managed service as
     // system — the afterCreate hook runs without an ambient user. Replaces the
     // legacy `getCollectionsHandler()` + `overrideAccess` runtime path.
+    //
+    // The slug arrives RESOLVED. Passing `formOverrides.slug` read the declared
+    // name, which a host that renames the collection has taken out of the
+    // registry, so the lookup found nothing on exactly the installs the rename
+    // API supports.
+    //
+    // NOT on the caller's transaction, and it cannot be here. The plugin facade
+    // rebuilds its context from `user` and `overrideAccess` alone, and
+    // `CollectionService.findEntryById` forwards only those two to the entry
+    // service, so an executor has nowhere to go on this path: passing one
+    // looked like transaction awareness and was discarded before the query.
+    //
+    // The cost is written down rather than hidden. A submission created inside
+    // a transaction alongside a form created in that same transaction cannot
+    // see it and is refused, and on a pool whose only connection the
+    // transaction holds, this read waits for it. Both fail safely. The pattern
+    // for fixing it exists in collection-hook-service and
+    // collection-access-service, which forward a context's executor for exactly
+    // this reason; bringing it here means changing the entry service and the
+    // plugin facade with it.
     const form = await nextly.services.collections.findEntryById(
-      config.formOverrides.slug,
+      formsSlug,
       formId,
       { as: "system" }
     );
     return form;
   } catch (err) {
-    nextly.logger.error?.("Form Builder: failed to fetch form", {
+    // A form that is not there is an answer, and the caller decides what a
+    // submission naming no form means. Anything else is the read itself
+    // failing, and it is rethrown: swallowing a pool timeout or a throwing
+    // `afterRead` hook turned a server fault into "this form could not be
+    // read", so the writer was told their submission was invalid, with a status
+    // that says not to retry.
+    if (!NextlyError.isNotFound(err)) throw err;
+    nextly.logger.error?.("Form Builder: form not found", {
       formId,
       error: err instanceof Error ? err.message : String(err),
     });

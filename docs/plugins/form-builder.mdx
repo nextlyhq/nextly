@@ -331,7 +331,17 @@ it is supposed to depend on. An application that hosts its own route, as below, 
 
 ### Validation
 
-The plugin generates [Zod](https://zod.dev) schemas from form field definitions at runtime. Every submission is validated against the schema before storage. Free-text fields are also sanitized by stripping HTML tags to prevent injection.
+The plugin generates [Zod](https://zod.dev) schemas from form field definitions at runtime. Every submission is validated against the schema before storage, and free-text fields are sanitized by stripping HTML tags to prevent injection.
+
+That happens on a `beforeChange` hook on the submissions collection, the last collection-level mutating phase before the insert, so it applies to every way a submission can be written: your own route calling `submitForm`, the built-in `POST /api/forms/:slug/submit`, `nextly.forms.submit()`, an admin editing a stored submission, and a record created from the admin. A submission is also projected onto the fields the form declares, so a key the form does not define is dropped rather than stored. Field-level `beforeChange` hooks run after this one and are handed the whole record, so one you register on this collection yourself is trusted the way core trusts a field hook on any other collection.
+
+Values are sanitized before they are validated, so every rule judges the value that will actually be stored rather than the one that arrived.
+
+A submission flagged as spam is stored without being validated, deliberately, so a false positive stays reviewable rather than being thrown away. That exception ends when the row leaves spam: marking one "Not spam" checks the payload it is carrying against the form, so a row that never satisfied the form has to be corrected in the same edit before it can become an ordinary counted submission.
+
+Spam protection is not part of that, and deliberately so. The honeypot, the rate limit and reCAPTCHA are facts about an HTTP request rather than about a row: a trusted server importing a thousand submissions would rate-limit its own import, and a honeypot field means nothing without a browser to have skipped it. Those run in `submitForm` only.
+
+That decides which route you point a browser at. `POST /api/forms/:slug/submit` is built into Nextly and does not reach this plugin's handler, so a submission arriving there is projected, validated and sanitized, and meets no honeypot, no rate limit and no reCAPTCHA. To get those, host a route that calls `submitForm`, as under "Handling Submissions" above, and send the browser to that one.
 
 You can validate data without creating a submission:
 

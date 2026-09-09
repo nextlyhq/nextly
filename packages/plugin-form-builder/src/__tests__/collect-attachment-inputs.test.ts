@@ -19,9 +19,7 @@ describe("collectAttachmentInputs", () => {
   });
 
   it("collects mediaId from a single-value file field", () => {
-    const fields = [
-      { type: "file", name: "resume", attachToEmail: true },
-    ];
+    const fields = [{ type: "file", name: "resume", attachToEmail: true }];
     const data = { resume: "med_abc" };
     expect(collectAttachmentInputs(fields, data)).toEqual([
       { mediaId: "med_abc" },
@@ -49,9 +47,7 @@ describe("collectAttachmentInputs", () => {
   });
 
   it("skips undefined/null file field values", () => {
-    const fields = [
-      { type: "file", name: "missing", attachToEmail: true },
-    ];
+    const fields = [{ type: "file", name: "missing", attachToEmail: true }];
     const data = {};
     expect(collectAttachmentInputs(fields, data)).toEqual([]);
   });
@@ -68,10 +64,7 @@ describe("collectAttachmentInputs", () => {
       id_doc: "med_c",
     };
     const result = collectAttachmentInputs(fields, data);
-    expect(result).toEqual([
-      { mediaId: "med_a" },
-      { mediaId: "med_b" },
-    ]);
+    expect(result).toEqual([{ mediaId: "med_a" }, { mediaId: "med_b" }]);
   });
 
   it("skips non-string values in arrays", () => {
