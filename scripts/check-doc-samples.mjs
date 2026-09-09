@@ -1828,22 +1828,110 @@ export function usedOnlyAsValue(code, name, extension = "tsx") {
   return mentioned && !asType;
 }
 
+/** Whether a block ever constructs this name. */
+export function constructedInBlock(code, name, extension = "tsx") {
+  let constructed = false;
+  const visit = node => {
+    if (
+      ts.isNewExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === name
+    ) {
+      constructed = true;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parseSample(code, extension));
+  return constructed;
+}
+
+/** Whether two names are the same but for one character. */
+function withinOneEdit(a, b) {
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (long.length - short.length > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < short.length && j < long.length) {
+    if (short[i] === long[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    if (edits === 1) return false;
+    edits += 1;
+    if (short.length === long.length) i += 1;
+    j += 1;
+  }
+  return true;
+}
+
+/**
+ * Whether the name is one of ours with a character wrong.
+ *
+ * `NextlyEror` and `Skelton` are not names a reader declares, they are
+ * `NextlyError` and `Skeleton` misspelled, and a rule that only asks whether
+ * the workspace exports the name as written waves both through.
+ *
+ * Compared in lower case so a wrong capital counts as the same word, and a
+ * difference of ONLY capitals is then excluded rather than reported: a reader's
+ * generated `Users` sits one capital from an internal `users`, and calling that
+ * a misspelling would charge the most ordinary reader-owned name there is.
+ *
+ * A difference at the END is excluded for the same reason, and it is the one
+ * that matters most: a generated collection type is the PLURAL of a model this
+ * workspace exports, so `Users` is one character from `User` and `Posts` one
+ * from `Post`. Those two names are the whole point of the exemption. A
+ * misspelling puts its wrong character in the middle, which is what separates
+ * `NextlyEror` from `NextlyError` and `Skelton` from `Skeleton`.
+ */
+export function misspelledExport(name, exported = workspaceExports()) {
+  const wanted = name.toLowerCase();
+  for (const candidate of exported) {
+    const other = candidate.toLowerCase();
+    if (other === wanted) continue;
+    if (!withinOneEdit(wanted, other)) continue;
+    if (differsOnlyAtTheEnd(wanted, other)) continue;
+    return true;
+  }
+  return false;
+}
+
+/** Whether one name is the other with a character added at the end. */
+function differsOnlyAtTheEnd(a, b) {
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  return long.length !== short.length && long.startsWith(short);
+}
+
 /**
  * Whether a missing name belongs to the reader, for the way this block used it.
  *
- * The name alone cannot answer it: `Media` is exported as a type and never as a
- * value, so it is the reader's in `collections: [Posts, Users, Media]` and ours
- * in `const m: Media`.
+ * The name alone cannot answer it, in both directions.
+ *
+ * `Media` is exported as a type and never as a value, so it is the reader's in
+ * `collections: [Posts, Users, Media]` and ours in `const m: Media`.
+ *
+ * And a name this workspace does not export is not the reader's just for that.
+ * `new S3Client({})` asks for a runtime class, which is not a thing
+ * `nextly generate:types` writes into a reader's project or a component they
+ * author, so a sample using one has forgotten an import. `NextlyEror` is a name
+ * of ours with a letter missing. Both were being set aside, which is the docs
+ * gate accepting samples that are simply broken.
  */
 export function readerOwnedMention(name, code, extension) {
   if (!/^[A-Z][A-Za-z0-9]*$/.test(name)) return false;
+  // Asked before anything else, because it settles the question on its own:
+  // whatever the workspace does or does not export, a constructed name has to
+  // be a runtime class, and neither a generated type nor an authored component
+  // is one.
+  if (constructedInBlock(code, name, extension)) return false;
   if (workspaceExports().has(name)) {
     return (
       !workspaceValueExports().has(name) &&
       usedOnlyAsValue(code, name, extension)
     );
   }
-  return true;
+  return !misspelledExport(name);
 }
 
 export async function classifyDocDiagnostics({ diagnostics, samples }) {

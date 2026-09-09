@@ -17,6 +17,8 @@ import {
   isModule,
   pageOf,
   readerOwnedName,
+  constructedInBlock,
+  misspelledExport,
   readerOwnedMention,
   usedOnlyAsValue,
   workspaceValueExports,
@@ -1390,6 +1392,42 @@ describe("the workspace's own exported names", () => {
   );
 
   it(
+    "keeps a broken sample rather than calling its name the reader's",
+    () => {
+      // Three shapes that are not reader-owned however they look: a class the
+      // sample forgot to import, one of ours with a letter missing, and a
+      // component of ours misspelled.
+      expect(
+        readerOwnedMention("S3Client", "const s = new S3Client({});", "ts")
+      ).toBe(false);
+      expect(
+        readerOwnedMention("NextlyEror", "const e: NextlyEror = x;", "ts")
+      ).toBe(false);
+      expect(
+        readerOwnedMention("Skelton", "const s = <Skelton />;", "tsx")
+      ).toBe(false);
+      // Construction settles it even for a name the workspace does export,
+      // because a type-only export cannot supply the class either.
+      expect(
+        readerOwnedMention("QueryClient", "const q = new QueryClient();", "ts")
+      ).toBe(false);
+      // The control, and the reason the rule exists: the reader's own names
+      // are still set aside, including the two that sit one character from a
+      // model this workspace exports.
+      for (const name of ["Posts", "Users", "Page", "Chart", "MyCollection"]) {
+        expect(
+          readerOwnedMention(
+            name,
+            `const c = { collections: [${name}] };`,
+            "ts"
+          )
+        ).toBe(true);
+      }
+    },
+    BUILDS_THE_PROGRAM
+  );
+
+  it(
     "reads a type-only name by how the block used it",
     () => {
       // `collections: [Posts, Users, Media]` needs a value, and no import here
@@ -1414,6 +1452,64 @@ describe("the workspace's own exported names", () => {
     },
     BUILDS_THE_PROGRAM
   );
+});
+
+describe("a name this workspace does not export", () => {
+  // Not exporting a name is not the same as the reader owning it, and treating
+  // the two as one made the gate accept samples that are simply broken.
+
+  it("reads a constructed name as a class the sample forgot to import", () => {
+    // `nextly generate:types` writes types, and a reader authors components.
+    // Neither is a thing you call `new` on, so a constructed name is a runtime
+    // class the sample did not import.
+    expect(
+      constructedInBlock("const s = new S3Client({});", "S3Client", "ts")
+    ).toBe(true);
+    // The controls: the same name used as a value is not construction, and a
+    // name the block never mentions cannot be constructed by it.
+    expect(constructedInBlock("const s = [S3Client];", "S3Client", "ts")).toBe(
+      false
+    );
+    expect(constructedInBlock("const s = new Date();", "S3Client", "ts")).toBe(
+      false
+    );
+  });
+
+  it("reads one of our own names with a letter wrong as a misspelling", () => {
+    const exported = new Set([
+      "NextlyError",
+      "Skeleton",
+      "User",
+      "Post",
+      "users",
+    ]);
+    expect(misspelledExport("NextlyEror", exported)).toBe(true);
+    expect(misspelledExport("Skelton", exported)).toBe(true);
+  });
+
+  it("does not read a plural or a capital as a misspelling", () => {
+    // The two that decide the rule. A generated collection type is the plural
+    // of a model this workspace exports, so `Users` sits one character from
+    // `User` and `Posts` one from `Post`; and `Users` sits one capital from an
+    // internal `users`. Those are the names the exemption exists for.
+    const exported = new Set([
+      "NextlyError",
+      "Skeleton",
+      "User",
+      "Post",
+      "users",
+    ]);
+    expect(misspelledExport("Users", exported)).toBe(false);
+    expect(misspelledExport("Posts", exported)).toBe(false);
+    expect(misspelledExport("Page", exported)).toBe(false);
+  });
+
+  it("asks the set it was given", () => {
+    // The control for the two above: an injectable set that failed to apply
+    // would leave them reading the workspace and passing for the wrong reason.
+    expect(misspelledExport("Zzy", new Set(["Zzz"]))).toBe(true);
+    expect(misspelledExport("NextlyEror", new Set())).toBe(false);
+  });
 });
 
 describe("how a block used a name", () => {
