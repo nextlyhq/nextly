@@ -1467,6 +1467,66 @@ describe("a gesture whose subject changes underneath it", () => {
   });
 });
 
+describe("a gesture whose TIER changes underneath it", () => {
+  /*
+   * The state switcher and the canvas width live outside this component, so
+   * either can move while the pointer is down. The addresses the gesture carries
+   * were built at the press and name the OLD tier, so releasing would commit
+   * into a tier the canvas and the inspector have both stopped showing — an edit
+   * landing where the author is not looking.
+   */
+  function TierHarness({ state }: { state: string }): React.JSX.Element {
+    const editor = useEditorState({ initialDocument: documentWith() });
+    live = editor;
+    return (
+      <SpacingHandles
+        editor={editor}
+        bands={[band("margin", "top", "10")]}
+        subject={subjectWith()}
+        context={{
+          address: { state: state as "base", breakpoint: "base" },
+        }}
+      />
+    );
+  }
+
+  it("abandons the gesture when the edited state changes", () => {
+    const { rerender } = render(<TierHarness state="base" />);
+    act(() => {
+      fireEvent.pointerDown(handle("top margin"), {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    act(() => {
+      fireEvent.pointerMove(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+    rerender(<TierHarness state="hover" />);
+    act(() => {
+      fireEvent.pointerUp(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+
+    expect(live?.undoDepth).toBe(0);
+  });
+
+  /* The control: a gesture whose tier held still must still commit. */
+  it("commits when the tier does not move", () => {
+    render(<TierHarness state="base" />);
+    drag(handle("top margin"), [{ x: 0, y: -20 }]);
+    expect(live?.undoDepth).toBe(1);
+  });
+});
+
 describe("what the block's author allows", () => {
   /*
    * `supports` is the block author's capability declaration, and the Style

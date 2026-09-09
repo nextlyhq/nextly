@@ -382,7 +382,9 @@ export function SpacingHandles({
   const latest = React.useRef<{
     styles: BlockNode["styles"];
     nodeId: string;
-  }>({ styles: undefined, nodeId: "" });
+    /** The tier the surface is editing, so a gesture can notice it moved. */
+    tier: string;
+  }>({ styles: undefined, nodeId: "", tier: "" });
   const [preview, setPreview] = React.useState<string | null>(null);
   /**
    * The band a gesture is holding, kept alive for the gesture's lifetime.
@@ -452,6 +454,7 @@ export function SpacingHandles({
   // document rather than the one the gesture began in.
   latest.current.styles = node?.styles;
   latest.current.nodeId = nodeId;
+  latest.current.tier = `${context.address.state}\u0000${context.address.breakpoint}`;
 
   const targetFor = React.useCallback(
     (address: StyleAddress): ScrubTarget | undefined =>
@@ -557,6 +560,9 @@ export function SpacingHandles({
   );
 
   /** Write the gesture's result to the document, as ONE op. */
+  /** The tier this render is editing, as one comparable value. */
+  const tier = `${context.address.state}\u0000${context.address.breakpoint}`;
+
   const commit = React.useCallback(
     (
       band: SpacingBand,
@@ -603,6 +609,18 @@ export function SpacingHandles({
        * another's. A gesture whose subject moved is abandoned, not committed.
        */
       if (latest.current.nodeId !== nodeId) return;
+      /*
+       * And it must still be about the tier it started in.
+       *
+       * The state switcher and the canvas width are outside this component, so
+       * either can move while the pointer is down — a second pointer on the
+       * switcher, or a panel resize that changes the edited breakpoint. The
+       * addresses this gesture carries were built at the press and name the OLD
+       * tier, so releasing would commit into a tier the canvas and the inspector
+       * have both stopped showing: an edit an author cannot see landing
+       * somewhere they are not looking.
+       */
+      if (latest.current.tier !== tier) return;
       const result = scrubCommitOps(
         target,
         /*
@@ -623,7 +641,7 @@ export function SpacingHandles({
     // `node.styles` is deliberately absent: the commit reads the LATEST styles
     // through a ref, so rebuilding this callback per edit would only replace the
     // listeners of a gesture already in flight.
-    [editor, nodeId, targetFor, valuesFor]
+    [editor, nodeId, targetFor, tier, valuesFor]
   );
 
   /** Draw the gesture's result without touching the document. */

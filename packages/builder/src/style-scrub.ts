@@ -51,6 +51,7 @@ import {
   previewContainerName,
   STYLE_STATES,
   type BlockDocument,
+  type BreakpointDef,
   type BreakpointSet,
   type Declaration,
   type NodeStyles,
@@ -443,18 +444,94 @@ export type ScrubPreview =
  * Empty when the caller supplied no styles, which leaves the previous behaviour
  * rather than guessing at one.
  */
+/** The definition one breakpoint id has on this site, with its axis. */
+function breakpointDef(
+  breakpoints: BreakpointSet | undefined,
+  id: string
+):
+  | { readonly def: BreakpointDef; readonly axis: "viewport" | "container" }
+  | undefined {
+  if (breakpoints === undefined) return undefined;
+  const viewport = breakpoints.viewport.find(one => one.id === id);
+  if (viewport !== undefined) return { def: viewport, axis: "viewport" };
+  const container = breakpoints.container.find(one => one.id === id);
+  return container === undefined
+    ? undefined
+    : { def: container, axis: "container" };
+}
+
+/**
+ * Whether a rule at `other` still applies everywhere a rule at `edited` does.
+ *
+ * Only such a rule can compete with the preview, which is wrapped in the edited
+ * breakpoint's own at-rule and shows up nowhere else. A bound is always an UPPER
+ * one — `BreakpointDef` carries `maxWidth`, and the unconditional tier omits it
+ * — so the question reduces to whether one range contains the other, which the
+ * site's own definitions answer without parsing any CSS.
+ *
+ * A breakpoint this site does not define competes with nothing: `compilePageCss`
+ * writes no rule for it at all.
+ *
+ * Two CONDITIONAL breakpoints on different axes are read as not covering, and
+ * that is the honest answer rather than a cautious one: a `@media` width and a
+ * `@container` width are measured against different boxes, so neither contains
+ * the other by anything these numbers say. Excluding on a guess would freeze the
+ * preview wherever the guess was wrong, which is the worse of the two failures.
+ */
+function coversTier(
+  breakpoints: BreakpointSet | undefined,
+  edited: string,
+  other: string
+): boolean {
+  if (other === edited) return true;
+  const there = breakpointDef(breakpoints, other);
+  // Undefined here, so the compiler emits nothing for it.
+  if (there === undefined) return false;
+  // Unconditional: it applies at every width, so it covers any tier.
+  if (there.def.maxWidth === undefined) return true;
+  const here = breakpointDef(breakpoints, edited);
+  if (here === undefined || here.def.maxWidth === undefined) return false;
+  if (here.axis !== there.axis) return false;
+  // Both upper bounds on one axis: the wider range contains the narrower.
+  return there.def.maxWidth >= here.def.maxWidth;
+}
+
+/** The breakpoint map a state holds, read by own keys only. */
+function ownBreakpoints(
+  styles: NodeStyles,
+  state: StyleState
+): readonly string[] {
+  const part = Object.getOwnPropertyDescriptor(styles, state);
+  const value = part !== undefined && "value" in part ? part.value : undefined;
+  return typeof value === "object" && value !== null
+    ? Object.keys(value as Record<string, unknown>)
+    : [];
+}
+
 function laterStateExclusions(target: ScrubTarget): string {
-  if (target.styles === undefined) return "";
-  const { address } = target;
+  const { address, styles } = target;
+  if (styles === undefined) return "";
   const from = STYLE_STATES.indexOf(address.state);
   /* c8 ignore next -- the address's state comes from the same union */
   if (from < 0) return "";
+  /*
+   * Every breakpoint the node stores, not only the edited one.
+   *
+   * A later state's rules are emitted after EVERY base-state breakpoint —
+   * measured: `hover` at the unconditional tier comes out after `base` inside
+   * `@media (max-width: 640px)`. So a hover declared one tier out still beats a
+   * narrow base rule, and a lookup keyed on the edited breakpoint alone missed
+   * it: the drag appeared to work while hovered and snapped back on release,
+   * which is this function's own defect one dimension over.
+   */
+  const declaredWhereItCompetes = (state: StyleState): boolean =>
+    ownBreakpoints(styles, state).some(
+      breakpoint =>
+        coversTier(target.breakpoints, address.breakpoint, breakpoint) &&
+        readStyleValue(styles, { ...address, state, breakpoint }) !== undefined
+    );
   return STYLE_STATES.slice(from + 1)
-    .filter(
-      later =>
-        readStyleValue(target.styles, { ...address, state: later }) !==
-        undefined
-    )
+    .filter(declaredWhereItCompetes)
     .map(later => `:not(${stateFragment(later)})`)
     .join("");
 }
@@ -588,5 +665,25 @@ export function scrubCommitOps(
   if (atRuleFor(target) === null) {
     return { ok: false, issues: [] };
   }
+  /*
+   * ENFORCED, not assumed.
+   *
+   * The breakpoint is judged once, from the target, and this used to say that a
+   * mixed list was a caller mistake rather than a case to serve — while doing
+   * nothing to stop one. A write naming another tier would then be persisted
+   * under a breakpoint this function never checked, including one the site does
+   * not define, which `compilePageCss` emits no rule for at all: the value is
+   * stored, the page never shows it, and nothing reports either.
+   *
+   * An invariant a function documents and does not check is one its callers are
+   * free to break, and the caller here is a gesture whose addresses change under
+   * a modifier. Refusing costs one comparison per write.
+   */
+  const { state, breakpoint } = target.address;
+  const strayed = writes.some(
+    write =>
+      write.address.state !== state || write.address.breakpoint !== breakpoint
+  );
+  if (strayed) return { ok: false, issues: [] };
   return styleWriteOps(target.nodeId, styles, writes, target.policy);
 }

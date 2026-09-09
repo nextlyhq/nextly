@@ -7,6 +7,7 @@ import {
   PREVIEW_VIEWPORT_CONTAINER,
   STYLE_STATES,
   type BlockDocument,
+  type BreakpointSet,
   type NodeStyles,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
@@ -14,10 +15,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   scrubCommitOp,
+  scrubCommitOps,
   scrubPreviewCss,
   scrubStateFragments,
   type ScrubTarget,
 } from "./style-scrub";
+import type { StyleAddress } from "./style-values";
 
 /** Scrubbing the bottom margin of one node. */
 const TARGET: ScrubTarget = {
@@ -540,6 +543,127 @@ describe("a preview that must not outrank another state", () => {
     const weight = (selector: string): string =>
       selector.replaceAll(/:not\(:where\([^)]*\)\)/g, "");
     expect(weight(excluded)).toBe(plain);
+  });
+});
+
+describe("a commit whose writes stray from the target's tier", () => {
+  /*
+   * The breakpoint is judged once, from the target. A write naming another tier
+   * would otherwise be persisted under a breakpoint this function never checked
+   * — including one the site does not define, which `compilePageCss` emits no
+   * rule for at all: the value is stored, the page never shows it, and nothing
+   * reports either. An invariant a function documents and does not check is one
+   * its callers are free to break.
+   */
+  const at = (over: Partial<StyleAddress>) => ({ ...TARGET.address, ...over });
+
+  it("refuses a write naming another breakpoint", () => {
+    const result = scrubCommitOps(TARGET, undefined, [
+      { address: at({ breakpoint: "mobile" }), value: "4px" },
+    ]);
+    expect(result.ok).toBe(false);
+  });
+
+  it("refuses a write naming another state", () => {
+    const result = scrubCommitOps(TARGET, undefined, [
+      { address: at({ state: "hover" }), value: "4px" },
+    ]);
+    expect(result.ok).toBe(false);
+  });
+
+  it("refuses the whole group when only one write strays", () => {
+    const result = scrubCommitOps(TARGET, undefined, [
+      { address: at({ path: ["blockStart"] }), value: "4px" },
+      { address: at({ state: "hover" }), value: "4px" },
+    ]);
+    expect(result.ok).toBe(false);
+  });
+
+  /*
+   * The control: sides of the same tier are what this function is FOR, and
+   * refusing everything would satisfy the three assertions above.
+   */
+  it("accepts writes that all share the target's tier", () => {
+    const result = scrubCommitOps(TARGET, undefined, [
+      { address: at({ path: ["blockStart"] }), value: "4px" },
+      { address: at({ path: ["blockEnd"] }), value: "4px" },
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.op).not.toBeNull();
+  });
+});
+
+describe("a later state declared at another breakpoint", () => {
+  /*
+   * A later state's rules are emitted after EVERY base-state breakpoint —
+   * measured: `hover` at the unconditional tier comes out after `base` inside
+   * `@media (max-width: 640px)`. So a hover one tier out beats a narrow base
+   * rule, and a preview keyed on its own breakpoint alone missed it: the drag
+   * appeared to work while hovered and snapped back on release.
+   */
+  const SITE: BreakpointSet = {
+    viewport: [
+      { id: "base", label: "Base" },
+      { id: "tablet", label: "Tablet", maxWidth: 1024 },
+      { id: "mobile", label: "Mobile", maxWidth: 640 },
+    ],
+    container: [{ id: "card", label: "Card", maxWidth: 500 }],
+  };
+
+  function selectorAt(breakpoint: string, styles: NodeStyles): string {
+    const preview = scrubPreviewCss(
+      {
+        ...TARGET,
+        address: { ...TARGET.address, breakpoint },
+        breakpoints: SITE,
+        styles,
+      },
+      "32px"
+    );
+    expect(preview.ok, breakpoint).toBe(true);
+    if (!preview.ok) throw new Error("expected a preview");
+    return preview.css;
+  }
+
+  const hoverAt = (breakpoint: string): NodeStyles => ({
+    hover: { [breakpoint]: { margin: { blockEnd: "24px" } } },
+  });
+
+  it("steps aside for a later state at the unconditional tier", () => {
+    expect(selectorAt("mobile", hoverAt("base"))).toContain(
+      ":not(:where(:hover, .nx-pb-state-hover))"
+    );
+  });
+
+  it("steps aside for a later state at a WIDER conditional tier", () => {
+    // `tablet` (<=1024) still matches everywhere `mobile` (<=640) does.
+    expect(selectorAt("mobile", hoverAt("tablet"))).toContain(":not(");
+  });
+
+  /*
+   * The control, and the half that keeps this from over-excluding. A NARROWER
+   * tier does not match where a wider one does, so its rule cannot compete —
+   * excluding on it would blank the preview at the widths the author is
+   * actually dragging at.
+   */
+  it("ignores a later state at a NARROWER tier", () => {
+    expect(selectorAt("tablet", hoverAt("mobile"))).not.toContain(":not(");
+    expect(selectorAt("base", hoverAt("mobile"))).not.toContain(":not(");
+  });
+
+  it("ignores a breakpoint this site does not define", () => {
+    // The compiler writes no rule for it, so it competes with nothing.
+    expect(selectorAt("mobile", hoverAt("nonesuch"))).not.toContain(":not(");
+  });
+
+  /*
+   * Two conditional tiers on different axes are not comparable by width: a
+   * `@media` and a `@container` measure different boxes. Neither is claimed to
+   * contain the other.
+   */
+  it("does not guess across the viewport and container axes", () => {
+    expect(selectorAt("mobile", hoverAt("card"))).not.toContain(":not(");
   });
 });
 
