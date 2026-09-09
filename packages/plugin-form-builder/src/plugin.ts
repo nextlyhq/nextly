@@ -27,8 +27,8 @@ import {
 } from "./document-shapes";
 import {
   sameSubmittedPayload,
+  submissionMarks,
   type SubmissionOriginMarks,
-  takeSubmissionMarks,
   prepareSubmission,
 } from "./handlers/prepare-submission";
 import type {
@@ -979,13 +979,8 @@ export async function prepareSubmissionForWrite(
     submission.data !== undefined ? submission.data : stored?.data
   );
 
-  // Taken once, for this payload, and not before here: an early return above
-  // would spend a mark on a write that never used it.
-  const marks = takeSubmissionMarks({
-    form: formId,
-    status: typeof submission.status === "string" ? submission.status : "",
-    payload: incoming,
-  });
+  // Read off the row itself, so it describes this write and no other.
+  const marks = submissionMarks(submission);
 
   const fields = await fieldsToCheckAgainst(marks, formsSlug, formId, nextly);
 

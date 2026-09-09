@@ -20,8 +20,6 @@
  * stay on the HTTP path.
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
-
 import type { AnyFormField } from "../types";
 import {
   generateZodSchema,
@@ -132,23 +130,34 @@ export function sanitizeSubmissionData(
 }
 
 /**
- * Whether the plugin's own submit handler is the one writing.
+ * How the plugin's own submit handler says a row is its own.
  *
  * The write-seam check has to be lenient in exactly one case: a honeypot or
  * reCAPTCHA hit is stored flagged rather than dropped, so a false positive stays
- * recoverable, and requiring it to be valid would throw away the thing being
+ * reviewable, and requiring it to be valid would throw away the thing being
  * reviewed. Deciding that from the row's own `status` made it caller-controlled:
  * the submissions collection grants public create, nothing restricts `status`,
  * so anyone could post `status: "spam"` and switch validation off.
  *
- * `AsyncLocalStorage` is the mechanism because the question is about the CALL,
- * not about the row. The store follows the await chain into the hook and cannot
- * be reached from a request body, a header or a field. A module-level flag would
- * be the same idea and wrong: two submissions in flight would read each other's.
+ * A SYMBOL key on the row is the channel, and it is the only one that both
+ * reaches the hook and cannot be reached from a request. `JSON.parse` never
+ * produces a symbol key, so nothing a caller posts can carry it, and
+ * `JSON.stringify` ignores it, so it cannot be stored by accident. It travels
+ * with the row it describes, which is what the alternatives could not do.
  *
- * Node's own API, and the same one Next.js and OpenTelemetry use for
- * request-scoped context, rather than a channel invented here.
+ * The alternatives were measured, not assumed. `createEntry`'s `params.context`
+ * is unreachable: `wrapCollectionsForPlugin` rebuilds the trailing argument as
+ * `{ user, overrideAccess }` and drops everything else. `AsyncLocalStorage`
+ * reaches the hook but describes the CALL rather than the row, so a submission
+ * written by another hook inside the same call took the exception, and
+ * identifying the intended row by its content broke as soon as a host hook
+ * normalised the payload, since core rebuilds the payload object on the way.
+ * A symbol on the row has neither problem: booting a real Nextly and reading
+ * the hook's context back, the row's symbol arrives and the payload's does not.
  */
+const PLUGIN_SUBMISSION = Symbol.for("nextly.plugin-form-builder.submission");
+
+/** What the handler says about the row it is writing. */
 export interface SubmissionOriginMarks {
   /**
    * The handler decided this row is spam and is keeping it as evidence, so the
@@ -161,52 +170,30 @@ export interface SubmissionOriginMarks {
    * the one the row names.
    */
   form?: Record<string, unknown>;
-  /**
-   * The row this exception is for, so no other write can take it.
-   *
-   * Spending the marks on the first write in the scope is not enough on its
-   * own: a hook registered before this plugin runs ahead of its handler, and a
-   * submission that hook writes reaches the seam first. It would take an
-   * exception granted to another row, and the row it was granted for would then
-   * be validated and refused.
-   */
-  writing?: IntendedWrite;
 }
 
-/**
- * The row a marked call is writing, as much of it as tells that row apart.
- *
- * The answers alone were not enough: a hook that copies them onto a different
- * form, or writes them back under a different status, matches on content while
- * being a different row.
- *
- * Compared by content rather than by reference, which was measured rather than
- * assumed: core rebuilds both the row and its payload on the way to the hook,
- * so neither arrives as the object the handler passed.
- */
-export interface IntendedWrite {
-  /** The parent form's id. */
-  form: string;
-  /** The status the handler is storing, which is what the exception is about. */
-  status: string;
-  /** The visitor's answers. */
-  payload: Record<string, unknown>;
+/** Mark `row` as this plugin's own write, and hand it back. */
+export function asPluginSubmission(
+  row: Record<string, unknown>,
+  marks: SubmissionOriginMarks
+): Record<string, unknown> {
+  return Object.defineProperty(row, PLUGIN_SUBMISSION, {
+    value: marks,
+    enumerable: true,
+    configurable: true,
+  });
 }
 
-/** One marked write, and whether it has already been made. */
-interface SubmissionOriginScope {
-  marks: SubmissionOriginMarks;
-  spent: boolean;
+/** A row as it looks once this plugin has marked it. */
+interface MarkedSubmission {
+  [PLUGIN_SUBMISSION]?: SubmissionOriginMarks;
 }
 
-const submissionOrigin = new AsyncLocalStorage<SubmissionOriginScope>();
-
-/** Run `write` marked as the plugin's own, so the write seam can trust it. */
-export function asPluginSubmission<T>(
-  marks: SubmissionOriginMarks,
-  write: () => T
-): T {
-  return submissionOrigin.run({ marks, spent: false }, write);
+/** What this row was marked as, or nothing when it is somebody else's. */
+export function submissionMarks(
+  row: Record<string, unknown>
+): SubmissionOriginMarks | undefined {
+  return (row as MarkedSubmission)[PLUGIN_SUBMISSION];
 }
 
 /** A form value, compared the way a form value can be. */
@@ -232,38 +219,6 @@ export function sameSubmittedPayload(
   const answers = Object.entries(granted);
   if (answers.length !== Object.keys(incoming).length) return false;
   return answers.every(([field, answer]) => sameValue(answer, incoming[field]));
-}
-
-/**
- * The marks for this row, if they were granted for this row, taken once.
- *
- * The scope outlives the write it was opened for: `createEntry` does not
- * resolve until the `afterCreate` hooks have run, and a hook registered before
- * this plugin runs ahead of its handler, so a submission written from either
- * place is inside the same store. Naming the payload is what stops such a row
- * taking an exception meant for another.
- *
- * Still spent once, so a second row carrying the same answers to the same form
- * cannot be waved through on the back of the first.
- */
-export function takeSubmissionMarks(
-  writing: IntendedWrite
-): SubmissionOriginMarks | undefined {
-  const scope = submissionOrigin.getStore();
-  if (!scope || scope.spent) return undefined;
-  const granted = scope.marks.writing;
-  if (granted && !sameWrite(granted, writing)) return undefined;
-  scope.spent = true;
-  return scope.marks;
-}
-
-/** Whether two writes are the same row. */
-function sameWrite(granted: IntendedWrite, writing: IntendedWrite): boolean {
-  return (
-    granted.form === writing.form &&
-    granted.status === writing.status &&
-    sameSubmittedPayload(granted.payload, writing.payload)
-  );
 }
 
 /** A submission ready to store, or the reasons it is not. */

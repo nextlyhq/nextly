@@ -34,7 +34,7 @@ Stripping markup no longer removes text that only looks like a tag. A `<` opens 
 
 `validateSubmission` asks the same rule rather than restating it, so a preflight check and the write can no longer disagree about the same submission.
 
-A submission flagged as spam is stored without being validated so a false positive stays reviewable, and that exception now ends where it should: it names the row it was granted for rather than the next write in the call, and marking a row "Not spam" checks the payload it carries against the form.
+A submission flagged as spam is stored without being validated so a false positive stays reviewable, and that exception now belongs to a row rather than to a call: it travels as a symbol key on the row itself, which a request body cannot carry and a second write cannot take. Marking a row "Not spam" checks the payload it carries against the form.
 
 Moving a submission to another form re-projects its answers onto that form's fields, and that change is stamped as an edit, because the visitor's stored answers changed and nothing else records it.
 

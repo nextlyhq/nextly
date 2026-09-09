@@ -305,26 +305,19 @@ export async function submitForm(
     // Marked as the plugin's own write for the length of the call, so the
     // write-seam hook knows a flagged row is evidence this handler chose to
     // keep rather than a caller asking for validation to be skipped.
-    const submission = await asPluginSubmission(
-      // The form is handed to the write seam rather than re-read there: reading
-      // a form runs its `afterRead` hooks, one of which counts submissions.
-      {
+    // Marked as this plugin's own write, so the write seam knows a flagged row
+    // is evidence this handler chose to keep rather than a caller asking for
+    // validation to be skipped. The form goes with it so the seam does not read
+    // it a second time.
+    const submission = await collections.createEntry(
+      pluginConfig.formSubmissionOverrides.slug,
+      asPluginSubmission(submissionData, {
         keepAsEvidence: isContentSpam,
         form: { id: form.id, fields: form.fields },
-        writing: {
-          form: form.id,
-          status: submissionData.status,
-          payload: storedData,
-        },
-      },
-      () =>
-        collections.createEntry(
-          pluginConfig.formSubmissionOverrides.slug,
-          submissionData,
-          // Public form submission — create as system. No ambient user; an
-          // empty context already resolves to system, but be explicit.
-          { as: "system" }
-        )
+      }),
+      // Public form submission — create as system. No ambient user; an
+      // empty context already resolves to system, but be explicit.
+      { as: "system" }
     );
 
     logger.info?.("Form submission created successfully", {

@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   asPluginSubmission,
   prepareSubmission,
-  takeSubmissionMarks,
+  submissionMarks,
 } from "../handlers/prepare-submission";
 import { validateSubmission } from "../handlers/submit-form";
 import { formBuilder, prepareSubmissionForWrite } from "../plugin";
@@ -212,6 +212,15 @@ describe("the write-seam hook on submissions", () => {
 
   const withForm = nextlyWith({ id: "form1", fields });
 
+  const readsOf = (nextly: unknown) =>
+    (
+      nextly as {
+        services: {
+          collections: { findEntryById: { mock: { calls: unknown[] } } };
+        };
+      }
+    ).services.collections.findEntryById.mock.calls;
+
   it("prepares a submission the Direct API would have stored raw", async () => {
     const ctx = {
       data: {
@@ -256,16 +265,17 @@ describe("the write-seam hook on submissions", () => {
     // positive stays recoverable, and requiring it to be valid would throw away
     // the thing being reviewed.
     const ctx = {
-      data: {
-        form: "form1",
-        data: { name: "<b>bot</b>", email: "not-an-email" },
-        status: "spam",
-      },
+      data: asPluginSubmission(
+        {
+          form: "form1",
+          data: { name: "<b>bot</b>", email: "not-an-email" },
+          status: "spam",
+        },
+        { keepAsEvidence: true }
+      ),
       operation: "create",
     };
-    const out = await asPluginSubmission({ keepAsEvidence: true }, () =>
-      prepareSubmissionForWrite(ctx, formsSlug, withForm)
-    );
+    const out = await prepareSubmissionForWrite(ctx, formsSlug, withForm);
     expect((out?.data as Record<string, unknown>).name).toBe("bot");
     expect((out?.data as Record<string, unknown>).email).toBe("not-an-email");
   });
@@ -463,31 +473,19 @@ describe("the write-seam hook on submissions", () => {
     // which COUNTs that form's submissions, so a write was paying for a count
     // of every write before it.
     const nextly = nextlyWith({ id: "form1", fields });
-    const out = await asPluginSubmission(
-      { keepAsEvidence: false, form: { id: "form1", fields } },
-      () =>
-        prepareSubmissionForWrite(
-          {
-            data: {
-              form: "form1",
-              data: { name: "Ada", email: "ada@example.com" },
-            },
-            operation: "create",
-          },
-          formsSlug,
-          nextly
-        )
+    const out = await prepareSubmissionForWrite(
+      {
+        data: asPluginSubmission(
+          { form: "form1", data: { name: "Ada", email: "ada@example.com" } },
+          { keepAsEvidence: false, form: { id: "form1", fields } }
+        ),
+        operation: "create",
+      },
+      formsSlug,
+      nextly
     );
     expect(out?.data).toEqual({ name: "Ada", email: "ada@example.com" });
-    expect(
-      (
-        nextly as unknown as {
-          services: {
-            collections: { findEntryById: { mock: { calls: unknown[] } } };
-          };
-        }
-      ).services.collections.findEntryById.mock.calls
-    ).toHaveLength(0);
+    expect(readsOf(nextly)).toHaveLength(0);
   });
 
   it("reads the form when the one handed over is a different form", async () => {
@@ -495,130 +493,109 @@ describe("the write-seam hook on submissions", () => {
     // it, so a mismatch falls back to the read rather than checking a payload
     // against the wrong schema.
     const nextly = nextlyWith({ id: "form1", fields });
-    await asPluginSubmission(
-      { keepAsEvidence: false, form: { id: "other-form", fields: [] } },
-      () =>
-        prepareSubmissionForWrite(
-          {
-            data: {
-              form: "form1",
-              data: { name: "Ada", email: "ada@example.com" },
-            },
-            operation: "create",
-          },
-          formsSlug,
-          nextly
-        )
+    await prepareSubmissionForWrite(
+      {
+        data: asPluginSubmission(
+          { form: "form1", data: { name: "Ada", email: "ada@example.com" } },
+          { keepAsEvidence: false, form: { id: "other-form", fields: [] } }
+        ),
+        operation: "create",
+      },
+      formsSlug,
+      nextly
     );
-    expect(
-      (
-        nextly as unknown as {
-          services: {
-            collections: { findEntryById: { mock: { calls: unknown[] } } };
-          };
-        }
-      ).services.collections.findEntryById.mock.calls
-    ).toHaveLength(1);
+    expect(readsOf(nextly)).toHaveLength(1);
   });
 
-  it("spends the evidence exception on the one write it was granted for", async () => {
-    // `createEntry` does not resolve until its `afterCreate` hooks have run, so
-    // a hook that writes a second submission runs inside the same store. The
-    // second write must not inherit an exception granted to the first.
-    await asPluginSubmission({ keepAsEvidence: true }, async () => {
-      const kept = await prepareSubmissionForWrite(
+  it("gives the exception to its own row and to no other", async () => {
+    // The exception belongs to a row, not to a call. A hook registered before
+    // this plugin runs ahead of its handler and a hook running after it can
+    // write another submission, and both used to reach an exception granted
+    // elsewhere: first by arriving first, then by carrying the same answers.
+    const evidence = asPluginSubmission(
+      {
+        form: "form1",
+        data: { name: "<b>bot</b>", email: "not-an-email" },
+        status: "spam",
+      },
+      { keepAsEvidence: true }
+    );
+
+    // Another row written in the same call, with the same answers on the same
+    // form under the same status. Everything about its content matches, and it
+    // is still validated, because the mark is not on it.
+    await expect(
+      prepareSubmissionForWrite(
         {
           data: {
             form: "form1",
             data: { name: "<b>bot</b>", email: "not-an-email" },
+            status: "spam",
           },
           operation: "create",
         },
         formsSlug,
         withForm
-      );
-      expect((kept?.data as Record<string, unknown>).email).toBe(
-        "not-an-email"
-      );
+      )
+    ).rejects.toThrow();
 
-      await expect(
-        prepareSubmissionForWrite(
-          {
-            data: {
-              form: "form1",
-              data: { name: "Ada", email: "also-not-an-email" },
-            },
-            operation: "create",
-          },
-          formsSlug,
-          withForm
-        )
-      ).rejects.toThrow();
-    });
-  });
-
-  it("hands the marks to the first taker only", async () => {
-    // The mechanism under the test above, stated directly.
-    const writing = { form: "form1", status: "spam", payload: { name: "bot" } };
-    await asPluginSubmission({ keepAsEvidence: true, writing }, () => {
-      expect(takeSubmissionMarks(writing)?.keepAsEvidence).toBe(true);
-      expect(takeSubmissionMarks(writing)).toBeUndefined();
-    });
-    // The control: outside a marked call there is nothing to take.
-    expect(takeSubmissionMarks(writing)).toBeUndefined();
-  });
-
-  it("does not hand the evidence exception to another row's write", async () => {
-    // A hook registered before this plugin runs ahead of its handler, so a
-    // submission that hook writes reaches the seam first, inside the same
-    // store. Spending the marks on whoever arrives first gave the exception to
-    // the wrong row and left the evidence row to be refused.
-    const evidence = { name: "<b>bot</b>", email: "not-an-email" };
-    await asPluginSubmission(
-      {
-        keepAsEvidence: true,
-        writing: { form: "form1", status: "spam", payload: evidence },
-      },
-      async () => {
-        await expect(
-          prepareSubmissionForWrite(
-            {
-              data: {
-                form: "form1",
-                data: { name: "Ada", email: "also-not-an-email" },
-              },
-              operation: "create",
-            },
-            formsSlug,
-            withForm
-          )
-        ).rejects.toThrow();
-
-        // Same answers, different form: content alone would have matched.
-        await expect(
-          prepareSubmissionForWrite(
-            {
-              data: { form: "form1", data: evidence, status: "new" },
-              operation: "create",
-            },
-            formsSlug,
-            withForm
-          )
-        ).rejects.toThrow();
-
-        const kept = await prepareSubmissionForWrite(
-          {
-            data: { form: "form1", data: evidence, status: "spam" },
-            operation: "create",
-          },
-          formsSlug,
-          withForm
-        );
-        expect((kept?.data as Record<string, unknown>).email).toBe(
-          "not-an-email"
-        );
-      }
+    // And the row the exception was granted for still has it, whichever order
+    // the two are written in.
+    const kept = await prepareSubmissionForWrite(
+      { data: evidence, operation: "create" },
+      formsSlug,
+      withForm
     );
+    expect((kept?.data as Record<string, unknown>).email).toBe("not-an-email");
+  });
+
+  it("survives the payload being rewritten before the seam sees it", async () => {
+    // A host hook can normalise `data` in an earlier phase. Identifying the row
+    // by its content meant the intended row stopped matching its own mark and
+    // was refused, which for a honeypot hit is a visible failure where the
+    // whole point is that the bot cannot tell.
+    const row = asPluginSubmission(
+      {
+        form: "form1",
+        data: { name: "<b>bot</b>", email: "not-an-email" },
+        status: "spam",
+      },
+      { keepAsEvidence: true }
+    );
+    row.data = { name: "rewritten by a host hook", email: "still-not-email" };
+    const out = await prepareSubmissionForWrite(
+      { data: row, operation: "create" },
+      formsSlug,
+      withForm
+    );
+    expect((out?.data as Record<string, unknown>).email).toBe(
+      "still-not-email"
+    );
+  });
+
+  it("cannot be asked for from a request body", async () => {
+    // The reason it is a symbol. A caller posts JSON, and `JSON.parse` never
+    // produces a symbol key, so no request can carry this mark however it is
+    // spelled.
+    const posted = JSON.parse(
+      JSON.stringify({
+        form: "form1",
+        data: { name: "bot", email: "not-an-email" },
+        status: "spam",
+        keepAsEvidence: true,
+        "Symbol(nextly.plugin-form-builder.submission)": {
+          keepAsEvidence: true,
+        },
+      })
+    ) as Record<string, unknown>;
+    expect(submissionMarks(posted)).toBeUndefined();
+    await expect(
+      prepareSubmissionForWrite(
+        { data: posted, operation: "create" },
+        formsSlug,
+        withForm
+      )
+    ).rejects.toThrow();
   });
 
   it("checks an evidence row on its way out of spam", async () => {
@@ -857,6 +834,47 @@ describe("a submission written straight to the collection", () => {
         : (stored?.data as Record<string, unknown>);
 
     expect(payload).toEqual({ message: "alert(1)hello", rating: 5 });
+  });
+
+  it("carries a marked row's exception through core to the seam", async () => {
+    // The mark is a symbol on the row, and core rebuilds a row on its way to
+    // the hook, so this is the assertion that says the symbol survives that
+    // journey. Everything about the evidence path rests on it, and if core ever
+    // stops carrying unknown symbol keys this fails rather than quietly
+    // validating a honeypot hit and answering the bot with an error.
+    const { plugin } = formBuilder();
+    current = await createTestNextly({ plugins: [plugin] });
+
+    const form = await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact-3",
+        fields: [
+          { type: "email", name: "email", label: "Email", required: true },
+        ],
+        status: "published",
+      },
+    });
+    const formId = (form as { item: { id: string } }).item.id;
+    const row = () => ({
+      form: formId,
+      data: { email: "not-an-email" },
+      status: "spam" as const,
+      submittedAt: new Date(),
+    });
+
+    const created = await current.nextly.create({
+      collection: "form-submissions",
+      data: asPluginSubmission(row(), { keepAsEvidence: true }),
+    });
+    expect((created as { item: { id: string } }).item.id).toBeTruthy();
+
+    // The control: the same row, unmarked, is refused. Without it the test
+    // would pass on a collection that never validated anything.
+    await expect(
+      current.nextly.create({ collection: "form-submissions", data: row() })
+    ).rejects.toThrow();
   });
 
   it("refuses one the form's schema rejects, rather than storing it", async () => {
