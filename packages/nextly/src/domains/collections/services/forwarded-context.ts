@@ -2,8 +2,8 @@
  * Everything the collection facade forwards from a {@link RequestContext} to
  * the entry service, in one object so no field can travel without the others.
  *
- * The three are not the same KIND of thing, and the docblocks below say which
- * is which — but they share one failure, which is why they share one function.
+ * They are not the same KIND of thing, and the docblocks below say which is
+ * which — but they share one failure, which is why they share one function.
  * Each facade method used to rebuild this argument as a hand-written literal,
  * and a literal drops whatever it does not name. That dropped the hook context,
  * so a plugin could not reach a channel core had accepted for months; and it
@@ -44,14 +44,23 @@ export interface ForwardedContext {
    * row cannot say. Nothing here bypasses access, validation or any hook.
    */
   context: Record<string, unknown> | undefined;
+  /**
+   * The HTTP request that produced this operation, when one did. The core
+   * resolves it into what hooks read as `ctx.req.http`; its absence is what
+   * tells a rule scoped to a visitor that a seed or a job made this write.
+   */
+  request: Request | undefined;
 }
 
 /** Read what the entry service needs off a {@link RequestContext}, whole. */
-export function forwardedFromContext(context: RequestContext): ForwardedContext {
+export function forwardedFromContext(
+  context: RequestContext
+): ForwardedContext {
   return {
     user: context.user,
     overrideAccess: context.overrideAccess,
     authenticatedScope: context.authenticatedScope,
     context: context.context,
+    request: context.request,
   };
 }

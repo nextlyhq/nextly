@@ -25,6 +25,7 @@ import {
   type FormAvailabilityInput,
 } from "../../domains/forms/form-availability";
 import { NextlyError } from "../../errors";
+import { resolveRequestFacts } from "../../hooks/request-facts";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { getCollectionsHandlerFromDI } from "../helpers/di";
@@ -242,20 +243,21 @@ const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
         });
       }
 
-      // Capture client metadata from request headers for audit.
-      let ipAddress = "unknown";
-      let userAgent = "unknown";
-      if (request) {
-        const headers = request.headers;
-        ipAddress =
-          headers.get("x-forwarded-for")?.split(",")[0] ||
-          headers.get("x-real-ip") ||
-          "unknown";
-        userAgent = headers.get("user-agent") || "unknown";
-      }
+      // Capture client metadata for audit. The address comes from the core
+      // resolver, which walks the forwarded chain from the right under this
+      // deployment's proxy-trust settings. Reading the leftmost hop instead
+      // recorded whatever the sender chose to claim.
+      const facts = resolveRequestFacts(request);
+      const ipAddress = facts.http?.ip ?? "unknown";
+      const userAgent = facts.headers?.["user-agent"] ?? "unknown";
 
       const submissionEntry = await svc.collectionsHandler.createEntry(
-        { collectionName: "form-submissions" },
+        {
+          collectionName: "form-submissions",
+          // The request this submission's hooks are told about, so a rule
+          // scoped to a visitor can tell one from a server-side import.
+          request,
+        },
         {
           form: form.id,
           data: submissionData.data,

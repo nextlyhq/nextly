@@ -88,6 +88,22 @@ export interface RequestContext {
    * nothing above could reach it.
    */
   context?: Record<string, unknown>;
+
+  /**
+   * The HTTP request that produced this operation, when one did.
+   *
+   * The core resolves it into the facts hooks are handed as `ctx.req`: the
+   * headers, and a client address judged against this deployment's proxy-trust
+   * settings rather than read raw off `x-forwarded-for`. It is the request
+   * itself rather than an address because the caller does not get to name its
+   * own client: a forwarded address is only worth what the trust settings say
+   * it is, and those are read in one place.
+   *
+   * Leave it out for a write no request produced -- a seed, an import, a
+   * scheduled job. That absence is what tells a request-scoped rule, a rate
+   * limit or a honeypot, to stand down rather than judge a server as a visitor.
+   */
+  request?: Request;
 }
 
 /**

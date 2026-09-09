@@ -17,6 +17,7 @@ import {
 } from "@nextly/hooks/context-builder";
 import type { HookRegistry } from "@nextly/hooks/hook-registry";
 import type { PrebuiltHookContext } from "@nextly/hooks/prebuilt";
+import type { ResolvedRequestFacts } from "@nextly/hooks/request-facts";
 import { StoredHookExecutor } from "@nextly/hooks/stored-hook-executor";
 import type { HookContext } from "@nextly/hooks/types";
 import type { StoredHookConfig } from "@nextly/schemas/dynamic-collections/types";
@@ -93,8 +94,17 @@ export class CollectionHookService {
    *
    * Wrapper around `buildContext()` that automatically injects the Nextly
    * instance into the `req` property of the hook context.
+   *
+   * `req` is required, not optional, and that is the whole mechanism. Every
+   * write and read path builds its contexts here, so a path that has a request
+   * and forgets to say so cannot compile, and a path that genuinely has none
+   * says that once, deliberately. The alternative -- optional, populated at the
+   * sites someone remembered -- is a hook told there was no visitor because the
+   * operation it ran under was never taught to mention one.
    */
-  buildHookContext<T>(options: BuildContextOptions<T>): HookContext<T> {
+  buildHookContext<T>(
+    options: BuildContextOptions<T> & { req: ResolvedRequestFacts }
+  ): HookContext<T> {
     return buildContext({
       ...options,
       req: {
@@ -112,26 +122,34 @@ export class CollectionHookService {
    *
    * @param queryDatabase - Function to check field uniqueness (injected by caller)
    */
-  buildPrebuiltHookContext(
-    collectionName: string,
-    operation: "create" | "read" | "update" | "delete",
-    data: unknown,
-    queryDatabase: (params: QueryDatabaseParams) => Promise<boolean>,
-    user?: UserContext,
-    sharedContext: Record<string, unknown> = {},
-    // Transaction-bound executor forwarded onto the context when the hook runs
-    // inside a caller-owned transaction, so DB-reading hooks stay on the
-    // transaction's connection (see HookContext.executor). Omitted otherwise.
-    executor?: unknown
-  ): PrebuiltHookContext {
+  buildPrebuiltHookContext(options: {
+    collection: string;
+    operation: "create" | "read" | "update" | "delete";
+    data: unknown;
+    queryDatabase: (params: QueryDatabaseParams) => Promise<boolean>;
+    /** See {@link CollectionHookService.buildHookContext} for why this is required. */
+    req: ResolvedRequestFacts;
+    user?: UserContext;
+    sharedContext?: Record<string, unknown>;
+    /**
+     * Transaction-bound executor forwarded onto the context when the hook runs
+     * inside a caller-owned transaction, so DB-reading hooks stay on the
+     * transaction's connection (see HookContext.executor). Omitted otherwise.
+     */
+    executor?: unknown;
+  }): PrebuiltHookContext {
+    const { collection, operation, data, queryDatabase, user, executor } =
+      options;
+    const sharedContext = options.sharedContext ?? {};
     return {
-      collection: collectionName,
+      collection,
       operation,
       data,
       user: user ? { id: user.id, email: user.email } : undefined,
       context: sharedContext,
       executor,
       req: {
+        ...options.req,
         nextly: this.resolveNextlyForHooks() as NextlyDirectAPI | undefined,
       },
       queryDatabase: async params => {
@@ -173,6 +191,13 @@ export class CollectionHookService {
     user?: UserContext;
     sharedContext?: Record<string, unknown>;
     /**
+     * What the core resolved about the request behind this write, handed to
+     * both the code and the stored context. This phase is the seam a
+     * request-scoped rule attaches to, so it is the one that most needs to be
+     * able to say whether there was a request.
+     */
+    req: ResolvedRequestFacts;
+    /**
      * The stored row an update is changing. Carried because a handler comparing
      * old against new is the ordinary use of the phase, and the context this
      * builds is the only place it can come from.
@@ -192,6 +217,7 @@ export class CollectionHookService {
         originalData: options.originalData,
         user: options.user,
         context: sharedContext,
+        req: options.req,
         // Forwarded to the code-hook context as well as the stored one below:
         // a handler doing the documented transaction-bound read through
         // `context.executor` would otherwise fall back to the pool while the
@@ -204,15 +230,16 @@ export class CollectionHookService {
     const fromStored = await this.storedHookExecutor.execute(
       "beforeChange",
       storedHooks,
-      this.buildPrebuiltHookContext(
+      this.buildPrebuiltHookContext({
         collection,
         operation,
         data,
-        options.queryDatabase,
-        options.user,
+        queryDatabase: options.queryDatabase,
+        user: options.user,
         sharedContext,
-        options.executor
-      )
+        executor: options.executor,
+        req: options.req,
+      })
     );
     applyBeforeChangeResult(data, fromStored.data);
   }

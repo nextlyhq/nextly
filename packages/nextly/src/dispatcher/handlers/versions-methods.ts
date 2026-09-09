@@ -565,6 +565,8 @@ export async function restoreVersionForDocument(
      * and building it twice is how the two drift.
      */
     params: Params;
+    /** The HTTP request behind the restore, when one produced it. */
+    request?: Request;
   }
 ): Promise<{ restoredFrom: number; droppedFields: string[] }> {
   const caller = readAccessCallerFromParams(args.params, args.user);
@@ -604,6 +606,7 @@ export async function restoreVersionForDocument(
     // The publish gate a restore-to-published triggers must judge the key's own
     // scope, not the owner's RBAC.
     authenticatedScope: readAuthenticatedScope(args.params),
+    request: args.request,
   });
 }
 
