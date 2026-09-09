@@ -401,7 +401,7 @@ describe("entryAllowedAt and allowedEntries", () => {
     const entries = palette();
     const verdict = entryAllowedAt(
       entry(entries, "acme/column"),
-      { at: "root" },
+      { kind: "root" },
       registryNestingSource()
     );
 
@@ -419,7 +419,7 @@ describe("entryAllowedAt and allowedEntries", () => {
     expect(
       entryAllowedAt(
         entry(entries, "acme/column"),
-        { at: "slot", parentType: "acme/columns", slot: "children" },
+        { kind: "slot", parentType: "acme/columns", slot: "children" },
         registryNestingSource()
       ).allowed
     ).toBe(true);
@@ -429,7 +429,7 @@ describe("entryAllowedAt and allowedEntries", () => {
     const entries = palette();
     const verdict = entryAllowedAt(
       entry(entries, "acme/column"),
-      { at: "slot", parentType: "acme/text", slot: "children" },
+      { kind: "slot", parentType: "acme/text", slot: "children" },
       registryNestingSource()
     );
 
@@ -444,13 +444,13 @@ describe("entryAllowedAt and allowedEntries", () => {
     const source = registryNestingSource();
 
     expect(
-      entryAllowedAt(entry(entries, "acme/text"), { at: "root" }, source)
+      entryAllowedAt(entry(entries, "acme/text"), { kind: "root" }, source)
         .allowed
     ).toBe(true);
     expect(
       entryAllowedAt(
         entry(entries, "acme/text"),
-        { at: "slot", parentType: "acme/columns", slot: "children" },
+        { kind: "slot", parentType: "acme/columns", slot: "children" },
         source
       ).allowed
     ).toBe(true);
@@ -460,7 +460,7 @@ describe("entryAllowedAt and allowedEntries", () => {
     const entries = palette();
     const offered = allowedEntries(
       entries,
-      { at: "root" },
+      { kind: "root" },
       registryNestingSource()
     );
 
@@ -486,7 +486,7 @@ describe("entryAllowedAt and allowedEntries", () => {
     expect(
       entryAllowedAt(
         entry(entries, "acme/column#narrow"),
-        { at: "root" },
+        { kind: "root" },
         registryNestingSource()
       ).allowed
     ).toBe(false);
@@ -513,7 +513,7 @@ describe("entryAllowedAt and allowedEntries", () => {
 
     const refused = entryAllowedAt(
       entry(entries, "acme/text"),
-      { at: "slot", parentType: "acme/gallery", slot: "children" },
+      { kind: "slot", parentType: "acme/gallery", slot: "children" },
       source
     );
     expect(refused.allowed).toBe(false);
@@ -525,7 +525,7 @@ describe("entryAllowedAt and allowedEntries", () => {
     expect(
       entryAllowedAt(
         entry(entries, "acme/photo"),
-        { at: "slot", parentType: "acme/gallery", slot: "children" },
+        { kind: "slot", parentType: "acme/gallery", slot: "children" },
         source
       ).allowed
     ).toBe(true);
@@ -551,7 +551,7 @@ describe("entryAllowedAt and allowedEntries", () => {
 
     const verdict = entryAllowedAt(
       entry(entries, "acme/stray"),
-      { at: "slot", parentType: "acme/grid", slot: "cells" },
+      { kind: "slot", parentType: "acme/grid", slot: "cells" },
       registryNestingSource()
     );
     expect(verdict.allowed).toBe(false);
@@ -573,7 +573,7 @@ describe("insertionPointFor", () => {
     expect(insertionPointFor(document, null)).toEqual({
       kind: "document-end",
       at: { index: 1 },
-      target: { at: "root" },
+      target: { kind: "root" },
     });
   });
 
@@ -588,7 +588,7 @@ describe("insertionPointFor", () => {
     expect(insertionPointFor(document, "a")).toEqual({
       kind: "after-selection",
       at: { index: 1 },
-      target: { at: "root" },
+      target: { kind: "root" },
     });
   });
 
@@ -613,7 +613,7 @@ describe("insertionPointFor", () => {
     expect(point).toEqual({
       kind: "after-selection",
       at: { parentId: "wrap", slot: "children", index: 1 },
-      target: { at: "slot", parentType: "acme/columns", slot: "children" },
+      target: { kind: "slot", parentType: "acme/columns", slot: "children" },
     });
   });
 
@@ -646,7 +646,7 @@ describe("insertionPointFor", () => {
     ).toEqual({
       kind: "inside-selection",
       at: { parentId: "wrap", slot: "children", index: 0 },
-      target: { at: "slot", parentType: "acme/columns", slot: "children" },
+      target: { kind: "slot", parentType: "acme/columns", slot: "children" },
     });
   });
 
@@ -708,7 +708,7 @@ describe("insertionPointFor", () => {
     expect(insertionPointFor(documentOf([]), null)).toEqual({
       kind: "document-end",
       at: { index: 0 },
-      target: { at: "root" },
+      target: { kind: "root" },
     });
   });
 });
@@ -1179,7 +1179,7 @@ describe("the pattern tier", () => {
 
     const verdict = entryAllowedAt(
       pattern as never,
-      { at: "root" },
+      { kind: "root" },
       registryNestingSource()
     );
 
@@ -1205,8 +1205,11 @@ describe("the pattern tier", () => {
     );
 
     expect(
-      entryAllowedAt(pattern as never, { at: "root" }, registryNestingSource())
-        .allowed
+      entryAllowedAt(
+        pattern as never,
+        { kind: "root" },
+        registryNestingSource()
+      ).allowed
     ).toBe(true);
   });
 
@@ -1229,7 +1232,7 @@ describe("the pattern tier", () => {
     );
 
     expect(
-      allowedEntries(patterns, { at: "root" }, registryNestingSource()).map(
+      allowedEntries(patterns, { kind: "root" }, registryNestingSource()).map(
         offered => offered.patternId
       )
     ).toEqual(["ok"]);
