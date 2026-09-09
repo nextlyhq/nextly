@@ -235,8 +235,8 @@ describe("renderedDomId: which of a node's two spellings reaches the page", () =
   });
 
   it("treats an EMPTY string cssId as shadowing, emitting nothing reachable", () => {
-    // The renderer sets `id=""`, which no anchor, label or selector reaches —
-    // and the bag's value is overwritten, so it does not render either.
+    // Nothing reachable is emitted: an empty id addresses nothing, and the
+    // bag is shadowed, so its value does not render either.
     expect(
       renderedDomId(bare({ cssId: "", attributes: { id: "hero" } }))
     ).toBeUndefined();
@@ -260,8 +260,8 @@ describe("renderedDomId: which of a node's two spellings reaches the page", () =
   });
 
   it("lets a trailing EMPTY case variant overwrite an earlier one", () => {
-    // The renderer lowercases each key and assigns in turn, so
-    // `{ id: "hero", ID: "" }` leaves the element with `id=""`. Skipping the
+    // Attribute names are case-insensitive and the last variant decides, so
+    // `{ id: "hero", ID: "" }` leaves an empty id, which is no id. Skipping the
     // empty one keeps `hero` and reports an id that does not render — which
     // then makes a copy rename itself away from an id nothing owns.
     expect(

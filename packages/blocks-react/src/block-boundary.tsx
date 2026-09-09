@@ -1,6 +1,7 @@
 import {
   blockPartClassName,
   blockTypeClassName,
+  renderedDomId,
   type BlockNode,
   type ComponentUnresolvedReason,
   type ResolvedBlockNode,
@@ -363,12 +364,38 @@ function withNodeAttributes(
        * property inline editing commits into.
        */
       if (nodeAttribute && key.startsWith(EDITOR_NAMESPACE)) continue;
+      /*
+       * `id` is deliberately NOT assigned here. Which of a node's two spellings
+       * reaches the page is one question, and the engine's `renderedDomId` is
+       * the one answer to it — six other surfaces already derive from it, and
+       * this renderer is the thing that answer models. Assigning the bag's `id`
+       * in this loop and correcting it afterwards would restate the rule, which
+       * is how the rule and the page come to disagree.
+       */
+      if (key === "id") continue;
       extra[key] = value;
     }
   }
-  // The modelled field wins over an attribute of the same name: `cssId` is what
-  // the editor writes, and the attribute bag is the escape hatch beside it.
-  if (cssId !== undefined) extra.id = cssId;
+  /*
+   * The single id this node emits, ASKED rather than restated.
+   *
+   * The rule already carries everything this loop used to do by hand: the
+   * modelled field wins over an attribute of the same name, only a STRING
+   * `cssId` shadows, the bag is read case-insensitively with the last variant
+   * winning, and an empty result is no id at all.
+   *
+   * That last clause is the one behaviour change. A node with `cssId: ""` used
+   * to emit a literal `id=""`, because this loop tested `!== undefined` and the
+   * empty string passes. It no longer does, and nothing reachable is lost: the
+   * DOM Standard unsets an element's ID when the attribute is set to the empty
+   * string, so `getElementById("")` never matched it, no IDREF could name it,
+   * and `#` is not a valid selector. The HTML Standard separately requires an
+   * id to hold at least one character, so what shipped was invalid markup that
+   * addressed nothing. The empty `cssId` still SHADOWS the bag, which is the
+   * part authors can observe, and the inspector still offers to remove it.
+   */
+  const renderedId = renderedDomId(node);
+  if (renderedId !== undefined) extra.id = renderedId;
   applyEditorMarkers(extra, node, nodeAttribute, declaresSlots);
 
   return Object.keys(extra).length > 0 ? cloneElement(output, extra) : output;
