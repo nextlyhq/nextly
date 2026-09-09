@@ -378,20 +378,29 @@ Everything else on this page is `@public` today.
 The plugin's own `admin` field controls where its items live (D20):
 
 ```ts
-import { AdminPlacement } from "nextly";
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 
 definePlugin({
+  name: "@acme/nextly-plugin-reports",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.63",
   // ...
   admin: {
-    placement: AdminPlacement.COLLECTIONS, // COLLECTIONS | SINGLES | USERS | SETTINGS | PLUGINS | STANDALONE
+    placement: "collections", // collections | singles | users | settings | plugins | standalone
     order: 10, // lower = higher; default 100
-    after: "collections", // anchor for STANDALONE icons
+    after: "collections", // anchor for standalone icons
   },
 });
 ```
 
-Placement defaults to `PLUGINS`. `STANDALONE` gives the plugin its own top-level icon,
+Placement defaults to `plugins`. `standalone` gives the plugin its own top-level icon,
 anchored after the section named by `after`.
+
+The value is written out rather than read from the `AdminPlacement` constant, which ships
+from `nextly` and not from `@nextlyhq/plugin-sdk`. The SDK is the only surface a plugin
+should depend on, so reaching into core for a constant would tie your plugin to core's
+layout for the sake of one string. A host config, which already imports from `nextly`,
+can use the constant, and does so below.
 
 ## Host overrides (D49)
 
@@ -400,6 +409,9 @@ An integrator can override a plugin's placement without forking it, via
 
 ```ts
 // nextly.config.ts
+import { AdminPlacement, defineConfig } from "nextly";
+import { reports } from "@acme/nextly-plugin-reports";
+
 export default defineConfig({
   plugins: [reports()],
   admin: {

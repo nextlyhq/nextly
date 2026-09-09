@@ -410,6 +410,60 @@ export interface CountArgs<TSlug extends CollectionSlug = CollectionSlug>
 }
 
 /**
+ * Arguments for a grouped read.
+ *
+ * Extends {@link CountArgs} rather than restating its filters, so a group
+ * accepts exactly what a count accepts. The parity is the point: the buckets
+ * describe the rows a count of the same arguments would have counted, and a
+ * filter that existed on only one of them would let the two disagree.
+ *
+ * @example
+ * ```typescript
+ * const { buckets, truncated } = await nextly.group({
+ *   collection: 'orders',
+ *   groupBy: 'region',
+ *   where: { status: { equals: 'paid' } },
+ * });
+ * ```
+ */
+export interface GroupArgs<TSlug extends CollectionSlug = CollectionSlug>
+  extends CountArgs<TSlug> {
+  /**
+   * The field whose distinct values become the buckets.
+   *
+   * Refused when it names a field carrying a read rule, when it names the
+   * owner column, or when it resolves to no column at all — a group key that
+   * quietly did nothing would answer with one bucket holding every row.
+   */
+  groupBy: string;
+
+  /**
+   * How many buckets to return, bounded by the server's own cap.
+   *
+   * Applied after grouping completes, so it chooses among finished buckets and
+   * never changes which rows were aggregated.
+   */
+  bucketLimit?: number;
+}
+
+/**
+ * Result of a grouped read.
+ */
+export interface GroupResult {
+  /** Distinct values of the grouped field, largest bucket first. */
+  buckets: { value: string | null; count: number }[];
+
+  /**
+   * Whether buckets were left out because the cap was reached.
+   *
+   * Reported rather than hidden, for the reason a bounded count reports
+   * `atLeast`: a chart that silently omits categories reads as the whole
+   * picture, and the reader acts on whichever it shows as largest.
+   */
+  truncated: boolean;
+}
+
+/**
  * Arguments for bulk deleting multiple documents by IDs.
  *
  * @example

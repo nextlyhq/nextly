@@ -241,16 +241,18 @@ Validate a form config before saving:
 ```typescript
 import { validateFormConfig, assertValidFormConfig } from '@nextlyhq/plugin-form-builder';
 
-const result = validateFormConfig(myFormConfig);
+const result = validateFormConfig(contactForm);
 if (!result.valid) {
   console.error(result.errors);
 }
 
 // Or throw on invalid config
-assertValidFormConfig(myFormConfig);
+assertValidFormConfig(contactForm);
 ```
 
 ## Form Submissions
+
+The handlers below take a `{ pluginContext, pluginConfig }` context. `pluginContext` is the `ctx` your code already receives from the plugin system -- for example a [plugin route handler](/docs/plugins/routes)'s `(req, ctx) => ...`, or your own plugin's `init(ctx)`. `pluginConfig` is the object `formBuilder()` returned: keep the result and use `fb.config`. Note that `getFormBuilderConfig(ctx)` is **not** an alternative from another plugin's context — the resolved config is written onto the form-builder's own context during its `init`, and `initializePlugins` gives every plugin a separate one, so that call returns `undefined` anywhere else.
 
 ### Handling Submissions
 
@@ -258,12 +260,23 @@ Use the `submitForm` handler to process submissions server-side. It runs the ful
 
 ```typescript
 import { submitForm } from '@nextlyhq/plugin-form-builder';
+import type { PluginContext } from '@nextlyhq/plugin-sdk';
+import type { ResolvedFormBuilderConfig } from '@nextlyhq/plugin-form-builder';
+
+declare const request: Request;
+declare const pluginContext: PluginContext;
+declare const pluginConfig: ResolvedFormBuilderConfig;
 
 const result = await submitForm(
   {
     formSlug: 'contact',
     data: { firstName: 'Jane', email: 'jane@example.com', message: 'Hello!' },
-    metadata: { ipAddress: req.ip, userAgent: req.headers['user-agent'] },
+    metadata: {
+      // No ipAddress here on purpose: see "Where the IP has to come from"
+      // below. Reading `x-forwarded-for` straight off the request is the one
+      // thing not to do.
+      userAgent: request.headers.get('user-agent') || undefined,
+    },
   },
   { pluginContext, pluginConfig }
 );
@@ -278,6 +291,44 @@ if (result.success) {
 }
 ```
 
+### Where the IP has to come from
+
+`submitForm` keys two protections on `metadata.ipAddress`: the per-IP rate limit,
+and the one-submission-per-visitor check when `allowMultipleSubmissions` is off. It
+also stores the value on the submission.
+
+That makes the header a control input, not a log field. `x-forwarded-for` is
+client-supplied on a direct request and on any proxy that forwards it verbatim, so
+a bot that varies it on every request gets a fresh rate-limit bucket each time and
+walks past a limit that looks configured. Nextly closed exactly this in its own
+auth and rate-limit paths, which is why `getTrustedClientIp` exists:
+
+```ts
+// nextly.config.ts, or anywhere the application itself runs
+import { getTrustedClientIp, parseTrustedProxyIpsEnv } from "nextly";
+
+declare const request: Request;
+declare const trustProxy: boolean;
+
+const ipAddress =
+  getTrustedClientIp(request, {
+    trustProxy,
+    trustedProxyIps: parseTrustedProxyIpsEnv(process.env.TRUSTED_PROXY_IPS),
+  }) ?? undefined;
+```
+
+It walks the forwarded chain from the right, skipping hops in `TRUSTED_PROXY_IPS`,
+and returns the first one you did not vouch for. It returns `null` when it cannot
+identify a client, and passing `undefined` on is the correct thing to do with that:
+the limiter skips a submission it cannot attribute rather than filing every unknown
+caller in one bucket.
+
+Two consequences worth stating plainly. `security.trustProxy` defaults to `false`,
+so until you set it and list your proxies the resolver returns `null` and the rate
+limit does not run. And `getTrustedClientIp` ships from `nextly`, not from
+`@nextlyhq/plugin-sdk`, so a distributed plugin cannot reach it through the surface
+it is supposed to depend on. An application that hosts its own route, as below, can.
+
 ### Validation
 
 The plugin generates [Zod](https://zod.dev) schemas from form field definitions at runtime. Every submission is validated against the schema before storage. Free-text fields are also sanitized by stripping HTML tags to prevent injection.
@@ -286,6 +337,11 @@ You can validate data without creating a submission:
 
 ```typescript
 import { validateSubmission } from '@nextlyhq/plugin-form-builder';
+import type { PluginContext } from '@nextlyhq/plugin-sdk';
+import type { ResolvedFormBuilderConfig } from '@nextlyhq/plugin-form-builder';
+
+declare const pluginContext: PluginContext;
+declare const pluginConfig: ResolvedFormBuilderConfig;
 
 const { valid, errors } = await validateSubmission(
   'contact',
@@ -310,6 +366,11 @@ Admins can also add internal notes to any submission -- these are not visible to
 
 ```typescript
 import { getFormSubmissionStats } from '@nextlyhq/plugin-form-builder';
+import type { PluginContext } from '@nextlyhq/plugin-sdk';
+import type { ResolvedFormBuilderConfig } from '@nextlyhq/plugin-form-builder';
+
+declare const pluginContext: PluginContext;
+declare const pluginConfig: ResolvedFormBuilderConfig;
 
 const stats = await getFormSubmissionStats('contact', { pluginContext, pluginConfig });
 // { total: 42, new: 5, read: 30, archived: 7 }
@@ -443,27 +504,53 @@ Supported events: `submission.created`, `submission.updated`, `submission.delete
 When a `secret` is configured, the request includes an `X-Webhook-Signature` header with an HMAC-SHA256 signature (`sha256=<hex>`). Verify it on the receiving end:
 
 ```typescript
-const crypto = require('crypto');
+// app/api/form-webhook/route.ts
+import { createHmac, timingSafeEqual } from "node:crypto";
 
-const signature = 'sha256=' + crypto
-  .createHmac('sha256', secret)
-  .update(JSON.stringify(req.body))
-  .digest('hex');
+export async function POST(request: Request) {
+  // Fail closed on a missing secret. Defaulting to "" still produces a valid
+  // HMAC, and it is one anybody can compute, so the endpoint would authenticate
+  // every forged request instead of none.
+  const secret = process.env.FORM_WEBHOOK_SECRET;
+  if (!secret) {
+    return new Response("Webhook secret is not configured", { status: 500 });
+  }
 
-const isValid = crypto.timingSafeEqual(
-  Buffer.from(req.headers['x-webhook-signature']),
-  Buffer.from(signature)
-);
+  // The RAW body, read once. Signing a re-serialised object instead compares a
+  // signature against bytes the sender never sent: `JSON.parse` then
+  // `JSON.stringify` is free to reorder keys and drop whitespace, so a correct
+  // signature fails whenever the two disagree.
+  const raw = await request.text();
+  const expected = `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`;
+  const sent = request.headers.get("x-webhook-signature") ?? "";
+
+  // Lengths first: `timingSafeEqual` throws on a mismatch, which turns a forged
+  // signature into a 500 rather than a rejection.
+  const a = Buffer.from(sent);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return new Response("Invalid signature", { status: 401 });
+  }
+
+  const payload: unknown = JSON.parse(raw);
+  // ... handle the verified payload
+
+  return Response.json({ received: true });
+}
 ```
 
 ## Exporting Submissions
 
-Export submissions to CSV or JSON from code or the admin UI.
+Export submissions to CSV or JSON from code or the admin UI. The examples below assume you already have `form` (a `FormDocument`) and `submissions` (a `SubmissionDocument[]`) -- for example, from `ctx.services.collections` in a plugin route or hook.
 
 ### CSV Export
 
 ```typescript
 import { exportToCSV, downloadFile, generateExportFilename } from '@nextlyhq/plugin-form-builder';
+import type { FormDocument, SubmissionDocument } from '@nextlyhq/plugin-form-builder';
+
+declare const form: FormDocument;
+declare const submissions: SubmissionDocument[];
 
 const csv = exportToCSV(submissions, form, {
   includeMetadata: true,
@@ -482,6 +569,10 @@ downloadFile(csv, filename, 'text/csv;charset=utf-8');
 
 ```typescript
 import { exportToJSON } from '@nextlyhq/plugin-form-builder';
+import type { FormDocument, SubmissionDocument } from '@nextlyhq/plugin-form-builder';
+
+declare const form: FormDocument;
+declare const submissions: SubmissionDocument[];
 
 const json = exportToJSON(submissions, form, {
   includeMetadata: true,
@@ -494,6 +585,10 @@ const json = exportToJSON(submissions, form, {
 
 ```typescript
 import { exportAndDownload } from '@nextlyhq/plugin-form-builder';
+import type { FormDocument, SubmissionDocument } from '@nextlyhq/plugin-form-builder';
+
+declare const form: FormDocument;
+declare const submissions: SubmissionDocument[];
 
 // In a React component
 const handleExport = (format: 'csv' | 'json') => {
@@ -561,29 +656,100 @@ const contactForm = createFormConfig('contact', [
 ]);
 ```
 
+`createFormConfig` builds the definition and stops there. Nothing in the plugin accepts
+a `FormConfig`: `formBuilder()` takes no `forms` option, and `submitForm` resolves a slug
+by querying the **forms collection**, so a form exists at submission time only as a row in
+that collection. Create the `contact` form in the admin under Forms before going further,
+or seed the row yourself; a submission to a slug with no row is answered as a form that
+does not exist, before validation or storage. Closing that gap is tracked as
+`createFormConfig` having no path to a row.
+
 **3. Handle submissions in an API route:**
 
-```typescript
-import { submitForm } from '@nextlyhq/plugin-form-builder';
+`submitForm` takes two context values: `pluginContext`, which is a plugin's `ctx`, and
+`pluginConfig`, which is the resolved form-builder config. Both are reachable from your
+own config file. A route contributed through [`contributes.routes`](/docs/plugins/routes)
+is handed the `ctx` as its second argument, and `formBuilder()` returns its resolved
+config as `fb.config`, which is why step 1 keeps the return value rather than inlining it.
 
-export async function POST(request: Request) {
-  const data = await request.json();
+So the endpoint is a small plugin of your own, declared beside the form-builder in
+`nextly.config.ts`:
 
-  const result = await submitForm(
-    {
-      formSlug: 'contact',
-      data,
-      metadata: {
-        ipAddress: request.headers.get('x-forwarded-for') || undefined,
-        userAgent: request.headers.get('user-agent') || undefined,
+```ts
+// nextly.config.ts
+import {
+  defineConfig,
+  getTrustedClientIp,
+  parseTrustedProxyIpsEnv,
+} from "nextly";
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { formBuilder, submitForm } from "@nextlyhq/plugin-form-builder";
+
+const fb = formBuilder({
+  notifications: { defaultFrom: "noreply@mysite.com" },
+  spamProtection: {
+    honeypot: true,
+    rateLimit: { maxSubmissions: 5, windowMs: 60_000 },
+  },
+});
+
+const contactEndpoint = definePlugin({
+  name: "@acme/contact-endpoint",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.63",
+  contributes: {
+    routes: [
+      {
+        method: "POST",
+        path: "/contact",
+        // A visitor has no session, so the route opts out of auth. What stops
+        // abuse is `submitForm` itself: the honeypot and rate limit configured
+        // above run on every call, and a route that skipped it would skip them.
+        public: true,
+        handler: async (request, ctx) => {
+          const data = await request.json();
+
+          // Through the trust-proxy gate, never straight off the header: this
+          // value keys the rate limit above, so a forgeable one hands a bot a
+          // fresh bucket per request. `null` becomes `undefined`, which the
+          // limiter reads as "cannot attribute" and skips.
+          const ipAddress =
+            getTrustedClientIp(request, {
+              trustProxy: ctx.config.security?.trustProxy ?? false,
+              trustedProxyIps: parseTrustedProxyIpsEnv(
+                process.env.TRUSTED_PROXY_IPS
+              ),
+            }) ?? undefined;
+
+          const result = await submitForm(
+            {
+              formSlug: "contact",
+              data,
+              metadata: {
+                ipAddress,
+                userAgent: request.headers.get("user-agent") ?? undefined,
+              },
+            },
+            { pluginContext: ctx, pluginConfig: fb.config }
+          );
+
+          return Response.json(result);
+        },
       },
-    },
-    { pluginContext, pluginConfig }
-  );
+    ],
+  },
+});
 
-  return Response.json(result);
-}
+export default defineConfig({
+  plugins: [fb.plugin, contactEndpoint],
+  // collections: [...] as in step 1
+});
 ```
+
+The route is mounted under the contributing plugin's namespace, so the form posts to
+`/api/plugins/@acme/contact-endpoint/contact`.
+
+
 
 ## Next Steps
 

@@ -169,6 +169,39 @@ export {
   type PluginCategory,
 } from "./plugins/plugin-categories";
 export { pluginAdminSlug } from "./plugins/plugin-slug";
+// And the same for a plugin's HTTP routes, for the same reason and with a
+// sharper consequence. `pluginAdminSlug` derived twice produces a dead link;
+// this derived twice produces a request to a path nothing serves, which the
+// caller sees as an empty answer rather than as an error. The admin needs it
+// because a plugin's own UI calling its own route has to address it, and the
+// dispatcher is the only thing that knows where that is.
+export { pluginRouteFullPath } from "./plugins/routes/route-path";
+
+// The VERBS those routes may declare, published beside the path helper and for
+// the same reason: the admin's client for calling a plugin route has to know
+// which methods exist, and a second list of them is a narrower view that stops
+// covering the wider one the moment a method is added — the plugin declares a
+// route the admin cannot call, and nothing fails. A pure string union, so this
+// costs the browser nothing.
+export type { RouteMethod } from "./plugins/routes/route-types";
+
+// And what may travel as one of those routes' bodies. Published here for the
+// same reason: the admin's client serialises with `JSON.stringify`, so a value
+// outside this set is not sent as written — a `Date` becomes a string, a `Map`
+// or `FormData` becomes `{}`, a function is dropped, a bigint throws. Stating
+// the set makes the compiler refuse those where the author can still see what
+// they meant.
+export type { JsonValue } from "./plugins/admin-contributions";
+
+// And what a plugin route may have to say about a write that already
+// committed. Published here for the same reason the two above are: a plugin
+// route reporting a post-commit hook failure and the plugin UI reading that
+// report are two halves of one package, and only one of them may load the
+// framework. Without a shared name the browser half either restates the shape
+// -- a second definition that drifts the first time a field is added -- or
+// types the field as `unknown` and stops being able to say anything about it.
+// A pure interface of strings, so this costs the browser nothing.
+export type { HookWarning } from "./hooks/side-effect-warnings";
 
 // The admin CONTRIBUTION shapes, published so the admin panel can DERIVE its
 // `/admin-meta` types from the declaration the server serializes rather than

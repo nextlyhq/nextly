@@ -52,6 +52,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
@@ -270,15 +271,27 @@ export function BlockToolbar({
    * rather than nothing at all. That sentence is the reason the button stays
    * pressable, and swallowing the press here would take it away.
    */
+  // The SHARED runner map, not a second one.
+  //
+  // 🔴 The dispatch here was a chain of `else if` ending in a bare `else
+  // verbs.delete()`, so a verb added to `ToolbarActionId` and not wired did not
+  // fail to compile — it fell through and DELETED the block the author had
+  // selected. Measured: adding an id makes `ICONS` fail with TS2741 and left
+  // the dispatch silent, so the compiler pointed at the icon, a developer
+  // supplied one, and the new button then deleted things.
+  //
+  // Taken from `blockActionRunners` rather than written again here. A second
+  // exhaustive record makes the compiler demand an entry in BOTH and prove
+  // nothing about the two agreeing — this bar could be wired to a different
+  // verb than the palette and the context menu, which is the drift the
+  // exhaustiveness was added to prevent, one level up.
+  const perform = React.useMemo(() => blockActionRunners(verbs), [verbs]);
+
   const run = React.useCallback(
     (action: ToolbarAction) => {
-      if (action.id === "select-parent") verbs.selectParent();
-      else if (action.id === "move-up") verbs.move("up");
-      else if (action.id === "move-down") verbs.move("down");
-      else if (action.id === "duplicate") verbs.duplicate();
-      else verbs.delete();
+      perform[action.id]();
     },
-    [verbs]
+    [perform]
   );
 
   if (hidden || actions.length === 0) return null;

@@ -24,6 +24,25 @@ import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
+/**
+ * What the library route answers, for the one case that cares.
+ *
+ * `undefined` is the ordinary state here — a site with no saved patterns — and
+ * every other case in this file was written against it.
+ */
+let libraryAnswer: { items: unknown[]; meta: unknown } | undefined;
+
+/**
+ * Which panel the shell stub asks for.
+ *
+ * The real shell draws one at a time and calls `renderPanel` only for that one,
+ * so this is how a case says "the author is looking at something else".
+ */
+let shownPanel = "insert";
+
+/** How many times anything asked for a plugin route. */
+let routeReads = 0;
+
 /** Props the recorders captured on the most recent render. */
 const seen: {
   inspector: Record<string, unknown> | undefined;
@@ -113,7 +132,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
          * never mounts and "the panel was given a starter" would be an
          * assertion about a component that was never rendered.
          */}
-        {renderPanel?.("insert")}
+        {renderPanel?.(shownPanel)}
         {children}
       </div>
     ),
@@ -191,6 +210,26 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    */
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
+  /*
+   * The library read. Absent here rather than stubbed with patterns, because
+   * these cases are about other surfaces and an offered pattern would change
+   * what the palette contains. `pending: false` says the read ANSWERED with
+   * nothing, which is the site with an empty library — the state every one of
+   * these cases was written against.
+   */
+  // The library read. Mutable so one case can put a pattern in it: what the
+  // panel is GIVEN is this file's subject, and the tier was unreachable for as
+  // long as the answer never reached the prop.
+  usePluginRoute: () => ({
+    ...(() => {
+      routeReads += 1;
+      return {};
+    })(),
+    data: libraryAnswer,
+    pending: false,
+    error: null,
+    refetch: () => {},
+  }),
   useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
@@ -241,6 +280,11 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // A leaked answer would make the next case's palette offer a pattern it was
+  // not written for.
+  libraryAnswer = undefined;
+  shownPanel = "insert";
+  routeReads = 0;
 });
 
 describe("what makes a palette drag reachable at all", () => {
@@ -290,5 +334,99 @@ describe("what makes a palette drag reachable at all", () => {
     // The same function the drag returned, so a row's press reaches THIS
     // gesture rather than some other callback that merely has the right name.
     expect(seen.insertPanel?.beginInsertDrag).toBe(beginInsertDrag);
+  });
+});
+
+describe("what makes the saved pattern tier reachable at all", () => {
+  it("hands the panel the patterns the library answered with", () => {
+    // The panel has accepted a `patterns` prop since the tier landed, and
+    // nothing supplied one — so an author could save a pattern and never see it
+    // again. Every other assertion in this file stays green with the prop
+    // absent, because the palette still draws its blocks.
+    //
+    // Asserted as IDENTITY with what the read returned, not as "some patterns
+    // arrived": a component that built its own list would satisfy presence.
+    const items = [
+      {
+        id: "hero",
+        title: "Hero",
+        granularity: "section",
+        content: { formatVersion: 1, kind: "pattern", nodes: [] },
+      },
+    ];
+    libraryAnswer = { items, meta: { count: 1, truncated: false } };
+
+    openEditor();
+
+    // Population first: an assertion about `undefined` reads as a passing
+    // wiring check.
+    expect(seen.insertPanel).toBeDefined();
+    expect(seen.insertPanel?.patterns).toBe(items);
+  });
+
+  it("does not offer a PAGE pattern for insertion", () => {
+    // A full-page pattern is a way to start a page, not something to place
+    // after the selected block. `SavedPattern` carries no granularity, so the
+    // panel cannot tell one apart — it would be offered for insertion inside
+    // the page it is meant to be.
+    const section = {
+      id: "hero",
+      title: "Hero",
+      granularity: "section",
+      content: { formatVersion: 1, kind: "pattern", nodes: [] },
+    };
+    const whole = {
+      id: "landing",
+      title: "Landing",
+      granularity: "page",
+      content: { formatVersion: 1, kind: "pattern", nodes: [] },
+    };
+    libraryAnswer = {
+      items: [section, whole],
+      meta: { count: 2, truncated: false },
+    };
+
+    openEditor();
+
+    const offered = seen.insertPanel?.patterns as { id: string }[] | undefined;
+    expect(offered?.map(p => p.id)).toEqual(["hero"]);
+  });
+
+  it("gives it an empty list, not undefined, before the read answers", () => {
+    // The panel builds its catalogue in a memo keyed on this prop, running the
+    // planner's preflight over every pattern in the library. A fresh `[]` each
+    // render is a new identity, so that whole catalogue would rebuild on every
+    // keystroke of the panel's own filter.
+    openEditor();
+    const first = seen.insertPanel?.patterns;
+    cleanup();
+    openEditor();
+
+    expect(first).toEqual([]);
+    expect(seen.insertPanel?.patterns).toBe(first);
+  });
+});
+
+describe("what the editor reads before anyone asks for it", () => {
+  it("does not read the library while another panel is open", () => {
+    // Reading in the editor's own body fetched every saved pattern document on
+    // every editor mount — for authors who open Layers, or Tokens, or no panel
+    // at all, and never visit Insert. The library is the panel's data, so the
+    // panel's mount is when it is asked for.
+    shownPanel = "layers";
+
+    openEditor();
+
+    expect(routeReads).toBe(0);
+  });
+
+  it("reads it once the insert panel is the one on screen", () => {
+    // The control. Without it the assertion above is satisfied by a hook that
+    // never reads at all, which is the tier being unreachable again.
+    shownPanel = "insert";
+
+    openEditor();
+
+    expect(routeReads).toBeGreaterThan(0);
   });
 });

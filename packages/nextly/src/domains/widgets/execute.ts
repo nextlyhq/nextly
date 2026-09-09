@@ -112,6 +112,41 @@ async function runCount(
 }
 
 /**
+ * How many rows carry each distinct value of the query's group key.
+ *
+ * Reaches the row set through the same `sharedReadArgs` a count does, and the
+ * domain that owns the rows resolves that set once for both. Nothing about
+ * access is decided here.
+ *
+ * `truncated` is forwarded only when true, so a whole answer carries no field
+ * at all rather than a `false` a reader has to interpret.
+ */
+async function runGroupBy(
+  collection: string,
+  query: WidgetQuery,
+  caller: ReadCaller
+): Promise<WidgetResult> {
+  // `validateWidgetQuery` refuses a `groupBy` op without a key, so by the time
+  // a query reaches execution the key is present. The fallback keeps that
+  // assumption from becoming an unchecked cast.
+  const groupBy = query.groupBy ?? "";
+  const result = await getNextly().group({
+    collection,
+    groupBy,
+    // The query's own limit bounds the BUCKETS, which is what a limit means for
+    // a grouped read: `validateWidgetQuery` clamps it and defaults it, so
+    // ignoring it here let a card asking for two categories receive fifty.
+    bucketLimit: query.limit,
+    ...sharedReadArgs(query, caller),
+  });
+  return {
+    op: "groupBy",
+    buckets: result.buckets,
+    ...(result.truncated ? { truncated: true } : {}),
+  };
+}
+
+/**
  * The columns a caller may actually see, paired with the source's label.
  *
  * Derived from the ROWS that came back, not from the source declaration alone,
@@ -211,6 +246,7 @@ export async function executeWidgetQuery(
 
   if (query.op === "count") return runCount(collection, query, caller);
   if (query.op === "list") return runList(collection, query, caller, source);
+  if (query.op === "groupBy") return runGroupBy(collection, query, caller);
 
   // Same refusal as every other source/op dead end, for the same reason: this
   // one is reachable only for an op a source DECLARED support for, so a

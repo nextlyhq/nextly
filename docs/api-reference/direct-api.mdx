@@ -14,7 +14,9 @@ Import `getNextly` (or the lazy `nextly` convenience object) from the runtime pa
 ```typescript title="app/posts/page.tsx"
 import { getNextly } from "nextly";
 
-const nextly = getNextly();
+import config from "../../nextly.config";
+
+const nextly = await getNextly({ config });
 
 const result = await nextly.find({
   collection: "posts",
@@ -35,7 +37,7 @@ import { nextly } from "nextly";
 const posts = await nextly.find({ collection: "posts", limit: 10 });
 ```
 
-`getNextly()` and `nextly` are equivalent — pick whichever reads better. Both throw if the runtime services have not yet been initialised (this happens automatically when your Next.js route handler boots through `createDynamicHandlers`).
+`getNextly({ config })` and `nextly` reach the same singleton. `getNextly` takes your loaded config and can initialise the runtime itself, so it is safe to call from anywhere; `nextly` is the lighter import for code that runs after initialisation, and throws if nothing has initialised the runtime yet (this happens automatically when your Next.js route handler boots through `createDynamicHandlers`).
 
 ## TypeScript support
 
@@ -217,7 +219,7 @@ const archived = await nextly.update({
 
 ### delete
 
-Delete by ID or by `where`. The two paths return different shapes because a multi-row delete cannot collapse into a single mutation envelope:
+Delete by ID or by `where`. The two paths return different shapes because a multi-row delete cannot collapse into a single mutation envelope, and the return type is the union either way — narrow it before reading a path-specific field:
 
 ```typescript
 // By ID — returns MutationResult<{ id }>
@@ -225,15 +227,21 @@ const deleted = await nextly.delete({
   collection: "posts",
   id: "abc-123",
 });
-deleted.message; // "Posts deleted."
-deleted.item.id; // "abc-123"
+
+if ("item" in deleted) {
+  deleted.message; // "Posts deleted."
+  deleted.item.id; // "abc-123"
+}
 
 // By where — returns DeleteResult ({ deleted: boolean, ids: string[] })
 const archived = await nextly.delete({
   collection: "posts",
   where: { status: { equals: "archived" } },
 });
-console.log("Deleted IDs:", archived.ids);
+
+if ("ids" in archived) {
+  console.log("Deleted IDs:", archived.ids);
+}
 ```
 
 | Argument | Type | Default | Description |
@@ -704,25 +712,28 @@ Every Direct API failure throws a single `NextlyError` class. The error carries 
 ```typescript
 import { NextlyError } from "nextly";
 
-try {
-  const post = await nextly.findByID({ collection: "posts", id: "missing" });
-} catch (err) {
-  if (NextlyError.isNotFound(err)) {
-    // 404
-    return null;
-  }
-  if (NextlyError.isValidation(err)) {
-    // 400 — err.publicData.errors carries [{ path, code, message }]
-    console.log(err.publicData);
+async function getPost() {
+  try {
+    const post = await nextly.findByID({ collection: "posts", id: "missing" });
+    return post;
+  } catch (err) {
+    if (NextlyError.isNotFound(err)) {
+      // 404
+      return null;
+    }
+    if (NextlyError.isValidation(err)) {
+      // 400 — err.publicData.errors carries [{ path, code, message }]
+      console.log(err.publicData);
+      throw err;
+    }
+    if (NextlyError.isAuthRequired(err)) {
+      // 401
+    }
+    if (NextlyError.isForbidden(err)) {
+      // 403
+    }
     throw err;
   }
-  if (NextlyError.isAuthRequired(err)) {
-    // 401
-  }
-  if (NextlyError.isForbidden(err)) {
-    // 403
-  }
-  throw err;
 }
 ```
 
@@ -737,13 +748,15 @@ The same `NextlyError` is what the route handler serialises into the HTTP error 
 ```typescript title="app/blog/page.tsx"
 import { getNextly } from "nextly";
 
+import config from "../../nextly.config";
+
 export default async function BlogPage({
   searchParams,
 }: {
   searchParams: Promise<{ page?: string }>;
 }) {
   const { page } = await searchParams;
-  const nextly = getNextly();
+  const nextly = await getNextly({ config });
 
   const result = await nextly.find({
     collection: "posts",

@@ -12,8 +12,9 @@
 import { NextlyError } from "../../errors/nextly-error";
 
 import { requiredPermissionSlugs } from "./gate";
-import type { WidgetQuery } from "./query";
+import type { WidgetQuery, WidgetQuerySpec } from "./query";
 import { validateWidgetSettings, type WidgetSetting } from "./settings";
+import type { WidgetOp } from "./sources";
 
 /*
  * Re-exported from the contract's home so a caller reading a definition finds
@@ -126,6 +127,29 @@ const DATA_ARCHETYPE_SET: ReadonlySet<WidgetArchetype> = new Set(
 );
 
 /**
+ * The result each data archetype knows how to draw.
+ *
+ * Declared rather than left to the renderer, because the renderer discovers a
+ * mismatch too late to say anything useful: a `metric` handed buckets returns
+ * an "expected a count" body, so the card is drawn as an error on every load
+ * while the declaration that caused it looks fine. Registration is where an
+ * author can still be told which archetype takes which result.
+ *
+ * `custom` is deliberately absent. Its component receives the result whole and
+ * decides what to draw, so constraining it here would be this file guessing at
+ * a plugin's intent -- and the flexibility to draw something new from a new op
+ * is the reason that archetype exists.
+ */
+const ARCHETYPE_RESULTS: ReadonlyMap<
+  DataWidgetArchetype,
+  ReadonlySet<WidgetOp>
+> = new Map([
+  ["metric", new Set<WidgetOp>(["count"])],
+  ["table", new Set<WidgetOp>(["list"])],
+  ["list", new Set<WidgetOp>(["list"])],
+]);
+
+/**
  * How many numbers one `stats` card may declare.
  *
  * A bound rather than a style note. Each cell is its OWN count query, so a card
@@ -164,7 +188,13 @@ export interface WidgetStatCell {
    * muted dash forever -- a declaration mistake wearing the appearance of
    * unavailable data, which is the one reading nobody investigates.
    */
-  query: WidgetQuery & { op: "count" };
+  /**
+   * `groupBy?: never` alongside the op, because `groupBy` is optional on
+   * `WidgetQuery`: the intersection pins the op and would still have accepted
+   * a group key beside it, which the registration check does not look at and
+   * the executor would drop.
+   */
+  query: WidgetQuery & { op: "count"; groupBy?: never };
   /** Where this number navigates. A cell without one draws as plain text. */
   link?: { label: string; href: string };
 }
@@ -271,8 +301,14 @@ export interface WidgetDefinition {
    * shortcut rather than a card, and nothing has asked it for more.
    */
   requiredPermission?: string | readonly string[];
-  /** Required for every data archetype; forbidden for `text` and `actions`. */
-  query?: WidgetQuery;
+  /**
+   * Required for every data archetype; forbidden for `text` and `actions`.
+   *
+   * Typed as {@link WidgetQuerySpec} so a declaration pairing `groupBy` with an
+   * op that ignores it, or a `groupBy` op carrying no key, fails to compile
+   * rather than booting and failing on every request the card makes.
+   */
+  query?: WidgetQuerySpec;
   /** Required for `custom`; forbidden otherwise. */
   component?: string;
   /** Required for `actions`; forbidden otherwise. */
@@ -1071,6 +1107,28 @@ function validateCells(d: Partial<WidgetDefinition>): void {
   if (problem !== undefined) fail(`${d.id}: ${problem}`);
 }
 
+/**
+ * Why an archetype cannot draw the result its query would return, if it cannot.
+ *
+ * Answers a reason rather than throwing, like {@link querylessQueryProblem}
+ * beside it, so the caller attaches the widget id once for every rule.
+ */
+export function archetypeResultProblem(
+  archetype: WidgetArchetype,
+  query: WidgetQuerySpec | undefined
+): string | undefined {
+  // A Map, not an object literal. A contribution's archetype is caller text,
+  // and `"toString"` or `"constructor"` indexes an object literal to something
+  // inherited rather than to `undefined` — the same hole this file's group-key
+  // sibling had, so it gets the container that cannot have it.
+  const drawable = ARCHETYPE_RESULTS.get(archetype as DataWidgetArchetype);
+  if (!drawable || !query?.op || drawable.has(query.op)) return undefined;
+  return (
+    `archetype "${archetype}" draws a ${[...drawable].join(" or ")} result, ` +
+    `so it cannot use op "${query.op}"`
+  );
+}
+
 function validateQuery(d: Partial<WidgetDefinition>): void {
   const archetype = d.archetype as WidgetArchetype;
   if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
@@ -1084,6 +1142,8 @@ function validateQuery(d: Partial<WidgetDefinition>): void {
       `${d.id}: archetype "${d.archetype}" draws from cells, so it takes no top-level query`
     );
   }
+  const mismatch = archetypeResultProblem(archetype, d.query);
+  if (mismatch !== undefined) fail(`${d.id}: ${mismatch}`);
   const problem = querylessQueryProblem(archetype, d.query);
   if (problem !== undefined) fail(`${d.id}: ${problem}`);
 }

@@ -305,6 +305,39 @@ describe("walkNodes / findNode / locateNode", () => {
   });
 });
 
+describe("an entry reflection cannot classify", () => {
+  /** A Proxy that answers nothing at all — every trap throws once revoked. */
+  function revoked(): BlockNode {
+    const { proxy, revoke } = Proxy.revocable(makeNode("core/box", 1, {}), {});
+    revoke();
+    return proxy as BlockNode;
+  }
+
+  it("is not handed to the callback as though it were a node", () => {
+    // `Array.isArray` THROWS on a revoked Proxy, so classifying an entry is
+    // itself a reflection that can fail. Reading that failure as "not a list"
+    // makes it "an object, then" — and every caller's next move is to read a
+    // field off it.
+    let handed = 0;
+    expect(() =>
+      walkNodes([revoked(), makeNode("core/box", 1, {})], () => {
+        handed += 1;
+      })
+    ).not.toThrow();
+    expect(handed).toBe(1);
+  });
+
+  it("does not take a lookup down on its way past", () => {
+    // Ordered so the walk MUST pass the revoked entry before reaching what it
+    // is looking for. With it last the search stops early and this passes
+    // whatever the classification does.
+    const wanted = makeNode("core/box", 1, {});
+    const forest = [revoked(), wanted];
+
+    expect(findNode(forest, wanted.id)).toBe(wanted);
+  });
+});
+
 describe("a forest whose slots form a cycle", () => {
   // A cycle reaches these primitives the same way every other malformed shape
   // does: persisted documents are not required to have been validated, and an

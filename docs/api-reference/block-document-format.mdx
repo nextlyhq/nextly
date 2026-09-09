@@ -32,6 +32,8 @@ legacy page-builder canvas has already saved.
 ```ts
 import { parseBlockDocument } from "nextly";
 
+declare const value: unknown; // the document you did not write
+
 const result = parseBlockDocument(value);
 if (!result.success) {
   console.error(result.issues);

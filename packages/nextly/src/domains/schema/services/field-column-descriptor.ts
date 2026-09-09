@@ -419,7 +419,17 @@ export function isTextStorageKind(kind: ColumnKind): boolean {
  * "promote relationship to JSON" rule lives here too; previously
  * `build-from-fields.ts` ignored it and shipped wrong types.
  */
-function classifyFieldKind(
+/**
+ * The column kind a field produces, which is the canonical answer to what its
+ * storage is — `json` for anything structured, `skip` for a field that keeps
+ * its values in another table.
+ *
+ * Exported so a caller asking "can this field be grouped" reads the same
+ * classification the DDL is built from, rather than keeping a list of type
+ * names beside it. A plugin field type declaring `storage: "json"` is mapped
+ * here and would be invisible to such a list.
+ */
+export function classifyFieldKind(
   field: FieldDefinition,
   builtBy: ColumnOrigin
 ): ColumnKind {

@@ -822,6 +822,18 @@ export class CollectionsHandler {
   }
 
   /**
+   * How many rows carry each distinct value of one field.
+   *
+   * @param params - Collection name, the field to group by, and the same
+   * filters a count accepts
+   */
+  async groupEntries(
+    params: Parameters<CollectionEntryService["groupEntries"]>[0]
+  ): ReturnType<CollectionEntryService["groupEntries"]> {
+    return this.entryService.groupEntries(params);
+  }
+
+  /**
    * Update an existing entry.
    * @param params - Collection name, entry ID, optional user ID, and optional depth for relationship population
    * @param body - Update data

@@ -381,8 +381,12 @@ describe("chrome decides whether the HOST frames the widget", () => {
     // which rule refused.
     for (const [archetype, extra] of [
       ["metric", { query: { source: "collection:posts", op: "count" } }],
-      ["list", { query: { source: "collection:posts", op: "find" } }],
-      ["table", { query: { source: "collection:posts", op: "find" } }],
+      // `list`, not `find`: these two archetypes draw a list result, and the
+      // op was never validated against the archetype until now, so the wrong
+      // spelling sat here harmlessly. It refuses on the op before reaching the
+      // chrome rule this case is about.
+      ["list", { query: { source: "collection:posts", op: "list" } }],
+      ["table", { query: { source: "collection:posts", op: "list" } }],
       ["actions", { actions: [{ label: "New", href: "/admin/users/create" }] }],
       ["text", {}],
     ] as const) {
@@ -601,5 +605,52 @@ describe("a stats widget draws from cells, not from one query", () => {
         cells: [{ key: "a", label: "A" }],
       })
     ).toThrow(/requires a query object/);
+  });
+});
+
+describe("an archetype draws one kind of result", () => {
+  it("refuses a metric declared with a grouped query", () => {
+    // Registration is the last point an author can be told. Accepted, the card
+    // executes successfully and the admin's metric body replaces it with an
+    // "expected a count" error on every load -- a declaration mistake wearing
+    // the appearance of a broken server.
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/x",
+        title: "X",
+        defaultSize: "lg",
+        archetype: "metric",
+        query: { source: "collection:posts", op: "groupBy", groupBy: "status" },
+      })
+    ).toThrow(/cannot use op "groupBy"/);
+  });
+
+  it("refuses a list declared with a count", () => {
+    // The mirror, so the rule is not satisfied by refusing one op everywhere.
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/x",
+        title: "X",
+        defaultSize: "lg",
+        archetype: "list",
+        query: { source: "collection:posts", op: "count" },
+      })
+    ).toThrow(/cannot use op "count"/);
+  });
+
+  it("leaves a custom widget free to draw whatever its component draws", () => {
+    // The flexibility that archetype exists for: its component receives the
+    // result whole, so constraining the op here would be this file guessing at
+    // a plugin's intent.
+    expect(() =>
+      validateWidgetDefinition({
+        id: "plugin/x",
+        title: "X",
+        defaultSize: "lg",
+        archetype: "custom",
+        component: "plugin/x/Body",
+        query: { source: "collection:posts", op: "groupBy", groupBy: "status" },
+      })
+    ).not.toThrow();
   });
 });

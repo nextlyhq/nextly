@@ -260,6 +260,27 @@ export type {
   BulkAction,
 } from "./components/ui/table/data-table";
 
+// A plugin's own admin UI reading a route that plugin contributed. The two
+// halves of a plugin — its HTTP routes and its admin components — had no way to
+// reach each other: the SDK exported no route client, so an author's choice was
+// to hand-roll auth and error parsing or to read something else instead.
+// Through `protectedApi` and TanStack Query, so the session, its refresh and
+// the typed error envelope are the ones the rest of the admin uses.
+export { usePluginRoute } from "@admin/hooks/queries/usePluginRoute";
+export type {
+  PluginRouteRead,
+  PluginRouteRequest,
+} from "@admin/hooks/queries/usePluginRoute";
+// The WRITE half of the same seam. A plugin could read its own route and not
+// write to it, so a feature that saves something had to hand-roll the session
+// and the error envelope after all.
+export { usePluginRouteMutation } from "@admin/hooks/queries/usePluginRouteMutation";
+export type {
+  PluginRouteMethod,
+  PluginRouteWrite,
+  PluginRouteWriter,
+} from "@admin/hooks/queries/usePluginRouteMutation";
+
 // Field-UI kit — controlled, form-library-agnostic field-building components
 // (type picker, options editor, default-value input, condition row) rendered
 // from the shared `nextly/field-catalog`. Author surface re-exported by

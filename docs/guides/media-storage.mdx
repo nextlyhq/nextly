@@ -379,14 +379,19 @@ The list endpoint is permission-gated by `read-settings`; mutation endpoints req
 
 ### Using sizes from your frontend
 
-The media API response includes every generated variant under `sizes`:
+A media file carries its generated variants under `sizes`, keyed by the name you
+configured. It does so however you read it: populated as a relationship on an entry
+or a single, fetched on its own with `media.findByID()`, or returned by
+`GET /api/media/:id`.
 
 ```json
 {
   "id": "abc-123",
-  "url": "/uploads/2026/04/photo.jpg",
+  "url": "https://example.com/uploads/2026/04/photo.jpg",
   "width": 3000,
   "height": 2000,
+  "focalX": 50,
+  "focalY": 50,
   "sizes": {
     "thumbnail": { "url": "...", "width": 150, "height": 150 },
     "medium": { "url": "...", "width": 768, "height": 512 },
@@ -395,21 +400,64 @@ The media API response includes every generated variant under `sizes`:
 }
 ```
 
-With `next/image`:
+Every URL in that response is absolute, the variants included, so a mobile client
+or an edge worker can resolve one without knowing where your storage adapter puts
+things. `sizes` is `null` for a file with no variants: a non-image, or an image
+uploaded before you configured any size.
+
+Select one with `getMediaVariant`, which asks for a name, tries your fallback name
+next, then `thumbnailUrl`, then the original:
 
 ```tsx
+// app/(site)/media-image.tsx
 import Image from "next/image";
+import { getMediaVariant, type MediaLike } from "nextly";
 
-const media = await nextly.media.findByID({ id: "abc-123" });
-const large = media?.sizes?.large;
-
-<Image
-  src={large?.url ?? media!.url}
-  width={large?.width ?? media!.width}
-  height={large?.height ?? media!.height}
-  alt={media?.altText ?? ""}
-/>
+export function MediaImage({ media, alt }: { media: MediaLike; alt: string }) {
+  return (
+    <Image
+      src={getMediaVariant(media, "large", { fallback: "medium" }) ?? media.url}
+      alt={alt}
+      width={1200}
+      height={800}
+    />
+  );
+}
 ```
+
+Hand it either kind of media value. `MediaLike` is the narrow shape the helper needs,
+and both a populated relationship and a `MediaFile` satisfy it.
+
+Reading a media record on its own is still a `findByID`, and it still needs a runtime:
+
+```tsx
+// app/(site)/photo/page.tsx
+import Image from "next/image";
+import { getNextly } from "nextly";
+
+import config from "../../../nextly.config";
+
+export default async function Photo() {
+  const nextly = await getNextly({ config });
+  const media = await nextly.media.findByID({ id: "abc-123" });
+  if (!media) return null;
+
+  return (
+    <Image
+      src={media.url}
+      width={media.width ?? 1200}
+      height={media.height ?? 800}
+      alt={media.altText ?? ""}
+    />
+  );
+}
+```
+
+`getNextly({ config })` initialises the runtime if nothing has yet, so this page works
+wherever it renders. The synchronous proxy from `nextly/runtime` assumes an already
+initialised process and throws `Nextly services not initialized` when it is the first
+Nextly code a worker runs, which a blank scaffold makes likely because it ships no
+`instrumentation.ts`.
 
 ## Crop point (focal point)
 
@@ -418,11 +466,37 @@ Each media record can carry a focal point that controls how `"cover"` crops beha
 Use them with CSS `object-position` for responsive cropping:
 
 ```tsx
-<img
-  src={media.url}
-  style={{ objectFit: "cover", objectPosition: `${media.focalX}% ${media.focalY}%` }}
-/>
+// app/(site)/cover.tsx
+import Image from "next/image";
+
+export function Cover({
+  url,
+  focalX,
+  focalY,
+  alt,
+}: {
+  url: string;
+  focalX: number;
+  focalY: number;
+  alt: string;
+}) {
+  return (
+    <Image
+      src={url}
+      alt={alt}
+      fill
+      style={{
+        objectFit: "cover",
+        objectPosition: `${focalX}% ${focalY}%`,
+      }}
+    />
+  );
+}
 ```
+
+The component takes the two values rather than a whole media record, because
+`media.findByID()` does not return them today: `MediaFile` has no `focalX` or `focalY`,
+so read the crop point from the media row until it does.
 
 ## Environment variables
 

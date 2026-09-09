@@ -28,6 +28,7 @@
 import { defineCollection, select, text, textarea } from "nextly/config";
 
 import { blocks } from "../fields/blocksHelper";
+import { PATTERN_GRANULARITIES } from "../library-contract";
 
 /** The slug patterns are stored under. */
 export const PATTERNS_SLUG = "patterns";
@@ -35,17 +36,12 @@ export const PATTERNS_SLUG = "patterns";
 /**
  * How much of a page one pattern covers.
  *
- * A closed set rather than free text, because it is a FACET: the browser
- * filters on it and a full-page pattern is offered as a way to start a page
- * rather than as something to insert into one. Free text would put the two
- * behaviours behind a string nobody spells the same way twice.
+ * RE-EXPORTED from the wire contract, which is where it has to live: the insert
+ * surface runs in a browser and cannot load this module, because the field
+ * helpers above reach the framework. One vocabulary, read by the collection
+ * that stores it and the panel that filters on it.
  */
-export const PATTERN_GRANULARITIES = [
-  "element",
-  "group",
-  "section",
-  "page",
-] as const;
+export { PATTERN_GRANULARITIES };
 
 /**
  * The plugin-owned `patterns` collection.

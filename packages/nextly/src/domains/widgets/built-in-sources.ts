@@ -294,7 +294,12 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
     // path answers. Advisory only -- see `WidgetSource.requiredPermission`
     // for why nothing enforces it.
     requiredPermission: `read-${collection.slug}`,
-    supports: ["count", "list"],
+    // `groupBy` alongside them because a collection source is the one kind
+    // whose rows go through the read pipeline that can settle an aggregate
+    // against the caller's own access. A system source answers from its own
+    // service and would have to implement grouping itself, so it does not
+    // declare support here and is refused by name.
+    supports: ["count", "list", "groupBy"],
     fields,
   };
 }

@@ -49,6 +49,8 @@ at the default:
 
 ```ts
 // nextly.config.ts
+import { defineConfig } from "nextly";
+
 export default defineConfig({
   preview: { route: "/next/preview" },
 });
@@ -65,6 +67,7 @@ to put it.
 This is the step most easily missed, and its failure is the most confusing.
 
 ```ts
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { previewDraftGate } from "nextly/runtime";
 
 const { ContentPage, generateMetadata } = createBlocksPage({
@@ -116,6 +119,8 @@ Nextly cannot work out a URL on its own. If a post has the slug
 **Code-first**, a function of the entry:
 
 ```ts
+import { defineCollection } from "nextly";
+
 export const Posts = defineCollection({
   slug: "posts",
   status: true,

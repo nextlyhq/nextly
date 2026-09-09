@@ -465,6 +465,59 @@ export { useUploadMedia } from "@nextlyhq/admin";
 export { usePluginClientConfig } from "@nextlyhq/admin";
 
 /**
+ * @experimental Read a route this plugin contributed, from this plugin's own
+ * admin components.
+ *
+ * The two halves of a plugin could not reach each other: a plugin may serve an
+ * HTTP route and may render admin components, and there was no client for the
+ * second to call the first with. An author's choice was to hand-roll the
+ * session, its refresh and the error envelope, or to read something else.
+ *
+ * The path is built from the plugin's package NAME through the dispatcher's own
+ * `pluginRouteFullPath`, so a caller cannot address a namespace the server does
+ * not serve — a mistake that does not raise, because a request to a path
+ * nothing serves answers with nothing and reads as an empty result.
+ *
+ * The plugin names ITSELF. There is no ambient plugin identity in the admin: a
+ * component is rendered through a registry by string path, so nothing in its
+ * React context says which plugin contributed it — which is why
+ * `usePluginClientConfig` takes the name too.
+ *
+ * `pending` is a REAL third state beside the data. `undefined` is both "the
+ * route answered nothing" and "the route has not answered", and a surface that
+ * cannot tell them apart draws its empty state over a read in flight.
+ */
+export { usePluginRoute } from "@nextlyhq/admin";
+
+/**
+ * @experimental Write to a route this plugin contributed.
+ *
+ * The other half of `usePluginRoute`, and it was the missing half: a plugin
+ * could READ its own route and had nothing to write to it with, so any feature
+ * that saved something was back to hand-rolling the session, its refresh and
+ * the error envelope — the exact problem the read hook was added to remove.
+ *
+ * The plugin names ITSELF here too, for the same reason, and `invalidates`
+ * names the plugin's own read paths so a save refreshes the list it belongs in.
+ * Those paths are resolved through this plugin's name, so one plugin cannot
+ * invalidate another's cached reads however it spells a path.
+ *
+ * `write` RESOLVES on failure rather than rejecting, answering `undefined`, and
+ * reports the cause on `error`. A rejecting promise is the idiomatic TanStack
+ * shape and a footgun on a surface handed to plugin authors: a caller who does
+ * not wrap the await gets an unhandled rejection for a failure already
+ * reported. It is the same shape the read hook has, so there is one thing to
+ * learn rather than two.
+ */
+export { usePluginRouteMutation } from "@nextlyhq/admin";
+export type {
+  PluginRouteMethod,
+  PluginRouteWrite,
+  PluginRouteWriter,
+} from "@nextlyhq/admin";
+export type { PluginRouteRead, PluginRouteRequest } from "@nextlyhq/admin";
+
+/**
  * @experimental Read and write a Single this plugin owns, through the same
  * client the admin's own Single form uses.
  *
