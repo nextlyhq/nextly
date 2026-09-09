@@ -146,13 +146,26 @@ function moveAction(
 /**
  * What an author is told when they hold no grant to save a pattern.
  *
+ * Names the OPERATION the author attempted, not a permission. Saving needs more
+ * than one grant — the pattern is stored and published in the same act — so a
+ * message naming any single one is wrong for somebody: an author who may create
+ * a pattern but not publish it would be told they cannot create, and would go
+ * and ask for the grant they already hold. "Save" is also the word on the
+ * control they pressed, which is the thing they can describe when they ask.
+ *
+ * Which grant is missing is deliberately NOT reported. The answer arrives as
+ * one boolean because that is the question the verb asks, and a message
+ * enumerating server-side permission names would tie this copy to slugs the
+ * browser has no other reason to know — the same coupling the resolved-slug
+ * lookup exists to avoid.
+ *
  * ONE string, exported, because two surfaces say it: this list, which dims the
  * control and titles it, and the runner in `keyboard-actions`, which announces
  * it when a dimmed control is pressed anyway. Written twice they would drift,
  * and the drift would be invisible — each reads correctly on its own.
  */
 export const SAVE_PATTERN_GRANT_REFUSAL =
-  "You do not have permission to create patterns.";
+  "You do not have permission to save patterns.";
 
 function saveAction(
   document: BlockDocument,

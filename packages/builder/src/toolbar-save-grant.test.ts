@@ -47,6 +47,16 @@ describe("save as pattern, and the grant behind it", () => {
     });
   });
 
+  it("names the OPERATION refused, not one of the grants it needs", () => {
+    // Saving takes more than one grant — the pattern is stored and published in
+    // the same act — so a message naming any single one is wrong for somebody.
+    // An author who may create a pattern but not publish it, told they cannot
+    // "create", would ask for the grant they already hold.
+    const reason = (save(["a"], false) as { reason: string }).reason;
+    expect(reason).toMatch(/save/i);
+    expect(reason).not.toMatch(/create/i);
+  });
+
   it("refuses a multi-block selection on the same grant", () => {
     // The set path builds its verbs separately, so a grant threaded through one
     // and not the other leaves the toolbar refusing a single block and offering
