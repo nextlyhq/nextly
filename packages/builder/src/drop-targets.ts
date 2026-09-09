@@ -70,7 +70,11 @@ import type {
 } from "@nextlyhq/blocks-engine";
 
 import type { Point, Rect } from "./geometry";
-import { blockAllowedAt, type InsertTarget, type SlotSource } from "./inserter";
+import {
+  blockAllowedAt,
+  type PlacementTarget,
+  type SlotSource,
+} from "./inserter";
 import type { OpPosition } from "./ops";
 
 /**
@@ -113,7 +117,7 @@ export interface DropRegion {
   /** Stable identity: {@link ROOT_REGION}, or `"<parentId>::<slot>"`. */
   readonly id: string;
   /** What this region is, as the nesting rule needs to see it. */
-  readonly at: InsertTarget;
+  readonly at: PlacementTarget;
   /** The container node, absent for the root region. */
   readonly parentId?: string;
   /** The slot within that container, absent for the root region. */
@@ -151,7 +155,7 @@ export interface DropTarget {
   /** Where the block goes. */
   readonly at: OpPosition;
   /** What that position is, for the nesting rule. */
-  readonly target: InsertTarget;
+  readonly target: PlacementTarget;
   /** The axis children are separated along. */
   readonly axis: DropAxis;
   /**
@@ -298,7 +302,7 @@ export function collectRegions(
           .filter((child): child is Rect => child !== undefined);
         regions.push({
           id: `${node.id}::${slot}`,
-          at: { at: "slot", parentType: node.type, slot },
+          at: { kind: "slot", parentType: node.type, slot },
           parentId: node.id,
           slot,
           depth,
@@ -317,7 +321,7 @@ export function collectRegions(
 
   regions.push({
     id: ROOT_REGION,
-    at: { at: "root" },
+    at: { kind: "root" },
     depth: 0,
     rect: rects.rootRect(),
     axis: axisOfRects(rootChildRects),
