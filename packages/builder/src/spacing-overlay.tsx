@@ -506,6 +506,25 @@ function sameSubject(
   );
 }
 
+/**
+ * One document's probe answers, made on the first probe that needs them.
+ *
+ * Lifted out of `measure` rather than inlined there: the measurement is already
+ * the longest thing in this file, and the question "has this document been
+ * probed before" is a whole one that reads better with a name than as another
+ * branch inside a function about geometry.
+ */
+function answersFor(
+  probed: WeakMap<EditorState["document"], Map<string, boolean>>,
+  document: EditorState["document"]
+): Map<string, boolean> {
+  const known = probed.get(document);
+  if (known !== undefined) return known;
+  const fresh = new Map<string, boolean>();
+  probed.set(document, fresh);
+  return fresh;
+}
+
 export function SpacingOverlay({
   editor,
   hidden = false,
@@ -693,13 +712,10 @@ export function SpacingOverlay({
     const rootPainted = canvasPaintedScale(root);
 
     /*
-     * THIS document's answers, created on the first probe that needs them. The
-     * measurement reads them in a layout effect, so the entry is made where the
-     * measurement happens rather than during render.
+     * THIS document's answers. The measurement runs in a layout effect, so the
+     * entry is made where the measuring happens rather than during render.
      */
-    const cached = responds.current.get(document);
-    const answers = cached ?? new Map<string, boolean>();
-    if (cached === undefined) responds.current.set(document, answers);
+    const answers = answersFor(responds.current, document);
 
     /** This node's answer for one box and side, probed once and remembered. */
     const outwardFor = (box: SpacingBox, side: SpacingSide): boolean => {
