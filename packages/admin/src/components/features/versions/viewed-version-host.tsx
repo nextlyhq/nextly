@@ -254,22 +254,20 @@ function VersionAwareToolbarSlots({
   historicalValues: Record<string, unknown> | null;
 }) {
   return (
-    <>
-      <EntryFormToolbarSlots
-        context={context}
-        controllerField={controllerField}
-        writesHeld={writesHeld}
-        value={
-          controllerField !== undefined
-            ? historicalToolbarValue(
-                historicalValues,
-                viewingVersion,
-                controllerField
-              )
-            : undefined
-        }
-      />
-    </>
+    <EntryFormToolbarSlots
+      context={context}
+      controllerField={controllerField}
+      writesHeld={writesHeld}
+      value={
+        controllerField !== undefined
+          ? historicalToolbarValue(
+              historicalValues,
+              viewingVersion,
+              controllerField
+            )
+          : undefined
+      }
+    />
   );
 }
 

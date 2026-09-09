@@ -565,12 +565,9 @@ export function useEntryForm({
       mode,
 
       entry?.id,
-
       createMutation,
-
       updateMutation,
       isSubmitting,
-
       onSuccess,
       onError,
       blankPasswordFields,
@@ -603,8 +600,17 @@ export function useEntryForm({
     }
     // Discard is a write like any other: the same latch the submit gate holds
     // keeps a save started in the same turn from running concurrently, whose
-    // completion order would otherwise decide the working-draft state.
-    if (isSubmitting || submissionLatch.current) return;
+    // completion order would otherwise decide the working-draft state. A
+    // latched call is REFUSED, not queued silently — every other path here
+    // rejects so the awaiting confirm dialog stays open with its retry
+    // context, and a refused discard must not close it as though it landed.
+    if (isSubmitting || submissionLatch.current) {
+      const latchedError = new Error(
+        "A save is already in progress — wait for it to finish, then discard again."
+      );
+      onError?.(latchedError);
+      throw latchedError;
+    }
     submissionLatch.current = true;
     try {
       const result = await discardMutation.mutateAsync();

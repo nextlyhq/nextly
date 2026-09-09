@@ -195,7 +195,7 @@ export interface BlocksFieldProps<
    * that ignores it does not merely look wrong: this one opened a full-screen
    * editor bound to whichever form was nearest, which in a version-history view
    * is the SNAPSHOT'S. Committing there writes into a past version of the
-   * document — `VersionSnapshotForm` states that as impossible in its own
+   * document — `ReadOnlyDocumentForm` states that as impossible in its own
    * docblock, and nothing was enforcing it.
    */
   readOnly?: boolean;

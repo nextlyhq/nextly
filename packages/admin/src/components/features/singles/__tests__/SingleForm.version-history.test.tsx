@@ -32,6 +32,8 @@ const {
   viewed,
   sidebarProps,
   headerProps,
+  languagePanelProps,
+  localizationEnabled,
   useDocumentLock,
   useDocumentAutosave,
   useAutosaveRecovery,
@@ -41,6 +43,10 @@ const {
     current: null as { actionsDisabled?: boolean } | null,
   },
   headerProps: { current: null as { hasUnsavedWork?: boolean } | null },
+  languagePanelProps: {
+    current: null as { actionsDisabled?: boolean } | null,
+  },
+  localizationEnabled: { current: false },
   useDocumentLock: vi.fn(),
   useDocumentAutosave: vi.fn(() => ({ status: "idle", lastSavedAt: null })),
   useAutosaveRecovery: vi.fn<
@@ -83,6 +89,14 @@ vi.mock(
   })
 );
 
+// The language panel is where the withheld-write decision lands for locale
+// actions: a stand-in records what the editor actually handed it.
+vi.mock("@admin/components/features/entries/LanguagePanel", () => ({
+  LanguagePanel: (props: { actionsDisabled?: boolean }) => {
+    languagePanelProps.current = props;
+    return null;
+  },
+}));
 // The header is where the history panel normally mounts and publishes both the
 // chosen version and the restore affordance. Standing in for it lets a test
 // name the arrival state directly, which no fixture of the real panel can.
@@ -107,7 +121,7 @@ vi.mock(
 
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
-    enabled: false,
+    enabled: localizationEnabled.current,
     locales: [],
     defaultLocale: "en",
     fallback: true,
@@ -156,6 +170,8 @@ beforeEach(() => {
   viewed.current = null;
   sidebarProps.current = null;
   headerProps.current = null;
+  languagePanelProps.current = null;
+  localizationEnabled.current = false;
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
     takeOver: vi.fn(),
@@ -276,6 +292,26 @@ describe("SingleForm — a published version replaces the document", () => {
       <SingleForm schema={schema} document={document} onSubmit={vi.fn()} />
     );
     expect(sidebarProps.current?.actionsDisabled).toBe(false);
+  });
+
+  it("withholds the language panel's actions while a version is on screen", () => {
+    localizationEnabled.current = true;
+    renderViewing({
+      versionNo: 7,
+      snapshot: { heroTitle: "as it was" },
+      locale: null,
+      isLoading: false,
+      error: null,
+    });
+    expect(languagePanelProps.current?.actionsDisabled).toBe(true);
+  });
+
+  it("leaves the language panel's actions alone while the live document is on screen", () => {
+    localizationEnabled.current = true;
+    render(
+      <SingleForm schema={schema} document={document} onSubmit={vi.fn()} />
+    );
+    expect(languagePanelProps.current?.actionsDisabled).toBe(false);
   });
 
   it("refuses the native submit path while a version is on screen", async () => {

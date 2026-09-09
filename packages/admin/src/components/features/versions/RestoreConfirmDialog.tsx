@@ -68,19 +68,11 @@ export function RestoreConfirmDialog({
                 held at version {versionNo}
                 {isPublished ? ", and the document is published" : ""}.
               </p>
-              {unsavedChanges ? (
-                <p>
-                  Nothing already saved is lost. The current saved content is
-                  kept as its own version, and restoring records a new one — so
-                  you can undo this by restoring again.
-                </p>
-              ) : (
-                <p>
-                  Nothing is lost. The current content is kept as its own
-                  version, and restoring records a new one — so you can undo
-                  this by restoring again.
-                </p>
-              )}
+              <p>
+                {unsavedChanges
+                  ? "Nothing already saved is lost. The current saved content is kept as its own version, and restoring records a new one — so you can undo this by restoring again."
+                  : "Nothing is lost. The current content is kept as its own version, and restoring records a new one — so you can undo this by restoring again."}
+              </p>
               <p>
                 Values that were never stored in a version, such as passwords,
                 are left as they are.
