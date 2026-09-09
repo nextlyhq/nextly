@@ -259,6 +259,16 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:test-lanes
 
+      # The lane above proves a PACKAGE is run by some lane. Which lane a FILE
+      # lands in is decided by its name alone: the unit config excludes
+      # `*.integration.test.ts` and the integration config claims it. A suite
+      # that boots a real instance under the unit name runs on a 10s budget
+      # sized for jsdom components, against every package turbo is building,
+      # and times out only when the runner is busy.
+      - name: A suite that boots an instance is in the integration lane
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:instance-boot-lane
+
       # The About line and topic list are repository settings, not files, so every
       # check that reads git's index is blind to them. Reports unverifiable rather
       # than failing when the API cannot be reached.
