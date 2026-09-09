@@ -18,7 +18,10 @@
 
 import { readCaller } from "../../api/authenticated-read";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
-import { callerMayPerform } from "../../auth/authenticated-scope";
+import {
+  apiKeyScopeFrom,
+  callerMayPerform,
+} from "../../auth/authenticated-scope";
 import { readAccessCaller } from "../../auth/entity-read-access";
 import type { AuthContext } from "../../auth/middleware";
 
@@ -36,9 +39,7 @@ import type { PluginRouteCaller } from "./route-types";
 export function pluginRouteScope(
   auth: AuthContext
 ): AuthenticatedScope | undefined {
-  return auth.authMethod === "api-key"
-    ? { actorType: "apiKey", permissions: auth.permissions }
-    : undefined;
+  return auth.authMethod === "api-key" ? apiKeyScopeFrom(auth) : undefined;
 }
 
 /**

@@ -16,6 +16,11 @@ import {
 
 // getSession from ../session is a backward-compat wrapper that delegates
 // to the new jose-based session/get-session.ts module internally.
+import {
+  apiKeyScopeFrom,
+  type GrantedPermission,
+  ruleFacingPermissions,
+} from "../authenticated-scope";
 import { getSession } from "../session";
 
 import { authRateLimiter } from "./rate-limiter";
@@ -152,6 +157,13 @@ export interface AuthContext {
   userName?: string;
   userEmail?: string;
   permissions: string[];
+  /**
+   * The permission ROWS behind `permissions`, present only for `api-key`.
+   *
+   * Both spellings a rule or a check may ask for are derived from these, so
+   * they cannot disagree. See {@link GrantedPermission}.
+   */
+  grants?: readonly GrantedPermission[];
   roles: string[];
   authMethod: "session" | "api-key";
   /**
@@ -242,10 +254,14 @@ async function apiKeyRateLimitRefusal(
  * // valid key — apiKeyResult.userId, apiKeyResult.permissions, and apiKeyResult.roles are populated
  * ```
  */
-export async function requireApiKeyAuth(
-  req: Request
-): Promise<
-  | { userId: string; permissions: string[]; roles: string[]; apiKeyId: string }
+export async function requireApiKeyAuth(req: Request): Promise<
+  | {
+      userId: string;
+      permissions: string[];
+      grants: readonly GrantedPermission[];
+      roles: string[];
+      apiKeyId: string;
+    }
   | ErrorResponse
   | null
 > {
@@ -289,8 +305,8 @@ export async function requireApiKeyAuth(
   if (overLimit) return overLimit;
 
   // 5. Resolve effective permissions and roles for this token type
-  const [permissions, roles] = await Promise.all([
-    apiKeyService.resolveApiKeyPermissions(
+  const [grants, roles] = await Promise.all([
+    apiKeyService.resolveApiKeyGrants(
       keyAuth.tokenType,
       keyAuth.roleId,
       keyAuth.userId,
@@ -305,7 +321,13 @@ export async function requireApiKeyAuth(
 
   // The key's own id travels with the result so a write can be attributed to
   // the specific key, not just to the user that owns it.
-  return { userId: keyAuth.userId, permissions, roles, apiKeyId: keyAuth.id };
+  return {
+    userId: keyAuth.userId,
+    permissions: grants.map(grant => grant.slug),
+    grants,
+    roles,
+    apiKeyId: keyAuth.id,
+  };
 }
 
 /**
@@ -398,6 +420,7 @@ export async function requireAuthentication(
   return {
     userId: apiKeyResult.userId,
     permissions: apiKeyResult.permissions,
+    grants: apiKeyResult.grants,
     roles: apiKeyResult.roles,
     authMethod: "api-key",
     apiKeyId: apiKeyResult.apiKeyId,
@@ -613,11 +636,18 @@ async function evaluateCodeAccess(
         );
   }
 
-  // Function — build context with the API key's resolved roles/permissions
+  // Function — build context with the API key's resolved roles/permissions.
+  //
+  // In the RULE spelling. `authResult.permissions` holds the stored slugs
+  // (`read-notes`), and `AccessControlContext.permissions` is documented as
+  // `resource:action` — which `listEffectivePermissions` produces for the
+  // session branch below. Handing a rule the stored form denied every key on
+  // exactly the predicate the documentation shows.
+  const scope = apiKeyScopeFrom(authResult);
   const ctx: AccessControlContext = {
     user: { id: authResult.userId },
-    roles: authResult.roles,
-    permissions: authResult.permissions,
+    roles: [...(scope.roles ?? [])],
+    permissions: ruleFacingPermissions(scope),
     operation,
     collection: resource,
   };

@@ -37,6 +37,7 @@ import { createHash, randomBytes, randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
+import type { GrantedPermission } from "../../../auth/authenticated-scope";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import { apiKeys as apiKeysMysql } from "../../../schemas/api-keys/mysql";
@@ -260,9 +261,32 @@ export function isKeyExpired(expiresAt: Date | null): boolean {
 // an ApiKeyService instance — same pattern as services/lib/permissions.ts.
 const _apiKeyPermissionsCache = new Map<
   string,
-  { slugs: string[]; cachedAt: number }
+  { grants: readonly GrantedPermission[]; cachedAt: number }
 >();
 const _PERMISSIONS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * One key's grants, in both spellings a permission is written in.
+ *
+ * A permission row carries an `action` and a `resource`, and the codebase spells
+ * the pair two ways on purpose: `action-resource` in the database and the admin
+ * matrix (`read-posts`), and `resource:action` wherever a code-defined access
+ * rule reads it (`posts:read`). `AccessFunction` in `collections/fields/types/base`
+ * states the second as its contract, and `listEffectivePermissions` is what
+ * produces it for a session caller.
+ *
+ * Both are projected here from the SAME rows rather than converted from one
+ * another. A stored slug cannot be decomposed back into its parts — a
+ * deliberately custom one (`manage-api-keys`, on action `update`) is explicitly
+ * supported by `RolePermissionService`, so splitting on the hyphen would invent
+ * a resource that no row names.
+ */
+/** Distinct rows, keyed on the slug — the identity a grant is stored under. */
+function dedupeGrants(rows: GrantedPermission[]): GrantedPermission[] {
+  const bySlug = new Map<string, GrantedPermission>();
+  for (const row of rows) if (!bySlug.has(row.slug)) bySlug.set(row.slug, row);
+  return Array.from(bySlug.values());
+}
 
 /**
  * Evict a single API key's resolved permissions from the shared in-memory cache.
@@ -668,15 +692,44 @@ export class ApiKeyService extends BaseService {
     userId: string,
     keyId: string
   ): Promise<string[]> {
+    const grants = await this.resolveApiKeyGrants(
+      tokenType,
+      roleId,
+      userId,
+      keyId
+    );
+    return grants.map(grant => grant.slug);
+  }
+
+  /**
+   * The key's grants in both spellings — see {@link ApiKeyGrants}.
+   *
+   * A code-defined access rule reads `resource:action`, so an access check that
+   * judges a key on its own scope needs that projection as well as the stored
+   * slugs its coarse permission check tests.
+   *
+   * Returns a COPY. The cached arrays are shared by every request this key
+   * makes for the TTL, and the scope built from them is handed to plugin route
+   * handlers — which `ctx.authenticatedScope` invites to narrow it. Handing out
+   * the cached array made such a narrowing edit the key's real grants until the
+   * entry expired, so a handler restricting one call could deny the key
+   * everything for five minutes.
+   */
+  async resolveApiKeyGrants(
+    tokenType: ApiKeyTokenType,
+    roleId: string | null,
+    userId: string,
+    keyId: string
+  ): Promise<readonly GrantedPermission[]> {
     const cacheKey = `apikey:${keyId}`;
     const now = Date.now();
 
     const cached = _apiKeyPermissionsCache.get(cacheKey);
     if (cached && now - cached.cachedAt < _PERMISSIONS_CACHE_TTL_MS) {
-      return cached.slugs;
+      return cached.grants;
     }
 
-    let slugs: string[];
+    let rows: GrantedPermission[];
 
     if (tokenType === "role-based") {
       // Guard: referenced role was deleted via onDelete: "set null"
@@ -685,19 +738,32 @@ export class ApiKeyService extends BaseService {
           `API key ${keyId} is role-based but its role has been deleted — all requests will be denied`,
           { keyId }
         );
-        return [];
+        return Object.freeze([]);
       }
-      slugs = await this.resolveRolePermissionSlugs(roleId);
+      rows = await this.resolveRolePermissionRows(roleId);
     } else {
-      const allSlugs = await this.resolveUserPermissionSlugs(userId);
-      slugs =
+      const all = await this.resolveUserPermissionRows(userId);
+      // Still filtered on the STORED slug rather than on `action === "read"`.
+      // A deliberately custom slug is supported, so the two disagree — a row
+      // named `view-dashboard` on action `read` is excluded by the slug test
+      // and included by the action test, and widening what a read-only key
+      // holds is not this change's business.
+      rows =
         tokenType === "read-only"
-          ? allSlugs.filter(slug => slug.startsWith("read-"))
-          : allSlugs;
+          ? all.filter(row => row.slug.startsWith("read-"))
+          : all;
     }
 
-    _apiKeyPermissionsCache.set(cacheKey, { slugs, cachedAt: now });
-    return slugs;
+    // Frozen rather than copied per caller. The array and its rows are shared
+    // by every request this key makes for the TTL, and a caller narrowing its
+    // own scope used to edit the key's real grants through exactly this
+    // reference. `narrowScope` returns a new scope instead, so nothing needs to
+    // write here and nothing may.
+    const grants = Object.freeze(
+      dedupeGrants(rows).map(row => Object.freeze(row))
+    );
+    _apiKeyPermissionsCache.set(cacheKey, { grants, cachedAt: now });
+    return grants;
   }
 
   /**
@@ -752,9 +818,15 @@ export class ApiKeyService extends BaseService {
     return listRoleSlugsForUser(userId);
   }
 
-  private async resolveRolePermissionSlugs(roleId: string): Promise<string[]> {
+  private async resolveRolePermissionRows(
+    roleId: string
+  ): Promise<GrantedPermission[]> {
     const rows = await this.db
-      .select({ slug: this.permissionsTable.slug })
+      .select({
+        slug: this.permissionsTable.slug,
+        action: this.permissionsTable.action,
+        resource: this.permissionsTable.resource,
+      })
       .from(this.rolePermissionsTable)
       .innerJoin(
         this.permissionsTable,
@@ -762,16 +834,18 @@ export class ApiKeyService extends BaseService {
       )
       .where(eq(this.rolePermissionsTable.roleId, roleId));
 
-    const seen = new Set<string>();
-    for (const row of rows as Array<{ slug: string }>) {
-      seen.add(row.slug);
-    }
-    return Array.from(seen);
+    return rows as GrantedPermission[];
   }
 
-  private async resolveUserPermissionSlugs(userId: string): Promise<string[]> {
+  private async resolveUserPermissionRows(
+    userId: string
+  ): Promise<GrantedPermission[]> {
     const rows = await this.db
-      .select({ slug: this.permissionsTable.slug })
+      .select({
+        slug: this.permissionsTable.slug,
+        action: this.permissionsTable.action,
+        resource: this.permissionsTable.resource,
+      })
       .from(this.userRolesTable)
       .innerJoin(
         this.rolePermissionsTable,
@@ -783,11 +857,7 @@ export class ApiKeyService extends BaseService {
       )
       .where(eq(this.userRolesTable.userId, userId));
 
-    const seen = new Set<string>();
-    for (const row of rows as Array<{ slug: string }>) {
-      seen.add(row.slug);
-    }
-    return Array.from(seen);
+    return rows as GrantedPermission[];
   }
 
   /**

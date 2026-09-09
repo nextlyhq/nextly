@@ -1,4 +1,5 @@
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
+import { currentCallerScope, runWithCallerScope } from "../auth/caller-scope";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
 import { NextlyError } from "../errors/nextly-error";
@@ -9,8 +10,6 @@ import type {
 } from "../services/collections/collection-service";
 import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
-
-import { currentCallerScope } from "./routes/caller-scope";
 
 /**
  * @public Elevation options for the managed `ctx.services` path.
@@ -224,8 +223,19 @@ export function wrapCollectionsForPlugin(
         // implementation of what `resolveServiceOpts` already decided. A
         // spread cannot forget a field.
         next[idx] = { ...resolved } satisfies RequestContext;
+        // The scope this call runs under becomes the ambient one for its whole
+        // duration, so a route that NARROWED its scope is narrowed at every
+        // gate underneath and not only at the one it passed the scope to.
+        //
+        // Field access is the gate that makes this necessary. It reads the
+        // ambient scope rather than an argument — eighteen call sites reach it
+        // and none could be relied on to forward one — so without re-pinning,
+        // a handler that gave up a grant still got the field that grant opens,
+        // which is the narrowing silently not happening.
         const call = () =>
-          (fn as (...a: unknown[]) => Promise<unknown>).apply(target, next);
+          runWithCallerScope(resolved.authenticatedScope, () =>
+            (fn as (...a: unknown[]) => Promise<unknown>).apply(target, next)
+          );
 
         if (verb === undefined) return call();
 
