@@ -1122,10 +1122,27 @@ export function planConvertToComponent<TFields>(
     return { problem: "invalid-source" };
   }
 
-  const saved = plannedSave(document, selectedIds, nesting, limits);
+  // Read ONCE, for the same reason the id above is checked at runtime: this is
+  // a published entry point, and `limits` is an object the caller owns. Every
+  // member can be a getter or a proxy trap, so two reads can answer
+  // differently — and the stages below have to agree about the cap or the
+  // agreement between them is the thing an author relies on. Measured on this
+  // function before the snapshot: `maxNodes` was read five times, and a getter
+  // answering honestly on four of them and `0` on the fifth approved a
+  // conversion whose definition contained an instance of itself. Poisoning any
+  // OTHER single read was refused, which is what makes this the fifth read's
+  // agreement with the first rather than a general validation weakness.
+  //
+  // A spread rather than a per-member copy so a member added to
+  // `DocumentLimits` is snapshotted too: a list written out here would go on
+  // reading the new one live, which is the failure this exists to prevent
+  // wearing a different member's name.
+  const bounds: DocumentLimits = { ...limits };
+
+  const saved = plannedSave(document, selectedIds, nesting, bounds);
   if (saved.problem !== undefined) return saved;
 
-  const definition = componentDocument(saved, exposure, limits);
+  const definition = componentDocument(saved, exposure, bounds);
   if (definition.problem !== undefined) return definition;
 
   // A definition holding an instance of ITSELF. The selection can already
@@ -1135,7 +1152,8 @@ export function planConvertToComponent<TFields>(
   // content with a broken placeholder. Asked through the resolver's own
   // published index, not a walk of this module's own.
   //
-  // `limits.maxNodes` is passed, and passing it is the whole guard. The index
+  // The caller's own node cap is passed, and passing it is the whole guard.
+  // The index
   // walks depth-first under a node budget and STOPS silently, returning a
   // prefix that is indistinguishable from a definition referencing nothing —
   // and "references nothing" is the answer that approves the conversion. Left
@@ -1147,20 +1165,20 @@ export function planConvertToComponent<TFields>(
   //
   // Threading the caller's cap is sufficient, rather than merely better. The
   // definition reaching this line is one `plannedSave` accepted under the SAME
-  // `limits`, and that ceiling is `maxNodes` nodes exactly — measured at the
+  // `bounds`, and that ceiling is `maxNodes` nodes exactly — measured at the
   // boundary: a selection of `maxNodes` is accepted and walks whole, and
   // `maxNodes + 1` is refused as `"exceeds-limits"` before this line is
   // reached. So there is no definition here that this walk can truncate, which
   // is why the prefix is not tested for and no refusal for one exists.
   if (
-    componentIdsIn(definition.document.nodes, limits.maxNodes).includes(
+    componentIdsIn(definition.document.nodes, bounds.maxNodes).includes(
       componentId
     )
   ) {
     return { problem: "self-reference" };
   }
 
-  const replaced = replaceOps(document, saved, componentId, nesting, limits);
+  const replaced = replaceOps(document, saved, componentId, nesting, bounds);
   if (replaced.problem !== undefined) return replaced;
 
   return {

@@ -1810,6 +1810,66 @@ describe("what a definition may not be", () => {
     ).toBe("exceeds-limits");
   });
 
+  it("reads the caller's node cap once, so it cannot answer twice", () => {
+    // `limits` is an object the caller owns, and every member of it can be a
+    // getter or a proxy trap. The stages here have to AGREE about the cap: the
+    // survey validates the definition under one, and the self-reference guard
+    // walks it under another. Two reads let those disagree, and the direction
+    // that matters is a guard whose cap is smaller than the definition the
+    // survey accepted — it walks a prefix and approves a conversion whose
+    // definition contains an instance of itself.
+    //
+    // Asserted as ONE read rather than as "the same value twice", because a
+    // getter can count its own calls and a single read cannot disagree with
+    // itself. Every poison position is exercised, so a later stage added
+    // between them cannot reintroduce a second read unnoticed.
+    const doc = page([
+      node("i1", {
+        type: COMPONENT_INSTANCE_TYPE,
+        props: { componentId: "def-1" },
+      }),
+    ]);
+
+    /** Honest on every read of `maxNodes` except the nth, which answers 0. */
+    const poisonNthRead = (n: number) => {
+      let reads = 0;
+      const limits: DocumentLimits = {
+        ...DEFAULT_LIMITS,
+        get maxNodes() {
+          reads += 1;
+          return reads === n ? 0 : DEFAULT_LIMITS.maxNodes;
+        },
+      };
+      return { limits, reads: () => reads };
+    };
+
+    for (const position of [1, 2, 3, 4, 5, 6, 7]) {
+      const poisoned = poisonNthRead(position);
+      const plan = planConvertToComponent(
+        doc,
+        ["i1"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent,
+        poisoned.limits
+      );
+
+      // Never a create. Poisoning the FIRST read is the caller honestly
+      // saying zero, which is refused for exceeding it; every later position
+      // never happens, so the honest cap stands and the guard sees the
+      // self-reference. Both are refusals, which is the property.
+      expect({ position, create: plan.create }).toEqual({
+        position,
+        create: undefined,
+      });
+      expect({ position, reads: poisoned.reads() }).toEqual({
+        position,
+        reads: 1,
+      });
+    }
+  });
+
   it("refuses an exposure list whose indices are accessors", () => {
     // A genuine array, with entries that would be well formed, that computes
     // them. Neither the array check nor the entry guards see it, and reading
