@@ -55,6 +55,26 @@ const TIMESTAMP_FIELDS: readonly WidgetSourceField[] = [
 const STATUS_FIELD: WidgetSourceField = { name: "status", type: "string" };
 
 /**
+ * The other column the status lifecycle creates, and the one a "what went live
+ * this week" timeline buckets by.
+ *
+ * Appended on exactly the same terms as `status`, because it carries exactly
+ * the same presence in the canonical registry: `first_published_at` is declared
+ * `presence: "withStatusLifecycle"`, the same value the status column has, and
+ * it is readable rather than stripped from responses.
+ *
+ * Left out, the read path had the column and could bucket it -- the descriptor
+ * resolves through `getSystemColumnDescriptors` -- while the SOURCE did not
+ * advertise it, so widget validation refused every timeline over first
+ * publication before execution. That is the same failure the status field's own
+ * docblock describes, in the direction of a column that exists and is denied.
+ */
+const FIRST_PUBLISHED_FIELD: WidgetSourceField = {
+  name: "firstPublishedAt",
+  type: "date",
+};
+
+/**
  * Field types a widget must never see, however the caller declares the
  * collection. `password`'s own type declares its value "never returned by any
  * read or mutation response" (collections/fields/types/password.ts) -- so
@@ -290,7 +310,9 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
   const seen = new Set(declared.map(f => f.name));
   const systemFields: WidgetSourceField[] = [IDENTITY_FIELD];
   if (collection.timestamps !== false) systemFields.push(...TIMESTAMP_FIELDS);
-  if (collection.status === true) systemFields.push(STATUS_FIELD);
+  if (collection.status === true) {
+    systemFields.push(STATUS_FIELD, FIRST_PUBLISHED_FIELD);
+  }
 
   const id = `collection:${collection.slug}`;
   const fields = [

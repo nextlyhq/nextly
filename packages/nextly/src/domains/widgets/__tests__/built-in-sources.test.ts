@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { getSystemColumnDescriptors } from "../../schema/services/field-column-descriptor";
 import { registerBuiltInSources } from "../built-in-sources";
 import { validateWidgetQuery } from "../query";
 import { clearSources, getSource, listSources } from "../sources";
@@ -21,6 +22,61 @@ describe("built-in sources", () => {
     expect(source?.kind).toBe("collection");
     expect(source?.supports).toContain("count");
     expect(source?.supports).toContain("list");
+  });
+
+  it("publishes every readable column the status lifecycle creates", () => {
+    // Derived from the canonical registry rather than restated, so a system
+    // column added there with the lifecycle presence fails here until someone
+    // decides whether a widget may name it. The source publishes a CURATED set
+    // -- `created_by` is deliberately withheld -- so this pins the lifecycle
+    // columns specifically rather than every system column.
+    //
+    // `first_published_at` was missing: the read path could bucket it while
+    // the source did not advertise it, so validation refused every timeline
+    // over first publication before execution.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+        status: true,
+      },
+    ]);
+
+    const published = new Set(
+      (getSource("collection:posts")?.fields ?? []).map(f => f.name)
+    );
+    const lifecycleColumns = getSystemColumnDescriptors("postgresql", {
+      hasTitleField: true,
+      hasSlugField: true,
+      hasStatus: true,
+    })
+      .map(c => c.name)
+      .filter(name => name === "status" || name === "first_published_at");
+
+    expect(lifecycleColumns.sort()).toEqual(["first_published_at", "status"]);
+    expect(published.has("status")).toBe(true);
+    expect(published.has("firstPublishedAt")).toBe(true);
+  });
+
+  it("withholds the lifecycle columns from a collection without status", () => {
+    // The control: appended unconditionally, they would be a promise the read
+    // path cannot keep -- validation passes and the query fails on a missing
+    // column, which is the defect the timestamps docblock describes.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    const published = new Set(
+      (getSource("collection:posts")?.fields ?? []).map(f => f.name)
+    );
+    expect(published.has("status")).toBe(false);
+    expect(published.has("firstPublishedAt")).toBe(false);
+    expect(published.has("createdAt")).toBe(true);
   });
 
   it("carries a field's localization onto the source", () => {
