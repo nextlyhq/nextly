@@ -1376,6 +1376,59 @@ describe("an edit the editor will not take", () => {
   });
 });
 
+describe("a key pressed while the pointer is still down", () => {
+  /*
+   * The handle can hold focus during its own drag. A key edit committed
+   * underneath the gesture is overwritten by the release — which was built from
+   * the starts taken at the press — so the author's key press vanishes while the
+   * history keeps an entry for it.
+   */
+  it("ignores an arrow key while a drag is in flight", () => {
+    mount([band("margin", "top", "10")]);
+    const element = handle("top margin");
+    act(() => {
+      fireEvent.pointerDown(element, {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    act(() => {
+      fireEvent.pointerMove(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+    // Mid-drag, and the handle happens to have focus.
+    act(() => {
+      fireEvent.keyDown(element, { key: "ArrowUp" });
+    });
+    expect(live?.undoDepth).toBe(0);
+
+    act(() => {
+      fireEvent.pointerUp(document.body, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+    // One gesture, one entry, and the value the DRAG meant.
+    expect(live?.undoDepth).toBe(1);
+    expect(stored("margin", "blockStart")).toBe("30px");
+  });
+
+  it("still takes the key once the gesture is over", () => {
+    mount([band("margin", "top", "10")]);
+    drag(handle("top margin"), [{ x: 0, y: -20 }]);
+    act(() => {
+      fireEvent.keyDown(handle("top margin"), { key: "ArrowUp" });
+    });
+    expect(live?.undoDepth).toBe(2);
+  });
+});
+
 describe("a gesture whose subject changes underneath it", () => {
   /*
    * The component is not keyed on the node, so selecting another block mid-drag

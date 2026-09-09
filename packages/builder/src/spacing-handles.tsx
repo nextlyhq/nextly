@@ -922,6 +922,17 @@ export function SpacingHandles({
        */
       const delta = spacingKeyDelta(event.key, band.box, band.side);
       if (delta === undefined) return;
+      /*
+       * A pointer gesture owns the value until it is released.
+       *
+       * The handle can hold focus while a drag is in flight, so an arrow key
+       * pressed mid-drag would commit immediately — and the release, built from
+       * the starts taken at the PRESS, would then overwrite it. The author's key
+       * edit disappears and the history keeps an entry for it, which is the
+       * worst of both. Escape is already filtered this way on the document
+       * listener; this is the same rule for the keys that write.
+       */
+      if (gesture.current !== null) return;
 
       event.preventDefault();
       const { starts, refusals } = startsFor(band);
