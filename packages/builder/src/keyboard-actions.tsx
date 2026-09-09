@@ -46,7 +46,11 @@ import {
   selectionDuplication,
   selectionMove,
 } from "./selection-ops";
-import { toolbarActions, type ToolbarAction } from "./toolbar-actions";
+import {
+  SAVE_PATTERN_GRANT_REFUSAL,
+  toolbarActions,
+  type ToolbarAction,
+} from "./toolbar-actions";
 
 /**
  * The bindings, and why these keys.
@@ -850,6 +854,17 @@ export function useBlockKeyboardActions({
    * over a selection that cannot be saved.
    */
   const saveSelectionAsPattern = React.useCallback(() => {
+    // The GRANT before the planner, matching the order the action list uses:
+    // an author who may not save at all is owed that reason rather than a
+    // critique of the blocks they chose. Checked HERE and not only there
+    // because the toolbar keeps an unavailable verb focusable and still calls
+    // this runner — so a refusal that lived only in the description would dim
+    // the control and open the form anyway, for exactly the authors this
+    // exists to stop.
+    if (!mayCreatePattern) {
+      announce(SAVE_PATTERN_GRANT_REFUSAL);
+      return;
+    }
     const refusal = saveAsPatternRefusal(
       editor.document,
       editor.selection.ids,
@@ -861,6 +876,7 @@ export function useBlockKeyboardActions({
     }
     onSaveAsPattern();
   }, [
+    mayCreatePattern,
     editor.document,
     editor.selection.ids,
     nestingSource,

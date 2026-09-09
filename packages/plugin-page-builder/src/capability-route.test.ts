@@ -44,7 +44,50 @@ describe("the pattern capability route", () => {
     // able to save, and one asking about `patterns` would refuse an author who
     // holds `create-site_patterns` — the false refusal that hides a working
     // feature, which is worse than the late failure this replaces.
-    expect(asked).toEqual([["create", "site_patterns"]]);
+    // Both permissions the write needs, about the RESOLVED collection. A route
+    // asking `read` would report every author as able to save, and one asking
+    // about `patterns` would refuse an author who holds `create-site_patterns`.
+    expect(asked).toEqual([
+      ["create", "site_patterns"],
+      ["publish", "site_patterns"],
+    ]);
+  });
+
+  it("requires PUBLISH as well, because the save creates a published row", async () => {
+    // Codex P2 on #1678, confirmed against the write: `save-pattern-route`
+    // persists `status: "published"`, and core resolves the publish grant
+    // separately from create for that transition — its own docblock says an
+    // author without it "is refused by core". An answer naming `create` alone
+    // therefore says yes to an author the save refuses, which relocates the
+    // defect instead of fixing it.
+    const asked: Array<[string, string]> = [];
+    const answer = await readPatternCapability({
+      self: { collections: { [PATTERNS_SLUG]: "site_patterns" } },
+      caller: {
+        can: async (a: string, r: string) => {
+          asked.push([a, r]);
+          return a === "create";
+        },
+      },
+    });
+    expect(asked).toContainEqual(["publish", "site_patterns"]);
+    expect(answer).toEqual({ mayCreate: false });
+  });
+
+  it("stops at the first refusal rather than asking the rest", async () => {
+    // The second question costs a permission read, and an author refused the
+    // first has already been answered.
+    const asked: Array<[string, string]> = [];
+    await readPatternCapability({
+      self: { collections: {} },
+      caller: {
+        can: async (a: string, r: string) => {
+          asked.push([a, r]);
+          return false;
+        },
+      },
+    });
+    expect(asked).toEqual([["create", PATTERNS_SLUG]]);
   });
 
   it("reports what the caller answered, in both directions", async () => {
@@ -67,7 +110,10 @@ describe("the pattern capability route", () => {
         },
       },
     });
-    expect(asked).toEqual([["create", PATTERNS_SLUG]]);
+    expect(asked).toEqual([
+      ["create", PATTERNS_SLUG],
+      ["publish", PATTERNS_SLUG],
+    ]);
   });
 
   it("refuses a caller nobody identified, without asking", async () => {

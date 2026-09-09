@@ -39,6 +39,7 @@ import {
   CAPABILITY_ROUTE_PATH,
   type PatternCapabilityResponse,
 } from "./library-contract";
+import { SAVED_PATTERN_STATUS } from "./save-pattern-route";
 
 /**
  * What this route needs of the plugin route context.
@@ -68,7 +69,23 @@ export async function readPatternCapability(
 ): Promise<PatternCapabilityResponse> {
   if (ctx.caller === null) return { mayCreate: false };
   const slug = ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG;
-  return { mayCreate: await ctx.caller.can("create", slug) };
+  // EVERY permission the save requires, not just the obvious one. The route
+  // creates the row already published, and core resolves the publish grant
+  // separately from create for exactly that transition — so an author holding
+  // `create` and not `publish` would be told yes and refused by the write, which
+  // is the failure this answer exists to prevent rather than relocate.
+  //
+  // DERIVED from the status the save persists, so a future save that stored a
+  // draft stops asking for a grant it no longer needs. `every` rather than a
+  // chain of `&&` because the list is the rule.
+  const needed: string[] =
+    SAVED_PATTERN_STATUS === "published" ? ["create", "publish"] : ["create"];
+  for (const action of needed) {
+    // Sequential, and it short-circuits: the second question costs a permission
+    // read, and an author refused the first has already been answered.
+    if (!(await ctx.caller.can(action, slug))) return { mayCreate: false };
+  }
+  return { mayCreate: true };
 }
 
 /**

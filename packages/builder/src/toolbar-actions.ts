@@ -143,6 +143,17 @@ function moveAction(
  * cannot be saved, so leaving it dimmed and silent would be a control an author
  * can only guess at.
  */
+/**
+ * What an author is told when they hold no grant to save a pattern.
+ *
+ * ONE string, exported, because two surfaces say it: this list, which dims the
+ * control and titles it, and the runner in `keyboard-actions`, which announces
+ * it when a dimmed control is pressed anyway. Written twice they would drift,
+ * and the drift would be invisible — each reads correctly on its own.
+ */
+export const SAVE_PATTERN_GRANT_REFUSAL =
+  "You do not have permission to create patterns.";
+
 function saveAction(
   document: BlockDocument,
   ids: readonly string[],
@@ -162,7 +173,7 @@ function saveAction(
       id: "save-as-pattern",
       label,
       enabled: false,
-      reason: "You do not have permission to create patterns.",
+      reason: SAVE_PATTERN_GRANT_REFUSAL,
     };
   const refusal = saveAsPatternRefusal(document, ids, nesting);
   if (refusal === undefined)
