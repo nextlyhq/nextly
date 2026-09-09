@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const find = vi.fn();
 
 vi.mock("../../../direct-api/nextly", () => ({
-  getNextly: () => ({ find }),
+  requireNextly: () => ({ find }),
 }));
 
 // Backs `getRegisteredCollections`'s real (unstubbed) path -- see "does not

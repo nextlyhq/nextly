@@ -65,6 +65,7 @@ import {
 } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
+  CANVAS_ROOT_CLASS,
   authoredBreakpoints,
   BlockToolbar,
   BreakpointManager,
@@ -155,6 +156,7 @@ import { DocumentStatusPill } from "./DocumentStatusPill";
 import { pageRenderInputs, readDocumentLimits } from "./page-render-inputs";
 import { PageBuilderCard } from "./PageBuilderCard";
 import { usePatternLibrary } from "./pattern-library-client";
+import { SavePatternPrompt } from "./SavePatternPrompt";
 /* The save state, which the status pill cannot carry: it renders nothing on a
    collection with no publish lifecycle, and took the only reading of unsaved
    work down with it. */
@@ -1504,6 +1506,86 @@ function finishInlineEdit(
 }
 
 /**
+ * Raising the save-as-pattern form, and everything that has to be true first.
+ *
+ * A hook rather than three pieces of state in the editor, and not only because
+ * that function is the most complex in the package: the three are one gesture.
+ * An open passage has to be committed before the document is worth saving, the
+ * document that comes back is what the form must store, and the control the
+ * author pressed has to be remembered before it loses focus. Split across the
+ * editor they would be three things to keep in step; here the order is the
+ * function body.
+ */
+function useSavePatternVerb(
+  editor: { document: BlockDocument },
+  inline: { commit: () => InlineEditOutcome }
+): {
+  /** The document to save from, or `null` when the author has not asked. */
+  readonly document: BlockDocument | null;
+  /** Where focus should go when the form closes, asked at that moment. */
+  readonly returnFocusTo: () => HTMLElement | null;
+  readonly open: () => void;
+  readonly close: () => void;
+} {
+  const [document, setDocument] = useState<BlockDocument | null>(null);
+  /*
+   * The opener, read at the GESTURE.
+   *
+   * The toolbar button, the menu item or the palette row still has focus while
+   * this runs, and by the time the dialog is mounting it does not — measured,
+   * it has gone even by Radix's own "about to take focus" hook. This is the
+   * last moment it is knowable.
+   */
+  const [openedFrom, setOpenedFrom] = useState<HTMLElement | null>(null);
+
+  const open = useCallback(() => {
+    /*
+     * An open inline passage is COMMITTED first, and its document is what the
+     * form saves.
+     *
+     * A rich-text editor holds the author's words itself while they type — the
+     * canvas keeps the caret still — so `editor.document` during an open
+     * passage is the one from before it. A form snapshotting that stores a
+     * pattern missing the words on screen, silently.
+     *
+     * A REFUSED commit declines to open the form at all, for the reason the
+     * exit gesture declines to close: the words are in the passage and nowhere
+     * else, and the author has been told what happened.
+     */
+    const finished = finishInlineEdit(inline, editor.document);
+    if (!finished.mayClose) return;
+    const active = window.document.activeElement;
+    setOpenedFrom(active instanceof HTMLElement ? active : null);
+    setDocument(finished.document);
+  }, [editor.document, inline]);
+
+  const close = useCallback(() => setDocument(null), []);
+
+  /*
+   * Resolved at the CLOSE, not at the open.
+   *
+   * The control that raised the form is usually gone by then: a context-menu
+   * item unmounts with its menu, and a palette row with the palette. Focusing a
+   * detached node does nothing and leaves the author on the body, at the top of
+   * the page — so the fallback is the editor itself.
+   *
+   * The canvas REGION rather than the canvas root: the root is a plain div with
+   * no tabindex, so focusing it does nothing, while the region the shell wraps
+   * it in is `tabIndex={0}` because a keyboard author has to be able to scroll
+   * the page. Found by walking up from the root rather than by its label, which
+   * is display copy.
+   */
+  const returnFocusTo = useCallback((): HTMLElement | null => {
+    if (openedFrom?.isConnected === true) return openedFrom;
+    const root = window.document.querySelector(`.${CANVAS_ROOT_CLASS}`);
+    const region = root?.closest<HTMLElement>("[tabindex]") ?? null;
+    return region;
+  }, [openedFrom]);
+
+  return { document, returnFocusTo, open, close };
+}
+
+/**
  * The form's save shortcut, parsed from the SAME spec the form registers.
  *
  * Asked of the shortcut library rather than written out here. A hand-rolled
@@ -1764,6 +1846,12 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     if (problem !== null) toast.error(problem);
   }, []);
   const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
+
+  // Whether the save-as-pattern form is up. A boolean here rather than the form
+  // itself, because the verb that raises it belongs to the shared chain — the
+  // toolbar, the context menu and the palette all reach it — while everything
+  // the form needs is mounted only while it is up. See `SavePatternPrompt`.
+  const savePattern = useSavePatternVerb(editor, inline);
 
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
@@ -2654,7 +2742,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           It draws the live region and publishes the structural verbs to what it
           wraps, which is how the toolbar presses exactly what the keys press.
         */}
-        <BlockKeyboardActions editor={editor} onEditText={inline.begin}>
+        <BlockKeyboardActions
+          editor={editor}
+          onEditText={inline.begin}
+          onSaveAsPattern={savePattern.open}
+        >
           {/*
             Inside the verbs provider, which is what lets the palette run
             exactly what the keystrokes and the toolbar run.
@@ -2800,6 +2892,20 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
               />
             </BlockContextMenu>
           )}
+          {/*
+            Rendered inside the verbs provider so the form and the button that
+            opens it are one feature rather than two that have to be kept in
+            step. The dialog is CONTROLLED from here because the verb that opens
+            it belongs to the same chain as every other block verb — a form that
+            owned its own trigger would be reachable from one surface and not
+            from the palette, the context menu or a keystroke.
+          */}
+          <SavePatternPrompt
+            document={savePattern.document}
+            selectedIds={editor.selection.ids}
+            onClose={savePattern.close}
+            returnFocusTo={savePattern.returnFocusTo}
+          />
         </BlockKeyboardActions>
       </BuilderShell>
     </div>

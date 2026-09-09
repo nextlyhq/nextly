@@ -87,6 +87,22 @@ export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
  * of one contract that could then be versioned apart.
  */
 export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
+
+/**
+ * @experimental Hold the editor's shortcuts while something modal is over it.
+ *
+ * From THIS entry rather than the root, which carries no `"use client"` banner
+ * and is documented as callable from a Server Component. The hook reaches
+ * `useShortcuts`, so exporting it there would pull the design system's client
+ * barrel into a module a server build is entitled to load — the contract the
+ * root entry states about itself, broken by one re-export.
+ *
+ * Published at all because a modal the editor RAISES is not always the editor's
+ * own: a host draws the form its verbs open, and a focus trap does nothing about
+ * shortcuts — the canvas's bindings sit on the document, so Delete and
+ * Alt+Arrow reach the page behind the dialog.
+ */
+export { useModalKeyboardHold } from "./modal-keyboard-hold";
 export type { CanvasPreview, CanvasProps } from "./canvas";
 
 /**

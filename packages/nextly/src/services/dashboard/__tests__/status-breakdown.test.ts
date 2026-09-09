@@ -22,7 +22,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { count } = vi.hoisted(() => ({ count: vi.fn() }));
-vi.mock("../../../direct-api/nextly", () => ({ getNextly: () => ({ count }) }));
+vi.mock("../../../direct-api/nextly", () => ({
+  requireNextly: () => ({ count }),
+}));
 
 const { containerGet } = vi.hoisted(() => ({ containerGet: vi.fn() }));
 vi.mock("../../../di/container", () => ({ container: { get: containerGet } }));

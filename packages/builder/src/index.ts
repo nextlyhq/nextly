@@ -361,6 +361,17 @@ export {
 } from "./builder-commands";
 
 /**
+ * @experimental Why a composition verb refused, in words an author can act on.
+ *
+ * From this entry because the surface that phrases a refusal is not always one
+ * of the editor's own: the form that names a pattern is the host's, and it has
+ * to say the same thing the toolbar said about the same selection. A second
+ * phrasing of one cause is how an author is told two different things about one
+ * refusal.
+ */
+export { compositionRefusalReason, isPlanProblem } from "./composition-refusal";
+
+/**
  * @experimental Who owns Escape while the editor is on screen.
  *
  * From this entry because the rule is a plain function over the DOM and a

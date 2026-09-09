@@ -42,7 +42,7 @@ import {
   shutdownServices,
 } from "./di/register";
 import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
-import { getNextly as getDirectAPI } from "./direct-api/nextly";
+import { requireNextly as getDirectAPI } from "./direct-api/nextly";
 import { resolveCollectionTableName } from "./domains/schema/utils/resolve-table-name";
 import { NextlyError } from "./errors/nextly-error";
 import { runBootTimeApplyIfDev } from "./init/boot-apply";

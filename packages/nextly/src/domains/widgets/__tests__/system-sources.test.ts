@@ -10,7 +10,7 @@ const count = vi.fn();
 // The collection path's collaborator, stubbed so the control below exercises a
 // real dispatch rather than falling over on a missing Direct API.
 vi.mock("../../../direct-api/nextly", () => ({
-  getNextly: () => ({ find, count }),
+  requireNextly: () => ({ find, count }),
 }));
 
 import { executeWidgetQuery } from "../execute";

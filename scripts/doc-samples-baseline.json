@@ -205,13 +205,11 @@
   "pages": {
     "docs/getting-started/quick-start.mdx": 1,
     "docs/guides/media-storage.mdx": 1,
-    "docs/guides/routing-and-seo.mdx": 6,
-    "docs/plugins/admin-ui.mdx": 2,
+    "docs/guides/routing-and-seo.mdx": 3,
+    "docs/plugins/admin-ui.mdx": 1,
     "docs/plugins/auth.mdx": 3,
     "docs/plugins/author-guide.mdx": 2,
     "docs/plugins/distribution.mdx": 1,
-    "docs/plugins/form-builder.mdx": 6,
-    "docs/plugins/index.mdx": 7,
     "docs/plugins/lifecycle.mdx": 2,
     "docs/database/mysql.mdx": 3,
     "docs/guides/isr-caching.mdx": 1
@@ -232,19 +230,19 @@
       "reader-file #12 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/guides/routing-and-seo.mdx": {
-      "#3 error TS2304: Cannot find name 'Page'.": 1,
-      "#4 error TS2304: Cannot find name 'Page'.": 1,
-      "#6 error TS2304: Cannot find name 'Page'.": 1,
       "#7 error TS2304: Cannot find name 'getPostBySlug'.": 1,
       "#8 error TS2304: Cannot find name 'services'.": 1,
       "#8 error TS18004: No value exists in scope for the shorthand property 'baseUrl'. Either declare one or provide an initializer.": 1,
-      "implicit-any #5 error TS7006: Parameter 'entry' implicitly has an 'any' type.": 1
+      "implicit-any #5 error TS7006: Parameter 'entry' implicitly has an 'any' type.": 1,
+      "reader-name #3 error TS2304: Cannot find name 'Page'.": 1,
+      "reader-name #4 error TS2304: Cannot find name 'Page'.": 1,
+      "reader-name #6 error TS2304: Cannot find name 'Page'.": 1
     },
     "docs/plugins/admin-ui.mdx": {
       "#9 error TS2304: Cannot find name 'Skeleton'.": 1,
-      "#9 error TS2304: Cannot find name 'Chart'.": 1,
       "uninstalled #11 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
-      "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1
+      "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1,
+      "reader-name #9 error TS2304: Cannot find name 'Chart'.": 1
     },
     "docs/plugins/auth.mdx": {
       "#1 error TS2304: Cannot find name 'verifyGoogleToken'.": 1,
@@ -260,25 +258,6 @@
     },
     "docs/plugins/distribution.mdx": {
       "#0 error TS2304: Cannot find name 'myPlugin'.": 1
-    },
-    "docs/plugins/form-builder.mdx": {
-      "#0 error TS2304: Cannot find name 'Posts'.": 1,
-      "#0 error TS2304: Cannot find name 'Users'.": 1,
-      "#0 error TS2304: Cannot find name 'Media'.": 1,
-      "#20 error TS2304: Cannot find name 'Posts'.": 1,
-      "#20 error TS2304: Cannot find name 'Users'.": 1,
-      "#20 error TS2304: Cannot find name 'Media'.": 1
-    },
-    "docs/plugins/index.mdx": {
-      "#0 error TS2304: Cannot find name 'Posts'.": 1,
-      "#0 error TS2304: Cannot find name 'Users'.": 1,
-      "#0 error TS2304: Cannot find name 'Media'.": 1,
-      "#1 error TS2304: Cannot find name 'Posts'.": 1,
-      "#1 error TS2304: Cannot find name 'Users'.": 1,
-      "#1 error TS2304: Cannot find name 'Media'.": 1,
-      "#2 error TS2304: Cannot find name 'MyCollection'.": 1,
-      "suppressed #3 error TS2339: Property 'id' does not exist on type '{}'.": 1,
-      "reader-file #4 error TS2307: Cannot find module './collections/my-collection' or its corresponding type declarations.": 1
     },
     "docs/plugins/lifecycle.mdx": {
       "#1 error TS2304: Cannot find name 'a'.": 1,
@@ -303,6 +282,17 @@
     "docs/getting-started/index.mdx": {
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1
+    },
+    "docs/plugins/index.mdx": {
+      "suppressed #3 error TS2339: Property 'id' does not exist on type '{}'.": 1,
+      "reader-file #4 error TS2307: Cannot find module './collections/my-collection' or its corresponding type declarations.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'Posts'.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'Users'.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'Media'.": 1,
+      "reader-name #1 error TS2304: Cannot find name 'Posts'.": 1,
+      "reader-name #1 error TS2304: Cannot find name 'Users'.": 1,
+      "reader-name #1 error TS2304: Cannot find name 'Media'.": 1,
+      "reader-name #2 error TS2304: Cannot find name 'MyCollection'.": 1
     },
     "docs/guides/email.mdx": {
       "implicit-any #4 error TS7006: Parameter 'data' implicitly has an 'any' type.": 3,
@@ -348,6 +338,14 @@
     },
     "docs/plugins/testing.mdx": {
       "reader-file #0 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1
+    },
+    "docs/plugins/form-builder.mdx": {
+      "reader-name #0 error TS2304: Cannot find name 'Posts'.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'Users'.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'Media'.": 1,
+      "reader-name #20 error TS2304: Cannot find name 'Posts'.": 1,
+      "reader-name #20 error TS2304: Cannot find name 'Users'.": 1,
+      "reader-name #20 error TS2304: Cannot find name 'Media'.": 1
     }
   }
 }

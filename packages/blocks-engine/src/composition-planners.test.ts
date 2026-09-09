@@ -1680,6 +1680,256 @@ describe("what a definition may not be", () => {
     ).toBeUndefined();
   });
 
+  it("finds a self-reference past the DEFAULT cap when the host raised it", () => {
+    // The guard asks the resolver's index for the definition's references, and
+    // that index walks depth-first under a node budget and stops SILENTLY. Its
+    // budget used to default here rather than follow the caller's `limits`, so
+    // on a site that raised `maxNodes` the walk still stopped at 5,000 and a
+    // self-reference beyond that read as "references nothing" — which is the
+    // answer that approves the conversion.
+    //
+    // Depth-first is what puts it beyond: a first root holding more than the
+    // default cap consumes the whole budget, so the instance on the SECOND
+    // root is never reached. Under the level-order walk the readers use it
+    // would have been visited immediately, which is why the two cannot be
+    // treated as interchangeable.
+    const raised = {
+      ...DEFAULT_LIMITS,
+      maxNodes: DEFAULT_LIMITS.maxNodes * 4,
+      maxBytes: DEFAULT_LIMITS.maxBytes * 100,
+    };
+    const doc = page([
+      node(
+        "fat",
+        {},
+        {
+          children: Array.from(
+            { length: DEFAULT_LIMITS.maxNodes + 10 },
+            (_, i) => node(`f${i}`)
+          ),
+        }
+      ),
+      node("i1", {
+        type: COMPONENT_INSTANCE_TYPE,
+        props: { componentId: "def-1" },
+      }),
+    ]);
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["fat", "i1"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent,
+        raised
+      ).problem
+    ).toBe("self-reference");
+
+    // The control: the SAME nodes with the instance as the first root are
+    // refused with the default budget too, so what the case above measures is
+    // walk order under a raised cap rather than the guard being absent.
+    expect(
+      planConvertToComponent(
+        page([...doc.nodes].reverse()),
+        ["i1", "fat"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent,
+        raised
+      ).problem
+    ).toBe("self-reference");
+  });
+
+  it("reads the whole definition at the ceiling, and refuses one past it", () => {
+    // Why no refusal exists for a definition the guard could only read part
+    // of: there is none to refuse. `plannedSave` accepts at most `maxNodes`
+    // nodes, and the guard now walks under that same number, so the walk
+    // always reaches the end.
+    //
+    // Both halves are asserted because the argument needs both. The first
+    // pins that a selection AT the ceiling is read whole — the instance is the
+    // last node walked, so anything reading a prefix misses it. The second
+    // pins the ceiling itself: if `plannedSave` ever accepted one more node
+    // than the guard walks, the last one would fall outside the budget and
+    // this reasoning would silently stop holding.
+    //
+    // Stated so it is not mistaken for evidence of the fix: this test PASSES
+    // against the unthreaded call as well, and by construction — the cap here
+    // is LOWER than the default the guard used to walk under, so the old
+    // budget was the more generous of the two and reached the end anyway. The
+    // break-verified case is the one above. What this one defends is the
+    // reasoning that made a refusal-for-a-truncated-prefix unnecessary.
+    const cap = 40;
+    const limits = { ...DEFAULT_LIMITS, maxNodes: cap };
+    const filler = (count: number) =>
+      Array.from({ length: count }, (_, i) => node(`c${i}`));
+    const selfLast = (fillerCount: number) =>
+      page([
+        node(
+          "r",
+          {},
+          {
+            children: [
+              ...filler(fillerCount),
+              node("i1", {
+                type: COMPONENT_INSTANCE_TYPE,
+                props: { componentId: "def-1" },
+              }),
+            ],
+          }
+        ),
+      ]);
+
+    // root + (cap - 2) filler + the instance = exactly `cap` nodes.
+    expect(
+      planConvertToComponent(
+        selfLast(cap - 2),
+        ["r"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent,
+        limits
+      ).problem
+    ).toBe("self-reference");
+
+    // One more node than the ceiling: refused before the guard is consulted.
+    expect(
+      planConvertToComponent(
+        selfLast(cap - 1),
+        ["r"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent,
+        limits
+      ).problem
+    ).toBe("exceeds-limits");
+  });
+
+  it("reads the caller's node cap once, so it cannot answer twice", () => {
+    // `limits` is an object the caller owns, and every member of it can be a
+    // getter or a proxy trap. The stages here have to AGREE about the cap: the
+    // survey validates the definition under one, and the self-reference guard
+    // walks it under another. Two reads let those disagree, and the direction
+    // that matters is a guard whose cap is smaller than the definition the
+    // survey accepted — it walks a prefix and approves a conversion whose
+    // definition contains an instance of itself.
+    //
+    // Asserted as ONE read rather than as "the same value twice", because a
+    // getter can count its own calls and a single read cannot disagree with
+    // itself. Every poison position is exercised, so a later stage added
+    // between them cannot reintroduce a second read unnoticed.
+    const doc = page([
+      node("i1", {
+        type: COMPONENT_INSTANCE_TYPE,
+        props: { componentId: "def-1" },
+      }),
+    ]);
+
+    /** Honest on every read of `maxNodes` except the nth, which answers 0. */
+    const poisonNthRead = (n: number) => {
+      let reads = 0;
+      const limits: DocumentLimits = {
+        ...DEFAULT_LIMITS,
+        get maxNodes() {
+          reads += 1;
+          return reads === n ? 0 : DEFAULT_LIMITS.maxNodes;
+        },
+      };
+      return { limits, reads: () => reads };
+    };
+
+    for (const position of [1, 2, 3, 4, 5, 6, 7]) {
+      const poisoned = poisonNthRead(position);
+      const plan = planConvertToComponent(
+        doc,
+        ["i1"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent,
+        poisoned.limits
+      );
+
+      // Never a create. Poisoning the FIRST read is the caller honestly
+      // saying zero, which is refused for exceeding it; every later position
+      // never happens, so the honest cap stands and the guard sees the
+      // self-reference. Both are refusals, which is the property.
+      expect({ position, create: plan.create }).toEqual({
+        position,
+        create: undefined,
+      });
+      expect({ position, reads: poisoned.reads() }).toEqual({
+        position,
+        reads: 1,
+      });
+    }
+  });
+
+  it("takes the caps by name, so how they are stored does not matter", () => {
+    // The snapshot above has to copy the RIGHT SET, and a spread copies own
+    // enumerable properties — the wrong set at both ends. It misses a member
+    // reached through the prototype or defined non-enumerably, so a caps
+    // object that reads perfectly well arrives with every cap `undefined`;
+    // and it reads members the planner never uses, so an unrelated getter on
+    // the caller's object runs, and a throwing one takes the call down.
+    //
+    // Each case is a caps object that behaves identically under a NAMED read
+    // and differently under a spread, so all three fail together the moment
+    // the snapshot goes back to copying properties wholesale.
+    const doc = page([
+      node("i1", {
+        type: COMPONENT_INSTANCE_TYPE,
+        props: { componentId: "def-1" },
+      }),
+    ]);
+    const convert = (limits: DocumentLimits) =>
+      planConvertToComponent(
+        doc,
+        ["i1"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent,
+        limits
+      ).problem;
+
+    // Reached through the prototype: `Object.create` leaves no own property.
+    const inherited = Object.create(DEFAULT_LIMITS) as DocumentLimits;
+
+    // Own, but not enumerable — as a class instance's accessors would be.
+    const nonEnumerable = {} as DocumentLimits;
+    for (const key of ["maxDepth", "maxNodes", "maxBytes"] as const) {
+      Object.defineProperty(nonEnumerable, key, {
+        value: DEFAULT_LIMITS[key],
+        enumerable: false,
+      });
+    }
+
+    // A caller's own metadata riding along on the caps object.
+    const withUnrelated = { ...DEFAULT_LIMITS } as DocumentLimits;
+    Object.defineProperty(withUnrelated, "meta", {
+      enumerable: true,
+      get() {
+        throw new Error("this getter is not the planner's business");
+      },
+    });
+
+    expect({
+      inherited: convert(inherited),
+      nonEnumerable: convert(nonEnumerable),
+      withUnrelated: convert(withUnrelated),
+    }).toEqual({
+      inherited: "self-reference",
+      nonEnumerable: "self-reference",
+      withUnrelated: "self-reference",
+    });
+  });
+
   it("refuses an exposure list whose indices are accessors", () => {
     // A genuine array, with entries that would be well formed, that computes
     // them. Neither the array check nor the entry guards see it, and reading

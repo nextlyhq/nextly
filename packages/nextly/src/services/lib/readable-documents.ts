@@ -31,7 +31,7 @@
  * @module services/lib/readable-documents
  */
 
-import { getNextly } from "../../direct-api/nextly";
+import { requireNextly } from "../../direct-api/nextly";
 import type { ReadCaller } from "../dashboard/readable-resources";
 
 /**
@@ -119,7 +119,7 @@ async function idsReturnedBy(
   // loop put the identity and locale decisions on every iteration.
   const scoped = identityOptions(locale, access);
   for (const chunk of chunked(entryIds)) {
-    const result = await getNextly().find({
+    const result = await requireNextly().find({
       collection,
       where: { id: { in: chunk } },
       select: { id: true },

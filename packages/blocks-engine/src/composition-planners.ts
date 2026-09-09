@@ -1122,10 +1122,40 @@ export function planConvertToComponent<TFields>(
     return { problem: "invalid-source" };
   }
 
-  const saved = plannedSave(document, selectedIds, nesting, limits);
+  // Read ONCE, for the same reason the id above is checked at runtime: this is
+  // a published entry point, and `limits` is an object the caller owns. Every
+  // member can be a getter or a proxy trap, so two reads can answer
+  // differently — and the stages below have to agree about the cap or the
+  // agreement between them is the thing an author relies on. Measured on this
+  // function before the snapshot: `maxNodes` was read five times, and a getter
+  // answering honestly on four of them and `0` on the fifth approved a
+  // conversion whose definition contained an instance of itself. Poisoning any
+  // OTHER single read was refused, which is what makes this the fifth read's
+  // agreement with the first rather than a general validation weakness.
+  //
+  // Named property reads rather than a spread. A spread copies OWN ENUMERABLE
+  // properties, which is the wrong set at both ends: it MISSES a member reached
+  // through the prototype or defined non-enumerably — measured, a
+  // `Object.create(DEFAULT_LIMITS)` reads `maxNodes` as 5,000 and spreads to
+  // `{}`, so every cap arrives `undefined` and a call that worked throws from
+  // `renameScopes` — and it READS unrelated members the planner never uses, so
+  // a caller whose limits object carries an enumerable getter for something
+  // else has that getter run, and a throwing one takes this call down.
+  //
+  // The annotation is what keeps the list honest: `DocumentLimits` is a closed
+  // set of required members, so a member added to it stops this literal
+  // compiling rather than being quietly read live. An OPTIONAL member added
+  // later would not, and would have to be added here by hand.
+  const bounds: DocumentLimits = {
+    maxDepth: limits.maxDepth,
+    maxNodes: limits.maxNodes,
+    maxBytes: limits.maxBytes,
+  };
+
+  const saved = plannedSave(document, selectedIds, nesting, bounds);
   if (saved.problem !== undefined) return saved;
 
-  const definition = componentDocument(saved, exposure, limits);
+  const definition = componentDocument(saved, exposure, bounds);
   if (definition.problem !== undefined) return definition;
 
   // A definition holding an instance of ITSELF. The selection can already
@@ -1134,11 +1164,34 @@ export function planConvertToComponent<TFields>(
   // unresolved, so a conversion whose dry run succeeded replaces visible
   // content with a broken placeholder. Asked through the resolver's own
   // published index, not a walk of this module's own.
-  if (componentIdsIn(definition.document.nodes).includes(componentId)) {
+  //
+  // The caller's own node cap is passed, and passing it is the whole guard.
+  // The index
+  // walks depth-first under a node budget and STOPS silently, returning a
+  // prefix that is indistinguishable from a definition referencing nothing —
+  // and "references nothing" is the answer that approves the conversion. Left
+  // to its default the walk ran under 5,000 however the host had configured
+  // the caller, so on a site that raised the cap a self-reference sitting past
+  // node 5,000 in walk order approved a conversion the resolver then leaves
+  // unresolved. Measured: at a budget equal to the definition's own node count
+  // the walk reads all of it, and one below that it answers `[]`.
+  //
+  // Threading the caller's cap is sufficient, rather than merely better. The
+  // definition reaching this line is one `plannedSave` accepted under the SAME
+  // `bounds`, and that ceiling is `maxNodes` nodes exactly — measured at the
+  // boundary: a selection of `maxNodes` is accepted and walks whole, and
+  // `maxNodes + 1` is refused as `"exceeds-limits"` before this line is
+  // reached. So there is no definition here that this walk can truncate, which
+  // is why the prefix is not tested for and no refusal for one exists.
+  if (
+    componentIdsIn(definition.document.nodes, bounds.maxNodes).includes(
+      componentId
+    )
+  ) {
     return { problem: "self-reference" };
   }
 
-  const replaced = replaceOps(document, saved, componentId, nesting, limits);
+  const replaced = replaceOps(document, saved, componentId, nesting, bounds);
   if (replaced.problem !== undefined) return replaced;
 
   return {

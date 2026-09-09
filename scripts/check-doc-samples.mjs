@@ -305,7 +305,8 @@ export const isModule = (code, extension = "tsx") => {
     if (
       ts.isCallExpression(node) &&
       (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(node.expression) && node.expression.text === "require"))
+        (ts.isIdentifier(node.expression) &&
+          node.expression.text === "require"))
     ) {
       loads = true;
       return;
@@ -753,7 +754,10 @@ export function deprecatedPropertiesIn(sourceFile, checker) {
           found.push({
             name,
             start: property.getStart(sourceFile),
-            note: (tag.text ?? []).map(part => part.text).join("").trim(),
+            note: (tag.text ?? [])
+              .map(part => part.text)
+              .join("")
+              .trim(),
           });
         }
       }
@@ -812,7 +816,10 @@ function applicableConstituents(constituents, literal, checker) {
     const name = writtenPropertyName(property);
     if (name === null) continue;
     const written = checker.getTypeAtLocation(property.initializer);
-    if (!written.isLiteral() && !(written.flags & ts.TypeFlags.BooleanLiteral)) {
+    if (
+      !written.isLiteral() &&
+      !(written.flags & ts.TypeFlags.BooleanLiteral)
+    ) {
       continue;
     }
     discriminants.push({ name, written });
@@ -883,6 +890,16 @@ export const UNRESOLVED_IMPORT = /error TS2307: Cannot find module '([^']+)'/;
 
 /** An undefined name, which may or may not be a defect. */
 export const MISSING_NAME = /error TS2304: Cannot find name '([^']+)'/;
+
+/**
+ * A shorthand property with nothing in scope to fill it.
+ *
+ * `{ Page }` is the same missing name as `Page`, and TypeScript reports it as
+ * TS18004 rather than TS2304. Reading only TS2304 meant the same reader-owned
+ * name was charged or set aside according to the punctuation around it.
+ */
+export const MISSING_SHORTHAND =
+  /error TS18004: No value exists in scope for the shorthand property '([^']+)'/;
 
 /** The package part of a specifier: @nextlyhq/plugin-sdk/testing -> @nextlyhq/plugin-sdk. */
 export const packageOf = specifier => {
@@ -1036,6 +1053,20 @@ export function exportsMapAnswers(exports, subpath) {
  * a continuation would hide a genuine typo or a missing import, which is one of
  * the things this audit exists to find.
  */
+/**
+ * The block a diagnostic came from, asked whether the name is the reader's.
+ *
+ * A diagnostic whose block cannot be found keeps its finding. Two of the three
+ * tests need the block to answer, so falling back to the name alone was the
+ * PERMISSIVE direction, not the strict one it was described as: a constructed
+ * name and a misspelled export would both have been set aside there.
+ */
+export function mentionIsReaderOwned(name, file, index, samples) {
+  const sample = samples.find(s => s.file === file && s.index === index);
+  if (!sample) return false;
+  return readerOwnedMention(name, sample.code, extensionFor(sample));
+}
+
 export function declaredEarlier(name, file, index, samples) {
   return samples.some(
     s =>
@@ -1230,7 +1261,9 @@ export function parseSample(source, extension = "tsx") {
     `sample.${extension}`,
     source,
     ts.ScriptTarget.Latest,
-    false,
+    // Parents, because asking whether a mention sits in a type position means
+    // walking up from it. Still the one place a sample is parsed.
+    true,
     extension === "tsx" ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   );
 }
@@ -1531,6 +1564,458 @@ function workspaceManifest(pkg) {
  * was once a pattern match asserting something nobody had checked, and each of
  * those hid real defects.
  */
+/**
+ * Every name the workspace publishes, read from its SOURCE entries.
+ *
+ * The question a missing PascalCase name raises is not what it looks like but
+ * whether the reader could have imported it. `Posts`, `Users` and `Page` are
+ * the reader's own: types `nextly generate:types` writes into their project,
+ * and components they author. Nothing here can define them and a page that
+ * mentions one is not broken. `Media` and `Skeleton` look exactly the same and
+ * are the opposite case: both ARE exported, from `nextly` and `@nextlyhq/ui`,
+ * so a sample using one without importing it is a defect a reader meets.
+ *
+ * Measured rather than assumed, which is the whole point of asking the exports:
+ * a rule keyed on the shape alone would have silenced those two.
+ *
+ * From `src`, never from `dist`, so the answer cannot depend on whether a build
+ * has run. CI runs the script suite BEFORE the build step, and reading the built
+ * types there returned an empty set: every name read as the reader's, and the
+ * unit tests failed on a clean checkout while passing on a laptop.
+ *
+ * EVERY typed entry a package declares, not only `"."`. A symbol published from
+ * a subpath is still published: `@nextlyhq/builder` exports `BuilderShell` from
+ * `./shell` and keeps it out of the root barrel, and reading the barrel alone
+ * called it the reader's.
+ *
+ * An entry is found in one of two ways, because neither alone is enough.
+ * `dist/shell.d.ts` names `src/shell.ts` and that mirror covers most of them,
+ * but not `nextly/document-lock`, which is built from
+ * `src/domains/document-lock/contract.ts`. Guessing the source from the output
+ * name left six entries unresolved, and with them went `DocumentLockHolder`,
+ * `FieldTypeCatalogEntry` and `Hsv`: reader-owned on a clean checkout and ours
+ * after a build, which is the build-state dependence this was supposed to end.
+ *
+ * So the build's own configuration is asked as well, by PARSING it for the
+ * source paths it names. Parsed rather than imported, because most of these
+ * configs are TypeScript and this gate runs under plain `node`, and because a
+ * gate that must not consult the network should not be executing build scripts
+ * either. An import chain inside the package is followed, since `@nextlyhq/ui`
+ * declares which barrel each subpath is built from in a module beside its
+ * config rather than in the config.
+ */
+const exportedNames = new Set();
+/**
+ * The subset that can supply a VALUE.
+ *
+ * TypeScript keeps two namespaces and a name can be in either. `Media` is in
+ * only one: `packages/nextly/src/types/media.ts` exports it as a type and
+ * `packages/admin/src/types/media.ts` as an interface, and nothing in the
+ * workspace exports a value by that name. So `collections: [Posts, Users,
+ * Media]` needs a value no import here can supply, which makes that `Media` the
+ * reader's own collection exactly as `Posts` is, while `const m: Media` is a
+ * defect a reader meets because the type is importable. Flattening the two
+ * namespaces into one set answered the first case wrongly.
+ */
+const exportedValues = new Set();
+
+/** `./dist/shell.d.ts` as its source, since that is what is always present. */
+function sourceCandidatesFor(typesPath) {
+  const built = typesPath.replace(/^\.\//, "").match(/^dist\/(.+)\.d\.ts$/);
+  return built ? [`src/${built[1]}.ts`, `src/${built[1]}.tsx`] : [];
+}
+
+/** A relative import specifier, as the files it could mean. */
+function localModuleCandidates(base) {
+  const withoutJs = base.replace(/\.js$/, "");
+  return [
+    `${withoutJs}.ts`,
+    `${withoutJs}.tsx`,
+    base,
+    `${withoutJs}.mjs`,
+    join(withoutJs, "index.ts"),
+  ];
+}
+
+/**
+ * The source files a package's build configuration names.
+ *
+ * Read by parsing, so nothing here runs a build script or needs a TypeScript
+ * loader to read a `.ts` config. Relative imports are followed within the
+ * package, because a config may keep its entry map in a module beside it.
+ */
+function buildConfigEntries(packageDir) {
+  let names;
+  try {
+    names = readdirSync(packageDir);
+  } catch {
+    return [];
+  }
+  const queue = names
+    .filter(name => /^tsup(\..+)?\.config\.[cm]?[jt]s$/.test(name))
+    .map(name => join(packageDir, name));
+  const seen = new Set();
+  const found = new Set();
+  while (queue.length > 0) {
+    const file = queue.pop();
+    if (seen.has(file) || !existsSync(file)) continue;
+    seen.add(file);
+    const source = ts.createSourceFile(
+      file,
+      readFileSync(file, "utf-8"),
+      ts.ScriptTarget.ES2022,
+      false,
+      ts.ScriptKind.TS
+    );
+    const visit = node => {
+      if (ts.isStringLiteral(node) && /^src\/.+\.tsx?$/.test(node.text)) {
+        const full = join(packageDir, node.text);
+        if (existsSync(full)) found.add(full);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    for (const statement of source.statements) {
+      if (!ts.isImportDeclaration(statement)) continue;
+      const specifier = statement.moduleSpecifier;
+      if (!ts.isStringLiteral(specifier)) continue;
+      if (!specifier.text.startsWith(".")) continue;
+      for (const candidate of localModuleCandidates(
+        join(dirname(file), specifier.text)
+      )) {
+        if (existsSync(candidate)) {
+          queue.push(candidate);
+          break;
+        }
+      }
+    }
+  }
+  return [...found];
+}
+
+/** Every typed entry a package declares, resolved to a file that exists. *
+ * The export set is a parameter with the workspace as its default, so the rule
+ * can be stated as a test without a build having run. That mattered: reading it
+ * unconditionally made the unit tests depend on build state, and they failed on
+ * a clean CI checkout while passing on a laptop.
+ */
+function typedEntriesOf(packageDir, manifest) {
+  const declared = [];
+  const map = manifest.exports;
+  if (map && typeof map === "object") {
+    for (const target of Object.values(map)) {
+      if (!target || typeof target !== "object") continue;
+      const types =
+        target.types ?? target.import?.types ?? target.default?.types;
+      if (typeof types === "string") declared.push(types);
+    }
+  }
+  const root = manifest.types ?? manifest.typings;
+  if (typeof root === "string") declared.push(root);
+  if (declared.length === 0) declared.push("dist/index.d.ts");
+
+  const resolved = new Set(buildConfigEntries(packageDir));
+  for (const entry of new Set(declared)) {
+    for (const candidate of sourceCandidatesFor(entry)) {
+      const full = join(packageDir, candidate.replace(/^\.\//, ""));
+      if (existsSync(full)) {
+        resolved.add(full);
+        break;
+      }
+    }
+  }
+  return [...resolved];
+}
+
+/**
+ * Whether an export is declared type-only, whatever it points at.
+ *
+ * Both spellings say it: `export type { X }` marks the declaration and
+ * `export { type X }` marks the specifier. A symbol exported by several
+ * specifiers is type-only only when every one of them is.
+ */
+function exportedAsTypeOnly(symbol) {
+  const specifiers = (symbol.declarations ?? []).filter(ts.isExportSpecifier);
+  if (specifiers.length === 0) return false;
+  return specifiers.every(
+    specifier => specifier.isTypeOnly || specifier.parent.parent.isTypeOnly
+  );
+}
+
+function workspaceExports() {
+  if (exportedNames.size > 0) return exportedNames;
+  const entries = [];
+  for (const dirent of readdirSync(join(ROOT, "packages"), {
+    withFileTypes: true,
+  })) {
+    if (!dirent.isDirectory()) continue;
+    const packageDir = join(ROOT, "packages", dirent.name);
+    const manifestPath = join(packageDir, "package.json");
+    if (!existsSync(manifestPath)) continue;
+    let manifest;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    } catch {
+      continue;
+    }
+    if (!manifest.name || manifest.private) continue;
+    entries.push(...typedEntriesOf(packageDir, manifest));
+  }
+  if (entries.length === 0) return exportedNames;
+  // One program over every entry, because the same question asked twenty times
+  // costs twenty type-checker startups.
+  const program = ts.createProgram(entries, {
+    noEmit: true,
+    skipLibCheck: true,
+    target: ts.ScriptTarget.ES2022,
+    jsx: ts.JsxEmit.ReactJSX,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+  });
+  const checker = program.getTypeChecker();
+  for (const entry of entries) {
+    const sourceFile = program.getSourceFile(entry);
+    if (!sourceFile) continue;
+    const symbol = checker.getSymbolAtLocation(sourceFile);
+    if (!symbol) continue;
+    for (const exported of checker.getExportsOfModule(symbol)) {
+      exportedNames.add(exported.getName());
+      // A re-export is an alias, and an alias carries no namespace of its own:
+      // asking the alias whether it is a value answers for the thing bound
+      // rather than for the binding. Both questions matter, and in this order.
+      //
+      // `export type { QueryClient } from "./types/query"` points at TanStack's
+      // runtime class, so the target is a value while the export is not: an
+      // importer of `@nextlyhq/admin` cannot get that class from it. Reading
+      // only the target put `QueryClient` among the values and kept `new
+      // QueryClient()` reported as a name the workspace could have supplied.
+      if (exportedAsTypeOnly(exported)) continue;
+      const target =
+        exported.flags & ts.SymbolFlags.Alias
+          ? checker.getAliasedSymbol(exported)
+          : exported;
+      if (target.flags & ts.SymbolFlags.Value) {
+        exportedValues.add(exported.getName());
+      }
+    }
+  }
+  return exportedNames;
+}
+
+export const readerOwnedName = (name, exported = workspaceExports()) =>
+  /^[A-Z][A-Za-z0-9]*$/.test(name) && !exported.has(name);
+
+/** The value half of {@link workspaceExports}, built by the same pass. */
+export function workspaceValueExports() {
+  workspaceExports();
+  return exportedValues;
+}
+
+/**
+ * Whether every mention of `name` in this block needs a value.
+ *
+ * Asked of the block rather than of the diagnostic's position, because a
+ * position has to survive the prelude a continuation fence is recompiled with,
+ * and a mention that moved is a wrong answer given confidently. A fence that
+ * uses the name in a type position anywhere keeps its finding, which is the
+ * loud direction: the alternative silences a reference a reader would meet.
+ */
+export function usedOnlyAsValue(code, name, extension = "tsx") {
+  let mentioned = false;
+  let asType = false;
+  const visit = node => {
+    if (ts.isIdentifier(node) && node.text === name) {
+      mentioned = true;
+      for (let at = node.parent; at; at = at.parent) {
+        // `typeof X` is written in a type position and reads X out of the
+        // VALUE namespace, so it is a value use however it looks. Asked before
+        // the general test below, because a type query is itself a type node.
+        if (ts.isTypeQueryNode(at)) break;
+        if (ts.isTypeNode(at)) {
+          asType = true;
+          break;
+        }
+        if (ts.isExpression(at) || ts.isStatement(at)) break;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parseSample(code, extension));
+  return mentioned && !asType;
+}
+
+/** Whether a block ever constructs this name. */
+/**
+ * The name a `new` expression needs in scope.
+ *
+ * `new AWS.S3Client()` needs `AWS`, not `S3Client`: the constructor is reached
+ * through a namespace, and the namespace is the binding the sample forgot to
+ * import. Reading only a bare identifier missed every qualified constructor.
+ */
+function constructorRoot(expression) {
+  let at = expression;
+  // Every node here is transparent to the question "what has to be in scope":
+  // a property or element access reaches through its object, and parentheses,
+  // `as`, `satisfies`, a non-null `!` and an angle-bracket assertion all wrap an
+  // expression without changing which binding it needs.
+  while (
+    ts.isPropertyAccessExpression(at) ||
+    ts.isElementAccessExpression(at) ||
+    ts.isParenthesizedExpression(at) ||
+    ts.isAsExpression(at) ||
+    ts.isSatisfiesExpression(at) ||
+    ts.isNonNullExpression(at) ||
+    ts.isTypeAssertionExpression(at)
+  ) {
+    at = at.expression;
+  }
+  return ts.isIdentifier(at) ? at.text : undefined;
+}
+
+export function constructedInBlock(code, name, extension = "tsx") {
+  let constructed = false;
+  const visit = node => {
+    if (ts.isNewExpression(node) && constructorRoot(node.expression) === name) {
+      constructed = true;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parseSample(code, extension));
+  return constructed;
+}
+
+/** Whether two names are the same but for one character. */
+function withinOneEdit(a, b) {
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (long.length - short.length > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < short.length && j < long.length) {
+    if (short[i] === long[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    if (edits === 1) return false;
+    edits += 1;
+    if (short.length === long.length) i += 1;
+    j += 1;
+  }
+  return true;
+}
+
+/**
+ * Whether the name is one of ours with a character wrong.
+ *
+ * `NextlyEror` and `Skelton` are not names a reader declares, they are
+ * `NextlyError` and `Skeleton` misspelled, and a rule that only asks whether
+ * the workspace exports the name as written waves both through.
+ *
+ * Compared in lower case so a wrong capital counts as the same word, and a
+ * difference of ONLY capitals is then excluded rather than reported: a reader's
+ * generated `Users` sits one capital from an internal `users`, and calling that
+ * a misspelling would charge the most ordinary reader-owned name there is.
+ *
+ * A difference at the END is excluded for the same reason, and it is the one
+ * that matters most: a generated collection type is the PLURAL of a model this
+ * workspace exports, so `Users` is one character from `User` and `Posts` one
+ * from `Post`. Those two names are the whole point of the exemption. A
+ * misspelling puts its wrong character in the middle, which is what separates
+ * `NextlyEror` from `NextlyError` and `Skelton` from `Skeleton`.
+ */
+export function misspelledExport(name, exported = workspaceExports()) {
+  const wanted = name.toLowerCase();
+  for (const candidate of exported) {
+    const other = candidate.toLowerCase();
+    if (other === wanted) continue;
+    if (!withinOneEdit(wanted, other)) continue;
+    if (differsOnlyAtTheEnd(wanted, other)) continue;
+    if (wanted.length < LONG_ENOUGH_TO_MISSPELL) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * How long a name has to be before one edit makes it a misspelling.
+ *
+ * One edit is a wide net over short names, and the net was catching the reader.
+ * Measured against this workspace's own export set, with the case and suffix
+ * exclusions already applied:
+ *
+ * ```
+ * length 4   9 of 24 plausible component names collide
+ * length 5   1 of 65
+ * length 6+  0 of 20
+ * ```
+ *
+ * `Host` from `POST`, `Cost`, `Past`, `Cart`, `Fork`, `Last`, `Tile`, `Star`
+ * and `Tags` are all names a reader would give a component, and every one of
+ * them was charged. The population changes character between four and five, so
+ * that is where the bar sits.
+ *
+ * Length rather than a shared opening, which is what this first tried: a shared
+ * opening also discards a typo made in the first few characters, so
+ * `NNextlyError` read as the reader's. Length keeps those, because the reason
+ * short names collide is that one edit reaches most of the alphabet from them,
+ * not where in the word the edit falls.
+ *
+ * What remains is a five-letter name one edit from an export, `Watch` against
+ * `Match`, which is 1 in 65 here and genuinely indistinguishable from a typo.
+ */
+const LONG_ENOUGH_TO_MISSPELL = 5;
+
+/** Whether one name is the other with a character added at the end. */
+function differsOnlyAtTheEnd(a, b) {
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  return long.length !== short.length && long.startsWith(short);
+}
+
+/**
+ * Whether a missing name belongs to the reader, for the way this block used it.
+ *
+ * The name alone cannot answer it, in both directions.
+ *
+ * `Media` is exported as a type and never as a value, so it is the reader's in
+ * `collections: [Posts, Users, Media]` and ours in `const m: Media`.
+ *
+ * And a name this workspace does not export is not the reader's just for that.
+ * `new S3Client({})` asks for a runtime class, which is not a thing
+ * `nextly generate:types` writes into a reader's project or a component they
+ * author, so a sample using one has forgotten an import. `NextlyEror` is a name
+ * of ours with a letter missing. Both were being set aside, which is the docs
+ * gate accepting samples that are simply broken.
+ *
+ * What is still set aside, deliberately: a third-party VALUE used without `new`
+ * and without an import, from a package no sample imports, such as `[S3Client]`
+ * or `err instanceof ZodError`. Closing it needs one of two things, and both
+ * were measured and cost more than the gap. Resolving what the corpus imports
+ * reaches `next`, `next/navigation` and `next/image` and none of those three,
+ * because `next/server` and the AWS and Zod packages are never imported here;
+ * enumerating every installed package and subpath is neither cheap nor
+ * hermetic. Requiring the corpus to introduce a name first charges `Users` in
+ * `collections: [Posts, Users, Media]` while setting `Posts` aside, because
+ * `Posts` happens to be imported on another page, and charges `<Chart />` as
+ * well. A report that treats three names in one array differently is not one
+ * anyone can act on.
+ */
+export function readerOwnedMention(name, code, extension) {
+  if (!/^[A-Z][A-Za-z0-9]*$/.test(name)) return false;
+  // Asked before anything else, because it settles the question on its own:
+  // whatever the workspace does or does not export, a constructed name has to
+  // be a runtime class, and neither a generated type nor an authored component
+  // is one.
+  if (constructedInBlock(code, name, extension)) return false;
+  if (workspaceExports().has(name)) {
+    return (
+      !workspaceValueExports().has(name) &&
+      usedOnlyAsValue(code, name, extension)
+    );
+  }
+  return !misspelledExport(name);
+}
+
 export async function classifyDocDiagnostics({ diagnostics, samples }) {
   const uninstalled = [];
   const continued = [];
@@ -1542,6 +2027,8 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
   // Implicit `any` on a parameter: a reader's generated types may or may not
   // answer it, and nothing in the diagnostic says which.
   const implicitAny = [];
+  // Names the reader declares in their own project, which nothing here can.
+  const readerNames = [];
   // A sample whose import did not resolve was not really checked: TypeScript
   // types the unresolved bindings as `any`, so a wrong call through them
   // produces no diagnostic at all. Counting such a sample as clean overstates
@@ -1596,11 +2083,16 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
       implicitAny.push(line);
       continue;
     }
-    const name = line.match(MISSING_NAME);
-    if (name) {
+    // Both spellings of the same question: a name the block uses and nothing
+    // here defines. `{ Page }` reports as TS18004 and `Page` as TS2304, and
+    // they get the same answer.
+    const name = nameIn(line);
+    if (name !== undefined) {
       const [file, idx] = line.split("  ")[0].split("#");
       const index = Number.parseInt(idx, 10);
-      if (declaredEarlier(name[1], file, index, samples)) continued.push(line);
+      if (declaredEarlier(name, file, index, samples)) continued.push(line);
+      else if (mentionIsReaderOwned(name, file, index, samples))
+        readerNames.push(line);
       else real.push(line);
       continue;
     }
@@ -1616,6 +2108,7 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
     unchecked,
     uncheckedSamples,
     readerFiles,
+    readerNames,
     implicitAny,
     // Every diagnostic that came in, so a caller can prove it kept them all.
     // The buckets above are a partition, and the audit's job is to record each
@@ -1824,7 +2317,18 @@ export function auditBasis() {
 
 /** The page and the name a diagnostic is about: `page.mdx#3` and `adapter`. */
 export const originOf = line => line.split("  ")[0].split(":")[0];
-export const nameIn = line => line.match(MISSING_NAME)?.[1];
+/**
+ * The name a diagnostic says is missing, in either spelling.
+ *
+ * `Page` reports as TS2304 and `{ Page }` as TS18004, and every question asked
+ * of a missing name downstream is the same question. Asking it in one place is
+ * what stops the two drifting: the classifier learned the shorthand first, then
+ * the rebuild, while the survivor pass below still read TS2304 alone, so a
+ * rebased shorthand was dropped as already-reported and its continuation stayed
+ * excused without ever being recompiled.
+ */
+export const nameIn = line =>
+  line.match(MISSING_NAME)?.[1] ?? line.match(MISSING_SHORTHAND)?.[1];
 
 /**
  * The page a diagnostic belongs to, for grouping and for the baseline's keys.
@@ -1861,15 +2365,39 @@ export const pageOf = line => {
  * against the whole set-aside list, which carries entries added before
  * classification.
  */
+/**
+ * The names each continuation has to be recompiled with, by the block it came
+ * from.
+ *
+ * Both spellings of a missing name, because a continuation is excused on the
+ * strength of being rebuilt. Reading only TS2304 here excused a shorthand
+ * continuation without ever recompiling it, so whatever the pasted declaration
+ * would have revealed stayed behind an unresolved `any` while the audit
+ * reported the block as handled.
+ */
+export function namesToRebuild(continuations) {
+  const byOrigin = new Map();
+  for (const line of continuations) {
+    const origin = line.split("  ")[0].split(":")[0];
+    const name = nameIn(line);
+    if (name) byOrigin.set(origin, [...(byOrigin.get(origin) ?? []), name]);
+  }
+  return byOrigin;
+}
+
 export function unaccountedFor({
   total,
   real,
   continued,
   readerFiles,
+  readerNames,
   uninstalled,
   implicitAny,
 }) {
-  return total - (real + continued + readerFiles + uninstalled + implicitAny);
+  return (
+    total -
+    (real + continued + readerFiles + readerNames + uninstalled + implicitAny)
+  );
 }
 
 async function auditDocs() {
@@ -1932,12 +2460,7 @@ async function auditDocs() {
   // A continuation is only harmless if the block does nothing wrong with what
   // it inherited, and that cannot be known while the value is unresolved. Each
   // one is compiled again with the declarations it needs.
-  const byOrigin = new Map();
-  for (const line of continuations) {
-    const origin = line.split("  ")[0].split(":")[0];
-    const name = line.match(MISSING_NAME)?.[1];
-    if (name) byOrigin.set(origin, [...(byOrigin.get(origin) ?? []), name]);
-  }
+  const byOrigin = namesToRebuild(continuations);
   const rebuilt = [];
   // The names each rebuild was FOR, so a name that is still missing can be told
   // from an unrelated one the block simply gets wrong.
@@ -2067,7 +2590,7 @@ async function auditDocs() {
       )
     );
     for (const line of rebased) {
-      if (MISSING_NAME.test(line)) {
+      if (nameIn(line) !== undefined) {
         const origin = originOf(line);
         const name = String(nameIn(line));
         const inherited = (inheritedByOrigin.get(origin) ?? []).includes(name);
@@ -2122,6 +2645,7 @@ async function auditDocs() {
     unchecked,
     uncheckedSamples,
     readerFiles,
+    readerNames,
     implicitAny,
     total: classified,
   } = await classifyDocDiagnostics({
@@ -2150,7 +2674,11 @@ async function auditDocs() {
     // `any`, so everything reached through it stops being checked while the
     // fence still counts as compiled; recording which fences are in that state
     // is what stops one quietly joining them.
-    ...readerFiles.map(text => ({ mark: "reader-file", text }))
+    ...readerFiles.map(text => ({ mark: "reader-file", text })),
+    // Names the reader declares in their own project. Recorded by identity like
+    // every other set-aside bucket, so a page cannot start mentioning a new one
+    // unnoticed; what it no longer does is charge the page a finding.
+    ...readerNames.map(text => ({ mark: "reader-name", text }))
   );
 
   // Nothing may be dropped on the floor. `real` is charged to a page, the
@@ -2171,6 +2699,7 @@ async function auditDocs() {
     real: real.length,
     continued: continued.length,
     readerFiles: readerFiles.length,
+    readerNames: readerNames.length,
     uninstalled: uninstalled.length,
     implicitAny: implicitAny.length,
   });
@@ -2227,6 +2756,11 @@ async function auditDocs() {
         ? `\n  ${String(implicitAny.length + fromInheritedBlocks.length)} leave a parameter implicitly ` +
           `\`any\`, which a reader's generated types answer for a document ` +
           `field and do not answer for a plain function.`
+        : "") +
+      (readerNames.length > 0
+        ? `\n  ${String(readerNames.length)} name a type or component the reader ` +
+          `declares, such as a generated Posts or their own Page, which no ` +
+          `package here exports.`
         : "") +
       (readerFiles.length > 0
         ? `\n  ${String(readerFiles.length)} import a file the reader writes, ` +
@@ -2376,7 +2910,9 @@ export function compareToBaseline({
     };
     for (const [what, was] of Object.entries(baseline.coverage ?? {})) {
       if ((seen[what] ?? 0) < was) {
-        lost.push(`${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`);
+        lost.push(
+          `${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`
+        );
       }
       // A GAIN has to be recorded too, or it is not protected. Accepting one
       // silently meant a fence added today could be deleted tomorrow, returning
@@ -2384,7 +2920,9 @@ export function compareToBaseline({
       // ratchet that only resists decreases from a number nobody updates
       // protects the corpus as it was and nothing since.
       if ((seen[what] ?? 0) > was) {
-        gained.push(`${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`);
+        gained.push(
+          `${what}: was ${String(was)}, now ${String(seen[what] ?? 0)}`
+        );
       }
     }
   }

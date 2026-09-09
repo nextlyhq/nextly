@@ -15,7 +15,7 @@
  * import cycles.
  *
  * A handler that needs CONTENT does not need this: the Direct API resolves
- * itself lazily (`direct-api/nextly.ts` calls `getNextly()` per method), so a
+ * itself lazily (`direct-api/nextly.ts` calls `requireNextly()` per method), so a
  * job can import and use it without anything being threaded through. Only a
  * consumer like this one, which wants the adapter beneath the API, takes deps
  * at registration.

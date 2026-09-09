@@ -4,7 +4,7 @@ const find = vi.fn();
 const count = vi.fn();
 
 vi.mock("../../../direct-api/nextly", () => ({
-  getNextly: () => ({ find, count }),
+  requireNextly: () => ({ find, count }),
 }));
 
 import { NextlyError } from "../../../errors/nextly-error";

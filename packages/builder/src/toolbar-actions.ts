@@ -35,8 +35,15 @@
  * @module toolbar-actions
  */
 
-import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  registryNestingSource,
+  saveAsPatternRefusal,
+  type BlockDocument,
+  type BlockNode,
+  type NestingSource,
+} from "@nextlyhq/blocks-engine";
 
+import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
 import { blockDuplication } from "./duplicate-block";
 import type { Rect } from "./geometry";
@@ -51,6 +58,7 @@ export type ToolbarActionId =
   | "move-up"
   | "move-down"
   | "duplicate"
+  | "save-as-pattern"
   | "delete";
 
 /** One button's worth of decision. */
@@ -117,6 +125,42 @@ function moveAction(
 }
 
 /**
+ * Whether this selection could be stored in the library, and why not.
+ *
+ * ASKED OF THE PLANNER, never restated. The ways a selection can be unsavable
+ * are not a short list a toolbar should keep its own copy of — a run with a gap,
+ * a block that may not be a document root, a node the op layer will not carry,
+ * one HTML id on two of the run's nodes, a document past the byte cap — and a
+ * surface enumerating them drifts the first time the planner learns a new way to
+ * say no. It drifts SILENTLY: the button stays enabled and the save fails.
+ *
+ * Offered for a SET as readily as for one block, because saving several blocks
+ * as one pattern is the ordinary case rather than the exception — a hero is a
+ * heading, a paragraph and a button.
+ *
+ * The refusal carries a reason whatever the cause, unlike a move at the edge of
+ * its container. There is nothing on the canvas that explains why a selection
+ * cannot be saved, so leaving it dimmed and silent would be a control an author
+ * can only guess at.
+ */
+function saveAction(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource
+): ToolbarAction {
+  const refusal = saveAsPatternRefusal(document, ids, nesting);
+  const label = "Save as pattern";
+  if (refusal === undefined)
+    return { id: "save-as-pattern", label, enabled: true };
+  return {
+    id: "save-as-pattern",
+    label,
+    enabled: false,
+    reason: compositionRefusalReason(refusal),
+  };
+}
+
+/**
  * The bar for a selection holding more than one block.
  *
  * **Duplicate, delete and move keep their meaning; select-parent loses it.**
@@ -138,7 +182,8 @@ function moveAction(
  */
 function manyBlockActions(
   document: BlockDocument,
-  ids: readonly string[]
+  ids: readonly string[],
+  nesting: NestingSource
 ): ToolbarAction[] {
   const many = `Only one block at a time. ${ids.length} are selected.`;
   const deleteLock = ids
@@ -157,6 +202,7 @@ function manyBlockActions(
     // A lock never stops a duplication, for a set as for one block: the
     // originals stay where they are.
     { id: "duplicate", label: "Duplicate", enabled: true },
+    saveAction(document, ids, nesting),
     deleteLock === undefined
       ? { id: "delete", label: "Delete", enabled: true }
       : {
@@ -187,15 +233,26 @@ export function toolbarActions(
    * not adopted the set — keeps the same answer it had. What changes for a
    * SET is which verbs are well defined, not which rules decide them.
    */
-  selectedIds?: readonly string[]
+  selectedIds?: readonly string[],
+  /**
+   * The nesting rule source, for asking whether a selection can be saved.
+   *
+   * Optional and defaulted to the registry, which is how the insert panel and
+   * the keyboard route already default it — so a refusal reads the same whether
+   * an author dragged the block, moved it with the keyboard, or tried to save
+   * it. Present as an option only so a test can supply a rule set without
+   * registering blocks globally.
+   */
+  nesting?: NestingSource
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
   const path = pathTo(document, selectedId);
   if (path.length === 0) return [];
 
+  const rules = nesting ?? registryNestingSource();
   const ids = selectedIds ?? [selectedId];
-  if (ids.length > 1) return manyBlockActions(document, ids);
+  if (ids.length > 1) return manyBlockActions(document, ids, rules);
 
   const moveLock = lockBlockingMove(document, selectedId);
   const deleteLock = lockBlockingDelete(document, selectedId);
@@ -236,6 +293,7 @@ export function toolbarActions(
       // reading the keyboard duplicate takes.
       enabled: blockDuplication(document, selectedId) !== null,
     },
+    saveAction(document, ids, rules),
     deleteLock === undefined
       ? {
           id: "delete",

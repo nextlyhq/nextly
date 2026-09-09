@@ -19,7 +19,7 @@
  * @module domains/widgets/execute
  */
 
-import { getNextly } from "../../direct-api/nextly";
+import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WhereFilter } from "../collections/query/query-operators";
@@ -104,7 +104,7 @@ async function runCount(
   query: WidgetQuery,
   caller: ReadCaller
 ): Promise<WidgetResult> {
-  const result = await getNextly().count({
+  const result = await requireNextly().count({
     collection,
     ...sharedReadArgs(query, caller),
   });
@@ -130,7 +130,7 @@ async function runGroupBy(
   // a query reaches execution the key is present. The fallback keeps that
   // assumption from becoming an unchecked cast.
   const groupBy = query.groupBy ?? "";
-  const result = await getNextly().group({
+  const result = await requireNextly().group({
     collection,
     groupBy,
     // The query's own limit bounds the BUCKETS, which is what a limit means for
@@ -241,7 +241,7 @@ async function runList(
   source: WidgetSource
 ): Promise<WidgetResult> {
   const select = toSelect(query.select);
-  const result = await getNextly().find({
+  const result = await requireNextly().find({
     collection,
     limit: query.limit,
     ...(query.sort ? { sort: query.sort } : {}),

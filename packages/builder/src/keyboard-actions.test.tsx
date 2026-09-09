@@ -22,7 +22,11 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { EditorState } from "./editor-state";
-import { BlockKeyboardActions } from "./keyboard-actions";
+import {
+  BlockKeyboardActions,
+  useBlockActionsContext,
+  type BlockActions,
+} from "./keyboard-actions";
 
 // `cleanup`, not an innerHTML wipe. This package does not enable vitest
 // globals, so testing-library registers no cleanup of its own — and clearing
@@ -80,12 +84,38 @@ function editorSpy(doc: BlockDocument, selectedId: string | null): EditorSpy {
  * while leaving the announcement untested — which is how the effect the rule
  * returns went unconsumed in the first place.
  */
-function mount(editor: EditorState) {
+function mount(editor: EditorState, onSaveAsPattern = () => undefined) {
   render(
     <ShortcutProvider>
-      <BlockKeyboardActions editor={editor} />
+      <BlockKeyboardActions onSaveAsPattern={onSaveAsPattern} editor={editor} />
     </ShortcutProvider>
   );
+}
+
+/**
+ * The verbs the provider publishes, as a surface below it would press them.
+ *
+ * Read through the context rather than by rendering a toolbar, because what is
+ * under test is the verb itself: every pointer surface runs exactly this.
+ */
+function verbsUnder(
+  editor: EditorState,
+  onSaveAsPattern: () => void
+): BlockActions {
+  let published: BlockActions | undefined;
+  function Probe(): null {
+    published = useBlockActionsContext();
+    return null;
+  }
+  render(
+    <ShortcutProvider>
+      <BlockKeyboardActions onSaveAsPattern={onSaveAsPattern} editor={editor}>
+        <Probe />
+      </BlockKeyboardActions>
+    </ShortcutProvider>
+  );
+  if (published === undefined) throw new Error("no verbs were published");
+  return published;
 }
 
 /**
@@ -395,6 +425,7 @@ describe("useBlockKeyboardActions", () => {
     render(
       <ShortcutProvider>
         <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
           editor={editor}
           nesting={{ parentsOf: () => ["acme/box"] }}
         />
@@ -997,7 +1028,10 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
     render(
       <ShortcutProvider>
         <HostBindings />
-        <BlockKeyboardActions editor={editor} />
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+        />
       </ShortcutProvider>
     );
     return hostCancel;
@@ -1056,7 +1090,10 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
     }
     render(
       <ShortcutProvider>
-        <BlockKeyboardActions editor={editor} />
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+        />
         <HostBindings />
       </ShortcutProvider>
     );
@@ -1079,7 +1116,10 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
     try {
       render(
         <ShortcutProvider>
-          <BlockKeyboardActions editor={editor} />
+          <BlockKeyboardActions
+            onSaveAsPattern={() => undefined}
+            editor={editor}
+          />
         </ShortcutProvider>
       );
 
@@ -1107,7 +1147,10 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
     const editor = editorSpy(pair(), "a");
     render(
       <ShortcutProvider>
-        <BlockKeyboardActions editor={editor} />
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+        />
       </ShortcutProvider>
     );
 
@@ -1136,7 +1179,10 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
     render(
       <ShortcutProvider>
         <HostBindings />
-        <BlockKeyboardActions editor={editor} />
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+        />
       </ShortcutProvider>
     );
 
@@ -1287,5 +1333,70 @@ describe("the document's history while the author is typing", () => {
     press("y", { ctrlKey: true });
 
     expect(editor.redo).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the save verb honours the planner before the host sees it", () => {
+  /** Three top-level blocks, with a gap between the two selected. */
+  function selectedAcrossAGap() {
+    return {
+      ...editorSpy(
+        documentOf([
+          { id: "a", type: "acme/text", version: 1, props: {} },
+          { id: "b", type: "acme/text", version: 1, props: {} },
+          { id: "c", type: "acme/text", version: 1, props: {} },
+        ]),
+        "a"
+      ),
+      selection: { ids: ["a", "c"], primary: "a" },
+    } as ReturnType<typeof editorSpy>;
+  }
+
+  it("does NOT reach the host for a selection the planner refuses", () => {
+    /*
+     * The toolbar keeps an unavailable verb focusable and still calls its
+     * runner — deliberately, so a verb can announce its own refusal. A bare
+     * pass-through therefore opens the form on a selection the planner has
+     * already rejected, and posts it.
+     */
+    const asked = vi.fn();
+
+    verbsUnder(selectedAcrossAGap(), asked).saveAsPattern();
+
+    expect(asked).not.toHaveBeenCalled();
+  });
+
+  it("says why, in the region every other refusal uses", () => {
+    // An author who pressed a dimmed control is owed the reason, and this is
+    // the only place a keyboard author would hear it.
+    const verbs = verbsUnder(selectedAcrossAGap(), () => undefined);
+
+    // Wrapped, because the announcement is state: read without flushing, the
+    // region is still empty and the case passes for a verb that says nothing.
+    act(() => {
+      verbs.saveAsPattern();
+    });
+
+    expect(screen.getByRole("status").textContent).toContain("no gaps");
+  });
+
+  it("reaches the host when the planner permits it", () => {
+    // The control. Without it a verb that never forwarded would satisfy both
+    // cases above while making the feature unreachable.
+    const asked = vi.fn();
+    const editor = {
+      ...editorSpy(
+        documentOf([
+          { id: "a", type: "acme/text", version: 1, props: {} },
+          { id: "b", type: "acme/text", version: 1, props: {} },
+        ]),
+        "a"
+      ),
+      selection: { ids: ["a", "b"], primary: "a" },
+    } as ReturnType<typeof editorSpy>;
+
+    verbsUnder(editor, asked).saveAsPattern();
+
+    expect(asked).toHaveBeenCalledTimes(1);
   });
 });

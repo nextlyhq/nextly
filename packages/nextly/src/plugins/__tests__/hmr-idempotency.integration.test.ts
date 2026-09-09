@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { defineCollection, text } from "../../config";
 import { createAdapter } from "../../database/factory";
 import { registerServices, shutdownServices } from "../../di/register";
-import { getNextly, resetNextlyInstance } from "../../direct-api/nextly";
+import { requireNextly, resetNextlyInstance } from "../../direct-api/nextly";
 import { resetEventBus } from "../../events/event-bus";
 import { resetFilterRegistry } from "../../filters";
 import { getHookRegistry, resetHookRegistry } from "../../hooks/hook-registry";
@@ -122,7 +122,7 @@ describe("HMR idempotency (B2/T5)", () => {
 
     const a1 = await freshAdapter();
     await boot(a1, [probe]);
-    await getNextly().create({ collection: "notes", data: { title: "x" } });
+    await requireNextly().create({ collection: "notes", data: { title: "x" } });
     expect(counter.n).toBe(1);
 
     // Simulate HMR: tear services down but keep the global bus + hook registry,
@@ -130,7 +130,7 @@ describe("HMR idempotency (B2/T5)", () => {
     await hmrReset();
     const a2 = await freshAdapter();
     await boot(a2, [probe]);
-    await getNextly().create({ collection: "notes", data: { title: "y" } });
+    await requireNextly().create({ collection: "notes", data: { title: "y" } });
 
     // Without the fix the stale handler also fires -> 3. With it -> 2.
     expect(counter.n).toBe(2);

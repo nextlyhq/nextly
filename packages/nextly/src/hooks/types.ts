@@ -254,7 +254,7 @@ export interface HookContext<T = any> {
    * and the Nextly Direct API instance for performing database operations
    * within hooks.
    *
-   * **`req.nextly`** provides the same Direct API available via `getNextly()`,
+   * **`req.nextly`** provides the same Direct API available via `requireNextly()`,
    * allowing hooks to perform CRUD operations on other collections.
    * This allows hooks to perform CRUD operations on other collections.
    *

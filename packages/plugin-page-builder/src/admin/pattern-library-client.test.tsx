@@ -93,3 +93,124 @@ describe("what reaches the insert panel", () => {
     expect(first.result.current.patterns).toBe(second.result.current.patterns);
   });
 });
+
+describe("the categories the save form suggests", () => {
+  it("offers every category the library uses, in a predictable order", () => {
+    // Sorted by name rather than by how often each is used: a suggestion list
+    // an author scans has to stay where they last saw it, and frequency moves
+    // the entries around as the library grows.
+    answering([
+      {
+        id: "a",
+        title: "A",
+        granularity: "section",
+        category: "Heroes",
+        document,
+      },
+      {
+        id: "b",
+        title: "B",
+        granularity: "element",
+        category: "Buttons",
+        document,
+      },
+    ]);
+
+    const { result } = renderHook(() => usePatternLibrary());
+
+    expect(result.current.categories).toEqual(["Buttons", "Heroes"]);
+  });
+
+  it("does not offer one spelling of a category twice", () => {
+    // A library holding both already has the problem the suggestions exist to
+    // prevent; offering both invites a third.
+    // The FIRST spelling is the one kept, and the fixtures have to be able to
+    // tell: written with a last row that trims back to the first, this passed
+    // with the de-duplication removed entirely, because a map keyed on the
+    // lower-cased name overwrites to the same value either way.
+    answering([
+      {
+        id: "a",
+        title: "A",
+        granularity: "section",
+        category: "Heroes",
+        document,
+      },
+      {
+        id: "b",
+        title: "B",
+        granularity: "section",
+        category: "heroes",
+        document,
+      },
+      {
+        id: "c",
+        title: "C",
+        granularity: "section",
+        category: "  HEROES  ",
+        document,
+      },
+    ]);
+
+    const { result } = renderHook(() => usePatternLibrary());
+
+    expect(result.current.categories).toEqual(["Heroes"]);
+  });
+
+  it("includes a page pattern's category, which the insert list leaves out", () => {
+    // The two lists answer different questions. A page pattern is not offered
+    // for insertion; the category it uses is still one this library uses, and
+    // an author filing a second page pattern should be offered it.
+    answering([
+      {
+        id: "page",
+        title: "Landing",
+        granularity: "page",
+        category: "Layouts",
+        document,
+      },
+    ]);
+
+    const { result } = renderHook(() => usePatternLibrary());
+
+    expect(result.current.patterns).toEqual([]);
+    expect(result.current.categories).toEqual(["Layouts"]);
+  });
+
+  it("offers nothing rather than a blank suggestion", () => {
+    // A category the collection stored as SQL NULL reads back with the key
+    // present, and an empty string in a suggestion list is a row an author can
+    // select that puts nothing in the field.
+    answering([
+      { id: "a", title: "A", granularity: "section", category: null, document },
+      {
+        id: "b",
+        title: "B",
+        granularity: "section",
+        category: "   ",
+        document,
+      },
+      { id: "c", title: "C", granularity: "section", document },
+    ]);
+
+    const { result } = renderHook(() => usePatternLibrary());
+
+    expect(result.current.categories).toEqual([]);
+  });
+
+  it("keeps ONE empty list while the read is in flight", () => {
+    // A fresh `[]` per render is a new prop identity, and the form memoises on
+    // it. The same reason the patterns list is stabilised.
+    read.mockReturnValue({
+      data: undefined,
+      error: null,
+      pending: true,
+    } as unknown as ReturnType<typeof usePluginRoute<LibraryResponse>>);
+
+    const { result, rerender } = renderHook(() => usePatternLibrary());
+    const first = result.current.categories;
+    rerender();
+
+    expect(result.current.categories).toBe(first);
+  });
+});

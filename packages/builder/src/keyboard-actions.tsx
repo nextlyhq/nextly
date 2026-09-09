@@ -20,12 +20,17 @@
  * @module keyboard-actions
  */
 
-import { findNode, registryNestingSource } from "@nextlyhq/blocks-engine";
-import type { NestingSource } from "@nextlyhq/blocks-engine";
+import {
+  findNode,
+  registryNestingSource,
+  saveAsPatternRefusal,
+  type NestingSource,
+} from "@nextlyhq/blocks-engine";
 import { useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
+import { compositionRefusalReason } from "./composition-refusal";
 import type { EditorState } from "./editor-state";
 import {
   keyboardMovePosition,
@@ -41,6 +46,7 @@ import {
   selectionDuplication,
   selectionMove,
 } from "./selection-ops";
+import { toolbarActions, type ToolbarAction } from "./toolbar-actions";
 
 /**
  * The bindings, and why these keys.
@@ -157,6 +163,21 @@ export interface BlockActions {
   readonly duplicate: () => void;
   /** Select the container holding the selection. */
   readonly selectParent: () => void;
+  /**
+   * Begin storing the selection in the pattern library.
+   *
+   * Unlike the four above it this runs NO op: it hands the gesture back to the
+   * host, which owns the library, the form that names what is saved and the
+   * write that stores it. It travels with the others because every surface over
+   * these verbs — toolbar, context menu, palette — must reach it the same way,
+   * and a second channel for one verb is how one surface comes to offer what
+   * another cannot run.
+   *
+   * No keystroke is bound to it here. The others are direct manipulations of a
+   * selection an author is looking at; this opens a form, and a shortcut that
+   * opens a modal belongs to the host's own key map rather than to the canvas.
+   */
+  readonly saveAsPattern: () => void;
 }
 
 /**
@@ -166,6 +187,54 @@ export interface BlockActions {
  * turns into a thrown error rather than a silently inert toolbar.
  */
 const BlockActionsContext = React.createContext<BlockActions | null>(null);
+
+/**
+ * The nesting rules the editor is judging placements by, for surfaces below it.
+ *
+ * A SECOND context rather than a field on {@link BlockActions}, because the two
+ * are different kinds of thing: those are verbs to run, this is a rule source to
+ * ask. Folding it in would make every consumer of the verbs re-render when a
+ * host swapped its rules, and would put a non-verb in a type whose name promises
+ * verbs.
+ *
+ * `null` means no provider, which {@link useNestingSource} answers with the
+ * registry — the same default every surface here already applies.
+ */
+const NestingContext = React.createContext<NestingSource | null>(null);
+
+/**
+ * The verbs for the current selection, computed once for every surface.
+ *
+ * The bar, the right-click menu and the palette each need the same list, and
+ * `toolbarActions` is not a cheap read: deciding whether a selection can be
+ * saved BUILDS the document a save would store — it clones the selected forest,
+ * re-identifies it and surveys the result — because that is what makes the
+ * answer exact. Asked three times, an ordinary edit copies and walks a large
+ * selection three times before anything is drawn.
+ *
+ * Published from here because this is the one place above all three that
+ * already holds the editor and the rules they must agree about.
+ */
+const SelectionActionsContext = React.createContext<ToolbarAction[] | null>(
+  null
+);
+
+/**
+ * The shared verb list, or `null` when there is no provider above.
+ *
+ * Deliberately NOT "compute it for me": a caller that handed this a fallback to
+ * run would have to be told when to run it, and the honest answer — whenever
+ * anything the fallback closes over changes — is exactly what this hook cannot
+ * see. Written that way it memoised on the context alone, so a surface outside a
+ * provider kept its FIRST answer for ever: stale availability and stale refusal
+ * reasons on every later selection.
+ *
+ * Answering `null` hands that decision back to the caller, which is the only
+ * place the inputs are known.
+ */
+export function useSelectionActionsContext(): ToolbarAction[] | null {
+  return React.useContext(SelectionActionsContext);
+}
 
 /**
  * The verbs from the nearest {@link BlockKeyboardActions}.
@@ -184,6 +253,27 @@ export function useBlockActionsContext(): BlockActions {
     );
   }
   return actions;
+}
+
+/**
+ * The nesting rules to judge a placement by, from the nearest provider.
+ *
+ * Falls back to the registry, which is what the canvas, the insert panel and the
+ * keyboard route all default to — so a surface outside a provider answers the
+ * way it did before this existed.
+ *
+ * It exists because a host MAY supply its own rules, and until this a surface
+ * had no way to reach them: `BlockKeyboardActions` took a `nesting` option and
+ * kept it, so the keyboard enforced the host's rules while the toolbar and the
+ * context menu consulted the registry. One selection could then be offered on
+ * one surface and refused on another, for the same document.
+ */
+export function useNestingSource(): NestingSource {
+  const supplied = React.useContext(NestingContext);
+  // Memoised on the supplied value so a surface that depends on the identity —
+  // `toolbarActions` is called inside a memo keyed on its arguments — is not
+  // handed a new object every render.
+  return React.useMemo(() => supplied ?? registryNestingSource(), [supplied]);
 }
 
 export interface BlockKeyboardActionsOptions {
@@ -205,6 +295,15 @@ export interface BlockKeyboardActionsOptions {
    * set without registering blocks globally.
    */
   nesting?: NestingSource;
+  /**
+   * Begin storing the selection in the library, when the author asks to.
+   *
+   * Supplied by the host because everything the gesture needs is the host's:
+   * which collection a pattern goes in, what it is called, and the route that
+   * writes it. Nothing here can do any of that, and a builder that guessed would
+   * be guessing about somebody else's schema.
+   */
+  onSaveAsPattern: () => void;
   /**
    * Whether the bindings are live. Defaults to true.
    *
@@ -233,6 +332,25 @@ export interface BlockKeyboardActionsResult {
   readonly announcement: string;
   /** The same verbs the keystrokes run, for a pointer surface to press. */
   readonly actions: BlockActions;
+  /**
+   * The rules this resolved placements by: the host's, or the registry.
+   *
+   * Returned so the provider can publish the SAME source it enforced, rather
+   * than every surface below resolving the default again and a host-supplied
+   * one reaching only the keyboard.
+   */
+  readonly nesting: NestingSource;
+  /**
+   * What to OFFER for the current selection, computed once for every surface.
+   *
+   * Told apart from {@link BlockKeyboardActionsResult.actions} by the question
+   * each answers: those are verbs to RUN, this is the list of what may be run
+   * and why not. Returned so the provider publishes the same list it built
+   * rather than each surface rebuilding it — and rebuilding it is not cheap,
+   * because deciding whether a selection can be saved builds the document a
+   * save would store.
+   */
+  readonly selectionActions: ToolbarAction[];
 }
 
 /**
@@ -254,6 +372,7 @@ export function useBlockKeyboardActions({
   enabled = true,
   onEditText,
   nesting,
+  onSaveAsPattern,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   /*
    * The same rule source the pointer route asks, defaulted the way the insert
@@ -702,17 +821,81 @@ export function useBlockKeyboardActions({
     }
   );
 
+  /*
+   * The planner's verdict, honoured HERE rather than left to each surface.
+   *
+   * The toolbar keeps an unavailable verb focusable and still calls its runner,
+   * deliberately, so the verb can announce its own refusal — that is how the
+   * existing verbs behave, and a bare pass-through would instead open a form
+   * and post a selection the planner has already rejected.
+   *
+   * Announced rather than merely refused, for the same reason: an author who
+   * pressed a dimmed control is owed the reason, and the live region is where
+   * every other refusal here is said.
+   *
+   * The host is asked only once the verdict is yes, so the form never opens
+   * over a selection that cannot be saved.
+   */
+  const saveSelectionAsPattern = React.useCallback(() => {
+    const refusal = saveAsPatternRefusal(
+      editor.document,
+      editor.selection.ids,
+      nestingSource
+    );
+    if (refusal !== undefined) {
+      announce(compositionRefusalReason(refusal));
+      return;
+    }
+    onSaveAsPattern();
+  }, [
+    editor.document,
+    editor.selection.ids,
+    nestingSource,
+    announce,
+    onSaveAsPattern,
+  ]);
+
+  /*
+   * The verb list, computed ONCE for every surface below.
+   *
+   * See {@link SelectionActionsContext}: the save preflight builds the document
+   * a save would store, so three surfaces asking separately made an ordinary
+   * edit copy and walk the selection three times.
+   */
+  const selectionActions = React.useMemo(
+    () =>
+      toolbarActions(
+        editor.document,
+        editor.selectedId,
+        editor.selection.ids,
+        nestingSource
+      ),
+    [editor.document, editor.selectedId, editor.selection.ids, nestingSource]
+  );
+
   const actions = React.useMemo<BlockActions>(
     () => ({
       move: moveSelected,
       delete: deleteSelected,
       duplicate: duplicateSelected,
       selectParent,
+      saveAsPattern: saveSelectionAsPattern,
     }),
-    [moveSelected, deleteSelected, duplicateSelected, selectParent]
+    [
+      moveSelected,
+      deleteSelected,
+      duplicateSelected,
+      selectParent,
+      saveSelectionAsPattern,
+    ]
   );
 
-  return { announcement, actions };
+  return {
+    announcement,
+    actions,
+    nesting: nestingSource,
+    selectionActions,
+  };
 }
 
 /**
@@ -736,13 +919,20 @@ export function BlockKeyboardActions({
   enabled,
   onEditText,
   nesting,
+  onSaveAsPattern,
   children,
 }: BlockKeyboardActionsOptions & {
   readonly children?: React.ReactNode;
 }): React.JSX.Element {
-  const { announcement, actions } = useBlockKeyboardActions({
+  const {
+    announcement,
+    actions,
+    nesting: rules,
+    selectionActions: offered,
+  } = useBlockKeyboardActions({
     editor,
     enabled,
+    onSaveAsPattern,
     ...(onEditText === undefined ? {} : { onEditText }),
     ...(nesting === undefined ? {} : { nesting }),
   });
@@ -756,11 +946,15 @@ export function BlockKeyboardActions({
   // text is frequently not announced at all, because the assistive technology
   // has nothing it was already watching.
   return (
-    <BlockActionsContext.Provider value={actions}>
-      <p aria-live="polite" role="status" className="nx-sr-only">
-        {announcement}
-      </p>
-      {children}
-    </BlockActionsContext.Provider>
+    <NestingContext.Provider value={rules}>
+      <SelectionActionsContext.Provider value={offered}>
+        <BlockActionsContext.Provider value={actions}>
+          <p aria-live="polite" role="status" className="nx-sr-only">
+            {announcement}
+          </p>
+          {children}
+        </BlockActionsContext.Provider>
+      </SelectionActionsContext.Provider>
+    </NestingContext.Provider>
   );
 }
