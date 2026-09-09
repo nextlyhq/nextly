@@ -110,6 +110,7 @@ export { BlockBoundary, BlockList } from "./block-boundary";
 // its own copy of the string the renderer emits.
 export {
   EDITOR_NAMESPACE,
+  INSTANCE_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PROP_ATTRIBUTE,
   SLOTS_ATTRIBUTE,

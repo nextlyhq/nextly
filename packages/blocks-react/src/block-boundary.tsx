@@ -244,6 +244,29 @@ export const PROP_ATTRIBUTE = "data-nx-prop";
 export const SLOTS_ATTRIBUTE = "data-nx-slots";
 
 /**
+ * Names the component INSTANCE an element's node belongs to, for an editor.
+ *
+ * A component is inlined at render: the instance node is replaced by the tree
+ * its definition describes, so every element an author sees inside one carries
+ * a node id the page's document does not contain. Without this, an editor
+ * hit-testing on {@link NODE_ID_ATTRIBUTE} alone resolves a click inside a
+ * component to an address it cannot select, edit or delete.
+ *
+ * Carries the HOST's instance rather than the nearest one, because that is what
+ * `instanceOf` means — the instance the author actually placed on the page,
+ * even where components nest.
+ *
+ * Written only for DEFINITION-owned nodes, which is the discrimination that
+ * makes it useful. An instance's slot content is nested inside the inlined tree
+ * and belongs to the page, so it is unmarked and stays directly selectable —
+ * exactly the nodes a marketer opened the editor to edit.
+ *
+ * Rides `nodeAttribute` for the reason its siblings do: it is the editor's own
+ * namespace and has no business on a published page.
+ */
+export const INSTANCE_ATTRIBUTE = "data-nx-instance";
+
+/**
  * The prefix every marker the editor puts on a rendered element shares.
  *
  * A NAMESPACE rather than a list, because a list is a thing to keep in sync
@@ -284,14 +307,21 @@ function propMarker(
  */
 function applyEditorMarkers(
   extra: Record<string, string>,
-  node: BlockNode,
+  node: ResolvedBlockNode,
   nodeAttribute: boolean,
   declaresSlots: boolean
 ): void {
-  // Before the node address rather than after it, so the two editor markers
-  // sit together and the "LAST, so it cannot be overwritten" reasoning below
-  // still describes the line it is attached to.
+  // Before the node address rather than after it, so the editor markers sit
+  // together and the "LAST, so it cannot be overwritten" reasoning below still
+  // describes the line it is attached to.
   if (nodeAttribute && declaresSlots) extra[SLOTS_ATTRIBUTE] = "";
+  // Only where the resolver marked the node as the definition's own. An
+  // unmarked node is the page's own content — either an ordinary block or an
+  // instance's slot content — and marking it would tell the editor to select a
+  // component when the author clicked something they can edit directly.
+  if (nodeAttribute && typeof node.instanceOf === "string") {
+    extra[INSTANCE_ATTRIBUTE] = node.instanceOf;
+  }
   /*
    * LAST, so it cannot be overwritten. This was written first, with a
    * comment saying that made it safe — the opposite of what the code did:
@@ -309,7 +339,7 @@ function applyEditorMarkers(
 
 function withNodeAttributes(
   output: ReactNode,
-  node: BlockNode,
+  node: ResolvedBlockNode,
   nodeAttribute = false,
   // Whether the block's definition declares at least one slot, decided once by
   // the caller and carried down rather than re-read from the definition here.
